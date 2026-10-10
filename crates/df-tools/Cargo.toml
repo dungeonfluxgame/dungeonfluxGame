@@ -61,7 +61,7 @@ js-sys = "=0.3.106"
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 gloo-timers = { version = "0.3", features = ["futures"] }
-web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "HtmlButtonElement", "Event", "Location", "Performance", "Navigator", "Request", "RequestInit", "Response", "Crypto", "HtmlSelectElement", "AbortController", "AbortSignal", "RequestMode", "RequestCredentials", "RequestCache", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "Node"] }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "HtmlButtonElement", "Event", "Location", "Performance", "Navigator", "Request", "RequestInit", "Response", "Crypto", "HtmlSelectElement", "HtmlTextAreaElement", "AbortController", "AbortSignal", "RequestMode", "RequestCredentials", "RequestCache", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "Node"] }
 
 [dev-dependencies]
 df-types = { path = "../df-types" }

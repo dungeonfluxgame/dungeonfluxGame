@@ -1,4 +1,5 @@
 //! Thin server-projected room, creation, dialogue and combat clients.
+mod dialogue_recovery;
 mod public_scene_assets;
 mod view_delivery;
 
@@ -46,6 +47,7 @@ struct Client {
     callbacks: Vec<Callback>,
     creation: Option<CharacterPhaseSurface>,
     scene_delivery: Option<Rc<PublicSceneDelivery>>,
+    dialogue: dialogue_recovery::DialogueRecovery,
     busy: bool,
 }
 impl Drop for Client {
@@ -148,6 +150,7 @@ fn request<T>(body: T, credential: &str) -> Result<tonic::Request<T>, String> {
     Ok(request)
 }
 fn retire_transport(client: &mut Client) {
+    client.dialogue.retire_transport();
     if let Some(scene) = &client.scene_delivery
         && scene.suspend().is_err()
     {
@@ -167,6 +170,7 @@ fn retire_transport(client: &mut Client) {
     client.busy = false;
 }
 fn clear_view_scope(client: &mut Client) -> Result<(), JsValue> {
+    client.dialogue.clear_scope();
     if let Some(scene) = &client.scene_delivery {
         scene
             .retire()
@@ -456,10 +460,11 @@ fn connect(client: Rc<RefCell<Client>>) {
                     state.views = Some(GameplayViews::new(scope, view_generation.clone()));
                 }
                 state.action = Some(
-                    ActionClient::new(channel)
+                    ActionClient::new(channel.clone())
                         .max_decoding_message_size(8192)
                         .max_encoding_message_size(8192),
                 );
+                state.dialogue.bind(channel);
                 state.connection = Some(connection);
             }
             // Reconnect refreshes local input/busy state from the retained snapshot.
@@ -496,6 +501,7 @@ fn connect(client: Rc<RefCell<Client>>) {
                 connection.close();
             }
             owned.borrow_mut().action.take();
+            owned.borrow_mut().dialogue.retire_transport();
             status(
                 &owned.borrow(),
                 match result {
@@ -543,6 +549,7 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
             .clone()
             .ok_or("Reconnect before sending input")?;
         if !replay {
+            state.dialogue.discard_unconfirmed();
             state.last_request = Some(body.clone());
             state.last_confirmed = false;
         }
@@ -572,35 +579,47 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
         let message = {
             let mut state = client.borrow_mut();
             state.busy = false;
-            match result {
-                Ok(response) => match response.outcome {
-                    Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) => {
-                        if receipt.operation_id != body.operation_id
-                            || receipt.session_id != body.session_id
-                            || receipt.run_id != body.run_id
-                            || receipt.revision.is_none()
-                        {
-                            "The receipt belongs to a different scope. Reconnect to recover."
-                                .to_owned()
-                        } else {
-                            if state
-                                .last_request
-                                .as_ref()
-                                .is_some_and(|saved| saved.operation_id == body.operation_id)
-                            {
-                                state.last_confirmed = receipt.outcome.is_some();
-                            }
-                            if let Some(revision) = receipt.revision {
-                                let _ = state.root.set_attribute(
-                                    "data-last-receipt-sequence",
-                                    &revision.sequence.unwrap_or(0).to_string(),
-                                );
-                            }
-                            let _ = state.root.set_attribute(
-                                "data-last-receipt-replayed",
-                                if receipt.replayed { "true" } else { "false" },
-                            );
-                            match receipt.outcome {
+            complete_action_response(&mut state, &body, result)
+        };
+        if redraw_current(&client).is_err() {
+            status(&client.borrow(), "Saved view could not be displayed.");
+        }
+        feedback(&client.borrow(), &message);
+    });
+}
+fn complete_action_response(
+    state: &mut Client,
+    body: &rpc::SubmitActionRequest,
+    result: Result<rpc::SubmitActionResponse, &str>,
+) -> String {
+    match result {
+        Ok(response) => match response.outcome {
+            Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) => {
+                if receipt.operation_id != body.operation_id
+                    || receipt.session_id != body.session_id
+                    || receipt.run_id != body.run_id
+                    || receipt.revision.is_none()
+                {
+                    "The receipt belongs to a different scope. Reconnect to recover.".to_owned()
+                } else {
+                    if state
+                        .last_request
+                        .as_ref()
+                        .is_some_and(|saved| saved.operation_id == body.operation_id)
+                    {
+                        state.last_confirmed = receipt.outcome.is_some();
+                    }
+                    if let Some(revision) = receipt.revision {
+                        let _ = state.root.set_attribute(
+                            "data-last-receipt-sequence",
+                            &revision.sequence.unwrap_or(0).to_string(),
+                        );
+                    }
+                    let _ = state.root.set_attribute(
+                        "data-last-receipt-replayed",
+                        if receipt.replayed { "true" } else { "false" },
+                    );
+                    match receipt.outcome {
                                 Some(rpc::decision_receipt::Outcome::Accepted(_))=>{
                                     if body.action_kind==rpc::GameplayActionKind::GreatswordAttack as i32 && state.first_attack.is_none() {state.first_attack=Some(body.clone());}
                                     if receipt.replayed {"Original saved outcome confirmed. No rolls or damage were repeated."} else {"Your choice is saved to the shared adventure."}.to_owned()
@@ -613,23 +632,21 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
                                 }.to_owned(),
                                 None=>"The server returned no decision outcome.".to_owned(),
                             }
-                        }
-                    }
-                    Some(rpc::submit_action_response::Outcome::OperationObservation(_)) => {
-                        "The operation requires recovery; retain the same input.".to_owned()
-                    }
-                    None => "The server returned no operation outcome.".to_owned(),
-                },
-                Err(error) => error.to_owned(),
+                }
             }
-        };
-        if redraw_current(&client).is_err() {
-            status(&client.borrow(), "Saved view could not be displayed.");
-        }
-        feedback(&client.borrow(), &message);
-    });
+            Some(rpc::submit_action_response::Outcome::OperationObservation(_)) => {
+                "The operation requires recovery; retain the same input.".to_owned()
+            }
+            None => "The server returned no operation outcome.".to_owned(),
+        },
+        Err(error) => error.to_owned(),
+    }
 }
 fn replay(client: Rc<RefCell<Client>>, first_attack: bool) {
+    if !first_attack && client.borrow().dialogue.has_confirmation() {
+        dialogue_recovery::retry(client);
+        return;
+    }
     let body = if first_attack {
         client.borrow().first_attack.clone()
     } else {
@@ -877,8 +894,10 @@ fn redraw_current(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
 fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), JsValue> {
     let (document, root, role) = {
         let mut state = client.borrow_mut();
+        let document = state.document.clone();
+        state.dialogue.capture_focus(&document)?;
         clear_callbacks(&mut state);
-        (state.document.clone(), state.root.clone(), state.role)
+        (document, state.root.clone(), state.role)
     };
     let (narration, scene, journey, offers, clue) = match view.audience {
         Some(rpc::view_message::Audience::Player(player)) if role == "player" => (
@@ -919,6 +938,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
             surface.set_text_content(None);
         }
         creation(client, &surface, creation_offer, offered)?;
+        dialogue_recovery::mount(client, &surface, &offers)?;
         // Recovery remains reachable while a creation submission is uncertain.
         let tools = if let Some(tools) = surface.query_selector(".tools")? {
             tools
@@ -1204,6 +1224,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
             }
         }
     }
+    dialogue_recovery::mount(client, &body, &offers)?;
     let actions = node(&document, &body, "div", "scene-actions", "")?;
     for offer in offers {
         action_button(client, &actions, offer)?;
@@ -1273,6 +1294,7 @@ fn new_client(
         callbacks: Vec::new(),
         creation: None,
         scene_delivery: None,
+        dialogue: dialogue_recovery::DialogueRecovery::default(),
         busy: false,
     })))
 }

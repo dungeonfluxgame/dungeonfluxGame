@@ -598,14 +598,21 @@ async fn exercise() -> Result<(), Error> {
             ))
             .await?
             .into_inner();
-        required(cancelled.confirmation_token.len() == 32)?;
+        required(
+            cancelled.input_id == input_id(0x32)
+                && cancelled.disposition == rpc::DialogueDisposition::Clarify as i32
+                && cancelled.confirmation_required
+                && cancelled.confirmation_token.len() == 32
+                && cancelled.revision == Some(wire::revision(baseline.basis().revision)),
+        )?;
+        let before_decline = counts(&inspector).await?;
         let cancelled_action = create(&baseline, 0x40);
         let confirm = rpc::ConfirmDialogueRequest {
             input_id: input_id(0x32),
             confirmation_token: cancelled.confirmation_token.clone(),
             action: Some(cancelled_action),
         };
-        dialogue
+        let declined = dialogue
             .cancel(authenticated(
                 rpc::CancelDialogueRequest {
                     input_id: input_id(0x32),
@@ -613,7 +620,18 @@ async fn exercise() -> Result<(), Error> {
                 },
                 &first,
             ))
-            .await?;
+            .await?
+            .into_inner();
+        required(
+            declined.input_id == input_id(0x32)
+                && declined.disposition == rpc::DialogueDisposition::Rejected as i32
+                && !declined.confirmation_required
+                && declined.confirmation_token.is_empty()
+                && declined.revision == Some(wire::revision(baseline.basis().revision))
+                && *running.service.updates.borrow() == baseline
+                && counts(&inspector).await? == before_decline
+                && counter.load(Ordering::SeqCst) == preparations,
+        )?;
         required(
             dialogue
                 .confirm(authenticated(confirm, &first))
