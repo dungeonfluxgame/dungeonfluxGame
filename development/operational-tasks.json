@@ -227,7 +227,1761 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-09-30T02:34:35.952560+00:00",
       "updated_at": "2026-09-30T07:12:32+00:00"
+    },
+    {
+      "id": "PLAY-A01",
+      "feature_id": "F32",
+      "title": "Add a tracked one-command launcher for the gameplay demo",
+      "objective": "One tracked command builds the native and WebAssembly sides from the current checkout, starts an owned PostgreSQL with a fresh df_gameplay_demo_* database, serves --gameplay-demo, prints the display and player URLs, and stops everything it started on exit.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "development/run-gameplay.sh",
+        "development/README.md"
+      ],
+      "acceptance_json": [
+        "From a clean checkout of main, development/run-gameplay.sh reaches a served game with no manual steps and no untracked scripts.",
+        "The display page and two player pages load at the printed URLs and reach the room.",
+        "Uses the pinned toolchain and keeps all generated output under artifacts/.",
+        "Refuses to start when the database or game port is already held, and names the holder.",
+        "On exit it stops only the PostgreSQL and server it started.",
+        "No memory-admission gating; a failed step reports the failing command and its output.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Run from a clean worktree at the named commit.",
+        "Open the three URLs in a real browser and reach the room.",
+        "After exit, confirm the owned processes are gone and both ports are free."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M1",
+        "milestone_goal": "Plays by hand: the existing harbor journey runs from main with one command.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "The 2026-10-11 review found no tracked way to launch the game: development/build-fixture.sh serve only starts the S00 transport lab, development/postgres.sh uses a different port and socket mode, and every end-to-end attempt (receipts a6-a16) went through an untracked Python controller that failed on its own memory and timing guards before a browser reached the game.",
+        "objective": "One tracked command builds the native and WebAssembly sides from the current checkout, starts an owned PostgreSQL with a fresh df_gameplay_demo_* database, serves --gameplay-demo, prints the display and player URLs, and stops everything it started on exit.",
+        "owners": [
+          "df-tools",
+          "coordinator"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Add a tracked one-command launcher for the gameplay demo",
+            "owner": "df-tools"
+          },
+          {
+            "hook": "Add a tracked one-command launcher for the gameplay demo",
+            "owner": "coordinator"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-F32-I03",
+          "B-F32-D02",
+          "B-C-df-tools-I02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "ADR/0002-resource-scheduling-and-cleanup.md",
+            "sha256": "a6476cfef449e089639109cc6d3cf5f0800b792b57a32696258d5ac0b9511966"
+          },
+          {
+            "path": "ADR/0004-development-reliability.md",
+            "sha256": "8f03d02d478086fd1f50d7aa10e8e7e766e3b15ae02f7f96efa43757c98a4dae"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [
+          "Changing game behaviour",
+          "The admission controller under artifacts/tmp"
+        ],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 100,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-A02",
+      "feature_id": "S01",
+      "title": "Make the demo session limits configurable",
+      "objective": "Replace the fixed 290-second auto-exit, the 128-call lifetime budget, the fixed listener address and Origin, and the connection and watch caps with validated startup settings whose defaults allow an open-ended local play session.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay.rs",
+        "crates/df-tools/src/gameplay/actor.rs",
+        "crates/df-tools/src/gameplay/startup_configuration.rs"
+      ],
+      "acceptance_json": [
+        "With default development settings a session stays up for over 30 minutes and serves more than 128 calls.",
+        "The previous limits remain selectable, and the existing qualification harness tests pass unchanged.",
+        "Invalid settings refuse startup with a typed error.",
+        "Listener address and Origin are configurable so a phone on the local network can join; a non-loopback bind happens only when explicitly set.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for accepted and refused settings.",
+        "A real browser session past the old time and call limits.",
+        "Existing df-tools gameplay tests at the same commit."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M1",
+        "milestone_goal": "Plays by hand: the existing harbor journey runs from main with one command.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "crates/df-tools/src/gameplay.rs hard-codes 127.0.0.1:63309 (line 558), the Origin check (202), four WebSocket connections (205, 771), six watch streams (738), a 128-call budget that also counts view refreshes (633-638) and auto-exit after 290 seconds (857). A person cannot play or tune a session under those limits.",
+        "objective": "Replace the fixed 290-second auto-exit, the 128-call lifetime budget, the fixed listener address and Origin, and the connection and watch caps with validated startup settings whose defaults allow an open-ended local play session.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Make the demo session limits configurable",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-C-df-server-D02",
+          "B-C-df-server-I01"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/implementation-roadmap.md",
+            "sha256": "0160ad8e8ec38f768e2348209b9989e30e8f403d9b1a4ebf694f0801f7206932",
+            "sections": [
+              "Delivery slices",
+              "First-slice failure envelope"
+            ]
+          },
+          {
+            "path": "planning/coding-style.md",
+            "sha256": "2d8e327e4172643544bd80b591f38226c25b83940a10f1d9e18ada9044faeabb"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 99,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-A03",
+      "feature_id": "S01",
+      "title": "Play the harbor journey in real browsers on main and log defects",
+      "objective": "Using the launcher, a display and two players complete join, character creation, the wharf, the courier, the bandit fight, and rest or the inn. Every defect, dead end and rough edge becomes a follow-up task.",
+      "stage": "acceptance",
+      "edit_areas_json": [
+        "development/evidence/play-baseline/ (retained evidence only)"
+      ],
+      "acceptance_json": [
+        "Each phase is observed reached, or the exact stopping point is recorded with a screenshot.",
+        "The commit and build played are identified.",
+        "A server restart mid-game is tried and the result recorded.",
+        "Defects are filed as follow-up tasks with severity; nothing is fixed inside this task.",
+        "No S01 acceptance is claimed from this run.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Real browser, three pages, human or computer-use operator with vision.",
+        "Screenshots and a short written log per phase."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M1",
+        "milestone_goal": "Plays by hand: the existing harbor journey runs from main with one command.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "The journey has integrated native tests but no retained observation of a full browser playthrough on main. This baseline tells us whether the remaining distance is game defects or harness friction.",
+        "objective": "Using the launcher, a display and two players complete join, character creation, the wharf, the courier, the bandit fight, and rest or the inn. Every defect, dead end and rough edge becomes a follow-up task.",
+        "owners": [
+          "coordinator",
+          "independent output evaluator"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Play the harbor journey in real browsers on main and log defects",
+            "owner": "coordinator"
+          },
+          {
+            "hook": "Play the harbor journey in real browsers on main and log defects",
+            "owner": "independent output evaluator"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-S01-A01",
+          "B-F31-I03"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/implementation-roadmap.md",
+            "sha256": "0160ad8e8ec38f768e2348209b9989e30e8f403d9b1a4ebf694f0801f7206932",
+            "sections": [
+              "Delivery slices",
+              "First-slice failure envelope"
+            ]
+          },
+          {
+            "path": "ADR/0005-frontier-output-evaluation.md",
+            "sha256": "25ab35a57ee8516a272b1ff3d04bba4def91319255d89158c9be55283ca6c35c"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 98,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-A04",
+      "feature_id": "C-df-presentation",
+      "title": "Restore a green all-targets compile on main",
+      "objective": "crates/df-presentation/tests/committed_eligibility.rs fails to compile on main. Repair it against the current contract, or remove it if the contract it tests was superseded, so the whole workspace check passes.",
+      "stage": "resolution",
+      "edit_areas_json": [
+        "crates/df-presentation/tests/committed_eligibility.rs"
+      ],
+      "acceptance_json": [
+        "cargo check --workspace --all-targets --locked passes at the fixed commit.",
+        "No assertion is weakened without confirming the approved behaviour changed.",
+        "df-presentation tests pass.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "cargo check --workspace --all-targets --offline --locked",
+        "cargo test -p df-presentation --offline --locked"
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M1",
+        "milestone_goal": "Plays by hand: the existing harbor journey runs from main with one command.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "cargo check --workspace --all-targets --offline --locked at 0b32c6b fails only in this test target, with 21 errors (for example ContinuityError where the source now has ContinuityState). Seven core crates pass 791 tests.",
+        "objective": "crates/df-presentation/tests/committed_eligibility.rs fails to compile on main. Repair it against the current contract, or remove it if the contract it tests was superseded, so the whole workspace check passes.",
+        "owners": [
+          "df-presentation"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Restore a green all-targets compile on main",
+            "owner": "df-presentation"
+          }
+        ],
+        "canonical_task_refs": [],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/coding-style.md",
+            "sha256": "2d8e327e4172643544bd80b591f38226c25b83940a10f1d9e18ada9044faeabb"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-B01",
+      "feature_id": "X10",
+      "title": "Define the gameplay tuning surface",
+      "objective": "Decide what can change without a rebuild, in what form, and when a change takes effect. Cover scenario content, encounter composition and stats, checks and difficulty values, rest and reward values, director policy parameters (tempo, narrative, encounter, combat tactics, experience), timers, and development controls (dice, checkpoints, new run).",
+      "stage": "design",
+      "edit_areas_json": [
+        "planning/gameplay-tuning.md",
+        "planning/implementation-roadmap.md"
+      ],
+      "acceptance_json": [
+        "A table of every tunable group with its owning crate, file format, validation bounds, and when a change can apply (next run, safe boundary, or live).",
+        "States what is deliberately not tunable through data, with reasons: new mechanics need reviewed Rust handlers, and departures from standard 2024 rules need an explicit disclosed custom ruleset.",
+        "Defines how an edited file becomes a new pinned revision and how a running session adopts it without a silent retcon.",
+        "Keeps loading server-side and keeps replay deterministic under the pinned revision.",
+        "Lists the open choices that need the user's decision, each with a recommendation.",
+        "Names the first tunables to implement for the harbor slice.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Independent review against the cited content, generated-content, director and replay policies.",
+        "User sign-off on the open choices before PLAY-B02 is frozen."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M2",
+        "milestone_goal": "Tunable: content and mechanics parameters change through data, without a rebuild.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "The user set the focus on 2026-10-11: a playable game that is highly configurable and dynamic so gameplay mechanics can be fine-tuned. The plan has the pieces (immutable versioned ContentPack, policy versions bound into every director basis, an explicit custom RulesetId for non-standard mechanics) but no document that turns them into a tuning workflow, and today all content is Rust constants in crates/df-tools/src/gameplay/model.rs, journey.rs and wire.rs.",
+        "objective": "Decide what can change without a rebuild, in what form, and when a change takes effect. Cover scenario content, encounter composition and stats, checks and difficulty values, rest and reward values, director policy parameters (tempo, narrative, encounter, combat tactics, experience), timers, and development controls (dice, checkpoints, new run).",
+        "owners": [
+          "df-content",
+          "df-engine",
+          "coordinator"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Define the gameplay tuning surface",
+            "owner": "df-content"
+          },
+          {
+            "hook": "Define the gameplay tuning surface",
+            "owner": "df-engine"
+          },
+          {
+            "hook": "Define the gameplay tuning surface",
+            "owner": "coordinator"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-C-df-content-D01",
+          "B-C-df-content-D03",
+          "B-F47-D01",
+          "B-F21-D03",
+          "B-F29-D01"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/c-df-content-d01-decision.md",
+            "sha256": "bdb96c328e48d24c2e5336e8abde4e88d9d5c8782f0d864ba1f6c2618dc9f294"
+          },
+          {
+            "path": "planning/generated-content.md",
+            "sha256": "0b252a24a8911108660f3276d8359d9df825a3398c7c7a4033c62e2279007ac0"
+          },
+          {
+            "path": "planning/runtime-directors.md",
+            "sha256": "ed8944f316d912498107ee550431e560795ba8114cb63a181b6aadeca70b48ca"
+          },
+          {
+            "path": "planning/campaign-authoring.md",
+            "sha256": "f183aaf7f42779733e4e4a03a588fe0ce04db9f3deabddbd86ef951058848e31"
+          },
+          {
+            "path": "planning/g10-d03-replay-logical-time-policy.md",
+            "sha256": "255d2439d028223d0c91ec3272909fbf5949197aa077f9f806041658422e21ac"
+          },
+          {
+            "path": "planning/implementation-roadmap.md",
+            "sha256": "0160ad8e8ec38f768e2348209b9989e30e8f403d9b1a4ebf694f0801f7206932",
+            "sections": [
+              "Delivery slices",
+              "First-slice failure envelope"
+            ]
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [
+          "Implementing any tunable",
+          "A scripting language or uploaded code"
+        ],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 99,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-B02",
+      "feature_id": "X10",
+      "title": "Move the harbor journey content out of Rust into a data pack",
+      "objective": "The room, creation options, enemy stats, items and actions, scene narration and courier lines load at startup from a validated pack file through df-content. Behaviour is unchanged.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-content/src/",
+        "crates/df-tools/src/gameplay/model.rs",
+        "crates/df-tools/src/gameplay/journey.rs",
+        "crates/df-tools/src/gameplay/wire.rs",
+        "pack data directory chosen in PLAY-B01 (exact path frozen at dispatch)"
+      ],
+      "acceptance_json": [
+        "No gameplay value or narration string remains a Rust literal in the journey modules; only identifiers and handler bindings do.",
+        "The same playthrough with scripted dice gives the same outcomes before and after.",
+        "A malformed or missing pack refuses startup with a typed error naming the file and location.",
+        "The pack identity and version are recorded with the run.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Existing journey tests run against the pack.",
+        "Negative tests for malformed, missing and out-of-bounds pack data.",
+        "One browser playthrough from the pack."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M2",
+        "milestone_goal": "Tunable: content and mechanics parameters change through data, without a rebuild.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "All playable content is hard-coded: one dwarf fighter, one bandit, greatsword, scimitar, flail, second wind, short rest, and the narration strings (crates/df-tools/src/gameplay/model.rs, journey.rs:36-41 and 405-493, wire.rs:234-249 and 596-653). Nothing can be tuned until it is data.",
+        "objective": "The room, creation options, enemy stats, items and actions, scene narration and courier lines load at startup from a validated pack file through df-content. Behaviour is unchanged.",
+        "owners": [
+          "df-content",
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Move the harbor journey content out of Rust into a data pack",
+            "owner": "df-content"
+          },
+          {
+            "hook": "Move the harbor journey content out of Rust into a data pack",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-C-df-content-W01",
+          "B-C-df-content-I04",
+          "B-C-df-content-I02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/c-df-content-d01-decision.md",
+            "sha256": "bdb96c328e48d24c2e5336e8abde4e88d9d5c8782f0d864ba1f6c2618dc9f294"
+          },
+          {
+            "path": "planning/campaign-authoring.md",
+            "sha256": "f183aaf7f42779733e4e4a03a588fe0ce04db9f3deabddbd86ef951058848e31"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-B03",
+      "feature_id": "X10",
+      "title": "Load a typed, versioned tuning profile on the server",
+      "objective": "The numeric and policy parameters named in the tuning design load from a file into typed, bounds-checked settings used by the rules glue and the directors. Each committed decision records the tuning revision in force.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "owning crates chosen in PLAY-B01, wired in crates/df-tools/src/gameplay/ (exact paths frozen at dispatch)"
+      ],
+      "acceptance_json": [
+        "Unknown keys and out-of-bounds values refuse with a typed error.",
+        "Changing a value changes the corresponding behaviour in a native test.",
+        "The revision is recorded in decision provenance, and replay of a recorded run uses its pinned revision.",
+        "Clients receive no tuning data beyond what their views already need.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests per parameter group.",
+        "Replay test across two revisions."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M2",
+        "milestone_goal": "Tunable: content and mechanics parameters change through data, without a rebuild.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Director policies and rule parameters are compiled in. The plan already binds a policy version into every basis (planning/runtime-directors.md), so a file-backed profile fits without new authority.",
+        "objective": "The numeric and policy parameters named in the tuning design load from a file into typed, bounds-checked settings used by the rules glue and the directors. Each committed decision records the tuning revision in force.",
+        "owners": [
+          "df-engine",
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Load a typed, versioned tuning profile on the server",
+            "owner": "df-engine"
+          },
+          {
+            "hook": "Load a typed, versioned tuning profile on the server",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-C-df-content-W01",
+          "B-F21-D03"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/runtime-directors.md",
+            "sha256": "ed8944f316d912498107ee550431e560795ba8114cb63a181b6aadeca70b48ca"
+          },
+          {
+            "path": "planning/g10-d03-replay-logical-time-policy.md",
+            "sha256": "255d2439d028223d0c91ec3272909fbf5949197aa077f9f806041658422e21ac"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-B04",
+      "feature_id": "F21",
+      "title": "Apply content and tuning changes without a rebuild",
+      "objective": "An edited pack or tuning file is adopted by starting a new run, or in a live session at a safe boundary through an explicit development-authorized command. No server rebuild. The change is a new pinned revision, never a silent retcon.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "owning crates chosen in PLAY-B01, wired in crates/df-tools/src/gameplay/ (exact paths frozen at dispatch)"
+      ],
+      "acceptance_json": [
+        "Edit a file, start a new run: the new values are in force with no rebuild.",
+        "Live apply at a safe boundary: the session continues, views update in place, and the revision change is a committed, logged decision.",
+        "Apply is refused mid-resolution with a typed reason.",
+        "An invalid file leaves the running revision untouched.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for new-run and live adoption, refusal and invalid input.",
+        "Browser observation of a live apply."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M2",
+        "milestone_goal": "Tunable: content and mechanics parameters change through data, without a rebuild.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Fine-tuning needs a short loop: edit, apply, observe. The content decision requires that a live campaign never silently retcons (planning/c-df-content-d01-decision.md), so adoption has to be an explicit committed step.",
+        "objective": "An edited pack or tuning file is adopted by starting a new run, or in a live session at a safe boundary through an explicit development-authorized command. No server rebuild. The change is a new pinned revision, never a silent retcon.",
+        "owners": [
+          "df-session",
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Apply content and tuning changes without a rebuild",
+            "owner": "df-session"
+          },
+          {
+            "hook": "Apply content and tuning changes without a rebuild",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-F47-W02",
+          "B-F21-I03",
+          "B-C-df-content-W01"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/c-df-content-d01-decision.md",
+            "sha256": "bdb96c328e48d24c2e5336e8abde4e88d9d5c8782f0d864ba1f6c2618dc9f294"
+          },
+          {
+            "path": "planning/storage-architecture.md",
+            "sha256": "69c6ef1ec2ce02b0ecc33c361e83ef9a027f669df1abe49199605552466a1da6"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 95,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-B05",
+      "feature_id": "F29",
+      "title": "Add development controls for fast tuning loops",
+      "objective": "A development-only command surface: show the current tuning revision and values, apply a file, start a new run, script or seed dice, and save and restore a checkpoint to jump straight to a phase such as the bandit fight.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/ (exact paths frozen at dispatch)"
+      ],
+      "acceptance_json": [
+        "Each control works from a command line against the running server.",
+        "The controls require development authority and are unavailable to player and host roles.",
+        "A checkpoint jump reaches combat without replaying earlier phases.",
+        "Scripted dice reproduce a chosen outcome.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for authority refusal.",
+        "A real run of each control against the launched game."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M2",
+        "milestone_goal": "Tunable: content and mechanics parameters change through data, without a rebuild.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Tuning a fight is impractical if every try replays join and character creation. F29 and F31 plan checkpoints and controlled dice; this delivers the part the tuning loop needs.",
+        "objective": "A development-only command surface: show the current tuning revision and values, apply a file, start a new run, script or seed dice, and save and restore a checkpoint to jump straight to a phase such as the bandit fight.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Add development controls for fast tuning loops",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-F29-I01",
+          "B-F29-I02",
+          "B-F31-I01",
+          "B-C-df-tools-I03"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/subsystem-architecture.md",
+            "sha256": "cf549f4f046f76713c881228d82c6a7111d8ccc84db208cb9d9db67bb192d9f6"
+          },
+          {
+            "path": "planning/g10-d03-replay-logical-time-policy.md",
+            "sha256": "255d2439d028223d0c91ec3272909fbf5949197aa077f9f806041658422e21ac"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 94,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-B06",
+      "feature_id": "F29",
+      "title": "Prove the tuning loop in the browser",
+      "objective": "Change one encounter value, one check difficulty and one pacing parameter by editing files, apply them without a rebuild, and observe each change in the running game. Then replay an earlier recorded run and confirm it reproduces under its pinned revision.",
+      "stage": "acceptance",
+      "edit_areas_json": [
+        "development/evidence/tuning-loop/ (retained evidence only)"
+      ],
+      "acceptance_json": [
+        "Three edits are each observed to change behaviour in the browser, with before and after recorded.",
+        "No rebuild or server restart happens between edit and observation for the live-apply case.",
+        "The earlier run replays identically under its original revision.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Real browser, operator with vision.",
+        "Replay comparison output retained."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M2",
+        "milestone_goal": "Tunable: content and mechanics parameters change through data, without a rebuild.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "This is the acceptance check for milestone M2.",
+        "objective": "Change one encounter value, one check difficulty and one pacing parameter by editing files, apply them without a rebuild, and observe each change in the running game. Then replay an earlier recorded run and confirm it reproduces under its pinned revision.",
+        "owners": [
+          "coordinator",
+          "independent output evaluator"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Prove the tuning loop in the browser",
+            "owner": "coordinator"
+          },
+          {
+            "hook": "Prove the tuning loop in the browser",
+            "owner": "independent output evaluator"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-F31-I02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "ADR/0005-frontier-output-evaluation.md",
+            "sha256": "25ab35a57ee8516a272b1ff3d04bba4def91319255d89158c9be55283ca6c35c"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 93,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-C01",
+      "feature_id": "S01",
+      "title": "Create the df-server crate and move the game composition into it",
+      "objective": "df-server becomes a workspace crate with a binary. The service handlers, session actor wiring, room, wire mapping and composition root now in df-tools move to df-server and df-api. df-tools keeps fixture and qualification code and calls the same composition.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "Cargo.toml",
+        "crates/df-server/",
+        "crates/df-api/src/",
+        "crates/df-tools/src/gameplay.rs",
+        "crates/df-tools/src/gameplay/actor.rs",
+        "crates/df-tools/src/gameplay/room.rs",
+        "crates/df-tools/src/gameplay/wire.rs",
+        "crates/df-tools/src/gameplay/dialogue.rs",
+        "development/run-gameplay.sh"
+      ],
+      "acceptance_json": [
+        "A df-server binary serves the same game as --gameplay-demo, and the launcher uses it.",
+        "Qualification harness flags are not compiled into the server binary.",
+        "Existing gameplay tests pass against the moved code.",
+        "The same playthrough with scripted dice gives the same outcomes before and after.",
+        "The tuning loop from PLAY-B06 works unchanged on the df-server binary.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "cargo check and tests for df-server, df-api and df-tools, native and WebAssembly where relevant.",
+        "One browser playthrough on the df-server binary."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M3",
+        "milestone_goal": "Real two-role slice: a df-server binary and the designed screens (roadmap S01).",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "crates/df-server has no Cargo.toml and is not a workspace member; its three modules are policy types nothing consumes. The working composition root is df_tools::gameplay::serve (crates/df-tools/src/gameplay.rs:295-1000) with handlers in gameplay.rs, room.rs, dialogue.rs, actor.rs and wire.rs: about 11,000 lines that belong in a server.",
+        "objective": "df-server becomes a workspace crate with a binary. The service handlers, session actor wiring, room, wire mapping and composition root now in df-tools move to df-server and df-api. df-tools keeps fixture and qualification code and calls the same composition.",
+        "owners": [
+          "df-server",
+          "df-api",
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Create the df-server crate and move the game composition into it",
+            "owner": "df-server"
+          },
+          {
+            "hook": "Create the df-server crate and move the game composition into it",
+            "owner": "df-api"
+          },
+          {
+            "hook": "Create the df-server crate and move the game composition into it",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-C-df-server-I01",
+          "B-C-df-server-I02",
+          "B-C-df-server-I03",
+          "B-C-df-server-I04",
+          "B-C-df-server-W01",
+          "S01-COMPOSE",
+          "B-S01-W02",
+          "B-C-df-api-I01",
+          "B-C-df-api-I02",
+          "B-C-df-api-I03",
+          "B-C-df-api-W01"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/implementation-roadmap.md",
+            "sha256": "0160ad8e8ec38f768e2348209b9989e30e8f403d9b1a4ebf694f0801f7206932",
+            "sections": [
+              "Delivery slices",
+              "First-slice failure envelope"
+            ]
+          },
+          {
+            "path": "planning/subsystem-architecture.md",
+            "sha256": "cf549f4f046f76713c881228d82c6a7111d8ccc84db208cb9d9db67bb192d9f6"
+          },
+          {
+            "path": "planning/coding-style.md",
+            "sha256": "2d8e327e4172643544bd80b591f38226c25b83940a10f1d9e18ada9044faeabb"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "Tuning lands in the fixture composition first so the user can tune sooner; this task moves that wiring with the rest. Do not start it while a tuning task is editing the same files."
+        ],
+        "out_of_scope": [
+          "Behaviour changes",
+          "Multi-room routing",
+          "Production deployment"
+        ],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 92,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-C05",
+      "feature_id": "F08",
+      "title": "Bring typed dialogue into the playable browser flow",
+      "objective": "Integrate the browser dialogue client so players can talk to the courier in the browser, carrying over the work on branch codex/f08-dialogue-recovery-20261010-a1 (candidate 95da403).",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/ (until PLAY-C02 retires it)",
+        "crates/df-ui/src/"
+      ],
+      "acceptance_json": [
+        "A player types a line to the courier in the browser and sees the confirmed result.",
+        "Rejected and uncertain inputs show a visible, typed outcome.",
+        "B-F08-D03 is closed through its normal review, or its remainder is recorded.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Existing native dialogue contract test.",
+        "Browser observation of submit, confirm and cancel."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M1",
+        "milestone_goal": "Plays by hand: the existing harbor journey runs from main with one command.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "The native DialogueService is served on main (crates/df-tools/src/gameplay/dialogue.rs:96) but the browser on main has no client for it; that exists only on the unmerged branch behind B-F08-D03, which is in review.",
+        "objective": "Integrate the browser dialogue client so players can talk to the courier in the browser, carrying over the work on branch codex/f08-dialogue-recovery-20261010-a1 (candidate 95da403).",
+        "owners": [
+          "df-tools",
+          "df-ui"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Bring typed dialogue into the playable browser flow",
+            "owner": "df-tools"
+          },
+          {
+            "hook": "Bring typed dialogue into the playable browser flow",
+            "owner": "df-ui"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-F08-D03"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/implementation-roadmap.md",
+            "sha256": "0160ad8e8ec38f768e2348209b9989e30e8f403d9b1a4ebf694f0801f7206932",
+            "sections": [
+              "Delivery slices",
+              "First-slice failure envelope"
+            ]
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-C02",
+      "feature_id": "S01",
+      "title": "Connect the designed player and display screens to the live game",
+      "objective": "df-web's role shell with the df-player and df-display screens renders from the server's view stream through df-client and sends real inputs. The hand-built client in df-tools is retired.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-web/src/",
+        "crates/df-player/src/",
+        "crates/df-display/src/",
+        "crates/df-client/src/",
+        "crates/df-tools/src/gameplay_browser.rs",
+        "crates/df-tools/src/gameplay_browser/"
+      ],
+      "acceptance_json": [
+        "Join, lobby, character creation, exploration, dialogue, combat and overlays render from live views in both roles.",
+        "No synthetic fixture data is on the served path.",
+        "Views update in place without a page reload, and valid focus and drafts survive updates.",
+        "The hand-built client is deleted.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "WebAssembly build and browser-target checks.",
+        "Browser playthrough in both roles."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M3",
+        "milestone_goal": "Real two-role slice: a df-server binary and the designed screens (roadmap S01).",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "There are two disjoint browser clients. The one that talks to the server is hand-built DOM in crates/df-tools/src/gameplay_browser.rs. The designed screens (df-web RoleShell, df-player, df-display, about 24,000 lines of df-ui) run only on synthetic fixture data and stop at a caller closure. No mapper from ViewMessage to the screen views exists outside exploration.",
+        "objective": "df-web's role shell with the df-player and df-display screens renders from the server's view stream through df-client and sends real inputs. The hand-built client in df-tools is retired.",
+        "owners": [
+          "df-web",
+          "df-player",
+          "df-display",
+          "df-client"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Connect the designed player and display screens to the live game",
+            "owner": "df-web"
+          },
+          {
+            "hook": "Connect the designed player and display screens to the live game",
+            "owner": "df-player"
+          },
+          {
+            "hook": "Connect the designed player and display screens to the live game",
+            "owner": "df-display"
+          },
+          {
+            "hook": "Connect the designed player and display screens to the live game",
+            "owner": "df-client"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-S01-W03",
+          "B-C-df-web-I02",
+          "B-C-df-web-I03",
+          "B-C-df-web-W01",
+          "B-C-df-client-I01",
+          "B-C-df-client-W01"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/implementation-roadmap.md",
+            "sha256": "0160ad8e8ec38f768e2348209b9989e30e8f403d9b1a4ebf694f0801f7206932",
+            "sections": [
+              "Delivery slices",
+              "First-slice failure envelope"
+            ]
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 91,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-C03",
+      "feature_id": "F01",
+      "title": "Add create-room and ready so a table can start its own game",
+      "objective": "Add create-room and ready calls and the lobby flow, using the invitation and readiness policy that already exists. Room codes are generated. The display pairs through the room.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-protocol/proto/gameplay.proto",
+        "crates/df-server/",
+        "crates/df-session/src/",
+        "crates/df-web/src/",
+        "crates/df-player/src/",
+        "crates/df-display/src/"
+      ],
+      "acceptance_json": [
+        "A display creates a room and shows a generated code; two players join with it.",
+        "The game starts only when the readiness rule is met.",
+        "No constant room code or embedded display credential remains.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for create, join, ready and refusal cases.",
+        "Browser run from create to start in both roles."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M3",
+        "milestone_goal": "Real two-role slice: a df-server binary and the designed screens (roadmap S01).",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "gameplay.proto has Join, Watch, Submit and Dialogue only. The room code is the constant LANTERN (crates/df-tools/src/gameplay/journey.rs:36), the display credential is embedded in the served page (gameplay.rs:277), and df-session invitation.rs and readiness.rs have no caller.",
+        "objective": "Add create-room and ready calls and the lobby flow, using the invitation and readiness policy that already exists. Room codes are generated. The display pairs through the room.",
+        "owners": [
+          "df-protocol",
+          "df-server",
+          "df-session",
+          "df-web"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Add create-room and ready so a table can start its own game",
+            "owner": "df-protocol"
+          },
+          {
+            "hook": "Add create-room and ready so a table can start its own game",
+            "owner": "df-server"
+          },
+          {
+            "hook": "Add create-room and ready so a table can start its own game",
+            "owner": "df-session"
+          },
+          {
+            "hook": "Add create-room and ready so a table can start its own game",
+            "owner": "df-web"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-F01-I01",
+          "B-F01-I02",
+          "B-F01-I04",
+          "B-F01-W02",
+          "B-S01-W01"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/implementation-roadmap.md",
+            "sha256": "0160ad8e8ec38f768e2348209b9989e30e8f403d9b1a4ebf694f0801f7206932",
+            "sections": [
+              "Delivery slices",
+              "First-slice failure envelope"
+            ]
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 91,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-C04",
+      "feature_id": "F02",
+      "title": "Use real guest sign-in and let players rejoin after a restart",
+      "objective": "Replace the random header binding with df-auth guest bootstrap and membership. Credentials persist in the browser so a reload or a server restart rejoins the same member.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-server/",
+        "crates/df-auth/src/",
+        "crates/df-persistence/src/",
+        "crates/df-client/src/",
+        "crates/df-web/src/"
+      ],
+      "acceptance_json": [
+        "A player reloads the page and is the same member with the same character.",
+        "After a server restart the saved game is restored and both players rejoin.",
+        "A request with another member's identity is refused.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for bootstrap, rebind and refusal.",
+        "Browser reload and restart observation."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M3",
+        "milestone_goal": "Real two-role slice: a df-server binary and the designed screens (roadmap S01).",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Authentication today is a random 32-byte x-df-local-binding header (gameplay.rs:56-78). df-auth is a declared dependency with no use on the served path, and credentials live only in tab memory, so a restored game cannot be rejoined.",
+        "objective": "Replace the random header binding with df-auth guest bootstrap and membership. Credentials persist in the browser so a reload or a server restart rejoins the same member.",
+        "owners": [
+          "df-auth",
+          "df-server",
+          "df-client"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Use real guest sign-in and let players rejoin after a restart",
+            "owner": "df-auth"
+          },
+          {
+            "hook": "Use real guest sign-in and let players rejoin after a restart",
+            "owner": "df-server"
+          },
+          {
+            "hook": "Use real guest sign-in and let players rejoin after a restart",
+            "owner": "df-client"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-C-df-auth-W01",
+          "B-F02-I01",
+          "B-F02-W01"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/implementation-roadmap.md",
+            "sha256": "0160ad8e8ec38f768e2348209b9989e30e8f403d9b1a4ebf694f0801f7206932",
+            "sections": [
+              "Delivery slices",
+              "First-slice failure envelope"
+            ]
+          },
+          {
+            "path": "planning/storage-architecture.md",
+            "sha256": "69c6ef1ec2ce02b0ecc33c361e83ef9a027f669df1abe49199605552466a1da6"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 91,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-C06",
+      "feature_id": "S01",
+      "title": "Accept the playable two-role slice in real browsers",
+      "objective": "Run the roadmap's S01 checks on the df-server binary and the designed screens: create, join, ready, play, a rejected action, private view denial, lost-response lookup, reconnect and a PostgreSQL restart.",
+      "stage": "acceptance",
+      "edit_areas_json": [
+        "development/evidence/s01-playable/ (retained evidence only)"
+      ],
+      "acceptance_json": [
+        "Every listed S01 check is observed passing or recorded as failing with evidence.",
+        "The telemetry query is reported as not performed, not as passed.",
+        "S01-ACCEPT is not closed by this task alone.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Real browsers in both roles with an operator with vision.",
+        "Database restart during play."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M3",
+        "milestone_goal": "Real two-role slice: a df-server binary and the designed screens (roadmap S01).",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "This is the acceptance check for milestone M3. The S01 telemetry query (OTEL into SQLite) is not on this track and stays an explicit open item for S01-ACCEPT.",
+        "objective": "Run the roadmap's S01 checks on the df-server binary and the designed screens: create, join, ready, play, a rejected action, private view denial, lost-response lookup, reconnect and a PostgreSQL restart.",
+        "owners": [
+          "coordinator",
+          "independent output evaluator"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Accept the playable two-role slice in real browsers",
+            "owner": "coordinator"
+          },
+          {
+            "hook": "Accept the playable two-role slice in real browsers",
+            "owner": "independent output evaluator"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-S01-A01",
+          "B-S01-F01",
+          "B-S01-F02",
+          "B-S01-F03",
+          "B-S01-F04",
+          "S01-ACCEPT"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/implementation-roadmap.md",
+            "sha256": "0160ad8e8ec38f768e2348209b9989e30e8f403d9b1a4ebf694f0801f7206932",
+            "sections": [
+              "Delivery slices",
+              "First-slice failure envelope"
+            ]
+          },
+          {
+            "path": "ADR/0005-frontier-output-evaluation.md",
+            "sha256": "25ab35a57ee8516a272b1ff3d04bba4def91319255d89158c9be55283ca6c35c"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 91,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-D01",
+      "feature_id": "F33",
+      "title": "Reconcile the queue with code already on main",
+      "objective": "For each blueprint implementation task on the playable path whose behaviour is already integrated, record the commit and evidence and take it through review, or record the precise remainder, so it is not implemented twice.",
+      "stage": "resolution",
+      "edit_areas_json": [
+        "development/workflow.sqlite3 (coordinator queue state)",
+        "development/evidence/ (mapping table)"
+      ],
+      "acceptance_json": [
+        "A retained table maps every S01-path blueprint to delivered at a commit, partly delivered, or not started.",
+        "Delivered ones are closed only through the normal reviewed lifecycle.",
+        "Nothing is closed by assertion.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Spot-check each delivered mapping by reading the cited code and running its tests."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "HK",
+        "milestone_goal": "Housekeeping that keeps the queue, machine and docs truthful.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "The queue lists B-C-df-engine-I01, B-C-df-persistence-I01 and other S01 prerequisites as pending although that code is integrated and reached by the gameplay demo. Under the current dependency graph S01-ACCEPT sits behind 244 unfinished tasks and B-C-df-server-I01 behind 87.",
+        "objective": "For each blueprint implementation task on the playable path whose behaviour is already integrated, record the commit and evidence and take it through review, or record the precise remainder, so it is not implemented twice.",
+        "owners": [
+          "coordinator"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Reconcile the queue with code already on main",
+            "owner": "coordinator"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-F33-D01",
+          "B-F33-D03"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "planning/plan-database.md",
+            "sha256": "96e3d6c791e7e7cb26e5831d9fde720f69d17301cb067d106966455870f21898"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 93,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-D02",
+      "feature_id": "F32",
+      "title": "Stop leftover processes and reclaim build output",
+      "objective": "Stop the old preview servers and database left running, and prune build folders and worktrees that no retained evidence depends on.",
+      "stage": "resolution",
+      "edit_areas_json": [
+        "artifacts/build/",
+        "artifacts/worktrees/",
+        "owned preview and database processes"
+      ],
+      "acceptance_json": [
+        "A read-only inventory lists each process and folder with its owner and whether evidence pins it.",
+        "Only items the user approved are stopped or deleted.",
+        "Retained evidence, the workflow, telemetry and quality databases are untouched.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Inventory before and after.",
+        "Port and process check after."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "HK",
+        "milestone_goal": "Housekeeping that keeps the queue, machine and docs truthful.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "On 2026-10-11, ten df-transport-fixture previews (ports 43180-43194) and one PostgreSQL from 30 September and 1 October were still running. artifacts/build holds 353 GB in 697 folders and there are 670 worktrees and 570 branches.",
+        "objective": "Stop the old preview servers and database left running, and prune build folders and worktrees that no retained evidence depends on.",
+        "owners": [
+          "coordinator",
+          "cleanup"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Stop leftover processes and reclaim build output",
+            "owner": "coordinator"
+          },
+          {
+            "hook": "Stop leftover processes and reclaim build output",
+            "owner": "cleanup"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-F32-I04"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "ADR/0002-resource-scheduling-and-cleanup.md",
+            "sha256": "a6476cfef449e089639109cc6d3cf5f0800b792b57a32696258d5ac0b9511966"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "blocked",
+      "blocking_reason": "Needs the user's approval before any process is stopped or any build output or worktree is deleted.",
+      "originating_task_id": null,
+      "priority": 80,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-D03",
+      "feature_id": "X06",
+      "title": "Bring the README, AGENTS.md and start guide up to date",
+      "objective": "Correct the statements that predate the code: the README's current-state section, the AGENTS.md phrases about Git, the workspace and previews not existing, and the build steps in development/start-s00.md. Point them at the launcher.",
+      "stage": "planning",
+      "edit_areas_json": [
+        "README.md",
+        "AGENTS.md",
+        "development/start-s00.md",
+        "development/README.md"
+      ],
+      "acceptance_json": [
+        "Each corrected statement matches the code at the named commit.",
+        "Only stale statements change; rules and policy text are untouched.",
+        "The documented launch steps work when followed literally.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Follow the documented steps from a clean checkout."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "HK",
+        "milestone_goal": "Housekeeping that keeps the queue, machine and docs truthful.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "README.md was last edited on 30 September and says the game server, clients, rules and PostgreSQL are unimplemented. development/start-s00.md omits the five DUNGEONFLUX_BUILD_* inputs that build-fixture.sh now requires.",
+        "objective": "Correct the statements that predate the code: the README's current-state section, the AGENTS.md phrases about Git, the workspace and previews not existing, and the build steps in development/start-s00.md. Point them at the launcher.",
+        "owners": [
+          "coordinator"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Bring the README, AGENTS.md and start guide up to date",
+            "owner": "coordinator"
+          }
+        ],
+        "canonical_task_refs": [],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+          },
+          {
+            "path": "ADR/0004-development-reliability.md",
+            "sha256": "8f03d02d478086fd1f50d7aa10e8e7e766e3b15ae02f7f96efa43757c98a4dae"
+          }
+        ],
+        "input_revision": "0b32c6b001673db1dd4862dd486a7ffc219afb50",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 85,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-11T20:13:57+00:00",
+      "updated_at": "2026-10-11T20:13:57+00:00"
     }
   ],
-  "dependencies": []
+  "dependencies": [
+    {
+      "task_id": "PLAY-A02",
+      "prerequisite_task_id": "PLAY-A01"
+    },
+    {
+      "task_id": "PLAY-A03",
+      "prerequisite_task_id": "PLAY-A01"
+    },
+    {
+      "task_id": "PLAY-A03",
+      "prerequisite_task_id": "PLAY-A02"
+    },
+    {
+      "task_id": "PLAY-B02",
+      "prerequisite_task_id": "PLAY-B01"
+    },
+    {
+      "task_id": "PLAY-B02",
+      "prerequisite_task_id": "PLAY-A03"
+    },
+    {
+      "task_id": "PLAY-B03",
+      "prerequisite_task_id": "PLAY-B02"
+    },
+    {
+      "task_id": "PLAY-B04",
+      "prerequisite_task_id": "PLAY-B03"
+    },
+    {
+      "task_id": "PLAY-B05",
+      "prerequisite_task_id": "PLAY-B04"
+    },
+    {
+      "task_id": "PLAY-B06",
+      "prerequisite_task_id": "PLAY-B05"
+    },
+    {
+      "task_id": "PLAY-C01",
+      "prerequisite_task_id": "PLAY-A03"
+    },
+    {
+      "task_id": "PLAY-C01",
+      "prerequisite_task_id": "PLAY-B06"
+    },
+    {
+      "task_id": "PLAY-C05",
+      "prerequisite_task_id": "PLAY-A03"
+    },
+    {
+      "task_id": "PLAY-C02",
+      "prerequisite_task_id": "PLAY-C01"
+    },
+    {
+      "task_id": "PLAY-C02",
+      "prerequisite_task_id": "PLAY-C05"
+    },
+    {
+      "task_id": "PLAY-C03",
+      "prerequisite_task_id": "PLAY-C01"
+    },
+    {
+      "task_id": "PLAY-C03",
+      "prerequisite_task_id": "PLAY-C02"
+    },
+    {
+      "task_id": "PLAY-C04",
+      "prerequisite_task_id": "PLAY-C03"
+    },
+    {
+      "task_id": "PLAY-C06",
+      "prerequisite_task_id": "PLAY-C02"
+    },
+    {
+      "task_id": "PLAY-C06",
+      "prerequisite_task_id": "PLAY-C03"
+    },
+    {
+      "task_id": "PLAY-C06",
+      "prerequisite_task_id": "PLAY-C04"
+    },
+    {
+      "task_id": "PLAY-D03",
+      "prerequisite_task_id": "PLAY-A01"
+    }
+  ]
 }
