@@ -560,6 +560,7 @@ name = "df-presentation"
 version = "0.1.0"
 dependencies = [
  "df-assets",
+ "df-media",
  "df-model",
  "df-observe",
  "df-types",

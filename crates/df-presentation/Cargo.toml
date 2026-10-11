@@ -9,6 +9,7 @@ publish = false
 df-model = { path = "../df-model" }
 
 [dev-dependencies]
+df-media = { path = "../df-media" }
 df-types = { path = "../df-types" }
 df-assets = { path = "../df-assets" }
 df-observe = { path = "../df-observe" }
