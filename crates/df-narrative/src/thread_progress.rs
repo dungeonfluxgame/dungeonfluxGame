@@ -34,6 +34,7 @@ pub(crate) struct AcceptedThreadConsequence<'a> {
     pub thread: &'a ContentReference,
     pub source: &'a GameFact,
     pub disposition: ThreadDisposition,
+    pub ending_policy: Option<ContentReference>,
 }
 
 /// Explicit record, consequence and comparison budgets; no calibrated defaults.
@@ -74,6 +75,8 @@ pub struct ThreadProgressEvidence {
     pub ordinal: u32,
     pub cause: Option<FactId>,
     pub disposition: ThreadDisposition,
+    /// Explicit authored eligibility only; no campaign termination or publication authority.
+    pub ending_policy: Option<ContentReference>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -110,6 +113,9 @@ pub enum CheckpointProgressError {
     Binding(CheckpointError),
     Progress(ProgressError),
     SourceDefinition,
+    SourceAdmission,
+    UnsupportedEndingPolicy,
+    InvalidEndingDisposition,
     InvalidCandidate(CheckpointError),
 }
 
@@ -129,6 +135,44 @@ pub fn stage_checkpoint_thread_progress(
     current: &Checkpoint,
     request: ThreadCheckpointRequest<'_>,
     limits: ProgressLimits,
+) -> Result<CheckpointThreadProgressProposal, CheckpointProgressError> {
+    stage_admitted_thread_progress(current, request, limits, None)
+}
+
+type ThreadSourceAdmission<'a> = dyn Fn(
+        &Checkpoint,
+        &RevisionLabel,
+        &ThreadConsequenceSelection<'_>,
+        &GameFact,
+    ) -> Result<Option<ContentReference>, CheckpointProgressError>
+    + 'a;
+
+impl ThreadCheckpointRequest<'_> {
+    /// Revalidates every canonical consequence with the immutable content owner.
+    /// The owner performs a bounded pure lookup in its current content snapshot,
+    /// admitting the exact thread/event/disposition and any ending policy.
+    /// Missing or withdrawn required policy must refuse, never become ordinary closure.
+    /// Eligibility remains detached evidence; session owns durable ending/publication.
+    pub fn stage_source_admitted(
+        self,
+        current: &Checkpoint,
+        limits: ProgressLimits,
+        admit: impl Fn(
+            &Checkpoint,
+            &RevisionLabel,
+            &ThreadConsequenceSelection<'_>,
+            &GameFact,
+        ) -> Result<Option<ContentReference>, CheckpointProgressError>,
+    ) -> Result<CheckpointThreadProgressProposal, CheckpointProgressError> {
+        stage_admitted_thread_progress(current, self, limits, Some(&admit))
+    }
+}
+
+fn stage_admitted_thread_progress(
+    current: &Checkpoint,
+    request: ThreadCheckpointRequest<'_>,
+    limits: ProgressLimits,
+    admit: Option<&ThreadSourceAdmission<'_>>,
 ) -> Result<CheckpointThreadProgressProposal, CheckpointProgressError> {
     current
         .validate_resume(request.expected_basis, request.admitted_pins)
@@ -193,10 +237,24 @@ pub fn stage_checkpoint_thread_progress(
                 ProgressError::SourceFactMismatch,
             ));
         }
+        let ending_policy = if let Some(admit) = admit {
+            work.charge().map_err(CheckpointProgressError::Progress)?;
+            let policy = admit(current, request.policy, selection, source)?;
+            if let Some(policy) = &policy {
+                if selection.disposition != ThreadDisposition::Resolve {
+                    return Err(CheckpointProgressError::InvalidEndingDisposition);
+                }
+                content(&basis, policy, &mut work).map_err(CheckpointProgressError::Progress)?;
+            }
+            policy
+        } else {
+            None
+        };
         consequences.push(AcceptedThreadConsequence {
             thread: selection.thread,
             source,
             disposition: selection.disposition,
+            ending_policy,
         });
     }
     let proposed = stage_thread_progress(
@@ -457,6 +515,7 @@ pub(crate) fn stage_thread_progress(
                 ordinal: canonical.ordinal,
                 cause: canonical.cause,
                 disposition: consequence.disposition,
+                ending_policy: consequence.ending_policy.clone(),
             });
         }
     }

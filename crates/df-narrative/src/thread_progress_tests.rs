@@ -132,6 +132,7 @@ impl Fixture {
             thread: &self.narrative.open_threads[thread],
             source: &self.facts[source],
             disposition,
+            ending_policy: None,
         }
     }
 }
@@ -257,6 +258,7 @@ fn invalid_later_consequence_refuses_the_entire_candidate() {
             thread: &missing,
             source: &fixture.facts[2],
             disposition: ThreadDisposition::Continue,
+            ending_policy: None,
         },
     ];
     assert_eq!(
@@ -274,6 +276,7 @@ fn closed_thread_and_conflicting_batch_have_typed_refusals() {
         thread: &closed,
         source: &fixture.facts[1],
         disposition: ThreadDisposition::Resolve,
+        ending_policy: None,
     };
     assert_eq!(
         stage_thread_progress(fixture.view(), &[consequence], limits()),
@@ -339,6 +342,7 @@ fn missing_or_forged_source_record_cannot_supply_progress() {
             thread: &fixture.narrative.open_threads[0],
             source: &source,
             disposition: ThreadDisposition::Continue,
+            ending_policy: None,
         };
         assert_eq!(
             stage_thread_progress(fixture.view(), &[consequence], limits()),
@@ -1065,4 +1069,425 @@ fn checkpoint_selection_bounds_decision_records_and_ownership_work() {
         Err(CheckpointProgressError::Progress(ProgressError::Capacity)),
     );
     assert_eq!(excessive, unchanged);
+}
+
+struct ThreadSourceRecord {
+    thread: ContentReference,
+    source: GameFact,
+    disposition: ThreadDisposition,
+    ending_required: bool,
+    ending_policy: Option<ContentReference>,
+}
+
+struct ThreadSourceFixture {
+    basis: Basis,
+    pins: CheckpointPins,
+    policy: RevisionLabel,
+    records: Vec<ThreadSourceRecord>,
+}
+
+impl ThreadSourceFixture {
+    fn new(fixture: &Fixture, current: &Checkpoint, disposition: ThreadDisposition) -> Self {
+        Self {
+            basis: current.basis(),
+            pins: current.pins().clone(),
+            policy: fixture.policy.clone(),
+            records: (0..2)
+                .map(|index| ThreadSourceRecord {
+                    thread: fixture.narrative.open_threads[index].clone(),
+                    source: fixture.facts[index + 1].clone(),
+                    disposition,
+                    ending_required: false,
+                    ending_policy: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn admit(
+        &self,
+        current: &Checkpoint,
+        policy: &RevisionLabel,
+        selection: &ThreadConsequenceSelection<'_>,
+        source: &GameFact,
+    ) -> Result<Option<ContentReference>, CheckpointProgressError> {
+        if current.basis() != self.basis || current.pins() != &self.pins || policy != &self.policy {
+            return Err(CheckpointProgressError::SourceAdmission);
+        }
+        let record = self.records.iter().find(|record| {
+            record.thread == *selection.thread
+                && record.source == *source
+                && record.source.id == selection.source
+                && record.disposition == selection.disposition
+                && matches!(
+                    &record.source.value,
+                    FactValue::ContentEvent { definition, .. } if definition == selection.event_definition
+                )
+        }).ok_or(CheckpointProgressError::SourceAdmission)?;
+        if record.ending_required && record.ending_policy.is_none() {
+            return Err(CheckpointProgressError::UnsupportedEndingPolicy);
+        }
+        Ok(record.ending_policy.clone())
+    }
+}
+
+#[test]
+fn source_owned_ordinary_resolution_preserves_every_ongoing_sibling() {
+    let fixture = Fixture::new();
+    let current = checkpoint(&fixture);
+    let before = current.clone();
+    let owner = ThreadSourceFixture::new(&fixture, &current, ThreadDisposition::Resolve);
+    let event = reference("resolved-event");
+    let selections = [ThreadConsequenceSelection {
+        thread: &fixture.narrative.open_threads[0],
+        event_definition: &event,
+        source: fact_id(2),
+        disposition: ThreadDisposition::Resolve,
+    }];
+    let propose = || {
+        checkpoint_request(&fixture, &current, &selections).stage_source_admitted(
+            &current,
+            limits(),
+            |current, policy, selection, source| owner.admit(current, policy, selection, source),
+        )
+    };
+    let result = propose().unwrap();
+    assert_eq!(result, propose().unwrap());
+    assert_eq!(current, before);
+    assert_eq!(
+        result.checkpoint.state().narrative.open_threads,
+        [reference("mystery"), reference("rival")]
+    );
+    assert_eq!(result.checkpoint.state().narrative.remaining_budget, 43);
+    assert!(
+        result
+            .evidence
+            .iter()
+            .all(|item| item.ending_policy.is_none())
+    );
+    let mut protected = result.checkpoint.state().clone();
+    protected.narrative = before.state().narrative.clone();
+    assert_eq!(protected, *before.state());
+}
+
+#[test]
+fn source_owned_continue_retains_causal_progress_without_ending_eligibility() {
+    let fixture = Fixture::new();
+    let current = checkpoint(&fixture);
+    let before = current.clone();
+    let owner = ThreadSourceFixture::new(&fixture, &current, ThreadDisposition::Continue);
+    let event = reference("resolved-event");
+    let selections = [ThreadConsequenceSelection {
+        thread: &fixture.narrative.open_threads[0],
+        event_definition: &event,
+        source: fact_id(2),
+        disposition: ThreadDisposition::Continue,
+    }];
+    let result = checkpoint_request(&fixture, &current, &selections)
+        .stage_source_admitted(&current, limits(), |current, policy, selection, source| {
+            owner.admit(current, policy, selection, source)
+        })
+        .unwrap();
+    assert_eq!(
+        result.checkpoint.state().narrative.open_threads,
+        fixture.narrative.open_threads
+    );
+    assert_eq!(
+        result.checkpoint.state().narrative.accepted_facts,
+        [fact_id(1), fact_id(2)]
+    );
+    assert_eq!(result.evidence[0].operation, fixture.facts[1].operation);
+    assert!(result.evidence[0].ending_policy.is_none());
+    assert_eq!(current, before);
+    assert_eq!(
+        checkpoint_request(&fixture, &current, &selections).stage_source_admitted(
+            &current,
+            limits(),
+            |current, policy, selection, source| {
+                owner.admit(current, policy, selection, source)?;
+                Ok(Some(reference("campaign")))
+            },
+        ),
+        Err(CheckpointProgressError::InvalidEndingDisposition)
+    );
+    assert_eq!(current, before);
+}
+
+#[test]
+fn authored_ending_eligibility_is_exact_detached_causal_evidence() {
+    let mut fixture = Fixture::new();
+    let ending = reference("authored-ending-policy");
+    fixture.admitted.push(ending.clone());
+    let current = checkpoint(&fixture);
+    let before = current.clone();
+    let mut owner = ThreadSourceFixture::new(&fixture, &current, ThreadDisposition::Resolve);
+    owner.records[1].ending_required = true;
+    owner.records[1].ending_policy = Some(ending.clone());
+    let event = reference("resolved-event");
+    // Canonical committed order must survive reverse producer order.
+    let selections = [
+        ThreadConsequenceSelection {
+            thread: &fixture.narrative.open_threads[1],
+            event_definition: &event,
+            source: fact_id(3),
+            disposition: ThreadDisposition::Resolve,
+        },
+        ThreadConsequenceSelection {
+            thread: &fixture.narrative.open_threads[0],
+            event_definition: &event,
+            source: fact_id(2),
+            disposition: ThreadDisposition::Resolve,
+        },
+    ];
+    let result = checkpoint_request(&fixture, &current, &selections)
+        .stage_source_admitted(&current, limits(), |current, policy, selection, source| {
+            owner.admit(current, policy, selection, source)
+        })
+        .unwrap();
+    assert_eq!(result.evidence[0].source, fact_id(2));
+    assert!(result.evidence[0].ending_policy.is_none());
+    assert_eq!(result.evidence[1].source, fact_id(3));
+    assert_eq!(result.evidence[1].ordinal, fixture.facts[2].ordinal);
+    assert_eq!(result.evidence[1].cause, Some(fact_id(2)));
+    assert_eq!(result.evidence[1].ending_policy, Some(ending));
+    assert_eq!(
+        result.checkpoint.state().narrative.open_threads,
+        [reference("rival")]
+    );
+    assert_eq!(current, before);
+    let mut protected = result.checkpoint.state().clone();
+    protected.narrative = before.state().narrative.clone();
+    assert_eq!(protected, *before.state());
+}
+
+#[test]
+fn absent_withdrawn_or_unadmitted_ending_policy_refuses_without_closure() {
+    let fixture = Fixture::new();
+    let current = checkpoint(&fixture);
+    let before = current.clone();
+    let event = reference("resolved-event");
+    let selections = [ThreadConsequenceSelection {
+        thread: &fixture.narrative.open_threads[1],
+        event_definition: &event,
+        source: fact_id(3),
+        disposition: ThreadDisposition::Resolve,
+    }];
+    for case in 0..3 {
+        let mut owner = ThreadSourceFixture::new(&fixture, &current, ThreadDisposition::Resolve);
+        owner.records[1].ending_required = true;
+        let expected = match case {
+            0 => CheckpointProgressError::UnsupportedEndingPolicy,
+            1 => {
+                owner.records.pop();
+                CheckpointProgressError::SourceAdmission
+            }
+            _ => {
+                owner.records[1].ending_policy = Some(reference("unsupported-ending-policy"));
+                CheckpointProgressError::Progress(ProgressError::UnadmittedContent)
+            }
+        };
+        assert_eq!(
+            checkpoint_request(&fixture, &current, &selections).stage_source_admitted(
+                &current,
+                limits(),
+                |current, policy, selection, source| owner
+                    .admit(current, policy, selection, source),
+            ),
+            Err(expected)
+        );
+        assert_eq!(current, before);
+    }
+}
+
+#[test]
+fn source_owner_rejects_wrong_thread_disposition_and_current_binding() {
+    let fixture = Fixture::new();
+    let current = checkpoint(&fixture);
+    let before = current.clone();
+    let event = reference("resolved-event");
+    let selections = [ThreadConsequenceSelection {
+        thread: &fixture.narrative.open_threads[0],
+        event_definition: &event,
+        source: fact_id(2),
+        disposition: ThreadDisposition::Resolve,
+    }];
+    for case in 0..7 {
+        let mut owner = ThreadSourceFixture::new(&fixture, &current, ThreadDisposition::Resolve);
+        match case {
+            0 => owner.records[0].thread = reference("mystery"),
+            1 => owner.records[0].disposition = ThreadDisposition::Continue,
+            2 => owner.basis.revision = revision(6),
+            3 => owner.pins.content.package_digest = ContentDigest([9; 32]),
+            4 => owner.policy = label("withdrawn-policy"),
+            5 => owner.records[0].source.operation = OperationId::from_bytes(&[9; 16]).unwrap(),
+            _ => owner.records[0].source.ordinal = 1,
+        }
+        assert_eq!(
+            checkpoint_request(&fixture, &current, &selections).stage_source_admitted(
+                &current,
+                limits(),
+                |current, policy, selection, source| owner
+                    .admit(current, policy, selection, source),
+            ),
+            Err(CheckpointProgressError::SourceAdmission)
+        );
+        assert_eq!(current, before);
+    }
+}
+
+#[test]
+fn source_entry_reuses_canonical_owner_and_conflict_rejection_atomically() {
+    let fixture = Fixture::new();
+    let canonical = checkpoint(&fixture);
+    let event = reference("resolved-event");
+    let selections = [
+        ThreadConsequenceSelection {
+            thread: &fixture.narrative.open_threads[0],
+            event_definition: &event,
+            source: fact_id(2),
+            disposition: ThreadDisposition::Resolve,
+        },
+        ThreadConsequenceSelection {
+            thread: &fixture.narrative.open_threads[1],
+            event_definition: &event,
+            source: fact_id(3),
+            disposition: ThreadDisposition::Resolve,
+        },
+    ];
+    let mut decisions = canonical.state().decisions.clone();
+    decisions.pop();
+    let current = checkpoint_with_decisions(&fixture, decisions);
+    let before = current.clone();
+    let owner = ThreadSourceFixture::new(&fixture, &current, ThreadDisposition::Resolve);
+    assert_eq!(
+        checkpoint_request(&fixture, &current, &selections).stage_source_admitted(
+            &current,
+            limits(),
+            |current, policy, selection, source| owner.admit(current, policy, selection, source),
+        ),
+        Err(CheckpointProgressError::Progress(
+            ProgressError::SourceFactMismatch
+        ))
+    );
+    assert_eq!(current, before);
+
+    let owner = ThreadSourceFixture::new(&fixture, &canonical, ThreadDisposition::Resolve);
+    let proposed = checkpoint_request(&fixture, &canonical, &selections)
+        .stage_source_admitted(
+            &canonical,
+            limits(),
+            |current, policy, selection, source| owner.admit(current, policy, selection, source),
+        )
+        .unwrap();
+    let repeated = proposed.checkpoint;
+    let owner = ThreadSourceFixture::new(&fixture, &repeated, ThreadDisposition::Resolve);
+    assert_eq!(
+        checkpoint_request(&fixture, &repeated, &selections).stage_source_admitted(
+            &repeated,
+            limits(),
+            |current, policy, selection, source| owner.admit(current, policy, selection, source),
+        ),
+        Err(CheckpointProgressError::Progress(
+            ProgressError::ClosedThread
+        ))
+    );
+}
+
+#[test]
+fn final_source_refusal_capacity_and_candidate_validation_publish_no_partial_state() {
+    let fixture = Fixture::new();
+    let current = checkpoint(&fixture);
+    let before = current.clone();
+    let event = reference("resolved-event");
+    let selections = [
+        ThreadConsequenceSelection {
+            thread: &fixture.narrative.open_threads[0],
+            event_definition: &event,
+            source: fact_id(2),
+            disposition: ThreadDisposition::Resolve,
+        },
+        ThreadConsequenceSelection {
+            thread: &fixture.narrative.open_threads[1],
+            event_definition: &event,
+            source: fact_id(3),
+            disposition: ThreadDisposition::Resolve,
+        },
+    ];
+    for case in 0..4 {
+        let mut owner = ThreadSourceFixture::new(&fixture, &current, ThreadDisposition::Resolve);
+        let mut request = checkpoint_request(&fixture, &current, &selections);
+        let mut bounded = limits();
+        let expected = match case {
+            0 => {
+                owner.records.pop();
+                CheckpointProgressError::SourceAdmission
+            }
+            1 => {
+                bounded.consequences = 1;
+                CheckpointProgressError::Progress(ProgressError::Capacity)
+            }
+            2 => {
+                bounded.work = 0;
+                CheckpointProgressError::Progress(ProgressError::Capacity)
+            }
+            _ => {
+                request.checkpoint_limits.maximum_records = 1;
+                CheckpointProgressError::InvalidCandidate(
+                    df_model::checkpoint::CheckpointError::Capacity,
+                )
+            }
+        };
+        assert_eq!(
+            request.stage_source_admitted(
+                &current,
+                bounded,
+                |current, policy, selection, source| owner
+                    .admit(current, policy, selection, source),
+            ),
+            Err(expected)
+        );
+        assert_eq!(current, before);
+    }
+}
+
+#[test]
+fn resolving_last_thread_or_completing_beats_never_infers_campaign_ending() {
+    let mut fixture = Fixture::new();
+    fixture.narrative.open_threads.truncate(1);
+    fixture
+        .narrative
+        .completed_beats
+        .append(&mut fixture.narrative.active_beats);
+    let current = checkpoint(&fixture);
+    let before = current.clone();
+    let mut owner = ThreadSourceFixture::new(&Fixture::new(), &current, ThreadDisposition::Resolve);
+    owner.records.truncate(1);
+    let event = reference("resolved-event");
+    let selections = [ThreadConsequenceSelection {
+        thread: &fixture.narrative.open_threads[0],
+        event_definition: &event,
+        source: fact_id(2),
+        disposition: ThreadDisposition::Resolve,
+    }];
+    let result = checkpoint_request(&fixture, &current, &selections)
+        .stage_source_admitted(&current, limits(), |current, policy, selection, source| {
+            owner.admit(current, policy, selection, source)
+        })
+        .unwrap();
+    assert!(result.checkpoint.state().narrative.open_threads.is_empty());
+    assert!(
+        result
+            .evidence
+            .iter()
+            .all(|item| item.ending_policy.is_none())
+    );
+    let selected = result.checkpoint;
+    let no_input = checkpoint_request(&fixture, &selected, &[])
+        .stage_source_admitted(&selected, limits(), |_, _, _, _| {
+            panic!("Empty thread list cannot imply a source consequence")
+        })
+        .unwrap();
+    assert_eq!(no_input.checkpoint, selected);
+    assert!(no_input.evidence.is_empty());
+    assert_eq!(current, before);
 }
