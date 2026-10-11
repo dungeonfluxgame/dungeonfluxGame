@@ -265,7 +265,10 @@ fn on_gesture(shared: &Shared, event: &Event) {
 }
 
 fn on_control(shared: &Shared, _event: &Event) {
-    match shared.borrow().sound() {
+    // Read the state first: a borrow held across the match would still be live when the
+    // arms borrow mutably, which aborts the whole client.
+    let sound = shared.borrow().sound();
+    match sound {
         Sound::Locked => unlock(shared),
         Sound::On => set_muted(shared, true),
         Sound::Muted => set_muted(shared, false),
