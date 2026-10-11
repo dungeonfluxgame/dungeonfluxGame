@@ -12,6 +12,7 @@ df-types = { path = "../df-types" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 df-observe = { path = "../df-observe" }
+tokio = { workspace = true, features = ["rt", "time"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 df-content = { path = "../df-content" }

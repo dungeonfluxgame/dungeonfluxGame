@@ -661,6 +661,7 @@ dependencies = [
  "df-observe",
  "df-rules",
  "df-types",
+ "tokio",
 ]
 
 [[package]]
