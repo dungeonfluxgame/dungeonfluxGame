@@ -1,3 +1,7 @@
+#[expect(
+    dead_code,
+    reason = "The shared session fixture exposes unrelated helpers unused by these presentation tests"
+)]
 #[path = "../../df-session/tests/support/fixture_model.rs"]
 mod fixture_model;
 mod support;
@@ -745,4 +749,201 @@ fn exact_caps_allow_selection_and_zero_demand_policy_does_not_create_generation(
     .unwrap();
     assert_eq!(result.disposition, MomentDisposition::Selected);
     assert!(result.selected.unwrap().demands.is_empty());
+}
+
+fn provenance_checkpoint(
+    causes: &[u8],
+    decision_fact: Option<u8>,
+    extra_seed_facts: u8,
+) -> Checkpoint {
+    let mut state = fixture_model::state();
+    let basis = fixture_model::basis();
+    let pins = fixture_model::pins();
+    let content = fixture_model::content();
+    let operation = |id| df_types::OperationId::from_bytes(&[id; 16]).unwrap();
+    for id in [30, 31].into_iter().chain(40..40 + extra_seed_facts) {
+        state.facts.push(GameFact {
+            id: fact(id),
+            revision: basis.revision,
+            operation: operation(id),
+            ordinal: 0,
+            cause: None,
+            audience: AudienceScope::Shared,
+            value: FactValue::ContentEvent {
+                definition: content.clone(),
+                subjects: vec![entity(4)],
+            },
+        });
+    }
+    if let Some(id) = decision_fact {
+        state.decisions.push(AcceptedDecision {
+            operation: operation(id),
+            revision: basis.revision,
+            facts: vec![fact(id)],
+            draws: vec![],
+            effects: vec![],
+            source_policy: label("committed-moment-source"),
+            semantic_output: Some("exact accepted outcome".into()),
+        });
+    }
+    let moment = NarrativeMoment {
+        id: record(32),
+        location: entity(4),
+        characters: vec![entity(4)],
+        facts: vec![fact(30), fact(31)],
+        attributed_claims: vec![],
+        audience: AudienceScope::Shared,
+        semantic_focus: content.clone(),
+        identity_revision: label("fixture-entity-1"),
+    };
+    state.presentation.push(PresentationDemand {
+        id: record(33),
+        definition: content.clone(),
+        audience: AudienceScope::Shared,
+        causal_facts: causes.iter().copied().map(fact).collect(),
+        source_revision: basis.revision,
+    });
+    state.continuity.shots.push(ShotPlan {
+        id: record(34),
+        moment: moment.id,
+        subjects: vec![entity(4)],
+        audience: AudienceScope::Shared,
+        duration_ticks: 5,
+        definition: content.clone(),
+        references: vec![],
+        performance: PerformanceHint {
+            definition: content.clone(),
+            voice: None,
+            emphasis_facts: vec![fact(31)],
+        },
+    });
+    state.continuity.moments.push(moment);
+    Checkpoint::new(
+        df_model::checkpoint::CHECKPOINT_SCHEMA,
+        basis,
+        pins,
+        state,
+        ReferenceInventory {
+            rules: &[fixture_model::rule()],
+            content: &[content],
+            resources: &fixture_model::resource_constraints(),
+            assets: &[],
+        },
+        fixture_model::limits(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn committed_moment_requires_decision_lineage_only_for_causal_outcomes() {
+    for (causes, decision_fact, accepted) in [
+        (&[31][..], Some(31), true),
+        (&[31][..], None, false),
+        (&[31][..], Some(30), false),
+        (&[30][..], Some(31), false),
+        (&[30, 31][..], Some(31), false),
+    ] {
+        let checkpoint = provenance_checkpoint(causes, decision_fact, 0);
+        let original = checkpoint.clone();
+        let context = MomentContext {
+            basis: checkpoint.basis(),
+            pins: checkpoint.pins(),
+            mode: checkpoint.state().mode,
+            moment: &checkpoint.state().continuity.moments[0],
+            presentation: &checkpoint.state().presentation[0],
+        };
+        let permitted = PermittedMoment {
+            context,
+            facts: &[fact(30), fact(31)],
+            attributed_claims: &[],
+            entities: &[entity(4)],
+            content: &[fixture_model::content()],
+            assets: &[],
+        };
+        let alternatives = [MomentAlternative {
+            context,
+            shots: &checkpoint.state().continuity.shots,
+            demands: &[],
+        }];
+        let result = select_committed_moment_plan(
+            &checkpoint,
+            context,
+            now(),
+            Some(permitted),
+            &alternatives,
+            limits(),
+        );
+        if accepted {
+            let selected = result.unwrap().selected.unwrap();
+            assert!(std::ptr::eq(selected, &alternatives[0]));
+            assert_eq!(selected.context.presentation.causal_facts, vec![fact(31)]);
+            assert_eq!(selected.context.moment.facts, vec![fact(30), fact(31)]);
+            let (_, decision) = checkpoint.committed_outcome(fact(31)).unwrap();
+            assert_eq!(decision.source_policy, label("committed-moment-source"));
+            assert_eq!(
+                decision.semantic_output.as_deref(),
+                Some("exact accepted outcome")
+            );
+        } else {
+            assert!(matches!(result, Err(MomentError::InvalidCurrentContext)));
+        }
+        // The lower selector retains admitted background presentation without an outcome claim.
+        assert_eq!(
+            select_moment_plan(context, now(), Some(permitted), &alternatives, limits())
+                .unwrap()
+                .disposition,
+            MomentDisposition::Selected,
+        );
+        assert_eq!(checkpoint, original);
+    }
+}
+
+#[test]
+fn empty_causality_and_lower_selector_retain_legal_background_presentation() {
+    for extra_seed_facts in [0, 16] {
+        let checkpoint = provenance_checkpoint(&[], None, extra_seed_facts);
+        let original = checkpoint.clone();
+        let context = MomentContext {
+            basis: checkpoint.basis(),
+            pins: checkpoint.pins(),
+            mode: checkpoint.state().mode,
+            moment: &checkpoint.state().continuity.moments[0],
+            presentation: &checkpoint.state().presentation[0],
+        };
+        let permitted = PermittedMoment {
+            context,
+            facts: &[fact(30), fact(31)],
+            attributed_claims: &[],
+            entities: &[entity(4)],
+            content: &[fixture_model::content()],
+            assets: &[],
+        };
+        let alternatives = [MomentAlternative {
+            context,
+            shots: &checkpoint.state().continuity.shots,
+            demands: &[],
+        }];
+        let mut bounds = limits();
+        bounds.maximum_items = 18;
+        let result = select_committed_moment_plan(
+            &checkpoint,
+            context,
+            now(),
+            Some(permitted),
+            &alternatives,
+            bounds,
+        );
+        if extra_seed_facts == 0 {
+            assert_eq!(result.unwrap().disposition, MomentDisposition::Selected);
+        } else {
+            assert!(matches!(result, Err(MomentError::Capacity)));
+        }
+        assert_eq!(
+            select_moment_plan(context, now(), Some(permitted), &alternatives, bounds)
+                .unwrap()
+                .disposition,
+            MomentDisposition::Selected,
+        );
+        assert_eq!(checkpoint, original);
+    }
 }
