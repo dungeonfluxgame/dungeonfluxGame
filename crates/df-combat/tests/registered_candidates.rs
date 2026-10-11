@@ -1331,3 +1331,627 @@ fn registered_limits_admit_exact_requirements_and_refuse_one_below() {
         }
     }
 }
+
+use df_combat::registered_candidates::{
+    RegisteredActionError, RegisteredActionRequest, enumerate_registered_actions,
+};
+
+fn action_checkpoint() -> Checkpoint {
+    let mut supplied = waiting(false).state().clone();
+    for id in [5, 6] {
+        supplied.entities.push(WorldEntity {
+            id: entity(id),
+            definition: content(),
+            location: None,
+            position: None,
+            identity_revision: label("fixture-enemy"),
+        });
+    }
+    supplied.encounters.push(EncounterState {
+        id: RecordId::from_bytes(&[15; 16]).unwrap(),
+        definition: content(),
+        participants: vec![entity(5), entity(4), entity(6)],
+        turn_order: vec![entity(5), entity(4), entity(6)],
+        active_turn: Some(entity(5)),
+        objectives: vec![content()],
+        combat_policy: content(),
+    });
+    checkpoint(supplied).unwrap()
+}
+
+fn action_input(target: u8) -> GameInput {
+    GameInput::Game(CommandInput {
+        basis: basis(),
+        observed_revision: basis().revision,
+        operation: operation(),
+        member: member(3),
+        command: GameCommand::ProposeAction {
+            actor: entity(5),
+            action: content(),
+            targets: vec![entity(target)],
+            choices: vec![],
+        },
+    })
+}
+
+fn action_request<'a>(
+    basis: &'a Basis,
+    pins: &'a CheckpointPins,
+    source: &'a RuleReference,
+    selector: &'a RevisionLabel,
+) -> RegisteredActionRequest<'a> {
+    RegisteredActionRequest {
+        current: CandidateContext { basis, pins },
+        actor: entity(5),
+        member: member(3),
+        operation: operation(),
+        source,
+        selector,
+    }
+}
+
+#[test]
+fn registered_actions_retain_exact_order_source_native_identity_and_empty_no_action() {
+    let current = action_checkpoint();
+    let original = current.clone();
+    let source = rule();
+    let handler = Handler {
+        pins: current.pins(),
+        calls: Cell::new(0),
+        reject: false,
+    };
+    for offers in [vec![action_input(4), action_input(6)], vec![]] {
+        let calls = handler.calls.get();
+        with_pipeline(
+            &current,
+            &current,
+            &handler,
+            &[],
+            false,
+            |registry, context, selector| {
+                let basis = current.basis();
+                let receipt = enumerate_registered_actions(
+                    context,
+                    registry,
+                    action_request(&basis, current.pins(), &source, selector),
+                    &offers,
+                    budgets(),
+                )
+                .unwrap();
+                assert_eq!(receipt.admitted().offers().len(), offers.len());
+                for (admitted, supplied) in receipt.admitted().offers().iter().zip(&offers) {
+                    assert!(std::ptr::eq(*admitted, supplied));
+                }
+                assert!(std::ptr::eq(receipt.source(), &source));
+                assert!(std::ptr::eq(receipt.selector(), selector));
+                assert_eq!(receipt.actor(), entity(5));
+                assert_eq!(receipt.member(), member(3));
+                assert_eq!(receipt.operation(), operation());
+                assert_eq!(receipt.admitted().basis(), &basis);
+                assert_eq!(receipt.admitted().pins(), current.pins());
+            },
+        );
+        assert_eq!(handler.calls.get(), calls + offers.len());
+    }
+    assert_eq!(current, original);
+    assert!(current.state().decisions.is_empty());
+    assert!(current.state().draws.is_empty());
+}
+
+#[test]
+fn every_action_identity_and_structural_input_is_checked_before_any_preparation() {
+    let current = action_checkpoint();
+    let source = rule();
+    for case in 0..11 {
+        let mut invalid = action_input(6);
+        let expected = if case == 9 {
+            invalid = GameInput::Host(HostInput {
+                basis: basis(),
+                operation: operation(),
+                host: member(3),
+                command: HostCommand::RequestCheckpoint,
+            });
+            RegisteredActionError::UnsupportedCommand
+        } else if case == 10 {
+            invalid = GameInput::Timer(TimerExpiry {
+                basis: basis(),
+                timer: TimerId::from_bytes(&[21; 16]).unwrap(),
+                generation: 1,
+                observed_time: current.state().logical_time,
+            });
+            RegisteredActionError::UnsupportedCommand
+        } else {
+            let GameInput::Game(command) = &mut invalid else {
+                unreachable!()
+            };
+            match case {
+                0 => {
+                    command.member = member(99);
+                    RegisteredActionError::MemberMismatch
+                }
+                1 => {
+                    command.operation = OperationId::from_bytes(&[99; 16]).unwrap();
+                    RegisteredActionError::OperationMismatch
+                }
+                2 => {
+                    let GameCommand::ProposeAction { actor, .. } = &mut command.command else {
+                        unreachable!()
+                    };
+                    *actor = entity(4);
+                    RegisteredActionError::ActorMismatch
+                }
+                3 => {
+                    command.basis.run = RunId::from_bytes(&[99; 16]).unwrap();
+                    RegisteredActionError::StaleBasis
+                }
+                4 => {
+                    command.observed_revision = revision(2, 7);
+                    RegisteredActionError::StaleBasis
+                }
+                5 => {
+                    command.command = GameCommand::Speak {
+                        speaker: entity(5),
+                        text: "fixture".into(),
+                        conversation: None,
+                    };
+                    RegisteredActionError::UnsupportedCommand
+                }
+                6 => {
+                    let GameCommand::ProposeAction { action, .. } = &mut command.command else {
+                        unreachable!()
+                    };
+                    action.entry = label("not-current-content");
+                    RegisteredActionError::Admission(CommandError::InvalidReference)
+                }
+                7 => {
+                    let GameCommand::ProposeAction { targets, .. } = &mut command.command else {
+                        unreachable!()
+                    };
+                    *targets = vec![entity(99)];
+                    RegisteredActionError::Admission(CommandError::InvalidReference)
+                }
+                8 => {
+                    let GameCommand::ProposeAction { targets, .. } = &mut command.command else {
+                        unreachable!()
+                    };
+                    *targets = vec![entity(4), entity(4)];
+                    RegisteredActionError::Admission(CommandError::DuplicateSelection)
+                }
+                _ => unreachable!(),
+            }
+        };
+        let handler = Handler {
+            pins: current.pins(),
+            calls: Cell::new(0),
+            reject: false,
+        };
+        let offers = [action_input(4), invalid];
+        with_pipeline(
+            &current,
+            &current,
+            &handler,
+            &[],
+            false,
+            |registry, context, selector| {
+                let basis = current.basis();
+                assert_eq!(
+                    enumerate_registered_actions(
+                        context,
+                        registry,
+                        action_request(&basis, current.pins(), &source, selector),
+                        &offers,
+                        budgets(),
+                    )
+                    .err(),
+                    Some(expected)
+                );
+            },
+        );
+        assert_eq!(handler.calls.get(), 0);
+    }
+}
+
+#[test]
+fn duplicate_registered_action_payload_refuses_before_rules_preparation() {
+    let current = action_checkpoint();
+    let offers = [action_input(4), action_input(4)];
+    let handler = Handler {
+        pins: current.pins(),
+        calls: Cell::new(0),
+        reject: false,
+    };
+    with_pipeline(
+        &current,
+        &current,
+        &handler,
+        &[],
+        false,
+        |registry, context, selector| {
+            let basis = current.basis();
+            let source = rule();
+            assert_eq!(
+                enumerate_registered_actions(
+                    context,
+                    registry,
+                    action_request(&basis, current.pins(), &source, selector),
+                    &offers,
+                    budgets(),
+                )
+                .err(),
+                Some(RegisteredActionError::Enumeration(
+                    CandidateError::Duplicate {
+                        first: 0,
+                        duplicate: 1,
+                    }
+                ))
+            );
+        },
+    );
+    assert_eq!(handler.calls.get(), 0);
+}
+
+#[test]
+fn registered_action_snapshot_source_selector_and_native_owners_are_current() {
+    let current = action_checkpoint();
+    let offers = [action_input(4)];
+    let source = rule();
+    for case in 0..7 {
+        let handler = Handler {
+            pins: current.pins(),
+            calls: Cell::new(0),
+            reject: false,
+        };
+        with_pipeline(
+            &current,
+            &current,
+            &handler,
+            &[],
+            case == 4,
+            |registry, context, selector| {
+                let mut basis = current.basis();
+                let mut pins = current.pins().clone();
+                if case == 0 {
+                    basis.revision = revision(2, 7);
+                }
+                if case == 1 {
+                    pins.rules.handler = label("other-handler");
+                }
+                let foreign_selector = label("not-registered");
+                let mut foreign_source = source.clone();
+                foreign_source.clause = label("not-admitted");
+                let mut request = action_request(&basis, &pins, &source, selector);
+                if case == 2 {
+                    request.member = member(99);
+                }
+                if case == 3 {
+                    request.actor = entity(99);
+                }
+                if case == 5 {
+                    request.selector = &foreign_selector;
+                }
+                if case == 6 {
+                    request.source = &foreign_source;
+                }
+                let expected = match case {
+                    0 => RegisteredActionError::StaleBasis,
+                    1 => RegisteredActionError::StalePins,
+                    2 => RegisteredActionError::Admission(CommandError::UnknownMember),
+                    3 => RegisteredActionError::Admission(CommandError::InvalidReference),
+                    4 | 6 => RegisteredActionError::SourceMismatch,
+                    5 => {
+                        assert!(matches!(
+                            enumerate_registered_actions(
+                                context,
+                                registry,
+                                request,
+                                &offers,
+                                budgets()
+                            ),
+                            Err(RegisteredActionError::Invocation(
+                                InvocationError::Dispatch(_)
+                            ))
+                        ));
+                        return;
+                    }
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    enumerate_registered_actions(context, registry, request, &offers, budgets())
+                        .err(),
+                    Some(expected)
+                );
+            },
+        );
+        assert_eq!(handler.calls.get(), 0);
+    }
+}
+
+#[test]
+fn complete_registered_action_dependencies_refuse_current_resource_time_entity_encounter_pending_changes()
+ {
+    let prepared = action_checkpoint();
+    let dependencies = [
+        RuleDependency::Resource {
+            owner: entity(4),
+            resource: label("fixture-resource-1"),
+        },
+        RuleDependency::LogicalTime,
+        RuleDependency::Entity(entity(5)),
+        RuleDependency::Encounter(RecordId::from_bytes(&[15; 16]).unwrap()),
+        RuleDependency::PendingResolutions,
+    ];
+    for case in 0..5 {
+        let mut state = prepared.state().clone();
+        let expected = match case {
+            0 => {
+                state.resources[0].value -= 1;
+                PreconditionError::StaleResource
+            }
+            1 => {
+                state.logical_time.ticks += 1;
+                PreconditionError::StaleTime
+            }
+            2 => {
+                state.entities[1].identity_revision = label("changed-identity");
+                PreconditionError::StaleEntity
+            }
+            3 => {
+                state.encounters[0].active_turn = Some(entity(4));
+                PreconditionError::StaleEncounter
+            }
+            4 => {
+                let PendingInput::Choice { remaining } = &mut state.pending[0].next else {
+                    unreachable!()
+                };
+                remaining[0].options.push(label("changed-option"));
+                PreconditionError::StalePending
+            }
+            _ => unreachable!(),
+        };
+        let current = checkpoint(state).unwrap();
+        let original = current.clone();
+        let handler = Handler {
+            pins: current.pins(),
+            calls: Cell::new(0),
+            reject: false,
+        };
+        let offers = [action_input(4)];
+        with_pipeline(
+            &prepared,
+            &current,
+            &handler,
+            &dependencies,
+            false,
+            |registry, context, selector| {
+                let basis = current.basis();
+                let source = rule();
+                assert_eq!(
+                    enumerate_registered_actions(
+                        context,
+                        registry,
+                        action_request(&basis, current.pins(), &source, selector),
+                        &offers,
+                        budgets(),
+                    )
+                    .err(),
+                    Some(RegisteredActionError::Enumeration(CandidateError::Owner(
+                        InvocationError::Handler(PreconditionedRejection::Precondition(expected)),
+                    )))
+                );
+            },
+        );
+        assert_eq!(handler.calls.get(), 0);
+        assert_eq!(current, original);
+    }
+}
+
+#[test]
+fn registered_action_work_and_owned_byte_limits_are_exact_before_handler_callbacks() {
+    let current = action_checkpoint();
+    let offers = [action_input(4), action_input(6)];
+    let bytes: usize = offers
+        .iter()
+        .map(|offer| offer.retained_bytes().unwrap())
+        .sum();
+    let mut exact = budgets();
+    exact.candidates.max_offers = 2;
+    exact.candidates.max_candidates = 2;
+    exact.candidates.max_identity_comparisons = 1;
+    exact.candidates.max_candidate_bytes = bytes;
+    exact.maximum_rules_preparations = 2;
+    exact.maximum_checkpoint_bytes = current.retained_bytes().unwrap();
+    exact.maximum_inventory_records = 3;
+    for case in 0..10 {
+        let mut limits = exact;
+        match case {
+            0 => {}
+            1 => limits.candidates.max_offers -= 1,
+            2 => limits.candidates.max_candidates -= 1,
+            3 => limits.candidates.max_identity_comparisons -= 1,
+            4 => limits.candidates.max_candidate_bytes -= 1,
+            5 => limits.maximum_rules_preparations -= 1,
+            6 => limits.maximum_checkpoint_bytes -= 1,
+            7 => limits.maximum_inventory_records -= 1,
+            8 => limits.maximum_staged_bytes = 0,
+            9 => {}
+            _ => unreachable!(),
+        }
+        let handler = Handler {
+            pins: current.pins(),
+            calls: Cell::new(0),
+            reject: false,
+        };
+        with_pipeline(
+            &current,
+            &current,
+            &handler,
+            &[],
+            false,
+            |registry, mut context, selector| {
+                let basis = current.basis();
+                let source = rule();
+                if case == 9 {
+                    context.command_limits.maximum_retained_bytes =
+                        offers[0].retained_bytes().unwrap() - 1;
+                }
+                let result = enumerate_registered_actions(
+                    context,
+                    registry,
+                    action_request(&basis, current.pins(), &source, selector),
+                    &offers,
+                    limits,
+                );
+                if case == 0 {
+                    assert_eq!(result.unwrap().admitted().offers().len(), 2);
+                } else if case == 3 {
+                    assert_eq!(
+                        result.err(),
+                        Some(RegisteredActionError::Enumeration(
+                            CandidateError::ComparisonCapacity {
+                                required: 1,
+                                limit: 0
+                            },
+                        ))
+                    );
+                } else {
+                    assert_eq!(result.err(), Some(RegisteredActionError::Capacity));
+                }
+            },
+        );
+        assert_eq!(handler.calls.get(), if case == 0 { 2 } else { 0 });
+    }
+}
+
+// An explicitly synthetic source fixture; no enemy mechanic or draw policy is defined.
+struct ActionDrawRequiredHandler<'a> {
+    inner: Handler<'a>,
+    previews: Cell<usize>,
+}
+impl RulesCommandHandler for ActionDrawRequiredHandler<'_> {
+    type Rejection = PreviewRefusal;
+    fn pins(&self) -> &CheckpointPins {
+        self.inner.pins
+    }
+    fn stage(
+        &self,
+        input: RulesCommandInput<'_>,
+        current: &Checkpoint,
+    ) -> Result<Checkpoint, Self::Rejection> {
+        assert!(input.supplied_draws.is_empty());
+        self.previews.set(self.previews.get() + 1);
+        if let GameInput::Game(CommandInput {
+            command: GameCommand::ProposeAction { targets, .. },
+            ..
+        }) = input.command
+            && targets.contains(&entity(6))
+        {
+            return Err(PreviewRefusal::ActualDrawsRequired);
+        }
+        self.inner
+            .stage(input, current)
+            .map_err(PreviewRefusal::Structural)
+    }
+}
+
+#[test]
+fn draw_required_registered_action_refuses_entire_preview_without_consuming_outcomes() {
+    let current = action_checkpoint();
+    let original = current.clone();
+    let offers = [action_input(4), action_input(6)];
+    let source = rule();
+    let handler = ActionDrawRequiredHandler {
+        inner: Handler {
+            pins: current.pins(),
+            calls: Cell::new(0),
+            reject: false,
+        },
+        previews: Cell::new(0),
+    };
+    with_response_source(
+        &current,
+        &handler,
+        &source,
+        &[rule()],
+        |registry, context, selector| {
+            let basis = current.basis();
+            assert_eq!(
+                enumerate_registered_actions(
+                    context,
+                    registry,
+                    action_request(&basis, current.pins(), &source, selector),
+                    &offers,
+                    budgets(),
+                )
+                .err(),
+                Some(RegisteredActionError::Enumeration(CandidateError::Owner(
+                    InvocationError::Handler(PreconditionedRejection::Handler(
+                        PreviewRefusal::ActualDrawsRequired
+                    )),
+                )))
+            );
+        },
+    );
+    assert_eq!(handler.previews.get(), 2);
+    assert_eq!(handler.inner.calls.get(), 1);
+    assert_eq!(current, original);
+}
+
+#[test]
+fn registered_action_handler_refusal_and_accepted_operation_never_create_receipt() {
+    for accepted in [false, true] {
+        let mut state = action_checkpoint().state().clone();
+        if accepted {
+            state.decisions.push(AcceptedDecision {
+                operation: operation(),
+                revision: basis().revision,
+                facts: vec![],
+                draws: vec![],
+                effects: vec![],
+                source_policy: label("fixture-handler"),
+                semantic_output: None,
+            });
+        }
+        let current = checkpoint(state).unwrap();
+        let original = current.clone();
+        let offers = [action_input(4)];
+        let handler = Handler {
+            pins: current.pins(),
+            calls: Cell::new(0),
+            reject: !accepted,
+        };
+        with_pipeline(
+            &current,
+            &current,
+            &handler,
+            &[],
+            false,
+            |registry, context, selector| {
+                let basis = current.basis();
+                let source = rule();
+                let error = enumerate_registered_actions(
+                    context,
+                    registry,
+                    action_request(&basis, current.pins(), &source, selector),
+                    &offers,
+                    budgets(),
+                )
+                .err();
+                let refusal = if accepted {
+                    InvocationError::AlreadyAccepted
+                } else {
+                    InvocationError::Handler(PreconditionedRejection::Handler(
+                        CheckpointError::InvalidReference,
+                    ))
+                };
+                assert_eq!(
+                    error,
+                    Some(RegisteredActionError::Enumeration(CandidateError::Owner(
+                        refusal
+                    )))
+                );
+            },
+        );
+        assert_eq!(handler.calls.get(), usize::from(!accepted));
+        assert_eq!(current, original);
+    }
+}
