@@ -12,6 +12,7 @@ fn fixture(inn: Option<Bytes>) -> Router {
         campfire: Bytes::from_static(b"campfire"),
         portrait: Bytes::from_static(b"portrait"),
         inn,
+        combat: None,
     })
 }
 
@@ -63,6 +64,25 @@ async fn allowlisted_routes_return_exact_public_bytes_mime_and_length() {
         assert!(!response.headers().contains_key(header::CONTENT_RANGE));
         assert_eq!(to_bytes(response.into_body(), 10).await.unwrap(), expected);
     }
+}
+
+#[tokio::test]
+async fn optional_combat_scene_is_served_exactly_or_redirects_to_the_default_scene() {
+    let mut router = router(PublicAssets {
+        art: Bytes::from_static(b"0123456789"),
+        campfire: Bytes::from_static(b"campfire"),
+        portrait: Bytes::from_static(b"portrait"),
+        inn: None,
+        combat: Some(Bytes::from_static(b"combat")),
+    });
+    let response = request(&mut router, Method::GET, COMBAT_PATH, HeaderMap::new()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "image/webp");
+    assert_eq!(to_bytes(response.into_body(), 6).await.unwrap(), "combat");
+    let mut absent = fixture(None);
+    let response = request(&mut absent, Method::GET, COMBAT_PATH, HeaderMap::new()).await;
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(response.headers()[header::LOCATION], ART_PATH);
 }
 
 #[tokio::test]
@@ -247,6 +267,7 @@ async fn large_get_and_range_bodies_are_poll_driven_bounded_chunks() {
         campfire: Bytes::new(),
         portrait: Bytes::new(),
         inn: None,
+        combat: None,
     });
     let validator = etag(&mut router, ART_PATH).await;
     let mut conditional_range = range("bytes=1-");
@@ -296,6 +317,7 @@ async fn etags_bind_exact_immutable_snapshot_bytes_and_change_with_the_selected_
         campfire: Bytes::new(),
         portrait: Bytes::from_static(b"abc"),
         inn: Some(Bytes::new()),
+        combat: None,
     };
     let mut original = router(assets.clone());
     let validator = etag(&mut original, ART_PATH).await;

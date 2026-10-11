@@ -24,6 +24,7 @@ const ART_PATH: &str = "/assets/ui/scenes/mara-harbor-v4.png";
 const CAMPFIRE_PATH: &str = "/assets/concept-art/scene-campfire-under-stars.webp";
 const PORTRAIT_PATH: &str = "/assets/concept-art/vell-avatar.webp";
 const INN_PATH: &str = "/assets/concept-art/scene-tavern-barkeep-talk-rain.webp";
+const COMBAT_PATH: &str = "/assets/concept-art/combat-harbor-docks-wide-lanterns.webp";
 
 #[derive(Clone)]
 pub(super) struct PublicAssets {
@@ -31,6 +32,7 @@ pub(super) struct PublicAssets {
     pub(super) campfire: Bytes,
     pub(super) portrait: Bytes,
     pub(super) inn: Option<Bytes>,
+    pub(super) combat: Option<Bytes>,
 }
 
 #[derive(Clone)]
@@ -53,6 +55,7 @@ struct PublicSnapshots {
     campfire: PublicSnapshot,
     portrait: PublicSnapshot,
     inn: Option<PublicSnapshot>,
+    combat: Option<PublicSnapshot>,
 }
 
 pub(super) fn router(assets: PublicAssets) -> Router {
@@ -61,12 +64,14 @@ pub(super) fn router(assets: PublicAssets) -> Router {
         campfire: PublicSnapshot::new(assets.campfire),
         portrait: PublicSnapshot::new(assets.portrait),
         inn: assets.inn.map(PublicSnapshot::new),
+        combat: assets.combat.map(PublicSnapshot::new),
     };
     Router::new()
         .route(ART_PATH, get(art))
         .route(CAMPFIRE_PATH, get(campfire))
         .route(PORTRAIT_PATH, get(portrait))
         .route(INN_PATH, get(inn))
+        .route(COMBAT_PATH, get(combat))
         .with_state(snapshots)
 }
 
@@ -124,6 +129,17 @@ async fn inn(
     headers: HeaderMap,
 ) -> Response {
     match assets.inn {
+        Some(bytes) => response(bytes, "image/webp", &method, &headers),
+        None => Redirect::temporary(ART_PATH).into_response(),
+    }
+}
+
+async fn combat(
+    State(assets): State<PublicSnapshots>,
+    method: Method,
+    headers: HeaderMap,
+) -> Response {
+    match assets.combat {
         Some(bytes) => response(bytes, "image/webp", &method, &headers),
         None => Redirect::temporary(ART_PATH).into_response(),
     }

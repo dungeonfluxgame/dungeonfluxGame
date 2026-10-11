@@ -25,6 +25,8 @@ mod browser {
         initiative: "18",
         status: PRIVATE_TEXT,
         resources: &RESOURCES,
+        hit_points: None,
+        portrait: None,
     }];
     const PLAYER_ACTORS: [CombatActor<'static>; 1] = [CombatActor {
         key: "corin",
@@ -32,6 +34,8 @@ mod browser {
         initiative: "18",
         status: "Your turn · ranger",
         resources: &RESOURCES,
+        hit_points: None,
+        portrait: None,
     }];
     const PARTY_ACTORS: [CombatActor<'static>; 3] = [
         CombatActor {
@@ -40,6 +44,8 @@ mod browser {
             initiative: "18",
             status: "Taking aim",
             resources: &[],
+            hit_points: None,
+            portrait: None,
         },
         CombatActor {
             key: "mira",
@@ -47,6 +53,8 @@ mod browser {
             initiative: "14",
             status: "Waiting in the shadows",
             resources: &[],
+            hit_points: None,
+            portrait: None,
         },
         CombatActor {
             key: "dockwarden",
@@ -54,6 +62,8 @@ mod browser {
             initiative: "11",
             status: "At the broken pier",
             resources: &[],
+            hit_points: None,
+            portrait: None,
         },
     ];
     const ROLLS: [CombatRoll<'static>; 1] = [CombatRoll {
@@ -62,6 +72,7 @@ mod browser {
         value: "17",
         explanation: "13 on the die + 4 attack bonus",
         source: "Resolved · Corin Vale",
+        verdict: None,
     }];
 
     fn error(failure: impl std::fmt::Display) -> JsValue {

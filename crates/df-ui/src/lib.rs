@@ -72,9 +72,9 @@ mod combat_phase;
 mod combat_phase_theme;
 
 pub use combat_phase::{
-    CombatActor, CombatArt, CombatDraft, CombatFeedback, CombatIntent, CombatLimits, CombatOffer,
-    CombatOfferKind, CombatPhaseState, CombatPhaseView, CombatReaction, CombatResource, CombatRoll,
-    CombatValidationError,
+    CombatActor, CombatArt, CombatDraft, CombatFeedback, CombatHitPoints, CombatIntent,
+    CombatLimits, CombatOffer, CombatOfferKind, CombatPhaseState, CombatPhaseView, CombatReaction,
+    CombatResource, CombatRoll, CombatTone, CombatValidationError, CombatVerdict,
 };
 #[cfg(target_arch = "wasm32")]
 pub use combat_phase::{CombatError, CombatPhaseSurface};

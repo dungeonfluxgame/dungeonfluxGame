@@ -329,6 +329,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         campfire: campfire_bytes,
         portrait: portrait_bytes,
         inn: inn_bytes,
+        combat: combat_bytes,
     } = startup_configuration::load_assets(
         std::path::Path::new(&web_root),
         std::path::Path::new(&asset_root),
@@ -821,6 +822,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             campfire: campfire_bytes,
             portrait: portrait_bytes,
             inn: inn_bytes,
+            combat: combat_bytes,
         }))
         .merge(public_assets::extra_router(
             startup_configuration::load_extra_assets(std::path::Path::new(&asset_root))?,

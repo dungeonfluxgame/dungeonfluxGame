@@ -222,6 +222,11 @@ impl TvStage {
         })
     }
 
+    /// The stage element, so another screen can mount inside the same persistent shell.
+    pub(super) fn root(&self) -> &Element {
+        &self.root
+    }
+
     /// The container for recovery controls; it is emptied and refilled on every render.
     pub(super) fn dock(&self) -> &Element {
         &self.dock

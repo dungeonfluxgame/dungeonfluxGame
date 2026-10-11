@@ -46,12 +46,24 @@ pub struct CombatResource<'a> {
     pub label: &'a str,
     pub value: &'a str,
 }
+/// Supplied hit points. The bar only shows the ratio; no rule is evaluated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CombatHitPoints {
+    pub current: u32,
+    pub maximum: u32,
+}
 pub struct CombatActor<'a> {
     pub key: &'a str,
     pub name: &'a str,
     pub initiative: &'a str,
     pub status: &'a str,
     pub resources: &'a [CombatResource<'a>],
+    /// Optional hit-point bar on the combatant card.
+    pub hit_points: Option<CombatHitPoints>,
+    /// Optional short ASCII token (letters, digits, `-`) published as `data-portrait`
+    /// so an owner stylesheet can attach portrait art. The initiative badge remains
+    /// the readable fallback when no art loads.
+    pub portrait: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,6 +71,11 @@ pub enum CombatOfferKind {
     Action,
     Roll,
     Reaction,
+    /// A local on/off option that accompanies an action. Activation reports the same
+    /// intent; the owner flips its own draft and publishes the new `selected` value.
+    Choice {
+        selected: bool,
+    },
 }
 
 /// Exact supplied selection, forwarded with its accepted binding/revision. The
@@ -84,12 +101,26 @@ pub struct CombatOffer<'a> {
     pub enabled: bool,
     pub pending: bool,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CombatTone {
+    Success,
+    Failure,
+    Neutral,
+}
+/// Server-supplied outcome word for a roll, such as a hit or a miss.
+#[derive(Clone, Copy)]
+pub struct CombatVerdict<'a> {
+    pub label: &'a str,
+    pub tone: CombatTone,
+}
 pub struct CombatRoll<'a> {
     pub key: &'a str,
     pub label: &'a str,
     pub value: &'a str,
     pub explanation: &'a str,
     pub source: &'a str,
+    /// Optional outcome ribbon. The first supplied roll is styled as the latest roll.
+    pub verdict: Option<CombatVerdict<'a>>,
 }
 #[derive(Clone, Copy)]
 pub struct CombatReaction<'a> {
@@ -142,6 +173,7 @@ pub enum CombatValidationError {
     EmptyText,
     DuplicateKey,
     UnknownActiveActor,
+    InvalidPortrait,
     Disposed,
 }
 impl fmt::Display for CombatValidationError {
@@ -151,6 +183,7 @@ impl fmt::Display for CombatValidationError {
             Self::EmptyText => "combat presentation requires nonempty text",
             Self::DuplicateKey => "combat presentation keys repeat",
             Self::UnknownActiveActor => "active actor is absent from supplied initiative",
+            Self::InvalidPortrait => "portrait token must be 1-32 letters, digits or hyphens",
             Self::Disposed => "combat presentation scope is disposed",
         })
     }
@@ -211,6 +244,15 @@ impl CombatPhaseView<'_> {
                 text(resource.label)?;
                 text(resource.value)?;
             }
+            if let Some(portrait) = actor.portrait
+                && (portrait.is_empty()
+                    || portrait.len() > 32
+                    || !portrait
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+            {
+                return Err(CombatValidationError::InvalidPortrait);
+            }
         }
         if self.active_actor.is_some_and(|key| !keys.contains(key)) {
             return Err(CombatValidationError::UnknownActiveActor);
@@ -242,6 +284,9 @@ impl CombatPhaseView<'_> {
                 roll.source,
             ] {
                 text(value)?;
+            }
+            if let Some(verdict) = &roll.verdict {
+                text(verdict.label)?;
             }
             if !keys.insert(roll.key) {
                 return Err(CombatValidationError::DuplicateKey);
@@ -363,12 +408,15 @@ mod browser {
         name: Element,
         initiative: Element,
         status: Element,
+        hit_points: Element,
+        hit_points_text: Element,
         resources: Element,
     }
     struct RollNodes {
         root: Element,
         label: Element,
         value: Element,
+        verdict: Element,
         explanation: Element,
         source: Element,
     }
@@ -551,6 +599,40 @@ mod browser {
             CombatFeedback::Pending(text) => InputFeedback::Pending(text),
             CombatFeedback::Refused(text) => InputFeedback::Rejected(text),
         }
+    }
+
+    fn publish_hit_points(
+        bar: &Element,
+        text: &Element,
+        actor: &CombatActor<'_>,
+    ) -> Result<(), CombatError> {
+        let Some(points) = actor.hit_points else {
+            bar.set_attribute("hidden", "")?;
+            return Ok(());
+        };
+        bar.remove_attribute("hidden")?;
+        // Presentation ratio only: the supplied numbers are shown unchanged.
+        let percent = if points.maximum == 0 {
+            0
+        } else {
+            u64::from(points.current.min(points.maximum)) * 100 / u64::from(points.maximum)
+        };
+        bar.set_attribute("style", &format!("--hp:{percent}%"))?;
+        bar.set_attribute("aria-valuemin", "0")?;
+        bar.set_attribute("aria-valuemax", &points.maximum.to_string())?;
+        bar.set_attribute("aria-valuenow", &points.current.to_string())?;
+        bar.set_attribute(
+            "data-state",
+            if points.current == 0 {
+                "down"
+            } else if percent <= 35 {
+                "low"
+            } else {
+                "healthy"
+            },
+        )?;
+        set_text(text, &format!("{} / {} HP", points.current, points.maximum));
+        Ok(())
     }
 
     /// One mounted cinematic phase. Stable keyed controls retain focus; accepted
@@ -859,12 +941,20 @@ mod browser {
                     let body = child(&self.document, &root, "div", "combat-actor-body")?;
                     let name = child(&self.document, &body, "h3", "")?;
                     let status = child(&self.document, &body, "p", "combat-muted")?;
+                    let hit_points = child(&self.document, &body, "div", "combat-hp")?;
+                    hit_points.set_attribute("role", "meter")?;
+                    hit_points.set_attribute("aria-label", "Hit points")?;
+                    child(&self.document, &hit_points, "span", "combat-hp-fill")?;
+                    let hit_points_text =
+                        child(&self.document, &hit_points, "span", "combat-hp-text")?;
                     let resources = child(&self.document, &body, "dl", "combat-resources")?;
                     entry.insert(ActorNodes {
                         root,
                         name,
                         initiative,
                         status,
+                        hit_points,
+                        hit_points_text,
                         resources,
                     });
                 }
@@ -881,6 +971,11 @@ mod browser {
                         },
                     )?;
                     nodes.root.set_attribute("data-actor-key", actor.key)?;
+                    match actor.portrait {
+                        Some(portrait) => nodes.root.set_attribute("data-portrait", portrait)?,
+                        None => nodes.root.remove_attribute("data-portrait")?,
+                    }
+                    publish_hit_points(&nodes.hit_points, &nodes.hit_points_text, actor)?;
                     nodes.resources.set_text_content(None);
                     for resource in actor.resources {
                         child(&self.document, &nodes.resources, "dt", "")?
@@ -913,12 +1008,14 @@ mod browser {
                     root.set_class_name("combat-roll");
                     let label = child(&self.document, &root, "h3", "")?;
                     let value = child(&self.document, &root, "p", "combat-roll-value")?;
+                    let verdict = child(&self.document, &root, "p", "combat-roll-verdict")?;
                     let explanation = child(&self.document, &root, "p", "combat-roll-explanation")?;
                     let source = child(&self.document, &root, "p", "combat-roll-source")?;
                     entry.insert(RollNodes {
                         root,
                         label,
                         value,
+                        verdict,
                         explanation,
                         source,
                     });
@@ -928,6 +1025,24 @@ mod browser {
                     set_text(&nodes.value, roll.value);
                     set_text(&nodes.explanation, roll.explanation);
                     set_text(&nodes.source, roll.source);
+                    match &roll.verdict {
+                        Some(verdict) => {
+                            nodes.verdict.remove_attribute("hidden")?;
+                            set_text(&nodes.verdict, verdict.label);
+                            nodes.verdict.set_attribute(
+                                "data-tone",
+                                match verdict.tone {
+                                    CombatTone::Success => "success",
+                                    CombatTone::Failure => "failure",
+                                    CombatTone::Neutral => "neutral",
+                                },
+                            )?;
+                        }
+                        None => {
+                            nodes.verdict.set_attribute("hidden", "")?;
+                            nodes.verdict.set_text_content(None);
+                        }
+                    }
                     nodes.root.set_attribute("data-roll-key", roll.key)?;
                     place(&self.rolls_root, &nodes.root, position)?;
                 }
@@ -1013,8 +1128,20 @@ mod browser {
                             CombatOfferKind::Action => "action",
                             CombatOfferKind::Roll => "roll",
                             CombatOfferKind::Reaction => "reaction",
+                            CombatOfferKind::Choice { .. } => "choice",
                         },
                     )?;
+                    if let CombatOfferKind::Choice { selected } = offer.kind {
+                        let state = if selected { "true" } else { "false" };
+                        nodes
+                            .control
+                            .element()
+                            .set_attribute("aria-pressed", state)?;
+                        nodes.root.set_attribute("data-selected", state)?;
+                    } else {
+                        nodes.control.element().remove_attribute("aria-pressed")?;
+                        nodes.root.remove_attribute("data-selected")?;
+                    }
                     set_text(&nodes.explanation, offer.explanation);
                     place(&self.offers_root, &nodes.root, position)?;
                 }
@@ -1189,6 +1316,8 @@ mod tests {
                 initiative: "Tied · first",
                 status: "Active actor",
                 resources: &resources,
+                hit_points: None,
+                portrait: None,
             },
             CombatActor {
                 key: "a",
@@ -1196,6 +1325,8 @@ mod tests {
                 initiative: "Tied · second",
                 status: "Waiting",
                 resources: &[],
+                hit_points: None,
+                portrait: None,
             },
         ];
         let rolls = [CombatRoll {
@@ -1204,6 +1335,7 @@ mod tests {
             value: "Outcome withheld",
             explanation: "Server is resolving the save",
             source: "Supplied source",
+            verdict: None,
         }];
         let supplied = view(&actors, &[], &rolls);
         assert_eq!(supplied.validate(limits()), Ok(()));
@@ -1253,6 +1385,42 @@ mod tests {
         );
     }
     #[test]
+    fn portrait_tokens_and_verdict_labels_are_bounded_presentation_text() {
+        let mut actors = [CombatActor {
+            key: "a",
+            name: "A",
+            initiative: "A",
+            status: "Ready",
+            resources: &[],
+            hit_points: Some(CombatHitPoints {
+                current: 3,
+                maximum: 13,
+            }),
+            portrait: Some("hero-1"),
+        }];
+        assert_eq!(view(&actors, &[], &[]).validate(limits()), Ok(()));
+        actors[0].portrait = Some("not a token");
+        assert_eq!(
+            view(&actors, &[], &[]).validate(limits()),
+            Err(CombatValidationError::InvalidPortrait)
+        );
+        let rolls = [CombatRoll {
+            key: "r",
+            label: "Attack",
+            value: "17",
+            explanation: "17 +5 = 22 vs AC 12",
+            source: "7 damage",
+            verdict: Some(CombatVerdict {
+                label: " ",
+                tone: CombatTone::Success,
+            }),
+        }];
+        assert_eq!(
+            view(&[], &[], &rolls).validate(limits()),
+            Err(CombatValidationError::EmptyText)
+        );
+    }
+    #[test]
     fn duplicate_offer_and_roll_keys_cannot_ambiguously_route_a_selection() {
         let label = RevisionLabel::new(Some("server-offer-1")).unwrap();
         let offers = [
@@ -1288,6 +1456,7 @@ mod tests {
                 value: "17",
                 explanation: "13 + 4",
                 source: "Server source",
+                verdict: None,
             },
             CombatRoll {
                 key: "same",
@@ -1295,6 +1464,7 @@ mod tests {
                 value: "14",
                 explanation: "12 + 2",
                 source: "Server source",
+                verdict: None,
             },
         ];
         assert_eq!(

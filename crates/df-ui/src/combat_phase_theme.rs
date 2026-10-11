@@ -65,6 +65,21 @@ pub(crate) const STYLES: &str = r#"
 .df-combat .combat-roll-value{grid-column:1;grid-row:1 / span 4;display:grid;place-items:center;align-self:center;aspect-ratio:1;margin:0;border:1px solid #e4c084;clip-path:polygon(25% 0,75% 0,100% 25%,100% 75%,75% 100%,25% 100%,0 75%,0 25%);background:linear-gradient(140deg,#86633373,#171c15);font:36px/1 Georgia,serif;color:#ffe0a3;text-shadow:0 2px 5px #000}
 .df-combat .combat-roll-explanation{grid-column:2;font:12px/1.6 system-ui,sans-serif;color:#e1d6bf;margin:5px 0}
 .df-combat .combat-roll-source{grid-column:2;font:11px/1.6 system-ui,sans-serif;color:#b8ad97;margin:3px 0 0}
+.df-combat .combat-hp{position:relative;height:18px;margin:8px 0 0;border:1px solid #d9b77a59;border-radius:9px;background:#0a0e0b;overflow:hidden}
+.df-combat .combat-hp-fill{position:absolute;inset:0 auto 0 0;width:var(--hp,0%);background:linear-gradient(90deg,#3f8553,#8fd18d);transition:width .45s ease-out}
+.df-combat .combat-hp[data-state=low] .combat-hp-fill{background:linear-gradient(90deg,#92392a,#e0784f)}
+.df-combat .combat-hp[data-state=down] .combat-hp-fill{width:0}
+.df-combat .combat-hp-text{position:relative;display:block;text-align:center;font:700 11px/18px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px #000}
+.df-combat .combat-roll-verdict{grid-column:2;justify-self:start;margin:6px 0 2px;padding:3px 24px;font:700 13px/1.7 system-ui,sans-serif;letter-spacing:2px;text-transform:uppercase;color:#fff4d6;background:#6b5a35;clip-path:polygon(0 0,100% 0,calc(100% - 11px) 50%,100% 100%,0 100%,11px 50%)}
+.df-combat .combat-roll-verdict[data-tone=success]{background:linear-gradient(#2f8150,#1d5a37);color:#dcffe8}
+.df-combat .combat-roll-verdict[data-tone=failure]{background:linear-gradient(#963a2e,#65261f);color:#ffe3dc}
+.df-combat .combat-roll:first-child{grid-template-columns:104px 1fr}
+.df-combat .combat-roll:first-child .combat-roll-value{font-size:54px;box-shadow:0 0 28px #e0b87766}
+.df-combat .combat-roll:first-child h3{font-size:15px}
+.df-combat .combat-offer[data-kind=choice] button{display:flex;justify-content:space-between;align-items:center;gap:12px;text-align:left;background:#1a211b;border-color:#c19d6055}
+.df-combat .combat-offer[data-kind=choice] button:after{content:'Off';flex:none;min-width:52px;padding:2px 10px;border:1px solid #b5aa8799;border-radius:12px;font:700 11px/1.7 system-ui,sans-serif;letter-spacing:1px;text-align:center;text-transform:uppercase;color:#cfc6b0}
+.df-combat .combat-offer[data-kind=choice][data-selected=true] button{background:#3a3422;border-color:#f0d195}
+.df-combat .combat-offer[data-kind=choice][data-selected=true] button:after{content:'On';background:#e0bd7f;border-color:#f0d195;color:#211b11}
 .df-combat .combat-connection{text-align:center;color:#b9ae96;font:11px/1.7 system-ui,sans-serif;padding:0 4vw 17px}
 .df-combat .combat-fixture-tools{width:min(1680px,92%);margin:0 auto 30px;border-top:1px solid #ad925d55;padding-top:20px}
 .df-combat .combat-fixture-tools summary{min-height:44px;color:#dfb974;cursor:pointer}

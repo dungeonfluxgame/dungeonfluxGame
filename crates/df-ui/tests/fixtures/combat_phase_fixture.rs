@@ -38,6 +38,8 @@ mod browser {
             initiative: "19",
             status: "Your turn",
             resources: &RESOURCES,
+            hit_points: None,
+            portrait: None,
         },
         CombatActor {
             key: "warden",
@@ -45,6 +47,8 @@ mod browser {
             initiative: "17",
             status: "At the water’s edge",
             resources: &[],
+            hit_points: None,
+            portrait: None,
         },
         CombatActor {
             key: "orin",
@@ -52,6 +56,8 @@ mod browser {
             initiative: "14",
             status: "Holding the bridge",
             resources: &[],
+            hit_points: None,
+            portrait: None,
         },
         CombatActor {
             key: "mira",
@@ -59,6 +65,8 @@ mod browser {
             initiative: "11",
             status: "By the lantern tower",
             resources: &[],
+            hit_points: None,
+            portrait: None,
         },
     ];
     const HISTORY: [CombatRoll<'static>; 2] = [
@@ -68,6 +76,7 @@ mod browser {
             value: "18 · Hit",
             explanation: "D20: 12 + Strength: 3 + Proficiency: 3 = 18. The server supplied this outcome.",
             source: "Synthetic resolved attack · read-only history",
+            verdict: None,
         },
         CombatRoll {
             key: "previous-save",
@@ -75,6 +84,7 @@ mod browser {
             value: "16 · Success",
             explanation: "D20: 14 + Dexterity: 2 = 16. DC 13, supplied by the fixture snapshot.",
             source: "Synthetic resolved save · read-only history",
+            verdict: None,
         },
     ];
     #[derive(Clone, Copy, Eq, PartialEq)]

@@ -487,6 +487,10 @@ pub(super) fn render(
         if let Some(previous) = dock.query_selector(".scene-actions")? {
             previous.remove();
         }
+        if let Some(own) = input.journey.own_character.as_ref() {
+            let token = live_combat::sheet::portrait_token(&input.journey.party, own);
+            live_combat::sheet::mount_inline(client, &dock, own, token)?;
+        }
         let actions = node(&document, &dock, "div", "scene-actions", "")?;
         for offer in input.offers.iter().filter(|offer| !is_simple_offer(offer)) {
             action_button(client, &actions, offer.clone())?;

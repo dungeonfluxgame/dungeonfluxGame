@@ -184,6 +184,7 @@ pub(super) struct StartupAssets {
     pub(super) campfire: bytes::Bytes,
     pub(super) portrait: bytes::Bytes,
     pub(super) inn: Option<bytes::Bytes>,
+    pub(super) combat: Option<bytes::Bytes>,
 }
 
 /// This is the local demonstration's existing byte-load policy, not media decoding.
@@ -210,6 +211,14 @@ pub(super) fn load_assets(web_root: &Path, asset_root: &Path) -> Result<StartupA
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error),
     };
+    let combat = match super::bounded_asset(
+        asset_root.join("../concept-art/combat-harbor-docks-wide-lanterns.webp"),
+        4 * 1024 * 1024,
+    ) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
     Ok(StartupAssets {
         glue,
         wasm,
@@ -217,6 +226,7 @@ pub(super) fn load_assets(web_root: &Path, asset_root: &Path) -> Result<StartupA
         campfire,
         portrait,
         inn,
+        combat,
     })
 }
 
