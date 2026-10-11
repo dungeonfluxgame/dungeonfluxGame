@@ -608,3 +608,375 @@ fn each_explicit_current_recipient_of_a_members_audience_is_selected() {
     .unwrap();
     assert_eq!(shared.facts().len(), 1);
 }
+
+fn record(value: u8) -> RecordId {
+    RecordId::from_bytes(&[value; 16]).unwrap()
+}
+
+fn journal(value: u8, sources: Vec<FactId>, audience: AudienceScope) -> JournalEntry {
+    JournalEntry {
+        id: record(value),
+        source_facts: sources,
+        attributed_claims: vec![],
+        audience,
+        text: "Retained source-bound account".to_owned(),
+    }
+}
+
+fn accept_facts(state: &mut GameState) {
+    state.decisions.push(AcceptedDecision {
+        operation: state.facts[0].operation,
+        revision: state.facts[0].revision,
+        facts: state.facts.iter().map(|fact| fact.id).collect(),
+        draws: vec![],
+        effects: vec![],
+        source_policy: label("accepted-journal-source"),
+        semantic_output: None,
+    });
+}
+
+fn journal_state() -> GameState {
+    let mut state = audience_state();
+    accept_facts(&mut state);
+    for index in 0..state.facts.len() {
+        state.continuity.journal.push(journal(
+            40 + index as u8,
+            vec![state.facts[index].id],
+            state.facts[index].audience.clone(),
+        ));
+    }
+    state
+}
+
+fn journals(
+    current: &Checkpoint,
+    observer: ObserverScope,
+) -> Result<Vec<&JournalEntry>, PerceptionError> {
+    df_knowledge::perception::perceive_journal(
+        current,
+        current.basis(),
+        current.pins(),
+        observer,
+        1000,
+        1000,
+        16,
+    )
+}
+
+#[test]
+fn journal_committed_source_and_exact_member_selection_preserve_canonical_identity() {
+    let current = checkpoint(journal_state()).unwrap();
+    let original = current.clone();
+    for (observer, indices) in [
+        (ObserverScope::Shared, vec![0]),
+        (ObserverScope::Member(member(3)), vec![0, 1]),
+        (ObserverScope::Member(member(5)), vec![0, 2]),
+    ] {
+        let selected = journals(&current, observer).unwrap();
+        assert_eq!(selected.len(), indices.len());
+        for (entry, index) in selected.iter().zip(indices) {
+            assert!(std::ptr::eq(
+                *entry,
+                &current.state().continuity.journal[index]
+            ));
+            assert_eq!(entry.source_facts, vec![current.state().facts[index].id]);
+        }
+        assert_eq!(current, original);
+    }
+}
+
+#[test]
+fn journal_missing_or_unrelated_decision_is_omitted_without_tightening_seed_perception() {
+    for unrelated in [false, true] {
+        let mut supplied = journal_state();
+        supplied.decisions.clear();
+        if unrelated {
+            supplied.decisions.push(AcceptedDecision {
+                operation: OperationId::from_bytes(&[99; 16]).unwrap(),
+                revision: revision(2, 7),
+                facts: vec![],
+                draws: vec![],
+                effects: vec![],
+                source_policy: label("unrelated-source"),
+                semantic_output: None,
+            });
+        }
+        let current = checkpoint(supplied).unwrap();
+        assert!(
+            journals(&current, ObserverScope::Member(member(3)))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            perceive(
+                &current,
+                basis(),
+                &pins(),
+                ObserverScope::Member(member(3)),
+                selection_limits()
+            )
+            .unwrap()
+            .facts()
+            .len(),
+            2
+        );
+        assert_eq!(current.state().continuity.journal.len(), 4);
+    }
+}
+
+#[test]
+fn journal_visible_text_cannot_disclose_any_private_or_host_cited_source() {
+    let mut supplied = journal_state();
+    supplied.continuity.journal.clear();
+    supplied.continuity.journal.push(journal(
+        40,
+        vec![supplied.facts[0].id, supplied.facts[1].id],
+        AudienceScope::Shared,
+    ));
+    supplied.continuity.journal.push(journal(
+        41,
+        vec![supplied.facts[0].id, supplied.facts[3].id],
+        AudienceScope::Shared,
+    ));
+    let current = checkpoint(supplied).unwrap();
+    assert!(
+        journals(&current, ObserverScope::Shared)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        journals(&current, ObserverScope::Member(member(5)))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        journals(&current, ObserverScope::Member(member(3)))
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+fn journal_claim_state() -> GameState {
+    let mut supplied = journal_state();
+    supplied.continuity.journal.truncate(1);
+    supplied.beliefs.push(AttributedClaim {
+        id: record(60),
+        holder: entity(4),
+        subject: entity(4),
+        claim: "The closed gate is open".to_owned(),
+        evidence: vec![supplied.facts[0].id],
+        audience: AudienceScope::Members(vec![member(3)]),
+        source: content(),
+    });
+    supplied.continuity.journal[0].attributed_claims = vec![record(60)];
+    supplied
+}
+
+#[test]
+fn journal_false_claim_stays_attributed_and_preserves_mechanical_truth() {
+    let current = checkpoint(journal_claim_state()).unwrap();
+    let original = current.clone();
+    let selected = journals(&current, ObserverScope::Member(member(3))).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].attributed_claims, vec![record(60)]);
+    assert_eq!(selected[0].source_facts, vec![current.state().facts[0].id]);
+    assert_eq!(current.state().beliefs[0].claim, "The closed gate is open");
+    assert!(
+        journals(&current, ObserverScope::Shared)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        journals(&current, ObserverScope::Member(member(5)))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(current, original);
+}
+
+fn secret_policy(audience: AudienceScope) -> SecretPolicy {
+    SecretPolicy {
+        holder: entity(4),
+        claims: vec![record(60)],
+        policy: content(),
+        permitted_audience: audience,
+    }
+}
+
+fn npc(secrets: Vec<SecretPolicy>) -> NpcState {
+    NpcState {
+        entity: entity(4),
+        role: content(),
+        personality: content(),
+        motivations: vec![],
+        goals: vec![],
+        needs: vec![],
+        fears: vec![],
+        known_facts: vec![],
+        beliefs: vec![record(60)],
+        secrets,
+    }
+}
+
+#[test]
+fn journal_secret_claim_policy_conflicting_ownership_and_hidden_evidence_are_enforced() {
+    for case in 0..5 {
+        let mut supplied = journal_claim_state();
+        supplied.beliefs[0].audience = AudienceScope::Shared;
+        let mut policies = vec![secret_policy(AudienceScope::Members(vec![member(3)]))];
+        match case {
+            0 => {}
+            1 => policies[0].permitted_audience = AudienceScope::Host,
+            2 => policies.push(secret_policy(AudienceScope::Shared)),
+            3 => {
+                let mut other = supplied.entities[0].clone();
+                other.id = entity(6);
+                supplied.entities.push(other);
+                policies[0].holder = entity(6);
+            }
+            _ => supplied.beliefs[0].evidence = vec![supplied.facts[3].id],
+        }
+        supplied.continuity.npcs.push(npc(policies));
+        // Grants do not authorize journal text or its private claim/evidence.
+        supplied.knowledge.push(KnowledgeGrant {
+            observer: member(5),
+            fact: supplied.facts[0].id,
+            source: supplied.facts[0].id,
+        });
+        let current = checkpoint(supplied).unwrap();
+        assert!(
+            journals(&current, ObserverScope::Shared)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            journals(&current, ObserverScope::Member(member(5)))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            journals(&current, ObserverScope::Member(member(3)))
+                .unwrap()
+                .len(),
+            usize::from(case == 0)
+        );
+    }
+}
+
+#[test]
+fn journal_source_free_notes_are_preserved_but_never_selected_as_committed_outcomes() {
+    let mut supplied = journal_claim_state();
+    supplied.continuity.journal[0].source_facts.clear();
+    let current = checkpoint(supplied).unwrap();
+    let original = current.clone();
+    assert!(
+        journals(&current, ObserverScope::Member(member(3)))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!current.state().continuity.journal[0].text.is_empty());
+    assert_eq!(current, original);
+}
+
+#[test]
+fn journal_stale_basis_pins_and_removed_member_refuse() {
+    use df_knowledge::perception::perceive_journal;
+    let current = checkpoint(journal_state()).unwrap();
+    let mut stale = basis();
+    stale.revision = revision(2, 7);
+    let mut wrong_pins = pins();
+    wrong_pins.content.content_digest.0[0] ^= 1;
+    for (expected, admitted, observer, error) in [
+        (
+            stale,
+            pins(),
+            ObserverScope::Shared,
+            PerceptionError::Checkpoint(CheckpointError::StaleBasis),
+        ),
+        (
+            basis(),
+            wrong_pins,
+            ObserverScope::Shared,
+            PerceptionError::Checkpoint(CheckpointError::ContentMismatch),
+        ),
+        (
+            basis(),
+            pins(),
+            ObserverScope::Member(member(99)),
+            PerceptionError::ObserverUnavailable,
+        ),
+    ] {
+        assert_eq!(
+            perceive_journal(&current, expected, &admitted, observer, 1000, 1000, 16).unwrap_err(),
+            error
+        );
+    }
+    let mut supplied = current.state().clone();
+    supplied.members.retain(|link| link.member != member(3));
+    // Remove now-invalid private audience references before canonical restoration.
+    for fact in &mut supplied.facts {
+        if fact.audience == AudienceScope::Members(vec![member(3)]) {
+            fact.audience = AudienceScope::Host;
+        }
+    }
+    for entry in &mut supplied.continuity.journal {
+        if entry.audience == AudienceScope::Members(vec![member(3)]) {
+            entry.audience = AudienceScope::Host;
+        }
+    }
+    let removed = checkpoint(supplied).unwrap();
+    assert_eq!(
+        journals(&removed, ObserverScope::Member(member(3))).unwrap_err(),
+        PerceptionError::ObserverUnavailable
+    );
+}
+
+#[test]
+fn journal_nested_scan_comparison_and_result_capacity_return_no_partial_output() {
+    use df_knowledge::perception::perceive_journal;
+    let mut supplied = state();
+    supplied.facts.push(fact(10, 0));
+    accept_facts(&mut supplied);
+    supplied.continuity.journal = vec![
+        journal(40, vec![supplied.facts[0].id], AudienceScope::Shared),
+        journal(41, vec![supplied.facts[0].id], AudienceScope::Shared),
+    ];
+    let current = checkpoint(supplied).unwrap();
+    let original = current.clone();
+    assert_eq!(
+        perceive_journal(&current, basis(), &pins(), ObserverScope::Shared, 10, 10, 2)
+            .unwrap()
+            .len(),
+        2
+    );
+    for (scans, comparisons, selected, error) in [
+        (9, 10, 2, PerceptionError::ScanCapacity),
+        (10, 9, 2, PerceptionError::ComparisonCapacity),
+        (10, 10, 1, PerceptionError::ResultCapacity),
+        (0, 10, 2, PerceptionError::ScanCapacity),
+        (10, 0, 2, PerceptionError::ComparisonCapacity),
+        (10, 10, 0, PerceptionError::ResultCapacity),
+    ] {
+        assert_eq!(
+            perceive_journal(
+                &current,
+                basis(),
+                &pins(),
+                ObserverScope::Shared,
+                scans,
+                comparisons,
+                selected
+            )
+            .unwrap_err(),
+            error
+        );
+        assert_eq!(current, original);
+    }
+    let empty = checkpoint(state()).unwrap();
+    assert!(
+        perceive_journal(&empty, basis(), &pins(), ObserverScope::Shared, 0, 0, 0)
+            .unwrap()
+            .is_empty()
+    );
+}

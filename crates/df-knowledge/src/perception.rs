@@ -339,3 +339,145 @@ pub fn perceive_claims<'a>(
         claims,
     })
 }
+
+fn journal_sources_permit(
+    state: &df_model::checkpoint::GameState,
+    entry: &df_model::checkpoint::JournalEntry,
+    observer: ObserverScope,
+    work: &mut ClaimWork,
+) -> Result<bool, PerceptionError> {
+    if entry.source_facts.is_empty() {
+        return Ok(false);
+    }
+    for id in &entry.source_facts {
+        work.visit()?;
+        let mut found = None;
+        for fact in &state.facts {
+            work.visit()?;
+            if fact.id == *id {
+                found = Some(fact);
+                break;
+            }
+        }
+        let Some(fact) = found else {
+            return Ok(false);
+        };
+        if !work.audience_permits(&fact.audience, observer)? {
+            return Ok(false);
+        }
+        let mut accepted = false;
+        for decision in &state.decisions {
+            work.visit()?;
+            if decision.operation != fact.operation || decision.revision != fact.revision {
+                continue;
+            }
+            for accepted_id in &decision.facts {
+                work.visit()?;
+                if *accepted_id == fact.id {
+                    accepted = true;
+                    break;
+                }
+            }
+            if accepted {
+                break;
+            }
+        }
+        if !accepted {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn journal_claims_permit(
+    state: &df_model::checkpoint::GameState,
+    entry: &df_model::checkpoint::JournalEntry,
+    observer: ObserverScope,
+    work: &mut ClaimWork,
+) -> Result<bool, PerceptionError> {
+    for id in &entry.attributed_claims {
+        work.visit()?;
+        let mut found = None;
+        for claim in &state.beliefs {
+            work.visit()?;
+            if claim.id == *id {
+                found = Some(claim);
+                break;
+            }
+        }
+        let Some(claim) = found else {
+            return Ok(false);
+        };
+        if !work.audience_permits(&claim.audience, observer)?
+            || !secret_claim_permits(state, claim, observer, work)?
+            || !claim_evidence_permits(state, claim, observer, work)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Borrow source-qualified journal entries in checkpoint order. Every cited fact
+/// must be visible and bound by its exact retained decision operation/revision;
+/// every attributed claim retains its own audience, secret-policy and evidence
+/// checks. Source-free notes remain stored but are omitted from this selection.
+///
+/// The authenticated owner supplies the current checkpoint, exact basis, pins and
+/// observer. A retained decision binding does not prove durable Session commit:
+/// the owner must supply authoritative committed state before publication. This
+/// function performs no I/O and never promotes a claim or text into a fact.
+/// Nested record scans and comparisons share the supplied finite work budgets.
+/// Zero permits no work/output in that dimension; every error discards all output.
+pub fn perceive_journal<'a>(
+    current: &'a Checkpoint,
+    expected: Basis,
+    admitted: &CheckpointPins,
+    observer: ObserverScope,
+    maximum_scan_records: usize,
+    maximum_record_comparisons: usize,
+    maximum_selected_entries: usize,
+) -> Result<Vec<&'a df_model::checkpoint::JournalEntry>, PerceptionError> {
+    current
+        .validate_resume(expected, admitted)
+        .map_err(PerceptionError::Checkpoint)?;
+    let state = current.state();
+    let mut work = ClaimWork {
+        scans: maximum_scan_records,
+        comparisons: maximum_record_comparisons,
+    };
+    if let ObserverScope::Member(member) = observer {
+        let mut found = false;
+        for link in &state.members {
+            work.visit()?;
+            if link.member == member {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(PerceptionError::ObserverUnavailable);
+        }
+    }
+    if state.continuity.journal.len() > work.scans {
+        return Err(PerceptionError::ScanCapacity);
+    }
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(state.continuity.journal.len().min(maximum_selected_entries))
+        .map_err(|_| PerceptionError::AllocationCapacity)?;
+    for entry in &state.continuity.journal {
+        work.visit()?;
+        if !work.audience_permits(&entry.audience, observer)?
+            || !journal_sources_permit(state, entry, observer, &mut work)?
+            || !journal_claims_permit(state, entry, observer, &mut work)?
+        {
+            continue;
+        }
+        if entries.len() == maximum_selected_entries {
+            return Err(PerceptionError::ResultCapacity);
+        }
+        entries.push(entry);
+    }
+    Ok(entries)
+}

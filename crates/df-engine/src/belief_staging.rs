@@ -354,3 +354,29 @@ impl<Owner: BeliefSourceOwner> BeliefStagingHandler<'_, Owner> {
         Ok(())
     }
 }
+
+/// Select journal entries from the checkpoint supplied by the Session/projection
+/// owner, using Knowledge's exact source and observer checks. A checkpoint returned
+/// by BeliefStagingHandler is still a staged proposal; selecting its journal does
+/// not commit it or authorize publication. Revalidate authoritative state before
+/// serialization. No claim, fact, decision, or intent is changed.
+pub fn select_journal<'a>(
+    current: &'a Checkpoint,
+    expected: Basis,
+    admitted: &CheckpointPins,
+    observer: df_knowledge::perception::ObserverScope,
+    maximum_scan_records: usize,
+    maximum_record_comparisons: usize,
+    maximum_selected_entries: usize,
+) -> Result<Vec<&'a df_model::checkpoint::JournalEntry>, df_knowledge::perception::PerceptionError>
+{
+    df_knowledge::perception::perceive_journal(
+        current,
+        expected,
+        admitted,
+        observer,
+        maximum_scan_records,
+        maximum_record_comparisons,
+        maximum_selected_entries,
+    )
+}

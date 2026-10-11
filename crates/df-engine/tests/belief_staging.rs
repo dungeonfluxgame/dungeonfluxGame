@@ -624,3 +624,176 @@ fn capacity_and_source_registration_are_bounded_before_commit() {
     );
     assert!(setup.current.state().beliefs.is_empty());
 }
+
+#[test]
+fn actual_registered_belief_staging_preserves_source_bound_journal_and_commit_distinction() {
+    use df_engine::belief_staging::select_journal;
+    use df_knowledge::perception::{ObserverScope, PerceptionError};
+    let mut setup = Setup::new();
+    let mut supplied = setup.current.state().clone();
+    let mut retained_claim = setup.update.claim.clone();
+    retained_claim.id = record(81);
+    supplied.beliefs.push(retained_claim.clone());
+    supplied.continuity.journal.push(JournalEntry {
+        id: record(82),
+        source_facts: vec![fact(30)],
+        attributed_claims: vec![retained_claim.id],
+        audience: AudienceScope::Shared,
+        text: "An attributed account of the sealed gate".to_owned(),
+    });
+    setup.current = setup.fixture.checkpoint(setup.current.basis(), supplied);
+    let original = setup.current.clone();
+    let owner = setup.owner();
+    let staged = setup
+        .registered(&owner, Some(&setup.update), &setup.current, &setup.input())
+        .unwrap();
+    assert_eq!(
+        staged.basis().revision,
+        original.basis().revision.next_sequence().unwrap()
+    );
+    assert_eq!(staged.state().facts, original.state().facts);
+    assert_eq!(staged.state().resources, original.state().resources);
+    assert_eq!(staged.state().draws, original.state().draws);
+    assert_eq!(staged.state().intents, original.state().intents);
+    assert_eq!(
+        staged.state().continuity.journal,
+        original.state().continuity.journal
+    );
+    assert_eq!(
+        staged.state().beliefs,
+        vec![retained_claim.clone(), setup.update.claim.clone()]
+    );
+    assert_eq!(
+        select_journal(
+            &staged,
+            original.basis(),
+            &setup.fixture.pins,
+            ObserverScope::Member(f::member(5)),
+            1000,
+            1000,
+            16
+        )
+        .unwrap_err(),
+        PerceptionError::Checkpoint(CheckpointError::StaleBasis)
+    );
+    let selected = select_journal(
+        &staged,
+        staged.basis(),
+        &setup.fixture.pins,
+        ObserverScope::Member(f::member(5)),
+        1000,
+        1000,
+        16,
+    )
+    .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert!(std::ptr::eq(
+        selected[0],
+        &staged.state().continuity.journal[0]
+    ));
+    assert_eq!(selected[0].source_facts, vec![fact(30)]);
+    assert_eq!(selected[0].attributed_claims, vec![retained_claim.id]);
+    assert_eq!(retained_claim.claim, "The sealed gate is open");
+    assert_eq!(
+        staged.state().facts[0].value,
+        FactValue::ContentEvent {
+            definition: content("sealed-gate-closed"),
+            subjects: vec![f::entity(6)],
+        }
+    );
+    for observer in [ObserverScope::Shared, ObserverScope::Member(f::member(3))] {
+        assert!(
+            select_journal(
+                &staged,
+                staged.basis(),
+                &setup.fixture.pins,
+                observer,
+                1000,
+                1000,
+                16
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+    assert_eq!(
+        select_journal(
+            &staged,
+            staged.basis(),
+            &setup.fixture.pins,
+            ObserverScope::Member(f::member(99)),
+            1000,
+            1000,
+            16
+        )
+        .unwrap_err(),
+        PerceptionError::ObserverUnavailable
+    );
+    // The original caller-owned checkpoint remains unchanged. The handler returns
+    // a staged candidate; this pure read supplies no durable Session receipt.
+    assert_eq!(setup.current, original);
+    assert_eq!(
+        select_journal(
+            &original,
+            original.basis(),
+            &setup.fixture.pins,
+            ObserverScope::Member(f::member(5)),
+            1000,
+            1000,
+            16
+        )
+        .unwrap(),
+        vec![&original.state().continuity.journal[0]]
+    );
+}
+
+#[test]
+fn actual_belief_consumer_refuses_unbound_journal_source_without_changing_stage() {
+    use df_engine::belief_staging::select_journal;
+    use df_knowledge::perception::{ObserverScope, PerceptionError};
+    let mut setup = Setup::new();
+    let mut supplied = setup.current.state().clone();
+    supplied.decisions.remove(0);
+    supplied.continuity.journal.push(JournalEntry {
+        id: record(82),
+        source_facts: vec![fact(30)],
+        attributed_claims: vec![],
+        audience: AudienceScope::Shared,
+        text: "Seeded account without decision".to_owned(),
+    });
+    setup.current = setup.fixture.checkpoint(setup.current.basis(), supplied);
+    let owner = setup.owner();
+    let staged = setup
+        .registered(&owner, Some(&setup.update), &setup.current, &setup.input())
+        .unwrap();
+    let original = staged.clone();
+    assert!(
+        select_journal(
+            &staged,
+            staged.basis(),
+            &setup.fixture.pins,
+            ObserverScope::Shared,
+            1000,
+            1000,
+            16
+        )
+        .unwrap()
+        .is_empty()
+    );
+    assert_eq!(
+        select_journal(
+            &staged,
+            staged.basis(),
+            &setup.fixture.pins,
+            ObserverScope::Shared,
+            0,
+            1000,
+            16
+        )
+        .unwrap_err(),
+        PerceptionError::ScanCapacity
+    );
+    assert_eq!(staged, original);
+    assert_eq!(staged.state().facts, setup.current.state().facts);
+    assert_eq!(staged.state().beliefs, vec![setup.update.claim.clone()]);
+}
