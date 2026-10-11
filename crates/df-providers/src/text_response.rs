@@ -497,8 +497,11 @@ impl NativeTextProvider {
         {
             return Err(failure(contract(TextResponseContract::Status, Some(usage))));
         }
-        if json.get("text").and_then(|text| text.get("format"))
-            != Some(&self.config.schema.format())
+        if json
+            .get("text")
+            .and_then(|text| text.get("format"))
+            .map(without_null_description)
+            != Some(self.config.schema.format())
         {
             return Err(failure(contract(TextResponseContract::Schema, Some(usage))));
         }
@@ -512,6 +515,18 @@ impl NativeTextProvider {
             output: ValidatedTextOutput(output),
         })
     }
+}
+
+/// The live API echoes the requested format with an extra `"description": null`; any other
+/// difference from the format that was sent still refuses the response.
+fn without_null_description(format: &Value) -> Value {
+    let mut format = format.clone();
+    if let Some(object) = format.as_object_mut()
+        && object.get("description").is_some_and(Value::is_null)
+    {
+        object.remove("description");
+    }
+    format
 }
 
 fn observed(

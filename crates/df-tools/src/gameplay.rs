@@ -23,6 +23,7 @@ mod room;
 mod startup_configuration;
 #[cfg(test)]
 mod startup_contract;
+mod storyteller;
 #[cfg(test)]
 mod tempo_clock;
 mod voice;

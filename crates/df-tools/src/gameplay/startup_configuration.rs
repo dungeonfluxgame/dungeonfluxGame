@@ -526,9 +526,231 @@ pub(super) fn pack_directory(
     })
 }
 
+const DEFAULT_TEXT_MODEL: &str = "gpt-6-luna";
+const DEFAULT_TEXT_TOKEN_BUDGET: u64 = 150_000;
+const MAXIMUM_TEXT_TOKEN_BUDGET: u64 = 100_000_000;
+const DEFAULT_TEXT_DEADLINE_SECONDS: u64 = 12;
+const MAXIMUM_TEXT_DEADLINE_SECONDS: u64 = 60;
+const DEFAULT_TEXT_CACHE: &str = "artifacts/tmp/play/text-cache";
+
+/// Raw storyteller inputs. The credential is read from the process environment only.
+pub(super) struct StorytellerInputs {
+    pub(super) credential: Result<String, VarError>,
+    pub(super) mode: Result<String, VarError>,
+    pub(super) model: Result<String, VarError>,
+    pub(super) token_budget: Result<String, VarError>,
+    pub(super) cache: Result<String, VarError>,
+    pub(super) deadline_seconds: Result<String, VarError>,
+}
+
+impl StorytellerInputs {
+    pub(super) fn from_environment() -> Self {
+        Self {
+            credential: std::env::var("OPENAI_API_KEY"),
+            mode: std::env::var("DF_GAMEPLAY_STORYTELLER"),
+            model: std::env::var("DF_GAMEPLAY_TEXT_MODEL"),
+            token_budget: std::env::var("DF_GAMEPLAY_TEXT_TOKEN_BUDGET"),
+            cache: std::env::var("DF_GAMEPLAY_TEXT_CACHE"),
+            deadline_seconds: std::env::var("DF_GAMEPLAY_TEXT_DEADLINE_SECONDS"),
+        }
+    }
+}
+
+/// Everything the storyteller needs to call the text model. Debug never shows the credential.
+pub(super) struct StorytellerSettings {
+    pub(super) credential: String,
+    pub(super) model: String,
+    /// Total tokens the server may spend on text generation during one run.
+    pub(super) token_budget: u64,
+    pub(super) cache_directory: std::path::PathBuf,
+    /// Covers every attempt of one expression, including the single retry.
+    pub(super) deadline: Duration,
+}
+
+impl std::fmt::Debug for StorytellerSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StorytellerSettings")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Whether the language model voices the story. `Off` carries the reason shown at startup.
+#[derive(Debug)]
+pub(super) enum StorytellerMode {
+    On(StorytellerSettings),
+    Off(&'static str),
+}
+
+/// A missing, empty or malformed credential, or `DF_GAMEPLAY_STORYTELLER=off`, turns the
+/// storyteller off; a malformed tuning value is refused without echoing it.
+pub(super) fn storyteller_mode(
+    inputs: StorytellerInputs,
+    current: &Path,
+) -> Result<StorytellerMode, io::Error> {
+    if optional(inputs.mode)?.is_some_and(|mode| mode.trim().eq_ignore_ascii_case("off")) {
+        return Ok(StorytellerMode::Off("DF_GAMEPLAY_STORYTELLER=off"));
+    }
+    let credential = match optional(inputs.credential)? {
+        None => return Ok(StorytellerMode::Off("OPENAI_API_KEY not set")),
+        Some(value) if value.is_empty() => {
+            return Ok(StorytellerMode::Off("OPENAI_API_KEY empty"));
+        }
+        Some(value)
+            if value.len() > 8192 || !value.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) =>
+        {
+            return Ok(StorytellerMode::Off("OPENAI_API_KEY not usable"));
+        }
+        Some(value) => value,
+    };
+    let model = optional(inputs.model)?.unwrap_or_else(|| DEFAULT_TEXT_MODEL.to_owned());
+    if model.is_empty()
+        || model.len() > 128
+        || !model
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(refused("DF_GAMEPLAY_TEXT_MODEL"));
+    }
+    let token_budget = match optional(inputs.token_budget)? {
+        Some(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|tokens| (1..=MAXIMUM_TEXT_TOKEN_BUDGET).contains(tokens))
+            .ok_or_else(|| refused("DF_GAMEPLAY_TEXT_TOKEN_BUDGET"))?,
+        None => DEFAULT_TEXT_TOKEN_BUDGET,
+    };
+    let deadline_seconds = match optional(inputs.deadline_seconds)? {
+        Some(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|seconds| (1..=MAXIMUM_TEXT_DEADLINE_SECONDS).contains(seconds))
+            .ok_or_else(|| refused("DF_GAMEPLAY_TEXT_DEADLINE_SECONDS"))?,
+        None => DEFAULT_TEXT_DEADLINE_SECONDS,
+    };
+    let cache = optional(inputs.cache)?.unwrap_or_else(|| DEFAULT_TEXT_CACHE.to_owned());
+    if cache.is_empty() {
+        return Err(refused("DF_GAMEPLAY_TEXT_CACHE"));
+    }
+    let cache = std::path::PathBuf::from(cache);
+    Ok(StorytellerMode::On(StorytellerSettings {
+        credential,
+        model,
+        token_budget,
+        cache_directory: if cache.is_absolute() {
+            cache
+        } else {
+            current.join(cache)
+        },
+        deadline: Duration::from_secs(deadline_seconds),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn storyteller_inputs(values: [Option<&str>; 6]) -> StorytellerInputs {
+        let [credential, mode, model, budget, cache, deadline] =
+            values.map(|value| value.map(str::to_owned).ok_or(VarError::NotPresent));
+        StorytellerInputs {
+            credential,
+            mode,
+            model,
+            token_budget: budget,
+            cache,
+            deadline_seconds: deadline,
+        }
+    }
+
+    #[test]
+    fn storyteller_is_off_without_a_credential_or_when_switched_off() {
+        let current = Path::new("/work");
+        let missing = storyteller_mode(storyteller_inputs([None; 6]), current).unwrap();
+        assert!(matches!(
+            missing,
+            StorytellerMode::Off("OPENAI_API_KEY not set")
+        ));
+        let empty = storyteller_mode(
+            storyteller_inputs([Some(""), None, None, None, None, None]),
+            current,
+        )
+        .unwrap();
+        assert!(matches!(
+            empty,
+            StorytellerMode::Off("OPENAI_API_KEY empty")
+        ));
+        for mode in ["off", " OFF "] {
+            let off = storyteller_mode(
+                storyteller_inputs([Some("sk-test"), Some(mode), None, None, None, None]),
+                current,
+            )
+            .unwrap();
+            assert!(matches!(
+                off,
+                StorytellerMode::Off("DF_GAMEPLAY_STORYTELLER=off")
+            ));
+        }
+    }
+
+    #[test]
+    fn storyteller_defaults_and_overrides_are_applied() {
+        let current = Path::new("/work");
+        let StorytellerMode::On(defaults) = storyteller_mode(
+            storyteller_inputs([Some("sk-test"), None, None, None, None, None]),
+            current,
+        )
+        .unwrap() else {
+            panic!("storyteller should be on");
+        };
+        assert_eq!(defaults.model, "gpt-6-luna");
+        assert_eq!(defaults.token_budget, 150_000);
+        assert_eq!(defaults.deadline, Duration::from_secs(12));
+        assert_eq!(
+            defaults.cache_directory,
+            Path::new("/work/artifacts/tmp/play/text-cache")
+        );
+        let StorytellerMode::On(custom) = storyteller_mode(
+            storyteller_inputs([
+                Some("sk-test"),
+                Some("on"),
+                Some("other-model"),
+                Some("20000"),
+                Some("/tmp/cache"),
+                Some("5"),
+            ]),
+            current,
+        )
+        .unwrap() else {
+            panic!("storyteller should be on");
+        };
+        assert_eq!(custom.model, "other-model");
+        assert_eq!(custom.token_budget, 20_000);
+        assert_eq!(custom.deadline, Duration::from_secs(5));
+        assert_eq!(custom.cache_directory, Path::new("/tmp/cache"));
+        assert!(!format!("{custom:?}").contains("sk-test"));
+    }
+
+    #[test]
+    fn invalid_storyteller_values_are_refused_without_echoing_them() {
+        let current = Path::new("/work");
+        let cases: [[Option<&str>; 6]; 6] = [
+            [Some("sk-test"), None, Some("bad model!"), None, None, None],
+            [Some("sk-test"), None, None, Some("0"), None, None],
+            [Some("sk-test"), None, None, Some("many"), None, None],
+            [Some("sk-test"), None, None, None, Some(""), None],
+            [Some("sk-test"), None, None, None, None, Some("0")],
+            [Some("sk-test"), None, None, None, None, Some("61")],
+        ];
+        for case in cases {
+            let error = storyteller_mode(storyteller_inputs(case), current)
+                .err()
+                .unwrap();
+            for value in case.into_iter().flatten().filter(|value| !value.is_empty()) {
+                assert!(!error.to_string().contains(value));
+            }
+        }
+    }
 
     fn inputs(values: [Option<&str>; 6]) -> SessionInputs {
         let [listen, origins, seconds, budget, connections, streams] =

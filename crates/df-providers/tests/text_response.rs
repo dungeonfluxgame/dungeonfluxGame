@@ -293,6 +293,26 @@ async fn refusal_incomplete_tools_foreign_metadata_model_schema_and_invalid_outp
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn live_api_echo_of_a_null_format_description_is_accepted_but_other_extra_keys_are_not() {
+    for (extra, accepted) in [("description", true), ("verbosity", false)] {
+        let (address, server) = fixture(move |sent| {
+            let mut reply = completed(sent);
+            reply["text"]["format"][extra] = Value::Null;
+            (200, serde_json::to_vec(&reply).unwrap())
+        });
+        let current = binding(ExecutionMode::Live);
+        let request = request(&current);
+        let outcome = provider(address)
+            .submit(&request, owner(&current), future::pending())
+            .await;
+        assert_eq!(outcome.is_ok(), accepted, "{extra}");
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn all_invalid_usage_forms_reject_and_valid_overrun_retains_exact_actual_counters() {
     for case in 0..10 {
         let (address, server) = fixture(move |sent| {
