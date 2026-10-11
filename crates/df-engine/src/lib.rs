@@ -17,3 +17,5 @@ pub mod plan_staging;
 pub mod relationship_staging;
 
 pub mod witness_staging;
+
+pub mod tempo_staging;
