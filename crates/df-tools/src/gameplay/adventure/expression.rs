@@ -73,17 +73,51 @@ const FORBIDDEN_WORDS: &[&str] = &[
 
 /// Craft notes for the storyteller; they never relax its fixed rules.
 const GUIDANCE: &str = "CRAFT\n\
-You are rewriting the plain DRAFT of each requested slot (facts.drafts, same slot name) so it reads like an experienced Dungeon Master speaking at the table. Improve the draft, keeping every fact in it.\n\
+You are rewriting the plain DRAFT of each requested slot (facts.drafts, same slot name) so it reads like an experienced Dungeon Master speaking at the table. The draft only states the facts; it is not wording to keep. Write fresh sentences with your own imagery, rhythm and phrasing, keeping every fact. Copy a draft sentence only when it is already vivid.\n\
 - Present tense, concrete sensory detail (sound, smell, light, touch), short clear sentences. No purple prose, no modern idiom or slang, no rules language, no game numbers.\n\
-- Titles are short noun phrases of a few words with no final full stop. Offer labels are button text: a verb the heroes do, like \"Ask Ilsa what is wrong\".\n\
+- Titles are short noun phrases of a few words with no final full stop. Offer labels are button text: what the heroes do, starting with a verb, such as asking, vowing or pressing on.\n\
 - Narration speaks to the party as \"you\". A spoken line is only the character's own first-person words: no quotation marks, no stage directions, no narration about them.\n\
-- Every speaker has a distinct voice. Let facts.cast (voice, delivery, mannerism) shape word choice, rhythm and what they fuss over; an anxious clerk and a gruff herb gatherer must not sound alike. A speaker sounds the same in every line.\n\
+- Every speaker has a distinct voice; a mannerism may colour a line (a fussy qualifier, a clipped aside) but never replaces its facts. Let facts.cast (voice, delivery, mannerism) shape word choice, rhythm and what they fuss over; an anxious clerk and a gruff herb gatherer must not sound alike. A speaker sounds the same in every line.\n\
 - Do not start two slots the same way or reuse the same image twice. Vary sentence shape.\n\
 - Keep every name, place, object and creature exactly as in FACTS, and write every must_mention term verbatim.\n\
 - Never write a slot's forbidden terms or hint at them; the secret belongs only in the private clue and the closing lines that list no forbidden terms.\n\
 - Do not add events, objects, injuries, outcomes or characters the draft does not have. Heroic fantasy for a living-room table: tense, never gory.\n\
 - The room narration keeps its closing invitation to share the room with your companions and bring your heroes into the story.\n\
 - Complete sentences that fit the maximum length; shorter is fine.\n";
+
+/// What each scene is, so the model can keep the story in order; the two middle scenes are
+/// alternatives, one for each way the party can answer the patron.
+const SCENE_ROLES: &[(&str, &str)] = &[
+    (
+        "room",
+        "the lobby on the TV while players join; it ends by inviting them in",
+    ),
+    (
+        "opening",
+        "the patron approaches the party and asks for help",
+    ),
+    (
+        "dialogue_seal",
+        "if the party asks what is wrong: the patron answers, then the enemy appears",
+    ),
+    (
+        "dialogue_escort",
+        "if the party offers to help: the patron accepts, then the enemy appears",
+    ),
+    (
+        "combat",
+        "the enemy confronts the party and the fight begins",
+    ),
+    (
+        "victory",
+        "after the heroes win: the enemy is beaten and the party catches its breath",
+    ),
+    ("defeat", "if the heroes fall: the errand fails for now"),
+    (
+        "inn",
+        "the party arrives at the destination and the contact greets them",
+    ),
+];
 
 /// Why the step left the pattern adventure unchanged.
 #[derive(Debug)]
@@ -250,6 +284,7 @@ fn group_facts(baseline: &GeneratedAdventure, planned: &[Planned<'_>], with_secr
             "what_the_enemy_wants_afterward": fact("complication"),
             "thanks": fact("reward.line"),
         },
+        "scene_roles": SCENE_ROLES.iter().copied().collect::<BTreeMap<&str, &str>>(),
         "cast": {
             "patron": person("patron"),
             "contact": person("contact"),
@@ -300,6 +335,7 @@ fn semantic_problem(sheet: &FactSheet, text: &str, known_words: &BTreeSet<String
             if !initial
                 && stem.chars().count() > 1
                 && stem.chars().next().is_some_and(char::is_uppercase)
+                && !stem.starts_with("I'")
                 && !known_words.contains(&stem.to_lowercase())
             {
                 return true;
@@ -320,6 +356,17 @@ fn known_words(baseline: &GeneratedAdventure) -> BTreeSet<String> {
         .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
         .map(|word| word.strip_suffix("'s").unwrap_or(word).to_lowercase())
         .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// Curly quotation marks and apostrophes become the plain ones the pattern text uses.
+fn plain_punctuation(text: &str) -> String {
+    text.chars()
+        .map(|character| match character {
+            '\u{2018}' | '\u{2019}' => '\'',
+            '\u{201c}' | '\u{201d}' => '"',
+            other => other,
+        })
         .collect()
 }
 
@@ -463,11 +510,12 @@ pub(crate) async fn express(
         let Some(answer) = answers.get(&slot.name) else {
             continue;
         };
-        let text = if slot.sheet.slot == "line" {
+        let text = plain_punctuation(if slot.sheet.slot == "line" {
             without_outer_quotes(answer)
         } else {
             answer.trim()
-        };
+        });
+        let text = text.as_str();
         if semantic_problem(slot.sheet, text, &known) {
             refused.insert(slot.name.clone(), "semantic");
         } else if let Some(entry) = texts.get_mut(slot.sheet_index) {

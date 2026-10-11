@@ -167,7 +167,7 @@ body:has(.tv-stage[data-tv-mode=combat])>main{min-height:0}
 @S[data-role=display] .combat-action-rail{display:none}
 @S[data-role=display] .combat-turn-badge{grid-area:banner;justify-self:center;display:block;margin:0;padding:.1em 1.6em;font:600 calc(var(--u)*3.3)/1.2 Georgia,serif;letter-spacing:.14em;text-transform:uppercase;color:#f0cf8e;text-align:center;border:0;border-top:1px solid #d9b77a99;border-bottom:1px solid #d9b77a99;border-radius:0;background:linear-gradient(90deg,transparent,#120d05d9 18%,#120d05d9 82%,transparent);text-shadow:0 3px 18px #000}
 @S[data-role=display] .df-combat h1{grid-area:title;align-self:end;margin:0 0 calc(var(--u)*.6);max-width:none;font-size:calc(var(--u)*2.5);letter-spacing:-.01em;line-height:1.1}
-@S[data-role=display] .combat-narration{grid-area:narr;align-self:start;max-width:none;font-size:calc(var(--u)*1.62);line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+@S[data-role=display] .combat-narration{grid-area:narr;align-self:start;max-width:none;font-size:calc(var(--u)*1.4);line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical}
 @S[data-role=display] .combat-roll-panel{grid-area:roll;min-height:0;overflow:hidden;padding:calc(var(--u)*1) calc(var(--u)*1.6);align-self:stretch;display:flex;flex-direction:column;justify-content:center}
 @S[data-role=display] .combat-roll-panel h2{margin:0 0 calc(var(--u)*.4);font-size:calc(var(--u)*1.3);letter-spacing:.2em;text-transform:uppercase;color:#e0b877}
 @S[data-role=display] .combat-roll-panel .combat-muted{font-size:calc(var(--u)*1.3)}
@@ -211,7 +211,7 @@ body:has(.tv-stage[data-tv-mode=combat])>main{min-height:0}
 @S[data-role=display][data-outcome=defeat] .df-aftermath .aftermath-chapter{background:var(--asset-ribbon-failure) center/100% 100% no-repeat}
 @S[data-role=display] .df-aftermath h1{font-size:calc(var(--u)*4.4);margin:0;text-shadow:0 4px 30px #000}
 @S[data-role=display] .df-aftermath h1::after{content:'';display:block;width:calc(var(--u)*34);height:calc(var(--u)*1.6);margin:calc(var(--u)*.5) auto 0;background:var(--asset-divider) center/contain no-repeat}
-@S[data-role=display] .df-aftermath .aftermath-narrative{margin:calc(var(--u)*.5) 0 0;font-size:calc(var(--u)*1.62);line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;text-shadow:0 2px 14px #000}
+@S[data-role=display] .df-aftermath .aftermath-narrative{margin:calc(var(--u)*.5) 0 0;font-size:calc(var(--u)*1.62);line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;text-shadow:0 2px 14px #000}
 @S[data-role=display] .df-aftermath .aftermath-lower{display:flex;flex-direction:column-reverse;gap:calc(var(--u)*.9);max-width:none;width:100%;margin:calc(var(--u)*1.2) 0 0}
 @S[data-role=display] .df-aftermath .aftermath-lower>.aftermath-panel{padding:0;background:none;border:0;border-image:none;box-shadow:none}
 @S[data-role=display] .df-aftermath .aftermath-panel h2,@S[data-role=display] .df-aftermath .aftermath-next-context{display:none}
