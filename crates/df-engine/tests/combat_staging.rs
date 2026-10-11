@@ -1095,3 +1095,664 @@ mod durable_session {
         );
     }
 }
+
+use df_combat::registered_candidates::{RegisteredActionRequest, enumerate_registered_actions};
+use df_engine::combat_staging::{
+    TacticalActionAdmission, TacticalActionError, stage_tactical_action,
+};
+
+fn tactical_action_checkpoint() -> Checkpoint {
+    let mut state = waiting(2).state().clone();
+    for id in [5, 6] {
+        state.entities.push(WorldEntity {
+            id: entity(id),
+            definition: content(),
+            location: None,
+            position: None,
+            identity_revision: label("fixture-enemy"),
+        });
+    }
+    state.encounters.push(EncounterState {
+        id: RecordId::from_bytes(&[15; 16]).unwrap(),
+        definition: content(),
+        participants: vec![entity(5), entity(4), entity(6)],
+        turn_order: vec![entity(5), entity(4), entity(6)],
+        active_turn: Some(entity(5)),
+        objectives: vec![content()],
+        combat_policy: content(),
+    });
+    checkpoint(state).unwrap()
+}
+
+fn tactical_action_input(target: u8) -> GameInput {
+    game(GameCommand::ProposeAction {
+        actor: entity(5),
+        action: content(),
+        targets: vec![entity(target)],
+        choices: vec![],
+    })
+}
+
+struct ActionAuthority {
+    native: Admission,
+    actor: EntityId,
+    source: RuleReference,
+    registered: bool,
+}
+
+fn action_authority() -> ActionAuthority {
+    ActionAuthority {
+        native: admission(&tactical_action_checkpoint()),
+        actor: entity(5),
+        source: rule(),
+        registered: true,
+    }
+}
+
+/// Real Combat admission -> source-bound receipt -> actual registered Engine staging.
+/// Both source handlers are explicit boundary fixtures, not source-producing enemy mechanics.
+fn invoke_action(
+    current: &Checkpoint,
+    preview: &Checkpoint,
+    prepared: &Checkpoint,
+    offers: &[GameInput],
+    input: RulesCommandInput<'_>,
+    final_handler: &SuppliedHandler,
+    authority: ActionAuthority,
+) -> Result<Checkpoint, TacticalActionError<FixtureRejection>> {
+    let source = rule();
+    let selector = label("fixture-continuation-position-1");
+    let preview_rules = [rule()];
+    let contents = [content()];
+    let resources = resource_constraints();
+    let dependencies = [
+        RuleDependency::Resource {
+            owner: entity(4),
+            resource: label("fixture-resource-1"),
+        },
+        RuleDependency::LogicalTime,
+        RuleDependency::Entity(entity(5)),
+        RuleDependency::Encounter(RecordId::from_bytes(&[15; 16]).unwrap()),
+        RuleDependency::PendingResolutions,
+    ];
+    let preview_inventory = || ReferenceInventory {
+        rules: &preview_rules,
+        content: &contents,
+        resources: &resources,
+        assets: &[],
+    };
+    let preview_context = || CurrentRuleContext {
+        checkpoint: preview,
+        basis: preview.basis(),
+        pins: preview.pins(),
+        inventory: preview_inventory(),
+        command_limits: command_limits(),
+    };
+    let preview_handler = handler(
+        preview,
+        RulesCommandInput {
+            command: offers.first().unwrap_or(input.command),
+            supplied_draws: &[],
+        },
+    );
+    let wrapper = PreconditionedCommandHandler::new(
+        &preview_handler,
+        &source,
+        preview_context(),
+        RulePreconditions {
+            prepared: preview,
+            sources: &preview_rules,
+            dependencies: &dependencies,
+        },
+        PreconditionLimits {
+            maximum_dependencies: 16,
+            maximum_comparisons: 8 * BYTES,
+            maximum_checkpoint_bytes: BYTES,
+        },
+    );
+    let entries = [CatalogEntry::new(&source, b"synthetic-action-clause")];
+    let catalog = CatalogSnapshot::from_published(
+        &preview.pins().rules.catalog,
+        preview.pins(),
+        b"synthetic-action-publication",
+        &entries,
+        CatalogLimits {
+            max_complete_bytes: 128,
+            max_entries: 4,
+            max_item_bytes: 64,
+            max_total_item_bytes: 128,
+        },
+    )
+    .unwrap();
+    let registrations = [HandlerRegistration::new(&selector, &source, &wrapper)];
+    let registry = DispatchRegistry::from_catalog(catalog, &registrations, 1).unwrap();
+    let basis = preview.basis();
+    let receipt = enumerate_registered_actions(
+        preview_context(),
+        &registry,
+        RegisteredActionRequest {
+            current: CandidateContext {
+                basis: &basis,
+                pins: preview.pins(),
+            },
+            actor: entity(5),
+            member: member(3),
+            operation: OperationId::from_bytes(&[20; 16]).unwrap(),
+            source: &source,
+            selector: &selector,
+        },
+        offers,
+        RegisteredCandidateLimits {
+            candidates: CandidateLimits {
+                max_offers: 8,
+                max_identity_comparisons: 28,
+                max_candidates: 8,
+                max_candidate_bytes: BYTES,
+            },
+            maximum_checkpoint_bytes: BYTES,
+            maximum_inventory_records: 8,
+            maximum_rules_preparations: 8,
+            maximum_staged_bytes: BYTES,
+        },
+    )
+    .unwrap();
+    assert_eq!(preview_handler.calls.get(), offers.len());
+    assert_eq!(final_handler.calls.get(), 0);
+    let current_inventory = || ReferenceInventory {
+        rules: &authority.native.rules,
+        content: &contents,
+        resources: &resources,
+        assets: &[],
+    };
+    let current_wrapper = PreconditionedCommandHandler::new(
+        final_handler,
+        &authority.source,
+        CurrentRuleContext {
+            checkpoint: current,
+            basis: current.basis(),
+            pins: current.pins(),
+            inventory: current_inventory(),
+            command_limits: authority.native.command,
+        },
+        RulePreconditions {
+            prepared,
+            sources: &authority.native.rules,
+            dependencies: &dependencies,
+        },
+        PreconditionLimits {
+            maximum_dependencies: 16,
+            maximum_comparisons: 8 * BYTES,
+            maximum_checkpoint_bytes: BYTES,
+        },
+    );
+    let current_entries = [CatalogEntry::new(
+        &authority.source,
+        b"synthetic-action-clause",
+    )];
+    let current_catalog = CatalogSnapshot::from_published(
+        &current.pins().rules.catalog,
+        current.pins(),
+        b"synthetic-action-publication",
+        &current_entries,
+        CatalogLimits {
+            max_complete_bytes: 128,
+            max_entries: 4,
+            max_item_bytes: 64,
+            max_total_item_bytes: 128,
+        },
+    )
+    .unwrap();
+    let final_registrations = [HandlerRegistration::new(
+        &authority.native.selector,
+        &authority.source,
+        &current_wrapper,
+    )];
+    let final_registry = DispatchRegistry::from_catalog(
+        current_catalog,
+        if authority.registered {
+            &final_registrations
+        } else {
+            &[]
+        },
+        1,
+    )
+    .unwrap();
+    if authority.registered {
+        assert!(
+            final_registry
+                .select(
+                    current.pins(),
+                    &authority.native.selector,
+                    &authority.source
+                )
+                .is_ok()
+        );
+    }
+    stage_tactical_action(
+        input,
+        current,
+        CommandEntryContext {
+            current_basis: current.basis(),
+            admitted_pins: current.pins(),
+            inventory: current_inventory(),
+            limits: CommandEntryLimits {
+                command: authority.native.command,
+                maximum_staged_bytes: authority.native.maximum_bytes,
+            },
+        },
+        TacticalActionAdmission {
+            candidates: &receipt,
+            actor: authority.actor,
+            member: authority.native.member,
+            operation: authority.native.operation,
+            source: &authority.source,
+            fence: authority.native.fence,
+            limits: ResumeLimits {
+                maximum_checkpoint_bytes: authority.native.maximum_bytes,
+            },
+        },
+        &final_registry,
+        &authority.native.selector,
+    )
+}
+
+#[test]
+fn registered_actions_reach_engine_as_exact_inputs_and_never_apply_preview() {
+    let current = tactical_action_checkpoint();
+    let original = current.clone();
+    let offers = [tactical_action_input(4), tactical_action_input(6)];
+    let input = RulesCommandInput {
+        command: &offers[1],
+        supplied_draws: &[],
+    };
+    let final_handler = handler(&current, input);
+    let staged = invoke_action(
+        &current,
+        &current,
+        &current,
+        &offers,
+        input,
+        &final_handler,
+        action_authority(),
+    )
+    .unwrap();
+    assert_eq!(final_handler.calls.get(), 1);
+    assert_eq!(
+        staged.basis().revision,
+        current.basis().revision.next_sequence().unwrap()
+    );
+    assert_eq!(staged.state().resources, current.state().resources);
+    assert_eq!(staged.state().facts, current.state().facts);
+    assert_eq!(staged.state().decisions.len(), 1);
+    assert!(staged.state().pending.is_empty());
+    assert_eq!(current, original);
+}
+
+#[test]
+fn registered_action_receipt_binds_independent_native_actor_member_and_operation() {
+    let current = tactical_action_checkpoint();
+    let offers = [tactical_action_input(4)];
+    let input = RulesCommandInput {
+        command: &offers[0],
+        supplied_draws: &[],
+    };
+    for case in 0..3 {
+        let mut authority = action_authority();
+        let expected = match case {
+            0 => {
+                authority.native.member = member(99);
+                TacticalActionError::MemberMismatch
+            }
+            1 => {
+                authority.native.operation = OperationId::from_bytes(&[99; 16]).unwrap();
+                TacticalActionError::OperationMismatch
+            }
+            2 => {
+                authority.actor = entity(4);
+                TacticalActionError::ActorMismatch
+            }
+            _ => unreachable!(),
+        };
+        let final_handler = handler(&current, input);
+        assert_eq!(
+            invoke_action(
+                &current,
+                &current,
+                &current,
+                &offers,
+                input,
+                &final_handler,
+                authority
+            ),
+            Err(expected)
+        );
+        assert_eq!(final_handler.calls.get(), 0);
+    }
+}
+
+#[test]
+fn action_receipt_rejects_other_current_registered_source_or_selector() {
+    let current = tactical_action_checkpoint();
+    let offers = [tactical_action_input(4)];
+    let input = RulesCommandInput {
+        command: &offers[0],
+        supplied_draws: &[],
+    };
+    for change_source in [false, true] {
+        let mut authority = action_authority();
+        let expected = if change_source {
+            authority.source.clause = label("other-current-compiled-clause");
+            authority.native.rules.push(authority.source.clone());
+            TacticalActionError::SourceMismatch
+        } else {
+            authority.native.selector = label("other-current-compiled-selector");
+            TacticalActionError::SelectorMismatch
+        };
+        let final_handler = handler(&current, input);
+        assert_eq!(
+            invoke_action(
+                &current,
+                &current,
+                &current,
+                &offers,
+                input,
+                &final_handler,
+                authority
+            ),
+            Err(expected)
+        );
+        assert_eq!(final_handler.calls.get(), 0);
+    }
+}
+
+#[test]
+fn equal_detached_changed_empty_and_unsupported_action_inputs_cannot_use_receipt() {
+    let current = tactical_action_checkpoint();
+    let offers = [tactical_action_input(4)];
+    for case in 0..6 {
+        let mut detached = offers[0].clone();
+        if case == 1 {
+            let GameInput::Game(command) = &mut detached else {
+                unreachable!()
+            };
+            let GameCommand::ProposeAction { targets, .. } = &mut command.command else {
+                unreachable!()
+            };
+            *targets = vec![entity(6)];
+        } else if case == 2 {
+            detached = response(0);
+        } else if case == 3 {
+            detached = host(HostCommand::RequestCheckpoint);
+        } else if case == 4 {
+            detached = GameInput::Timer(TimerExpiry {
+                basis: basis(),
+                timer: TimerId::from_bytes(&[21; 16]).unwrap(),
+                generation: 1,
+                observed_time: current.state().logical_time,
+            });
+        }
+        let selected = if case == 5 { &offers[0] } else { &detached };
+        let input = RulesCommandInput {
+            command: selected,
+            supplied_draws: &[],
+        };
+        // Build a valid candidate fixture while the rejected input reaches Engine unchanged.
+        let final_handler = handler(
+            &current,
+            RulesCommandInput {
+                command: &offers[0],
+                supplied_draws: &[],
+            },
+        );
+        let expected = if (2..=4).contains(&case) {
+            TacticalActionError::UnsupportedCommand
+        } else {
+            TacticalActionError::UnadmittedAction
+        };
+        let inventory = if case == 5 { &[][..] } else { &offers[..] };
+        assert_eq!(
+            invoke_action(
+                &current,
+                &current,
+                &current,
+                inventory,
+                input,
+                &final_handler,
+                action_authority()
+            ),
+            Err(expected)
+        );
+        assert_eq!(final_handler.calls.get(), 0);
+    }
+}
+
+#[test]
+fn action_receipt_current_basis_and_pins_are_rechecked_after_enumeration() {
+    let preview = tactical_action_checkpoint();
+    let offers = [tactical_action_input(4)];
+    let input = RulesCommandInput {
+        command: &offers[0],
+        supplied_draws: &[],
+    };
+    for change_pins in [false, true] {
+        let mut basis = preview.basis();
+        let mut pins = preview.pins().clone();
+        if change_pins {
+            pins.rules.handler = label("changed-handler-pin");
+        } else {
+            basis.revision = basis.revision.next_sequence().unwrap();
+        }
+        let mut state = preview.state().clone();
+        for pending in &mut state.pending {
+            pending.basis = basis;
+        }
+        let current = Checkpoint::new(
+            CHECKPOINT_SCHEMA,
+            basis,
+            pins,
+            state,
+            ReferenceInventory {
+                rules: &[rule()],
+                content: &[content()],
+                resources: &resource_constraints(),
+                assets: &[],
+            },
+            limits(),
+        )
+        .unwrap();
+        let final_handler = handler(&current, input);
+        assert_eq!(
+            invoke_action(
+                &current,
+                &preview,
+                &preview,
+                &offers,
+                input,
+                &final_handler,
+                action_authority()
+            ),
+            Err(if change_pins {
+                TacticalActionError::StalePins
+            } else {
+                TacticalActionError::StaleBasis
+            })
+        );
+        assert_eq!(final_handler.calls.get(), 0);
+    }
+}
+
+#[test]
+fn current_action_source_handler_generation_cancellation_and_capacity_are_rechecked() {
+    let current = tactical_action_checkpoint();
+    let original = current.clone();
+    let offers = [tactical_action_input(4)];
+    let input = RulesCommandInput {
+        command: &offers[0],
+        supplied_draws: &[],
+    };
+    for case in 0..6 {
+        let mut authority = action_authority();
+        let expected = match case {
+            0 => {
+                authority.native.fence.current_generation += 1;
+                Some(TacticalActionError::StaleGeneration)
+            }
+            1 => {
+                authority.native.fence.current_generation = 0;
+                Some(TacticalActionError::StaleGeneration)
+            }
+            2 => {
+                authority.native.fence.cancel_before_admission = true;
+                Some(TacticalActionError::CancelledBeforeAdmission)
+            }
+            3 => {
+                authority.native.maximum_bytes = 1;
+                Some(TacticalActionError::Capacity)
+            }
+            4 => {
+                authority.native.rules.clear();
+                Some(TacticalActionError::SourceMismatch)
+            }
+            5 => {
+                authority.registered = false;
+                None
+            }
+            _ => unreachable!(),
+        };
+        let final_handler = handler(&current, input);
+        let result = invoke_action(
+            &current,
+            &current,
+            &current,
+            &offers,
+            input,
+            &final_handler,
+            authority,
+        );
+        if let Some(expected) = expected {
+            assert_eq!(result, Err(expected));
+        } else {
+            assert!(matches!(
+                result,
+                Err(TacticalActionError::Command(CommandRejection::Invocation(
+                    InvocationError::Dispatch(_)
+                )))
+            ));
+        }
+        assert_eq!(final_handler.calls.get(), 0);
+        assert_eq!(current, original);
+    }
+}
+
+#[test]
+fn complete_action_dependencies_and_handler_refusal_are_rechecked_before_final_staging() {
+    let prepared = tactical_action_checkpoint();
+    let offers = [tactical_action_input(4)];
+    let input = RulesCommandInput {
+        command: &offers[0],
+        supplied_draws: &[],
+    };
+    for case in 0..6 {
+        let mut state = prepared.state().clone();
+        let dependency = match case {
+            0 => {
+                state.resources[0].value -= 1;
+                Some(PreconditionError::StaleResource)
+            }
+            1 => {
+                state.logical_time.ticks += 1;
+                Some(PreconditionError::StaleTime)
+            }
+            2 => {
+                state.entities[1].identity_revision = label("changed-identity");
+                Some(PreconditionError::StaleEntity)
+            }
+            3 => {
+                state.encounters[0].active_turn = Some(entity(4));
+                Some(PreconditionError::StaleEncounter)
+            }
+            4 => {
+                state.pending[0].continuation = label("changed-continuation");
+                Some(PreconditionError::StalePending)
+            }
+            5 => None,
+            _ => unreachable!(),
+        };
+        let current = checkpoint(state).unwrap();
+        let original = current.clone();
+        let mut final_handler = handler(&current, input);
+        final_handler.refuse = case == 5;
+        let rejection = if let Some(dependency) = dependency {
+            PreconditionedRejection::Precondition(dependency)
+        } else {
+            PreconditionedRejection::Handler(FixtureRejection::Unsupported)
+        };
+        assert_eq!(
+            invoke_action(
+                &current,
+                &prepared,
+                &prepared,
+                &offers,
+                input,
+                &final_handler,
+                action_authority()
+            ),
+            Err(TacticalActionError::Command(CommandRejection::Invocation(
+                InvocationError::Handler(rejection)
+            )))
+        );
+        assert_eq!(final_handler.calls.get(), usize::from(case == 5));
+        assert_eq!(current, original);
+    }
+}
+
+#[test]
+fn original_native_action_draw_slice_is_preserved_and_invalid_outcome_never_runs_handler() {
+    let current = tactical_action_checkpoint();
+    let original = current.clone();
+    let offers = [tactical_action_input(4)];
+    let draws = [native_roll_draw(0)];
+    let input = RulesCommandInput {
+        command: &offers[0],
+        supplied_draws: &draws,
+    };
+    let final_handler = handler(&current, input);
+    let mut invalid = draws.to_vec();
+    invalid[0].operation = OperationId::from_bytes(&[99; 16]).unwrap();
+    assert_eq!(
+        invoke_action(
+            &current,
+            &current,
+            &current,
+            &offers,
+            RulesCommandInput {
+                command: &offers[0],
+                supplied_draws: &invalid
+            },
+            &final_handler,
+            action_authority(),
+        ),
+        Err(TacticalActionError::Command(CommandRejection::Invocation(
+            InvocationError::DrawOperationMismatch
+        )))
+    );
+    assert_eq!(final_handler.calls.get(), 0);
+    let staged = invoke_action(
+        &current,
+        &current,
+        &current,
+        &offers,
+        input,
+        &final_handler,
+        action_authority(),
+    )
+    .unwrap();
+    assert!(std::ptr::eq(
+        final_handler.observed_draw_pointer.get(),
+        draws.as_ptr()
+    ));
+    assert_eq!(staged.state().draws, draws);
+    assert_eq!(staged.state().decisions[0].draws, vec![0]);
+    assert_eq!(final_handler.calls.get(), 1);
+    assert_eq!(current, original);
+}

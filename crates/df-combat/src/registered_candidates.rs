@@ -1,18 +1,20 @@
-//! Current canonical pending responses admitted through the compiled rules pipeline.
+//! Bounded canonical responses and action inventories admitted through compiled Rules.
 use crate::candidates::{
     AdmittedCandidates, CandidateContext, CandidateError, CandidateLimits, LegalOfferOwner,
     enumerate_candidates,
 };
 use df_model::checkpoint::{
-    CheckpointError, CommandInput, GameCommand, GameInput, OfferedResponse, PendingInput,
-    ReferenceInventory,
+    CheckpointError, CommandInput, EntityId, GameCommand, GameInput, OfferedResponse, PendingInput,
+    ReferenceInventory, RuleReference,
 };
-use df_model::commands::CommandError;
+use df_model::commands::{CommandError, validate_client_command};
 use df_rules::current_responses::{
     ResponseError, ResponsePreparationError, prepare_current_response,
 };
-use df_rules::preconditions::{CurrentRuleContext, PreconditionedCommandHandler};
-use df_rules::{DispatchRegistry, RulesCommandHandler, RulesCommandInput};
+use df_rules::preconditions::{
+    CurrentRuleContext, PreconditionedCommandHandler, PreconditionedRejection,
+};
+use df_rules::{DispatchRegistry, InvocationError, RulesCommandHandler, RulesCommandInput};
 use df_types::{MemberId, OperationId, RevisionLabel};
 
 /// Trusted native identities and current pins supplied independently of template labels.
@@ -304,5 +306,262 @@ fn borrowed_context<'a>(context: &CurrentRuleContext<'a>) -> CurrentRuleContext<
             assets: inventory.assets,
         },
         command_limits: context.command_limits,
+    }
+}
+
+/// Native source-owner admission for one finite actor action inventory.
+/// These values come from the session/source owners independently of offered commands.
+/// They confer no actor control, perception rights or mechanical authority themselves.
+pub struct RegisteredActionRequest<'a> {
+    pub current: CandidateContext<'a>,
+    pub actor: EntityId,
+    pub member: MemberId,
+    pub operation: OperationId,
+    pub source: &'a RuleReference,
+    pub selector: &'a RevisionLabel,
+}
+
+/// Ephemeral source-bound receipt over exact borrowed canonical action inputs.
+/// No staged checkpoint, outcome or serialization is retained.
+pub struct RegisteredActionCandidates<'a> {
+    admitted: AdmittedCandidates<'a, GameInput>,
+    actor: EntityId,
+    member: MemberId,
+    operation: OperationId,
+    source: &'a RuleReference,
+    selector: &'a RevisionLabel,
+}
+
+impl<'a> RegisteredActionCandidates<'a> {
+    pub fn admitted(&self) -> &AdmittedCandidates<'a, GameInput> {
+        &self.admitted
+    }
+
+    pub fn actor(&self) -> EntityId {
+        self.actor
+    }
+
+    pub fn member(&self) -> MemberId {
+        self.member
+    }
+
+    pub fn operation(&self) -> OperationId {
+        self.operation
+    }
+
+    pub fn source(&self) -> &'a RuleReference {
+        self.source
+    }
+
+    pub fn selector(&self) -> &'a RevisionLabel {
+        self.selector
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum RegisteredActionError<R> {
+    Capacity,
+    Snapshot(CheckpointError),
+    StaleBasis,
+    StalePins,
+    MemberMismatch,
+    OperationMismatch,
+    ActorMismatch,
+    UnsupportedCommand,
+    Admission(CommandError),
+    SourceMismatch,
+    Invocation(InvocationError<PreconditionedRejection<R>>),
+    Enumeration(CandidateError<InvocationError<PreconditionedRejection<R>>>),
+}
+
+/// Admit a supplied, source-owned ProposeAction inventory through its exact compiled handler.
+///
+/// This is a single-source deterministic action admission boundary, not an action producer or
+/// complete NPC LegalActionSet. Rules own every mechanical prerequisite and the reviewed
+/// dependency list. Native owners must establish actor control and perception before supplying
+/// the inventory. No targets, tactics, source mapping, catalog entries or mechanics are invented.
+/// Every command is checked before any preparation; duplicate inputs reject the entire batch.
+/// Each preparation receives empty actual draws and its detached checkpoint is discarded.
+/// A draw-dependent or unsupported handler refuses the whole inventory, never a partial legal
+/// set. Empty inventory is a successful no-action receipt. Session alone accepts and commits.
+pub fn enumerate_registered_actions<'a, H: RulesCommandHandler>(
+    context: CurrentRuleContext<'a>,
+    registry: &DispatchRegistry<'_, PreconditionedCommandHandler<'_, H>>,
+    request: RegisteredActionRequest<'a>,
+    offers: &'a [GameInput],
+    limits: RegisteredCandidateLimits,
+) -> Result<RegisteredActionCandidates<'a>, RegisteredActionError<H::Rejection>> {
+    if limits.maximum_checkpoint_bytes == 0
+        || limits.maximum_inventory_records == 0
+        || limits.maximum_staged_bytes == 0
+        || context
+            .checkpoint
+            .retained_bytes()
+            .is_none_or(|bytes| bytes > limits.maximum_checkpoint_bytes)
+        || offers.len() > limits.maximum_rules_preparations
+        || offers.len() > limits.candidates.max_offers
+        || offers.len() > limits.candidates.max_candidates
+    {
+        return Err(RegisteredActionError::Capacity);
+    }
+    let inventory_records = [
+        context.inventory.rules.len(),
+        context.inventory.content.len(),
+        context.inventory.resources.len(),
+        context.inventory.assets.len(),
+    ]
+    .into_iter()
+    .try_fold(0usize, |total, count| total.checked_add(count))
+    .ok_or(RegisteredActionError::Capacity)?;
+    if inventory_records > limits.maximum_inventory_records {
+        return Err(RegisteredActionError::Capacity);
+    }
+    let mut retained = 0usize;
+    for offer in offers {
+        let bytes = offer
+            .retained_bytes()
+            .ok_or(RegisteredActionError::Capacity)?;
+        if bytes > context.command_limits.maximum_retained_bytes {
+            return Err(RegisteredActionError::Capacity);
+        }
+        retained = retained
+            .checked_add(bytes)
+            .ok_or(RegisteredActionError::Capacity)?;
+    }
+    if retained > limits.candidates.max_candidate_bytes {
+        return Err(RegisteredActionError::Capacity);
+    }
+    if context.basis != *request.current.basis {
+        return Err(RegisteredActionError::StaleBasis);
+    }
+    if context.pins != request.current.pins {
+        return Err(RegisteredActionError::StalePins);
+    }
+    context
+        .checkpoint
+        .validate_resume(context.basis, context.pins)
+        .map_err(RegisteredActionError::Snapshot)?;
+    if !context
+        .checkpoint
+        .state()
+        .members
+        .iter()
+        .any(|link| link.member == request.member)
+    {
+        return Err(RegisteredActionError::Admission(
+            CommandError::UnknownMember,
+        ));
+    }
+    if !context
+        .checkpoint
+        .state()
+        .entities
+        .iter()
+        .any(|entity| entity.id == request.actor)
+    {
+        return Err(RegisteredActionError::Admission(
+            CommandError::InvalidReference,
+        ));
+    }
+    if request.source.catalog != context.pins.rules.catalog
+        || !context.inventory.rules.contains(request.source)
+    {
+        return Err(RegisteredActionError::SourceMismatch);
+    }
+    for offer in offers {
+        let GameInput::Game(command) = offer else {
+            return Err(RegisteredActionError::UnsupportedCommand);
+        };
+        let GameCommand::ProposeAction { actor, .. } = &command.command else {
+            return Err(RegisteredActionError::UnsupportedCommand);
+        };
+        if command.member != request.member {
+            return Err(RegisteredActionError::MemberMismatch);
+        }
+        if command.operation != request.operation {
+            return Err(RegisteredActionError::OperationMismatch);
+        }
+        if *actor != request.actor {
+            return Err(RegisteredActionError::ActorMismatch);
+        }
+        if command.basis != context.basis || command.observed_revision != context.basis.revision {
+            return Err(RegisteredActionError::StaleBasis);
+        }
+        validate_client_command(
+            offer,
+            context.checkpoint,
+            borrowed_context(&context).inventory,
+            context.command_limits,
+        )
+        .map_err(RegisteredActionError::Admission)?;
+    }
+    let handler = registry
+        .select(context.pins, request.selector, request.source)
+        .map_err(|error| RegisteredActionError::Invocation(InvocationError::Dispatch(error)))?;
+    if handler.source() != request.source {
+        return Err(RegisteredActionError::SourceMismatch);
+    }
+    let current = request.current;
+    let owner = ActionRegistryOwner {
+        context,
+        registry,
+        request: &request,
+        maximum_staged_bytes: limits.maximum_staged_bytes,
+    };
+    let admitted = enumerate_candidates(&owner, &(), current, current, offers, limits.candidates)
+        .map_err(RegisteredActionError::Enumeration)?;
+    Ok(RegisteredActionCandidates {
+        admitted,
+        actor: request.actor,
+        member: request.member,
+        operation: request.operation,
+        source: request.source,
+        selector: request.selector,
+    })
+}
+
+struct ActionRegistryOwner<'a, 'b, 'c, 'd, H> {
+    context: CurrentRuleContext<'a>,
+    registry: &'b DispatchRegistry<'c, PreconditionedCommandHandler<'d, H>>,
+    request: &'b RegisteredActionRequest<'a>,
+    maximum_staged_bytes: usize,
+}
+
+impl<H: RulesCommandHandler> LegalOfferOwner for ActionRegistryOwner<'_, '_, '_, '_, H> {
+    type Observation = ();
+    type Offer = GameInput;
+    type Error = InvocationError<PreconditionedRejection<H::Rejection>>;
+
+    fn validate_observation(&self, _: &(), _: CandidateContext<'_>) -> Result<(), Self::Error> {
+        // The entry validated the entire supplied native identity and input batch.
+        Ok(())
+    }
+
+    fn is_current_legal(
+        &self,
+        _: &(),
+        _: CandidateContext<'_>,
+        offer: &GameInput,
+    ) -> Result<bool, Self::Error> {
+        self.registry.stage(
+            self.context.pins,
+            self.request.selector,
+            self.request.source,
+            RulesCommandInput {
+                command: offer,
+                supplied_draws: &[],
+            },
+            self.context.checkpoint,
+            self.maximum_staged_bytes,
+        )?;
+        Ok(true)
+    }
+
+    fn same_offer(&self, left: &GameInput, right: &GameInput) -> Result<bool, Self::Error> {
+        Ok(left == right)
+    }
+
+    fn offer_bytes(&self, offer: &GameInput) -> Result<usize, Self::Error> {
+        offer.retained_bytes().ok_or(InvocationError::Capacity)
     }
 }

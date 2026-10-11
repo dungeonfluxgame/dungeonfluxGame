@@ -1,10 +1,13 @@
-//! Exact current member-controlled tactical responses enter the registered engine boundary.
-use crate::command_entry::CommandEntryContext;
+//! Exact registered tactical inputs revalidated through the canonical engine command boundary.
+use crate::command_entry::{CommandEntryContext, CommandRejection, decide_registered_command};
 use crate::pending_resumption::{ResumeError, ResumeFence, ResumeLimits, stage_pending_response};
 use df_combat::candidates::AdmittedCandidates;
-use df_model::checkpoint::{Checkpoint, GameCommand, GameInput, OfferedResponse, PendingInput};
-use df_rules::preconditions::PreconditionedCommandHandler;
-use df_rules::{DispatchRegistry, RulesCommandHandler, RulesCommandInput};
+use df_combat::registered_candidates::RegisteredActionCandidates;
+use df_model::checkpoint::{
+    Checkpoint, EntityId, GameCommand, GameInput, OfferedResponse, PendingInput, RuleReference,
+};
+use df_rules::preconditions::{PreconditionedCommandHandler, PreconditionedRejection};
+use df_rules::{DispatchRegistry, InvocationError, RulesCommandHandler, RulesCommandInput};
 use df_types::{MemberId, OperationId, RevisionLabel};
 
 /// Current native admission, independent of tactical suggestions and client labels.
@@ -131,4 +134,136 @@ pub fn stage_tactical_response<H: RulesCommandHandler>(
         selector,
     )
     .map_err(TacticalResponseError::Resume)
+}
+
+/// Independent native admission of a selected source-bound action inventory.
+/// Possession of the receipt and these values is not session authorization or NPC control.
+pub struct TacticalActionAdmission<'a> {
+    pub candidates: &'a RegisteredActionCandidates<'a>,
+    pub actor: EntityId,
+    pub member: MemberId,
+    pub operation: OperationId,
+    pub source: &'a RuleReference,
+    pub fence: ResumeFence,
+    pub limits: ResumeLimits,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TacticalActionError<R> {
+    Capacity,
+    UnsupportedCommand,
+    MemberMismatch,
+    OperationMismatch,
+    ActorMismatch,
+    SourceMismatch,
+    SelectorMismatch,
+    StaleBasis,
+    StalePins,
+    UnadmittedAction,
+    StaleGeneration,
+    CancelledBeforeAdmission,
+    Command(CommandRejection<PreconditionedRejection<R>>),
+}
+
+/// Revalidate and stage an exact registered ProposeAction using the existing engine command path.
+///
+/// The receipt retains enumeration source/selector/native identity as well as exact input borrows.
+/// A detached equal input or another currently registered handler cannot replace that binding.
+/// Current source inventory, full source-owned dependencies, model admission and shared candidate
+/// accounting are checked again. The original native draw slice passes unchanged to Rules.
+/// No preview checkpoint is applied and no outcome is generated or inferred by this adapter.
+/// Source-producing legal enemy attacks, perception, actor control and utility policy remain
+/// their owners' gates. Session must perform scoped operation lookup before entry and remains
+/// the sole durable acceptance/publication owner; stale/Unknown work cannot use a preview.
+pub fn stage_tactical_action<H: RulesCommandHandler>(
+    input: RulesCommandInput<'_>,
+    current: &Checkpoint,
+    context: CommandEntryContext<'_>,
+    admission: TacticalActionAdmission<'_>,
+    registry: &DispatchRegistry<'_, PreconditionedCommandHandler<'_, H>>,
+    selector: &RevisionLabel,
+) -> Result<Checkpoint, TacticalActionError<H::Rejection>> {
+    let candidates = admission.candidates;
+    if admission.limits.maximum_checkpoint_bytes == 0
+        || context.limits.maximum_staged_bytes == 0
+        || current
+            .retained_bytes()
+            .is_none_or(|bytes| bytes > admission.limits.maximum_checkpoint_bytes)
+        || candidates.admitted().offers().len() > context.limits.command.maximum_records
+        || input
+            .command
+            .retained_bytes()
+            .is_none_or(|bytes| bytes > context.limits.command.maximum_retained_bytes)
+    {
+        return Err(TacticalActionError::Capacity);
+    }
+    let GameInput::Game(command) = input.command else {
+        return Err(TacticalActionError::UnsupportedCommand);
+    };
+    let GameCommand::ProposeAction { actor, .. } = &command.command else {
+        return Err(TacticalActionError::UnsupportedCommand);
+    };
+    if command.member != admission.member || candidates.member() != admission.member {
+        return Err(TacticalActionError::MemberMismatch);
+    }
+    if command.operation != admission.operation || candidates.operation() != admission.operation {
+        return Err(TacticalActionError::OperationMismatch);
+    }
+    if *actor != admission.actor || candidates.actor() != admission.actor {
+        return Err(TacticalActionError::ActorMismatch);
+    }
+    if candidates.source() != admission.source
+        || admission.source.catalog != context.admitted_pins.rules.catalog
+        || !context.inventory.rules.contains(admission.source)
+    {
+        return Err(TacticalActionError::SourceMismatch);
+    }
+    if candidates.selector() != selector {
+        return Err(TacticalActionError::SelectorMismatch);
+    }
+    if candidates.admitted().basis() != &current.basis()
+        || context.current_basis != current.basis()
+        || command.basis != current.basis()
+        || command.observed_revision != current.basis().revision
+    {
+        return Err(TacticalActionError::StaleBasis);
+    }
+    if candidates.admitted().pins() != current.pins() || context.admitted_pins != current.pins() {
+        return Err(TacticalActionError::StalePins);
+    }
+    if !candidates
+        .admitted()
+        .offers()
+        .iter()
+        .any(|offer| std::ptr::eq(*offer, input.command))
+    {
+        return Err(TacticalActionError::UnadmittedAction);
+    }
+    if admission.fence.current_generation == 0
+        || admission.fence.admitted_generation != admission.fence.current_generation
+    {
+        return Err(TacticalActionError::StaleGeneration);
+    }
+    if admission.fence.cancel_before_admission {
+        return Err(TacticalActionError::CancelledBeforeAdmission);
+    }
+    let handler = registry
+        .select(context.admitted_pins, selector, admission.source)
+        .map_err(|error| {
+            TacticalActionError::Command(CommandRejection::Invocation(InvocationError::Dispatch(
+                error,
+            )))
+        })?;
+    if handler.source() != admission.source {
+        return Err(TacticalActionError::SourceMismatch);
+    }
+    decide_registered_command(
+        input,
+        current,
+        context,
+        registry,
+        selector,
+        admission.source,
+    )
+    .map_err(TacticalActionError::Command)
 }
