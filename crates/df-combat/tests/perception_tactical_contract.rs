@@ -557,3 +557,115 @@ fn decision_fixture_records_the_bounded_consumer_claim_and_open_producer_gate() 
     assert!(DECISION_FIXTURE.contains("df-combat has no direct df-knowledge dependency"));
     assert!(DECISION_FIXTURE.contains("tactics cannot read undisclosed enemy facts"));
 }
+
+#[test]
+fn undisclosed_player_evidence_rejects_before_any_score_or_criterion_is_inspected() {
+    let fixture = Fixture::new();
+    let observer = KnowledgeObserver::Member(member(3));
+    let observation = fixture.observation(observer);
+    let offers = [Offer { id: 1, legal: true }];
+    let admitted = fixture.admitted(&offers);
+    let grants = [
+        KnowledgeGrant {
+            observer: member(3),
+            fact: fact(4),
+            source: fact(6),
+        },
+        KnowledgeGrant {
+            observer: member(3),
+            fact: fact(5),
+            source: fact(6),
+        },
+        KnowledgeGrant {
+            observer: member(8),
+            fact: fact(99),
+            source: fact(6),
+        },
+    ];
+    let knowledge = TacticalKnowledge {
+        basis: &fixture.basis,
+        pins: &fixture.pins,
+        observer,
+        grants: &grants,
+        beliefs: &[],
+        npcs: &[],
+    };
+    let contributions = [
+        contribution(UtilityEvidence::Fact(fact(4)), i64::MAX),
+        contribution(UtilityEvidence::Fact(fact(5)), 1),
+        UtilityContribution {
+            criterion: reference("unsupported-private-criterion"),
+            evidence: UtilityEvidence::Fact(fact(99)),
+            value: i64::MAX,
+        },
+    ];
+    let assignments = [UtilityAssignment {
+        offer: &offers[0],
+        contributions: &contributions,
+    }];
+    assert!(matches!(
+        rank_tactics(
+            &observation,
+            &admitted,
+            &assignments,
+            &knowledge,
+            &fixture.policy(),
+            ranking_limits()
+        ),
+        Err(UtilityRankingError::UndisclosedEvidence)
+    ));
+}
+
+#[test]
+fn retaining_another_holders_belief_id_does_not_admit_the_private_claim() {
+    let fixture = Fixture::new();
+    let observer = KnowledgeObserver::Entity(entity(7));
+    let observation = fixture.observation(observer);
+    let offers = [Offer { id: 1, legal: true }];
+    let admitted = fixture.admitted(&offers);
+    let npcs = [NpcState {
+        entity: entity(7),
+        personality: reference("actor"),
+        role: reference("actor"),
+        motivations: vec![],
+        goals: vec![],
+        needs: vec![],
+        fears: vec![],
+        known_facts: vec![],
+        beliefs: vec![record(9)],
+        secrets: vec![],
+    }];
+    let beliefs = [AttributedClaim {
+        id: record(9),
+        holder: entity(8),
+        subject: entity(7),
+        claim: "another player's private tactical claim".to_owned(),
+        evidence: vec![fact(99)],
+        audience: AudienceScope::Shared,
+        source: reference("hidden-source"),
+    }];
+    let knowledge = TacticalKnowledge {
+        basis: &fixture.basis,
+        pins: &fixture.pins,
+        observer,
+        grants: &[],
+        beliefs: &beliefs,
+        npcs: &npcs,
+    };
+    let contributions = [contribution(UtilityEvidence::Belief(record(9)), 50)];
+    let assignments = [UtilityAssignment {
+        offer: &offers[0],
+        contributions: &contributions,
+    }];
+    assert!(matches!(
+        rank_tactics(
+            &observation,
+            &admitted,
+            &assignments,
+            &knowledge,
+            &fixture.policy(),
+            ranking_limits()
+        ),
+        Err(UtilityRankingError::UndisclosedEvidence)
+    ));
+}
