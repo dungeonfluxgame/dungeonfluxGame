@@ -65,3 +65,25 @@ pub use output_fetch::{
     OutputFetchPlan, OutputFetchRefusal, decode_output, fetch_output, inspect_decoded_image,
     inspect_dns_answers, inspect_fetch_response, prepare_output_fetch_plan,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+mod fal_media;
+#[cfg(not(target_arch = "wasm32"))]
+mod media_container;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_media_fetch;
+#[cfg(not(target_arch = "wasm32"))]
+pub use fal_media::{
+    EncodedFalMedia, FalCancellationObservation, FalImageBasis, FalImageJob, FalImageProfile,
+    FalImageRequest, FalImageSemantics, FalLoopFrames, FalMediaCompletion, FalMediaConfig,
+    FalMediaError, FalMediaFamily, FalMediaJob, FalMediaReason, FalReferenceFrame, FalSoundBasis,
+    FalSoundJob, FalSoundProfile, FalSoundRequest, FalSoundSemantics, FalVideoBasis,
+    FalVideoCompletionEvent, FalVideoJob, FalVideoProfile, FalVideoRequest, FalVideoSemantics,
+    NativeFalMediaProvider, PreparedFalMediaResponse,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use media_container::{EncodedMediaFacts, MediaContainerRefusal, MediaTimebase};
+#[cfg(not(target_arch = "wasm32"))]
+pub use native_media_fetch::FalCdnPin;
+#[cfg(not(target_arch = "wasm32"))]
+pub use registry::registered_fal_media_provider;

@@ -376,3 +376,13 @@ pub const fn candidate_for(
         _ => Err(UnsupportedCapability { capability }),
     }
 }
+
+/// Constructs the selected actual FAL adapter without granting rights or spend.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn registered_fal_media_provider(
+    config: crate::FalMediaConfig,
+    credential: &str,
+    limits: crate::NativeHttpLimits,
+) -> Result<crate::NativeFalMediaProvider, crate::FalMediaError> {
+    crate::NativeFalMediaProvider::new(config, credential, limits)
+}

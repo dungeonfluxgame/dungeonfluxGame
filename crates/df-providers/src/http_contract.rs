@@ -20,6 +20,7 @@ const FAL_QUEUE_BASE: &str = "https://queue.fal.run/fal-ai/flux/schnell";
 pub enum HttpMethod {
     Get,
     Post,
+    Put,
 }
 
 impl HttpMethod {
@@ -27,6 +28,7 @@ impl HttpMethod {
         match self {
             Self::Get => "GET",
             Self::Post => "POST",
+            Self::Put => "PUT",
         }
     }
 }
@@ -44,6 +46,25 @@ pub struct HttpRequest {
 }
 
 impl HttpRequest {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn fal_native(
+        method: HttpMethod,
+        endpoint: &str,
+        credential: &str,
+        body: Vec<u8>,
+    ) -> Self {
+        Self {
+            method,
+            url: endpoint.to_owned(),
+            headers: vec![
+                ("Authorization", format!("Key {credential}")),
+                ("Content-Type", "application/json".to_owned()),
+                ("X-Fal-No-Retry", "1".to_owned()),
+            ],
+            body,
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn elevenlabs_native(
         endpoint: &str,

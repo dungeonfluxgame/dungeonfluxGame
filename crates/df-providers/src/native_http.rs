@@ -199,6 +199,7 @@ impl NativeHttp {
         let method = match request.method() {
             HttpMethod::Get => reqwest::Method::GET,
             HttpMethod::Post => reqwest::Method::POST,
+            HttpMethod::Put => reqwest::Method::PUT,
         };
         let mut builder = self
             .client
