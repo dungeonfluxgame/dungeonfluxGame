@@ -1,0 +1,155 @@
+{
+  "alternatives_rejected": [
+    "New parallel FactionState/schema or public source owner DTO: exact shared contract producer is missing; generic canonical entities suffice for this bounded movement example.",
+    "Automatic TravelLeg arrival or weather mechanics inferred from content labels: source policy and rules owner admission are required.",
+    "Elapsed wall-time catch-up, per-faction timer/provider or market simulation: violates accepted logical-time/pause policy or unselected scope.",
+    "Resource stock regeneration or self-admitted larger cap: violates source-supplied trusted rules interval and required reward ownership."
+  ],
+  "attempt_id": "B-C-df-world-D04-a1",
+  "bounds": "Contract fixture: maximum 512 checkpoint records, 256 text bytes per label, 8192 total text bytes, 1 MiB retained checkpoint; world positive bounds capped 4096, fixture selected <=2 due events, <=2 changes and <=64 KiB retained proposals; pure functions do no I/O/clock/provider.",
+  "cases": [
+    "source_causal_environment_replacement_preserves_canonical_weather_fact_prefix",
+    "unaccepted_or_wrong_definition_weather_fact_refuses_whole_batch",
+    "stale_environment_geometry_basis_or_pins_refuses_without_mutation",
+    "faction_entity_moves_only_for_exact_admitted_event_destination_and_accepted_time",
+    "paused_due_faction_and_travel_events_return_backlog_without_movement",
+    "travel_leg_preserves_route_source_travelers_and_resource_stock_through_due_proposal",
+    "unaccepted_time_wrong_event_definition_or_previous_location_refuses",
+    "world_proposals_preserve_rules_resources_inventory_draws_and_source_bounds",
+    "checkpoint_refuses_self_raised_resource_bounds_and_out_of_range_stock",
+    "bounded_replay_is_deterministic_and_source_checkpoint_unchanged",
+    "contract_owner_and_gap_record_covers_exact_four_original_families"
+  ],
+  "decision": "Canonical immutable records produce bounded source-admitted proposals. Engine stages complete state; session alone commits with PostgreSQL fence/revision. World never infers mechanical authority from entity names, weather art, elapsed wall time or a resource fact.",
+  "existing_owner_hooks": [
+    {
+      "operation": "stage_schedule_advancement",
+      "owner": "df-world",
+      "status": "Actual pure function exercised by this contract; explicit accepted time and exact event/destination admission."
+    },
+    {
+      "operation": "stage_environmental_delta",
+      "owner": "df-world",
+      "status": "Actual pure function exercised by this contract; accepted current fact/source/scene basis required."
+    },
+    {
+      "operation": "compose_schedule_candidates and registered EnvironmentalChangeHandler",
+      "owner": "df-engine",
+      "status": "Existing source read; not executed or modified by this Design fixture."
+    },
+    {
+      "operation": "SessionRepository::commit_decision and submission Confirmed publication",
+      "owner": "df-session",
+      "status": "Existing source read; physical PostgreSQL/session integration not exercised by this Design fixture."
+    }
+  ],
+  "families": [
+    {
+      "family": "faction",
+      "gap": "No authored faction membership/governance producer or canonical faction-specific schema; fixture must disclose generic entity representation",
+      "mutation": "df-engine stages; df-session sole fenced PostgreSQL commit",
+      "policy": "df-content authored faction membership/movement/relations; df-interaction reactions; df-world causal scheduled movement; df-rules legality",
+      "proposal": "Actual stage_schedule_advancement with exact event/definition/entity/destination mapping; label cannot authorize membership or movement",
+      "state": "WorldEntity plus source-linked ContentEvent and ScheduledEvent; no canonical FactionState exists"
+    },
+    {
+      "family": "weather",
+      "gap": "Generic environment seam exists; actual weather rule/catalog/handler registration and geometry asset bytes remain separate production qualification",
+      "mutation": "Existing df-engine world_staging registered handler and session adapter stage candidate; df-session commits",
+      "policy": "df-content source-qualified weather definition; df-rules mechanical effects; weather never follows tempo/presentation intensity",
+      "proposal": "Actual stage_environmental_delta requires exact current environment/geometry/pins and accepted current-revision appended cause",
+      "state": "EnvironmentalState, SceneIdentityRevision, accepted ContentEvent fact prefix"
+    },
+    {
+      "family": "travel",
+      "gap": "Current selector does not automatically turn TravelLeg arrivals into ScheduledEvent or destination admission; no production travel completion source producer assumed",
+      "mutation": "Existing df-engine compose_schedule_candidates applies bounded location/time/cursor proposals to a validated candidate; df-session commits",
+      "policy": "df-content route/destination policy; df-rules speed/rest/consumption/legality",
+      "proposal": "Actual stage_schedule_advancement moves source-admitted exact scheduled destination only with accepted logical time; original TravelLeg and resources retained",
+      "state": "TravelLeg source/route/from/destination/travelers/starts/arrives plus LogicalTime and ScheduledEvent"
+    },
+    {
+      "family": "resource",
+      "gap": "A ResourceChanged fact alone is not mechanical authorization, inventory grant or spend validation",
+      "mutation": "df-engine rules staging constructs complete checkpoint; df-session commits",
+      "policy": "df-rules exclusively owns source-grounded bounds, spends and rewards; finite authored stock, no market simulator",
+      "proposal": "World environmental/schedule proposals must retain existing resources/inventory/draws; proposed resource interval edits rejected by actual Checkpoint validator against trusted inventory",
+      "state": "ResourceState and trusted ResourceConstraint; ResourceChanged facts carry exact before/after/source"
+    }
+  ],
+  "fixture_only": true,
+  "governing_sources": [
+    {
+      "path": "planning/subsystem-architecture.md",
+      "sections": [
+        "Design",
+        "Shared and transport crates",
+        "Server crates",
+        "Browser crates",
+        "Tooling crates",
+        "Integration and refinement",
+        "Commercial service composition"
+      ],
+      "sha256": "cf549f4f046f76713c881228d82c6a7111d8ccc84db208cb9d9db67bb192d9f6"
+    },
+    {
+      "path": "planning/subsystem-interfaces.md",
+      "sections": [
+        "Common contract rules",
+        "Pure domain and content",
+        "Separate runtime subsystem boundaries",
+        "Identity and session ownership",
+        "PostgreSQL persistence and durable media",
+        "AI/provider/media ports",
+        "Projection, RPC and transport",
+        "Feature-specific candidates within existing boundaries",
+        "Browser interfaces",
+        "Observability and development tooling",
+        "Commerce and lifecycle ports"
+      ],
+      "sha256": "f26e1dca42e878f8a816c9f9aa37463cb8f061224598214ceee62632a161907a"
+    },
+    {
+      "path": "planning/runtime-directors.md",
+      "sections": [
+        "Authority and composition",
+        "Pure public boundaries",
+        "Time, recovery and bounded work",
+        "Added feature projections",
+        "Acceptance and unresolved gates"
+      ],
+      "sha256": "ed8944f316d912498107ee550431e560795ba8114cb63a181b6aadeca70b48ca"
+    },
+    {
+      "path": "planning/long-horizon-state.md",
+      "sections": [
+        "Retrieval and contradiction semantics",
+        "World granularity and pause",
+        "Acceptance",
+        "Personal payload and rights lifecycle"
+      ],
+      "sha256": "977b5a346190a55c119242fdb7009a645e6d76aa2946d0684c46571d846e96ff"
+    },
+    {
+      "path": "development/backlog-catalog.json",
+      "sections": [
+        "C-df-world",
+        "B-C-df-world-D04"
+      ],
+      "sha256": "039b0a03b4085b43ad32c4063e2cb8fc789fc55fff7552aec6e951ec3b4704c3"
+    }
+  ],
+  "input_source": "13a55b85932091f988a594564edd2e00ac633427",
+  "new_public_production_contract": false,
+  "sole_commit_owner": "df-session",
+  "task_id": "B-C-df-world-D04",
+  "unperformed_production_qualifications": [
+    "authored faction policy",
+    "weather mechanics/source handler qualification",
+    "travel speed/rest/arrival producer",
+    "physical PostgreSQL fenced commit",
+    "browser/player continuity",
+    "full Standard2024 catalog",
+    "whole WORLD-TIME-ACCEPT"
+  ]
+}
