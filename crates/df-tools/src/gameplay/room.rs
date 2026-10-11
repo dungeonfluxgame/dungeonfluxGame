@@ -3,7 +3,10 @@ use df_model::checkpoint::{CommandInput, GameCommand, GameInput};
 use df_persistence::local_demo_scope::{LocalRejectedLookup, PLAYER};
 use df_protocol::common as rpc;
 use df_session::inbox::{AdmissionSequence, Reducer};
-use df_session::submission::{OwnedInput, SubmissionOutcome};
+use df_session::submission::{
+    DurableOwner, OwnedInput, PublicationOwner, RepositoryError, SessionEngine, SessionRepository,
+    SubmissionOutcome,
+};
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tonic::{Request, Response, Status};
@@ -16,6 +19,29 @@ fn refused(code: rpc::RejectionCode) -> rpc::JoinRoomResponse {
         )),
     }
 }
+// Exact uncertain input is lookup-only until DurableOwner validates its retained receipt
+// and reload. Known stale state instead requires an authorized reload before admission.
+fn prepare_join_recovery<R, E, P>(
+    owner: &mut DurableOwner<R, E, P>,
+    scope: &R::Scope,
+    input: &GameInput,
+    context: &df_observe::OperationContext,
+) -> Result<(), RepositoryError>
+where
+    R: SessionRepository,
+    E: SessionEngine<R::Scope>,
+    P: PublicationOwner<R::Scope>,
+{
+    if owner.has_uncertain_operation() {
+        if !owner.matches_uncertain_retry(scope, input)? {
+            return Err(RepositoryError::UnresolvedCommit);
+        }
+        Ok(())
+    } else {
+        owner.reload_current(scope, context)
+    }
+}
+
 // A receipt proves the durable decision, but cannot authorize a grant from a stale cache.
 fn admit_join_outcome(
     owner_current: bool,
@@ -61,9 +87,6 @@ impl actor::Actor {
         &mut self,
         request: rpc::JoinRoomRequest,
     ) -> Result<rpc::JoinRoomResponse, Status> {
-        if self.fenced {
-            return Ok(refused(rpc::RejectionCode::RecoveryRequired));
-        }
         if request.room_code.len() > 32
             || request.join_secret.len() != 32
             || request.join_secret.iter().all(|byte| *byte == 0)
@@ -96,47 +119,62 @@ impl actor::Actor {
                 model::pins().map_err(actor::unavailable)?,
             )
             .map_err(actor::unavailable)?;
-        // Lookup always precedes room/capacity/phase admission, and is fingerprint-bound.
-        match self
-            .issuer
-            .rejected_operation(&scope, self.owner.checkpoint().basis(), None, self.codec)
-            .map_err(|error| {
-                join_lookup_error(
-                    error,
-                    self.owner.checkpoint(),
-                    &mut self.fenced,
-                    &self.recovery_wakeup,
-                )
-            })? {
-            LocalRejectedLookup::Accepted => {}
-            LocalRejectedLookup::NotRecorded => {
-                if request.room_code != journey::ROOM_CODE {
-                    return Ok(refused(rpc::RejectionCode::InvalidSelection));
-                }
-                if journey::phase(self.owner.checkpoint()).map_err(actor::unavailable)?
-                    != rpc::JourneyPhase::Room
-                {
-                    return Ok(refused(rpc::RejectionCode::StaleOffer));
-                }
-                if journey::participants(self.owner.checkpoint()).len() >= 2 {
-                    return Ok(refused(rpc::RejectionCode::ResourceMissing));
-                }
-            }
-            LocalRejectedLookup::Conflict => {
-                return Ok(refused(rpc::RejectionCode::OperationConflict));
-            }
-            LocalRejectedLookup::Expired => {
-                return Ok(refused(rpc::RejectionCode::OperationExpired));
-            }
-            LocalRejectedLookup::Committed(_) => {
-                return Err(Status::internal("unexpected room receipt"));
-            }
-        }
-        let prior = self.owner.checkpoint().basis().revision;
         let context = df_observe::OperationContext {
             trace_parent: String::new(),
             build: crate::BUILD_ID.to_owned(),
         };
+        let recovering = self.fenced;
+        let replaying_uncertain = recovering && self.owner.has_uncertain_operation();
+        if recovering {
+            match prepare_join_recovery(&mut self.owner, &scope, &input, &context) {
+                Ok(()) => {}
+                Err(RepositoryError::UnresolvedCommit) => {
+                    return Ok(refused(rpc::RejectionCode::RecoveryRequired));
+                }
+                Err(error) => return Err(actor::unavailable(error)),
+            }
+        }
+        // The exact unresolved key reaches DurableOwner's lookup directly. Fresh
+        // room/capacity admission cannot reject a decision already committed.
+        if !replaying_uncertain {
+            // Lookup always precedes room/capacity/phase admission, and is fingerprint-bound.
+            match self
+                .issuer
+                .rejected_operation(&scope, self.owner.checkpoint().basis(), None, self.codec)
+                .map_err(|error| {
+                    join_lookup_error(
+                        error,
+                        self.owner.checkpoint(),
+                        &mut self.fenced,
+                        &self.recovery_wakeup,
+                    )
+                })? {
+                LocalRejectedLookup::Accepted => {}
+                LocalRejectedLookup::NotRecorded => {
+                    if request.room_code != journey::ROOM_CODE {
+                        return Ok(refused(rpc::RejectionCode::InvalidSelection));
+                    }
+                    if journey::phase(self.owner.checkpoint()).map_err(actor::unavailable)?
+                        != rpc::JourneyPhase::Room
+                    {
+                        return Ok(refused(rpc::RejectionCode::StaleOffer));
+                    }
+                    if journey::participants(self.owner.checkpoint()).len() >= 2 {
+                        return Ok(refused(rpc::RejectionCode::ResourceMissing));
+                    }
+                }
+                LocalRejectedLookup::Conflict => {
+                    return Ok(refused(rpc::RejectionCode::OperationConflict));
+                }
+                LocalRejectedLookup::Expired => {
+                    return Ok(refused(rpc::RejectionCode::OperationExpired));
+                }
+                LocalRejectedLookup::Committed(_) => {
+                    return Err(Status::internal("unexpected room receipt"));
+                }
+            }
+        }
+        let prior = self.owner.checkpoint().basis().revision;
         let (item, receiver) = OwnedInput::new(context, scope, input.clone());
         self.owner.reduce(AdmissionSequence(0), item);
         let receipt = match admit_join_outcome(
@@ -190,6 +228,13 @@ impl actor::Actor {
             }
             Err(error) => return Err(actor::unavailable(error)),
         };
+        // Membership grant acknowledgement is the final visibility gate. A receipt
+        // or reload alone must not reopen watches after an ambiguous Join.
+        if recovering {
+            self.fenced = false;
+            self.recovery_wakeup
+                .send_replace(self.owner.checkpoint().clone());
+        }
         if let Some(joins) = self.qualification_joins.as_mut()
             && joins.len() < 2
             && !joins
@@ -205,7 +250,7 @@ impl actor::Actor {
                 phase: rpc::JourneyPhase::Room as i32,
                 ..Default::default()
             })),
-            receipt.basis().revision <= prior,
+            replaying_uncertain || receipt.basis().revision <= prior,
         );
         Ok(rpc::JoinRoomResponse {
             outcome: Some(rpc::join_room_response::Outcome::Joined(Box::new(
