@@ -17,6 +17,7 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Element, Event};
 
 const MOUNT_ID: &str = "live-sheet";
+type CloseListener = Closure<dyn FnMut(Event)>;
 const UNRECORDED: &str = "Not recorded";
 
 const ABILITIES: [(&str, &str); 6] = [
@@ -47,7 +48,7 @@ pub(super) struct SheetOverlay {
     host: Element,
     surface: CharacterSheetSurface,
     close_button: Element,
-    on_close: RefCell<Option<Closure<dyn FnMut(Event)>>>,
+    on_close: RefCell<Option<CloseListener>>,
     disposed: Cell<bool>,
 }
 

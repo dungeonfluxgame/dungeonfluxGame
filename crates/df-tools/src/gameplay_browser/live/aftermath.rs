@@ -158,7 +158,12 @@ pub(super) fn present_rest(
         .map(|(index, member)| member_key(index, member))
         .collect();
     let conditions: Vec<&str> = view.journey.party.iter().map(condition).collect();
-    let details: Vec<String> = view.journey.party.iter().map(hit_points).collect();
+    let details: Vec<String> = view
+        .journey
+        .party
+        .iter()
+        .map(|member| format!("HP {} / {}", member.hit_points, member.maximum_hit_points))
+        .collect();
     let members: Vec<CampfireMember<'_>> = view
         .journey
         .party

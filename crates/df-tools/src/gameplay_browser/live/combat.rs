@@ -117,7 +117,7 @@ fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Opt
                 .iter()
                 .find(|fact| fact.label == "Second Wind uses")
             {
-                resources.push(("Second Wind", format!("{} uses left", uses.value)));
+                resources.push(("Second Wind", format!("{} remaining", uses.value)));
             }
         }
         result.push(ActorText {

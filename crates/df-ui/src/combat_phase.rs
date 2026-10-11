@@ -173,6 +173,7 @@ pub enum CombatValidationError {
     EmptyText,
     DuplicateKey,
     UnknownActiveActor,
+    InvalidPortrait,
     Disposed,
 }
 impl fmt::Display for CombatValidationError {
@@ -182,6 +183,7 @@ impl fmt::Display for CombatValidationError {
             Self::EmptyText => "combat presentation requires nonempty text",
             Self::DuplicateKey => "combat presentation keys repeat",
             Self::UnknownActiveActor => "active actor is absent from supplied initiative",
+            Self::InvalidPortrait => "portrait token must be 1-32 letters, digits or hyphens",
             Self::Disposed => "combat presentation scope is disposed",
         })
     }
@@ -249,7 +251,7 @@ impl CombatPhaseView<'_> {
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
             {
-                return Err(CombatValidationError::EmptyText);
+                return Err(CombatValidationError::InvalidPortrait);
             }
         }
         if self.active_actor.is_some_and(|key| !keys.contains(key)) {
@@ -1380,6 +1382,42 @@ mod tests {
                 ..limits()
             }),
             Err(CombatValidationError::Capacity)
+        );
+    }
+    #[test]
+    fn portrait_tokens_and_verdict_labels_are_bounded_presentation_text() {
+        let mut actors = [CombatActor {
+            key: "a",
+            name: "A",
+            initiative: "A",
+            status: "Ready",
+            resources: &[],
+            hit_points: Some(CombatHitPoints {
+                current: 3,
+                maximum: 13,
+            }),
+            portrait: Some("hero-1"),
+        }];
+        assert_eq!(view(&actors, &[], &[]).validate(limits()), Ok(()));
+        actors[0].portrait = Some("not a token");
+        assert_eq!(
+            view(&actors, &[], &[]).validate(limits()),
+            Err(CombatValidationError::InvalidPortrait)
+        );
+        let rolls = [CombatRoll {
+            key: "r",
+            label: "Attack",
+            value: "17",
+            explanation: "17 +5 = 22 vs AC 12",
+            source: "7 damage",
+            verdict: Some(CombatVerdict {
+                label: " ",
+                tone: CombatTone::Success,
+            }),
+        }];
+        assert_eq!(
+            view(&[], &[], &rolls).validate(limits()),
+            Err(CombatValidationError::EmptyText)
         );
     }
     #[test]
