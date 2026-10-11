@@ -1,0 +1,399 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "destinations",
+  "description": "One d4 sub-table per location. All four entries of a location share that location's interior art.",
+  "tables": {
+    "salt-quay": {
+      "die": 4,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "net-loft",
+          "name": "the Net Loft",
+          "title": "Net Loft",
+          "short": "the net loft",
+          "arrival": "Up a crooked stair, the net loft glows with lamplight and the smell of tar and rope."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "chandlers-back-room",
+          "name": "the Chandler's Back Room",
+          "title": "Chandler's Back Room",
+          "short": "the back room",
+          "arrival": "Behind barrels of lamp oil, a warm back room offers a long table and a banked fire."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "tidewatch-lamp-room",
+          "name": "the Tidewatch Lamp Room",
+          "title": "Tidewatch Lamp Room",
+          "short": "the lamp room",
+          "arrival": "At the top of the Tidewatch Light, the great lamp turns and throws gold across the water."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "old-boathouse",
+          "name": "the Old Boathouse",
+          "title": "Old Boathouse",
+          "short": "the boathouse",
+          "arrival": "Inside the old boathouse, upturned skiffs make a shadowed hall around one hanging lantern."
+        }
+      ]
+    },
+    "pinewood-trail": {
+      "die": 4,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "charcoal-hut",
+          "name": "the Charcoal-Burners' Hut",
+          "title": "Charcoal-Burners' Hut",
+          "short": "the hut",
+          "arrival": "The hut's low door opens on a banked hearth, drying herbs and the scent of woodsmoke."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "woodcutters-lodge",
+          "name": "the Woodcutters' Lodge",
+          "title": "Woodcutters' Lodge",
+          "short": "the lodge",
+          "arrival": "The lodge is all timber beams and firelight, with antlers over a wide stone hearth."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "hermits-cabin",
+          "name": "the Hermit's Cabin",
+          "title": "Hermit's Cabin",
+          "short": "the cabin",
+          "arrival": "A tiny cabin hides among the pines, one thread of candlelight leaking past its shutters."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "pilgrims-rest",
+          "name": "Pilgrims' Rest",
+          "title": "Pilgrims' Rest",
+          "short": "Pilgrims' Rest",
+          "arrival": "Pilgrims' Rest is a long, low hall of whitewashed stone, its benches warm from a roaring fire."
+        }
+      ]
+    },
+    "windward-pass": {
+      "die": 4,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "windward-waystation",
+          "name": "the Windward Waystation",
+          "title": "Windward Waystation",
+          "short": "the waystation",
+          "arrival": "The waystation's heavy door shuts out the wind, and a roaring hearth floods the hall with gold."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "shepherds-bothy",
+          "name": "the Shepherds' Bothy",
+          "title": "Shepherds' Bothy",
+          "short": "the bothy",
+          "arrival": "The bothy is little more than stone and turf, but its stove glows and the kettle sings."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "muleteers-inn",
+          "name": "the Muleteers' Inn",
+          "title": "Muleteers' Inn",
+          "short": "the inn",
+          "arrival": "The inn rings with low talk, wet boots steaming before a crowded hearth."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "cairn-house",
+          "name": "the Cairn House",
+          "title": "Cairn House",
+          "short": "the cairn house",
+          "arrival": "The Cairn House is a squat stone refuge, its long table lit by a single iron lamp."
+        }
+      ]
+    },
+    "lamplit-market": {
+      "die": 4,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "tin-street-tea-house",
+          "name": "the Tin Street Tea House",
+          "title": "Tin Street Tea House",
+          "short": "the tea house",
+          "arrival": "Paper screens glow around the tea house, where steam rises from a dozen small cups."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "brannocks-apothecary",
+          "name": "Brannock's Apothecary",
+          "title": "Brannock's Apothecary",
+          "short": "the apothecary",
+          "arrival": "Jars of dried petals and amber syrups crowd the apothecary's shelves, glowing in the lamplight."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "puppet-theater",
+          "name": "the Puppet Theater",
+          "title": "Puppet Theater",
+          "short": "the theater",
+          "arrival": "Behind the little stage curtain, painted faces watch from a lamplit shelf."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "lantern-makers-shop",
+          "name": "the Lantern-Maker's Shop",
+          "title": "Lantern-Maker's Shop",
+          "short": "the shop",
+          "arrival": "In the lantern-maker's shop, a hundred unlit lamps hang like sleeping fruit."
+        }
+      ]
+    },
+    "rookhill-gate": {
+      "die": 4,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "caretakers-lodge",
+          "name": "the Caretaker's Lodge",
+          "title": "Caretaker's Lodge",
+          "short": "the lodge",
+          "arrival": "The lodge is small and tidy, with a kettle on the stove and keys hanging in neat rows."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "quiet-bells-chapel",
+          "name": "the Chapel of Quiet Bells",
+          "title": "Chapel of Quiet Bells",
+          "short": "the chapel",
+          "arrival": "In the chapel, candles burn before a wall of silent bronze bells."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "undercroft-study",
+          "name": "the Undercroft Study",
+          "title": "Undercroft Study",
+          "short": "the study",
+          "arrival": "Down a short stair, the undercroft study smells of beeswax, old paper and cold stone."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "vestry",
+          "name": "the Vestry",
+          "title": "Vestry",
+          "short": "the vestry",
+          "arrival": "The vestry is warm and cluttered with robes and candle stubs, and a lamp glows on the table."
+        }
+      ]
+    },
+    "reedmoor-boardwalk": {
+      "die": 4,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "stilt-house",
+          "name": "the Stilt House",
+          "title": "Stilt House",
+          "short": "the stilt house",
+          "arrival": "The stilt house sways softly over dark water, lamplit and hung with drying reeds."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "heron-shrine",
+          "name": "the Heron Shrine",
+          "title": "Heron Shrine",
+          "short": "the shrine",
+          "arrival": "Inside the shrine, lanterns shaped like herons light a floor of polished boards."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "eel-catchers-hall",
+          "name": "the Eel-Catchers' Hall",
+          "title": "Eel-Catchers' Hall",
+          "short": "the hall",
+          "arrival": "The hall smells of smoke and river mud, and every beam is hung with lanterns and baskets."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "ferrymans-hut",
+          "name": "the Ferryman's Hut",
+          "title": "Ferryman's Hut",
+          "short": "the hut",
+          "arrival": "The ferryman's hut is snug and low, with a stove, a rope bed and a lamp swinging overhead."
+        }
+      ]
+    },
+    "thistledown-farm": {
+      "die": 4,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "farmhouse-kitchen",
+          "name": "the Farmhouse Kitchen",
+          "title": "Farmhouse Kitchen",
+          "short": "the kitchen",
+          "arrival": "The farmhouse kitchen is bright with copper pans, a crackling fire and fresh-baked bread."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "old-hayloft",
+          "name": "the Old Hayloft",
+          "title": "Old Hayloft",
+          "short": "the hayloft",
+          "arrival": "Up in the old hayloft, lanterns hang from the rafters over sweet-smelling bales."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "mill-house",
+          "name": "the Mill House",
+          "title": "Mill House",
+          "short": "the mill house",
+          "arrival": "In the mill house, great wooden wheels creak softly behind a table laid with bread and cheese."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "cider-cellar",
+          "name": "the Cider Cellar",
+          "title": "Cider Cellar",
+          "short": "the cellar",
+          "arrival": "Down in the cider cellar, casks line the walls and one warm lamp lights a crooked table."
+        }
+      ]
+    },
+    "orrery-library": {
+      "die": 4,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "map-room",
+          "name": "the Map Room",
+          "title": "Map Room",
+          "short": "the map room",
+          "arrival": "In the map room, charts cover every table and a green-shaded lamp hums softly."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "binding-workshop",
+          "name": "the Binding Workshop",
+          "title": "Binding Workshop",
+          "short": "the bindery",
+          "arrival": "The bindery smells of paste and leather, with unfinished books lined up like sleeping birds."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "archivists-study",
+          "name": "the Archivist's Study",
+          "title": "Archivist's Study",
+          "short": "the study",
+          "arrival": "The study is narrow and tall, its ladder-reached shelves lit by one bright reading lamp."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "reading-gallery",
+          "name": "the Reading Gallery",
+          "title": "Reading Gallery",
+          "short": "the gallery",
+          "arrival": "The gallery's balcony looks down over sleeping desks, and a single lamp burns on the rail."
+        }
+      ]
+    }
+  }
+}

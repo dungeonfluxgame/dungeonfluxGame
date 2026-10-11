@@ -1,0 +1,533 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "locations",
+  "description": "Eight settings. tags drive compatibility; art keys point into art-manifest.json. Each location owns an atmosphere sub-table (d6) rolled three times without repeats.",
+  "tables": {
+    "locations": {
+      "die": 8,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "salt-quay",
+          "name": "the Salt Quay",
+          "title": "Salt Quay",
+          "short": "the quay",
+          "tags": [
+            "water",
+            "town"
+          ],
+          "art": {
+            "arrival": "loc-salt-quay-arrival",
+            "interior": "loc-salt-quay-interior"
+          },
+          "atmosphere": {
+            "die": 6,
+            "entries": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "Lanterns sway above black, slow water."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Gulls mutter in the rigging of sleeping boats."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "Wet planks gleam amber beneath the lamps."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "A bell buoy clangs somewhere out in the fog."
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "text": "Salt wind tugs at hanging nets and shop signs."
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "text": "Moonlight lies in cold silver bands across the harbor."
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "pinewood-trail",
+          "name": "the Pinewood Trail",
+          "title": "Pinewood Trail",
+          "short": "the trail",
+          "tags": [
+            "wild",
+            "sacred"
+          ],
+          "art": {
+            "arrival": "loc-pinewood-trail-arrival",
+            "interior": "loc-pinewood-trail-interior"
+          },
+          "atmosphere": {
+            "die": 6,
+            "entries": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "Wind combs the pines with a long, dry whisper."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Lantern light trembles on mossy roots and stones."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "An owl asks its question from somewhere above."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Mist threads between the dark trunks like slow smoke."
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "text": "A wayside shrine glows with a single candle."
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "text": "Needles crunch underfoot, loud in the hush."
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "windward-pass",
+          "name": "the Windward Pass",
+          "title": "Windward Pass",
+          "short": "the pass",
+          "tags": [
+            "mountain",
+            "wild"
+          ],
+          "art": {
+            "arrival": "loc-windward-pass-arrival",
+            "interior": "loc-windward-pass-interior"
+          },
+          "atmosphere": {
+            "die": 6,
+            "entries": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "Snow hisses across the stones in thin white ribbons."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "The path hugs a cliff above a long, starry drop."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "Faded pennants snap on a cairn ahead."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Torches gutter in the thin, cold wind."
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "text": "Ice glitters on the old waystation walls."
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "text": "Far below, a river glints like a dropped blade."
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "lamplit-market",
+          "name": "the Lamplit Market",
+          "title": "Lamplit Market",
+          "short": "the market",
+          "tags": [
+            "town",
+            "market"
+          ],
+          "art": {
+            "arrival": "loc-lamplit-market-arrival",
+            "interior": "loc-lamplit-market-interior"
+          },
+          "atmosphere": {
+            "die": 6,
+            "entries": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "Paper lanterns bob above crowded awnings."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Hawkers cry out over sizzling pans and chiming bells."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "Spice, smoke and rain scent the narrow stalls."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "A street fiddler plays beneath a painted sign."
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "text": "Puddles carry the red and gold of a hundred lamps."
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "text": "Canvas roofs drip steadily onto the cobbles."
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "rookhill-gate",
+          "name": "the Rookhill Gate",
+          "title": "Rookhill Gate",
+          "short": "the gate",
+          "tags": [
+            "grave",
+            "sacred"
+          ],
+          "art": {
+            "arrival": "loc-rookhill-gate-arrival",
+            "interior": "loc-rookhill-gate-interior"
+          },
+          "atmosphere": {
+            "die": 6,
+            "entries": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "Iron gates stand open on rows of pale headstones."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Votive candles gutter in little glass cups."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "Rooks shift in the yews and settle again."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Fog pools between the old stone angels."
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "text": "A cold bell tolls once in the chapel tower."
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "text": "Dew silvers every blade of grass and every name."
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "reedmoor-boardwalk",
+          "name": "the Reedmoor Boardwalk",
+          "title": "Reedmoor Boardwalk",
+          "short": "the boardwalk",
+          "tags": [
+            "water",
+            "wild",
+            "sacred"
+          ],
+          "art": {
+            "arrival": "loc-reedmoor-boardwalk-arrival",
+            "interior": "loc-reedmoor-boardwalk-interior"
+          },
+          "atmosphere": {
+            "die": 6,
+            "entries": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "Reeds whisper along a path of slick, creaking planks."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Pale marsh lights drift over the black water."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "Frogs fall silent as your lantern passes."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Mist rises in sheets from the still pools."
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "text": "A leaning shrine stands on stilts, wrapped in vines."
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "text": "Fireflies stitch gold dots through the dark."
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "thistledown-farm",
+          "name": "Thistledown Farm",
+          "title": "Thistledown Farm",
+          "short": "the farm",
+          "tags": [
+            "farm",
+            "wild"
+          ],
+          "art": {
+            "arrival": "loc-thistledown-farm-arrival",
+            "interior": "loc-thistledown-farm-interior"
+          },
+          "atmosphere": {
+            "die": 6,
+            "entries": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "A farmhouse window glows warm behind a crooked orchard."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Crickets shrill in the long grass."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "A weathervane creaks on the barn's ridge."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Cart tracks run silver with moonlit puddles."
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "text": "Hay and woodsmoke scent the cool night air."
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "text": "Sheep bells clink somewhere on the dark hill."
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "orrery-library",
+          "name": "the Orrery Library",
+          "title": "Orrery Library",
+          "short": "the library",
+          "tags": [
+            "scholar",
+            "town"
+          ],
+          "art": {
+            "arrival": "loc-orrery-library-arrival",
+            "interior": "loc-orrery-library-interior"
+          },
+          "atmosphere": {
+            "die": 6,
+            "entries": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "Brass planets turn slowly beneath a glass dome."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Lamplight gilds endless ladders and leather spines."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "Rain taps the tall windows in patient rhythm."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "A reading-room clock ticks above sleeping desks."
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "text": "Dust motes drift through a shaft of moonlight."
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "text": "Somewhere, a page turns with a dry whisper."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,232 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "complications",
+  "description": "Why the antagonist is there. 'for' lists the antagonist groups (speaker = person/goblinoid, beast, undead) the entry suits.",
+  "tables": {
+    "complications": {
+      "die": 20,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "hired-rival",
+          "for": [
+            "speaker"
+          ],
+          "text": "A rival of {contact.first}'s paid {ant.short} to see that {stake.short} never arrived."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "honest-mistake",
+          "for": [
+            "speaker"
+          ],
+          "text": "{ant.short} honestly believed {patron.first} had stolen {stake.short} and meant to take it back."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "old-debt",
+          "for": [
+            "speaker"
+          ],
+          "text": "{patron.first} owed {ant.short} an old debt, and {ant.short} decided tonight was payment night."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "blackmailed",
+          "for": [
+            "speaker"
+          ],
+          "text": "Someone held a secret over {ant.short} and named {stake.short} as the price of silence."
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "toll-claim",
+          "for": [
+            "speaker"
+          ],
+          "text": "{ant.short} had taken over this stretch and charged a toll no honest traveler could pay."
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "greedy-rumor",
+          "for": [
+            "speaker"
+          ],
+          "text": "{ant.short} heard whispers of what {stake.short} is worth and followed {patron.first} from the start."
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "old-oath",
+          "for": [
+            "speaker"
+          ],
+          "text": "{ant.short} swore an old oath that {stake.short} would never reach {contact.first}."
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "afraid",
+          "for": [
+            "speaker"
+          ],
+          "text": "{ant.short} was more frightened than angry, sure that {stake.short} would bring ruin on everyone."
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "hunger-and-light",
+          "for": [
+            "beast"
+          ],
+          "text": "Hunger and lantern light had drawn it down to the path, and it would not be turned aside."
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "driven-from-den",
+          "for": [
+            "beast"
+          ],
+          "text": "Something had driven it from its den, and this was the only dry way it knew."
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "guarding-nest",
+          "for": [
+            "beast"
+          ],
+          "text": "It had a nest close by and took every passer-by for a threat."
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "hard-winter",
+          "for": [
+            "beast"
+          ],
+          "text": "A lean season had made it bold enough to challenge anyone carrying fire."
+        },
+        {
+          "faces": [
+            13,
+            13
+          ],
+          "id": "set-loose",
+          "for": [
+            "beast"
+          ],
+          "text": "Someone had set it on the trail so that {stake.short} would go no further."
+        },
+        {
+          "faces": [
+            14,
+            14
+          ],
+          "id": "followed-trail",
+          "for": [
+            "beast"
+          ],
+          "text": "It had followed {patron.first}'s scent for miles and would not let go."
+        },
+        {
+          "faces": [
+            15,
+            15
+          ],
+          "id": "old-binding",
+          "for": [
+            "undead"
+          ],
+          "text": "An old binding still sent it to guard this place against anyone carrying a lantern."
+        },
+        {
+          "faces": [
+            16,
+            16
+          ],
+          "id": "broken-ward",
+          "for": [
+            "undead"
+          ],
+          "text": "The last storm had cracked the wards, and it walked its old route again."
+        },
+        {
+          "faces": [
+            17,
+            17
+          ],
+          "id": "dim-duty",
+          "for": [
+            "undead"
+          ],
+          "text": "It followed a dim memory of duty and took anyone with {stake.short} for a trespasser."
+        },
+        {
+          "faces": [
+            18,
+            18
+          ],
+          "id": "careless-hand",
+          "for": [
+            "undead"
+          ],
+          "text": "A careless hand had disturbed its long rest, and it did not understand why."
+        },
+        {
+          "faces": [
+            19,
+            19
+          ],
+          "id": "woken-on-purpose",
+          "for": [
+            "undead"
+          ],
+          "text": "Someone had woken it on purpose, so that {stake.short} would never reach {contact.first}."
+        },
+        {
+          "faces": [
+            20,
+            20
+          ],
+          "id": "drawn-to-flame",
+          "for": [
+            "undead"
+          ],
+          "text": "It knew nothing but the flame in your lantern, and it advanced toward the light."
+        }
+      ]
+    }
+  }
+}

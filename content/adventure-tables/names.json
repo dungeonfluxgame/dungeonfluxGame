@@ -1,0 +1,770 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "names",
+  "description": "Given names by gender, surnames, goblin and kobold names, and descriptive adjectives for creatures and undead.",
+  "tables": {
+    "he": {
+      "die": 20,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Tomas"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Bryn"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Corwin"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Eldric"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "Fenn"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Garrick"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "Halden"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "Ivo"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "Jorun"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "Kelbin"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "Lorcan"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "Marek"
+        },
+        {
+          "faces": [
+            13,
+            13
+          ],
+          "text": "Nolan"
+        },
+        {
+          "faces": [
+            14,
+            14
+          ],
+          "text": "Osric"
+        },
+        {
+          "faces": [
+            15,
+            15
+          ],
+          "text": "Perrin"
+        },
+        {
+          "faces": [
+            16,
+            16
+          ],
+          "text": "Rudd"
+        },
+        {
+          "faces": [
+            17,
+            17
+          ],
+          "text": "Soren"
+        },
+        {
+          "faces": [
+            18,
+            18
+          ],
+          "text": "Tobin"
+        },
+        {
+          "faces": [
+            19,
+            19
+          ],
+          "text": "Ulric"
+        },
+        {
+          "faces": [
+            20,
+            20
+          ],
+          "text": "Wystan"
+        }
+      ]
+    },
+    "she": {
+      "die": 20,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Anwen"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Brisa"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Calla"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Dessa"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "Elspeth"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Fiora"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "Gwenna"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "Hesper"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "Ilsa"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "Jessamy"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "Kestrel"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "Liora"
+        },
+        {
+          "faces": [
+            13,
+            13
+          ],
+          "text": "Maren"
+        },
+        {
+          "faces": [
+            14,
+            14
+          ],
+          "text": "Nell"
+        },
+        {
+          "faces": [
+            15,
+            15
+          ],
+          "text": "Odalys"
+        },
+        {
+          "faces": [
+            16,
+            16
+          ],
+          "text": "Petra"
+        },
+        {
+          "faces": [
+            17,
+            17
+          ],
+          "text": "Rowan"
+        },
+        {
+          "faces": [
+            18,
+            18
+          ],
+          "text": "Sabine"
+        },
+        {
+          "faces": [
+            19,
+            19
+          ],
+          "text": "Tamsin"
+        },
+        {
+          "faces": [
+            20,
+            20
+          ],
+          "text": "Wren"
+        }
+      ]
+    },
+    "surnames": {
+      "die": 20,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Ashdown"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Brightwater"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Cobb"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Dunmere"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "Fairweather"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Greaves"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "Harrow"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "Ingram"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "Kettering"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "Lowell"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "Marlow"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "Nettleby"
+        },
+        {
+          "faces": [
+            13,
+            13
+          ],
+          "text": "Oakes"
+        },
+        {
+          "faces": [
+            14,
+            14
+          ],
+          "text": "Pennington"
+        },
+        {
+          "faces": [
+            15,
+            15
+          ],
+          "text": "Quillon"
+        },
+        {
+          "faces": [
+            16,
+            16
+          ],
+          "text": "Ravensby"
+        },
+        {
+          "faces": [
+            17,
+            17
+          ],
+          "text": "Thorne"
+        },
+        {
+          "faces": [
+            18,
+            18
+          ],
+          "text": "Underhill"
+        },
+        {
+          "faces": [
+            19,
+            19
+          ],
+          "text": "Vale"
+        },
+        {
+          "faces": [
+            20,
+            20
+          ],
+          "text": "Whitlock"
+        }
+      ]
+    },
+    "goblin": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Pinch"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Snag"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Rutter"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Gristle"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "Wick"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Scrabble"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "Skritch"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "Mudge"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "Bodkin"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "Tallow"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "Grub"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "Nettle"
+        }
+      ]
+    },
+    "kobold": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Ashkit"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Embrik"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Cindle"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Tindra"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "Scalet"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Sparrik"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "Kindle"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "Flintra"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "Ember"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "Soot"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "Pebble"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "Zindra"
+        }
+      ]
+    },
+    "creature_adj": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Gaunt"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Scarred"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Grizzled"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Lantern-Eyed"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "Bristling"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Sleek"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "Ragged"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "Soot-Black"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "Pale"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "Wary"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "Shaggy"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "Restless"
+        }
+      ]
+    },
+    "undead_adj": {
+      "die": 8,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Rusted"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Barrow-Cold"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Dust-Gray"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Tide-Worn"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "Silent"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Weary"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "Hollow"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "Ash-Pale"
+        }
+      ]
+    }
+  }
+}

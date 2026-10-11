@@ -1,0 +1,123 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "contacts",
+  "description": "Who waits at the destination.",
+  "tables": {
+    "contacts": {
+      "die": 6,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "old-mapmaker",
+          "role": "mapmaker",
+          "desc": "a dry, careful old mapmaker",
+          "gender": "he",
+          "voice": "dry, careful old man",
+          "fits": [
+            "scholar",
+            "town",
+            "mountain",
+            "market"
+          ],
+          "art": "contact-old-mapmaker"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "river-healer",
+          "role": "healer",
+          "desc": "a gentle river healer",
+          "gender": "she",
+          "voice": "gentle middle-aged woman",
+          "fits": [
+            "water",
+            "wild",
+            "farm",
+            "sacred"
+          ],
+          "art": "contact-river-healer"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "watch-sergeant",
+          "role": "watch sergeant",
+          "desc": "a brisk watch sergeant",
+          "gender": "he",
+          "voice": "brisk, no-nonsense man",
+          "fits": [
+            "town",
+            "market",
+            "water",
+            "mountain",
+            "scholar",
+            "grave"
+          ],
+          "art": "contact-watch-sergeant"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "shrine-keeper",
+          "role": "shrine keeper",
+          "desc": "a serene shrine keeper",
+          "gender": "she",
+          "voice": "serene elderly woman",
+          "fits": [
+            "sacred",
+            "grave",
+            "wild",
+            "farm"
+          ],
+          "art": "contact-shrine-keeper"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "tinker",
+          "role": "tinker",
+          "desc": "a cheerful, wiry tinker",
+          "gender": "he",
+          "voice": "cheerful wiry man",
+          "fits": [
+            "market",
+            "wild",
+            "farm",
+            "mountain",
+            "town"
+          ],
+          "art": "contact-tinker"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "miller",
+          "role": "miller",
+          "desc": "a hearty, flour-dusted miller",
+          "gender": "she",
+          "voice": "hearty woman of middle years",
+          "fits": [
+            "farm",
+            "wild",
+            "market",
+            "water"
+          ],
+          "art": "contact-miller"
+        }
+      ]
+    }
+  }
+}

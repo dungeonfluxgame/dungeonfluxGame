@@ -1,0 +1,96 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "rewards",
+  "description": "Story-only thanks spoken by the contact. They promise no item, gold or XP.",
+  "tables": {
+    "chapter_lines": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "There will always be a place for you by my fire."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Ask for me by name in any town on this road, and doors will open."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Your names will be spoken kindly in every tavern from here to the coast."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "I owe you a favor now, and I keep my debts."
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "I know a sealed cellar nobody has opened in years. Ask me when you are rested."
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Come back at winter's end. I may have work worth your steel."
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "I will vouch for you to anyone who matters in this region."
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "On your next road, I will send word ahead that you are friends."
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "Rest here as long as you like. There is stew, and there are beds."
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "There is talk of trouble farther along. Come and hear it when you can."
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "You have friends here now, whether you wanted them or not."
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "When the old story is told, I will make sure your part is not forgotten."
+        }
+      ]
+    }
+  }
+}

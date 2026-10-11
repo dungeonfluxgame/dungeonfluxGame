@@ -1,0 +1,286 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "macguffins",
+  "description": "The thing at stake. tags are matched against hooks.stake_tags.",
+  "tables": {
+    "stakes": {
+      "die": 20,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "surveyors-maps",
+          "full": "a bundle of surveyors' maps",
+          "short": "the map bundle",
+          "title": "Surveyors' Maps",
+          "tags": [
+            "carry",
+            "message"
+          ]
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "brass-key",
+          "full": "a brass key wrapped in blue cloth",
+          "short": "the brass key",
+          "title": "The Brass Key",
+          "tags": [
+            "carry",
+            "heirloom"
+          ]
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "healers-salve",
+          "full": "a clay jar of healer's salve",
+          "short": "the salve jar",
+          "title": "Healer's Salve",
+          "tags": [
+            "carry",
+            "remedy"
+          ]
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "steady-lantern",
+          "full": "a lantern whose flame never gutters",
+          "short": "the steady lantern",
+          "title": "The Steady Lantern",
+          "tags": [
+            "carry",
+            "heirloom"
+          ]
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "lullaby-book",
+          "full": "a hand-bound book of lullabies",
+          "short": "the lullaby book",
+          "title": "The Lullaby Book",
+          "tags": [
+            "carry",
+            "heirloom"
+          ]
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "iron-coffer",
+          "full": "a small iron-bound coffer",
+          "short": "the iron coffer",
+          "title": "The Iron Coffer",
+          "tags": [
+            "carry",
+            "heirloom"
+          ]
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "seed-grain",
+          "full": "a sack of precious seed-grain",
+          "short": "the seed sack",
+          "title": "The Seed Grain",
+          "tags": [
+            "carry"
+          ]
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "heavy-whistle",
+          "full": "a strangely heavy carved whistle",
+          "short": "the old whistle",
+          "title": "The Heavy Whistle",
+          "tags": [
+            "carry",
+            "heirloom"
+          ]
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "wax-letter",
+          "full": "a wax-sealed letter",
+          "short": "the letter",
+          "title": "The Sealed Letter",
+          "tags": [
+            "message",
+            "carry"
+          ]
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "knotted-cord",
+          "full": "a knotted warning-cord",
+          "short": "the knotted cord",
+          "title": "The Knotted Cord",
+          "tags": [
+            "message"
+          ]
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "signet-ring",
+          "full": "a signet ring and a hurried note",
+          "short": "the signet ring",
+          "title": "The Signet Ring",
+          "tags": [
+            "message",
+            "heirloom"
+          ]
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "petition",
+          "full": "a rolled petition of forty names",
+          "short": "the petition",
+          "title": "The Petition",
+          "tags": [
+            "message"
+          ]
+        },
+        {
+          "faces": [
+            13,
+            13
+          ],
+          "id": "fever-herb",
+          "full": "a rare white fever-herb",
+          "short": "the fever-herb",
+          "title": "The Fever-Herb",
+          "tags": [
+            "remedy"
+          ]
+        },
+        {
+          "faces": [
+            14,
+            14
+          ],
+          "id": "bitter-tonic",
+          "full": "a bottle of bitter-root tonic",
+          "short": "the tonic",
+          "title": "The Bitter Tonic",
+          "tags": [
+            "remedy",
+            "carry"
+          ]
+        },
+        {
+          "faces": [
+            15,
+            15
+          ],
+          "id": "silent-clock",
+          "full": "a silent heirloom clock",
+          "short": "the old clock",
+          "title": "The Silent Clock",
+          "tags": [
+            "heirloom"
+          ]
+        },
+        {
+          "faces": [
+            16,
+            16
+          ],
+          "id": "chapel-bell",
+          "full": "a small silver chapel bell",
+          "short": "the silver bell",
+          "title": "The Silver Bell",
+          "tags": [
+            "heirloom",
+            "carry"
+          ]
+        },
+        {
+          "faces": [
+            17,
+            17
+          ],
+          "id": "debt-ledger",
+          "full": "a ledger of an old debt",
+          "short": "the ledger",
+          "title": "The Old Ledger",
+          "tags": [
+            "message",
+            "heirloom"
+          ]
+        },
+        {
+          "faces": [
+            18,
+            18
+          ],
+          "id": "cradle-blanket",
+          "full": "a crest-stitched cradle-blanket",
+          "short": "the blanket",
+          "title": "The Crest Blanket",
+          "tags": [
+            "heirloom"
+          ]
+        },
+        {
+          "faces": [
+            19,
+            19
+          ],
+          "id": "ward-stone",
+          "full": "a ward-stone, warm to the touch",
+          "short": "the ward-stone",
+          "title": "The Ward-Stone",
+          "tags": [
+            "carry",
+            "heirloom"
+          ]
+        },
+        {
+          "faces": [
+            20,
+            20
+          ],
+          "id": "red-star-chart",
+          "full": "a star-chart marked in red ink",
+          "short": "the star-chart",
+          "title": "The Star-Chart",
+          "tags": [
+            "message",
+            "carry"
+          ]
+        }
+      ]
+    }
+  }
+}

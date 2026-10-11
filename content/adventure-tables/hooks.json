@@ -1,0 +1,319 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "hooks",
+  "description": "Hook entries decide the chapter kind (deliver, escort, warn, retrieve) and carry the patron-side text. Placeholders resolve against the roll context.",
+  "tables": {
+    "hooks": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "late-parcel",
+          "kind": "deliver",
+          "fits": [
+            "water",
+            "town",
+            "wild",
+            "mountain",
+            "sacred",
+            "grave",
+            "farm",
+            "scholar",
+            "market"
+          ],
+          "stake_tags": [
+            "carry",
+            "heirloom"
+          ],
+          "title": "A Parcel for {contact.first}",
+          "entrance": "hurries out of the dark, clutching {stake.full} close",
+          "pitch": "Please, wait. I'm carrying {stake.short} to its owner tonight, and I think I'm being followed.",
+          "answer": "I took it on trust, and I can't see who is behind me. It has to arrive before dawn.",
+          "accept": "Then come with me to {dest.name}. {contact.first} is expecting {stake.short}, and I'd feel safer with you beside me."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "dying-promise",
+          "kind": "deliver",
+          "fits": [
+            "water",
+            "town",
+            "wild",
+            "mountain",
+            "sacred",
+            "grave",
+            "farm",
+            "scholar",
+            "market"
+          ],
+          "stake_tags": [
+            "carry",
+            "heirloom",
+            "message"
+          ],
+          "title": "A Promise to Keep",
+          "entrance": "stumbles toward you, cradling {stake.full}",
+          "pitch": "I swore to an old friend that {stake.short} would reach {contact.first}. Tonight I may not keep my word.",
+          "answer": "My friend is gone now. This is all I have left of the promise, and I won't see it lost.",
+          "accept": "Thank you. {contact.first} will be at {dest.name}. Get me there, and my promise is kept."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "secret-errand",
+          "kind": "deliver",
+          "fits": [
+            "town",
+            "market",
+            "water",
+            "scholar"
+          ],
+          "stake_tags": [
+            "carry",
+            "message"
+          ],
+          "title": "Quiet Hands, Quiet Words",
+          "entrance": "slips from a doorway and holds out {stake.full}",
+          "pitch": "Take {stake.short} the last stretch to its owner, and tell no one. I can't be seen with it.",
+          "answer": "I'm known here, and watched. If I walk with you, they will know. Please, just take it from here.",
+          "accept": "Then listen: it goes to {contact.first} at {dest.name}. I'll walk a few steps behind, as if I don't know you."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "frightened-traveler",
+          "kind": "escort",
+          "fits": [
+            "wild",
+            "mountain",
+            "farm",
+            "water",
+            "grave",
+            "sacred",
+            "town"
+          ],
+          "stake_tags": [
+            "carry",
+            "message",
+            "heirloom"
+          ],
+          "title": "A Dangerous Road",
+          "entrance": "hurries toward your lantern, pale and out of breath",
+          "pitch": "I must reach {contact.first} before morning, and the way behind me isn't safe. Will you walk with me?",
+          "answer": "I'm carrying {stake.short} for {contact.first}, and whoever is behind me knows it.",
+          "accept": "{contact.first} will be at {dest.name}. Stay close, and I'll see that you're thanked."
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "the-witness",
+          "kind": "escort",
+          "fits": [
+            "town",
+            "market",
+            "water",
+            "farm",
+            "scholar",
+            "grave"
+          ],
+          "stake_tags": [
+            "message",
+            "carry"
+          ],
+          "title": "What {patron.first} Saw",
+          "entrance": "pushes through the dark toward you, eyes wide and glancing back",
+          "pitch": "I saw something I shouldn't have, and I need a safe road to {contact.first}. Please, will you help me?",
+          "answer": "I can't say it aloud, not here. But it concerns {stake.short}, and it can't wait.",
+          "accept": "{contact.first} is waiting at {dest.name}. Once I'm there, I can finally tell it all."
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "pilgrim-vow",
+          "kind": "escort",
+          "fits": [
+            "sacred",
+            "mountain",
+            "wild",
+            "grave",
+            "farm"
+          ],
+          "stake_tags": [
+            "carry",
+            "heirloom"
+          ],
+          "title": "A Vow Before Dawn",
+          "entrance": "limps up to you on a walking stick, holding {stake.full}",
+          "pitch": "I vowed to bring {stake.short} to {contact.first} by dawn, and my legs won't carry me there alone.",
+          "answer": "It is an old vow, and I'm too proud to break it. Too tired to keep it, though, without help.",
+          "accept": "To {dest.name}, then. {contact.first} will be waiting. Thank you; the road has been long and lonely."
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "urgent-warning",
+          "kind": "warn",
+          "fits": [
+            "water",
+            "town",
+            "wild",
+            "mountain",
+            "sacred",
+            "grave",
+            "farm",
+            "scholar",
+            "market"
+          ],
+          "stake_tags": [
+            "message",
+            "carry"
+          ],
+          "title": "Word Before Dawn",
+          "entrance": "runs up to you, one hand raised and breathing hard",
+          "pitch": "Someone has to warn {contact.first} before dawn, and I'm too slow to get there. Will you carry the word?",
+          "answer": "The warning is about {stake.short}. If {contact.first} doesn't hear it in time, there won't be a second chance.",
+          "accept": "Go to {dest.name}. Tell {contact.first} that {patron.first} sent you, and that the warning was true."
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "failing-ward",
+          "kind": "warn",
+          "fits": [
+            "sacred",
+            "grave",
+            "mountain",
+            "wild",
+            "water",
+            "scholar"
+          ],
+          "stake_tags": [
+            "message",
+            "heirloom"
+          ],
+          "title": "A Light Going Out",
+          "entrance": "hurries toward you, shielding a small flame with {pos} hand",
+          "pitch": "The old wards are failing, and {contact.first} must be told before they fail completely. Please, help me reach {contact.obj}.",
+          "answer": "Nobody listens to me. But {stake.short} proves it, and {contact.first} will know what it means.",
+          "accept": "{dest.name|cap} is the place. Walk with me, and if anyone stops us, let them see you're ready."
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "missed-signal",
+          "kind": "warn",
+          "fits": [
+            "water",
+            "mountain",
+            "town",
+            "scholar"
+          ],
+          "stake_tags": [
+            "message"
+          ],
+          "title": "The Missed Signal",
+          "entrance": "waves to catch your attention, anxious and apologetic",
+          "pitch": "A signal meant for {contact.first} never arrived. Someone cut it off, and I need to put it right tonight.",
+          "answer": "I don't know who, but I know it was deliberate. And {stake.short} is the only proof I have.",
+          "accept": "Then we go to {dest.name}. {contact.first} will know how to read {stake.short}, if we arrive in time."
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "promised-remedy",
+          "kind": "retrieve",
+          "fits": [
+            "farm",
+            "wild",
+            "market",
+            "town",
+            "water",
+            "sacred"
+          ],
+          "stake_tags": [
+            "remedy"
+          ],
+          "title": "A Remedy Promised",
+          "entrance": "hurries toward you, twisting a worn cloth in {pos} hands",
+          "pitch": "A child I know is ill, and only {stake.full} will help. {contact.first} holds it, but I daren't go alone.",
+          "answer": "I was told {contact.first} would give it freely, if I can only reach {contact.obj} in one piece.",
+          "accept": "{dest.name|cap}. Hurry, if you can. Every hour counts, and I will not forget your kindness."
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "stolen-heirloom",
+          "kind": "retrieve",
+          "fits": [
+            "town",
+            "market",
+            "farm",
+            "scholar",
+            "water"
+          ],
+          "stake_tags": [
+            "heirloom"
+          ],
+          "title": "What Was Taken",
+          "entrance": "approaches in a rush, anger and hope mingled on {pos} face",
+          "pitch": "Thieves took {stake.full} from my family, and {contact.first} has traced it. I need honest witnesses when I ask for it back.",
+          "answer": "I could go alone, but they would call me a liar. With you beside me, they can't.",
+          "accept": "Come to {dest.name}. {contact.first} said to ask there, and to bring friends."
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "old-favor",
+          "kind": "retrieve",
+          "fits": [
+            "water",
+            "town",
+            "wild",
+            "mountain",
+            "sacred",
+            "grave",
+            "farm",
+            "scholar",
+            "market"
+          ],
+          "stake_tags": [
+            "heirloom",
+            "remedy",
+            "carry"
+          ],
+          "title": "A Favor Called In",
+          "entrance": "steps into your path, one hand outstretched in greeting",
+          "pitch": "An old friend, {contact.first}, holds {stake.full} for me. Collecting it alone has become dangerous.",
+          "answer": "Someone else wants it as badly as I do, and they have been watching my door.",
+          "accept": "{contact.first} waits at {dest.name}. Walk me there, and I'll make sure you're repaid."
+        }
+      ]
+    }
+  }
+}

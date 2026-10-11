@@ -1,0 +1,1255 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "antagonists",
+  "description": "Twelve SRD 5.2.1 creatures that fit the single-enemy melee model. Numbers are copied from the cited stat blocks. fidelity exact = every number and feature that can matter in the encounter is as written; simplified = a feature the engine cannot express was dropped or folded, so the run must be flagged as custom rules.",
+  "attribution": "This work includes material from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of the Coast LLC, available at https://www.dndbeyond.com/srd. The SRD 5.2.1 is licensed under the Creative Commons Attribution 4.0 International License, available at https://creativecommons.org/licenses/by/4.0/legalcode.",
+  "source": {
+    "file": "development/rules-sources/srd-5.2.1-en.pdf",
+    "sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+  },
+  "hero_baseline": {
+    "armor_class": 17,
+    "hit_points": 13,
+    "attack_bonus": 5,
+    "weapon": "Greatsword 2d6+3",
+    "count": 2
+  },
+  "tables": {
+    "antagonists": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "bandit",
+          "label": "Bandit",
+          "srd": {
+            "name": "Bandit",
+            "section": "Monsters A–Z",
+            "page": 261,
+            "cr": "1/8",
+            "block": "AC 12; HP 11 (2d8+2); Str 11 Dex 12 Con 12 Int 10 Wis 10 Cha 10; Scimitar +3, 1d6+1 slashing",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 11,
+            "armor_class": 12,
+            "abilities": {
+              "strength": 11,
+              "dexterity": 12,
+              "constitution": 12,
+              "intelligence": 10,
+              "wisdom": 10,
+              "charisma": 10
+            },
+            "attack_bonus": 3,
+            "weapon": {
+              "label": "scimitar",
+              "damage_dice": 1,
+              "damage_sides": 6
+            },
+            "damage_modifier": 1
+          },
+          "fidelity": "exact",
+          "fidelity_note": "Single melee attack taken as written. Light Crossbow is an unused alternative action.",
+          "klass": "person",
+          "speaks": true,
+          "gender": "he",
+          "voice": "rough young man",
+          "fits": [
+            "town",
+            "market",
+            "water",
+            "wild",
+            "mountain",
+            "farm",
+            "grave"
+          ],
+          "name_form": "person",
+          "the": "the thief",
+          "noun": "Thief",
+          "art": "ant-bandit",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short}, a wiry road thief in a patched coat, steps into the light with a scimitar drawn."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "A scimitar glints as {ant.short} slides out of the shadows, wearing a crooked grin."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "Footsteps stop. {ant.short} blocks the way, a curved scimitar resting on one shoulder."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "{ant.short} drops from the dark ahead, scimitar low and eyes fixed on {stake.short}."
+              }
+            ]
+          },
+          "warnings": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "Hand over {stake.short} and nobody gets hurt. Last warning."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "You're a long way from help. Give me {stake.short} and walk away."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "I don't want a fight, but I'll have {stake.short} one way or another."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Step aside. {stake.short|cap} was never yours to carry."
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "cultist",
+          "label": "Cultist",
+          "srd": {
+            "name": "Cultist",
+            "section": "Monsters A–Z",
+            "page": 278,
+            "cr": "1/8",
+            "block": "AC 12; HP 9 (2d8); Str 11 Dex 12 Con 10 Int 10 Wis 11 Cha 10; Ritual Sickle +3, 1d4+1 slashing plus 1 necrotic",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 9,
+            "armor_class": 12,
+            "abilities": {
+              "strength": 11,
+              "dexterity": 12,
+              "constitution": 10,
+              "intelligence": 10,
+              "wisdom": 11,
+              "charisma": 10
+            },
+            "attack_bonus": 3,
+            "weapon": {
+              "label": "ritual sickle",
+              "damage_dice": 1,
+              "damage_sides": 4
+            },
+            "damage_modifier": 2
+          },
+          "fidelity": "simplified",
+          "fidelity_note": "The extra 1 necrotic damage is folded into the flat damage modifier (1 + 1 = 2) because the combat model carries one damage type.",
+          "klass": "person",
+          "speaks": true,
+          "gender": "she",
+          "voice": "low, measured woman",
+          "fits": [
+            "grave",
+            "sacred",
+            "scholar",
+            "water"
+          ],
+          "name_form": "person",
+          "the": "the cultist",
+          "noun": "Cultist",
+          "art": "ant-cultist",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short}, a hooded zealot in plain gray robes, glides into the light with a curved sickle in hand."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "A pale sickle gleams as {ant.short} steps forward, murmuring in an old, dry tongue."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short} rises from the gloom, hood low and sickle raised in a slow, ritual arc."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "The shadows part. {ant.short} approaches without hurry, sickle held like an offering."
+              }
+            ]
+          },
+          "warnings": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "The old rites have already named {stake.short} ours. Stand aside."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "You cannot hold what the stars have claimed. Stand aside."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "Give {stake.short} to me, and the quiet will keep you safe."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Whatever {patron.first} told you, it was only half the truth."
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "guard",
+          "label": "Guard",
+          "srd": {
+            "name": "Guard",
+            "section": "Monsters A–Z",
+            "page": 296,
+            "cr": "1/8",
+            "block": "AC 16; HP 11 (2d8+2); Str 13 Dex 12 Con 12 Int 10 Wis 11 Cha 10; Spear +3, 1d6+1 piercing (melee)",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 11,
+            "armor_class": 16,
+            "abilities": {
+              "strength": 13,
+              "dexterity": 12,
+              "constitution": 12,
+              "intelligence": 10,
+              "wisdom": 11,
+              "charisma": 10
+            },
+            "attack_bonus": 3,
+            "weapon": {
+              "label": "spear",
+              "damage_dice": 1,
+              "damage_sides": 6
+            },
+            "damage_modifier": 1
+          },
+          "fidelity": "exact",
+          "fidelity_note": "Spear used as a melee attack, as the stat block allows. Thrown use is not offered.",
+          "klass": "person",
+          "speaks": true,
+          "gender": "he",
+          "voice": "stern, clipped man",
+          "fits": [
+            "town",
+            "market",
+            "water",
+            "scholar",
+            "mountain",
+            "farm"
+          ],
+          "name_form": "person",
+          "the": "the guard",
+          "noun": "Guard",
+          "art": "ant-guard",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short}, a stern guard in a dented chain shirt, lowers a spear across your path."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Boots ring on the ground. {ant.short} strides in, shield up and spear leveled."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short} steps into the light, spear ready and a stubborn frown fixed in place."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "A spear-point catches the lamplight as {ant.short} halts you with a raised hand."
+              }
+            ]
+          },
+          "warnings": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "By order of the watch, {stake.short} stays here. Stand down!"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Nobody passes tonight. Hand over {stake.short} and come quietly."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "I have my orders. Surrender {stake.short}, or I will make you."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "This way is closed, and so are your questions. Give it here."
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "goblin-warrior",
+          "label": "Goblin Warrior",
+          "srd": {
+            "name": "Goblin Warrior",
+            "section": "Monsters A–Z",
+            "page": 290,
+            "cr": "1/4",
+            "block": "AC 15; HP 10 (3d6); Str 8 Dex 15 Con 10 Int 10 Wis 8 Cha 8; Scimitar +4, 1d6+2 slashing",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 10,
+            "armor_class": 15,
+            "abilities": {
+              "strength": 8,
+              "dexterity": 15,
+              "constitution": 10,
+              "intelligence": 10,
+              "wisdom": 8,
+              "charisma": 8
+            },
+            "attack_bonus": 4,
+            "weapon": {
+              "label": "scimitar",
+              "damage_dice": 1,
+              "damage_sides": 6
+            },
+            "damage_modifier": 2
+          },
+          "fidelity": "exact",
+          "fidelity_note": "Single melee attack taken as written. Nimble Escape (a movement option) and the Advantage rider have no effect because the encounter has no movement and no Advantage.",
+          "klass": "goblinoid",
+          "speaks": true,
+          "gender": "he",
+          "voice": "sharp, squeaky voice",
+          "fits": [
+            "wild",
+            "mountain",
+            "farm",
+            "water",
+            "market"
+          ],
+          "name_form": "goblinoid",
+          "the": "the goblin",
+          "noun": "Goblin",
+          "art": "ant-goblin-warrior",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short} scrambles into view, small and quick, a rusty scimitar waving over {ant.pos} head."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "A grinning shadow leaps out: {ant.short}, scimitar flashing, shield clanking."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short} hops onto the path, ears twitching, and points a scimitar your way."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "With a cackle, {ant.short} darts from cover and plants {ant.self} in front of you."
+              }
+            ]
+          },
+          "warnings": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "Big folk too slow! Drop {stake.short}!"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "{stake.short|cap} is mine now! Mine, mine, mine!"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "We watched you walk. Now we take {stake.short}."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Give, give, or I poke you with my sword!"
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "kobold-warrior",
+          "label": "Kobold Warrior",
+          "srd": {
+            "name": "Kobold Warrior",
+            "section": "Monsters A–Z",
+            "page": 302,
+            "cr": "1/8",
+            "block": "AC 14; HP 7 (3d6-3); Str 7 Dex 15 Con 9 Int 8 Wis 7 Cha 8; Dagger +4, 1d4+2 piercing (melee)",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 7,
+            "armor_class": 14,
+            "abilities": {
+              "strength": 7,
+              "dexterity": 15,
+              "constitution": 9,
+              "intelligence": 8,
+              "wisdom": 7,
+              "charisma": 8
+            },
+            "attack_bonus": 4,
+            "weapon": {
+              "label": "dagger",
+              "damage_dice": 1,
+              "damage_sides": 4
+            },
+            "damage_modifier": 2
+          },
+          "fidelity": "exact",
+          "fidelity_note": "Dagger used as a melee attack. Pack Tactics needs an ally and none is present; Sunlight Sensitivity cannot apply because every generated scene is night or interior.",
+          "klass": "goblinoid",
+          "speaks": true,
+          "gender": "she",
+          "voice": "high, rapid voice",
+          "fits": [
+            "mountain",
+            "wild",
+            "grave",
+            "farm",
+            "scholar",
+            "town"
+          ],
+          "name_form": "goblinoid",
+          "the": "the kobold",
+          "noun": "Kobold",
+          "art": "ant-kobold-warrior",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short} skitters out of a crack in the dark, a dagger clutched in both claws."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Scales glint as {ant.short} rears up, dagger raised and tail lashing."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short} pops from hiding with a yip and brandishes a little dagger like a banner."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "A small, fierce shape drops in front of you: {ant.short}, dagger ready."
+              }
+            ]
+          },
+          "warnings": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "This tunnel is ours! Leave {stake.short} and go!"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "My clutch watches from the dark. Drop it and run!"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "You are big. I am clever. Give me {stake.short}!"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "You trespass! {stake.short|cap} belongs to the deep ones now!"
+              }
+            ]
+          }
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "skeleton",
+          "label": "Skeleton",
+          "srd": {
+            "name": "Skeleton",
+            "section": "Monsters A–Z",
+            "page": 325,
+            "cr": "1/4",
+            "block": "AC 14; HP 13 (2d8+4); Str 10 Dex 16 Con 15 Int 6 Wis 8 Cha 5; Shortsword +5, 1d6+3 piercing (stat block continues on p.326)",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 13,
+            "armor_class": 14,
+            "abilities": {
+              "strength": 10,
+              "dexterity": 16,
+              "constitution": 15,
+              "intelligence": 6,
+              "wisdom": 8,
+              "charisma": 5
+            },
+            "attack_bonus": 5,
+            "weapon": {
+              "label": "shortsword",
+              "damage_dice": 1,
+              "damage_sides": 6
+            },
+            "damage_modifier": 3
+          },
+          "fidelity": "exact",
+          "fidelity_note": "Shortsword used as written. Bludgeoning vulnerability is not exercised (the encounter offers a slashing Greatsword only); poison immunity is unused.",
+          "klass": "undead",
+          "speaks": false,
+          "gender": "it",
+          "voice": "",
+          "fits": [
+            "grave",
+            "sacred",
+            "mountain",
+            "scholar"
+          ],
+          "name_form": "undead",
+          "the": "the skeleton",
+          "noun": "Sentinel",
+          "art": "ant-skeleton",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short|cap} rises on dry, clicking joints, a rusted shortsword in its grip."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "With a slow clatter, {ant.short} steps into the light and lifts its shortsword."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short|cap} turns its empty gaze upon you and takes one deliberate step forward."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "A pale figure unfolds from the shadows: {ant.short}, blade ready, silent as stone."
+              }
+            ]
+          },
+          "warnings": null
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "zombie",
+          "label": "Zombie",
+          "srd": {
+            "name": "Zombie",
+            "section": "Monsters A–Z",
+            "page": 343,
+            "cr": "1/4",
+            "block": "AC 8; HP 15 (2d8+6); Str 13 Dex 6 Con 16 Int 3 Wis 6 Cha 5; Slam +3, 1d8+1 bludgeoning (stat block continues on p.344)",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 15,
+            "armor_class": 8,
+            "abilities": {
+              "strength": 13,
+              "dexterity": 6,
+              "constitution": 16,
+              "intelligence": 3,
+              "wisdom": 6,
+              "charisma": 5
+            },
+            "attack_bonus": 3,
+            "weapon": {
+              "label": "slam",
+              "damage_dice": 1,
+              "damage_sides": 8
+            },
+            "damage_modifier": 1
+          },
+          "fidelity": "simplified",
+          "fidelity_note": "Undead Fortitude is not modeled. The SRD Knocking Out rule (p.17) replaces 0 HP with 1 HP, which arguably never triggers the trait, but the ruling is not settled here; the owner may reclassify this entry as exact.",
+          "klass": "undead",
+          "speaks": false,
+          "gender": "it",
+          "voice": "",
+          "fits": [
+            "grave",
+            "water"
+          ],
+          "name_form": "undead",
+          "the": "the zombie",
+          "noun": "Wanderer",
+          "art": "ant-zombie",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short|cap} shambles into the light, rags dripping, arms swinging low."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Slow, dragging steps announce {ant.short}, which lurches toward you with a heavy swing."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short|cap} sways out of the dark and fixes its dull gaze on your lantern."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "A tide-soaked figure staggers forward: {ant.short}, silent and relentless."
+              }
+            ]
+          },
+          "warnings": null
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "wolf",
+          "label": "Wolf",
+          "srd": {
+            "name": "Wolf",
+            "section": "Animals",
+            "page": 364,
+            "cr": "1/4",
+            "block": "AC 12; HP 11 (2d8+2); Str 14 Dex 15 Con 12 Int 3 Wis 12 Cha 6; Bite +4, 1d6+2 piercing, Prone rider",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 11,
+            "armor_class": 12,
+            "abilities": {
+              "strength": 14,
+              "dexterity": 15,
+              "constitution": 12,
+              "intelligence": 3,
+              "wisdom": 12,
+              "charisma": 6
+            },
+            "attack_bonus": 4,
+            "weapon": {
+              "label": "bite",
+              "damage_dice": 1,
+              "damage_sides": 6
+            },
+            "damage_modifier": 2
+          },
+          "fidelity": "simplified",
+          "fidelity_note": "The Prone rider on a bite against a Medium or smaller target is not modeled. Pack Tactics needs an ally and none is present.",
+          "klass": "beast",
+          "speaks": false,
+          "gender": "it",
+          "voice": "",
+          "fits": [
+            "wild",
+            "mountain",
+            "farm"
+          ],
+          "name_form": "creature",
+          "the": "the wolf",
+          "noun": "Wolf",
+          "art": "ant-wolf",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short|cap} pads into the lantern light, hackles raised and eyes bright."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "A low growl rolls out as {ant.short} circles closer, head low."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short|cap} slips from the dark, lips curled, muscles bunched to spring."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Two eyes catch the light, and {ant.short} steps forward, teeth showing."
+              }
+            ]
+          },
+          "warnings": null
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "giant-rat",
+          "label": "Giant Rat",
+          "srd": {
+            "name": "Giant Rat",
+            "section": "Animals",
+            "page": 353,
+            "cr": "1/8",
+            "block": "AC 13; HP 7 (2d6); Str 7 Dex 16 Con 11 Int 2 Wis 10 Cha 4; Bite +5, 1d4+3 piercing",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 7,
+            "armor_class": 13,
+            "abilities": {
+              "strength": 7,
+              "dexterity": 16,
+              "constitution": 11,
+              "intelligence": 2,
+              "wisdom": 10,
+              "charisma": 4
+            },
+            "attack_bonus": 5,
+            "weapon": {
+              "label": "bite",
+              "damage_dice": 1,
+              "damage_sides": 4
+            },
+            "damage_modifier": 3
+          },
+          "fidelity": "exact",
+          "fidelity_note": "Single bite taken as written. Pack Tactics needs an ally and none is present.",
+          "klass": "beast",
+          "speaks": false,
+          "gender": "it",
+          "voice": "",
+          "fits": [
+            "town",
+            "water",
+            "farm",
+            "market",
+            "scholar",
+            "grave"
+          ],
+          "name_form": "creature",
+          "the": "the giant rat",
+          "noun": "Giant Rat",
+          "art": "ant-giant-rat",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short|cap} scurries into view, whiskers twitching and teeth bared."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "A scrabble of claws, and {ant.short} bolts out of the dark, big as a hound."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short|cap} rears up on its haunches and hisses at the lantern light."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "With a shrill squeal, {ant.short} darts across your path and turns to face you."
+              }
+            ]
+          },
+          "warnings": null
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "giant-weasel",
+          "label": "Giant Weasel",
+          "srd": {
+            "name": "Giant Weasel",
+            "section": "Animals",
+            "page": 355,
+            "cr": "1/8",
+            "block": "AC 13; HP 9 (2d8); Str 11 Dex 17 Con 10 Int 4 Wis 12 Cha 5; Bite +5, 1d4+3 piercing",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 9,
+            "armor_class": 13,
+            "abilities": {
+              "strength": 11,
+              "dexterity": 17,
+              "constitution": 10,
+              "intelligence": 4,
+              "wisdom": 12,
+              "charisma": 5
+            },
+            "attack_bonus": 5,
+            "weapon": {
+              "label": "bite",
+              "damage_dice": 1,
+              "damage_sides": 4
+            },
+            "damage_modifier": 3
+          },
+          "fidelity": "exact",
+          "fidelity_note": "Single bite taken as written.",
+          "klass": "beast",
+          "speaks": false,
+          "gender": "it",
+          "voice": "",
+          "fits": [
+            "farm",
+            "wild",
+            "town",
+            "market"
+          ],
+          "name_form": "creature",
+          "the": "the giant weasel",
+          "noun": "Giant Weasel",
+          "art": "ant-giant-weasel",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short|cap} pours out of the dark like a sleek brown ribbon, chattering with fury."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "A flash of fur, and {ant.short} lands in front of you, back arched."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short|cap} slinks into the light, long body coiled and bright eyes unblinking."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "With a hiss, {ant.short} whips out of cover and bars the path."
+              }
+            ]
+          },
+          "warnings": null
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "mastiff",
+          "label": "Mastiff",
+          "srd": {
+            "name": "Mastiff",
+            "section": "Animals",
+            "page": 357,
+            "cr": "1/8",
+            "block": "AC 12; HP 5 (1d8+1); Str 13 Dex 14 Con 12 Int 3 Wis 12 Cha 7; Bite +3, 1d6+1 piercing, Prone rider",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 5,
+            "armor_class": 12,
+            "abilities": {
+              "strength": 13,
+              "dexterity": 14,
+              "constitution": 12,
+              "intelligence": 3,
+              "wisdom": 12,
+              "charisma": 7
+            },
+            "attack_bonus": 3,
+            "weapon": {
+              "label": "bite",
+              "damage_dice": 1,
+              "damage_sides": 6
+            },
+            "damage_modifier": 1
+          },
+          "fidelity": "simplified",
+          "fidelity_note": "The Prone rider on a bite against a Medium or smaller target is not modeled.",
+          "klass": "beast",
+          "speaks": false,
+          "gender": "it",
+          "voice": "",
+          "fits": [
+            "farm",
+            "town",
+            "market",
+            "grave"
+          ],
+          "name_form": "creature",
+          "the": "the mastiff",
+          "noun": "Mastiff",
+          "art": "ant-mastiff",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short|cap} bounds out of the dark, chain dragging, a deep bark shaking the air."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "A heavy shape lunges into the light: {ant.short}, jaws wide and hackles stiff."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short|cap} plants its paws in the path and fills the night with a rumbling growl."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Claws scrape the ground as {ant.short} circles, ears flat and eyes on you."
+              }
+            ]
+          },
+          "warnings": null
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "scout",
+          "label": "Scout",
+          "srd": {
+            "name": "Scout",
+            "section": "Monsters A–Z",
+            "page": 322,
+            "cr": "1/2",
+            "block": "AC 13; HP 16 (3d8+3); Str 11 Dex 14 Con 12 Int 11 Wis 13 Cha 11; Shortsword +4, 1d6+2 piercing; Multiattack (2 attacks)",
+            "license": "CC-BY-4.0",
+            "pdf_sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+          },
+          "stats": {
+            "hit_points": 16,
+            "armor_class": 13,
+            "abilities": {
+              "strength": 11,
+              "dexterity": 14,
+              "constitution": 12,
+              "intelligence": 11,
+              "wisdom": 13,
+              "charisma": 11
+            },
+            "attack_bonus": 4,
+            "weapon": {
+              "label": "shortsword",
+              "damage_dice": 1,
+              "damage_sides": 6
+            },
+            "damage_modifier": 2
+          },
+          "fidelity": "simplified",
+          "fidelity_note": "Multiattack (two attacks per action) is dropped: the combat model resolves one attack per turn. This makes the Scout weaker than written.",
+          "klass": "person",
+          "speaks": true,
+          "gender": "she",
+          "voice": "cool, clipped woman",
+          "fits": [
+            "wild",
+            "mountain",
+            "farm",
+            "water"
+          ],
+          "name_form": "person",
+          "the": "the scout",
+          "noun": "Scout",
+          "art": "ant-scout",
+          "arrivals": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "{ant.short}, a lean tracker in a green cloak, steps from the trees with a shortsword drawn."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "Without a sound, {ant.short} appears ahead, shortsword loose in a practiced grip."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "{ant.short} drops lightly onto the path, a longbow slung across {ant.pos} back and a blade in hand."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "A cloaked figure rises from the dark: {ant.short}, steady-eyed, shortsword ready."
+              }
+            ]
+          },
+          "warnings": {
+            "die": 4,
+            "variants": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "text": "You walk loud for travelers. Put {stake.short} down."
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "text": "I've tracked {patron.first} for two days. It ends here."
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "text": "Easy now. Hand over {stake.short} and I'll let you leave."
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "text": "Whoever sent you picked the wrong road."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,354 @@
+[
+  {
+    "art_key": "loc-salt-quay-arrival",
+    "kind": "scene",
+    "file_stem": "scene-salt-quay-arrival",
+    "aspect": "16:9",
+    "used_by": "locations.salt-quay arrival scene (room, opening, dialogue, combat, victory, defeat)",
+    "prompt": "A fishing-town quay at night: wet timber planks, moored boats with furled sails, hanging nets, lanterns on poles reflected in black water, a bell buoy half seen in drifting fog. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-salt-quay-interior",
+    "kind": "scene",
+    "file_stem": "scene-salt-quay-interior",
+    "aspect": "16:9",
+    "used_by": "destinations of salt-quay (resolution scene)",
+    "prompt": "The warm interior of a waterside net loft: rope coils, hanging nets, a long scarred table, a banked fire and a single lantern, rain-dark window shutters, an inviting but watchful mood. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-pinewood-trail-arrival",
+    "kind": "scene",
+    "file_stem": "scene-pinewood-trail-arrival",
+    "aspect": "16:9",
+    "used_by": "locations.pinewood-trail arrival scene (room, opening, dialogue, combat, victory, defeat)",
+    "prompt": "A narrow forest trail among tall pines under a full moon, mist between the trunks, a small wayside shrine with one glowing candle, mossy roots catching lantern light. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-pinewood-trail-interior",
+    "kind": "scene",
+    "file_stem": "scene-pinewood-trail-interior",
+    "aspect": "16:9",
+    "used_by": "destinations of pinewood-trail (resolution scene)",
+    "prompt": "The inside of a timber woodland lodge: heavy beams, a wide stone hearth with a crackling fire, drying herbs, antlers over the mantel, a long plank table and a sense of shelter after a hard night. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-windward-pass-arrival",
+    "kind": "scene",
+    "file_stem": "scene-windward-pass-arrival",
+    "aspect": "16:9",
+    "used_by": "locations.windward-pass arrival scene (room, opening, dialogue, combat, victory, defeat)",
+    "prompt": "A high mountain pass at night: a stone path hugging a cliff, thin blowing snow, a cairn hung with faded pennants, far valleys under stars, torchlight guttering in the wind. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-windward-pass-interior",
+    "kind": "scene",
+    "file_stem": "scene-windward-pass-interior",
+    "aspect": "16:9",
+    "used_by": "destinations of windward-pass (resolution scene)",
+    "prompt": "The common hall of a stone mountain waystation: a roaring hearth, thick rafters, wet boots steaming by the fire, benches and a heavy table, amber light against cold blue shadow. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-lamplit-market-arrival",
+    "kind": "scene",
+    "file_stem": "scene-lamplit-market-arrival",
+    "aspect": "16:9",
+    "used_by": "locations.lamplit-market arrival scene (room, opening, dialogue, combat, victory, defeat)",
+    "prompt": "A crowded night market in a walled town: canvas awnings, hundreds of paper lanterns in red and gold, wet cobbles mirroring the lamps, steaming stalls, a street fiddler's corner, narrow alleys receding into dark. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-lamplit-market-interior",
+    "kind": "scene",
+    "file_stem": "scene-lamplit-market-interior",
+    "aspect": "16:9",
+    "used_by": "destinations of lamplit-market (resolution scene)",
+    "prompt": "The back room of a cluttered market shop: shelves of jars and dried herbs, hanging lanterns, a low table with steaming cups, patterned screens glowing warmly, secrets-in-the-lamplight mood. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-rookhill-gate-arrival",
+    "kind": "scene",
+    "file_stem": "scene-rookhill-gate-arrival",
+    "aspect": "16:9",
+    "used_by": "locations.rookhill-gate arrival scene (room, opening, dialogue, combat, victory, defeat)",
+    "prompt": "An old hillside cemetery gate at night: open iron gates, rows of pale headstones, votive candles in glass cups, yew trees with sleeping rooks, fog pooling around stone angels, a chapel tower against the stars. Solemn, not frightening. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-rookhill-gate-interior",
+    "kind": "scene",
+    "file_stem": "scene-rookhill-gate-interior",
+    "aspect": "16:9",
+    "used_by": "destinations of rookhill-gate (resolution scene)",
+    "prompt": "A candlelit stone chapel interior: a wall of silent bronze bells, a carved stone tomb, many small flames, cool blue stone with warm amber candle glow, quiet and sacred. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-reedmoor-boardwalk-arrival",
+    "kind": "scene",
+    "file_stem": "scene-reedmoor-boardwalk-arrival",
+    "aspect": "16:9",
+    "used_by": "locations.reedmoor-boardwalk arrival scene (room, opening, dialogue, combat, victory, defeat)",
+    "prompt": "A marsh boardwalk at night: slick plank path over still black water, tall reeds, drifting mist, pale marsh lights in the distance, a leaning stilt shrine wrapped in vines, fireflies like gold dots. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-reedmoor-boardwalk-interior",
+    "kind": "scene",
+    "file_stem": "scene-reedmoor-boardwalk-interior",
+    "aspect": "16:9",
+    "used_by": "destinations of reedmoor-boardwalk (resolution scene)",
+    "prompt": "The inside of a lamplit stilt house over water: curved reed walls, heron-shaped lanterns, polished boards, drying nets of reeds, a stove glowing, water glinting through floor gaps. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-thistledown-farm-arrival",
+    "kind": "scene",
+    "file_stem": "scene-thistledown-farm-arrival",
+    "aspect": "16:9",
+    "used_by": "locations.thistledown-farm arrival scene (room, opening, dialogue, combat, victory, defeat)",
+    "prompt": "A hill farmstead at dusk turning to night: a crooked orchard, a warm lit farmhouse window, a barn with a weathervane, silver cart tracks, long grass under a rising moon, a quiet pastoral mood. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-thistledown-farm-interior",
+    "kind": "scene",
+    "file_stem": "scene-thistledown-farm-interior",
+    "aspect": "16:9",
+    "used_by": "destinations of thistledown-farm (resolution scene)",
+    "prompt": "A bright farmhouse kitchen: copper pans, a crackling hearth, fresh bread on a long table, hanging onions and herbs, lantern light on whitewashed walls, a feeling of welcome. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-orrery-library-arrival",
+    "kind": "scene",
+    "file_stem": "scene-orrery-library-arrival",
+    "aspect": "16:9",
+    "used_by": "locations.orrery-library arrival scene (room, opening, dialogue, combat, victory, defeat)",
+    "prompt": "A grand night library with a glass dome sheltering a great brass orrery, tall shelves with rolling ladders, lamplight gilding leather spines, a shaft of moonlight with drifting dust, rain on tall windows. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "loc-orrery-library-interior",
+    "kind": "scene",
+    "file_stem": "scene-orrery-library-interior",
+    "aspect": "16:9",
+    "used_by": "destinations of orrery-library (resolution scene)",
+    "prompt": "A private map room in a library: tables covered in charts and brass instruments, a green-shaded lamp, ladders and shelves of rolled maps, a small fire, quiet scholarly warmth. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+  },
+  {
+    "art_key": "patron-ferry-clerk",
+    "kind": "portrait",
+    "file_stem": "portrait-patron-ferry-clerk",
+    "aspect": "2:3",
+    "used_by": "patrons.ferry-clerk",
+    "prompt": "Fantasy character portrait of a nervous young man in his twenties, a ferry clerk in a damp wool coat and a clerk's cap, ink-stained fingers, wide worried eyes. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "patron-herbwife",
+    "kind": "portrait",
+    "file_stem": "portrait-patron-herbwife",
+    "aspect": "2:3",
+    "used_by": "patrons.herbwife",
+    "prompt": "Fantasy character portrait of a stern older woman, an herb gatherer, weathered face, gray hair under a patched shawl, a satchel of dried herbs, sharp watchful eyes. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "patron-lamp-warden",
+    "kind": "portrait",
+    "file_stem": "portrait-patron-lamp-warden",
+    "aspect": "2:3",
+    "used_by": "patrons.lamp-warden",
+    "prompt": "Fantasy character portrait of a weary middle-aged man, a lamp warden with a trimmed beard, a hooded coat, a small lantern at his shoulder, tired kind eyes. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "patron-archivist",
+    "kind": "portrait",
+    "file_stem": "portrait-patron-archivist",
+    "aspect": "2:3",
+    "used_by": "patrons.archivist",
+    "prompt": "Fantasy character portrait of a brisk young woman, an archivist with ink-smudged cheek, spectacles pushed up on her forehead, a dark scholar's vest, quick bright eyes. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "patron-merchant",
+    "kind": "portrait",
+    "file_stem": "portrait-patron-merchant",
+    "aspect": "2:3",
+    "used_by": "patrons.merchant",
+    "prompt": "Fantasy character portrait of a round, jovial middle-aged man, a cloth merchant in a rich velvet cap, a measuring ribbon around his neck, a worried smile. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "patron-shepherd",
+    "kind": "portrait",
+    "file_stem": "portrait-patron-shepherd",
+    "aspect": "2:3",
+    "used_by": "patrons.shepherd",
+    "prompt": "Fantasy character portrait of a soft-spoken elderly man, a shepherd with a white beard, a wool cloak, a crook, gentle lined face. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "patron-acolyte",
+    "kind": "portrait",
+    "file_stem": "portrait-patron-acolyte",
+    "aspect": "2:3",
+    "used_by": "patrons.acolyte",
+    "prompt": "Fantasy character portrait of an earnest young woman, a temple acolyte in plain pale robes, a small silver pendant, short hair, determined hopeful eyes. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "patron-innkeeper",
+    "kind": "portrait",
+    "file_stem": "portrait-patron-innkeeper",
+    "aspect": "2:3",
+    "used_by": "patrons.innkeeper",
+    "prompt": "Fantasy character portrait of a warm, worried older woman, an innkeeper with an apron and rolled sleeves, flour on her forearm, graying braid, kind tired eyes. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "patron-veteran",
+    "kind": "portrait",
+    "file_stem": "portrait-patron-veteran",
+    "aspect": "2:3",
+    "used_by": "patrons.veteran",
+    "prompt": "Fantasy character portrait of a grizzled older man, a retired soldier with a scarred chin and a faded military cloak, straight posture, a stoic but troubled gaze. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "patron-bell-ringer",
+    "kind": "portrait",
+    "file_stem": "portrait-patron-bell-ringer",
+    "aspect": "2:3",
+    "used_by": "patrons.bell-ringer",
+    "prompt": "Fantasy character portrait of a calm, tired middle-aged woman, a bell ringer in a gray hooded cloak, rope-calloused hands, steady dark eyes. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-bandit",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-bandit",
+    "aspect": "2:3",
+    "used_by": "antagonists.bandit",
+    "prompt": "Fantasy creature portrait of a wiry young road thief in a patched dark coat, a bandana at his neck, a curved scimitar at his shoulder, a wary half-grin. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-cultist",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-cultist",
+    "aspect": "2:3",
+    "used_by": "antagonists.cultist",
+    "prompt": "Fantasy creature portrait of a hooded woman in plain gray ritual robes, a curved sickle in her hand, pale composed face, a dim crescent charm, unsettling calm. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-guard",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-guard",
+    "aspect": "2:3",
+    "used_by": "antagonists.guard",
+    "prompt": "Fantasy creature portrait of a stern man in a dented chain shirt and a gray tabard, spear raised, round shield on his arm, a stubborn unyielding frown. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-goblin-warrior",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-goblin-warrior",
+    "aspect": "2:3",
+    "used_by": "antagonists.goblin-warrior",
+    "prompt": "Fantasy creature portrait of a small green-skinned goblin warrior with big ears and a sharp grin, scrap leather armor, a rusty scimitar, mischievous and dangerous. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-kobold-warrior",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-kobold-warrior",
+    "aspect": "2:3",
+    "used_by": "antagonists.kobold-warrior",
+    "prompt": "Fantasy creature portrait of a small kobold with dull red-brown scales and a short snout, bright yellow eyes, a dagger clutched in clawed hands, fierce and clever. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-skeleton",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-skeleton",
+    "aspect": "2:3",
+    "used_by": "antagonists.skeleton",
+    "prompt": "Fantasy creature portrait of an animated skeleton in rusted mail scraps, empty dark eye sockets with faint cold light, a shortsword, weathered bone-white, solemn and not gory. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-zombie",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-zombie",
+    "aspect": "2:3",
+    "used_by": "antagonists.zombie",
+    "prompt": "Fantasy creature portrait of a shambling figure in tide-soaked rags, gray skin, dull glowing eyes, slack stance; eerie and sorrowful rather than gruesome, no wounds, no gore. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-wolf",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-wolf",
+    "aspect": "2:3",
+    "used_by": "antagonists.wolf",
+    "prompt": "Fantasy creature portrait of a lean gray wolf with raised hackles and bright amber eyes, snow-dusted fur, a low snarl, head-and-chest view. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-giant-rat",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-giant-rat",
+    "aspect": "2:3",
+    "used_by": "antagonists.giant-rat",
+    "prompt": "Fantasy creature portrait of a rat the size of a hound, coarse brown fur, long whiskers, small bright eyes, teeth bared, head-and-chest view. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-giant-weasel",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-giant-weasel",
+    "aspect": "2:3",
+    "used_by": "antagonists.giant-weasel",
+    "prompt": "Fantasy creature portrait of a long, sleek giant weasel with chestnut fur and a cream throat, arched back, bright black eyes, head-and-chest view. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-mastiff",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-mastiff",
+    "aspect": "2:3",
+    "used_by": "antagonists.mastiff",
+    "prompt": "Fantasy creature portrait of a heavy-shouldered mastiff with a scarred muzzle, a worn leather collar with a broken chain, rumbling growl, head-and-chest view. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "ant-scout",
+    "kind": "portrait",
+    "file_stem": "portrait-ant-scout",
+    "aspect": "2:3",
+    "used_by": "antagonists.scout",
+    "prompt": "Fantasy creature portrait of a lean woman ranger in a green hooded cloak, short sword in hand, longbow across her back, cool measuring gaze. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "contact-old-mapmaker",
+    "kind": "portrait",
+    "file_stem": "portrait-contact-old-mapmaker",
+    "aspect": "2:3",
+    "used_by": "contacts.old-mapmaker",
+    "prompt": "Fantasy character portrait of a dry, careful elderly man, a mapmaker with ink-stained fingers and thick spectacles, a long gray beard, a roll of charts under one arm. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "contact-river-healer",
+    "kind": "portrait",
+    "file_stem": "portrait-contact-river-healer",
+    "aspect": "2:3",
+    "used_by": "contacts.river-healer",
+    "prompt": "Fantasy character portrait of a gentle middle-aged woman, a river healer with a woven satchel of herbs, braided dark hair, calm compassionate eyes. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "contact-watch-sergeant",
+    "kind": "portrait",
+    "file_stem": "portrait-contact-watch-sergeant",
+    "aspect": "2:3",
+    "used_by": "contacts.watch-sergeant",
+    "prompt": "Fantasy character portrait of a brisk, no-nonsense man in his forties, a watch sergeant in a battered leather cuirass, a short cloak and a lantern, square jaw. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "contact-shrine-keeper",
+    "kind": "portrait",
+    "file_stem": "portrait-contact-shrine-keeper",
+    "aspect": "2:3",
+    "used_by": "contacts.shrine-keeper",
+    "prompt": "Fantasy character portrait of a serene elderly woman, a shrine keeper in soft layered robes, a string of small bells at her belt, kind and unhurried. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "contact-tinker",
+    "kind": "portrait",
+    "file_stem": "portrait-contact-tinker",
+    "aspect": "2:3",
+    "used_by": "contacts.tinker",
+    "prompt": "Fantasy character portrait of a cheerful wiry man, a traveling tinker with a patched hat, pots and tools clinking on his shoulder pack, a quick grin. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "contact-miller",
+    "kind": "portrait",
+    "file_stem": "portrait-contact-miller",
+    "aspect": "2:3",
+    "used_by": "contacts.miller",
+    "prompt": "Fantasy character portrait of a hearty middle-aged woman, a miller dusted with flour, rolled sleeves, strong forearms, a broad welcoming smile. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  }
+]

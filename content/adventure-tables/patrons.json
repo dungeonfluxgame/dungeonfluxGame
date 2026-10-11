@@ -1,0 +1,182 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "patrons",
+  "description": "Quest-giver archetypes. gender fixes pronouns and portrait; voice is the voice-casting tag; fits are location tags (any-of).",
+  "tables": {
+    "patrons": {
+      "die": 10,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "ferry-clerk",
+          "role": "ferry clerk",
+          "desc": "a nervous young ferry clerk",
+          "gender": "he",
+          "voice": "anxious young man",
+          "fits": [
+            "water",
+            "town"
+          ],
+          "art": "patron-ferry-clerk"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "herbwife",
+          "role": "herb gatherer",
+          "desc": "a stern herb gatherer",
+          "gender": "she",
+          "voice": "gruff older woman",
+          "fits": [
+            "wild",
+            "farm",
+            "market"
+          ],
+          "art": "patron-herbwife"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "lamp-warden",
+          "role": "lamp warden",
+          "desc": "a weary lamp warden",
+          "gender": "he",
+          "voice": "weary middle-aged man",
+          "fits": [
+            "water",
+            "mountain",
+            "grave"
+          ],
+          "art": "patron-lamp-warden"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "archivist",
+          "role": "archivist",
+          "desc": "a brisk young archivist",
+          "gender": "she",
+          "voice": "brisk young woman",
+          "fits": [
+            "scholar",
+            "town"
+          ],
+          "art": "patron-archivist"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "merchant",
+          "role": "cloth merchant",
+          "desc": "a round, jovial cloth merchant",
+          "gender": "he",
+          "voice": "jovial heavyset man",
+          "fits": [
+            "market",
+            "town"
+          ],
+          "art": "patron-merchant"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "shepherd",
+          "role": "shepherd",
+          "desc": "a soft-spoken old shepherd",
+          "gender": "he",
+          "voice": "soft-spoken elderly man",
+          "fits": [
+            "farm",
+            "mountain",
+            "wild"
+          ],
+          "art": "patron-shepherd"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "acolyte",
+          "role": "temple acolyte",
+          "desc": "an earnest young temple acolyte",
+          "gender": "she",
+          "voice": "earnest young woman",
+          "fits": [
+            "sacred",
+            "grave"
+          ],
+          "art": "patron-acolyte"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "innkeeper",
+          "role": "innkeeper",
+          "desc": "a warm, worried innkeeper",
+          "gender": "she",
+          "voice": "warm older woman",
+          "fits": [
+            "town",
+            "farm",
+            "mountain",
+            "market"
+          ],
+          "art": "patron-innkeeper"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "veteran",
+          "role": "retired soldier",
+          "desc": "a grizzled retired soldier",
+          "gender": "he",
+          "voice": "grizzled older man",
+          "fits": [
+            "town",
+            "mountain",
+            "farm",
+            "grave",
+            "wild"
+          ],
+          "art": "patron-veteran"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "bell-ringer",
+          "role": "bell ringer",
+          "desc": "a calm, tired bell ringer",
+          "gender": "she",
+          "voice": "calm middle-aged woman",
+          "fits": [
+            "sacred",
+            "town",
+            "water",
+            "scholar"
+          ],
+          "art": "patron-bell-ringer"
+        }
+      ]
+    }
+  }
+}

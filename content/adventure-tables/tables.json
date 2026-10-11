@@ -1,0 +1,173 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "tables",
+  "schema_version": 1,
+  "tables_version": "1.0.0",
+  "description": "Index of the adventure roll tables. The server hashes the exact bytes of every file listed here, in listed order, as the tables revision.",
+  "files": [
+    "locations.json",
+    "patrons.json",
+    "hooks.json",
+    "macguffins.json",
+    "antagonists.json",
+    "complications.json",
+    "secrets.json",
+    "destinations.json",
+    "contacts.json",
+    "rewards.json",
+    "names.json",
+    "npc-traits.json",
+    "prose-patterns.json",
+    "art-manifest.json"
+  ],
+  "rng": {
+    "algorithm": "splitmix64",
+    "seed_bits": 64,
+    "init": "state = finalize(seed + 0x9E3779B97F4A7C15), where finalize is the two-multiply xor-shift mix below applied once, so adjacent seeds give unrelated streams",
+    "next": "state = state + 0x9E3779B97F4A7C15 (mod 2^64); z = state; z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9; z = (z ^ (z >> 27)) * 0x94D049BB133111EB; return z ^ (z >> 31)  (all mod 2^64)",
+    "roll": "roll(N): limit = 2^64 - (2^64 mod N); draw x until x < limit; natural = (x mod N) + 1"
+  },
+  "selection": {
+    "faces": "Entries own contiguous face ranges covering 1..die exactly; a list of n entries uses the smallest die in {4,6,8,10,12,20} with n <= die, faces spread evenly with the first (die mod n) entries taking one extra face. Lists of 1 are not rolled.",
+    "incompatible": "If the entry is incompatible with earlier results, record the roll as rejected and roll the same die again.",
+    "max_attempts": 64,
+    "fallback": "After 64 rejections take the first compatible entry in table order and record it as 'fallback' (natural 0).",
+    "determinism": "Every draw, including rejected ones, consumes the stream, so the whole adventure is a pure function of (seed, tables revision, rules mode)."
+  },
+  "rules_modes": {
+    "standard": "Only antagonists with fidelity=exact.",
+    "custom_allowed": "All twelve; any simplified antagonist makes the run a disclosed custom ruleset."
+  },
+  "roll_order": [
+    {
+      "n": 1,
+      "table": "location",
+      "file": "locations.json",
+      "die": 8,
+      "filter": null
+    },
+    {
+      "n": 2,
+      "table": "hook",
+      "file": "hooks.json",
+      "die": 12,
+      "filter": "hook.fits intersects location.tags"
+    },
+    {
+      "n": 3,
+      "table": "patron",
+      "file": "patrons.json",
+      "die": 10,
+      "filter": "patron.fits intersects location.tags"
+    },
+    {
+      "n": 4,
+      "table": "stake",
+      "file": "macguffins.json",
+      "die": 20,
+      "filter": "stake.tags intersects hook.stake_tags"
+    },
+    {
+      "n": 5,
+      "table": "antagonist",
+      "file": "antagonists.json",
+      "die": 12,
+      "filter": "antagonist.fits intersects location.tags AND (fidelity == exact OR rules_mode == custom_allowed)"
+    },
+    {
+      "n": 6,
+      "table": "complication",
+      "file": "complications.json",
+      "die": 20,
+      "filter": "group(antagonist) in complication.for"
+    },
+    {
+      "n": 7,
+      "table": "secret",
+      "file": "secrets.json",
+      "die": 12,
+      "filter": "hook.kind in secret.kinds"
+    },
+    {
+      "n": 8,
+      "table": "destination",
+      "file": "destinations.json",
+      "die": 4,
+      "filter": "sub-table of location.id"
+    },
+    {
+      "n": 9,
+      "table": "contact",
+      "file": "contacts.json",
+      "die": 6,
+      "filter": "contact.fits intersects location.tags"
+    },
+    {
+      "n": 10,
+      "table": "reward",
+      "file": "rewards.json",
+      "die": 12,
+      "filter": null
+    },
+    {
+      "n": 11,
+      "table": "name.patron.given / name.patron.surname / name.contact.given / name.contact.surname / name.antagonist.*",
+      "file": "names.json",
+      "die": "20 or 12 or 8",
+      "filter": "contact given != patron given; contact surname != patron surname; person antagonist given not in {patron, contact}"
+    },
+    {
+      "n": 12,
+      "table": "trait.patron.mannerism, trait.patron.speech, trait.contact.mannerism, trait.contact.speech, trait.antagonist.menace (speakers only)",
+      "file": "npc-traits.json",
+      "die": "12 or 8",
+      "filter": null
+    },
+    {
+      "n": 13,
+      "table": "atmosphere.a, atmosphere.b, atmosphere.c",
+      "file": "locations.json",
+      "die": 6,
+      "filter": "b != a; c not in {a, b}"
+    },
+    {
+      "n": 14,
+      "table": "prose.* (beat order), antagonist.arrival, antagonist.warning (speakers only)",
+      "file": "prose-patterns.json",
+      "die": "4 (2-variant lists use d4 with two faces each)",
+      "filter": "antagonist group selects combat_open_* and foreshadow_*; hook.kind selects route_* and defeat_*"
+    }
+  ],
+  "limits": {
+    "scene_title": 32,
+    "narration_generated": 220,
+    "spoken_line": 160,
+    "offer_label": 40,
+    "speaker": 28,
+    "private_clue": 280
+  },
+  "counts": {
+    "locations": 8,
+    "patrons": 10,
+    "hooks": 12,
+    "stakes": 20,
+    "antagonists": 12,
+    "complications": 20,
+    "secrets": 12,
+    "destinations": 32,
+    "contacts": 6,
+    "rewards": 12,
+    "art_images": 44
+  },
+  "compat_tags": [
+    "water",
+    "town",
+    "wild",
+    "mountain",
+    "sacred",
+    "grave",
+    "farm",
+    "scholar",
+    "market"
+  ]
+}

@@ -1,0 +1,1138 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "prose-patterns",
+  "description": "Sentence patterns, several variants per slot, chosen by roll. {a.b} reads a context field; {a.b|cap} capitalizes the first letter. Lists of length 2 use a d4 with two faces each.",
+  "mechanical_keys": [
+    "combat_mech",
+    "victory_mech",
+    "victory_rested",
+    "defeat_mech",
+    "defeat_rested",
+    "escort_support_suffix"
+  ],
+  "limits": {
+    "title": 32,
+    "narration_generated": 220,
+    "spoken_line": 160,
+    "offer_label": 40,
+    "speaker": 28,
+    "private_clue": 280
+  },
+  "tables": {
+    "begin_label": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Enter {loc.name}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Step into {loc.name}"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Begin at {loc.name}"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Walk into {loc.name}"
+        }
+      ]
+    },
+    "room_title": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Gather at {loc.name}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Meet at {loc.name}"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Arrive at {loc.name}"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Night at {loc.name}"
+        }
+      ]
+    },
+    "room_narration": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{loc.atmos_a} {loc.atmos_b} Share the room with your companions, then bring your heroes into the story."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "{loc.name|cap} waits in the dark. {loc.atmos_a} Share the room with your companions, then bring your heroes into the story."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Night has settled over {loc.name}. {loc.atmos_a} Share the room with your companions, then bring your heroes into the story."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "{loc.atmos_a} Something is about to happen. Share the room with your companions, then bring your heroes into the story."
+        }
+      ]
+    },
+    "opening_narration": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "You reach {loc.name} as {patron.desc} {entrance}. {foreshadow}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "{loc.atmos_c} {patron.desc|cap} {entrance}. {foreshadow}"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "As you cross {loc.name}, {patron.desc} {entrance}. {foreshadow}"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "{patron.desc|cap} {entrance} just as you arrive at {loc.name}. {foreshadow}"
+        }
+      ]
+    },
+    "foreshadow_speaker": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Behind {patron.obj}, a footstep scuffs the dark."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Out in the dark, a second set of footsteps stops."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "A shadow detaches itself from the dark behind {patron.obj}."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "You hear a boot scrape just beyond the lantern light."
+        }
+      ]
+    },
+    "foreshadow_beast": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Out past the light, something low and quick shifts."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "A faint scrabbling stirs just beyond the lantern light."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Eyes glint once in the dark, then vanish."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Something unseen moves along behind {patron.obj}."
+        }
+      ]
+    },
+    "foreshadow_undead": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "A dry clatter drifts out of the dark, patient and slow."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Somewhere close by, something dry rattles and goes quiet."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "The lanterns gutter, as though the dark were listening."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Slow, measured footsteps echo from out of the dark."
+        }
+      ]
+    },
+    "ask_label": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Ask {patron.first} what is wrong"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Question {patron.first} closely"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Draw {patron.first} aside to talk"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Press {patron.first} for the truth"
+        }
+      ]
+    },
+    "help_label": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Offer to help {patron.first}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Promise {patron.first} your protection"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Vow to see {patron.first} through"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Pledge your help to {patron.first}"
+        }
+      ]
+    },
+    "stand_label": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Stand your ground"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Face down {ant.the}"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Block the path of {ant.the}"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Shield {patron.first} from {ant.the}"
+        }
+      ]
+    },
+    "continue_label": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Continue to {dest.short}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Follow {patron.first} to {dest.short}"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Press on to {dest.short}"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Head for {dest.short}"
+        }
+      ]
+    },
+    "ask_title": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "A Quiet Word"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Hard Questions"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Whispers in the Dark"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "What Is Not Said"
+        }
+      ]
+    },
+    "ask_narration": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{patron.first} draws you aside, {patron.mannerism}. {arrival}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "{patron.first} lowers {patron.pos} voice and leans close, {patron.mannerism}. {arrival}"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Before you can press further, {patron.first} stiffens, {patron.mannerism}. {arrival}"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "{patron.first} hesitates, {patron.mannerism}, then looks past you. {arrival}"
+        }
+      ]
+    },
+    "help_title": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "A Promise Made"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Sworn on the Road"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Walk Together"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Allies in the Dark"
+        }
+      ]
+    },
+    "help_narration": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{patron.first} lets out a shaky breath and steadies {patron.self} behind you. {arrival}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Relief crosses {patron.first}'s face, and {patron.sub} moves to your side. {arrival}"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "{patron.first} nods, {patron.mannerism}, and stays close at your shoulder. {arrival}"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "{patron.first} presses close behind you, trusting your lead. {arrival}"
+        }
+      ]
+    },
+    "route_deliver": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "text": "{stake.short|cap} goes to {contact.full} at {dest.name}."
+        },
+        {
+          "faces": [
+            3,
+            4
+          ],
+          "text": "{contact.full} waits at {dest.name} for {stake.short}."
+        }
+      ]
+    },
+    "route_escort": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "text": "I must reach {contact.full} at {dest.name}."
+        },
+        {
+          "faces": [
+            3,
+            4
+          ],
+          "text": "{contact.full} is expecting me at {dest.name}."
+        }
+      ]
+    },
+    "route_warn": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "text": "The warning is for {contact.full} at {dest.name}."
+        },
+        {
+          "faces": [
+            3,
+            4
+          ],
+          "text": "{contact.full} at {dest.name} must hear it before dawn."
+        }
+      ]
+    },
+    "route_retrieve": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "text": "{contact.full} is keeping {stake.short} for me at {dest.name}."
+        },
+        {
+          "faces": [
+            3,
+            4
+          ],
+          "text": "{stake.short|cap} waits with {contact.full} at {dest.name}."
+        }
+      ]
+    },
+    "clue": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{patron.first} whispers to you alone: {route} {secret.fact} Keep it between us."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "{patron.first} lowers {patron.pos} voice so only you can hear. {route} {secret.fact} Tell no one."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "In a private murmur, {patron.first} tells you: {route} {secret.fact} Say nothing to the others."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "{patron.first} draws you close. {route} {secret.fact} Keep it between us."
+        }
+      ]
+    },
+    "combat_title": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "A Stand at {loc.short}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Trouble at {loc.short}"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "The Way Is Barred"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Hold the Line"
+        }
+      ]
+    },
+    "combat_open_speaker": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{ant.short|cap} will not be talked down."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "{ant.short|cap} has made up {ant.pos} mind."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "There will be no more talking."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "{ant.short|cap} raises {ant.pos} weapon in answer."
+        }
+      ]
+    },
+    "combat_open_beast": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{ant.short|cap} will not be turned aside."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "{ant.short|cap} lowers {ant.pos} head and rushes in."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "There is no reasoning with it."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "{ant.short|cap} circles, searching for a gap."
+        }
+      ]
+    },
+    "combat_open_undead": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{ant.short|cap} advances without a sound."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "{ant.short|cap} cannot be reasoned with."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "{ant.short|cap} comes on, slow and certain."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "The lantern light does not slow {ant.obj}."
+        }
+      ]
+    },
+    "combat_mech": {
+      "die": null,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Both heroes are within 5 feet of {ant.the}, and everyone fights in the open: no surprise, cover or movement. This encounter uses nonlethal melee attacks."
+        }
+      ]
+    },
+    "victory_title": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "The Way Ahead"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Hard-Won Ground"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Breathing Room"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "A Moment of Quiet"
+        }
+      ]
+    },
+    "victory_lead": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "In the quiet that follows, you piece it together."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "As the dust settles, the truth comes out."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "When the shaking stops, the pieces fit together."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Between breaths, you work out what drove the fight."
+        }
+      ]
+    },
+    "victory_mech": {
+      "die": null,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{ant.short|cap} falls unconscious with 1 HP. {story} {ant.pos|cap} Short Rest has begun; campaign time has not completed it."
+        }
+      ]
+    },
+    "victory_rested": {
+      "die": null,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{ant.short|cap} was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Knocked-out creatures are awake with 1 HP, still Prone; their held weapons remain dropped. The original victory and {patron.first}'s unresolved journey remain."
+        }
+      ]
+    },
+    "victory_dialogue": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "You stood your ground. Come on; {dest.short} isn't far now."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "I owe you more than I can say. {dest.name|cap} is just ahead."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Thank you. {contact.first} will be waiting at {dest.name}."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Let's go before anything else finds us. {dest.name|cap} is close."
+        }
+      ]
+    },
+    "defeat_title": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "A Costly Encounter"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "A Bitter Night"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Out of the Fight"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "The Night Turns Against You"
+        }
+      ]
+    },
+    "defeat_deliver": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "text": "{stake.short|cap} is lost in the confusion, and {patron.first}'s errand fails tonight."
+        },
+        {
+          "faces": [
+            3,
+            4
+          ],
+          "text": "{stake.short|cap} slips away in the struggle, and {patron.first}'s errand stalls tonight."
+        }
+      ]
+    },
+    "defeat_escort": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "text": "{patron.first} is driven off into the dark, and the road to {dest.short} stays closed tonight."
+        },
+        {
+          "faces": [
+            3,
+            4
+          ],
+          "text": "{patron.first} flees into the night, and the way to {dest.short} stays barred."
+        }
+      ]
+    },
+    "defeat_warn": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "text": "The warning goes undelivered, and {contact.first} will hear the news too late."
+        },
+        {
+          "faces": [
+            3,
+            4
+          ],
+          "text": "No word reaches {contact.first} tonight, and the danger grows."
+        }
+      ]
+    },
+    "defeat_retrieve": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "text": "{contact.first} keeps {stake.short} for now, and {patron.first} must try again another night."
+        },
+        {
+          "faces": [
+            3,
+            4
+          ],
+          "text": "{stake.short|cap} stays out of reach, and {patron.first} leaves empty-handed."
+        }
+      ]
+    },
+    "defeat_mech": {
+      "die": null,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Both heroes are unconscious with 1 HP after nonlethal attacks. {story} Their Short Rests have begun; campaign time has not completed them."
+        }
+      ]
+    },
+    "defeat_rested": {
+      "die": null,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Both heroes were defeated by nonlethal attacks. An uninterrupted hour has passed without Hit Point Dice or healing. They awaken with 1 HP, still Prone, and their held weapons remain dropped. That rest does not change the original defeat."
+        }
+      ]
+    },
+    "inn_title": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{dest.title}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "A Welcome Waiting"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Safe at Last"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "End of the Road"
+        }
+      ]
+    },
+    "inn_intro": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{contact.first}, {contact.desc}, is already waiting, {contact.mannerism}."
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "There, {contact.mannerism}, stands {contact.first}, {contact.desc}."
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "{contact.first}, {contact.desc}, looks up at once, {contact.mannerism}."
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "{contact.desc|cap}, {contact.first}, rises to greet you, {contact.mannerism}."
+        }
+      ]
+    },
+    "inn_dialogue": {
+      "die": 4,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "{secret.confirm} {reward.line}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "{secret.confirm} Now, then. {reward.line}"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Well done. {secret.confirm} {reward.line}"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "{secret.confirm} Rest easy. {reward.line}"
+        }
+      ]
+    },
+    "escort_support_suffix": {
+      "die": null,
+      "variants": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "The {patron.role} now looks to {name} for support on the way."
+        }
+      ]
+    }
+  }
+}

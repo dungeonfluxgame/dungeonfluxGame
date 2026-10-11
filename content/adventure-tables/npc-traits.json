@@ -1,0 +1,246 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "npc-traits",
+  "description": "mannerisms are participial phrases shown in narration ({pos} resolves to the NPC's pronoun); speech and menace are delivery directions for voice synthesis and are never shown.",
+  "tables": {
+    "mannerisms": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "wringing {pos} hands"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "glancing over {pos} shoulder"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "tugging at {pos} sleeve"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "standing very straight"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "smiling a little too brightly"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "rubbing {pos} tired eyes"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "holding a lantern high"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "breathing hard"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "tapping a nervous rhythm on {pos} belt"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "frowning at the ground"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "speaking low and fast"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "keeping {pos} voice steady with effort"
+        }
+      ]
+    },
+    "speech": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "speaks in a hurried whisper"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "pauses often to listen"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "voice cracks when excited"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "slow and deliberate"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "dry, gentle humor"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "formal and precise"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "words tumble out"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "low and gravelly"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "bright and quick"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "tired but kind"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "brusque, clipped sentences"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "warm, rolling cadence"
+        }
+      ]
+    },
+    "menace": {
+      "die": 8,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "grinning without warmth"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "tight and grim"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "mocking and slow"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "nervous, bluffing"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "cold and precise"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "breathless and eager"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "loud and swaggering"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "hissing through clenched teeth"
+        }
+      ]
+    }
+  }
+}
