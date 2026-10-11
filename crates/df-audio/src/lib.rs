@@ -32,9 +32,10 @@ pub use queue::{PresentationPcmView as PcmView, PresentationQueue as AudioQueue}
 
 pub use pcm::{PcmBuffer, PcmFormat, PcmRefusal};
 pub use queue::{
-    AudioReceipt, BufferCompletion, BufferTicket, Cancellation, EnqueueRefusal,
-    MissingPlaybackPrerequisite, PresentationPcmView, PresentationQueue, QueueError, QueueLimits,
-    QueueSnapshot, QueueState, REQUIRED_PLAYBACK_PREREQUISITES, Replacement,
+    AudioReceipt, BufferCompletion, BufferTicket, Cancellation, CaptionBinding, CaptionError,
+    DriftDirection, EnqueueRefusal, MissingPlaybackPrerequisite, PlaybackDrift,
+    PresentationPcmView, PresentationQueue, QueueError, QueueLimits, QueueSnapshot, QueueState,
+    REQUIRED_PLAYBACK_PREREQUISITES, Replacement, ServerPlaybackTimeline, TimelineError,
 };
 
 pub mod browser_playback;
