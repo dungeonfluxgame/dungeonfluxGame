@@ -106,6 +106,7 @@ fn source_digests() -> &'static SourceDigests {
         let mut content = Sha256::new();
         for source in [
             CONTENT,
+            include_bytes!("fixtures/harbor-journey-pack-baseline.json").as_slice(),
             include_bytes!("courier_ai.rs").as_slice(),
             include_bytes!("journey/narrative_phase.rs").as_slice(),
             include_bytes!("journey/narrative_transition.rs").as_slice(),
@@ -129,14 +130,88 @@ fn source_digests() -> &'static SourceDigests {
     })
 }
 
+fn revision_digest(
+    domain: &[u8],
+    compiled: ContentDigest,
+    revision: super::pack::Revision,
+) -> ContentDigest {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(compiled.0);
+    digest.update(revision.as_bytes());
+    ContentDigest(digest.finalize().into())
+}
+
+pub(super) fn source_revision() -> String {
+    match super::pack::active() {
+        Some(loaded) if !loaded.departures.is_empty() => format!(
+            "{}+custom-{}",
+            df_rules::local_journey::SOURCE_REVISION,
+            &loaded.tuning_revision.to_hex()[..12]
+        ),
+        _ => df_rules::local_journey::SOURCE_REVISION.to_owned(),
+    }
+}
+
+/// Configuration labels contain bounded revision prefixes selected at startup, never credentials.
+pub(super) fn validate_file_revisions(
+    stored: &df_types::RevisionLabel,
+    current: &df_types::RevisionLabel,
+) -> Result<(), std::io::Error> {
+    if stored != current {
+        return Err(std::io::Error::other(format!(
+            "gameplay revision mismatch: stored {}; current {}; start a new database (re-run development/run-gameplay.sh without --database)",
+            stored.as_str(),
+            current.as_str()
+        )));
+    }
+    Ok(())
+}
+
 pub(super) fn pins() -> Result<CheckpointPins, RepositoryError> {
     let digests = source_digests();
+    let loaded = super::pack::active();
+    let custom = loaded
+        .as_ref()
+        .is_some_and(|loaded| !loaded.departures.is_empty());
+    let configuration = loaded.as_ref().map_or_else(
+        || "local-gameplay-demo-config-1".to_owned(),
+        |loaded| {
+            format!(
+                "local-gameplay-demo-config-1:t-{}:p-{}",
+                &loaded.tuning_revision.to_hex()[..16],
+                &loaded.pack_revision.to_hex()[..16]
+            )
+        },
+    );
+    let ruleset = if custom {
+        format!(
+            "custom-{}",
+            &loaded
+                .as_ref()
+                .ok_or(RepositoryError::InvalidCandidate)?
+                .tuning_revision
+                .to_hex()[..12]
+        )
+    } else {
+        "srd521-journey-subset-2".to_owned()
+    };
+    let catalog_digest = loaded.as_ref().map_or(digests.manifest, |loaded| {
+        revision_digest(b"df-tuning-pin/1", digests.manifest, loaded.tuning_revision)
+    });
+    let content_digest = loaded.as_ref().map_or(digests.content, |loaded| {
+        revision_digest(b"df-pack-pin/1", digests.content, loaded.pack_revision)
+    });
     Ok(CheckpointPins {
         rules: RulesPins {
-            mode: RulesMode::Standard2024,
-            ruleset: label("srd521-journey-subset-2")?,
+            mode: if custom {
+                RulesMode::DisclosedCustom
+            } else {
+                RulesMode::Standard2024
+            },
+            ruleset: label(&ruleset)?,
             catalog: label("srd521-journey-subset-2")?,
-            catalog_digest: digests.manifest,
+            catalog_digest,
             source_manifest: label("srd521-creation-combat-rest-reviewed-subset")?,
             source_manifest_digest: digests.manifest,
             handler: label("source-qualified-journey-compiled-3")?,
@@ -144,15 +219,15 @@ pub(super) fn pins() -> Result<CheckpointPins, RepositoryError> {
         },
         content: ContentPins {
             content: label("harbor-investigation-demo-5-threads-1-rest-1-inn-1")?,
-            content_digest: digests.content,
+            content_digest,
             package: label("harbor-investigation-demo-profile6-npc-1")?,
-            package_digest: digests.content,
+            package_digest: content_digest,
         },
         build: BuildIdentity::new(
             Some(crate::BUILD_ID),
             Some(crate::BUILD_ID),
             Some(crate::BUILD_ID),
-            Some("local-gameplay-demo-config-1"),
+            Some(&configuration),
             Some("harbor-investigation-demo-profile6-npc-1"),
         )
         .map_err(invalid)?,
@@ -897,3 +972,83 @@ mod tests {
 
 #[cfg(test)]
 mod diagnostic_tests;
+
+#[cfg(test)]
+mod tuning_pin_tests {
+    use super::super::pack;
+    use super::*;
+    const PACK: &[u8] = include_bytes!("../../../../content/harbor-journey/pack.json");
+    const TUNING: &[u8] = include_bytes!("../../../../content/harbor-journey/tuning.json");
+    #[test]
+    fn identical_files_bind_stable_standard_pins_and_each_byte_edit_changes_its_digest() {
+        let baseline = pins().unwrap();
+        let standard = pack::with_test_pack(pack::load_from_bytes(PACK, TUNING).unwrap(), || {
+            pins().unwrap()
+        });
+        let again = pack::with_test_pack(pack::load_from_bytes(PACK, TUNING).unwrap(), || {
+            pins().unwrap()
+        });
+        assert_eq!(standard, again);
+        assert_eq!(standard.rules.mode, RulesMode::Standard2024);
+        assert_eq!(standard.rules.ruleset, baseline.rules.ruleset);
+        assert_eq!(source_revision(), df_rules::local_journey::SOURCE_REVISION);
+        let tuning_edit = [TUNING, b" "].concat();
+        let changed =
+            pack::with_test_pack(pack::load_from_bytes(PACK, &tuning_edit).unwrap(), || {
+                pins().unwrap()
+            });
+        assert_ne!(changed.rules.catalog_digest, standard.rules.catalog_digest);
+        assert_eq!(changed.content, standard.content);
+        let pack_edit = [PACK, b" "].concat();
+        let changed =
+            pack::with_test_pack(pack::load_from_bytes(&pack_edit, TUNING).unwrap(), || {
+                pins().unwrap()
+            });
+        assert_ne!(
+            changed.content.content_digest,
+            standard.content.content_digest
+        );
+        assert_ne!(
+            changed.content.package_digest,
+            standard.content.package_digest
+        );
+        assert_eq!(changed.rules, standard.rules);
+        let stored = standard
+            .build
+            .revision(df_types::BuildRevision::Configuration);
+        let current = changed
+            .build
+            .revision(df_types::BuildRevision::Configuration);
+        let refusal = validate_file_revisions(stored, current)
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains(stored.as_str()) && refusal.contains(current.as_str()));
+        assert!(refusal.contains("start a new database"));
+        assert!(validate_file_revisions(stored, stored).is_ok());
+    }
+    #[test]
+    fn departures_disclose_custom_rules_in_pins_and_existing_view_source_fields() {
+        let tuning = String::from_utf8(TUNING.to_vec())
+            .unwrap()
+            .replace("\"armor_class\": 17", "\"armor_class\": 15");
+        let loaded = pack::load_from_bytes(PACK, tuning.as_bytes()).unwrap();
+        let suffix = format!("+custom-{}", &loaded.tuning_revision.to_hex()[..12]);
+        pack::with_test_pack(loaded, || {
+            let checkpoint = super::super::journey::initial().unwrap();
+            assert_eq!(checkpoint.pins().rules.mode, RulesMode::DisclosedCustom);
+            assert!(
+                checkpoint
+                    .pins()
+                    .rules
+                    .ruleset
+                    .as_str()
+                    .starts_with("custom-")
+            );
+            assert!(
+                super::super::wire::creation_offer()
+                    .source_revision
+                    .ends_with(&suffix)
+            );
+        });
+    }
+}

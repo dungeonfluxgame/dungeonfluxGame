@@ -513,7 +513,7 @@ fn accepted_rest(
                 && matches!(&fact.value, FactValue::TimeAdvanced { before, after }
                     if before.ticks_per_second != 0
                         && before.ticks_per_second == after.ticks_per_second
-                        && after.ticks.checked_sub(before.ticks) == Some(u64::from(before.ticks_per_second) * 3600)
+                        && after.ticks.checked_sub(before.ticks) == Some(u64::from(before.ticks_per_second) * u64::from(super::pack::rest().short_rest_seconds))
                         && after.ticks_per_second == state.logical_time.ticks_per_second
                         && after.ticks <= state.logical_time.ticks)
         });

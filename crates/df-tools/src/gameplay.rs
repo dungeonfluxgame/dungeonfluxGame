@@ -339,6 +339,46 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         startup_configuration::SessionSettings::qualification()
     };
+    if interactive {
+        let directory = startup_configuration::pack_directory(
+            std::env::var("DF_GAMEPLAY_PACK_DIR"),
+            &std::env::current_dir()?,
+        )?;
+        let loaded = pack::load(&directory).map_err(|error| io::Error::other(error.to_string()))?;
+        println!(
+            "GAMEPLAY PACK directory={} pack={} tuning={} {}",
+            directory.display(),
+            &loaded.pack_revision.to_hex()[..16],
+            &loaded.tuning_revision.to_hex()[..16],
+            if loaded.departures.is_empty() {
+                "standard SRD 5.2.1 values".to_owned()
+            } else {
+                format!("CUSTOM RULES: {}", loaded.departures.join(", "))
+            }
+        );
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        let mut span = df_observe::begin(&context, "gameplay.startup");
+        span.event(
+            "gameplay.pack.loaded",
+            &[
+                (
+                    "game.run",
+                    hex(model::basis()
+                        .map_err(|_| io::Error::other("gameplay run invalid"))?
+                        .run
+                        .as_bytes()),
+                ),
+                ("gameplay.pack_revision", loaded.pack_revision.to_hex()),
+                ("gameplay.tuning_revision", loaded.tuning_revision.to_hex()),
+                ("gameplay.departures", loaded.departures.join(", ")),
+            ],
+        );
+        span.finish_unmeasured("loaded");
+        pack::install(loaded)?;
+    }
     let npc_phase = courier_npc_qualification::phase();
     let npc_budget = npc_phase
         .map(courier_npc_qualification::call_budget)
@@ -380,6 +420,35 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     .await
     .map_err(|_| io::Error::other("grant connect handshake deadline"))??;
     let grant_driver = tokio::spawn(grant_connection);
+    if interactive {
+        let diagnostic = tokio::time::timeout(
+            Duration::from_secs(2),
+            df_persistence::local_demo_scope::stored_startup_configuration(
+                &grant_client,
+                &cold,
+                codec,
+            ),
+        )
+        .await;
+        let checked = match diagnostic {
+            Ok(Ok(Some(stored))) => model::validate_file_revisions(
+                &stored,
+                cold.pins()
+                    .build
+                    .revision(df_types::BuildRevision::Configuration),
+            ),
+            Ok(Ok(None)) => Ok(()),
+            Ok(Err(error)) => Err(io::Error::other(format!(
+                "stored gameplay provenance refused: {error:?}"
+            ))),
+            Err(_) => Err(io::Error::other("stored gameplay provenance deadline")),
+        };
+        if let Err(error) = checked {
+            drop(grant_client);
+            join_grant_driver(grant_driver).await?;
+            return Err(error.into());
+        }
+    }
     let initialization = tokio::time::timeout(
         Duration::from_secs(5),
         df_persistence::local_demo_scope::admit_startup(
@@ -807,7 +876,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     };
     let router = Router::new()
         .route("/gameplay", get(both))
-        .route("/gameplay/player", get(player))
+        .route("/gameplay/player", get(room::player_page))
         .route("/gameplay/display", get(display))
         .route("/gameplay/tunnel", get(socket))
         .route("/pkg/df_tools.js", get(glue))

@@ -100,7 +100,20 @@ PostgreSQL. Open the `display` URL from the server's `READY` line, then open the
 `player` URL in two browser tabs to play both seats. Press Ctrl-C to stop the
 server; the launcher also stops PostgreSQL when it started it. To resume a saved
 game, use `development/run-gameplay.sh --no-build --database <name>` with the
-database name printed by the launcher. For LAN access, set the listen address
+database name printed by the launcher.
+
+Edit `content/harbor-journey/tuning.json` to tune hero AC, proficiency, base HP,
+ability arrays/background bonuses, Second Wind and weapon dice; bandit stats,
+attack/damage and weapon dice; critical threshold, round ticks, combat log depth,
+Short Rest seconds and narrative intervention budget. `pack.json` supplies scene
+text, offer labels, creation options, equipment, room code and the private courier clue.
+Restart to apply changes; re-run without `--database` for a fresh game.
+`DF_GAMEPLAY_PACK_DIR` selects another directory containing both required files.
+The startup line prints both file revisions; departures from SRD values show
+`CUSTOM RULES` there and a `+custom-<revision>` suffix on the in-game rules label.
+Saved games refuse changed revisions; start a new database after editing either file.
+
+For LAN access, set the listen address
 and allowed origin to your machine's IP:
 
 ```sh

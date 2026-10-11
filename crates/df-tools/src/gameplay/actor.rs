@@ -618,12 +618,8 @@ impl Actor {
                                         (choice.group_id.as_str(), choice.option_id.as_str())
                                     })
                                     .collect::<Vec<_>>();
-                                df_rules::local_journey::validate_character(
-                                    &df_rules::local_journey::CreationRules::srd_521(),
-                                    &character.name,
-                                    &selections,
-                                )
-                                .is_err()
+                                super::pack::validate_character(&character.name, &selections)
+                                    .is_err()
                             }))
                     {
                         Some(rpc::RejectionCode::InvalidSelection)

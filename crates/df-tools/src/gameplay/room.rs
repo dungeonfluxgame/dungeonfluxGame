@@ -79,6 +79,19 @@ fn join_lookup_error(
     actor::unavailable(error)
 }
 
+pub(super) fn matches_room_code(code: &str) -> bool {
+    code == super::journey::room_code()
+}
+
+/// The shell remains shared with qualification. Only its validated ASCII room binding changes.
+pub(super) async fn player_page() -> axum::response::Html<String> {
+    let axum::response::Html(body) = super::player().await;
+    axum::response::Html(body.replace(
+        &format!("data-room=\"{}\"", super::journey::ROOM_CODE),
+        &format!("data-room=\"{}\"", super::journey::room_code()),
+    ))
+}
+
 #[cfg(test)]
 mod admission_tests;
 
@@ -151,7 +164,7 @@ impl actor::Actor {
                 })? {
                 LocalRejectedLookup::Accepted => {}
                 LocalRejectedLookup::NotRecorded => {
-                    if request.room_code != journey::ROOM_CODE {
+                    if !matches_room_code(&request.room_code) {
                         return Ok(refused(rpc::RejectionCode::InvalidSelection));
                     }
                     if journey::phase(self.owner.checkpoint()).map_err(actor::unavailable)?

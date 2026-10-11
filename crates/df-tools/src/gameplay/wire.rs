@@ -211,44 +211,74 @@ fn attack_group(id: &str, label: &str, description: &str) -> rpc::JourneyGroup {
     }
 }
 pub(super) fn creation_offer() -> rpc::CharacterCreationOffer {
-    use df_rules::local_journey as rules;
-    let group = |id: &str, label: &str, values: &[(&str, &str, &str)]| rpc::JourneyGroup {
-        group_id: id.to_owned(),
-        label: label.to_owned(),
-        options: values
-            .iter()
-            .map(|(id, label, description)| rpc::JourneyOption {
-                option_id: (*id).to_owned(),
-                label: (*label).to_owned(),
-                description: (*description).to_owned(),
-            })
-            .collect(),
-    };
-    let choice_group = |id: &str, label: &str, values: &[&str]| {
-        group(
-            id,
-            label,
-            &values.iter().map(|id| (*id, *id, "")).collect::<Vec<_>>(),
-        )
-    };
-    rpc::CharacterCreationOffer {description:"Supported adventure builds: Level 1 Dwarf Fighter / Soldier. Choose one option in each group. Other classes and species remain in development; every submitted build is validated on the server.".to_owned(),
-        groups:vec![
-            group("species","Ancestry",&[("dwarf","Dwarf","Dwarven Toughness, Darkvision, Dwarven Resilience and Stonecunning retained.")]),
-            group("class","Class",&[("fighter-1","Fighter · level 1","Weapon training, Fighting Style, Second Wind, three masteries.")]),
-            group("background","Background",&[("soldier","Soldier","Athletics, Intimidation, gaming set and Savage Attacker.")]),
-            group("array","Ability training",&[("stalwart","Stalwart","STR17 DEX13 CON15 INT10 WIS12 CHA8 · Soldier +2STR/+1CON"),
-                ("vanguard","Vanguard","STR17 DEX14 CON14 INT8 WIS10 CHA12 · Soldier +2STR/+1CON")]),
-            choice_group("alignment","Alignment",rules::ALIGNMENTS),
-            choice_group("language-1","First additional language",rules::STANDARD_LANGUAGES),
-            choice_group("language-2","Second additional language",rules::STANDARD_LANGUAGES),
-            choice_group("skill-1","First Fighter skill",rules::FIGHTER_SKILLS),
-            choice_group("skill-2","Second Fighter skill",rules::FIGHTER_SKILLS),
-            choice_group("gaming-set","Gaming set proficiency",rules::GAMING_SETS),
-            group("equipment","Starting equipment",&[("fighter-a-soldier-a","Fighter A + Soldier A","Chain Mail, Greatsword, Flail, 8 Javelins, Dungeoneer's Pack; Spear, Shortbow, 20 arrows, gaming set, Healer's Kit, Quiver, Traveler's Clothes; 18 GP.")]),
-            group("style-masteries","Fighting Style and masteries",&[("defense-greatsword-flail-javelin","Defense · Greatsword / Flail / Javelin","Defense +1 armored AC. Graze / Sap / Slow masteries. This encounter offers Greatsword only.")]),
-            group("allied-ties","Initiative tie agreement",&[("join-order","Party agrees: earlier join acts first","Party ties use join order; the GM chooses allies before the Bandit when tied.")]),
-        ],source_revision:rules::SOURCE_REVISION.to_owned()}
+    use super::pack;
+    pack::with_content(|content| {
+        let mut groups = Vec::new();
+        for group in &content.creation.groups {
+            let options = group
+                .options
+                .iter()
+                .map(|option| rpc::JourneyOption {
+                    option_id: option.id.clone(),
+                    label: option.label.clone(),
+                    description: match &group.description_template {
+                        Some(template) => pack::with_creation(|rules| {
+                            let array = rules
+                                .ability_arrays
+                                .iter()
+                                .find(|array| array.id == option.id)
+                                .expect("validated creation array reference");
+                            pack::render_array_description(
+                                template,
+                                array.scores,
+                                pack::BackgroundBonus {
+                                    strength: rules.background_bonus.strength,
+                                    constitution: rules.background_bonus.constitution,
+                                },
+                            )
+                        }),
+                        None => option.description.clone().unwrap_or_default(),
+                    },
+                })
+                .collect();
+            groups.push(rpc::JourneyGroup {
+                group_id: group.id.clone(),
+                label: group.label.clone(),
+                options,
+            });
+            if group.id == "array" {
+                let lists = &content.creation.pick_lists;
+                for (id, label, values) in [
+                    ("alignment", "Alignment", &lists.alignment),
+                    ("language-1", "First additional language", &lists.language),
+                    ("language-2", "Second additional language", &lists.language),
+                    ("skill-1", "First Fighter skill", &lists.skill),
+                    ("skill-2", "Second Fighter skill", &lists.skill),
+                    ("gaming-set", "Gaming set proficiency", &lists.gaming_set),
+                ] {
+                    groups.push(rpc::JourneyGroup {
+                        group_id: id.to_owned(),
+                        label: label.to_owned(),
+                        options: values
+                            .iter()
+                            .map(|value| rpc::JourneyOption {
+                                option_id: value.clone(),
+                                label: value.clone(),
+                                description: String::new(),
+                            })
+                            .collect(),
+                    });
+                }
+            }
+        }
+        rpc::CharacterCreationOffer {
+            description: content.creation.description.clone(),
+            groups,
+            source_revision: model::source_revision(),
+        }
+    })
 }
+
 fn party_member(
     state: &df_model::checkpoint::GameState,
     who: df_model::checkpoint::EntityId,
@@ -273,9 +303,9 @@ fn party_member(
             0
         },
         maximum_hit_points: if who.as_bytes() == &[0x65; 16] {
-            11
+            u32::from(super::pack::bandit().hit_points)
         } else if ready {
-            13
+            journey::maximum_hit_points(state, who)?
         } else {
             0
         },
@@ -512,7 +542,10 @@ pub(super) fn journey_view(
                 destinations: if kind == rpc::GameplayActionKind::ChooseHarborScene {
                     vec![rpc::HarborSceneOption {
                         destination: rpc::HarborDestination::HarborInn as i32,
-                        label: "Harbor Inn".to_owned(),
+                        label: super::pack::scene(super::pack::SceneKey::Inn)
+                            .title
+                            .trim_start_matches("The ")
+                            .to_owned(),
                     }]
                 } else {
                     Vec::new()
@@ -578,100 +611,64 @@ pub(super) fn journey_view(
             outcomes: outcomes
                 .into_iter()
                 .rev()
-                .take(6)
+                .take(usize::from(super::pack::combat().combat_log_entries))
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
                 .collect(),
             finished: encounter.active_turn.is_none(),
-            source_revision: df_rules::local_journey::SOURCE_REVISION.to_owned(),
+            source_revision: model::source_revision(),
             active_participant_id: encounter
                 .active_turn
                 .map_or_else(Vec::new, |who| who.as_bytes().to_vec()),
         });
     }
-    let (title, narration, speaker, dialogue) = match phase {
-        rpc::JourneyPhase::Room => (
-            "Gather at the Lantern Wharf",
-            "A rain-soaked harbor waits beyond the lanterns. Share the room with your companions, then bring your heroes into the story.",
-            "",
-            "",
-        ),
-        rpc::JourneyPhase::Opening => (
-            "The Broken Seal",
-            "You reach the Lantern Wharf as a frightened courier slips from the shadows. Behind him, a boot scrapes across the boards.",
-            "Courier",
-            "Please. I can't deliver this alone. The seal was broken before the ship reached port.",
-        ),
-        rpc::JourneyPhase::Dialogue => {
-            if state.narrative.active_beats[0].entry.as_str() == "courier-answer-seal" {
-                (
-                    "A Whisper in the Rain",
-                    "The courier presses the packet against his coat. A dockside enforcer approaches, one hand on a scimitar.",
-                    "Courier",
-                    "The crest belongs to a ship that never appears on the ledger. I think someone aboard followed me.",
-                )
-            } else {
-                (
-                    "An Oath at the Wharf",
-                    "The courier steadies himself behind you. The approaching enforcer draws a scimitar and demands the packet.",
-                    "Courier",
-                    "If you help me reach the inn, I'll tell Vell what I saw aboard that ship. But he won't let us leave.",
-                )
-            }
+    use super::pack::{self, SceneKey};
+    let key = match phase {
+        rpc::JourneyPhase::Room => SceneKey::Room,
+        rpc::JourneyPhase::Opening => SceneKey::Opening,
+        rpc::JourneyPhase::Dialogue
+            if state.narrative.active_beats[0].entry.as_str() == "courier-answer-seal" =>
+        {
+            SceneKey::DialogueSeal
         }
-        rpc::JourneyPhase::Combat => (
-            "Steel Beneath the Lanterns",
-            "The Bandit is within 5 feet of both heroes. All weapons are wielded openly: no surprise, cover or movement. This encounter uses nonlethal melee attacks.",
-            "Bandit",
-            "Hand over the packet. Last warning.",
-        ),
+        rpc::JourneyPhase::Dialogue => SceneKey::DialogueEscort,
+        rpc::JourneyPhase::Combat => SceneKey::Combat,
         rpc::JourneyPhase::Complete
             if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] =>
         {
-            (
-                "The Harbor Inn",
-                "Warm lamplight frames the next chapter with your party and the courier. The sealed packet remains unresolved.",
-                "Courier",
-                "We'll keep the packet close. Its journey isn't over.",
-            )
+            SceneKey::Inn
         }
-        rpc::JourneyPhase::Complete => {
-            let rested = state
-                .narrative
-                .completed_beats
-                .contains(&model::content("short-rest-complete")?);
-            if journey::combat_victory(state)? {
-                (
-                    "The Courier's Road",
-                    if rested {
-                        "The Bandit was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Knocked-out creatures are awake with 1 HP, still Prone; their held weapons remain dropped. The original victory and the courier's unresolved journey remain."
-                    } else {
-                        "The Bandit falls unconscious with 1 HP. The courier lowers his shaking hands. The packet—and its secret—remain with your party. His Short Rest has begun; campaign time has not completed it."
-                    },
-                    "Courier",
-                    "You stood your ground. Come on. There's a light waiting for us at the inn.",
-                )
-            } else {
-                (
-                    "A Costly Encounter",
-                    if rested {
-                        "Both heroes were defeated by nonlethal attacks. An uninterrupted hour has passed without Hit Point Dice or healing. They awaken with 1 HP, still Prone, and their held weapons remain dropped. That rest does not change the original defeat: the Bandit took the packet and left."
-                    } else {
-                        "Both heroes are unconscious with 1 HP after nonlethal attacks. Their Short Rests have begun; campaign time has not completed them. The Bandit takes the packet and leaves."
-                    },
-                    "",
-                    "",
-                )
-            }
-        }
+        rpc::JourneyPhase::Complete if journey::combat_victory(state)? => SceneKey::Victory,
+        rpc::JourneyPhase::Complete => SceneKey::Defeat,
         _ => return Err(RepositoryError::InvalidCandidate),
     };
+    let authored = pack::scene(key);
+    let rested = state
+        .narrative
+        .completed_beats
+        .contains(&model::content("short-rest-complete")?);
+    let narration = if rested {
+        authored
+            .narration_rested
+            .as_deref()
+            .unwrap_or(&authored.narration)
+    } else {
+        &authored.narration
+    };
     let narration = match witnessed_courier_support(current, observer, perceived.facts(), &party)? {
-        Some(name) => {
-            format!("{narration} The courier now looks to {name} for support on the escort.")
-        }
+        Some(name) => pack::with_content(|content| {
+            format!(
+                "{narration} {}",
+                content.escort_support_suffix.replace("{name}", &name)
+            )
+        }),
         None => narration.to_owned(),
+    };
+    let narration = if super::pack::active().is_some_and(|loaded| !loaded.departures.is_empty()) {
+        format!("{narration} Custom rules: {}.", model::source_revision())
+    } else {
+        narration
     };
     let journey = rpc::JourneyView {
         phase: if creation.is_some() {
@@ -679,22 +676,22 @@ pub(super) fn journey_view(
         } else {
             phase as i32
         },
-        room_code: journey::ROOM_CODE.to_owned(),
-        join_path: format!("/gameplay/player?room={}", journey::ROOM_CODE),
+        room_code: journey::room_code(),
+        join_path: format!("/gameplay/player?room={}", journey::room_code()),
         party,
         creation,
         own_character: own,
         combat,
-        speaker: speaker.to_owned(),
-        dialogue: dialogue.to_owned(),
+        speaker: authored.speaker,
+        dialogue: authored.dialogue,
     };
     let scene = if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] {
         journey::inn_scene()
     } else {
         rpc::GameplayScene {
             destination: rpc::HarborDestination::Unspecified as i32,
-            title: title.to_owned(),
-            scene_asset: "assets/ui/scenes/mara-harbor-v4.png".to_owned(),
+            title: authored.title,
+            scene_asset: authored.asset,
         }
     };
 

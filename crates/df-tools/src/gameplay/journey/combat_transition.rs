@@ -98,7 +98,7 @@ impl LegalOfferOwner for CurrentPlayerAttack<'_> {
         if candidate.actor != *actor
             || candidate.target != entity(BANDIT)?
             || candidate.weapon != held_weapon_id(*actor)?
-            || candidate.definition != model::content("greatsword")?
+            || candidate.definition != model::content(&super::pack::hero_weapon_item())?
             || candidate.source != rule()?
         {
             return Err(RepositoryError::InvalidCandidate);
@@ -123,7 +123,7 @@ impl LegalOfferOwner for CurrentPlayerAttack<'_> {
         if weapon.definition != candidate.definition
             || weapon.identity_revision != model::label("source-starting-equipment-1")?
             || item.owner != *actor
-            || item.quantity != 1
+            || item.quantity != super::pack::hero_weapon_quantity()
             || item.source != candidate.source
             || item.origin != candidate.definition
             || item.attunement_owner.is_some()
@@ -205,7 +205,7 @@ fn admit(
         actor,
         target: entity(BANDIT)?,
         weapon: held_weapon_id(actor)?,
-        definition: model::content("greatsword")?,
+        definition: model::content(&super::pack::hero_weapon_item())?,
         source: rule()?,
     };
     let basis = current.basis();

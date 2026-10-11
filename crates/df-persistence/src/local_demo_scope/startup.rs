@@ -87,6 +87,56 @@ pub async fn admit_startup(
     }
 }
 
+/// Read only bounded startup provenance after complete schema/catalog admission. The result
+/// diagnoses incompatible files; it never grants an owner lease or supplies recovery authority.
+pub async fn stored_startup_configuration(
+    client: &Client,
+    cold: &Checkpoint,
+    codec: NativeCodecLimits,
+) -> Result<Option<df_types::RevisionLabel>, RepositoryError> {
+    let catalog = client.query_one("SELECT to_regnamespace('df_game') IS NOT NULL, to_regnamespace('df_local_demo') IS NOT NULL", &[]).await.map_err(|_| RepositoryError::Unavailable)?;
+    let game: bool = catalog
+        .try_get(0)
+        .map_err(|_| RepositoryError::InvalidCandidate)?;
+    let local: bool = catalog
+        .try_get(1)
+        .map_err(|_| RepositoryError::InvalidCandidate)?;
+    if classify_catalog(game, local).map_err(|error| error.class)? {
+        return Ok(None);
+    }
+    let maximum =
+        i64::try_from(codec.maximum_document_bytes).map_err(|_| RepositoryError::Capacity)?;
+    let row = client
+        .query_opt(
+            crate::sql::LOAD_CURRENT,
+            &[
+                &TENANT.as_slice(),
+                &cold.basis().session.as_bytes().as_slice(),
+                &maximum,
+            ],
+        )
+        .await
+        .map_err(|_| RepositoryError::Unavailable)?
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    let version: i32 = row
+        .try_get("codec_version")
+        .map_err(|_| RepositoryError::InvalidCandidate)?;
+    let schema: i32 = row
+        .try_get("schema_version")
+        .map_err(|_| RepositoryError::InvalidCandidate)?;
+    if schema != i32::from(df_model::checkpoint::CHECKPOINT_SCHEMA) {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    let bytes: Vec<u8> = row
+        .try_get("complete_envelope")
+        .map_err(|_| RepositoryError::InvalidCandidate)?;
+    crate::checkpoint_codec::validate_storage_format(version, b"DFCP", &bytes)
+        .map_err(|_| RepositoryError::InvalidCandidate)?;
+    crate::checkpoint_codec::decode_checkpoint_configuration(&bytes, codec)
+        .map(Some)
+        .map_err(|_| RepositoryError::InvalidCandidate)
+}
+
 async fn restore(
     tx: &Transaction<'_>,
     cold: &Checkpoint,

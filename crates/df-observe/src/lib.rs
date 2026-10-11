@@ -75,6 +75,16 @@ fn begin_with_tracer(
     }
 }
 impl OperationSpan {
+    /// Attach a structured event with caller-selected safe provenance, never private payloads.
+    pub fn event(&mut self, name: &'static str, attributes: &[(&'static str, String)]) {
+        self.span.add_event(
+            name,
+            attributes
+                .iter()
+                .map(|(key, value)| KeyValue::new(*key, value.clone()))
+                .collect(),
+        );
+    }
     /// Finish exactly once with a safe classification and actual observed byte count.
     pub fn finish(&mut self, status: &str, bytes: usize) {
         self.end(status, Some(bytes));
@@ -249,6 +259,29 @@ mod native {
                 .iter()
                 .find(|attribute| attribute.key.as_str() == name)
                 .map(|attribute| &attribute.value)
+        }
+
+        #[test]
+        fn structured_revision_event_retains_exact_provenance_through_shared_export() {
+            let telemetry = FixtureTelemetry::default();
+            let mut span = telemetry.begin(&context(TRACE_PARENT), "gameplay.startup");
+            let attributes = [
+                ("game.run", "run-42".to_owned()),
+                ("gameplay.pack_revision", "pack-sha".to_owned()),
+                ("gameplay.tuning_revision", "tuning-sha".to_owned()),
+                ("gameplay.departures", "hero.armor_class".to_owned()),
+            ];
+            span.event("gameplay.pack.loaded", &attributes);
+            span.finish_unmeasured("loaded");
+            drop(span);
+            let spans = telemetry.exporter.spans.lock().unwrap();
+            let event = &spans[0].events.events[0];
+            assert_eq!(event.name, "gameplay.pack.loaded");
+            for ((key, value), attribute) in attributes.iter().zip(&event.attributes) {
+                assert_eq!(attribute.key.as_str(), *key);
+                assert_eq!(attribute.value, Value::String(value.clone().into()));
+            }
+            assert_eq!(event.attributes.len(), 4);
         }
 
         #[test]

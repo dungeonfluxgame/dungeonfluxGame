@@ -3,7 +3,9 @@
 //! No production bootstrap, arbitrary scope constructor, or hosted identity is provided.
 mod recovery;
 mod startup;
-pub use startup::{DemoStartup, DemoStartupIdentity, admit_startup, release_owner};
+pub use startup::{
+    DemoStartup, DemoStartupIdentity, admit_startup, release_owner, stored_startup_configuration,
+};
 
 use std::time::Duration;
 
