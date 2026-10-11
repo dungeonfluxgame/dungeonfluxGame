@@ -84,6 +84,18 @@ impl LayoutRoot {
         Ok(())
     }
 
+    /// Applies the caller's presentation preference in place. Reduction is additive:
+    /// false removes this explicit reduction, while the OS preference still applies.
+    /// This changes no child nodes, native control behavior, focus, drafts or game state.
+    pub fn set_reduced_motion(&self, reduce: bool) -> Result<(), UiError> {
+        if reduce {
+            self.root.set_attribute("data-df-reduced-motion", "true")?;
+        } else {
+            self.root.remove_attribute("data-df-reduced-motion")?;
+        }
+        Ok(())
+    }
+
     /// Repeated calls succeed. Child owners dispose resources before removing a layout.
     pub fn unmount(&self) -> Result<(), UiError> {
         if let Some(parent) = self.root.parent_node() {
