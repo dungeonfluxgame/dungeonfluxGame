@@ -243,14 +243,11 @@ impl CharacterPhaseView {
             }
             let mut options = BTreeSet::new();
             for option in &group.options {
-                for text in [
-                    &option.id,
-                    &option.label,
-                    &option.description,
-                    &option.availability,
-                ] {
+                for text in [&option.id, &option.label, &option.availability] {
                     validate_text(text, limits.max_text_bytes, false)?;
                 }
+                // An option may have no description of its own; the card then shows none.
+                validate_text(&option.description, limits.max_text_bytes, true)?;
                 if !options.insert(&option.id) {
                     return Err(CharacterValidationError::DuplicateId);
                 }

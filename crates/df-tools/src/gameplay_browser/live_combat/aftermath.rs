@@ -7,7 +7,8 @@ use crate::gameplay_browser::{Client, feedback, prepare, send};
 use df_protocol::common as rpc;
 use df_ui::{
     AftermathPartyMember, CampfireAction, CampfireMember, CampfireOffer, CampfireSelection,
-    CampfireSurface, CampfireView, EncounterAftermathSurface, EncounterAftermathView,
+    CampfireSurface, CampfireView, CombatHitPoints, EncounterAftermathSurface,
+    EncounterAftermathView,
 };
 use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::JsValue;
@@ -33,15 +34,6 @@ fn condition(member: &rpc::PartyMemberView) -> &'static str {
     } else {
         "Awake"
     }
-}
-
-fn hit_points(member: &rpc::PartyMemberView) -> String {
-    format!(
-        "HP {} / {} · {}",
-        member.hit_points,
-        member.maximum_hit_points,
-        condition(member)
-    )
 }
 
 /// "Victory" when the server projects the courier's closing line, which only the won encounter
@@ -85,18 +77,24 @@ pub(super) fn present_display(
         .enumerate()
         .map(|(index, member)| member_key(index, member))
         .collect();
-    let summaries: Vec<String> = view.journey.party.iter().map(hit_points).collect();
     let party: Vec<AftermathPartyMember<'_>> = view
         .journey
         .party
         .iter()
-        .zip(keys.iter().zip(&summaries))
-        .map(|(member, (key, summary))| AftermathPartyMember {
+        .zip(&keys)
+        .enumerate()
+        .map(|(index, (member, key))| AftermathPartyMember {
             key,
             name: &member.name,
-            summary,
+            summary: condition(member),
+            hit_points: (member.maximum_hit_points > 0).then_some(CombatHitPoints {
+                current: member.hit_points,
+                maximum: member.maximum_hit_points,
+            }),
+            portrait: Some(if index == 0 { "hero-1" } else { "hero-2" }),
         })
         .collect();
+    host.set_attribute("data-outcome", &outcome_word(view).to_lowercase())?;
     let aftermath = EncounterAftermathView {
         generation: revision.epoch().get(),
         revision: presentation.sequence(),
@@ -107,7 +105,7 @@ pub(super) fn present_display(
         party: &party,
         next_heading: "What happens next",
         next_context: "Each player chooses for their hero on their own device.",
-        next_empty: "The party is deciding whether to rest or move on.",
+        next_empty: "The party decides: rest or move on.",
         next_scene: None,
         feedback: None,
     };

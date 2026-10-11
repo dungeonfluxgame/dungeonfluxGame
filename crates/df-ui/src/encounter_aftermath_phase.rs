@@ -7,6 +7,11 @@ pub struct AftermathPartyMember<'a> {
     pub key: &'a str,
     pub name: &'a str,
     pub summary: &'a str,
+    /// Optional hit-point bar on the member card (ratio only; the numbers are shown as given).
+    pub hit_points: Option<crate::CombatHitPoints>,
+    /// Optional short ASCII token (letters, digits, `-`) published as `data-portrait` so an
+    /// owner stylesheet can attach portrait art; the member's initial is the fallback.
+    pub portrait: Option<&'a str>,
 }
 
 #[derive(Clone, Copy)]
@@ -104,6 +109,15 @@ impl EncounterAftermathView<'_> {
             text(member.key, 128)?;
             text(member.name, 256)?;
             text(member.summary, 2048)?;
+            if let Some(portrait) = member.portrait
+                && (portrait.is_empty()
+                    || portrait.len() > 32
+                    || !portrait
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+            {
+                return Err(AftermathValidationError::EmptyText);
+            }
             if !keys.insert(member.key) {
                 return Err(AftermathValidationError::DuplicateMember);
             }
@@ -129,7 +143,7 @@ mod browser {
 
     const STYLES: &str = r#"
 .df-aftermath{position:relative;isolation:isolate;min-height:100svh;box-sizing:border-box;container-type:inline-size;padding:clamp(22px,4vw,64px);color:#f3e8d3;background:linear-gradient(180deg,#11171375,#111713ed 65%,#111713),url('assets/concept-art/combat-harbor-docks-wide-lanterns.webp') center 38%/cover,#111713;font:16px/1.65 Georgia,serif}
-.df-aftermath *{box-sizing:border-box;min-width:0;overflow-wrap:anywhere}.df-aftermath [hidden]{display:none!important}.df-aftermath .aftermath-story{max-width:760px;margin:clamp(50px,16svh,170px) auto 34px}.df-aftermath .aftermath-chapter{margin:0 0 16px;font:11px/1.6 system-ui,sans-serif;letter-spacing:2px;text-transform:uppercase;color:#edcb8d}.df-aftermath h1{font-size:clamp(36px,5vw,68px);line-height:1.06;font-weight:400;letter-spacing:-1px;margin:0 0 23px;text-wrap:balance;text-shadow:0 3px 25px #000}.df-aftermath .aftermath-narrative{font-size:20px;line-height:1.75;margin:0;color:#eee2ca;text-shadow:0 2px 10px #000}.df-aftermath .aftermath-lower{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:24px;max-width:1000px;margin:auto}.df-aftermath .aftermath-panel{padding:24px;border:1px solid #c8a76b66;border-radius:8px;background:linear-gradient(135deg,#242b22f2,#151d17ef);box-shadow:0 16px 45px #0004}.df-aftermath h2{font-size:24px;font-weight:400;color:#ecd19f;margin:0 0 17px}.df-aftermath .aftermath-party{list-style:none;padding:0;margin:0}.df-aftermath .aftermath-member{padding:12px 0;border-top:1px solid #b69b663d}.df-aftermath .aftermath-member:first-child{border-top:0;padding-top:0}.df-aftermath h3{font-size:19px;font-weight:400;margin:0 0 3px}.df-aftermath .aftermath-member p,.df-aftermath .aftermath-next-context{font:13px/1.7 system-ui,sans-serif;color:#d7cbb3;margin:0}.df-aftermath button{width:100%;min-height:48px;margin-top:20px;padding:12px 16px;border:1px solid #f0d195;border-radius:5px;background:linear-gradient(135deg,#efd3a0,#c6a15f);color:#211b11;font:600 14px/1.5 system-ui,sans-serif;cursor:pointer;touch-action:manipulation}.df-aftermath button:hover:enabled{background:#f5dcad}.df-aftermath button:disabled{color:#bdb49e;background:#20271f;border-color:#777d6459;cursor:default}.df-aftermath button[aria-busy=true]{border-style:dashed;color:#efd3a0;background:#313728;cursor:wait}.df-aftermath :focus-visible{outline:3px solid #ffe0a3;outline-offset:4px}.df-aftermath .aftermath-empty,.df-aftermath .aftermath-feedback{font:13px/1.7 system-ui,sans-serif;color:#ebcf9d;margin:14px 0 0}.df-aftermath .aftermath-feedback:empty{display:none}
+.df-aftermath *{box-sizing:border-box;min-width:0;overflow-wrap:anywhere}.df-aftermath [hidden]{display:none!important}.df-aftermath .aftermath-story{max-width:760px;margin:clamp(50px,16svh,170px) auto 34px}.df-aftermath .aftermath-chapter{margin:0 0 16px;font:11px/1.6 system-ui,sans-serif;letter-spacing:2px;text-transform:uppercase;color:#edcb8d}.df-aftermath h1{font-size:clamp(36px,5vw,68px);line-height:1.06;font-weight:400;letter-spacing:-1px;margin:0 0 23px;text-wrap:balance;text-shadow:0 3px 25px #000}.df-aftermath .aftermath-narrative{font-size:20px;line-height:1.75;margin:0;color:#eee2ca;text-shadow:0 2px 10px #000}.df-aftermath .aftermath-lower{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:24px;max-width:1000px;margin:auto}.df-aftermath .aftermath-panel{padding:24px;border:1px solid #c8a76b66;border-radius:8px;background:linear-gradient(135deg,#242b22f2,#151d17ef);box-shadow:0 16px 45px #0004}.df-aftermath h2{font-size:24px;font-weight:400;color:#ecd19f;margin:0 0 17px}.df-aftermath .aftermath-party{list-style:none;padding:0;margin:0}.df-aftermath .aftermath-member{display:flex;gap:14px;align-items:center;padding:12px 0;border-top:1px solid #b69b663d}.df-aftermath .aftermath-member-body{flex:1}.df-aftermath .aftermath-portrait{position:relative;flex:none;overflow:hidden;display:grid;place-items:center;width:56px;height:56px;border-radius:50%;border:2px solid #cba466b3;background:#162230;color:#e3c68f;font-size:24px}.df-aftermath .aftermath-hp{position:relative;height:16px;margin-top:6px;border:1px solid #d9b77a59;border-radius:8px;background:#0a0e0b;overflow:hidden}.df-aftermath .aftermath-hp-fill{position:absolute;inset:0 auto 0 0;width:var(--hp,0%);background:linear-gradient(90deg,#3f8553,#8fd18d)}.df-aftermath .aftermath-hp[data-state=low] .aftermath-hp-fill{background:linear-gradient(90deg,#92392a,#e0784f)}.df-aftermath .aftermath-hp-text{position:relative;display:block;text-align:center;font:700 11px/16px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px #000}.df-aftermath .aftermath-member:first-child{border-top:0;padding-top:0}.df-aftermath h3{font-size:19px;font-weight:400;margin:0 0 3px}.df-aftermath .aftermath-member p,.df-aftermath .aftermath-next-context{font:13px/1.7 system-ui,sans-serif;color:#d7cbb3;margin:0}.df-aftermath button{width:100%;min-height:48px;margin-top:20px;padding:12px 16px;border:1px solid #f0d195;border-radius:5px;background:linear-gradient(135deg,#efd3a0,#c6a15f);color:#211b11;font:600 14px/1.5 system-ui,sans-serif;cursor:pointer;touch-action:manipulation}.df-aftermath button:hover:enabled{background:#f5dcad}.df-aftermath button:disabled{color:#bdb49e;background:#20271f;border-color:#777d6459;cursor:default}.df-aftermath button[aria-busy=true]{border-style:dashed;color:#efd3a0;background:#313728;cursor:wait}.df-aftermath :focus-visible{outline:3px solid #ffe0a3;outline-offset:4px}.df-aftermath .aftermath-empty,.df-aftermath .aftermath-feedback{font:13px/1.7 system-ui,sans-serif;color:#ebcf9d;margin:14px 0 0}.df-aftermath .aftermath-feedback:empty{display:none}
 @container(max-width:600px){.df-aftermath .aftermath-lower{grid-template-columns:1fr;gap:16px}.df-aftermath .aftermath-story{margin-top:55px}.df-aftermath h1{font-size:37px}.df-aftermath .aftermath-narrative{font-size:16px}.df-aftermath .aftermath-panel{padding:19px}}
 @media(prefers-reduced-motion:reduce){.df-aftermath *{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 "#;
@@ -176,8 +190,11 @@ mod browser {
     }
     struct MemberNodes {
         root: Element,
+        portrait: Element,
         name: Element,
         summary: Element,
+        hit_points: Element,
+        hit_points_text: Element,
     }
     pub struct EncounterAftermathSurface {
         document: Document,
@@ -395,17 +412,77 @@ mod browser {
                 {
                     let root = self.document.create_element("li")?;
                     root.set_class_name("aftermath-member");
-                    let name = child(&self.document, &root, "h3", "")?;
-                    let summary = child(&self.document, &root, "p", "")?;
+                    let portrait = child(&self.document, &root, "span", "aftermath-portrait")?;
+                    let body = child(&self.document, &root, "div", "aftermath-member-body")?;
+                    let name = child(&self.document, &body, "h3", "")?;
+                    let summary = child(&self.document, &body, "p", "")?;
+                    let hit_points = child(&self.document, &body, "div", "aftermath-hp")?;
+                    hit_points.set_attribute("role", "meter")?;
+                    hit_points.set_attribute("aria-label", "Hit points")?;
+                    child(&self.document, &hit_points, "span", "aftermath-hp-fill")?;
+                    let hit_points_text =
+                        child(&self.document, &hit_points, "span", "aftermath-hp-text")?;
                     entry.insert(MemberNodes {
                         root,
+                        portrait,
                         name,
                         summary,
+                        hit_points,
+                        hit_points_text,
                     });
                 }
                 if let Some(nodes) = members.get(member.key) {
                     set_text(&nodes.name, member.name);
                     set_text(&nodes.summary, member.summary);
+                    set_text(
+                        &nodes.portrait,
+                        &member
+                            .name
+                            .chars()
+                            .next()
+                            .map(|initial| initial.to_uppercase().collect::<String>())
+                            .unwrap_or_default(),
+                    );
+                    match member.portrait {
+                        Some(portrait) => nodes.root.set_attribute("data-portrait", portrait)?,
+                        None => nodes.root.remove_attribute("data-portrait")?,
+                    }
+                    match member.hit_points {
+                        Some(points) => {
+                            nodes.hit_points.remove_attribute("hidden")?;
+                            // Presentation ratio only; the supplied numbers are shown unchanged.
+                            let percent = if points.maximum == 0 {
+                                0
+                            } else {
+                                u64::from(points.current.min(points.maximum)) * 100
+                                    / u64::from(points.maximum)
+                            };
+                            nodes
+                                .hit_points
+                                .set_attribute("style", &format!("--hp:{percent}%"))?;
+                            nodes.hit_points.set_attribute(
+                                "data-state",
+                                if points.current == 0 {
+                                    "down"
+                                } else if percent <= 35 {
+                                    "low"
+                                } else {
+                                    "healthy"
+                                },
+                            )?;
+                            nodes
+                                .hit_points
+                                .set_attribute("aria-valuenow", &points.current.to_string())?;
+                            nodes
+                                .hit_points
+                                .set_attribute("aria-valuemax", &points.maximum.to_string())?;
+                            set_text(
+                                &nodes.hit_points_text,
+                                &format!("{} / {} HP", points.current, points.maximum),
+                            );
+                        }
+                        None => nodes.hit_points.set_attribute("hidden", "")?,
+                    }
                     let mut before = self.party_root.first_child();
                     for _ in 0..position {
                         before = before.and_then(|node| node.next_sibling());

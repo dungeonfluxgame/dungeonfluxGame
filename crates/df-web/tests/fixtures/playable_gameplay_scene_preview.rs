@@ -155,6 +155,8 @@ mod browser {
         key: "mara",
         name: "Mara",
         summary: "Watching the lanterns along the road inland.",
+        hit_points: None,
+        portrait: None,
     }];
     const PUBLIC_CAMP: [CampfireMember<'static>; 1] = [CampfireMember {
         key: "mara",

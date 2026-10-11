@@ -878,7 +878,7 @@ fn creation(
         editable,name:String::new(),flavor:String::new(),appearance:None,portrait:None,
         groups:offer.groups.iter().map(|group|CharacterGroup {id:group.group_id.clone(),label:group.label.clone(),
             description:"Choose one offered option.".to_owned(),selected:None,options:group.options.iter().map(|option|CharacterOption {
-                id:option.option_id.clone(),label:option.label.clone(),description:if option.description.trim().is_empty() {option.label.clone()} else {option.description.clone()},
+                id:option.option_id.clone(),label:live_combat::display_label(&option.label),description:option.description.clone(),
                 enabled:true,availability:"Available in this room".to_owned(),portrait:None,
             }).collect()}).collect(),
         facts:vec![CharacterFact {label:"Supported rules".to_owned(),value:offer.source_revision.clone()}],

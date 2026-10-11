@@ -80,6 +80,37 @@ impl Live {
     }
 }
 
+/// An option label for people: ids such as `common-sign` read as "Common Sign". Labels that
+/// already carry capitals are left alone. Presentation only; submitted values stay the ids.
+pub(super) fn display_label(label: &str) -> String {
+    if label.chars().any(char::is_uppercase) {
+        return label.to_owned();
+    }
+    label
+        .split(['-', ' '])
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut letters = word.chars();
+            letters.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(letters).collect()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The marker the server appends to narration when the rules are customised.
+const RULES_MARKER: &str = "Custom rules:";
+
+/// Narration without a trailing custom-rules label, and whether the label was present. The
+/// long label is never shown; a small badge stands in for it.
+fn split_rules_marker(text: &str) -> (&str, bool) {
+    match text.find(RULES_MARKER) {
+        Some(index) => (text[..index].trim_end(), true),
+        None => (text, false),
+    }
+}
+
 /// The accepted view parts a live screen presents.
 pub(super) struct LiveView<'a> {
     pub(super) surface: &'a Element,
@@ -294,11 +325,44 @@ fn mount_chrome(
     recovery(client, &extras)
 }
 
+/// A small gold badge for customised rules: top-right on the display, under the hero header on
+/// a phone.
+fn mount_rules_badge(
+    client: &Rc<RefCell<Client>>,
+    host: &Element,
+    custom: bool,
+) -> Result<(), JsValue> {
+    if let Some(previous) = host.query_selector(":scope > .live-rules-badge")? {
+        previous.remove();
+    }
+    if !custom {
+        return Ok(());
+    }
+    let document = client.borrow().document.clone();
+    let badge = node(&document, host, "div", "live-rules-badge", "Custom rules")?;
+    let after = host
+        .query_selector(":scope > .live-hero-head")?
+        .and_then(|head| head.next_sibling());
+    if let Some(after) = after {
+        host.insert_before(&badge, Some(&after))?;
+    }
+    Ok(())
+}
+
 /// Presents combat or the aftermath when the accepted view is one. Returns false for every
 /// other view, which the other renderers show.
 pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Result<bool, JsValue> {
     let Some(screen) = classify(view) else {
         return Ok(false);
+    };
+    let (narration, custom_rules) = split_rules_marker(view.narration);
+    let view = &LiveView {
+        narration: if narration.is_empty() {
+            &view.scene.title
+        } else {
+            narration
+        },
+        ..*view
     };
     let host = ensure_host(client, view.surface, screen)?;
     let player = client.borrow().role == "player";
@@ -308,6 +372,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
         (Screen::Aftermath, true) => aftermath::present_rest(client, &host, view)?,
     }
     mount_chrome(client, &host, view)?;
+    mount_rules_badge(client, &host, custom_rules)?;
     Ok(true)
 }
 

@@ -55,6 +55,7 @@ struct RollText {
     verdict: (&'static str, CombatTone),
 }
 struct Text {
+    keyart: Option<&'static str>,
     title: String,
     narration: String,
     connection: &'static str,
@@ -288,7 +289,12 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         .as_ref()
         .is_some_and(|own| Some(own.name.as_str()) == active_name);
     let blocked = state.busy || (state.last_request.is_some() && !state.last_confirmed);
+    let keyart = active
+        .as_deref()
+        .and_then(|key| actors.iter().find(|actor| actor.key == key))
+        .map(|actor| actor.portrait);
     Ok(Text {
+        keyart,
         title: view.scene.title.clone(),
         narration: view.narration.to_owned(),
         connection: if state.connection.is_some() {
@@ -389,7 +395,7 @@ fn with_view<T>(text: &Text, operation: impl FnOnce(&CombatPhaseView<'_>) -> T) 
         action_empty: &text.action_empty,
         offers: &offers,
         roll_heading: "Latest roll",
-        roll_empty: "No attack rolled yet. The first result appears here.",
+        roll_empty: "Waiting for the first strike…",
         rolls: &rolls,
         reaction: None,
         draft: None,
@@ -447,6 +453,7 @@ pub(super) fn present(
     if let Some(surface) = mounted {
         with_view(&text, |view| surface.update(binding, presentation, view))
             .map_err(|_| render_error(client, "combat-update"))?;
+        publish_keyart(&document, surface.root(), text.keyart)?;
         return Ok(());
     }
     let surface = with_view(&text, |view| {
@@ -468,9 +475,36 @@ pub(super) fn present(
             }
         })
         .map_err(|_| render_error(client, "combat-intent"))?;
+    publish_keyart(&document, surface.root(), text.keyart)?;
     host.insert_before(surface.root(), host.first_child().as_ref())?;
     client.borrow_mut().combat.mounted = Some(Mounted::Combat(Rc::new(surface)));
     Ok(())
+}
+
+/// The active combatant's large portrait, shown by the shared display's layout. It is an extra
+/// child of the surface root, which the surface never touches.
+fn publish_keyart(
+    document: &web_sys::Document,
+    root: &Element,
+    portrait: Option<&str>,
+) -> Result<(), JsValue> {
+    let art = match root.query_selector(":scope > .live-keyart")? {
+        Some(art) => art,
+        None => {
+            let art = document.create_element("div")?;
+            art.set_class_name("live-keyart");
+            art.set_attribute("aria-hidden", "true")?;
+            root.append_child(&art)?;
+            art
+        }
+    };
+    match portrait {
+        Some(portrait) => {
+            art.set_attribute("data-portrait", portrait)?;
+            art.remove_attribute("hidden")
+        }
+        None => art.set_attribute("hidden", ""),
+    }
 }
 
 /// A choice flips only this screen's own draft; an action submits through the existing path.
