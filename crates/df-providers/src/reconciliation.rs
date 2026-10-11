@@ -131,15 +131,96 @@ pub enum ReconciliationInput<'a> {
 /// Describes lookup and submission idempotency separately for one route.
 pub const fn reconciliation_capability(route: CandidateRouteId) -> ReconciliationCapability {
     let lookup = match route {
-        CandidateRouteId::ElevenFlashV25Tts | CandidateRouteId::OpenAiResponsesText => {
-            ReconciliationLookup::ResponseMetadataOnly
-        }
+        CandidateRouteId::ElevenFlashV25Tts
+        | CandidateRouteId::OpenAiResponsesText
+        | CandidateRouteId::ElevenScribeV2Stt => ReconciliationLookup::ResponseMetadataOnly,
         CandidateRouteId::FalFluxSchnellDisposableImage => ReconciliationLookup::CapturedRequestId,
     };
     ReconciliationCapability {
         lookup,
         submission_idempotency_documented: false,
     }
+}
+
+/// Applies an actual native STT observation to its exact full original binding.
+/// The canonical classifier owns outcome/liability policy; supplier meters never
+/// establish verified billing. Source/rights/locale/profile substitutions refuse.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn reconcile_stt_attempt<Receipt, Refusal, Failure>(
+    request: &CheckedRequest<crate::ElevenSttBasis>,
+    attempt: &ProviderAttemptIdentity,
+    owner: RequestOwnerState<'_, crate::ElevenSttBasis>,
+    observation: &crate::NativeSpeechObservation,
+    billing: ProviderBillingClass,
+    settlement: &BudgetMutation<Receipt, Refusal, Failure>,
+    policy: ProviderRetryPolicy,
+) -> Result<ProviderOutcomeDecision, ProviderOutcomeError> {
+    let matched = observation.matches_stt(request);
+    reconcile_native_speech(
+        request,
+        attempt,
+        owner,
+        (observation, matched),
+        billing,
+        settlement,
+        policy,
+    )
+}
+
+/// Encoded speech completion follows the same canonical policy and complete
+/// immutable binding fence as transcription. It grants no decoder/playback rights.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn reconcile_speech_attempt<Receipt, Refusal, Failure>(
+    request: &CheckedRequest<crate::ElevenSpeechBasis>,
+    attempt: &ProviderAttemptIdentity,
+    owner: RequestOwnerState<'_, crate::ElevenSpeechBasis>,
+    observation: &crate::NativeSpeechObservation,
+    billing: ProviderBillingClass,
+    settlement: &BudgetMutation<Receipt, Refusal, Failure>,
+    policy: ProviderRetryPolicy,
+) -> Result<ProviderOutcomeDecision, ProviderOutcomeError> {
+    let matched = observation.matches_speech(request);
+    reconcile_native_speech(
+        request,
+        attempt,
+        owner,
+        (observation, matched),
+        billing,
+        settlement,
+        policy,
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn reconcile_native_speech<Semantic: Eq, Receipt, Refusal, Failure>(
+    request: &CheckedRequest<Semantic>,
+    attempt: &ProviderAttemptIdentity,
+    owner: RequestOwnerState<'_, Semantic>,
+    observed: (&crate::NativeSpeechObservation, bool),
+    billing: ProviderBillingClass,
+    settlement: &BudgetMutation<Receipt, Refusal, Failure>,
+    policy: ProviderRetryPolicy,
+) -> Result<ProviderOutcomeDecision, ProviderOutcomeError> {
+    let (observation, matched) = observed;
+    let complete = matched
+        && attempt.route == observation.route
+        && attempt.operation == observation.identity.operation
+        && attempt.supplier_request_id.as_ref() == observation.metadata().request_id();
+    classify_provider_outcome(
+        request,
+        owner,
+        ProviderAttemptObservation {
+            operation: attempt.operation,
+            result: if complete {
+                ProviderResultClass::Complete
+            } else {
+                ProviderResultClass::Incomplete
+            },
+            billing,
+        },
+        settlement,
+        policy,
+    )
 }
 
 /// Applies supplier result facts through the canonical provider outcome policy.

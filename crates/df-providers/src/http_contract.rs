@@ -45,6 +45,24 @@ pub struct HttpRequest {
 
 impl HttpRequest {
     #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn elevenlabs_native(
+        endpoint: &str,
+        credential: &str,
+        content_type: String,
+        body: Vec<u8>,
+    ) -> Self {
+        Self {
+            method: HttpMethod::Post,
+            url: endpoint.to_owned(),
+            headers: vec![
+                ("xi-api-key", credential.to_owned()),
+                ("Content-Type", content_type),
+            ],
+            body,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn headers(&self) -> &[(&'static str, String)] {
         &self.headers
     }
@@ -87,7 +105,7 @@ impl fmt::Debug for HttpRequest {
         formatter
             .debug_struct("HttpRequest")
             .field("method", &self.method)
-            .field("url", &self.url)
+            .field("url", &"[REDACTED]")
             .field("headers", &"[REDACTED]")
             .field("body", &"[REDACTED]")
             .finish()
@@ -568,7 +586,7 @@ fn nonempty_header(value: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn encode_path_segment(value: &str) -> String {
+pub(crate) fn encode_path_segment(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {

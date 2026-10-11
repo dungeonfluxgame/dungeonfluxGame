@@ -8,6 +8,18 @@ pub enum CandidateRouteId {
     ElevenFlashV25Tts,
     FalFluxSchnellDisposableImage,
     OpenAiResponsesText,
+    ElevenScribeV2Stt,
+}
+
+/// Explicit source-qualified speech route factory, separate from the dated
+/// two-candidate pricing record. It does not admit account rights or spend.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn registered_speech_provider(
+    route: CandidateRouteId,
+    credential: &str,
+    limits: crate::NativeHttpLimits,
+) -> Result<crate::NativeSpeechProvider, crate::SpeechAdapterError> {
+    crate::NativeSpeechProvider::new(route, credential, limits)
 }
 
 /// Constructs the actual native Responses adapter from explicit caller configuration.

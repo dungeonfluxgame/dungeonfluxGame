@@ -263,7 +263,7 @@ fn fal_images_require_same_request_completion_and_valid_media_metadata() {
         Err(HttpRequestError::ResultBeforeCompletion)
     );
     assert_eq!(
-        validate_fal_images(&completed, &request_id, &[image.clone()]),
+        validate_fal_images(&completed, &request_id, std::slice::from_ref(&image)),
         Ok(())
     );
     assert_eq!(

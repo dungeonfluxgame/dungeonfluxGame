@@ -57,11 +57,29 @@ pub(crate) struct NativeHttpResponse {
     pub status: u16,
     pub body: Vec<u8>,
     pub transport_request_id: Option<ProviderRequestId>,
+    pub metadata: NativeHttpMetadata,
 }
 
 pub(crate) struct NativeHttpFailure {
     pub reason: NativeHttpRefusal,
     pub transport_request_id: Option<ProviderRequestId>,
+    pub metadata: Box<NativeHttpMetadata>,
+}
+
+/// Retained supplier facts, never billing or resend authority.
+#[derive(Clone, Default)]
+pub(crate) struct NativeHttpMetadata {
+    pub request_id: Option<ProviderRequestId>,
+    pub transport_request_id: Option<ProviderRequestId>,
+    pub trace_id: Option<String>,
+    pub character_cost: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum NativeResponseProfile {
+    Json,
+    ElevenJson,
+    AudioMpeg,
 }
 
 impl NativeHttp {
@@ -113,13 +131,36 @@ impl NativeHttp {
         remaining_deadline: Duration,
         cancellation: impl Future<Output = ()>,
     ) -> Result<NativeHttpResponse, NativeHttpFailure> {
-        let mut captured_id = None;
+        self.execute_profile(
+            request,
+            remaining_deadline,
+            cancellation,
+            NativeResponseProfile::Json,
+        )
+        .await
+    }
+
+    pub(crate) async fn execute_profile(
+        &self,
+        request: HttpRequest,
+        remaining_deadline: Duration,
+        cancellation: impl Future<Output = ()>,
+        profile: NativeResponseProfile,
+    ) -> Result<NativeHttpResponse, NativeHttpFailure> {
+        let mut captured = NativeHttpMetadata::default();
         let result = self
-            .execute_owned(request, remaining_deadline, cancellation, &mut captured_id)
+            .execute_owned(
+                request,
+                remaining_deadline,
+                cancellation,
+                profile,
+                &mut captured,
+            )
             .await;
         result.map_err(|reason| NativeHttpFailure {
             reason,
-            transport_request_id: captured_id,
+            transport_request_id: captured.transport_request_id.clone(),
+            metadata: Box::new(captured),
         })
     }
 
@@ -128,7 +169,8 @@ impl NativeHttp {
         request: HttpRequest,
         remaining_deadline: Duration,
         cancellation: impl Future<Output = ()>,
-        captured_id: &mut Option<ProviderRequestId>,
+        profile: NativeResponseProfile,
+        captured: &mut NativeHttpMetadata,
     ) -> Result<NativeHttpResponse, NativeHttpRefusal> {
         if request.body().len() > self.limits.maximum_request_bytes {
             return Err(NativeHttpRefusal::RequestTooLarge);
@@ -142,7 +184,7 @@ impl NativeHttp {
         tokio::select! {
             biased;
             () = cancellation => Err(NativeHttpRefusal::Cancelled),
-            result = tokio::time::timeout(duration, self.send_and_read(request, captured_id)) => {
+            result = tokio::time::timeout(duration, self.send_and_read(request, profile, captured)) => {
                 result.map_err(|_| NativeHttpRefusal::Deadline)?
             }
         }
@@ -151,7 +193,8 @@ impl NativeHttp {
     async fn send_and_read(
         &self,
         request: HttpRequest,
-        captured_id: &mut Option<ProviderRequestId>,
+        profile: NativeResponseProfile,
+        captured: &mut NativeHttpMetadata,
     ) -> Result<NativeHttpResponse, NativeHttpRefusal> {
         let method = match request.method() {
             HttpMethod::Get => reqwest::Method::GET,
@@ -165,13 +208,48 @@ impl NativeHttp {
             builder = builder.header(*name, value);
         }
         let mut response = builder.send().await.map_err(classify_transport_error)?;
-        if let Some(value) = response.headers().get("x-request-id") {
-            let value = value.to_str().map_err(|_| NativeHttpRefusal::Unknown)?;
-            if value.len() > 256 {
-                return Err(NativeHttpRefusal::HeadersTooLarge);
+        if matches!(profile, NativeResponseProfile::Json) {
+            // Preserve the existing Responses transport's selected-header contract.
+            if let Some(value) = response.headers().get("x-request-id") {
+                let value = value.to_str().map_err(|_| NativeHttpRefusal::Unknown)?;
+                if value.len() > 256 {
+                    return Err(NativeHttpRefusal::HeadersTooLarge);
+                }
+                captured.transport_request_id =
+                    Some(ProviderRequestId::new(value).map_err(|_| NativeHttpRefusal::Unknown)?);
             }
-            *captured_id =
-                Some(ProviderRequestId::new(value).map_err(|_| NativeHttpRefusal::Unknown)?);
+        } else {
+            for name in ["x-request-id", "request-id", "x-trace-id", "character-cost"] {
+                let mut values = response.headers().get_all(name).iter();
+                if let Some(value) = values.next() {
+                    if values.next().is_some() {
+                        return Err(NativeHttpRefusal::HeadersTooLarge);
+                    }
+                    let value = value.to_str().map_err(|_| NativeHttpRefusal::Unknown)?;
+                    if value.is_empty()
+                        || value.len() > 256
+                        || !value.bytes().all(|b| (0x21..=0x7e).contains(&b))
+                    {
+                        return Err(NativeHttpRefusal::HeadersTooLarge);
+                    }
+                    match name {
+                        "x-request-id" => {
+                            captured.transport_request_id = Some(
+                                ProviderRequestId::new(value)
+                                    .map_err(|_| NativeHttpRefusal::Unknown)?,
+                            )
+                        }
+                        "request-id" => {
+                            captured.request_id = Some(
+                                ProviderRequestId::new(value)
+                                    .map_err(|_| NativeHttpRefusal::Unknown)?,
+                            )
+                        }
+                        "x-trace-id" => captured.trace_id = Some(value.to_owned()),
+                        _ => captured.character_cost = Some(value.to_owned()),
+                    }
+                }
+            }
         }
         let status = response.status().as_u16();
         if response.status().is_redirection() {
@@ -195,11 +273,15 @@ impl NativeHttp {
             .next()
             .and_then(|value| value.to_str().ok())
             .ok_or(NativeHttpRefusal::ContentType)?;
+        let expected_type = match (profile, status) {
+            (NativeResponseProfile::AudioMpeg, 200) => "audio/mpeg",
+            _ => "application/json",
+        };
         if content_types.next().is_some()
             || !content_type
                 .split(';')
                 .next()
-                .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
+                .is_some_and(|media| media.trim().eq_ignore_ascii_case(expected_type))
         {
             return Err(NativeHttpRefusal::ContentType);
         }
@@ -231,7 +313,8 @@ impl NativeHttp {
         Ok(NativeHttpResponse {
             status,
             body,
-            transport_request_id: captured_id.clone(),
+            transport_request_id: captured.transport_request_id.clone(),
+            metadata: captured.clone(),
         })
     }
 }
