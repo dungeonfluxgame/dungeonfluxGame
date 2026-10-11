@@ -1,5 +1,5 @@
-//! Source-owned environmental proposals through the registered rules/session boundary.
-//! Causes must already be committed. This adapter creates no facts, mechanics or game time.
+//! Source-owned world proposals through the registered rules/session boundary.
+//! Environmental causes are committed; time and movement facts come from source handlers.
 
 use df_model::checkpoint::{
     AcceptedDecision, Basis, Checkpoint, CheckpointError, CheckpointLimits, CheckpointPins,
@@ -329,5 +329,235 @@ impl<Owner: EnvironmentalSourceOwner> EnvironmentalChangeHandler<'_, Owner> {
             return Err(WorldStagingError::Capacity);
         }
         Ok(())
+    }
+}
+
+/// One exact source producer followed by the existing logical schedule composition.
+/// The session supplies its current admitted pause state; this does not persist a pause policy.
+/// Register the decorator with the producer's exact clause and current source prerequisites.
+/// Only a time-only schedule producer is supported: its entity state and ordered movement facts
+/// must match the immutable original schedule selection. Durable admission/publication remain
+/// session-owned; this decorator creates no source facts or decisions.
+pub struct AcceptedTimeScheduleHandler<'a, Handler> {
+    pub producer: &'a Handler,
+    pub current_basis: Basis,
+    pub inventory: ReferenceInventory<'a>,
+    pub paused: bool,
+    pub deadline_remaining: std::time::Duration,
+    pub policy: &'a ContentReference,
+    pub destinations: &'a [df_world::AdmittedScheduleDestination<'a>],
+    pub limits: crate::director_staging::ScheduleDirectorLimits,
+}
+
+/// A refusal returns no candidate and leaves the complete original checkpoint unchanged.
+#[derive(Debug, Eq, PartialEq)]
+pub enum TimeScheduleError<R> {
+    Capacity,
+    Snapshot(CheckpointError),
+    UnsupportedInput,
+    StaleCommand,
+    Paused,
+    PendingResolution,
+    Producer(df_rules::InvocationError<R>),
+    InvalidTimeFact,
+    MissingMovementFact,
+    SourceWorldConflict,
+    World(crate::director_staging::DirectorError),
+    WorldPending,
+    InvalidCandidate(CheckpointError),
+}
+
+impl<Handler: RulesCommandHandler> RulesCommandHandler
+    for AcceptedTimeScheduleHandler<'_, Handler>
+{
+    type Rejection = TimeScheduleError<Handler::Rejection>;
+
+    fn pins(&self) -> &CheckpointPins {
+        self.producer.pins()
+    }
+
+    fn bound_source(&self) -> Option<&RuleReference> {
+        self.producer.bound_source()
+    }
+
+    fn stage(
+        &self,
+        input: RulesCommandInput<'_>,
+        current: &Checkpoint,
+    ) -> Result<Checkpoint, Self::Rejection> {
+        use crate::director_staging::{
+            DirectorCandidates, DirectorStaging, EnvironmentalRequest, ScheduleDirectorRequest,
+            compose_schedule_candidates,
+        };
+        use df_model::checkpoint::FactValue;
+        use df_world::DueSelectionRequest;
+
+        let bounds = self.limits.directors;
+        let request_bytes = self
+            .destinations
+            .len()
+            .checked_mul(std::mem::size_of::<df_world::AdmittedScheduleDestination<'_>>())
+            .and_then(|bytes| bytes.checked_add(self.policy.package.retained_heap_bytes()))
+            .and_then(|bytes| bytes.checked_add(self.policy.entry.retained_heap_bytes()))
+            .ok_or(TimeScheduleError::Capacity)?;
+        let inventory_records = [
+            self.inventory.rules.len(),
+            self.inventory.content.len(),
+            self.inventory.resources.len(),
+            self.inventory.assets.len(),
+        ]
+        .into_iter()
+        .try_fold(0usize, |total, count| total.checked_add(count))
+        .ok_or(TimeScheduleError::Capacity)?;
+        let budget = bounds
+            .maximum_checkpoint_bytes
+            .checked_mul(5)
+            .and_then(|bytes| bytes.checked_add(self.limits.schedule.output_bytes))
+            .and_then(|bytes| bytes.checked_add(request_bytes))
+            .ok_or(TimeScheduleError::Capacity)?;
+        if inventory_records > self.limits.checkpoint.maximum_records
+            || bounds.maximum_checkpoint_bytes == 0
+            || self.limits.checkpoint.maximum_retained_bytes == 0
+            || self.limits.checkpoint.maximum_retained_bytes > bounds.maximum_checkpoint_bytes
+            || self.destinations.len() > self.limits.schedule.destinations
+            || self.destinations.len() > 4096
+            || budget > bounds.maximum_pass_bytes
+            || current
+                .retained_bytes()
+                .is_none_or(|bytes| bytes > bounds.maximum_checkpoint_bytes)
+        {
+            return Err(TimeScheduleError::Capacity);
+        }
+        current
+            .validate_resume(self.current_basis, self.pins())
+            .map_err(TimeScheduleError::Snapshot)?;
+        let (basis, observed) = match input.command {
+            GameInput::Game(command) => (command.basis, command.observed_revision),
+            GameInput::Host(command) => (command.basis, command.basis.revision),
+            _ => return Err(TimeScheduleError::UnsupportedInput),
+        };
+        if basis != self.current_basis || observed != self.current_basis.revision {
+            return Err(TimeScheduleError::StaleCommand);
+        }
+        if self.paused {
+            return Err(TimeScheduleError::Paused);
+        }
+        if !current.state().pending.is_empty() {
+            return Err(TimeScheduleError::PendingResolution);
+        }
+        // The canonical guard binds the sole new operation, its ordered facts and borrowed draws.
+        // Registration/source rights and actor control remain the approved source owner's work.
+        let candidate = df_rules::stage_handler(
+            self.producer,
+            self.pins(),
+            input,
+            current,
+            bounds.maximum_checkpoint_bytes,
+        )
+        .map_err(TimeScheduleError::Producer)?;
+        if !candidate.state().pending.is_empty() {
+            return Err(TimeScheduleError::PendingResolution);
+        }
+        let appended = candidate
+            .state()
+            .facts
+            .get(current.state().facts.len()..)
+            .ok_or(TimeScheduleError::InvalidTimeFact)?;
+        let mut times = appended.iter().filter_map(|fact| match fact.value {
+            FactValue::TimeAdvanced { before, after } => Some((before, after)),
+            _ => None,
+        });
+        if times.next() != Some((current.state().logical_time, candidate.state().logical_time))
+            || times.next().is_some()
+        {
+            return Err(TimeScheduleError::InvalidTimeFact);
+        }
+        // The producer owns source consequences. Only this adapter owns the derived cursor.
+        if candidate.state().schedules != current.state().schedules
+            || candidate.state().continuity.catch_up != current.state().continuity.catch_up
+            || candidate.state().continuity.environment != current.state().continuity.environment
+        {
+            return Err(TimeScheduleError::SourceWorldConflict);
+        }
+        let composed = compose_schedule_candidates(
+            current,
+            self.pins(),
+            ScheduleDirectorRequest {
+                accepted_time: Some(DueSelectionRequest {
+                    expected_basis: self.current_basis,
+                    target_time: candidate.state().logical_time,
+                    paused: false,
+                    deadline_remaining: self.deadline_remaining,
+                    policy: self.policy,
+                }),
+                destinations: self.destinations,
+                environmental: EnvironmentalRequest::NotApplicable,
+            },
+            DirectorCandidates {
+                interaction: None,
+                narrative: None,
+            },
+            ReferenceInventory {
+                rules: self.inventory.rules,
+                content: self.inventory.content,
+                resources: self.inventory.resources,
+                assets: self.inventory.assets,
+            },
+            self.limits,
+        )
+        .map_err(TimeScheduleError::World)?;
+        let DirectorStaging::Staged(staged) = composed else {
+            return Err(TimeScheduleError::WorldPending);
+        };
+        if candidate.state().entities != staged.candidate().state().entities {
+            return Err(TimeScheduleError::SourceWorldConflict);
+        }
+        let mut movement_facts = appended.iter().filter_map(|fact| match &fact.value {
+            FactValue::EntityMoved {
+                entity,
+                destination,
+                position,
+            } => Some((*entity, *destination, *position)),
+            _ => None,
+        });
+        for event in &staged.world().events {
+            let destination = self
+                .destinations
+                .iter()
+                .find(|destination| destination.event == event.id)
+                .ok_or(TimeScheduleError::MissingMovementFact)?;
+            let position = current
+                .state()
+                .entities
+                .iter()
+                .find(|entity| entity.id == destination.entity)
+                .and_then(|entity| entity.position)
+                .ok_or(TimeScheduleError::MissingMovementFact)?;
+            if movement_facts.next()
+                != Some((destination.entity, destination.destination, position))
+            {
+                return Err(TimeScheduleError::MissingMovementFact);
+            }
+        }
+        if movement_facts.next().is_some() {
+            return Err(TimeScheduleError::MissingMovementFact);
+        }
+        // All source records remain exact. No time/movement fact or accepted decision is invented.
+        let mut state = candidate.state().clone();
+        state.continuity.catch_up = staged.candidate().state().continuity.catch_up.clone();
+        Checkpoint::new(
+            candidate.schema(),
+            candidate.basis(),
+            candidate.pins().clone(),
+            state,
+            ReferenceInventory {
+                rules: self.inventory.rules,
+                content: self.inventory.content,
+                resources: self.inventory.resources,
+                assets: self.inventory.assets,
+            },
+            self.limits.checkpoint,
+        )
+        .map_err(TimeScheduleError::InvalidCandidate)
     }
 }
