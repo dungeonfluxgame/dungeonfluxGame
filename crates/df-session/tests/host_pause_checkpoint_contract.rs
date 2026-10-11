@@ -306,7 +306,7 @@ fn current(selection: &Selection) -> Checkpoint {
             ticks_per_second: 10,
         },
         source: rule(),
-        status: DurableStatus::Ready,
+        status: DurableStatus::Pending,
     });
     state.intents.push(DurableIntent {
         id: effect,
@@ -317,7 +317,7 @@ fn current(selection: &Selection) -> Checkpoint {
         job: None,
         timer: Some(timer),
         generation: 9,
-        status: DurableStatus::Ready,
+        status: DurableStatus::Pending,
         definition: content("scenario"),
     });
     state.decisions.push(AcceptedDecision {
@@ -764,7 +764,7 @@ fn positive_process_budget_and_actual_owner_wake_do_not_advance_paused_time() {
     assert_eq!(owner.checkpoint(), &before);
     assert_eq!(
         owner.checkpoint().state().timers[0].status,
-        DurableStatus::Ready
+        DurableStatus::Pending
     );
     assert!(
         owner.checkpoint().state().logical_time.ticks
