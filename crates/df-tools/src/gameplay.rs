@@ -25,6 +25,7 @@ mod startup_configuration;
 mod startup_contract;
 #[cfg(test)]
 mod tempo_clock;
+mod voice;
 mod wire;
 
 use axum::{
@@ -55,6 +56,7 @@ struct Service {
     actor: InboxHandle<actor::Call>,
     updates: watch::Receiver<df_model::checkpoint::Checkpoint>,
     streams: Arc<Semaphore>,
+    voice: voice::Voice,
 }
 fn credential<T>(request: &Request<T>) -> Result<[u8; 32], Status> {
     let value = request
@@ -93,10 +95,16 @@ impl Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
-        tokio::time::timeout(Duration::from_secs(5), wait)
+        let viewed = tokio::time::timeout(Duration::from_secs(5), wait)
             .await
             .map_err(|_| Status::deadline_exceeded("gameplay view deadline"))?
-            .map_err(|_| Status::unavailable("gameplay actor stopped"))?
+            .map_err(|_| Status::unavailable("gameplay actor stopped"))?;
+        // Every view leaves the server through here, so this is where spoken lines are
+        // registered; only the display audience is voiced.
+        if let Ok((_, message)) = &viewed {
+            self.voice.register_view(message);
+        }
+        viewed
     }
 }
 #[tonic::async_trait]
@@ -382,6 +390,13 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         span.finish_unmeasured("loaded");
         pack::install(loaded)?;
     }
+    let voice = voice::Voice::start(if interactive {
+        startup_configuration::voice_settings(
+            startup_configuration::VoiceInputs::from_environment(),
+        )?
+    } else {
+        startup_configuration::VoiceSettings::Off(startup_configuration::VoiceOff::Qualification)
+    })?;
     let npc_phase = courier_npc_qualification::phase();
     let npc_budget = npc_phase
         .map(courier_npc_qualification::call_budget)
@@ -839,6 +854,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         actor: sender.clone(),
         updates: receiver,
         streams: Arc::new(Semaphore::new(settings.max_watch_streams)),
+        voice: voice.clone(),
     };
     let (incoming_sender, incoming) =
         NativeIncoming::bounded(NonZeroUsize::new(4).ok_or("invalid native incoming bound")?)?;
@@ -895,7 +911,8 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .merge(public_assets::extra_router(
             startup_configuration::load_extra_assets(std::path::Path::new(&asset_root))?,
-        ));
+        ))
+        .merge(voice::router(voice.clone()));
     let npc = npc_phase.map(|phase| {
         tokio::spawn(courier_npc_qualification::run(
             service.clone(),
@@ -962,6 +979,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     };
     if interactive {
         let origin = &settings.allowed_origins[0];
+        println!("{}", voice.startup_line());
         println!("READY display={origin}/gameplay/display player={origin}/gameplay/player");
     }
     let outcome: Result<(), Box<dyn std::error::Error>> = {

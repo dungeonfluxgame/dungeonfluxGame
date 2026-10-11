@@ -725,6 +725,8 @@ dependencies = [
  "df-observe",
  "df-persistence",
  "df-protocol",
+ "df-provider-api",
+ "df-providers",
  "df-rpc-bridge",
  "df-rules",
  "df-session",

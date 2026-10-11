@@ -7,6 +7,7 @@ mod live_lobby;
 mod live_screens;
 mod live_theme;
 mod live_tv;
+mod live_voice;
 mod public_scene_assets;
 mod view_delivery;
 
@@ -1055,6 +1056,7 @@ fn receive_view(
         // A fresh server view supersedes the last message shown in the toast.
         feedback(&client.borrow(), "");
         redraw_current(client)?;
+        live_voice::observe(client);
     }
     Ok(())
 }

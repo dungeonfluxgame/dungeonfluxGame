@@ -24,6 +24,7 @@ df-types = { path = "../df-types" }
 df-rpc-bridge = { path = "../df-rpc-bridge" }
 df-observe = { path = "../df-observe" }
 bytes.workspace = true
+sha2 = "=0.10.9"
 futures.workspace = true
 tonic.workspace = true
 tokio.workspace = true
@@ -48,11 +49,12 @@ df-knowledge = { path = "../df-knowledge" }
 df-narrative = { path = "../df-narrative" }
 df-world = { path = "../df-world" }
 df-persistence = { path = "../df-persistence" }
+df-provider-api = { path = "../df-provider-api" }
+df-providers = { path = "../df-providers" }
 df-rules = { path = "../df-rules" }
 df-session = { path = "../df-session" }
 df-tempo = { path = "../df-tempo" }
 prost.workspace = true
-sha2 = "=0.10.9"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 serde_path_to_error = "=0.1.20"
@@ -64,7 +66,7 @@ js-sys = "=0.3.106"
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 gloo-timers = { version = "0.3", features = ["futures"] }
-web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "HtmlButtonElement", "Event", "Location", "Performance", "Navigator", "Request", "RequestInit", "Response", "Crypto", "HtmlSelectElement", "HtmlTextAreaElement", "AbortController", "AbortSignal", "RequestMode", "RequestCredentials", "RequestCache", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "Node", "Storage"] }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "HtmlButtonElement", "Event", "Location", "Performance", "Navigator", "Request", "RequestInit", "Response", "Crypto", "HtmlSelectElement", "HtmlTextAreaElement", "AbortController", "AbortSignal", "RequestMode", "RequestCredentials", "RequestCache", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "Node", "Storage", "HtmlAudioElement", "HtmlMediaElement", "DomTokenList", "KeyboardEvent", "Blob", "BlobPropertyBag", "Url"] }
 
 [dev-dependencies]
 df-types = { path = "../df-types" }

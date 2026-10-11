@@ -83,6 +83,13 @@ fi
 
 mkdir -p "$TMPDIR" "$PLAY"
 chmod 700 "$PLAY"
+
+# Spoken narration: take only the ElevenLabs key from the ignored .env, never printing it.
+if test -z "${ELEVENLABS_API_KEY:-}" && test -f "$ROOT/.env"; then
+  ELEVENLABS_API_KEY=$(sed -n 's/^ELEVENLABS_API_KEY=//p' "$ROOT/.env" | head -n 1)
+  if test -n "$ELEVENLABS_API_KEY"; then export ELEVENLABS_API_KEY; else unset ELEVENLABS_API_KEY; fi
+fi
+export DF_GAMEPLAY_VOICE_CACHE=${DF_GAMEPLAY_VOICE_CACHE:-$ARTIFACT_ROOT/tmp/play/voice-cache}
 cd "$ROOT"
 if test "$NO_BUILD" -eq 0; then
   cargo build --locked --offline -p df-tools --bin df-transport-fixture

@@ -222,6 +222,9 @@ impl RunningActor {
             actor: sender.clone(),
             updates: receiver,
             streams: Arc::new(Semaphore::new(6)),
+            voice: super::voice::Voice::disabled(
+                super::startup_configuration::VoiceOff::Qualification,
+            ),
         };
         Ok(Self {
             service,

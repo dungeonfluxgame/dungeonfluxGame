@@ -128,6 +128,151 @@ pub(super) fn session_settings(inputs: SessionInputs) -> Result<SessionSettings,
     })
 }
 
+/// Raw inputs of the spoken-narration feature. Only the process environment supplies the
+/// ElevenLabs credential.
+pub(super) struct VoiceInputs {
+    pub(super) credential: Result<String, VarError>,
+    pub(super) mode: Result<String, VarError>,
+    pub(super) character_budget: Result<String, VarError>,
+    pub(super) cache_dir: Result<String, VarError>,
+    pub(super) narrator_voice: Result<String, VarError>,
+    pub(super) npc_voice: Result<String, VarError>,
+}
+
+impl VoiceInputs {
+    pub(super) fn from_environment() -> Self {
+        Self {
+            credential: std::env::var("ELEVENLABS_API_KEY"),
+            mode: std::env::var("DF_GAMEPLAY_VOICE"),
+            character_budget: std::env::var("DF_GAMEPLAY_VOICE_CHAR_BUDGET"),
+            cache_dir: std::env::var("DF_GAMEPLAY_VOICE_CACHE"),
+            narrator_voice: std::env::var("DF_GAMEPLAY_VOICE_NARRATOR"),
+            npc_voice: std::env::var("DF_GAMEPLAY_VOICE_NPC"),
+        }
+    }
+}
+
+/// Stock ElevenLabs premade voices: "George", a warm storyteller for the narration, and
+/// "Callum", a husky character voice that sounds clearly different for NPC lines.
+const DEFAULT_NARRATOR_VOICE: &str = "JBFqnCBsd6RMkjVDRZzb";
+const DEFAULT_NPC_VOICE: &str = "N2lVS1w4EtoT3dr4eOWO";
+const DEFAULT_VOICE_CHARACTER_BUDGET: u32 = 12_000;
+const MAXIMUM_VOICE_CHARACTER_BUDGET: u32 = 1_000_000;
+const DEFAULT_VOICE_CACHE: &str = "artifacts/tmp/play/voice-cache";
+
+/// The ElevenLabs credential. It is only readable through [`VoiceCredential::expose`]
+/// and never appears in `Debug` output.
+pub(super) struct VoiceCredential(String);
+
+impl VoiceCredential {
+    pub(super) fn expose(&self) -> &str {
+        &self.0
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+impl std::fmt::Debug for VoiceCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("VoiceCredential([REDACTED])")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum VoiceOff {
+    Qualification,
+    Disabled,
+    NoCredential,
+}
+
+impl VoiceOff {
+    pub(super) fn reason(self) -> &'static str {
+        match self {
+            Self::Qualification => "qualification run",
+            Self::Disabled => "DF_GAMEPLAY_VOICE=off",
+            Self::NoCredential => "ELEVENLABS_API_KEY not set",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct VoiceConfiguration {
+    pub(super) credential: VoiceCredential,
+    pub(super) character_budget: u32,
+    pub(super) cache_dir: std::path::PathBuf,
+    pub(super) narrator_voice: String,
+    pub(super) npc_voice: String,
+}
+
+#[derive(Debug)]
+pub(super) enum VoiceSettings {
+    Off(VoiceOff),
+    On(VoiceConfiguration),
+}
+
+/// Voice is on when a credential is present and `DF_GAMEPLAY_VOICE` is not `off`. Invalid
+/// values are refused without echoing them; empty values count as unset.
+pub(super) fn voice_settings(inputs: VoiceInputs) -> Result<VoiceSettings, io::Error> {
+    let disabled = match optional(inputs.mode)?.as_deref() {
+        None | Some("" | "on") => false,
+        Some("off") => true,
+        Some(_) => return Err(refused("DF_GAMEPLAY_VOICE")),
+    };
+    let character_budget = match optional(inputs.character_budget)?.filter(|v| !v.is_empty()) {
+        Some(value) => value
+            .parse::<u32>()
+            .ok()
+            .filter(|budget| *budget <= MAXIMUM_VOICE_CHARACTER_BUDGET)
+            .ok_or_else(|| refused("DF_GAMEPLAY_VOICE_CHAR_BUDGET"))?,
+        None => DEFAULT_VOICE_CHARACTER_BUDGET,
+    };
+    let cache_dir = optional(inputs.cache_dir)?
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_VOICE_CACHE.to_owned());
+    let narrator_voice = voice_identifier(
+        inputs.narrator_voice,
+        DEFAULT_NARRATOR_VOICE,
+        "DF_GAMEPLAY_VOICE_NARRATOR",
+    )?;
+    let npc_voice = voice_identifier(inputs.npc_voice, DEFAULT_NPC_VOICE, "DF_GAMEPLAY_VOICE_NPC")?;
+    if disabled {
+        return Ok(VoiceSettings::Off(VoiceOff::Disabled));
+    }
+    let Some(credential) = optional(inputs.credential)?.filter(|value| !value.is_empty()) else {
+        return Ok(VoiceSettings::Off(VoiceOff::NoCredential));
+    };
+    Ok(VoiceSettings::On(VoiceConfiguration {
+        credential: VoiceCredential(credential),
+        character_budget,
+        cache_dir: cache_dir.into(),
+        narrator_voice,
+        npc_voice,
+    }))
+}
+
+/// An ElevenLabs voice id: letters, digits, `-` and `_` only, so it is always one safe
+/// URL path segment.
+fn voice_identifier(
+    input: Result<String, VarError>,
+    default: &str,
+    name: &str,
+) -> Result<String, io::Error> {
+    let Some(value) = optional(input)?.filter(|value| !value.is_empty()) else {
+        return Ok(default.to_owned());
+    };
+    if value.len() > 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(refused(name));
+    }
+    Ok(value)
+}
+
 fn refused(name: &str) -> io::Error {
     io::Error::other(format!("{name} invalid"))
 }
