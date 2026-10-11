@@ -421,6 +421,252 @@ fn authored_input_order_preserves_canonical_slot_order_and_admitted_no_change_is
     assert_eq!(next.state().encounters, current.state().encounters);
 }
 
+// These synthetic reviewed mappings exercise source admission, not a rulebook catalog.
+fn end_state_fixture(outcome: &str) -> Fixture {
+    let mut fixture = Fixture::new();
+    fixture.replacements = [
+        content(&format!("{outcome}-first")),
+        content(&format!("{outcome}-second")),
+    ];
+    fixture.content.extend(fixture.replacements.iter().cloned());
+    fixture
+}
+
+struct EndStateSource {
+    source: SourceOwner,
+    target: EncounterState,
+    replacements: [ContentReference; 2],
+    terminal: bool,
+    refusal: Cell<Option<ObjectivePolicyError>>,
+    calls: Cell<usize>,
+}
+
+impl EndStateSource {
+    fn new(fixture: &Fixture, terminal: bool) -> Self {
+        Self {
+            source: SourceOwner::new(fixture),
+            target: fixture.current().state().encounters[0].clone(),
+            replacements: fixture.replacements.clone(),
+            terminal,
+            refusal: Cell::new(None),
+            calls: Cell::new(0),
+        }
+    }
+}
+
+impl ObjectivePolicyOwner for EndStateSource {
+    fn admit_transition(
+        &self,
+        current: &Checkpoint,
+        transition: &AuthoredObjectiveTransition<'_>,
+    ) -> Result<(), ObjectivePolicyError> {
+        self.source.admit_transition(current, transition)
+    }
+
+    fn admit_end_state(
+        &self,
+        _: &Checkpoint,
+        target: &EncounterState,
+        changes: &[AuthoredObjectiveTransition<'_>],
+    ) -> Result<bool, ObjectivePolicyError> {
+        self.calls.set(self.calls.get() + 1);
+        if let Some(refusal) = self.refusal.get() {
+            return Err(refusal);
+        }
+        if target != &self.target
+            || changes.len() != 2
+            || !self
+                .replacements
+                .iter()
+                .enumerate()
+                .all(|(index, replacement)| {
+                    changes.iter().any(|change| {
+                        change.encounter == target.id
+                            && change.objective_index == index
+                            && change.replacement == replacement
+                    })
+                })
+        {
+            return Err(ObjectivePolicyError::PolicyMismatch);
+        }
+        Ok(self.terminal)
+    }
+}
+
+impl ObjectiveSourceOwner for EndStateSource {
+    type Refusal = SourceRefusal;
+
+    fn admit_application(
+        &self,
+        current: &Checkpoint,
+        registration: &ObjectiveRegistration,
+        command: &CommandInput,
+        transitions: &[AuthoredObjectiveTransition<'_>],
+    ) -> Result<(), Self::Refusal> {
+        self.source
+            .admit_application(current, registration, command, transitions)
+    }
+}
+
+fn registered_end_state(
+    fixture: &Fixture,
+    source: &EndStateSource,
+    current: &Checkpoint,
+    input: &GameInput,
+) -> Result<Checkpoint, Rejection> {
+    let changes = fixture.transitions(current);
+    let base = fixture.handler(&source.source, current.basis(), Some(&changes));
+    let handler = ObjectiveTransitionHandler {
+        owner: source,
+        current_basis: base.current_basis,
+        admitted_pins: base.admitted_pins,
+        inventory: fixture.inventory(),
+        registration: base.registration,
+        transitions: Some(&changes),
+        limits: base.limits,
+    };
+    registered_end_state_handler(fixture, current, current, input, &handler)
+}
+
+fn assert_end_state_preserved(fixture: &Fixture, original: &Checkpoint, next: &Checkpoint) {
+    let mut expected = original.state().clone();
+    let target = &mut expected.encounters[0];
+    target.objectives = fixture.replacements.to_vec();
+    target.turn_order.clear();
+    target.active_turn = None;
+    expected.decisions.push(AcceptedDecision {
+        operation: operation(50),
+        revision: original.basis().revision.next_sequence().unwrap(),
+        facts: vec![],
+        draws: vec![],
+        effects: vec![],
+        source_policy: fixture.registration.policy.clone(),
+        semantic_output: None,
+    });
+    assert_eq!(next.state(), &expected);
+    assert_eq!(next.pins(), original.pins());
+    let mut basis = original.basis();
+    basis.revision = basis.revision.next_sequence().unwrap();
+    assert_eq!(next.basis(), basis);
+}
+
+#[test]
+fn registered_success_failure_escape_are_source_admitted_and_continuation_preserves_turns() {
+    for outcome in ["reviewed-success", "reviewed-failure", "reviewed-escape"] {
+        let fixture = end_state_fixture(outcome);
+        let current = fixture.current();
+        let before = current.clone();
+        let input = fixture.input(current.basis());
+        let source = EndStateSource::new(&fixture, true);
+        let next = registered_end_state(&fixture, &source, &current, &input).unwrap();
+        assert_end_state_preserved(&fixture, &current, &next);
+        assert_eq!(source.calls.get(), 1);
+        assert_eq!(current, before);
+        let continuing = EndStateSource::new(&fixture, false);
+        let next = registered_end_state(&fixture, &continuing, &current, &input).unwrap();
+        assert_preserved(&fixture, &current, &next);
+        assert_eq!(continuing.calls.get(), 1);
+    }
+}
+
+#[test]
+fn registered_end_state_denial_has_no_candidate_or_application_admission() {
+    let fixture = end_state_fixture("reviewed-escape");
+    let current = fixture.current();
+    let before = current.clone();
+    let source = EndStateSource::new(&fixture, true);
+    source.refusal.set(Some(ObjectivePolicyError::RightsDenied));
+    assert_eq!(
+        registered_end_state(&fixture, &source, &current, &fixture.input(current.basis())),
+        Err(rejected(ObjectiveStagingError::Objective(
+            ObjectiveProposalError::Policy(ObjectivePolicyError::RightsDenied)
+        )))
+    );
+    assert_eq!(source.source.calls.get(), 2);
+    assert_eq!(source.calls.get(), 1);
+    assert_eq!(source.source.applications.get(), 0);
+    assert_eq!(current, before);
+}
+
+fn registered_end_state_handler(
+    fixture: &Fixture,
+    prepared: &Checkpoint,
+    current: &Checkpoint,
+    input: &GameInput,
+    handler: &ObjectiveTransitionHandler<'_, EndStateSource>,
+) -> Result<Checkpoint, Rejection> {
+    let dependencies = [
+        RuleDependency::Entity(fixture::entity(4)),
+        RuleDependency::Encounter(encounter(12)),
+        RuleDependency::PendingResolutions,
+    ];
+    let sources = [fixture.registration.source.clone()];
+    let guarded = PreconditionedCommandHandler::new(
+        handler,
+        &fixture.registration.source,
+        CurrentRuleContext {
+            checkpoint: current,
+            basis: handler.current_basis,
+            pins: handler.admitted_pins,
+            inventory: fixture.inventory(),
+            command_limits: command_limits(),
+        },
+        RulePreconditions {
+            prepared,
+            sources: &sources,
+            dependencies: &dependencies,
+        },
+        PreconditionLimits {
+            maximum_dependencies: 4,
+            maximum_comparisons: 10_000_000,
+            maximum_checkpoint_bytes: 1024 * 1024,
+        },
+    );
+    let selector = fixture::label("compiled-objective-application");
+    let entries = [CatalogEntry::new(
+        &fixture.registration.source,
+        b"exact synthetic authored objective source",
+    )];
+    let catalog = CatalogSnapshot::from_published(
+        &fixture.pins.rules.catalog,
+        &fixture.pins,
+        b"complete synthetic catalog",
+        &entries,
+        CatalogLimits {
+            max_complete_bytes: 64,
+            max_entries: 1,
+            max_item_bytes: 64,
+            max_total_item_bytes: 64,
+        },
+    )
+    .unwrap();
+    let registrations = [HandlerRegistration::new(
+        &selector,
+        &fixture.registration.source,
+        &guarded,
+    )];
+    let registry = DispatchRegistry::from_catalog(catalog, &registrations, 1).unwrap();
+    decide_registered_command(
+        RulesCommandInput {
+            command: input,
+            supplied_draws: &[],
+        },
+        current,
+        CommandEntryContext {
+            current_basis: handler.current_basis,
+            admitted_pins: handler.admitted_pins,
+            inventory: fixture.inventory(),
+            limits: CommandEntryLimits {
+                command: command_limits(),
+                maximum_staged_bytes: 1024 * 1024,
+            },
+        },
+        &registry,
+        &selector,
+        &fixture.registration.source,
+    )
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod durable_session {
     use super::*;
@@ -495,9 +741,12 @@ mod durable_session {
         StaleFence,
         RevisionConflict,
         DeniedTail,
+        DeniedEndState,
     }
     struct Database {
         checkpoint: Checkpoint,
+        replacements: [ContentReference; 2],
+        end_state_admissions: usize,
         ledger: Vec<(Scope, DecisionReceipt)>,
         failure: Failure,
         commits: usize,
@@ -561,10 +810,7 @@ mod durable_session {
                 .clone();
             let receipt = DecisionReceipt::new(candidate.basis(), decision, 64 * 1024)?;
             // One atomic fixture write covers both objective slots, checkpoint and exact receipt.
-            assert_eq!(
-                candidate.state().encounters[0].objectives,
-                Fixture::new().replacements
-            );
+            assert_eq!(candidate.state().encounters[0].objectives, db.replacements);
             db.checkpoint = candidate.clone();
             db.ledger.push((scope.clone(), receipt.clone()));
             Ok(if db.failure == Failure::LostAck {
@@ -584,7 +830,7 @@ mod durable_session {
     }
     struct Engine {
         fixture: Fixture,
-        source: SourceOwner,
+        source: EndStateSource,
         database: Rc<RefCell<Database>>,
     }
     impl SessionEngine<Scope> for Engine {
@@ -597,13 +843,24 @@ mod durable_session {
             scope.validate_input(input)?;
             self.database.borrow_mut().decisions += 1;
             if self.database.borrow().failure == Failure::SourceWithdrawn {
-                self.source.refusal.set(Some(SourceRefusal::Withdrawn));
+                self.source
+                    .source
+                    .refusal
+                    .set(Some(SourceRefusal::Withdrawn));
             }
             if self.database.borrow().failure == Failure::DeniedTail {
-                self.source.refused_index.set(Some(1));
+                self.source.source.refused_index.set(Some(1));
             }
-            registered(&self.fixture, &self.source, current, input)
-                .map_err(|_| RepositoryError::InvalidCandidate)
+            if self.database.borrow().failure == Failure::DeniedEndState {
+                self.source
+                    .refusal
+                    .set(Some(ObjectivePolicyError::RightsDenied));
+            }
+            let before = self.source.calls.get();
+            let result = registered_end_state(&self.fixture, &self.source, current, input)
+                .map_err(|_| RepositoryError::InvalidCandidate);
+            self.database.borrow_mut().end_state_admissions += self.source.calls.get() - before;
+            result
         }
         fn validate_recovery(&mut self, current: &Checkpoint) -> Result<(), RepositoryError> {
             current
@@ -624,10 +881,7 @@ mod durable_session {
             let mut db = self.database.borrow_mut();
             assert_eq!(checkpoint, &db.checkpoint);
             assert!(db.ledger.iter().any(|(prior, receipt)| prior == scope && receipt.basis() == checkpoint.basis()));
-            assert_eq!(
-                checkpoint.state().encounters[0].objectives,
-                Fixture::new().replacements
-            );
+            assert_eq!(checkpoint.state().encounters[0].objectives, db.replacements);
             db.publications += 1;
             if db.failure == Failure::Publication {
                 return Err(DeliveryError::Unavailable);
@@ -645,15 +899,24 @@ mod durable_session {
     }
     type Owner = DurableOwner<Repository, Engine, Publication>;
     fn setup(failure: Failure) -> (Owner, Rc<RefCell<Database>>, Scope) {
-        let fixture = Fixture::new();
+        setup_with_fixture(failure, Fixture::new(), false)
+    }
+
+    fn setup_with_fixture(
+        failure: Failure,
+        fixture: Fixture,
+        terminal: bool,
+    ) -> (Owner, Rc<RefCell<Database>>, Scope) {
         let current = fixture.current();
         let scope = Scope {
             input: fixture.input(current.basis()),
             principal: fixture::member(3),
         };
-        let source = SourceOwner::new(&fixture);
+        let source = EndStateSource::new(&fixture, terminal);
         let db = Rc::new(RefCell::new(Database {
             checkpoint: current.clone(),
+            replacements: fixture.replacements.clone(),
+            end_state_admissions: 0,
             ledger: vec![],
             failure,
             commits: 0,
@@ -855,5 +1118,89 @@ mod durable_session {
             SubmissionOutcome::OperationConflict
         );
         assert_eq!(counts(&db.borrow()), (1, 1, 1, 1, 1));
+    }
+    #[test]
+    fn durable_terminal_success_failure_escape_commit_once_and_exact_retry_never_restages() {
+        for outcome in ["reviewed-success", "reviewed-failure", "reviewed-escape"] {
+            let fixture = end_state_fixture(outcome);
+            let (mut owner, db, scope) =
+                setup_with_fixture(Failure::None, end_state_fixture(outcome), true);
+            let original = owner.checkpoint().clone();
+            let receipt = submit(&mut owner, &scope);
+            assert!(matches!(receipt, SubmissionOutcome::Confirmed(_)));
+            assert_end_state_preserved(&fixture, &original, owner.checkpoint());
+            db.borrow_mut().failure = Failure::DeniedEndState;
+            assert_eq!(submit(&mut owner, &scope), receipt);
+            let db = db.borrow();
+            assert_eq!(counts(&db), (1, 1, 1, 1, 1));
+            assert_eq!(db.end_state_admissions, 1);
+            assert_eq!(owner.checkpoint(), &db.checkpoint);
+        }
+    }
+
+    #[test]
+    fn terminal_lost_ack_reloads_both_objectives_and_cleared_turns_without_reexecution() {
+        let fixture = end_state_fixture("reviewed-escape");
+        let (mut owner, db, scope) =
+            setup_with_fixture(Failure::LostAck, end_state_fixture("reviewed-escape"), true);
+        let original = owner.checkpoint().clone();
+        assert_eq!(
+            submit(&mut owner, &scope),
+            SubmissionOutcome::LookupRequired
+        );
+        assert_eq!(owner.checkpoint(), &original);
+        assert_end_state_preserved(&fixture, &original, &db.borrow().checkpoint);
+        assert_eq!(counts(&db.borrow()), (1, 1, 0, 0, 1));
+        db.borrow_mut().failure = Failure::DeniedEndState;
+        let receipt = submit(&mut owner, &scope);
+        assert!(matches!(receipt, SubmissionOutcome::Confirmed(_)));
+        assert_eq!(submit(&mut owner, &scope), receipt);
+        assert_end_state_preserved(&fixture, &original, owner.checkpoint());
+        assert_eq!(counts(&db.borrow()), (1, 1, 0, 0, 1));
+        assert_eq!(db.borrow().end_state_admissions, 1);
+    }
+
+    #[test]
+    fn terminal_precommit_rollback_preserves_turns_and_retry_commits_the_whole_candidate() {
+        let fixture = end_state_fixture("reviewed-failure");
+        let (mut owner, db, scope) = setup_with_fixture(
+            Failure::BeforeCommit,
+            end_state_fixture("reviewed-failure"),
+            true,
+        );
+        let original = owner.checkpoint().clone();
+        assert_eq!(
+            submit(&mut owner, &scope),
+            SubmissionOutcome::Refused(RepositoryError::Unavailable)
+        );
+        assert_eq!(owner.checkpoint(), &original);
+        assert_eq!(db.borrow().checkpoint, original);
+        assert_eq!(counts(&db.borrow()), (1, 1, 0, 0, 0));
+        db.borrow_mut().failure = Failure::None;
+        assert!(matches!(
+            submit(&mut owner, &scope),
+            SubmissionOutcome::Confirmed(_)
+        ));
+        assert_end_state_preserved(&fixture, &original, owner.checkpoint());
+        assert_eq!(counts(&db.borrow()), (2, 2, 1, 1, 1));
+        assert_eq!(db.borrow().end_state_admissions, 2);
+    }
+
+    #[test]
+    fn terminal_admission_denial_reaches_no_commit_publication_or_wake() {
+        let (mut owner, db, scope) = setup_with_fixture(
+            Failure::DeniedEndState,
+            end_state_fixture("reviewed-success"),
+            true,
+        );
+        let original = owner.checkpoint().clone();
+        assert_eq!(
+            submit(&mut owner, &scope),
+            SubmissionOutcome::Refused(RepositoryError::InvalidCandidate)
+        );
+        assert_eq!(owner.checkpoint(), &original);
+        assert_eq!(db.borrow().checkpoint, original);
+        assert_eq!(counts(&db.borrow()), (1, 0, 0, 0, 0));
+        assert_eq!(db.borrow().end_state_admissions, 1);
     }
 }

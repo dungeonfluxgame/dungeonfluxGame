@@ -146,7 +146,7 @@ fn transition<'a>(
 }
 
 fn run<'a>(
-    authority: &Authority,
+    authority: &impl ObjectivePolicyOwner,
     current: &'a Checkpoint,
     transitions: &'a [AuthoredObjectiveTransition<'a>],
     inventory: ReferenceInventory<'a>,
@@ -793,5 +793,291 @@ fn an_actor_in_the_committed_event_but_outside_the_current_encounter_is_rejected
         Some(ObjectiveProposalError::ActorMismatch)
     );
     assert_eq!(authority.calls.get(), 1);
+    assert_eq!(current, before);
+}
+
+struct EndStateAuthority {
+    mapping: Authority,
+    admission: Result<bool, ObjectivePolicyError>,
+    calls: Cell<usize>,
+}
+
+impl ObjectivePolicyOwner for EndStateAuthority {
+    fn admit_transition(
+        &self,
+        current: &Checkpoint,
+        transition: &AuthoredObjectiveTransition<'_>,
+    ) -> Result<(), ObjectivePolicyError> {
+        self.mapping.admit_transition(current, transition)
+    }
+
+    fn admit_end_state(
+        &self,
+        current: &Checkpoint,
+        target: &EncounterState,
+        transitions: &[AuthoredObjectiveTransition<'_>],
+    ) -> Result<bool, ObjectivePolicyError> {
+        self.calls.set(self.calls.get() + 1);
+        if current.basis() != self.mapping.basis
+            || target != &encounter(12)
+            || transitions.len() != 2
+            || ![0, 1].into_iter().all(|index| {
+                transitions.iter().any(|transition| {
+                    transition.encounter == target.id
+                        && transition.objective_index == index
+                        && transition.replacement == &self.mapping.replacement
+                })
+            })
+        {
+            return Err(ObjectivePolicyError::PolicyMismatch);
+        }
+        self.admission
+    }
+}
+
+#[test]
+fn source_reviewed_success_failure_and_escape_end_only_the_affected_encounter() {
+    for outcome in ["authored-success", "authored-failure", "authored-escape"] {
+        let current = current(|_| {});
+        let before = current.clone();
+        let cause = &current.state().facts[0];
+        let mut mapping = Authority::new(cause);
+        mapping.replacement.entry = label(outcome);
+        let authority = EndStateAuthority {
+            mapping,
+            admission: Ok(true),
+            calls: Cell::new(0),
+        };
+        let mut changes = [
+            transition(&authority.mapping, cause),
+            transition(&authority.mapping, cause),
+        ];
+        changes[0].objective_index = 1;
+        let rules = [rule()];
+        let content = [content(), authority.mapping.replacement.clone(), policy()];
+        let resources = resource_constraints();
+        let proposal = run(
+            &authority,
+            &current,
+            &changes,
+            inventory(&rules, &content, &resources),
+            proposal_limits(),
+        )
+        .unwrap();
+        let mut expected = current.state().clone();
+        let target = &mut expected.encounters[0];
+        target.objectives = vec![authority.mapping.replacement.clone(); 2];
+        target.turn_order.clear();
+        target.active_turn = None;
+        assert_eq!(proposal.checkpoint.state(), &expected);
+        assert_eq!(proposal.evidence.len(), 2);
+        assert_eq!(authority.calls.get(), 1);
+        assert_eq!(current, before);
+    }
+}
+
+#[test]
+fn continuing_and_empty_batches_preserve_turns_without_inferred_label_meaning() {
+    let current = current(|_| {});
+    let cause = &current.state().facts[0];
+    let authority = EndStateAuthority {
+        mapping: Authority::new(cause),
+        admission: Ok(false),
+        calls: Cell::new(0),
+    };
+    let mut changes = [
+        transition(&authority.mapping, cause),
+        transition(&authority.mapping, cause),
+    ];
+    changes[1].objective_index = 1;
+    let rules = [rule()];
+    let content = definitions();
+    let resources = resource_constraints();
+    let proposal = run(
+        &authority,
+        &current,
+        &changes,
+        inventory(&rules, &content, &resources),
+        proposal_limits(),
+    )
+    .unwrap();
+    assert_eq!(
+        proposal.checkpoint.state().encounters[0].turn_order,
+        current.state().encounters[0].turn_order
+    );
+    assert_eq!(
+        proposal.checkpoint.state().encounters[0].active_turn,
+        current.state().encounters[0].active_turn
+    );
+    let empty = run(
+        &authority,
+        &current,
+        &[],
+        inventory(&rules, &content, &resources),
+        proposal_limits(),
+    )
+    .unwrap();
+    assert_eq!(empty.checkpoint, current);
+    assert_eq!(authority.calls.get(), 1);
+}
+
+#[test]
+fn denied_terminal_admission_discards_both_objectives_and_all_turns() {
+    let current = current(|_| {});
+    let before = current.clone();
+    let cause = &current.state().facts[0];
+    let authority = EndStateAuthority {
+        mapping: Authority::new(cause),
+        admission: Err(ObjectivePolicyError::RightsDenied),
+        calls: Cell::new(0),
+    };
+    let mut changes = [
+        transition(&authority.mapping, cause),
+        transition(&authority.mapping, cause),
+    ];
+    changes[1].objective_index = 1;
+    let rules = [rule()];
+    let content = definitions();
+    let resources = resource_constraints();
+    assert_eq!(
+        run(
+            &authority,
+            &current,
+            &changes,
+            inventory(&rules, &content, &resources),
+            proposal_limits(),
+        )
+        .err(),
+        Some(ObjectiveProposalError::Policy(
+            ObjectivePolicyError::RightsDenied
+        ))
+    );
+    assert_eq!(authority.mapping.calls.get(), 2);
+    assert_eq!(authority.calls.get(), 1);
+    assert_eq!(current, before);
+}
+
+#[test]
+fn invalid_tail_and_bounded_requests_never_reach_terminal_admission() {
+    for case in ["stale-tail", "count", "work", "input", "output"] {
+        let current = current(|_| {});
+        let before = current.clone();
+        let cause = &current.state().facts[0];
+        let authority = EndStateAuthority {
+            mapping: Authority::new(cause),
+            admission: Ok(true),
+            calls: Cell::new(0),
+        };
+        let mut changes = [
+            transition(&authority.mapping, cause),
+            transition(&authority.mapping, cause),
+        ];
+        changes[1].objective_index = 1;
+        let mut bounded = proposal_limits();
+        match case {
+            "stale-tail" => changes[1].expected = &authority.mapping.replacement,
+            "count" => bounded.maximum_changes = 1,
+            "work" => bounded.maximum_comparisons = 1,
+            "input" => bounded.maximum_input_bytes = 1,
+            "output" => bounded.maximum_output_bytes = 1,
+            _ => unreachable!(),
+        }
+        let rules = [rule()];
+        let content = definitions();
+        let resources = resource_constraints();
+        assert!(
+            run(
+                &authority,
+                &current,
+                &changes,
+                inventory(&rules, &content, &resources),
+                bounded,
+            )
+            .is_err()
+        );
+        assert_eq!(authority.calls.get(), 0);
+        assert_eq!(current, before);
+    }
+}
+
+struct EncounterBatchAuthority {
+    mappings: Vec<Authority>,
+    calls: Cell<usize>,
+}
+
+impl ObjectivePolicyOwner for EncounterBatchAuthority {
+    fn admit_transition(
+        &self,
+        current: &Checkpoint,
+        transition: &AuthoredObjectiveTransition<'_>,
+    ) -> Result<(), ObjectivePolicyError> {
+        self.mappings
+            .iter()
+            .find(|mapping| mapping.encounter == transition.encounter)
+            .ok_or(ObjectivePolicyError::PolicyMismatch)?
+            .admit_transition(current, transition)
+    }
+
+    fn admit_end_state(
+        &self,
+        _: &Checkpoint,
+        target: &EncounterState,
+        changes: &[AuthoredObjectiveTransition<'_>],
+    ) -> Result<bool, ObjectivePolicyError> {
+        self.calls.set(self.calls.get() + 1);
+        if changes.len() != 4 {
+            return Err(ObjectivePolicyError::PolicyMismatch);
+        }
+        if target.id == encounter(13).id {
+            return Err(ObjectivePolicyError::RightsDenied);
+        }
+        Ok(true)
+    }
+}
+
+#[test]
+fn a_denied_final_encounter_discards_an_earlier_admitted_terminal_encounter() {
+    let current = current(|_| {});
+    let before = current.clone();
+    let cause = &current.state().facts[0];
+    let first = Authority::new(cause);
+    let mut second = Authority::new(cause);
+    second.encounter = encounter(13).id;
+    let authority = EncounterBatchAuthority {
+        mappings: vec![first, second],
+        calls: Cell::new(0),
+    };
+    let mut changes = Vec::new();
+    for mapping in &authority.mappings {
+        for objective_index in [0, 1] {
+            changes.push(AuthoredObjectiveTransition {
+                encounter: mapping.encounter,
+                objective_index,
+                expected: &mapping.expected,
+                replacement: &mapping.replacement,
+                policy: &mapping.policy,
+                source: &mapping.source,
+                actor: entity(4),
+                cause,
+            });
+        }
+    }
+    let rules = [rule()];
+    let content = definitions();
+    let resources = resource_constraints();
+    assert_eq!(
+        run(
+            &authority,
+            &current,
+            &changes,
+            inventory(&rules, &content, &resources),
+            proposal_limits(),
+        )
+        .err(),
+        Some(ObjectiveProposalError::Policy(
+            ObjectivePolicyError::RightsDenied
+        ))
+    );
+    assert_eq!(authority.calls.get(), 2);
     assert_eq!(current, before);
 }

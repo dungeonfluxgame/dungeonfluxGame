@@ -2,7 +2,8 @@
 
 use df_model::checkpoint::{
     AcceptedDecision, Basis, Checkpoint, CheckpointError, CheckpointLimits, CheckpointPins,
-    ContentReference, EntityId, FactValue, GameFact, RecordId, ReferenceInventory, RuleReference,
+    ContentReference, EncounterState, EntityId, FactValue, GameFact, RecordId, ReferenceInventory,
+    RuleReference,
 };
 
 /// One already-authored mapping, not a success/failure enum or executable predicate.
@@ -43,6 +44,23 @@ pub trait ObjectivePolicyOwner {
         current: &Checkpoint,
         transition: &AuthoredObjectiveTransition<'_>,
     ) -> Result<(), ObjectivePolicyError>;
+
+    /// Admit source-owned termination after every transition in the complete batch validates.
+    ///
+    /// The encounter is the unchanged canonical record. The source must review the complete
+    /// replacement batch, accepted causes, current rights and rules timing before returning
+    /// true. This clears only its turn order and active turn; objective references retain the
+    /// authored success, failure or escape meaning. No reward or mechanical outcome is made.
+    /// False preserves turns. Existing owners default to continuation; labels alone never end
+    /// an encounter. The same deterministic, bounded, pure admission requirements apply.
+    fn admit_end_state(
+        &self,
+        _current: &Checkpoint,
+        _encounter: &EncounterState,
+        _transitions: &[AuthoredObjectiveTransition<'_>],
+    ) -> Result<bool, ObjectivePolicyError> {
+        Ok(false)
+    }
 }
 
 /// Explicit decision bounds; none has an unlimited default.
@@ -306,7 +324,8 @@ fn content(
 /// and their accepted decisions constrain causes; a valid inventory never substitutes
 /// for authored policy/current rights admission. A failed tail returns no partial
 /// result. Canonical encounter/objective ordering, all sibling state and every existing
-/// audience are preserved. No new actor, reward, fact, draw or mechanical outcome is made.
+/// audience are preserved. Source-admitted terminal encounters also clear their existing turns.
+/// No new actor, reward, fact, draw or mechanical outcome is made.
 pub fn propose_objective_transitions<'a>(
     owner: &impl ObjectivePolicyOwner,
     request: ObjectiveProposalRequest<'a>,
@@ -341,11 +360,12 @@ pub fn propose_objective_transitions<'a>(
     admit_request_bytes(&request, input_bytes)?;
     let mut output_bound = input_bytes
         .checked_add(size_of::<Vec<ObjectiveChangeEvidence<'a>>>())
+        .and_then(|bytes| bytes.checked_add(size_of::<Vec<RecordId>>()))
         .and_then(|bytes| {
             request
                 .transitions
                 .len()
-                .checked_mul(size_of::<ObjectiveChangeEvidence<'a>>())
+                .checked_mul(size_of::<ObjectiveChangeEvidence<'a>>() + size_of::<RecordId>())
                 .and_then(|evidence| bytes.checked_add(evidence))
         })
         .ok_or(ObjectiveProposalError::Capacity)?;
@@ -412,6 +432,7 @@ pub fn propose_objective_transitions<'a>(
         .ok_or(ObjectiveProposalError::UnknownEncounter)?;
         if encounter.objectives.len() > request.limits.maximum_records
             || encounter.participants.len() > request.limits.maximum_records
+            || encounter.turn_order.len() > request.limits.maximum_records
         {
             return Err(ObjectiveProposalError::Capacity);
         }
@@ -482,6 +503,28 @@ pub fn propose_objective_transitions<'a>(
             decision,
         });
     }
+    // Keep termination admission behind every exact mapping/cause check, once per affected
+    // encounter. A denied final encounter cannot leak an earlier objective or turn change.
+    let mut ended = Vec::new();
+    ended
+        .try_reserve_exact(request.transitions.len())
+        .map_err(|_| ObjectiveProposalError::Capacity)?;
+    for encounter in &state.encounters {
+        if find(request.transitions, &mut work, |transition| {
+            transition.encounter == encounter.id
+        })?
+        .is_none()
+        {
+            continue;
+        }
+        work.charge()?;
+        if owner
+            .admit_end_state(request.current, encounter, request.transitions)
+            .map_err(ObjectiveProposalError::Policy)?
+        {
+            ended.push(encounter.id);
+        }
+    }
     let mut candidate = state.clone();
     for transition in request.transitions {
         let mut target = None;
@@ -498,6 +541,12 @@ pub fn propose_objective_transitions<'a>(
             .get_mut(transition.objective_index)
             .ok_or(ObjectiveProposalError::UnknownObjective)?;
         *objective = transition.replacement.clone();
+    }
+    for encounter in &mut candidate.encounters {
+        if find(&ended, &mut work, |id| *id == encounter.id)?.is_some() {
+            encounter.turn_order.clear();
+            encounter.active_turn = None;
+        }
     }
     let checkpoint = Checkpoint::new(
         request.current.schema(),

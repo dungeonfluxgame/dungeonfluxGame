@@ -24,7 +24,8 @@ pub struct ObjectiveRegistration {
 ///
 /// In addition to each `ObjectivePolicyOwner` mapping/cause/rights check, admission must
 /// check the current registration, authenticated member's actor control and application
-/// policy. Both checks are pure, deterministic and bounded. No inventory entry, client
+/// policy, including source-admitted terminal turn clearing. All checks are pure,
+/// deterministic and bounded. No inventory entry, client
 /// action or retained proposal supplies permission. Session authenticates ingress first.
 pub trait ObjectiveSourceOwner: ObjectivePolicyOwner {
     type Refusal;
@@ -168,7 +169,8 @@ impl<Owner: ObjectiveSourceOwner> RulesCommandHandler for ObjectiveTransitionHan
             return Err(ObjectiveStagingError::WrongCommand);
         }
         // The real proposer admits all request bytes before invoking its source policy owner.
-        // Its detached result remains private if application admission or the final tail fails.
+        // Objective replacements and source-admitted turn termination share one detached result.
+        // It remains private if application admission or the final tail fails.
         let proposal = propose_objective_transitions(
             self.owner,
             ObjectiveProposalRequest {
