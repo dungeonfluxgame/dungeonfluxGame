@@ -2380,3 +2380,653 @@ fn engine_narrative_waits_for_unresolved_world_work_before_examining_consequence
     assert_eq!(world.events.len(), 2);
     assert_eq!(current, unchanged);
 }
+
+struct BeatAdmission {
+    policy: RevisionLabel,
+    rules: Vec<RuleReference>,
+    references: Vec<ContentReference>,
+    resources: Vec<ResourceConstraint>,
+}
+
+impl BeatAdmission {
+    fn new() -> Self {
+        let mut references = admitted_content();
+        references.extend(
+            [
+                "opening",
+                "ask-courier",
+                "escort-courier",
+                "courier-seal",
+                "courier-escort",
+                "refusal-recorded",
+            ]
+            .map(|entry| ContentReference {
+                package: content().package,
+                entry: label(entry),
+            }),
+        );
+        Self {
+            policy: label("admitted-beat-alternatives"),
+            rules: vec![rule()],
+            references,
+            resources: resource_constraints(),
+        }
+    }
+
+    fn inventory(&self) -> ReferenceInventory<'_> {
+        ReferenceInventory {
+            rules: &self.rules,
+            content: &self.references,
+            resources: &self.resources,
+            assets: &[],
+        }
+    }
+
+    fn checkpoint(&self, mut state: GameState) -> Checkpoint {
+        state.narrative.active_beats = vec![self.references[2].clone()];
+        state.narrative.accepted_facts = vec![FactId::from_bytes(&[7; 16]).unwrap()];
+        self.rebuild(state)
+    }
+
+    fn rebuild(&self, state: GameState) -> Checkpoint {
+        Checkpoint::new(
+            CHECKPOINT_SCHEMA,
+            basis(),
+            pins(),
+            state,
+            self.inventory(),
+            checkpoint_limits(),
+        )
+        .unwrap()
+    }
+
+    fn alternatives<'a>(
+        &'a self,
+        causes: &'a [df_narrative::BeatCause<'a>],
+    ) -> [df_narrative::AdmittedBeatAlternative<'a>; 2] {
+        [(3, 5), (4, 6)].map(|(selection, to)| df_narrative::AdmittedBeatAlternative {
+            selection: &self.references[selection],
+            from: &self.references[2],
+            to: &self.references[to],
+            causes,
+            required_threads: &self.references[..1],
+            opened_thread: None,
+        })
+    }
+
+    fn request<'a>(
+        &'a self,
+        current: &'a Checkpoint,
+        selection: &'a ContentReference,
+        alternatives: &'a [df_narrative::AdmittedBeatAlternative<'a>],
+    ) -> df_narrative::CheckpointBeatRequest<'a> {
+        df_narrative::CheckpointBeatRequest {
+            expected_basis: current.basis(),
+            admitted_pins: current.pins(),
+            policy: &self.policy,
+            expected_policy: &self.policy,
+            recipient: member(3),
+            selection,
+            alternatives,
+            inventory: self.inventory(),
+            checkpoint_limits: checkpoint_limits(),
+        }
+    }
+}
+
+fn beat_limits() -> df_narrative::BeatSelectionLimits {
+    df_narrative::BeatSelectionLimits {
+        records: 100,
+        alternatives: 2,
+        work: 4096,
+    }
+}
+
+fn beat_schedule<'a>(
+    current: &'a Checkpoint,
+    destinations: &'a [AdmittedScheduleDestination<'a>],
+) -> ScheduleDirectorRequest<'a> {
+    ScheduleDirectorRequest {
+        accepted_time: Some(DueSelectionRequest {
+            expected_basis: current.basis(),
+            target_time: time(12),
+            paused: false,
+            deadline_remaining: Duration::from_secs(1),
+            policy: &current.state().narrative.definition,
+        }),
+        destinations,
+        environmental: EnvironmentalRequest::NotApplicable,
+    }
+}
+
+fn compose_beats<'a>(
+    current: &'a Checkpoint,
+    narrative: df_narrative::CheckpointBeatRequest<'_>,
+    limits: ScheduleDirectorLimits,
+    narrative_limits: df_narrative::BeatSelectionLimits,
+) -> Result<DirectorStaging<'a>, DirectorError> {
+    compose_schedule_beat_selection(
+        current,
+        current.pins(),
+        beat_schedule(current, &[]),
+        None,
+        narrative,
+        limits,
+        narrative_limits,
+    )
+}
+
+#[test]
+fn engine_selected_authored_routes_retain_exact_policy_and_ordered_causes_without_success_grants() {
+    let admission = BeatAdmission::new();
+    let mut state = source_backed_schedule_state();
+    state.schedules.clear();
+    let current = admission.checkpoint(state);
+    let unchanged = current.clone();
+    let causes = [df_narrative::BeatCause {
+        fact: FactId::from_bytes(&[7; 16]).unwrap(),
+        event: &admission.references[0],
+        consumed_by_narrative: true,
+    }];
+    let alternatives = admission.alternatives(&causes);
+    for (selection, destination) in [(3, 5), (4, 6)] {
+        let request =
+            || admission.request(&current, &admission.references[selection], &alternatives);
+        let first = compose_beats(&current, request(), schedule_limits(), beat_limits()).unwrap();
+        let second = compose_beats(&current, request(), schedule_limits(), beat_limits()).unwrap();
+        assert_eq!(first, second);
+        let DirectorStaging::Staged(staged) = first else {
+            panic!("route not staged")
+        };
+        assert_eq!(
+            staged.candidate().state().narrative.active_beats,
+            [admission.references[destination].clone()]
+        );
+        assert_eq!(
+            staged.candidate().state().narrative.completed_beats,
+            [admission.references[2].clone()]
+        );
+        assert_eq!(staged.narrative_policy(), Some(&admission.policy));
+        assert_eq!(
+            staged.beat_selection(),
+            Some(&admission.references[selection])
+        );
+        assert_eq!(staged.beat_causes(), [causes[0].fact]);
+        let mut protected = staged.candidate().state().clone();
+        protected.narrative = current.state().narrative.clone();
+        protected.logical_time = current.state().logical_time;
+        protected.continuity.catch_up = current.state().continuity.catch_up.clone();
+        assert_eq!(protected, *current.state());
+        assert_eq!(staged.candidate().basis(), current.basis());
+        assert_eq!(staged.candidate().pins(), current.pins());
+        assert_eq!(
+            compose_beats(
+                staged.candidate(),
+                admission.request(
+                    staged.candidate(),
+                    &admission.references[selection],
+                    &alternatives
+                ),
+                schedule_limits(),
+                beat_limits()
+            ),
+            Err(DirectorError::BeatSelection(
+                df_narrative::BeatSelectionError::Prerequisite
+            )),
+        );
+    }
+    assert_eq!(current, unchanged);
+}
+
+#[test]
+fn engine_actual_refusal_is_required_for_either_authored_fallback_and_retains_causal_order() {
+    let admission = BeatAdmission::new();
+    let mut state = source_backed_schedule_state();
+    state.schedules.clear();
+    let current = admission.checkpoint(state);
+    let refusal = FactId::from_bytes(&[22; 16]).unwrap();
+    let operation = df_types::OperationId::from_bytes(&[23; 16]).unwrap();
+    let mut refused_state = current.state().clone();
+    refused_state.facts.push(GameFact {
+        id: refusal,
+        revision: current.basis().revision,
+        operation,
+        ordinal: 0,
+        cause: Some(FactId::from_bytes(&[7; 16]).unwrap()),
+        audience: AudienceScope::Shared,
+        value: FactValue::ContentEvent {
+            definition: admission.references[7].clone(),
+            subjects: vec![],
+        },
+    });
+    refused_state.decisions.push(AcceptedDecision {
+        operation,
+        revision: current.basis().revision,
+        facts: vec![refusal],
+        draws: vec![],
+        effects: vec![],
+        source_policy: label("accepted-courier-refusal"),
+        semantic_output: None,
+    });
+    let refused = admission.rebuild(refused_state);
+    let unchanged = refused.clone();
+    let causes = [
+        df_narrative::BeatCause {
+            fact: FactId::from_bytes(&[7; 16]).unwrap(),
+            event: &admission.references[0],
+            consumed_by_narrative: true,
+        },
+        df_narrative::BeatCause {
+            fact: refusal,
+            event: &admission.references[7],
+            consumed_by_narrative: false,
+        },
+    ];
+    let alternatives = admission.alternatives(&causes);
+    for selection in [3, 4] {
+        assert_eq!(
+            compose_beats(
+                &current,
+                admission.request(&current, &admission.references[selection], &alternatives),
+                schedule_limits(),
+                beat_limits()
+            ),
+            Err(DirectorError::BeatSelection(
+                df_narrative::BeatSelectionError::Source
+            )),
+        );
+        let output = compose_beats(
+            &refused,
+            admission.request(&refused, &admission.references[selection], &alternatives),
+            schedule_limits(),
+            beat_limits(),
+        )
+        .unwrap();
+        let DirectorStaging::Staged(staged) = output else {
+            panic!("fallback not staged")
+        };
+        assert_eq!(staged.beat_causes(), [causes[0].fact, refusal]);
+        assert_eq!(staged.candidate().state().facts, refused.state().facts);
+        assert_eq!(
+            staged.candidate().state().decisions,
+            refused.state().decisions
+        );
+        assert_eq!(
+            staged.candidate().state().knowledge,
+            refused.state().knowledge
+        );
+        assert_eq!(
+            staged.candidate().state().resources,
+            refused.state().resources
+        );
+        assert_eq!(
+            staged.candidate().state().narrative.open_threads,
+            refused.state().narrative.open_threads
+        );
+    }
+    assert_eq!(refused, unchanged);
+}
+
+#[test]
+fn engine_beat_malformed_sources_audiences_ambiguity_and_inventory_refuse_atomically() {
+    use df_narrative::{BeatCause, BeatSelectionError};
+    let admission = BeatAdmission::new();
+    let mut state = source_backed_schedule_state();
+    state.schedules.clear();
+    let baseline = admission.checkpoint(state);
+    for case in 0..8 {
+        let mut state = baseline.state().clone();
+        if case == 2 {
+            state.facts[0].audience = AudienceScope::Host;
+        }
+        if case == 3 {
+            state.decisions.clear();
+        }
+        let current = admission.rebuild(state);
+        let unchanged = current.clone();
+        let fact = FactId::from_bytes(&[if case == 0 { 99 } else { 7 }; 16]).unwrap();
+        let cause = || BeatCause {
+            fact,
+            event: &admission.references[if case == 1 { 7 } else { 0 }],
+            consumed_by_narrative: true,
+        };
+        let mut causes = vec![cause()];
+        if case == 4 {
+            causes.push(cause());
+        }
+        let mut alternatives = admission.alternatives(&causes);
+        if case == 5 {
+            alternatives[1].selection = alternatives[0].selection;
+        }
+        let mut request = admission.request(&current, &admission.references[3], &alternatives);
+        let mut inventory = admission.references.clone();
+        if case == 6 {
+            inventory.remove(3);
+            request.inventory.content = &inventory;
+        }
+        if case == 7 {
+            request.selection = &admission.references[0];
+        }
+        let expected = match case {
+            2 => BeatSelectionError::Recipient,
+            5 | 7 => BeatSelectionError::Selection,
+            6 => BeatSelectionError::UnadmittedContent,
+            _ => BeatSelectionError::Source,
+        };
+        assert_eq!(
+            compose_beats(&current, request, schedule_limits(), beat_limits()),
+            Err(DirectorError::BeatSelection(expected)),
+            "case {case}"
+        );
+        assert_eq!(current, unchanged);
+    }
+}
+
+#[test]
+fn engine_beat_basis_pins_and_policy_are_revalidated_after_sibling_staging() {
+    use df_narrative::{BeatCause, BeatSelectionError};
+    let admission = BeatAdmission::new();
+    let mut state = source_backed_schedule_state();
+    state.schedules.clear();
+    let current = admission.checkpoint(state);
+    let unchanged = current.clone();
+    let causes = [BeatCause {
+        fact: FactId::from_bytes(&[7; 16]).unwrap(),
+        event: &admission.references[0],
+        consumed_by_narrative: true,
+    }];
+    let alternatives = admission.alternatives(&causes);
+    for (expected_basis, error) in [
+        (
+            Basis {
+                session: SessionId::from_bytes(&[99; 16]).unwrap(),
+                ..current.basis()
+            },
+            CheckpointError::WrongSession,
+        ),
+        (
+            Basis {
+                run: RunId::from_bytes(&[99; 16]).unwrap(),
+                ..current.basis()
+            },
+            CheckpointError::WrongRun,
+        ),
+        (
+            Basis {
+                revision: revision(2, 7),
+                ..current.basis()
+            },
+            CheckpointError::StaleBasis,
+        ),
+    ] {
+        let mut request = admission.request(&current, &admission.references[3], &alternatives);
+        request.expected_basis = expected_basis;
+        assert_eq!(
+            compose_beats(&current, request, schedule_limits(), beat_limits()),
+            Err(DirectorError::BeatSelection(BeatSelectionError::Binding(
+                error
+            )))
+        );
+    }
+    for component in 0..3 {
+        let mut stale = current.pins().clone();
+        let error = match component {
+            0 => {
+                stale.content.package_digest = ContentDigest([99; 32]);
+                CheckpointError::ContentMismatch
+            }
+            1 => {
+                stale.rules.handler_digest = ContentDigest([99; 32]);
+                CheckpointError::RulesMismatch
+            }
+            _ => {
+                stale.build = BuildIdentity::new(
+                    Some("different-source"),
+                    Some("fixture-native-1"),
+                    Some("fixture-wasm-1"),
+                    Some("fixture-config-1"),
+                    Some("fixture-content-1"),
+                )
+                .unwrap();
+                CheckpointError::BuildMismatch
+            }
+        };
+        let mut request = admission.request(&current, &admission.references[3], &alternatives);
+        request.admitted_pins = &stale;
+        assert_eq!(
+            compose_beats(&current, request, schedule_limits(), beat_limits()),
+            Err(DirectorError::BeatSelection(BeatSelectionError::Binding(
+                error
+            )))
+        );
+    }
+    let stale_policy = label("stale-policy");
+    let mut request = admission.request(&current, &admission.references[3], &alternatives);
+    request.expected_policy = &stale_policy;
+    assert_eq!(
+        compose_beats(&current, request, schedule_limits(), beat_limits()),
+        Err(DirectorError::BeatSelection(
+            BeatSelectionError::StalePolicy
+        ))
+    );
+    assert_eq!(current, unchanged);
+}
+
+#[test]
+fn engine_beat_limits_include_receipt_bytes_and_reject_without_candidate() {
+    use df_narrative::{BeatCause, BeatSelectionError};
+    let admission = BeatAdmission::new();
+    let mut state = source_backed_schedule_state();
+    state.schedules.clear();
+    let current = admission.checkpoint(state);
+    let unchanged = current.clone();
+    let causes = [BeatCause {
+        fact: FactId::from_bytes(&[7; 16]).unwrap(),
+        event: &admission.references[0],
+        consumed_by_narrative: true,
+    }];
+    let alternatives = admission.alternatives(&causes);
+    for case in 0..7 {
+        let mut request = admission.request(&current, &admission.references[3], &alternatives);
+        let mut bounds = schedule_limits();
+        let mut selection_bounds = beat_limits();
+        let expected = match case {
+            0 => {
+                selection_bounds.alternatives = 1;
+                DirectorError::Capacity
+            }
+            1 => {
+                selection_bounds.records = 1;
+                DirectorError::BeatSelection(BeatSelectionError::Capacity)
+            }
+            2 => {
+                selection_bounds.work = 0;
+                DirectorError::BeatSelection(BeatSelectionError::Capacity)
+            }
+            3 => {
+                request.checkpoint_limits.maximum_retained_bytes = 1;
+                DirectorError::BeatSelection(BeatSelectionError::Capacity)
+            }
+            4 => {
+                request.checkpoint_limits.maximum_retained_bytes *= 2;
+                DirectorError::InvalidLimits
+            }
+            5 => {
+                bounds.directors.maximum_pass_bytes = current.retained_bytes().unwrap()
+                    + 3 * bounds.directors.maximum_checkpoint_bytes
+                    + bounds.schedule.output_bytes;
+                assert!(matches!(
+                    compose_schedule_candidates(
+                        &current,
+                        current.pins(),
+                        beat_schedule(&current, &[]),
+                        DirectorCandidates {
+                            interaction: None,
+                            narrative: None
+                        },
+                        admission.inventory(),
+                        bounds
+                    )
+                    .unwrap(),
+                    DirectorStaging::Staged(_),
+                ));
+                DirectorError::Capacity
+            }
+            _ => {
+                selection_bounds.records = usize::MAX;
+                DirectorError::Capacity
+            }
+        };
+        assert_eq!(
+            compose_beats(&current, request, bounds, selection_bounds),
+            Err(expected),
+            "case {case}"
+        );
+    }
+    assert_eq!(current, unchanged);
+}
+
+#[test]
+fn engine_beat_preserves_rules_world_and_missing_environment_pending_before_selection() {
+    let admission = BeatAdmission::new();
+    let mut state = source_backed_schedule_state();
+    let world = admission.checkpoint(state.clone());
+    let output = compose_beats(
+        &world,
+        admission.request(&world, &admission.references[0], &[]),
+        schedule_limits(),
+        beat_limits(),
+    )
+    .unwrap();
+    assert!(matches!(output, DirectorStaging::WorldPending(_)));
+    state.pending.push(PendingResolution {
+        id: ResolutionId::from_bytes(&[9; 16]).unwrap(),
+        basis: basis(),
+        continuation: label("rules-continuation"),
+        window: ResolutionWindow {
+            id: WindowId::from_bytes(&[10; 16]).unwrap(),
+            phase: TriggerPhase::BeforeDraw,
+            causal_fact: FactId::from_bytes(&[7; 16]).unwrap(),
+            source: rule(),
+            timer: None,
+        },
+        next: PendingInput::Choice {
+            remaining: vec![OfferedResponse {
+                participant: member(3),
+                offer: label("offer"),
+                options: vec![label("option")],
+                source: rule(),
+            }],
+        },
+        choices: vec![],
+        draw_ordinals: vec![],
+        spent: vec![],
+        rulings: vec![],
+    });
+    let rules = admission.checkpoint(state);
+    let output = compose_beats(
+        &rules,
+        admission.request(&rules, &admission.references[0], &[]),
+        schedule_limits(),
+        beat_limits(),
+    )
+    .unwrap();
+    let DirectorStaging::RulesPending(pending) = output else {
+        panic!("rules skipped")
+    };
+    assert_eq!(pending, rules.state().pending);
+    let mut state = world.state().clone();
+    state.schedules.clear();
+    let missing_environment = admission.rebuild(state);
+    let unchanged = missing_environment.clone();
+    let mut schedule = beat_schedule(&missing_environment, &[]);
+    schedule.environmental = EnvironmentalRequest::Required {
+        admitted_changes: None,
+        limits: EnvironmentalDeltaLimits {
+            input_records: 256,
+            changes: 16,
+            output_bytes: 65536,
+        },
+    };
+    assert_eq!(
+        compose_schedule_beat_selection(
+            &missing_environment,
+            missing_environment.pins(),
+            schedule,
+            None,
+            admission.request(&missing_environment, &admission.references[0], &[]),
+            schedule_limits(),
+            beat_limits()
+        )
+        .unwrap(),
+        DirectorStaging::MissingEnvironmentalProducer,
+    );
+    assert_eq!(missing_environment, unchanged);
+}
+
+#[test]
+fn engine_final_beat_refusal_discards_tentative_schedule_cursor_time_and_interaction() {
+    let admission = BeatAdmission::new();
+    let current = admission.checkpoint(source_backed_schedule_state());
+    let unchanged = current.clone();
+    let definition = content();
+    let destinations = [
+        AdmittedScheduleDestination {
+            event: id(8),
+            definition: &definition,
+            entity: entity(4),
+            expected_location: None,
+            destination: entity(5),
+        },
+        AdmittedScheduleDestination {
+            event: id(9),
+            definition: &definition,
+            entity: entity(4),
+            expected_location: Some(entity(5)),
+            destination: entity(6),
+        },
+    ];
+    let mut interaction_state = current.state().clone();
+    interaction_state.relationships = self::interaction_state().relationships;
+    let interaction = admission.rebuild(interaction_state);
+    let plain = compose_schedule_candidates(
+        &current,
+        current.pins(),
+        beat_schedule(&current, &destinations),
+        DirectorCandidates {
+            interaction: Some(interaction.clone()),
+            narrative: None,
+        },
+        admission.inventory(),
+        schedule_limits(),
+    )
+    .unwrap();
+    let DirectorStaging::Staged(staged) = plain else {
+        panic!("siblings not staged")
+    };
+    assert_eq!(
+        staged.candidate().state().entities[0].location,
+        Some(entity(6))
+    );
+    assert_eq!(staged.candidate().state().logical_time, time(12));
+    assert!(staged.candidate().state().continuity.catch_up.is_some());
+    assert_eq!(
+        staged.candidate().state().relationships,
+        interaction.state().relationships
+    );
+    assert_eq!(
+        compose_schedule_beat_selection(
+            &current,
+            current.pins(),
+            beat_schedule(&current, &destinations),
+            Some(interaction),
+            admission.request(&current, &admission.references[0], &[]),
+            schedule_limits(),
+            beat_limits()
+        ),
+        Err(DirectorError::BeatSelection(
+            df_narrative::BeatSelectionError::Selection
+        )),
+    );
+    assert_eq!(current, unchanged);
+}

@@ -1,4 +1,4 @@
-//! Proposed integration test for df-narrative/tests/alternative_refusal_contract.rs.
+//! Authored alternatives and actual accepted refusal retain player agency.
 //! The content owner, not this selector, admits the two authored alternatives.
 use df_model::checkpoint::*;
 use df_narrative::*;
@@ -43,6 +43,10 @@ impl Fixture {
             "packet-thread",
             "begin-story",
             "refusal-recorded",
+            "follow-refusal-trail",
+            "wait-for-courier",
+            "refusal-trail",
+            "refusal-wait",
         ]
         .map(content)
         .to_vec();
@@ -97,6 +101,88 @@ impl Fixture {
             source,
             policy: model::label("authored-courier-alternatives"),
         }
+    }
+
+    fn recorded_refusal(&self) -> Checkpoint {
+        let mut state = self.checkpoint.state().clone();
+        let operation = OperationId::from_bytes(&[23; 16]).unwrap();
+        let source = fact_id(22);
+        state.facts.push(GameFact {
+            id: source,
+            revision: self.checkpoint.basis().revision,
+            operation,
+            ordinal: 0,
+            cause: Some(self.source),
+            audience: AudienceScope::Shared,
+            value: FactValue::ContentEvent {
+                definition: self.references[8].clone(),
+                subjects: vec![],
+            },
+        });
+        state.decisions.push(AcceptedDecision {
+            operation,
+            revision: self.checkpoint.basis().revision,
+            facts: vec![source],
+            draws: vec![],
+            effects: vec![],
+            source_policy: model::label("admitted-courier-refusal"),
+            semantic_output: None,
+        });
+        self.checkpoint_with(state)
+    }
+
+    fn select_refusal(
+        &self,
+        current: &Checkpoint,
+        selection: &ContentReference,
+        limits: BeatSelectionLimits,
+    ) -> Result<Checkpoint, BeatSelectionError> {
+        let causes = [
+            BeatCause {
+                fact: self.source,
+                event: &self.references[7],
+                consumed_by_narrative: true,
+            },
+            BeatCause {
+                fact: fact_id(22),
+                event: &self.references[8],
+                consumed_by_narrative: false,
+            },
+        ];
+        let threads = [self.references[6].clone()];
+        let alternatives = [
+            AdmittedBeatAlternative {
+                selection: &self.references[9],
+                from: &self.references[1],
+                to: &self.references[11],
+                causes: &causes,
+                required_threads: &threads,
+                opened_thread: None,
+            },
+            AdmittedBeatAlternative {
+                selection: &self.references[10],
+                from: &self.references[1],
+                to: &self.references[12],
+                causes: &causes,
+                required_threads: &threads,
+                opened_thread: None,
+            },
+        ];
+        stage_checkpoint_beat_selection(
+            current,
+            CheckpointBeatRequest {
+                expected_basis: current.basis(),
+                admitted_pins: current.pins(),
+                policy: &self.policy,
+                expected_policy: &self.policy,
+                recipient: model::member(3),
+                selection,
+                alternatives: &alternatives,
+                inventory: self.inventory(),
+                checkpoint_limits: model::limits(),
+            },
+            limits,
+        )
     }
 
     fn inventory(&self) -> ReferenceInventory<'_> {
@@ -425,17 +511,16 @@ fn missing_understanding_thread_and_source_audience_refuse_without_fabricating_a
 #[test]
 fn refusal_consequence_retains_thread_until_an_admitted_resolution() {
     let fixture = Fixture::new();
-    let current = &fixture.checkpoint;
+    let refused = fixture.recorded_refusal();
+    let current = &refused;
     let selection = [ThreadConsequenceSelection {
         thread: &fixture.references[6],
-        event_definition: &fixture.references[7],
-        source: fixture.source,
+        event_definition: &fixture.references[8],
+        source: fact_id(22),
         disposition: ThreadDisposition::Continue,
     }];
-    // The accepted source may be recorded once as a continuing consequence.
-    let mut state = current.state().clone();
-    state.narrative.accepted_facts.clear();
-    let unconsumed = fixture.checkpoint_with(state);
+    // The actual accepted refusal may be consumed once while the player's thread remains open.
+    let unconsumed = current.clone();
     let continued = fixture.progress(&unconsumed, &selection).unwrap();
     assert_eq!(
         continued.checkpoint.state().narrative.open_threads,
@@ -445,7 +530,7 @@ fn refusal_consequence_retains_thread_until_an_admitted_resolution() {
         continued.checkpoint.state().narrative.active_beats,
         unconsumed.state().narrative.active_beats
     );
-    assert_eq!(continued.evidence[0].source, fixture.source);
+    assert_eq!(continued.evidence[0].source, fact_id(22));
     assert_eq!(
         continued.evidence[0].disposition,
         ThreadDisposition::Continue
@@ -458,7 +543,7 @@ fn refusal_consequence_retains_thread_until_an_admitted_resolution() {
     );
     let bad = [ThreadConsequenceSelection {
         thread: &fixture.references[6],
-        event_definition: &fixture.references[7],
+        event_definition: &fixture.references[8],
         source: fact_id(98),
         disposition: ThreadDisposition::Continue,
     }];
@@ -472,4 +557,136 @@ fn refusal_consequence_retains_thread_until_an_admitted_resolution() {
         unconsumed.state().narrative.open_threads,
         [fixture.references[6].clone()]
     );
+}
+
+#[test]
+fn actual_refusal_enables_two_authored_fallbacks_without_forcing_either_or_granting_success() {
+    let fixture = Fixture::new();
+    let refused = fixture.recorded_refusal();
+    let unchanged = refused.clone();
+    for (selection, destination) in [(9, 11), (10, 12)] {
+        assert_eq!(
+            fixture.select_refusal(
+                &fixture.checkpoint,
+                &fixture.references[selection],
+                Fixture::beat_limits(),
+            ),
+            Err(BeatSelectionError::Source),
+        );
+        let candidate = fixture
+            .select_refusal(
+                &refused,
+                &fixture.references[selection],
+                Fixture::beat_limits(),
+            )
+            .unwrap();
+        assert_eq!(
+            candidate.state().narrative.active_beats,
+            [fixture.references[destination].clone()]
+        );
+        let mut protected = candidate.state().clone();
+        protected.narrative = refused.state().narrative.clone();
+        assert_eq!(protected, *refused.state());
+        assert_eq!(
+            candidate.state().narrative.open_threads,
+            refused.state().narrative.open_threads
+        );
+        assert_eq!(
+            candidate.state().narrative.accepted_facts,
+            refused.state().narrative.accepted_facts
+        );
+        assert_eq!(candidate.state().resources[0].value, 4);
+        assert!(candidate.state().knowledge.is_empty());
+    }
+    assert_eq!(refused, unchanged);
+    assert_eq!(
+        refused.state().narrative.active_beats,
+        [fixture.references[1].clone()]
+    );
+}
+
+#[test]
+fn refusal_fallback_rejects_revoked_unaccepted_and_mismatched_evidence_atomically() {
+    let fixture = Fixture::new();
+    let refused = fixture.recorded_refusal();
+    for case in 0..3 {
+        let mut state = refused.state().clone();
+        let expected = match case {
+            0 => {
+                state.facts[1].audience = AudienceScope::Host;
+                BeatSelectionError::Recipient
+            }
+            1 => {
+                state.decisions.pop();
+                BeatSelectionError::Source
+            }
+            _ => {
+                state.facts[1].value = FactValue::ContentEvent {
+                    definition: fixture.references[7].clone(),
+                    subjects: vec![],
+                };
+                BeatSelectionError::Source
+            }
+        };
+        let current = fixture.checkpoint_with(state);
+        let unchanged = current.clone();
+        assert_eq!(
+            fixture.select_refusal(&current, &fixture.references[9], Fixture::beat_limits()),
+            Err(expected)
+        );
+        assert_eq!(current, unchanged);
+    }
+}
+
+#[test]
+fn refusal_fallback_count_and_work_limits_return_no_candidate() {
+    let fixture = Fixture::new();
+    let current = fixture.recorded_refusal();
+    let unchanged = current.clone();
+    for limits in [
+        BeatSelectionLimits {
+            alternatives: 1,
+            ..Fixture::beat_limits()
+        },
+        BeatSelectionLimits {
+            records: 1,
+            ..Fixture::beat_limits()
+        },
+        BeatSelectionLimits {
+            work: 0,
+            ..Fixture::beat_limits()
+        },
+    ] {
+        assert_eq!(
+            fixture.select_refusal(&current, &fixture.references[9], limits),
+            Err(BeatSelectionError::Capacity)
+        );
+    }
+    assert_eq!(current, unchanged);
+}
+
+#[test]
+fn authored_alternative_cannot_reopen_or_complete_an_already_completed_beat() {
+    let fixture = Fixture::new();
+    for completed in [1, 2] {
+        let mut state = fixture.checkpoint.state().clone();
+        state
+            .narrative
+            .completed_beats
+            .push(fixture.references[completed].clone());
+        let current = fixture.checkpoint_with(state);
+        let unchanged = current.clone();
+        assert_eq!(
+            fixture.select(
+                &current,
+                &fixture.references[4],
+                fixture.source,
+                current.basis(),
+                &fixture.policy,
+                false
+            ),
+            Err(BeatSelectionError::Prerequisite),
+        );
+        assert_eq!(current, unchanged);
+    }
 }
