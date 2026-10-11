@@ -1,5 +1,8 @@
 # Experimental S00 transport fixture
 
+This document covers the S00 transport lab only; start the playable game with
+`development/run-gameplay.sh`.
+
 Task `START-S00-001`, attempt `START-S00-001-a1`, input
 `8032257c9a3865f683f80e94134ab9fc6a404173`. This is a synthetic loopback experiment,
 not gameplay, a production bootstrap service, or full G02/G06 approval.
@@ -35,6 +38,15 @@ before execution. Cargo/protobuf/build output stays under `artifacts`; no home
 Rust install, shell profile change, system package manager or paid call is needed.
 
 For a fresh checkout without Rust, from the repository root:
+
+Before each `build-fixture.sh build`, set these required inputs to their respective
+files or directory:
+
+- `DUNGEONFLUX_BUILD_EXPECTED_IDENTITY`: required public identity record.
+- `DUNGEONFLUX_BUILD_OBSERVED_IDENTITY`: observed identity record.
+- `DUNGEONFLUX_BUILD_CONFIGURATION`: public configuration bytes.
+- `DUNGEONFLUX_BUILD_CONTENT_MANIFEST`: resolved content manifest.
+- `DUNGEONFLUX_BUILD_ASSETS_ROOT`: resolved static asset directory.
 
 ```sh
 mkdir -p artifacts/tmp/toolchain artifacts/cache/cargo artifacts/cache/rustup

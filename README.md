@@ -8,18 +8,26 @@ Project site: [dungeonfluxdnd.com](https://dungeonfluxdnd.com/).
 
 ## Current state
 
-This directory contains the architecture, development strategies, coding standards
-and SQLite planning tools, plus a pinned Rust workspace and runnable **experimental
-S00 transport fixture**. Its generated protobuf Rust client and native service exercise
-all four HTTP/2 gRPC modes over a binary WebSocket in a Rust/WASM browser.
+The playable local game runs with one command: `./development/run-gameplay.sh`. Open
+the printed display URL once and the player URL in two tabs. See [Play the game
+locally](development/README.md#play-the-game-locally) for details. Gameplay tuning
+is in progress, with design in [planning/gameplay-tuning.md](planning/gameplay-tuning.md)
+and data planned for `content/harbor-journey/`.
 
-Run `./development/build-fixture.sh build` then `./development/build-fixture.sh serve`
-and open <http://127.0.0.1:43180>. See [fixture setup, checks and qualification gaps](development/start-s00.md).
-The fixture also includes a separate [desktop pressure/resource qualification](development/qualify-g02.md) with real buffer/credit snapshots, latency samples and malicious-peer checks. Physical-device and whole-process resource evidence still block full G02 approval.
+The playable two-player harbor journey covers room join, Level 1 Dwarf Fighter
+(Soldier) creation, Lantern Wharf, typed courier dialogue, a real-dice bandit fight,
+a short rest and arrival at the Harbor Inn. It uses the 39-crate Rust workspace,
+real session actor and engine, generated gRPC-over-WebSocket services and durable
+PostgreSQL state; the fixture binary is `df-transport-fixture --gameplay-demo` in
+`crates/df-tools`.
 
-The game server, player/display application, rules and PostgreSQL deployment remain
-unimplemented. The transport fixture is synthetic; it does not approve production
-G02 device/resource qualification or G06 telemetry durability.
+A production `df-server` binary, live-data `df-web`/`df-player`/`df-display` screens,
+create-room/ready, real guest sign-in, telemetry wiring and the wider 2024 rules
+catalog are not implemented. The `crates/df-server` policy modules are not yet a
+workspace crate. The earlier S00 transport lab and its desktop pressure checks remain
+available; see [fixture setup](development/start-s00.md) and
+[G02 qualification](development/qualify-g02.md). Physical-device and whole-process
+resource evidence still block full G02 approval.
 
 The sibling `dungeonflux.old/` preserves the earlier implementation as a read-only
 reference. Its website was explicitly moved into [docs/](docs/); the remaining
@@ -199,8 +207,8 @@ See [plan database](planning/plan-database.md).
 
 Agents must read [AGENTS.md](AGENTS.md), relevant planning and
 [mandatory coding style](planning/coding-style.md). Shared types, schemas, migrations
-and composition have one active edit owner. Once Git exists, source workers use
-isolated worktrees and the coordinator integrates sequentially.
+and composition have one active edit owner. Source workers use isolated worktrees
+and the coordinator integrates sequentially.
 
 - A frontier coordinator delegates each user work item to one implementing agent.
   Prefer economical Luna/Muse workers, with Terra/Sol for harder logic and
@@ -217,8 +225,8 @@ isolated worktrees and the coordinator integrates sequentially.
   Planned cleanup runs every 30 active-development minutes and protects live
   output, retained evidence, operational databases and spools.
 - Workers retain meaningful confusion, errors, defects and challenges in devlog
-  through scoped commands when available. [CHANGELOG.md](CHANGELOG.md) will capture
-  every integrated commit in six-hour blocks once Git exists.
+  through scoped commands when available. [CHANGELOG.md](CHANGELOG.md) captures
+  every integrated commit in six-hour blocks.
 
 The installed `dungeonflux-quality-review` personal skill has a configured
 one-minute heartbeat. It claims bounded new/changed authored Rust files and caches

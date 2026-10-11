@@ -97,8 +97,8 @@ ownership, and bounded owned async work. Avoid speculative abstractions, silent
 error/default handling, input-driven panics, and ad hoc logging. Preserve the
 server-authoritative thin-client architecture and shared OTEL conventions.
 
-Once the workspace exists, formatting and affected native/WASM lint/compile gates
-are required before approval. Evaluators inspect both automated results and the
+Formatting and affected native/WASM lint/compile gates are required before approval.
+Evaluators inspect both automated results and the
 semantic style rules. Necessary exceptions are narrow, justified, and disclosed;
 do not disable gates or reformat unrelated files. Code style cannot substitute
 for the independent running-output evaluation required below.
@@ -241,11 +241,10 @@ capacity promises; selected bounds and payment/usage models require verified gat
   integration hooks and their owners, verification, and relevant known pitfalls.
   Preserve that brief for the attempt. Report missing prerequisites precisely;
   do not invent public contracts or silently substitute production stubs.
-- Once Git exists, use isolated worktrees for source implementation. Before that,
-  planning/documentation uses explicit file ownership and revision hashes; it does
-  not initialize Git merely to satisfy this rule. Include shared schemas, composition files, manifests,
-  and layout foundations in edit-area conflicts. Re-read affected source before
-  edits or resumed work, and stage only the task's paths. The coordinator
+- Use isolated worktrees for source implementation. Include shared schemas,
+  composition files, manifests, and layout foundations in edit-area conflicts.
+  Re-read affected source before edits or resumed work, and stage only the task's
+  paths. The coordinator
   integrates sequentially and owns authoritative task state.
 - Make connecting work explicit. Registered executors, reachable callers,
   complete projections, mounted views, and real asset bytes are part of an
@@ -328,8 +327,8 @@ current passive public/synthetic DungeonFlux preview, and start/renew its bounde
 active lease when actual work starts or continues. Stop it when the development
 run ends. Scheduled minute ticks must never renew activity; agents must not start
 competing timers. Report preview/source/task changes so the coordinator can update
-its registration. No game preview exists yet; the initial static site capture is
-explicitly a project-site baseline.
+its registration. A local game preview exists via `development/run-gameplay.sh`;
+earlier static-site captures remain a project-site baseline.
 
 Retain an actual browser screenshot and timestamp/source/task metadata each active
 minute, even when unchanged. The recorder appends scoped devlog entries; routine
