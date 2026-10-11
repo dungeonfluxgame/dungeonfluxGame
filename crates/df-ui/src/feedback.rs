@@ -14,6 +14,29 @@ pub enum FeedbackView<'a> {
     },
 }
 
+impl<'a> FeedbackView<'a> {
+    /// Maps the existing receipt owner's observation using caller-localized labels.
+    /// Absence and namespace retirement do not prove rejection or permit replay.
+    /// A committed receipt requires its owner's accepted/rejected and pending-work
+    /// presentation; returning None deliberately supplies no success label.
+    pub fn for_resolution<Receipt>(
+        resolution: &df_client::receipts::OperationResolution<Receipt>,
+        pending: &'a str,
+        uncertainty: &'a str,
+    ) -> Option<Self> {
+        use df_client::receipts::OperationResolution;
+
+        match resolution {
+            OperationResolution::InProgress => Some(Self::Pending(pending)),
+            OperationResolution::Uncertain
+            | OperationResolution::NotRecorded
+            | OperationResolution::ExpiredOrIndeterminate
+            | OperationResolution::NamespaceRetired { .. } => Some(Self::Uncertain(uncertainty)),
+            OperationResolution::Committed { .. } => None,
+        }
+    }
+}
+
 /// Identity of one presentation owner, not a server operation or permission.
 /// Capture this token before waiting; replacement rejects its late completions.
 #[derive(Clone)]
