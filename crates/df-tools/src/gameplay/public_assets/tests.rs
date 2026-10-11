@@ -12,6 +12,7 @@ fn fixture(inn: Option<Bytes>) -> Router {
         campfire: Bytes::from_static(b"campfire"),
         portrait: Bytes::from_static(b"portrait"),
         inn,
+        combat: None,
     })
 }
 
@@ -247,6 +248,7 @@ async fn large_get_and_range_bodies_are_poll_driven_bounded_chunks() {
         campfire: Bytes::new(),
         portrait: Bytes::new(),
         inn: None,
+        combat: None,
     });
     let validator = etag(&mut router, ART_PATH).await;
     let mut conditional_range = range("bytes=1-");
@@ -296,6 +298,7 @@ async fn etags_bind_exact_immutable_snapshot_bytes_and_change_with_the_selected_
         campfire: Bytes::new(),
         portrait: Bytes::from_static(b"abc"),
         inn: Some(Bytes::new()),
+        combat: None,
     };
     let mut original = router(assets.clone());
     let validator = etag(&mut original, ART_PATH).await;

@@ -324,6 +324,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         campfire: campfire_bytes,
         portrait: portrait_bytes,
         inn: inn_bytes,
+        combat: combat_bytes,
     } = startup_configuration::load_assets(
         std::path::Path::new(&web_root),
         std::path::Path::new(&asset_root),
@@ -815,6 +816,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             campfire: campfire_bytes,
             portrait: portrait_bytes,
             inn: inn_bytes,
+            combat: combat_bytes,
         }));
     let npc = npc_phase.map(|phase| {
         tokio::spawn(courier_npc_qualification::run(

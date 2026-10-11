@@ -1,5 +1,6 @@
 //! Thin server-projected room, creation, dialogue and combat clients.
 mod dialogue_recovery;
+mod live;
 mod public_scene_assets;
 mod view_delivery;
 
@@ -48,6 +49,7 @@ struct Client {
     creation: Option<CharacterPhaseSurface>,
     scene_delivery: Option<Rc<PublicSceneDelivery>>,
     dialogue: dialogue_recovery::DialogueRecovery,
+    live: live::Live,
     busy: bool,
 }
 impl Drop for Client {
@@ -65,6 +67,7 @@ impl Drop for Client {
         if let Some(creation) = self.creation.take() {
             let _cleanup = creation.dispose();
         }
+        let _cleanup = live::dispose(self);
     }
 }
 thread_local! {static CLIENTS:RefCell<Vec<Rc<RefCell<Client>>>>=const {RefCell::new(Vec::new())};}
@@ -296,6 +299,7 @@ fn clear_view_scope(client: &mut Client) -> Result<(), JsValue> {
     client.first_attack = None;
     client.last_confirmed = false;
     clear_callbacks(client);
+    let live_cleanup = live::dispose(client);
     let cleanup = client
         .creation
         .take()
@@ -304,11 +308,13 @@ fn clear_view_scope(client: &mut Client) -> Result<(), JsValue> {
     if let Some(surface) = client.root.query_selector(".view")? {
         surface.set_text_content(None);
         surface.remove_attribute("data-destination")?;
+        surface.remove_attribute("hidden")?;
     }
     client.root.remove_attribute("data-phase")?;
     client.root.remove_attribute("data-last-receipt-sequence")?;
     client.root.remove_attribute("data-last-receipt-replayed")?;
     cleanup.map_err(|_| JsValue::from_str("retired character scope cleanup failed"))?;
+    live_cleanup.map_err(|_| JsValue::from_str("retired live screen cleanup failed"))?;
     Ok(())
 }
 fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
@@ -1135,6 +1141,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         .query_selector(".view")?
         .ok_or_else(|| JsValue::from_str("view absent"))?;
     root.set_attribute("data-phase", &journey.phase.to_string())?;
+    live::sheet::sync(client)?;
     if let Some(creation_offer) = journey.creation.as_ref() {
         if let Some(scene) = &client.borrow().scene_delivery {
             scene
@@ -1176,6 +1183,17 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
             .map_err(|_| JsValue::from_str("character retirement failed"))?;
     }
     let scene = scene.ok_or_else(|| JsValue::from_str("server scene missing"))?;
+    let live_view = live::LiveView {
+        surface: &surface,
+        narration: &narration,
+        scene: &scene,
+        journey: &journey,
+        offers: &offers,
+    };
+    if live::present(client, &live_view)? {
+        return Ok(());
+    }
+    live::release(client, &surface)?;
     public_scene_assets::resolve(&scene.scene_asset)
         .map_err(|_| JsValue::from_str("unknown required public scene asset"))?;
     let (delivery, scope, revision) = {
@@ -1291,151 +1309,8 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
     if !clue.is_empty() {
         node(&document, &body, "p", "clue", &clue)?;
     }
-    if let Some(sheet) = journey.own_character {
-        let summary = node(&document, &body, "div", "hero-summary", "")?;
-        node(&document, &summary, "strong", "", &sheet.name)?;
-        node(
-            &document,
-            &summary,
-            "span",
-            "",
-            &format!(
-                "Dwarf Fighter · HP {}/{} · AC {}",
-                sheet.hit_points, sheet.maximum_hit_points, sheet.armor_class
-            ),
-        )?;
-        let facts = node(&document, &summary, "details", "sheet-facts", "")?;
-        node(
-            &document,
-            &facts,
-            "summary",
-            "",
-            "Your accepted character sheet",
-        )?;
-        for fact in &sheet.facts {
-            node(
-                &document,
-                &facts,
-                "p",
-                "",
-                &format!("{} · {}", fact.label, fact.value),
-            )?;
-        }
-        if let Some(uses) = sheet
-            .facts
-            .iter()
-            .find(|fact| fact.label == "Second Wind uses")
-        {
-            node(
-                &document,
-                &summary,
-                "span",
-                "wind-uses",
-                &format!("Second Wind · {} uses remaining", uses.value),
-            )?;
-        }
-    }
-    if let Some(combat) = journey.combat {
-        let battle = node(&document, &body, "section", "battle", "")?;
-        node(
-            &document,
-            &battle,
-            "div",
-            "eyebrow",
-            &format!(
-                "Round {} · {}",
-                combat.round,
-                if combat.finished {
-                    "Encounter resolved".to_owned()
-                } else {
-                    format!("{}'s turn", combat.active_actor)
-                }
-            ),
-        )?;
-        let roster = node(&document, &battle, "div", "combat-roster", "")?;
-        for member in &combat.participants {
-            let card = node(
-                &document,
-                &roster,
-                "div",
-                if member.active_turn {
-                    "combatant active"
-                } else {
-                    "combatant"
-                },
-                "",
-            )?;
-            node(&document, &card, "strong", "", &member.name)?;
-            node(
-                &document,
-                &card,
-                "span",
-                "",
-                &format!(
-                    "HP {}/{}{}",
-                    member.hit_points,
-                    member.maximum_hit_points,
-                    if member.unconscious {
-                        " · Unconscious"
-                    } else {
-                        ""
-                    }
-                ),
-            )?;
-            let hp = node(&document, &card, "progress", "hp", "")?;
-            hp.set_attribute("max", &member.maximum_hit_points.to_string())?;
-            hp.set_attribute("value", &member.hit_points.to_string())?;
-        }
-        let history = node(&document, &battle, "div", "combat-history", "")?;
-        for outcome in &combat.outcomes {
-            let result = node(&document, &history, "article", "combat-result", "")?;
-            node(
-                &document,
-                &result,
-                "span",
-                "roll-number",
-                &outcome.attack_die.to_string(),
-            )?;
-            node(
-                &document,
-                &result,
-                "strong",
-                "",
-                &format!("{} → {}", outcome.actor_name, outcome.target_name),
-            )?;
-            node(
-                &document,
-                &result,
-                "p",
-                "",
-                &format!(
-                    "{} + {} = {} vs AC {} · {}{} · {} damage · {} HP remaining",
-                    outcome.attack_die,
-                    outcome.attack_modifier,
-                    outcome.attack_total,
-                    outcome.target_armor_class,
-                    if outcome.hit {
-                        "Hit"
-                    } else if outcome.grazed {
-                        "Graze"
-                    } else {
-                        "Miss"
-                    },
-                    if outcome.critical { " · Critical" } else { "" },
-                    outcome.damage,
-                    outcome.target_hit_points
-                ),
-            )?;
-            if outcome.knocked_out {
-                node(
-                    &document,
-                    &result,
-                    "p",
-                    "clue",
-                    "Nonlethal knockout · Unconscious with 1 HP",
-                )?;
-            }
-        }
+    if let Some(sheet) = journey.own_character.as_ref() {
+        live::sheet::summary(client, &body, sheet)?;
     }
     dialogue_recovery::mount(client, &body, &offers)?;
     let actions = node(&document, &body, "div", "scene-actions", "")?;
@@ -1586,6 +1461,7 @@ fn new_client(
         creation: None,
         scene_delivery: None,
         dialogue: dialogue_recovery::DialogueRecovery::default(),
+        live: live::Live::default(),
         busy: false,
     })))
 }

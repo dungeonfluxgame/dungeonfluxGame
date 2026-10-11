@@ -242,6 +242,8 @@ mod browser {
             initiative: "First in supplied order",
             status: PRIVATE,
             resources: &[],
+            hit_points: None,
+            portrait: None,
         }];
         const PUBLIC_ACTORS: [CombatActor<'static>; 1] = [CombatActor {
             key: "mara",
@@ -249,6 +251,8 @@ mod browser {
             initiative: "First in supplied order",
             status: "Party member",
             resources: &[],
+            hit_points: None,
+            portrait: None,
         }];
         const ROLLS: [CombatRoll<'static>; 1] = [CombatRoll {
             key: "roll-one",
@@ -256,6 +260,7 @@ mod browser {
             value: "17",
             explanation: "13 + 4 · supplied",
             source: "Controlled supplied receipt",
+            verdict: None,
         }];
         CombatPhaseView {
             art: CombatArt::Harbor,

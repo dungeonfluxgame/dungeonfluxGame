@@ -69,6 +69,8 @@ mod browser {
             initiative: "Current preview turn",
             status: "Ready for your intent",
             resources: &[],
+            hit_points: None,
+            portrait: None,
         },
         CombatActor {
             key: "lookout",
@@ -76,6 +78,8 @@ mod browser {
             initiative: "Waiting",
             status: "Beside the sealed crate",
             resources: &[],
+            hit_points: None,
+            portrait: None,
         },
     ];
     const FIELDS: [SheetField<'static>; 2] = [
