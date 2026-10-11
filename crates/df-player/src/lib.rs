@@ -27,3 +27,11 @@ mod join;
 pub use join::{PlayerJoinConnection, PlayerJoinInput};
 #[cfg(target_arch = "wasm32")]
 pub use join::{PlayerJoinError, PlayerJoinScreen};
+
+mod action_draft;
+pub use action_draft::{
+    ActionDraft, ActionDraftError, ActionDraftStatus, ActionLookupError, ActionReceiptError,
+    MAX_RETAINED_ACTION_BYTES,
+};
+#[cfg(target_arch = "wasm32")]
+pub use action_draft::{ActionDraftLabels, ActionDraftMountError, MountedActionDraft};
