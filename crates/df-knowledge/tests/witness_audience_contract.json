@@ -1,0 +1,41 @@
+{
+  "alternatives": [
+    {
+      "choice": "Treat witnessed fact revision as current audience version",
+      "disposition": "rejected: later observer/membership frame may differ from original event revision"
+    },
+    {
+      "choice": "Add audience version field to canonical WitnessRecord",
+      "disposition": "not required for current borrowed projection; storage schema/RPC/codec expansion unperformed"
+    }
+  ],
+  "cases": [
+    "current audience Basis distinct from historical event provenance",
+    "exact member audience selection",
+    "paired irrelevant hidden facts preserve public proof",
+    "stale Basis/source pins refuse",
+    "membership revocation refuses",
+    "missing/hidden proof not fabricated",
+    "bounded witness/fact/member/output work"
+  ],
+  "decision": "The exact currently admitted Basis versions observer/audience selection; immutable witnessed fact revision/operation/ordinal and witness time/source are retained separately.",
+  "existing_native_cases": [
+    "witnessed_shared_courier_reaction_reaches_both_players_and_display_without_private_cue",
+    "witnessed_courier_reaction_requires_current_shared_cause_and_npc_evidence",
+    "altered_only_retained_witness_identity_refuses_all_roles_and_valid_replay_is_unchanged"
+  ],
+  "native_consumer": "df-tools::gameplay::wire::journey_view -> witnessed_courier_support -> df-knowledge::witness_projection::perceive_witnessed_fact",
+  "original_acceptance": [
+    "audience version pinned",
+    "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+  ],
+  "public_contract": "Borrowed existing Basis/WitnessRecord/GameFact through Knowledge perception; no new shared canonical DTO or stored audience-version field.",
+  "stage": "design",
+  "task_id": "B-F36-D02",
+  "unperformed": [
+    "compiler checks",
+    "independent native execution",
+    "browser/provider execution",
+    "broad F36 gameplay completion"
+  ]
+}
