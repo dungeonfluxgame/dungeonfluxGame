@@ -173,6 +173,10 @@ pub(super) struct Secret {
     pub(super) kinds: Vec<String>,
     pub(super) fact: String,
     pub(super) confirm: String,
+    /// Phrases that give the secret away; the first occurs verbatim in the rendered fact.
+    /// A listener who has not been told the secret must never hear them.
+    #[serde(default)]
+    pub(super) terms: Vec<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

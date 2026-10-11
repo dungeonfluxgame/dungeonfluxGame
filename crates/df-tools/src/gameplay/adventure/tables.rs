@@ -539,6 +539,23 @@ impl Tables {
                     "unknown or empty hook kinds",
                 ));
             }
+            if secret.terms.is_empty()
+                || secret.terms.len() > 4
+                || secret
+                    .terms
+                    .iter()
+                    .any(|term| term.is_empty() || term.chars().count() > 40)
+                || !secret
+                    .fact
+                    .to_lowercase()
+                    .contains(&secret.terms[0].to_lowercase())
+            {
+                return Err(invalid(
+                    "secrets.json",
+                    "tables.secrets.entries.terms",
+                    "one to four short terms, the first occurring verbatim in the fact",
+                ));
+            }
         }
         for complication in &self.complications.entries {
             if complication.groups.is_empty()

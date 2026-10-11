@@ -24,6 +24,8 @@ pub(in crate::gameplay) enum Reply {
     /// Like [`Reply::Output`], inside a response padded far beyond the schema's own size, as
     /// the live API's echo of the request is.
     Verbose(Value),
+    /// A complete response whose assistant text is computed from the request's prompt.
+    Compute(Arc<dyn Fn(&str) -> Value + Send + Sync>),
     /// A bare HTTP status with a JSON body.
     Status(u16, Value),
     /// Accept the connection and never answer.
@@ -81,6 +83,10 @@ impl FakeEndpoint {
                         }
                         Some(Reply::OutputText(text)) => {
                             respond(&mut socket, 200, &completed(&body, text))
+                        }
+                        Some(Reply::Compute(compute)) => {
+                            let slots = compute(body["input"].as_str().unwrap_or_default());
+                            respond(&mut socket, 200, &completed(&body, slots.to_string()))
                         }
                         Some(Reply::Status(status, body)) => respond(&mut socket, status, &body),
                         Some(Reply::Hang) | None => {
@@ -208,6 +214,7 @@ fn expression<'a>(facts: &'a Value, slots: &'a [Slot]) -> Expression<'a> {
         facts,
         slots,
         style: "a short spoken line",
+        profile: CallProfile::default(),
     }
 }
 
@@ -339,11 +346,7 @@ async fn a_missing_must_mention_term_is_rejected() {
     let cache = cache_directory("mention");
     let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
     let facts = facts();
-    let slots = vec![Slot {
-        name: "reply".to_owned(),
-        max_chars: 80,
-        must_mention: vec!["wharf".to_owned()],
-    }];
+    let slots = vec![Slot::new("reply", 80).mentioning(vec!["wharf".to_owned()])];
 
     let error = storyteller
         .express(&expression(&facts, &slots))
@@ -550,6 +553,118 @@ async fn an_unknown_supplier_failure_is_typed_and_not_refunded() {
     assert!(storyteller.remaining_tokens().unwrap() < 20_000);
 }
 
+fn batch_slots() -> Vec<Slot> {
+    vec![
+        Slot::new("first", 80),
+        Slot::new("second", 80).forbidding(vec!["wharf".to_owned()]),
+    ]
+}
+
+fn batch_request<'a>(facts: &'a Value, slots: &'a [Slot]) -> Expression<'a> {
+    Expression {
+        purpose: "adventure",
+        facts,
+        slots,
+        style: "short lines",
+        profile: CallProfile {
+            reasoning: Some(ReasoningEffort::Low),
+            output_tokens: Some(2500),
+            deadline: Some(Duration::from_secs(5)),
+            guidance: "CRAFT\nWrite like a Dungeon Master.\n",
+        },
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_batched_answer_keeps_the_good_slots_and_asks_again_only_for_the_bad_ones() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({"first": "Rain on the slates.", "second": "The wharf is dark."})),
+        Reply::Output(json!({"second": "A quiet dock."})),
+    ]);
+    let cache = cache_directory("partial-retry");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let (facts, slots) = (facts(), batch_slots());
+
+    let answer = storyteller
+        .express_partial(&batch_request(&facts, &slots))
+        .await
+        .unwrap();
+
+    assert_eq!(answer.accepted["first"], "Rain on the slates.");
+    assert_eq!(answer.accepted["second"], "A quiet dock.");
+    assert!(answer.rejected.is_empty());
+    assert_eq!(answer.tokens, 280);
+    let bodies = endpoint.bodies();
+    assert_eq!(bodies.len(), 2);
+    let second_prompt = sent_input(&bodies[1]);
+    assert!(second_prompt.contains("\"name\":\"second\""));
+    assert!(!second_prompt.contains("\"name\":\"first\""));
+    assert!(second_prompt.contains("slot \"second\" used or hinted at a term"));
+    for body in &bodies {
+        assert_eq!(body["reasoning"], json!({"effort": "low"}));
+        assert_eq!(body["max_output_tokens"], 2500);
+    }
+    assert!(sent_input(&bodies[0]).contains("CRAFT\nWrite like a Dungeon Master."));
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_slot_refused_twice_is_reported_while_the_accepted_slot_is_still_returned() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({"first": "Rain on the slates.", "second": "The wharf is dark."})),
+        Reply::Output(json!({"second": "Back at the wharf."})),
+    ]);
+    let cache = cache_directory("partial-refused");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let (facts, slots) = (facts(), batch_slots());
+
+    let answer = storyteller
+        .express_partial(&batch_request(&facts, &slots))
+        .await
+        .unwrap();
+
+    assert_eq!(answer.accepted.len(), 1);
+    assert_eq!(answer.accepted["first"], "Rain on the slates.");
+    assert_eq!(answer.rejected.len(), 1);
+    assert_eq!(answer.rejected["second"].label(), "forbidden_term");
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_batch_with_no_acceptable_slot_is_an_error_and_a_repeat_is_served_from_the_cache() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({"first": "Rain on the slates.", "second": "The wharf is dark."})),
+        Reply::Output(json!({"second": "Back at the wharf."})),
+    ]);
+    let cache = cache_directory("partial-cache");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let (facts, slots) = (facts(), batch_slots());
+    let request = batch_request(&facts, &slots);
+    storyteller.express_partial(&request).await.unwrap();
+
+    let again = storyteller.express_partial(&request).await.unwrap();
+
+    assert_eq!(again.accepted.len(), 1);
+    assert_eq!(again.tokens, 0, "served from the cache");
+    assert_eq!(endpoint.connections(), 2);
+    let none = Slot::new("only", 40).forbidding(vec!["wharf".to_owned()]);
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({"only": "The wharf."})),
+        Reply::Output(json!({"only": "Still the wharf."})),
+    ]);
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let only = [none];
+    let error = storyteller
+        .express_partial(&batch_request(&facts, &only))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        StorytellerError::Rejected(ValidationFailure::ForbiddenTerm { .. })
+    ));
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn an_off_storyteller_refuses_without_any_call() {
     let (facts, slots) = (facts(), slots());
@@ -604,6 +719,7 @@ async fn malformed_expressions_are_refused_before_any_call() {
             facts,
             slots,
             style: "",
+            profile: CallProfile::default(),
         };
         assert!(matches!(
             storyteller.express(&request).await,

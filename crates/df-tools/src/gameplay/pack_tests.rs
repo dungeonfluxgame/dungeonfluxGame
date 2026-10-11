@@ -1375,3 +1375,40 @@ fn antagonist_weapon_is_a_bounded_display_label() {
         Err(PackError::Bounds { .. })
     ));
 }
+
+#[test]
+fn shipped_pack_lists_its_secret_terms_and_speakers_and_bad_ones_are_refused() {
+    let loaded = load_from_bytes(shipped_pack().as_bytes(), shipped_tuning().as_bytes()).unwrap();
+    assert_eq!(loaded.pack.secret_terms, ["Vell", "Harbor Inn"]);
+    let names: Vec<&str> = loaded
+        .pack
+        .speakers
+        .iter()
+        .map(|speaker| speaker.name.as_str())
+        .collect();
+    assert_eq!(names, ["Courier", "Bandit"]);
+    for scene in &loaded.pack.scenes {
+        assert!(
+            scene.speaker.is_empty() || names.contains(&scene.speaker.as_str()),
+            "every shown speaker has a profile"
+        );
+    }
+    for (pointer, value) in [
+        ("/speakers/0/role", json!("")),
+        ("/speakers/0/voice", json!("v".repeat(97))),
+        ("/secret_terms/0", json!("")),
+    ] {
+        let pack = set(&shipped_pack(), pointer, value);
+        assert!(
+            matches!(refusal(&pack, &shipped_tuning()), PackError::Bounds { .. }),
+            "{pointer}"
+        );
+    }
+    let pack = edit(&shipped_pack(), |document| {
+        document["speakers"][0]["mood"] = json!("cheerful");
+    });
+    assert!(matches!(
+        refusal(&pack, &shipped_tuning()),
+        PackError::Parse { .. }
+    ));
+}

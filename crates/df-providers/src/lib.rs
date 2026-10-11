@@ -36,8 +36,9 @@ pub use native_http::{NativeHttpLimits, NativeHttpRefusal};
 pub use registry::registered_text_provider;
 #[cfg(not(target_arch = "wasm32"))]
 pub use text_response::{
-    NativeTextProvider, PreparedTextResponse, TextProviderConfig, TextResponseContract,
-    TextResponseError, TextResponseObservation, TextTokenUsage, ValidatedTextOutput,
+    NativeTextProvider, PreparedTextResponse, ReasoningEffort, TextProviderConfig,
+    TextResponseContract, TextResponseError, TextResponseObservation, TextTokenUsage,
+    ValidatedTextOutput,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use text_schema::{TextOutputSchema, TextSchemaError, TextSchemaLimits};

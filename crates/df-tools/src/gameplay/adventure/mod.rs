@@ -1,7 +1,9 @@
 //! Pure, server-owned chapter generation; governing design: adventure-generator §§1–12.
 mod bounds;
 pub(crate) mod cli;
+mod expression;
 mod generate;
+mod listener;
 pub(crate) mod record;
 mod render;
 mod rng;

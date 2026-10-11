@@ -34,6 +34,29 @@ pub struct TextProviderConfig {
     model: String,
     schema: TextOutputSchema,
     maximum_output_tokens: u32,
+    reasoning_effort: Option<ReasoningEffort>,
+}
+
+/// How much hidden reasoning the model may spend before it writes. Reasoning tokens count
+/// against `max_output_tokens`, so a short creative answer should ask for little of it.
+/// The request carries the setting only when the caller chose one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReasoningEffort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    fn wire_name(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
 }
 
 impl TextProviderConfig {
@@ -55,7 +78,16 @@ impl TextProviderConfig {
             model: model.to_owned(),
             schema,
             maximum_output_tokens,
+            reasoning_effort: None,
         })
+    }
+
+    /// Requests a reasoning effort; without this call the request omits the setting and the
+    /// supplier's default applies.
+    #[must_use]
+    pub fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
     }
 }
 
@@ -403,15 +435,21 @@ impl NativeTextProvider {
             bytes: Vec::new(),
             maximum_bytes: maximum_body_bytes,
         };
-        serde_json::to_writer(
-            &mut body,
-            &serde_json::json!({
-                "model":self.config.model,"input":input,"stream":false,"store":false,
-                "max_output_tokens":self.config.maximum_output_tokens,
-                "text":{"format":self.config.schema.format()},"metadata":metadata,
-            }),
-        )
-        .map_err(|_| TextResponseError::Transport(NativeHttpRefusal::RequestTooLarge))?;
+        let mut wire_body = serde_json::json!({
+            "model":self.config.model,"input":input,"stream":false,"store":false,
+            "max_output_tokens":self.config.maximum_output_tokens,
+            "text":{"format":self.config.schema.format()},"metadata":metadata,
+        });
+        if let (Some(effort), Some(fields)) =
+            (self.config.reasoning_effort, wire_body.as_object_mut())
+        {
+            fields.insert(
+                "reasoning".to_owned(),
+                serde_json::json!({"effort":effort.wire_name()}),
+            );
+        }
+        serde_json::to_writer(&mut body, &wire_body)
+            .map_err(|_| TextResponseError::Transport(NativeHttpRefusal::RequestTooLarge))?;
         let mapped = HttpRequest::responses(&self.endpoint, &self.credential, body.bytes);
         let response = self
             .http

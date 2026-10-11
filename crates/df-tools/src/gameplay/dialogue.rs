@@ -12,7 +12,11 @@ use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 
-use super::{Service, actor, credential, journey, model, npc_reply::NpcReplyContext, wire};
+use super::{
+    Service, actor, credential, journey, model,
+    npc_reply::{NpcReplyContext, StoryFacts},
+    wire,
+};
 
 const MAXIMUM_MESSAGE_BYTES: usize = 8192;
 const MAXIMUM_TEXT_BYTES: usize = 4096;
@@ -378,8 +382,8 @@ impl actor::Actor {
     fn npc_reply_context(&self, member: MemberId, typed: &str) -> Option<NpcReplyContext> {
         let view =
             wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member).ok()?;
-        let clue = super::pack::with_content(|pack| pack.courier_clue.clone());
-        NpcReplyContext::from_view(&view, member, typed, &clue)
+        let story = super::pack::with_content(StoryFacts::from_pack);
+        NpcReplyContext::from_view(&view, member, typed, &story)
     }
 
     fn confirm_dialogue(

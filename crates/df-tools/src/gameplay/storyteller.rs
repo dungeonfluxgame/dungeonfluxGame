@@ -43,8 +43,8 @@ use df_provider_api::{
 };
 use df_providers::{
     CandidateRouteId, NativeHttpLimits, NativeHttpRefusal, NativeTextProvider,
-    ProviderFailureClass, TextOutputSchema, TextProviderConfig, TextResponseContract,
-    TextResponseError, TextSchemaLimits, registered_text_provider,
+    ProviderFailureClass, ReasoningEffort, TextOutputSchema, TextProviderConfig,
+    TextResponseContract, TextResponseError, TextSchemaLimits, registered_text_provider,
 };
 use df_types::{
     LocaleTag, OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage,
@@ -57,16 +57,27 @@ use super::startup_configuration::{StorytellerMode, StorytellerSettings};
 
 /// Changing the fixed instruction or the schema shape invalidates every cached result.
 const PROMPT_VERSION: &str = "storyteller-1";
-const MAXIMUM_SLOTS: usize = 8;
+const MAXIMUM_SLOTS: usize = 32;
 const MAXIMUM_SLOT_CHARACTERS: usize = 4000;
 const MAXIMUM_MUST_MENTION: usize = 8;
+const MAXIMUM_SLOT_FORBIDDEN: usize = 24;
 const MAXIMUM_TERM_CHARACTERS: usize = 64;
 const MAXIMUM_STYLE_CHARACTERS: usize = 600;
+const MAXIMUM_GUIDANCE_CHARACTERS: usize = 4000;
 const MAXIMUM_FACTS_BYTES: usize = 16 * 1024;
 const MAXIMUM_PROMPT_BYTES: usize = 32 * 1024;
 const MAXIMUM_CACHE_FILE_BYTES: u64 = 64 * 1024;
 /// Tokens the model may spend thinking before it writes, on top of the visible prose.
 const REASONING_ALLOWANCE_TOKENS: usize = 200;
+
+const ADVENTURE_STYLE: &str = "vivid adventure prose in an experienced Dungeon Master's warm voice";
+/// A batched adventure answer is long, so it gets a larger cap but little hidden reasoning.
+const ADVENTURE_PROFILE: CallProfile = CallProfile {
+    reasoning: Some(ReasoningEffort::Low),
+    output_tokens: Some(2500),
+    deadline: None,
+    guidance: "",
+};
 
 /// The fixed voice and safety rules. The facts and slot list follow it in the same input.
 const INSTRUCTION: &str = "You are an experienced, warm Dungeon Master voicing part of a tabletop \
@@ -93,6 +104,8 @@ pub(super) struct Slot {
     pub(super) max_chars: usize,
     /// Terms the text must contain, compared case-insensitively.
     pub(super) must_mention: Vec<String>,
+    /// Terms this slot alone must not use, as whole words, on top of `facts.forbidden`.
+    pub(super) forbidden: Vec<String>,
 }
 
 impl Slot {
@@ -101,6 +114,43 @@ impl Slot {
             name: name.to_owned(),
             max_chars,
             must_mention: Vec::new(),
+            forbidden: Vec::new(),
+        }
+    }
+
+    pub(super) fn mentioning(mut self, terms: Vec<String>) -> Self {
+        self.must_mention = terms;
+        self
+    }
+
+    pub(super) fn forbidding(mut self, terms: Vec<String>) -> Self {
+        self.forbidden = terms;
+        self
+    }
+}
+
+/// How one kind of call is run. The default sends no reasoning setting, derives the output cap
+/// from the slot lengths and uses the storyteller's own deadline.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct CallProfile {
+    /// Hidden reasoning shares the output cap; short creative calls ask for little of it.
+    pub(super) reasoning: Option<ReasoningEffort>,
+    /// Output cap in tokens, reasoning included.
+    pub(super) output_tokens: Option<u32>,
+    /// Covers every attempt of the whole expression.
+    pub(super) deadline: Option<Duration>,
+    /// Craft notes appended to the fixed rules; they never relax them.
+    pub(super) guidance: &'static str,
+}
+
+impl CallProfile {
+    /// A one-line in-character answer.
+    pub(super) const fn short_reply() -> Self {
+        Self {
+            reasoning: Some(ReasoningEffort::Low),
+            output_tokens: Some(300),
+            deadline: None,
+            guidance: "",
         }
     }
 }
@@ -111,6 +161,17 @@ pub(super) struct Expression<'a> {
     pub(super) facts: &'a Value,
     pub(super) slots: &'a [Slot],
     pub(super) style: &'a str,
+    pub(super) profile: CallProfile,
+}
+
+/// The slots of a batched expression that passed their own checks, and why the others did not.
+/// A slot that failed is the caller's to fall back on; it never spoils the accepted ones.
+#[derive(Clone, Debug)]
+pub(super) struct PartialExpression {
+    pub(super) accepted: BTreeMap<String, String>,
+    pub(super) rejected: BTreeMap<String, ValidationFailure>,
+    /// Supplier-reported tokens of the calls made; zero when served from the cache.
+    pub(super) tokens: u64,
 }
 
 /// Why a returned text was refused. It never contains the offending text.
@@ -140,6 +201,21 @@ pub(super) enum ValidationFailure {
 }
 
 impl ValidationFailure {
+    /// A short stable name for records; it never contains the offending text.
+    pub(super) fn label(&self) -> &'static str {
+        match self {
+            Self::MissingSlot(_) => "missing",
+            Self::UnexpectedSlot(_) => "unexpected",
+            Self::EmptySlot(_) => "empty",
+            Self::TooLong { .. } => "too_long",
+            Self::MissingMention { .. } => "missing_term",
+            Self::MechanicsLeak { .. } => "game_numbers",
+            Self::ForbiddenTerm { .. } => "forbidden_term",
+            Self::ControlCharacter { .. } => "control_character",
+            Self::NotTheRequestedShape => "shape",
+        }
+    }
+
     /// The complaint appended to the retry. It names the slot and the problem, not the text.
     fn complaint(&self) -> String {
         match self {
@@ -234,7 +310,8 @@ impl fmt::Debug for Storyteller {
 
 /// What one model attempt produced, before text validation.
 enum Attempt {
-    Text(BTreeMap<String, String>),
+    /// The answer's string fields and the supplier-reported tokens it cost.
+    Text(BTreeMap<String, String>, u64),
     /// The model answered, but not in the requested shape; one retry is allowed.
     BadShape,
 }
@@ -278,6 +355,11 @@ impl Storyteller {
         self.online.is_some()
     }
 
+    /// The configured model identifier, when a model is configured.
+    pub(super) fn model(&self) -> Option<&str> {
+        self.online.as_ref().map(|online| online.model.as_str())
+    }
+
     #[cfg(test)]
     pub(super) fn remaining_tokens(&self) -> Option<u64> {
         self.online.as_ref().map(|online| {
@@ -307,7 +389,31 @@ impl Storyteller {
             purpose: "adventure",
             facts,
             slots,
-            style: "vivid adventure prose in an experienced Dungeon Master's warm voice",
+            style: ADVENTURE_STYLE,
+            profile: ADVENTURE_PROFILE,
+        })
+        .await
+    }
+
+    /// The batched form of [`Self::express_adventure`]: every slot is checked on its own, so
+    /// one bad slot costs only that slot. Fails only when no slot at all could be accepted.
+    pub(super) async fn express_adventure_partial(
+        &self,
+        facts: &Value,
+        slots: &[Slot],
+        guidance: &'static str,
+        deadline: Duration,
+    ) -> Result<PartialExpression, StorytellerError> {
+        self.express_partial(&Expression {
+            purpose: "adventure",
+            facts,
+            slots,
+            style: ADVENTURE_STYLE,
+            profile: CallProfile {
+                deadline: Some(deadline),
+                guidance,
+                ..ADVENTURE_PROFILE
+            },
         })
         .await
     }
@@ -342,6 +448,152 @@ impl Storyteller {
         outcome
     }
 
+    /// One batched expression with per-slot acceptance: cache, then at most two budgeted
+    /// attempts, the second asking again only for the slots the first answer got wrong. Only
+    /// the accepted slots are cached. Fails when nothing could be accepted.
+    pub(super) async fn express_partial(
+        &self,
+        request: &Expression<'_>,
+    ) -> Result<PartialExpression, StorytellerError> {
+        let online = self.online.as_ref().ok_or(StorytellerError::Off)?;
+        check_request(request)?;
+        let key = cache_key(&online.model, request);
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        let mut span = df_observe::begin(&context, "gameplay.storyteller.express");
+        span.event(
+            "storyteller.requested",
+            &[("storyteller.purpose", request.purpose.to_owned())],
+        );
+        let outcome = self
+            .express_partial_online(online, request, &key, &mut span)
+            .await;
+        span.finish_unmeasured(match &outcome {
+            Ok(_) => "expressed",
+            Err(StorytellerError::Off) => "off",
+            Err(StorytellerError::BudgetExhausted) => "budget_exhausted",
+            Err(StorytellerError::InvalidRequest(_)) => "invalid_request",
+            Err(StorytellerError::DeadlineExceeded) => "deadline",
+            Err(StorytellerError::Provider(_)) => "provider_failure",
+            Err(StorytellerError::Rejected(_)) => "rejected",
+        });
+        outcome
+    }
+
+    async fn express_partial_online(
+        &self,
+        online: &Online,
+        request: &Expression<'_>,
+        key: &[u8; 32],
+        span: &mut df_observe::OperationSpan,
+    ) -> Result<PartialExpression, StorytellerError> {
+        let rules = slot_rules(request);
+        let file = online.cache_directory.join(format!("{}.json", hex(key)));
+        if let Some(cached) = read_cache(file.clone()).await {
+            let (accepted, rejected) = sort_slots(&rules, request.slots, &cached);
+            if !accepted.is_empty() {
+                span.event("storyteller.cache_hit", &[]);
+                return Ok(PartialExpression {
+                    accepted,
+                    rejected,
+                    tokens: 0,
+                });
+            }
+        }
+        let started = Instant::now();
+        let mut accepted: BTreeMap<String, String> = BTreeMap::new();
+        let mut rejected: BTreeMap<String, ValidationFailure> = BTreeMap::new();
+        let mut tokens = 0_u64;
+        let mut complaint: Option<String> = None;
+        let mut last = StorytellerError::Rejected(ValidationFailure::NotTheRequestedShape);
+        for attempt in 1_u64..=2 {
+            let pending: Vec<Slot> = request
+                .slots
+                .iter()
+                .filter(|slot| !accepted.contains_key(&slot.name))
+                .cloned()
+                .collect();
+            if pending.is_empty() {
+                break;
+            }
+            let narrowed = Expression {
+                slots: &pending,
+                ..*request
+            };
+            let prompt = build_prompt(&narrowed, complaint.as_deref());
+            let reserved = online.reserve(&prompt, &narrowed)?;
+            span.event(
+                "storyteller.attempt",
+                &[
+                    ("storyteller.attempt", attempt.to_string()),
+                    ("storyteller.tokens_reserved", reserved.to_string()),
+                ],
+            );
+            match online
+                .attempt(&narrowed, key, attempt, &prompt, reserved, started)
+                .await
+            {
+                Ok(Attempt::Text(values, spent)) => {
+                    tokens = tokens.saturating_add(spent);
+                    let (now_accepted, now_rejected) = sort_slots(&rules, &pending, &values);
+                    accepted.extend(now_accepted);
+                    rejected = now_rejected;
+                    span.event(
+                        "storyteller.slots",
+                        &[
+                            ("storyteller.attempt", attempt.to_string()),
+                            ("storyteller.accepted", accepted.len().to_string()),
+                            ("storyteller.rejected", rejected.len().to_string()),
+                        ],
+                    );
+                    if let Some((_, failure)) = rejected.iter().next() {
+                        complaint = Some(failure.complaint());
+                        last = StorytellerError::Rejected(failure.clone());
+                    }
+                }
+                Ok(Attempt::BadShape) => {
+                    let failure = ValidationFailure::NotTheRequestedShape;
+                    complaint = Some(failure.complaint());
+                    last = StorytellerError::Rejected(failure);
+                }
+                Err(error) => {
+                    span.event(
+                        "storyteller.failed",
+                        &[("storyteller.error", error.to_string())],
+                    );
+                    if accepted.is_empty() {
+                        return Err(error);
+                    }
+                    break;
+                }
+            }
+        }
+        if accepted.is_empty() {
+            return Err(last);
+        }
+        if let Err(error) = write_cache(file, &accepted).await {
+            span.event(
+                "storyteller.cache_write_failed",
+                &[("storyteller.io_error", format!("{:?}", error.kind()))],
+            );
+        }
+        for slot in request.slots {
+            if !accepted.contains_key(&slot.name) && !rejected.contains_key(&slot.name) {
+                rejected.insert(
+                    slot.name.clone(),
+                    ValidationFailure::MissingSlot(slot.name.clone()),
+                );
+            }
+        }
+        Ok(PartialExpression {
+            accepted,
+            rejected,
+            tokens,
+        })
+    }
+
     async fn express_online(
         &self,
         online: &Online,
@@ -374,7 +626,7 @@ impl Storyteller {
                 .attempt(request, key, attempt, &prompt, reserved, started)
                 .await;
             match answer {
-                Ok(Attempt::Text(values)) => match validate(request, &values) {
+                Ok(Attempt::Text(values, _)) => match validate(request, &values) {
                     Ok(()) => {
                         if let Err(error) = write_cache(file, &values).await {
                             span.event(
@@ -458,7 +710,11 @@ impl Online {
         reserved: u64,
         started: Instant,
     ) -> Result<Attempt, StorytellerError> {
-        let remaining_time = self.deadline.saturating_sub(started.elapsed());
+        let remaining_time = request
+            .profile
+            .deadline
+            .unwrap_or(self.deadline)
+            .saturating_sub(started.elapsed());
         if remaining_time.is_zero() {
             self.refund(reserved);
             return Err(StorytellerError::DeadlineExceeded);
@@ -488,7 +744,8 @@ impl Online {
             Ok(Err(error)) => return self.settle_failure(error, reserved),
             Ok(Ok(response)) => response,
         };
-        self.reconcile(reserved, response.supplier_usage().total_tokens);
+        let tokens = response.supplier_usage().total_tokens;
+        self.reconcile(reserved, tokens);
         let events = response
             .complete(owner())
             .map_err(|error| StorytellerError::Provider(error.failure_class()))?;
@@ -497,7 +754,7 @@ impl Online {
             return Ok(Attempt::BadShape);
         };
         Ok(match string_fields(output.json()) {
-            Some(values) => Attempt::Text(values),
+            Some(values) => Attempt::Text(values, u64::try_from(tokens).unwrap_or(u64::MAX)),
             None => Attempt::BadShape,
         })
     }
@@ -558,10 +815,13 @@ impl Online {
         remaining_time: Duration,
     ) -> Result<PreparedCall, StorytellerError> {
         let schema = output_schema(request.slots).map_err(StorytellerError::InvalidRequest)?;
-        let output_tokens = u32::try_from(output_token_limit(request.slots))
+        let output_tokens = u32::try_from(output_token_limit(request))
             .map_err(|_| StorytellerError::InvalidRequest("tokens"))?;
-        let config = TextProviderConfig::new(&self.model, schema.clone(), output_tokens)
+        let mut config = TextProviderConfig::new(&self.model, schema.clone(), output_tokens)
             .map_err(|error| StorytellerError::Provider(error.failure_class()))?;
+        if let Some(effort) = request.profile.reasoning {
+            config = config.with_reasoning_effort(effort);
+        }
         let limits = NativeHttpLimits {
             connect_timeout: remaining_time.min(Duration::from_secs(5)),
             read_timeout: remaining_time,
@@ -699,15 +959,18 @@ fn output_schema(slots: &[Slot]) -> Result<TextOutputSchema, &'static str> {
     .map_err(|_| "schema")
 }
 
-fn output_token_limit(slots: &[Slot]) -> usize {
-    let characters: usize = slots.iter().map(|slot| slot.max_chars).sum();
+fn output_token_limit(request: &Expression<'_>) -> usize {
+    if let Some(tokens) = request.profile.output_tokens {
+        return usize::try_from(tokens).unwrap_or(8000).clamp(128, 8000);
+    }
+    let characters: usize = request.slots.iter().map(|slot| slot.max_chars).sum();
     (characters / 3 + 40 + REASONING_ALLOWANCE_TOKENS).clamp(128, 8000)
 }
 
 /// Two bytes per token is deliberately pessimistic; the supplier total replaces it afterwards.
 fn estimate_tokens(prompt: &str, request: &Expression<'_>) -> u64 {
     let input = prompt.len().div_ceil(2);
-    u64::try_from(input + output_token_limit(request.slots)).unwrap_or(u64::MAX)
+    u64::try_from(input + output_token_limit(request)).unwrap_or(u64::MAX)
 }
 
 fn string_fields(value: &Value) -> Option<BTreeMap<String, String>> {
@@ -760,8 +1023,17 @@ fn check_request(request: &Expression<'_>) -> Result<(), StorytellerError> {
         {
             return Err(invalid("must mention"));
         }
+        if slot.forbidden.len() > MAXIMUM_SLOT_FORBIDDEN
+            || slot.forbidden.iter().any(|term| {
+                term.trim().is_empty() || term.chars().count() > MAXIMUM_TERM_CHARACTERS
+            })
+        {
+            return Err(invalid("slot forbidden"));
+        }
     }
-    if request.style.chars().count() > MAXIMUM_STYLE_CHARACTERS {
+    if request.style.chars().count() > MAXIMUM_STYLE_CHARACTERS
+        || request.profile.guidance.chars().count() > MAXIMUM_GUIDANCE_CHARACTERS
+    {
         return Err(invalid("style"));
     }
     if !request.facts.is_object() || canonical(request.facts).len() > MAXIMUM_FACTS_BYTES {
@@ -803,15 +1075,16 @@ fn cache_key(model: &str, request: &Expression<'_>) -> [u8; 32] {
         .slots
         .iter()
         .map(|slot| {
-            json!({"name": slot.name, "max_chars": slot.max_chars, "must_mention": slot.must_mention})
+            json!({"name": slot.name, "max_chars": slot.max_chars, "must_mention": slot.must_mention, "forbidden": slot.forbidden})
         })
         .collect();
     let description = format!(
-        "{PROMPT_VERSION}\n{model}\n{}\n{}\n{}\n{}",
+        "{PROMPT_VERSION}\n{model}\n{}\n{}\n{}\n{}\n{:?}",
         request.purpose,
         canonical(request.facts),
         Value::Array(slots),
         request.style,
+        request.profile,
     );
     Sha256::digest(description.as_bytes()).into()
 }
@@ -825,11 +1098,23 @@ fn build_prompt(request: &Expression<'_>, complaint: Option<&str>) -> String {
         .slots
         .iter()
         .map(|slot| {
-            json!({"name": slot.name, "max_characters": slot.max_chars, "must_mention": slot.must_mention})
+            let mut described = json!({
+                "name": slot.name,
+                "max_characters": slot.max_chars,
+                "must_mention": slot.must_mention,
+            });
+            if !slot.forbidden.is_empty() {
+                described["forbidden"] = json!(slot.forbidden);
+            }
+            described
         })
         .collect();
     let mut prompt = String::with_capacity(2048);
     prompt.push_str(INSTRUCTION);
+    if !request.profile.guidance.is_empty() {
+        prompt.push_str(request.profile.guidance);
+        prompt.push('\n');
+    }
     prompt.push_str(&format!("PURPOSE: {}\n", request.purpose));
     if !request.style.is_empty() {
         prompt.push_str(&format!("STYLE: {}\n", request.style));
@@ -846,20 +1131,14 @@ fn build_prompt(request: &Expression<'_>, complaint: Option<&str>) -> String {
     prompt
 }
 
-/// Checks a model's text before anyone sees it. Never truncates: a text that breaks a rule
-/// is refused whole.
-pub(super) fn validate(
-    request: &Expression<'_>,
-    values: &BTreeMap<String, String>,
-) -> Result<(), ValidationFailure> {
-    if let Some(extra) = values
-        .keys()
-        .find(|name| !request.slots.iter().any(|slot| &slot.name == *name))
-    {
-        return Err(ValidationFailure::UnexpectedSlot(extra.clone()));
-    }
-    let facts_text = canonical(request.facts).to_lowercase();
-    let forbidden: Vec<String> = request
+/// What every slot of one request is checked against.
+struct SlotRules {
+    facts_text: String,
+    forbidden: Vec<String>,
+}
+
+fn slot_rules(request: &Expression<'_>) -> SlotRules {
+    let forbidden = request
         .facts
         .get("forbidden")
         .and_then(Value::as_array)
@@ -872,54 +1151,111 @@ pub(super) fn validate(
                 .collect()
         })
         .unwrap_or_default();
-    for slot in request.slots {
-        let text = values
-            .get(&slot.name)
-            .ok_or_else(|| ValidationFailure::MissingSlot(slot.name.clone()))?;
-        if text.trim().is_empty() {
-            return Err(ValidationFailure::EmptySlot(slot.name.clone()));
-        }
-        if text.chars().any(char::is_control) {
-            return Err(ValidationFailure::ControlCharacter {
-                slot: slot.name.clone(),
-            });
-        }
-        let length = text.chars().count();
-        if length > slot.max_chars {
-            return Err(ValidationFailure::TooLong {
-                slot: slot.name.clone(),
-                maximum: slot.max_chars,
-                actual: length,
-            });
-        }
-        let lowered = text.to_lowercase();
-        if slot
-            .must_mention
-            .iter()
-            .any(|term| !lowered.contains(&term.to_lowercase()))
-        {
-            return Err(ValidationFailure::MissingMention {
-                slot: slot.name.clone(),
-            });
-        }
-        if mechanics_mentions(&lowered)
-            .iter()
-            .any(|mention| !facts_text.contains(mention.as_str()))
-        {
-            return Err(ValidationFailure::MechanicsLeak {
-                slot: slot.name.clone(),
-            });
-        }
-        if forbidden
-            .iter()
-            .any(|term| contains_whole_word(&lowered, term))
-        {
-            return Err(ValidationFailure::ForbiddenTerm {
-                slot: slot.name.clone(),
-            });
-        }
+    SlotRules {
+        facts_text: canonical(request.facts).to_lowercase(),
+        forbidden,
+    }
+}
+
+/// Checks a model's text before anyone sees it. Never truncates: a text that breaks a rule
+/// is refused whole.
+pub(super) fn validate(
+    request: &Expression<'_>,
+    values: &BTreeMap<String, String>,
+) -> Result<(), ValidationFailure> {
+    if let Some(extra) = values
+        .keys()
+        .find(|name| !request.slots.iter().any(|slot| &slot.name == *name))
+    {
+        return Err(ValidationFailure::UnexpectedSlot(extra.clone()));
+    }
+    let rules = slot_rules(request);
+    request
+        .slots
+        .iter()
+        .try_for_each(|slot| validate_slot(&rules, slot, values))
+}
+
+fn validate_slot(
+    rules: &SlotRules,
+    slot: &Slot,
+    values: &BTreeMap<String, String>,
+) -> Result<(), ValidationFailure> {
+    let text = values
+        .get(&slot.name)
+        .ok_or_else(|| ValidationFailure::MissingSlot(slot.name.clone()))?;
+    if text.trim().is_empty() {
+        return Err(ValidationFailure::EmptySlot(slot.name.clone()));
+    }
+    if text.chars().any(char::is_control) {
+        return Err(ValidationFailure::ControlCharacter {
+            slot: slot.name.clone(),
+        });
+    }
+    let length = text.chars().count();
+    if length > slot.max_chars {
+        return Err(ValidationFailure::TooLong {
+            slot: slot.name.clone(),
+            maximum: slot.max_chars,
+            actual: length,
+        });
+    }
+    let lowered = text.to_lowercase();
+    if slot
+        .must_mention
+        .iter()
+        .any(|term| !lowered.contains(&term.to_lowercase()))
+    {
+        return Err(ValidationFailure::MissingMention {
+            slot: slot.name.clone(),
+        });
+    }
+    if mechanics_mentions(&lowered)
+        .iter()
+        .any(|mention| !rules.facts_text.contains(mention.as_str()))
+    {
+        return Err(ValidationFailure::MechanicsLeak {
+            slot: slot.name.clone(),
+        });
+    }
+    if rules
+        .forbidden
+        .iter()
+        .map(String::as_str)
+        .chain(slot.forbidden.iter().map(|term| term.trim()))
+        .any(|term| contains_whole_word(&lowered, &term.to_lowercase()))
+    {
+        return Err(ValidationFailure::ForbiddenTerm {
+            slot: slot.name.clone(),
+        });
     }
     Ok(())
+}
+
+/// Splits an answer into the slots that pass their own checks and the failure of each other.
+fn sort_slots(
+    rules: &SlotRules,
+    slots: &[Slot],
+    values: &BTreeMap<String, String>,
+) -> (
+    BTreeMap<String, String>,
+    BTreeMap<String, ValidationFailure>,
+) {
+    let mut accepted = BTreeMap::new();
+    let mut rejected = BTreeMap::new();
+    for slot in slots {
+        match validate_slot(rules, slot, values) {
+            Ok(()) => {
+                if let Some(text) = values.get(&slot.name) {
+                    accepted.insert(slot.name.clone(), text.clone());
+                }
+            }
+            Err(failure) => {
+                rejected.insert(slot.name.clone(), failure);
+            }
+        }
+    }
+    (accepted, rejected)
 }
 
 /// Dice (`d20`), difficulty classes (`dc 15`) and `hit point(s)` in lowercase text.

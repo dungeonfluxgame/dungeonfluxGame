@@ -15,8 +15,9 @@ use df_provider_api::{
 };
 use df_providers::{
     CandidateRouteId, NativeHttpLimits, NativeHttpRefusal, NativeTextProvider,
-    ProviderFailureClass, TextOutputSchema, TextProviderConfig, TextResponseContract,
-    TextResponseError, TextSchemaError, TextSchemaLimits, registered_text_provider,
+    ProviderFailureClass, ReasoningEffort, TextOutputSchema, TextProviderConfig,
+    TextResponseContract, TextResponseError, TextSchemaError, TextSchemaLimits,
+    registered_text_provider,
 };
 use df_types::{
     LocaleTag, OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage,
@@ -237,6 +238,10 @@ async fn registered_factory_checks_actual_chunked_eof_schema_usage_and_current_o
     assert_eq!(captured.body["text"]["format"]["strict"], true);
     assert_eq!(captured.body["text"]["format"]["type"], "json_schema");
     assert_eq!(captured.body["max_output_tokens"], 50);
+    assert!(
+        captured.body.get("reasoning").is_none(),
+        "no reasoning setting unless the caller chose one"
+    );
     assert!(!captured.extra_connection);
     for value in [format!("{provider:?}"), format!("{observation:?}")] {
         for secret in [
@@ -247,6 +252,35 @@ async fn registered_factory_checks_actual_chunked_eof_schema_usage_and_current_o
             assert!(!value.contains(secret));
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_chosen_reasoning_effort_is_sent_and_an_unchosen_one_is_omitted() {
+    let (address, server) = fixture(|sent| (200, serde_json::to_vec(&completed(sent)).unwrap()));
+    let current = binding(ExecutionMode::Live);
+    let request = request(&current);
+    let provider = registered_text_provider(
+        CandidateRouteId::OpenAiResponsesText,
+        TextProviderConfig::new("caller-model-snapshot", schema(), 50)
+            .unwrap()
+            .with_reasoning_effort(ReasoningEffort::Low),
+        "credential-private-sentinel",
+        limits(),
+    )
+    .unwrap()
+    .for_loopback_fixture(address)
+    .unwrap();
+
+    provider
+        .submit(&request, owner(&current), future::pending())
+        .await
+        .unwrap();
+
+    let captured = tokio::task::spawn_blocking(move || server.join().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(captured.body["reasoning"], json!({"effort": "low"}));
+    assert_eq!(captured.body["max_output_tokens"], 50);
 }
 
 #[tokio::test(flavor = "current_thread")]

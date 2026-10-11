@@ -480,6 +480,25 @@ pub(super) struct PackFile {
     /// Appended to scene narration after a space; contains the `{name}` placeholder once.
     pub(super) escort_support_suffix: String,
     pub(super) scenes: Vec<Scene>,
+    /// Phrases that give the private clue away. A listener who has not been told the clue
+    /// must never hear them, whoever is speaking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) secret_terms: Vec<String>,
+    /// Who each speaking character is, by the name a scene shows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) speakers: Vec<SpeakerProfile>,
+}
+
+/// What a language model needs to voice one speaking character in character.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SpeakerProfile {
+    /// Equals the `speaker` of the scenes this character speaks in.
+    pub(super) name: String,
+    /// Who the character is to the party, in a short phrase.
+    pub(super) role: String,
+    /// How the character sounds, in a short phrase.
+    pub(super) voice: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -1191,7 +1210,41 @@ fn validate_pack(pack: &PackFile) -> Result<(), PackError> {
             "text with exactly one {name} placeholder and no other braces",
         ));
     }
-    validate_scenes(&pack.scenes)
+    validate_scenes(&pack.scenes)?;
+    validate_speaking_notes(pack)
+}
+
+fn validate_speaking_notes(pack: &PackFile) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Pack;
+    range(FILE, "secret_terms", length(pack.secret_terms.len()), 0, 16)?;
+    for (index, term) in pack.secret_terms.iter().enumerate() {
+        text(FILE, &format!("secret_terms[{index}]"), term, 1, 64)?;
+    }
+    range(FILE, "speakers", length(pack.speakers.len()), 0, 8)?;
+    for (index, speaker) in pack.speakers.iter().enumerate() {
+        text(
+            FILE,
+            &format!("speakers[{index}].name"),
+            &speaker.name,
+            1,
+            48,
+        )?;
+        text(
+            FILE,
+            &format!("speakers[{index}].role"),
+            &speaker.role,
+            1,
+            96,
+        )?;
+        text(
+            FILE,
+            &format!("speakers[{index}].voice"),
+            &speaker.voice,
+            1,
+            96,
+        )?;
+    }
+    Ok(())
 }
 
 fn validate_creation(creation: &CreationPack) -> Result<(), PackError> {

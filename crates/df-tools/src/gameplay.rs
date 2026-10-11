@@ -370,6 +370,24 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         startup_configuration::SessionSettings::qualification()
     };
+    let storyteller = std::sync::Arc::new(if interactive {
+        let mode = startup_configuration::storyteller_mode(
+            startup_configuration::StorytellerInputs::from_environment(),
+            &std::env::current_dir()?,
+        )?;
+        match &mode {
+            startup_configuration::StorytellerMode::On(settings) => println!(
+                "STORYTELLER on model={} budget={}",
+                settings.model, settings.token_budget
+            ),
+            startup_configuration::StorytellerMode::Off(reason) => {
+                println!("STORYTELLER off ({reason})");
+            }
+        }
+        storyteller::Storyteller::from_mode(mode)
+    } else {
+        storyteller::Storyteller::disabled()
+    });
     if interactive {
         let settings = adventure_settings
             .as_ref()
@@ -389,6 +407,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                     settings,
                     &database_config()?,
                     &std::env::current_dir()?,
+                    &storyteller,
                 )
                 .await?;
                 let opening = prepared
@@ -407,6 +426,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                     prepared.record.entry("antagonist")?,
                     prepared.record.rolls.len()
                 );
+                println!("ADVENTURE {}", prepared.prose);
                 let directory = prepared.directory.clone();
                 let loaded = prepared.loaded.clone();
                 generated_adventure = Some(prepared);
@@ -492,24 +512,6 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         startup_configuration::VoiceSettings::Off(startup_configuration::VoiceOff::Qualification)
     })?;
-    let storyteller = std::sync::Arc::new(if interactive {
-        let mode = startup_configuration::storyteller_mode(
-            startup_configuration::StorytellerInputs::from_environment(),
-            &std::env::current_dir()?,
-        )?;
-        match &mode {
-            startup_configuration::StorytellerMode::On(settings) => println!(
-                "STORYTELLER on model={} budget={}",
-                settings.model, settings.token_budget
-            ),
-            startup_configuration::StorytellerMode::Off(reason) => {
-                println!("STORYTELLER off ({reason})");
-            }
-        }
-        storyteller::Storyteller::from_mode(mode)
-    } else {
-        storyteller::Storyteller::disabled()
-    });
     let npc_phase = courier_npc_qualification::phase();
     let npc_budget = npc_phase
         .map(courier_npc_qualification::call_budget)

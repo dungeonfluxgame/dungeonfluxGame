@@ -1,5 +1,5 @@
 //! Exact immutable bytes are authority on resume; changed tables are never consulted.
-use super::super::pack::{self, LoadedPack};
+use super::super::pack::{self, LoadedPack, SpeakerProfile};
 use super::{GenerateError, GeneratedAdventure, Roll, RollStatus, RulesMode};
 use df_persistence::local_demo_scope::DemoAdventure;
 use serde::{Deserialize, Serialize};
@@ -26,13 +26,44 @@ pub(crate) struct AdventureRecord {
     pack_sha256: String,
     tuning_sha256: String,
     pub(crate) seeded_dice: bool,
+    /// Copies of the pack's listener-safety data, so a review of the record shows them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    secret_terms: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    speakers: Vec<SpeakerProfile>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Expression {
+    /// `patterns` or `model`; `model` carries the details below.
     source: String,
     fact_sheet_sha256: String,
     output_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<ModelExpression>,
+}
+/// What the language model wrote: which slots took its text and which kept the pattern text.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ModelExpression {
+    pub(crate) model: String,
+    pub(crate) model_slots: Vec<String>,
+    pub(crate) pattern_slots: Vec<String>,
+    /// Why a pattern slot kept its pattern text, as `slot: reason`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) refused: Vec<String>,
+    /// Supplier-reported tokens of the calls made.
+    pub(crate) tokens: u64,
+}
+impl ModelExpression {
+    pub(crate) fn summary(&self) -> String {
+        format!(
+            "prose=model slots={}/{} tokens={}",
+            self.model_slots.len(),
+            self.model_slots.len() + self.pattern_slots.len(),
+            self.tokens
+        )
+    }
 }
 #[derive(Debug)]
 pub(crate) enum RecordError {
@@ -57,7 +88,17 @@ fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 impl GeneratedAdventure {
+    /// The documents of an adventure whose text is entirely the pattern text.
+    #[cfg(test)]
     pub(crate) fn documents(&self, seeded_dice: bool) -> Result<DemoAdventure, GenerateError> {
+        self.documents_expressed(seeded_dice, None)
+    }
+    /// The documents, recording how the language model took part when it did.
+    pub(crate) fn documents_expressed(
+        &self,
+        seeded_dice: bool,
+        model: Option<ModelExpression>,
+    ) -> Result<DemoAdventure, GenerateError> {
         let pack =
             serde_json::to_vec_pretty(&self.pack).map_err(|_| GenerateError::Serialization)?;
         let tuning =
@@ -73,7 +114,8 @@ impl GeneratedAdventure {
             rules_mode: self.rules_mode,
             rolls: self.rolls.clone(),
             expression: Expression {
-                source: "patterns".into(),
+                source: if model.is_some() { "model" } else { "patterns" }.into(),
+                model,
                 fact_sheet_sha256: hash(
                     &serde_json::to_vec(&self.fact_sheet)
                         .map_err(|_| GenerateError::Serialization)?,
@@ -83,6 +125,8 @@ impl GeneratedAdventure {
             pack_sha256: hash(&pack),
             tuning_sha256: hash(&tuning),
             seeded_dice,
+            secret_terms: self.pack.secret_terms.clone(),
+            speakers: self.pack.speakers.clone(),
         };
         let record =
             serde_json::to_vec_pretty(&record).map_err(|_| GenerateError::Serialization)?;
@@ -113,7 +157,10 @@ pub(crate) fn reload(
         |value: &str| value.len() == 64 && value.bytes().all(|c| c.is_ascii_hexdigit());
     if record.schema != RECORD_SCHEMA
         || record.generator_version != GENERATOR_VERSION
-        || record.expression.source != "patterns"
+        || !matches!(
+            (record.expression.source.as_str(), &record.expression.model),
+            ("patterns", None) | ("model", Some(_))
+        )
         || !valid_hash(&record.tables_revision)
         || !valid_hash(&record.expression.fact_sheet_sha256)
         || record.pack_sha256 != hash(&documents.pack)
@@ -193,6 +240,13 @@ impl AdventureRecord {
             })
             .map(|r| r.entry_id.as_str())
             .ok_or(RecordError::Invalid("missing selected story entry"))
+    }
+    /// The startup summary of how the story text was written.
+    pub(crate) fn prose_summary(&self) -> String {
+        match &self.expression.model {
+            Some(model) => model.summary(),
+            None => "prose=patterns (stored adventure uses the pattern text)".to_owned(),
+        }
     }
     pub(crate) fn tables_revision(&self) -> &str {
         &self.tables_revision

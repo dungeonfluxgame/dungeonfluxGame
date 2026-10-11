@@ -162,5 +162,21 @@
       "dialogue": "",
       "asset": "assets/ui/scenes/mara-harbor-v4.png"
     }
+  ],
+  "secret_terms": [
+    "Vell",
+    "Harbor Inn"
+  ],
+  "speakers": [
+    {
+      "name": "Courier",
+      "role": "a frightened courier who needs the heroes' help to deliver a sealed packet",
+      "voice": "hurried and anxious"
+    },
+    {
+      "name": "Bandit",
+      "role": "a dockside bandit who attacks the heroes to take the packet",
+      "voice": "sneering and rough"
+    }
   ]
 }

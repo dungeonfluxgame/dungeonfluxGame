@@ -606,3 +606,52 @@ fn record_binding_and_compiled_mechanical_text_fail_closed() {
         .is_err()
     );
 }
+#[test]
+fn generated_packs_carry_secret_terms_and_a_profile_for_every_shown_speaker() {
+    let tables = tables();
+    let adventure = generate(
+        &tables,
+        0x3c6ef378dd81de97,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        adventure.pack.secret_terms,
+        [
+            "my fault",
+            "unguarded",
+            "Lantern-Maker's Shop",
+            "Lorcan",
+            "Nettleby"
+        ]
+    );
+    let speakers: Vec<(&str, &str)> = adventure
+        .pack
+        .speakers
+        .iter()
+        .map(|speaker| (speaker.name.as_str(), speaker.voice.as_str()))
+        .collect();
+    assert_eq!(speakers[0], ("Ilsa", "calm middle-aged woman"));
+    assert_eq!(speakers[1], ("Lorcan", "brisk, no-nonsense man"));
+    assert_eq!(speakers[2].0, "Snag the Goblin");
+    let enemy = &adventure.pack.speakers[2].role;
+    assert!(enemy.starts_with("a hostile ") && enemy.contains("fighting the heroes"));
+    for scene in &adventure.pack.scenes {
+        assert!(
+            scene.speaker.is_empty()
+                || adventure
+                    .pack
+                    .speakers
+                    .iter()
+                    .any(|speaker| speaker.name == scene.speaker),
+            "{} has no profile",
+            scene.speaker
+        );
+    }
+    let documents = adventure.documents(false).unwrap();
+    let record = String::from_utf8(documents.record).unwrap();
+    assert!(record.contains("\"secret_terms\""));
+    assert!(record.contains("\"speakers\""));
+}
