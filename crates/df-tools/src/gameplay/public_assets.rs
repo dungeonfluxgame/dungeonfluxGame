@@ -70,6 +70,30 @@ pub(super) fn router(assets: PublicAssets) -> Router {
         .with_state(snapshots)
 }
 
+/// One allowlisted optional public file, already loaded within the startup byte bounds.
+pub(super) struct ExtraAsset {
+    pub(super) url: String,
+    pub(super) mime: &'static str,
+    pub(super) bytes: Bytes,
+}
+
+/// Routes exactly the loaded allowlist; every other path stays unrouted.
+pub(super) fn extra_router(assets: Vec<ExtraAsset>) -> Router {
+    let mut router = Router::new();
+    for asset in assets {
+        let snapshot = PublicSnapshot::new(asset.bytes);
+        let mime = asset.mime;
+        router = router.route(
+            &asset.url,
+            get(move |method: Method, headers: HeaderMap| {
+                let snapshot = snapshot.clone();
+                async move { response(snapshot, mime, &method, &headers) }
+            }),
+        );
+    }
+    router
+}
+
 async fn art(
     State(assets): State<PublicSnapshots>,
     method: Method,

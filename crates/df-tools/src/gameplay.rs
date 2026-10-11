@@ -818,7 +818,10 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             campfire: campfire_bytes,
             portrait: portrait_bytes,
             inn: inn_bytes,
-        }));
+        }))
+        .merge(public_assets::extra_router(
+            startup_configuration::load_extra_assets(std::path::Path::new(&asset_root))?,
+        ));
     let npc = npc_phase.map(|phase| {
         tokio::spawn(courier_npc_qualification::run(
             service.clone(),
