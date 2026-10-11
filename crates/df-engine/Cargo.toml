@@ -8,6 +8,7 @@ publish = false
 autotests = false
 
 [dependencies]
+df-tempo = { path = "../df-tempo" }
 df-knowledge = { path = "../df-knowledge" }
 df-encounter = { path = "../df-encounter" }
 df-model = { path = "../df-model" }
@@ -95,3 +96,7 @@ path = "tests/compound_step_continuation_contract.rs"
 [[test]]
 name = "character_reference_identity_contract"
 path = "tests/character_reference_identity_contract.rs"
+
+[[test]]
+name = "tempo_staging"
+path = "tests/tempo_staging.rs"

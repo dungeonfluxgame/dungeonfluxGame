@@ -437,6 +437,7 @@ dependencies = [
  "df-observe",
  "df-rules",
  "df-session",
+ "df-tempo",
  "df-testkit",
  "df-types",
  "df-world",
