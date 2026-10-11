@@ -830,3 +830,32 @@ async fn if_match_does_not_replace_redirect_or_route_failures() {
         }
     }
 }
+
+#[tokio::test]
+async fn extra_router_serves_exactly_the_loaded_allowlist() {
+    let mut router = extra_router(vec![ExtraAsset {
+        url: "/assets/ui/generated/wordmark".to_owned(),
+        mime: "image/png",
+        bytes: Bytes::from_static(b"wordmark"),
+    }]);
+    let served = request(
+        &mut router,
+        Method::GET,
+        "/assets/ui/generated/wordmark",
+        HeaderMap::new(),
+    )
+    .await;
+    assert_eq!(served.status(), StatusCode::OK);
+    assert_eq!(served.headers()[header::CONTENT_TYPE], "image/png");
+    assert_eq!(
+        to_bytes(served.into_body(), usize::MAX).await.unwrap(),
+        "wordmark"
+    );
+    for path in [
+        "/assets/ui/generated/portrait-courier",
+        "/assets/ui/generated/wordmark.png",
+    ] {
+        let missing = request(&mut router, Method::GET, path, HeaderMap::new()).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+}
