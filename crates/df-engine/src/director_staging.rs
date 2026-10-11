@@ -1,11 +1,12 @@
 //! Isolated policy staging over canonical checkpoints; no durable commit or rules execution.
 use df_model::checkpoint::{
-    Basis, Checkpoint, CheckpointError, CheckpointLimits, CheckpointPins, GameState,
-    PendingResolution, ReferenceInventory,
+    Basis, Checkpoint, CheckpointError, CheckpointLimits, CheckpointPins, ContentReference, FactId,
+    GameState, PendingResolution, ReferenceInventory,
 };
 use df_narrative::{
-    CheckpointProgressError, ProgressLimits, ThreadCheckpointRequest, ThreadConsequenceSelection,
-    ThreadProgressEvidence, stage_checkpoint_thread_progress,
+    BeatSelectionError, BeatSelectionLimits, CheckpointBeatRequest, CheckpointProgressError,
+    ProgressLimits, ThreadCheckpointRequest, ThreadConsequenceSelection, ThreadProgressEvidence,
+    stage_checkpoint_beat_selection, stage_checkpoint_thread_progress,
 };
 use df_types::RevisionLabel;
 use df_world::{
@@ -57,6 +58,7 @@ pub enum DirectorError {
     Schedule(ScheduleAdvancementError),
     Environment(EnvironmentalDeltaError),
     Narrative(CheckpointProgressError),
+    BeatSelection(BeatSelectionError),
     InvalidCandidate(CheckpointError),
     WorldStateConflict,
 }
@@ -74,6 +76,8 @@ pub struct StagedDirectors<'a> {
     candidate: Checkpoint,
     narrative_policy: Option<RevisionLabel>,
     narrative_evidence: Vec<ThreadProgressEvidence>,
+    beat_selection: Option<ContentReference>,
+    beat_causes: Vec<FactId>,
 }
 
 impl StagedDirectors<'_> {
@@ -108,6 +112,16 @@ impl StagedDirectors<'_> {
     /// Private causal records; the audience owner must authorize before projection.
     pub fn narrative_evidence(&self) -> &[ThreadProgressEvidence] {
         &self.narrative_evidence
+    }
+
+    /// Exact admitted route; private proposal evidence for owner revalidation.
+    pub fn beat_selection(&self) -> Option<&ContentReference> {
+        self.beat_selection.as_ref()
+    }
+
+    /// Ordered source facts that justified this route; this is not a durable receipt.
+    pub fn beat_causes(&self) -> &[FactId] {
+        &self.beat_causes
     }
 }
 
@@ -191,6 +205,8 @@ pub fn compose_director_candidates<'a>(
         candidate: selected,
         narrative_policy: None,
         narrative_evidence: vec![],
+        beat_selection: None,
+        beat_causes: vec![],
     })))
 }
 
@@ -305,6 +321,100 @@ pub fn compose_schedule_thread_progress<'a>(
         composition_limits,
     )?;
     finish_thread_progress(composed, narrative, limits.narrative)
+}
+
+/// Evaluates an explicitly selected authored route after World/environment and interaction.
+/// Pending prerequisites remain pending. A rejected route discards all detached sibling changes;
+/// it never chooses another route, grants knowledge, resolves rules or commits a decision.
+/// Exact policy, selection and ordered causes remain private for the transition/session owner.
+pub fn compose_schedule_beat_selection<'a>(
+    current: &'a Checkpoint,
+    admitted_pins: &CheckpointPins,
+    schedule: ScheduleDirectorRequest<'_>,
+    interaction: Option<Checkpoint>,
+    narrative: CheckpointBeatRequest<'_>,
+    limits: ScheduleDirectorLimits,
+    beat_limits: BeatSelectionLimits,
+) -> Result<DirectorStaging<'a>, DirectorError> {
+    if narrative.checkpoint_limits.maximum_retained_bytes
+        > limits.directors.maximum_checkpoint_bytes
+    {
+        return Err(DirectorError::InvalidLimits);
+    }
+    if narrative.alternatives.len() > beat_limits.alternatives {
+        return Err(DirectorError::Capacity);
+    }
+    // Composition reserves its checkpoint scratch; reserve the separately retained route receipt.
+    let receipt_bytes = std::mem::size_of::<Option<RevisionLabel>>()
+        .checked_add(narrative.policy.retained_heap_bytes())
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Option<ContentReference>>()))
+        .and_then(|bytes| bytes.checked_add(narrative.selection.package.retained_heap_bytes()))
+        .and_then(|bytes| bytes.checked_add(narrative.selection.entry.retained_heap_bytes()))
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Vec<FactId>>()))
+        .and_then(|bytes| {
+            beat_limits
+                .records
+                .checked_mul(std::mem::size_of::<FactId>())
+                .and_then(|causes| bytes.checked_add(causes))
+        })
+        .ok_or(DirectorError::Capacity)?;
+    let mut composition_limits = limits;
+    composition_limits.directors.maximum_pass_bytes = composition_limits
+        .directors
+        .maximum_pass_bytes
+        .checked_sub(receipt_bytes)
+        .ok_or(DirectorError::Capacity)?;
+    let inventory = ReferenceInventory {
+        rules: narrative.inventory.rules,
+        content: narrative.inventory.content,
+        resources: narrative.inventory.resources,
+        assets: narrative.inventory.assets,
+    };
+    let composed = compose_schedule_candidates(
+        current,
+        admitted_pins,
+        schedule,
+        DirectorCandidates {
+            interaction,
+            narrative: None,
+        },
+        inventory,
+        composition_limits,
+    )?;
+    let DirectorStaging::Staged(mut staged) = composed else {
+        return Ok(composed);
+    };
+    // Bound the additional evidence traversal as well as the selector's own traversal.
+    let evidence_work = narrative
+        .alternatives
+        .len()
+        .checked_add(beat_limits.records)
+        .ok_or(DirectorError::BeatSelection(BeatSelectionError::Capacity))?;
+    let work = beat_limits
+        .work
+        .checked_sub(evidence_work)
+        .ok_or(DirectorError::BeatSelection(BeatSelectionError::Capacity))?;
+    let policy = narrative.policy;
+    let selection = narrative.selection;
+    let alternatives = narrative.alternatives;
+    let candidate = stage_checkpoint_beat_selection(
+        &staged.candidate,
+        narrative,
+        BeatSelectionLimits {
+            work,
+            ..beat_limits
+        },
+    )
+    .map_err(DirectorError::BeatSelection)?;
+    let selected = alternatives
+        .iter()
+        .find(|alternative| alternative.selection == selection)
+        .ok_or(DirectorError::BeatSelection(BeatSelectionError::Selection))?;
+    staged.candidate = candidate;
+    staged.narrative_policy = Some(policy.clone());
+    staged.beat_selection = Some(selection.clone());
+    staged.beat_causes = selected.causes.iter().map(|cause| cause.fact).collect();
+    Ok(DirectorStaging::Staged(staged))
 }
 
 /// Bounds for the policy-only World/interaction and canonical narrative composition.
@@ -660,5 +770,7 @@ fn compose_world_candidates<'a>(
         candidate: selected,
         narrative_policy: None,
         narrative_evidence: vec![],
+        beat_selection: None,
+        beat_causes: vec![],
     })))
 }

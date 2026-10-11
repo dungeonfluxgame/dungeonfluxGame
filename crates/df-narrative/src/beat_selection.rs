@@ -157,6 +157,11 @@ pub fn stage_checkpoint_beat_selection(
     {
         return Err(BeatSelectionError::Prerequisite);
     }
+    if work.contains(&state.narrative.completed_beats, selected.from)?
+        || work.contains(&state.narrative.completed_beats, selected.to)?
+    {
+        return Err(BeatSelectionError::Prerequisite);
+    }
     let mut joined = false;
     for member in &state.members {
         work.charge()?;
