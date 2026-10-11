@@ -375,7 +375,7 @@ pub fn inspect_dns_answers(candidates: &[IpAddr]) -> Result<DnsInspection, Outpu
     })
 }
 
-fn strict_fal_locator(url: &str) -> bool {
+pub(crate) fn strict_fal_locator(url: &str) -> bool {
     let Some(authority_and_path) = url.strip_prefix("https://") else {
         return false;
     };
