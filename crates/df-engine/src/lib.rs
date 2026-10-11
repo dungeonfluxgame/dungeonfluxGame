@@ -5,6 +5,7 @@ pub mod command_entry;
 pub mod director_staging;
 pub mod effect_emission;
 pub mod encounter_start;
+pub mod host_pause;
 pub mod obligation_fulfillment;
 pub mod pending_resumption;
 pub mod semantic_candidate;
