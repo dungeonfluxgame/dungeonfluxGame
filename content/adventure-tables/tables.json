@@ -18,6 +18,14 @@
     "names.json",
     "npc-traits.json",
     "prose-patterns.json",
+    "campaign-premises.json",
+    "villains.json",
+    "factions.json",
+    "chapter-types.json",
+    "act-structure.json",
+    "clocks.json",
+    "twists.json",
+    "clues.json",
     "art-manifest.json"
   ],
   "rng": {
@@ -146,6 +154,39 @@
     "speaker": 28,
     "private_clue": 280
   },
+  "campaign": {
+    "stream": "Campaign frame rolls use a separate stream: Rng(seed XOR 0xCA3DA16B5EED). The frame is rolled once.",
+    "frame_roll_order": [
+      "premise d20",
+      "villain.type d12 (premise.villain_types)",
+      "villain.name d12",
+      "villain.title d12",
+      "villain.motive d12",
+      "villain.scheme d12 (family)",
+      "villain.method d10",
+      "villain.resource d8",
+      "villain.weakness d12",
+      "villain.signature d12",
+      "artifact d12",
+      "region.name d12",
+      "region.sites d4 (5..8)",
+      "site.home-base d8 (town, farm or water)",
+      "site.first-clue / lieutenant-lair / stronghold / extra roles d8 without repeats (soft role preference)",
+      "factions.count d6",
+      "faction d12 + attitude d6 + attitude-to-villain d6 (each)",
+      "ally.patron d10 + names",
+      "ally.contact d6 + names",
+      "chapters d6",
+      "lieutenant d8 (1, or 2 when chapters >= 9)",
+      "theme d12 x2",
+      "tone d6",
+      "slot types (one d-roll per slot)",
+      "balance repairs (recorded)",
+      "twists d12 x2 (family)"
+    ],
+    "chapter_seed": "chapter_seed(n, outcome_digest) = finalize(campaign_seed + n * 0x9E3779B97F4A7C15 + finalize(outcome_digest)); outcome_digest is SHA-256 (first 8 bytes) of the canonical outcome record of chapter n-1.",
+    "chapter_generation": "The chapter reuses the adventure roll order with forced entries: location from the slot role, hook kind and stake tags from the chapter type, patron and contact from the recurring cast, antagonist from the villain's minions or the named lieutenant, clue texts for the secret, recap and contact lines; every forced value is recorded with status 'forced'."
+  },
   "counts": {
     "locations": 8,
     "patrons": 10,
@@ -157,7 +198,14 @@
     "destinations": 32,
     "contacts": 6,
     "rewards": 12,
-    "art_images": 44
+    "art_images": 56,
+    "campaign_premises": 16,
+    "villain_types": 12,
+    "factions": 12,
+    "chapter_types": 16,
+    "twists": 12,
+    "clocks": 9,
+    "artifacts": 12
   },
   "compat_tags": [
     "water",

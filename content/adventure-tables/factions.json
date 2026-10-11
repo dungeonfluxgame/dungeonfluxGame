@@ -1,0 +1,299 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "factions",
+  "description": "Two to four factions per campaign (d6: 1-2 -> 2, 3-4 -> 3, 5-6 -> 4), each with an attitude toward the party and toward the villain.",
+  "tables": {
+    "factions": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "lamplighters",
+          "name": "the Lamplighters' Guild",
+          "goal": "keep the roads and streets lit and safe, and own the contracts that do it",
+          "asset": "a network of lamp-wardens who see everything after dusk",
+          "fits": [
+            "town",
+            "water",
+            "market"
+          ]
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "gray-mantle",
+          "name": "the Gray Mantle",
+          "goal": "collect secrets and trade them for influence",
+          "asset": "spies in every household of consequence",
+          "fits": [
+            "town",
+            "scholar",
+            "market"
+          ]
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "hearthward",
+          "name": "the Hearthward League",
+          "goal": "protect the farms and villages from outside powers",
+          "asset": "a militia of farmers who know every field and ditch",
+          "fits": [
+            "farm",
+            "wild",
+            "town"
+          ]
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "quiet-bell",
+          "name": "the Order of the Quiet Bell",
+          "goal": "keep the old wards and rites that guard the region",
+          "asset": "shrines and sanctuary in every settlement",
+          "fits": [
+            "sacred",
+            "grave",
+            "wild"
+          ]
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "tin-street",
+          "name": "the Tin Street Syndicate",
+          "goal": "run every honest and dishonest trade in the market",
+          "asset": "runners, fences and a good memory for debts",
+          "fits": [
+            "market",
+            "town",
+            "water"
+          ]
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "pass-wardens",
+          "name": "the Wardens of the Pass",
+          "goal": "hold the mountain road against anyone who would close it",
+          "asset": "watchtowers and signal fires along the ridge",
+          "fits": [
+            "mountain",
+            "wild",
+            "town"
+          ]
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "ashen-court",
+          "name": "the Ashen Court",
+          "goal": "restore a fallen noble house to power",
+          "asset": "old titles, old grudges and a few secretly loyal soldiers",
+          "fits": [
+            "town",
+            "scholar",
+            "farm"
+          ]
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "fen-folk",
+          "name": "the Reedmoor Fen-Folk",
+          "goal": "be left alone in their marsh and keep its secrets",
+          "asset": "boats, trails and knowledge no outsider has",
+          "fits": [
+            "water",
+            "wild",
+            "sacred"
+          ]
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "orrery-circle",
+          "name": "the Orrery Circle",
+          "goal": "understand the sky and the sleeping powers under it",
+          "asset": "a library, instruments and some real scholarship",
+          "fits": [
+            "scholar",
+            "town",
+            "sacred"
+          ]
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "salt-company",
+          "name": "the Salt Company",
+          "goal": "make the region rich through trade and ships",
+          "asset": "coin, caravans and political friends",
+          "fits": [
+            "water",
+            "market",
+            "town"
+          ]
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "pilgrims",
+          "name": "the Wandering Pilgrims",
+          "goal": "walk the old roads and renew the shrines",
+          "asset": "a rumor network that reaches every hamlet",
+          "fits": [
+            "sacred",
+            "wild",
+            "mountain",
+            "farm"
+          ]
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "hollow-court",
+          "name": "the Hollow Hill Court",
+          "goal": "keep an old bargain and punish those who break it",
+          "asset": "gifts, glamours and fearsome patience",
+          "fits": [
+            "wild",
+            "farm",
+            "sacred"
+          ]
+        }
+      ]
+    },
+    "attitude_toward_party": {
+      "die": 6,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "hostile",
+          "text": "hostile to outsiders"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "wary",
+          "text": "wary and testing"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "wary2",
+          "text": "wary and testing"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "neutral",
+          "text": "neutral, open to a good argument"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "friendly",
+          "text": "friendly if shown respect"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "ally",
+          "text": "eager to ally if the party proves itself"
+        }
+      ]
+    },
+    "attitude_toward_villain": {
+      "die": 6,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "foe",
+          "text": "opposes the villain"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "foe2",
+          "text": "opposes the villain"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "wary",
+          "text": "wary of the villain"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "unaware",
+          "text": "unaware of the villain"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "unaware2",
+          "text": "unaware of the villain"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "secret-ally",
+          "text": "secretly allied with the villain"
+        }
+      ]
+    }
+  }
+}

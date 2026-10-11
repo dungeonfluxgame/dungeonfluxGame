@@ -1,7 +1,7 @@
 {
   "schema": "df-adventure-tables/1",
   "file": "names",
-  "description": "Given names by gender, surnames, goblin and kobold names, and descriptive adjectives for creatures and undead.",
+  "description": "Given names by gender, surnames, goblin and kobold names, descriptive adjectives for creatures and undead, and villain names and title adjectives.",
   "tables": {
     "he": {
       "die": 20,
@@ -763,6 +763,273 @@
             8
           ],
           "text": "Ash-Pale"
+        }
+      ]
+    },
+    "villain_he": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Veyran"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Caldor"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Isidor"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Aldous"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "Corvane"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Estmere"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "Halvard"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "Orsino"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "Valkor"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "Rennick"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "Ludovic"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "Merrick"
+        }
+      ]
+    },
+    "villain_she": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Sevrine"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Morwenna"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Isolde"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Vesper"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "Lysandra"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Ottoline"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "Calanthe"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "Zephrine"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "Mirabel"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "Ysolde"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "Perdita"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "Nerissa"
+        }
+      ]
+    },
+    "villain_adjective": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "Pale"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "Gilded"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "Silent"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "Ashen"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "Hollow"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "Gray"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "Quiet"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "Ember-Eyed"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "Rook-Black"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "Thorned"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "Veiled"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "Winter"
         }
       ]
     }

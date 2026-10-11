@@ -1,7 +1,7 @@
 {
   "schema": "df-adventure-tables/1",
   "file": "rewards",
-  "description": "Story-only thanks spoken by the contact. They promise no item, gold or XP.",
+  "description": "chapter_lines: story-only thanks spoken by the contact. milestones: story rewards granted after each act. Neither promises item, gold, XP or levels in v1.",
   "tables": {
     "chapter_lines": {
       "die": 12,
@@ -89,6 +89,95 @@
             12
           ],
           "text": "When the old story is told, I will make sure your part is not forgotten."
+        }
+      ]
+    },
+    "milestones": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "a standing welcome in {faction.a} halls"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "a title the region uses for the party"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "a safe room in {home.name}"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "a lead on {artifact.short}"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "a debt owed by one of the allies"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "a map of {site.clue}"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "the first favor from {faction.b}"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "a name the villain now uses with fear"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "training time with a veteran (level gain in v2)"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "a keepsake with a story (item in v2)"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "a standing invitation to {faction.a} councils"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "a quiet promise from a rival to look away once"
         }
       ]
     }

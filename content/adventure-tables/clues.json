@@ -1,0 +1,169 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "clues",
+  "description": "Node clue library. p = private (patron whisper), r = recap (narration, past tense), c = contact (spoken). Slots resolve against the frame.",
+  "tables": {
+    "clues": {
+      "omens": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              2
+            ],
+            "p": "Odd things began near {site.clue} a few nights ago, and the old folk will not talk about them.",
+            "r": "Folk near {site.clue} had begun to leave their doors unlatched and their lamps lit.",
+            "c": "Strange doings near {site.clue}; I have been watching."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "p": "Animals have been leaving {region.short}, and nobody can say what scared them.",
+            "r": "The animals had been leaving the district without a sound.",
+            "c": "Even my dog will not walk west of {site.clue} now."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "p": "Three people have dreamed of the same dark room, and each woke up with the same name on their lips.",
+            "r": "Three villagers had dreamed of the same dark room.",
+            "c": "Dreams are spreading faster than any rumor."
+          }
+        ]
+      },
+      "villain": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              2
+            ],
+            "p": "Someone who {v.sig} is behind this, and the {v.title} is the name they use.",
+            "r": "The attackers wore no marks, yet whoever sent them {v.sig} and is called the {v.title}.",
+            "c": "The {v.title}, they call them. The sort who {v.sig}."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "p": "Every trouble has the same hand in it: the one they call the {v.title}.",
+            "r": "Every strand of the trouble pointed to the {v.title}.",
+            "c": "I have heard of the {v.title}; trouble follows that name."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "p": "I found a mark I know: the {v.title} was here before us.",
+            "r": "A familiar mark showed that the {v.title} had been here first.",
+            "c": "That mark is the {v.title}'s. They have been here longer than we thought."
+          }
+        ]
+      },
+      "scheme": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              2
+            ],
+            "p": "I overheard a plan to {v.scheme}. It is already underway.",
+            "r": "A scrap of paper in the attacker's pocket described a plan to {v.scheme}.",
+            "c": "They mean to {v.scheme}. That is why all this matters."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "p": "The stolen things all fit one purpose: to {v.scheme}.",
+            "r": "Everything that had been stolen fit one purpose: to {v.scheme}.",
+            "c": "Add it up and the answer is clear: they mean to {v.scheme}."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "p": "The {v.title} is not after gold. They want to {v.scheme}.",
+            "r": "It became clear the {v.title} was not after gold but meant to {v.scheme}.",
+            "c": "The {v.title} is not a thief. They want to {v.scheme}."
+          }
+        ]
+      },
+      "stronghold": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              2
+            ],
+            "p": "Every trail ends at {site.stronghold}. I have seen the carts go in.",
+            "r": "The trail ended where every trail ended, at {site.stronghold}.",
+            "c": "They are working out of {site.stronghold}; I have seen the lights."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "p": "There is a door behind {site.stronghold} that is not on any map.",
+            "r": "A map found among the attacker's things marked a door at {site.stronghold}.",
+            "c": "You will want to look at {site.stronghold}. Quietly."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "p": "A guard talked in {home.name}: the answer lies at {site.stronghold}.",
+            "r": "The word came together at last: it all led to {site.stronghold}.",
+            "c": "Everything leads to {site.stronghold}. Go carefully."
+          }
+        ]
+      },
+      "weakness": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              2
+            ],
+            "p": "I have heard that the {v.title} {v.weak}.",
+            "r": "Someone muttered that the {v.title} {v.weak}.",
+            "c": "Some say the {v.title} {v.weak}. Remember that."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "p": "{v.weak_clue_0}",
+            "r": "{v.weak_clue_0}",
+            "c": "{v.weak_clue_0}"
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "p": "{v.weak_clue_1}",
+            "r": "{v.weak_clue_1}",
+            "c": "{v.weak_clue_1}"
+          }
+        ]
+      }
+    }
+  }
+}

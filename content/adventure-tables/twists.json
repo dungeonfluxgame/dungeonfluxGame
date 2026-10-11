@@ -1,0 +1,222 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "twists",
+  "description": "Twelve reversals for the act breaks. Each lists compatible premise families and two hint lines that must be delivered before the reveal.",
+  "tables": {
+    "twists": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "ally-traitor",
+          "families": [
+            "succession",
+            "war",
+            "crime",
+            "hunt"
+          ],
+          "reveal": "One of the party's trusted allies has been feeding {villain.name} information from the start.",
+          "hints": [
+            "An ally answered a question nobody had asked.",
+            "A message arrived at {site.stronghold} that only an ally could have sent."
+          ]
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "patron-lied",
+          "families": [
+            "ritual",
+            "relic",
+            "breach",
+            "blight"
+          ],
+          "reveal": "The first patron's errand served {villain.name}, not the people.",
+          "hints": [
+            "The first patron avoided one particular question.",
+            "The stake was worth more to someone else than the patron admitted."
+          ]
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "relic-fake",
+          "families": [
+            "relic",
+            "succession"
+          ],
+          "reveal": "{artifact.name} has been a forgery all along; the real one is elsewhere.",
+          "hints": [
+            "The relic felt wrong in the hand, too plain and too warm.",
+            "A scholar noticed an anachronism in its carving."
+          ]
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "puppet-master",
+          "families": [
+            "waking",
+            "ritual",
+            "war",
+            "breach"
+          ],
+          "reveal": "{villain.name} is only an agent; something far worse is giving the orders.",
+          "hints": [
+            "{villain.name} spoke of 'when I am released', not 'when I win'.",
+            "A servant flinched at a name that did not belong to {villain.name}."
+          ]
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "heir-found",
+          "families": [
+            "succession",
+            "war"
+          ],
+          "reveal": "The missing heir is alive, and has been quietly helping the party all along.",
+          "hints": [
+            "A stranger paid a debt in the party's name.",
+            "An old family sign appeared on a safe door."
+          ]
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "faction-betrays",
+          "families": [
+            "war",
+            "crime",
+            "relic",
+            "ritual"
+          ],
+          "reveal": "{faction.a} has made a private deal with {villain.name}.",
+          "hints": [
+            "Their patrols were absent on a night they should have been out.",
+            "A faction envoy was seen leaving {site.stronghold}."
+          ]
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "clock-feint",
+          "families": [
+            "ritual",
+            "breach",
+            "blight",
+            "waking"
+          ],
+          "reveal": "The visible schedule was a feint; the real deadline is much closer.",
+          "hints": [
+            "Two notes disagreed about the date.",
+            "The ritual circle's markings were for a different night."
+          ]
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "price-of-cure",
+          "families": [
+            "blight",
+            "waking",
+            "ritual"
+          ],
+          "reveal": "The only cure requires what the party has been carrying all along.",
+          "hints": [
+            "A healer examined the party's keepsake with far too much interest.",
+            "The old tale names the cure as a thing 'carried in friendly hands'."
+          ]
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "monster-guard",
+          "families": [
+            "hunt",
+            "waking",
+            "blight"
+          ],
+          "reveal": "The beast was guarding something the villain wants, and never meant harm.",
+          "hints": [
+            "The creature killed no one that anyone could prove.",
+            "Its tracks circled the same spot every night."
+          ]
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "lieutenant-defects",
+          "families": [
+            "war",
+            "crime",
+            "succession",
+            "ritual"
+          ],
+          "reveal": "One of {villain.name}'s lieutenants will help the party, for a price.",
+          "hints": [
+            "The lieutenant struck to disarm, not to wound.",
+            "A scrawled note begged the party to look away from the east road."
+          ]
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "sanctuary-stronghold",
+          "families": [
+            "ritual",
+            "breach",
+            "waking",
+            "relic"
+          ],
+          "reveal": "The sanctuary the party trusted is built on top of {site.stronghold}'s true entrance.",
+          "hints": [
+            "The sanctuary's bells never rang at dawn.",
+            "A hidden stair was bricked up in a hurry."
+          ]
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "villain-right",
+          "families": [
+            "blight",
+            "war",
+            "succession",
+            "relic"
+          ],
+          "reveal": "{villain.name} is right about one thing: the region's old order really was unjust.",
+          "hints": [
+            "A ledger showed the old rulers taking more than their share.",
+            "Villagers spoke of {villain.name} with something close to gratitude."
+          ]
+        }
+      ]
+    }
+  }
+}

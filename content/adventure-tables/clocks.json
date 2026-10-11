@@ -1,0 +1,306 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "clocks",
+  "description": "Nine fronts-style clocks of 7 steps. Slots resolve against the campaign frame.",
+  "tables": {
+    "clocks": {
+      "creeping-dark": {
+        "die": null,
+        "steps": [
+          {
+            "step": 1,
+            "text": "Strange noises and cold drafts begin near {site.clue}."
+          },
+          {
+            "step": 2,
+            "text": "Animals flee and sleepers dream of the same dark hall."
+          },
+          {
+            "step": 3,
+            "text": "{villain.name}'s agents seal off {site.clue} and ask no questions."
+          },
+          {
+            "step": 4,
+            "text": "The first villagers walk off at night and are found standing in a field, silent."
+          },
+          {
+            "step": 5,
+            "text": "{region.name} sinks into a long dusk; lamps burn low and the dead stir."
+          },
+          {
+            "step": 6,
+            "text": "{villain.name} breaks the last seal beneath {site.stronghold}."
+          },
+          {
+            "step": 7,
+            "text": "What slept below walks free, and {region.short} becomes its country."
+          }
+        ]
+      },
+      "ritual-countdown": {
+        "die": null,
+        "steps": [
+          {
+            "step": 1,
+            "text": "Candles, chalk and missing scholars appear near {site.clue}."
+          },
+          {
+            "step": 2,
+            "text": "{villain.name}'s circle holds its first gathering under a covered moon."
+          },
+          {
+            "step": 3,
+            "text": "A second circle forms in {home.name} and starts recruiting openly."
+          },
+          {
+            "step": 4,
+            "text": "The omens turn public: lights in the sky, wells that sing at midnight."
+          },
+          {
+            "step": 5,
+            "text": "The circle gathers the last component, {artifact.name}."
+          },
+          {
+            "step": 6,
+            "text": "The ritual begins at {site.stronghold} on the appointed night."
+          },
+          {
+            "step": 7,
+            "text": "The rite completes, and {villain.name} gets exactly what was promised."
+          }
+        ]
+      },
+      "relic-race": {
+        "die": null,
+        "steps": [
+          {
+            "step": 1,
+            "text": "A fragment of {artifact.name} turns up and word spreads."
+          },
+          {
+            "step": 2,
+            "text": "Three factions send agents to the region, and one of them is quietly deadly."
+          },
+          {
+            "step": 3,
+            "text": "{villain.name} collects the first piece and silences the finder."
+          },
+          {
+            "step": 4,
+            "text": "A rival claims the second piece, and the region teeters on open conflict."
+          },
+          {
+            "step": 5,
+            "text": "{villain.name} learns where the last piece rests."
+          },
+          {
+            "step": 6,
+            "text": "The pieces are brought together at {site.stronghold}."
+          },
+          {
+            "step": 7,
+            "text": "{villain.name} wields {artifact.name}, and no one can say no."
+          }
+        ]
+      },
+      "usurper-rises": {
+        "die": null,
+        "steps": [
+          {
+            "step": 1,
+            "text": "The old ruler's funeral passes; {villain.name} is first to the high seat."
+          },
+          {
+            "step": 2,
+            "text": "Loyal officials are quietly retired or reassigned."
+          },
+          {
+            "step": 3,
+            "text": "A decree forbids anyone from speaking of the missing heir."
+          },
+          {
+            "step": 4,
+            "text": "Guards begin arresting travelers who ask the wrong questions."
+          },
+          {
+            "step": 5,
+            "text": "{villain.name} announces a coronation and invites every faction."
+          },
+          {
+            "step": 6,
+            "text": "Dissenters are locked in {site.stronghold} awaiting the ceremony."
+          },
+          {
+            "step": 7,
+            "text": "The coronation completes; a new regime begins and the old one is erased."
+          }
+        ]
+      },
+      "blight-spreads": {
+        "die": null,
+        "steps": [
+          {
+            "step": 1,
+            "text": "Crops yellow near {site.clue}; healers shrug."
+          },
+          {
+            "step": 2,
+            "text": "The sickness reaches the outskirts of {home.name}."
+          },
+          {
+            "step": 3,
+            "text": "Wells and streams turn bitter, and rumors accuse neighbors."
+          },
+          {
+            "step": 4,
+            "text": "{villain.name} offers a cure, and the desperate begin paying."
+          },
+          {
+            "step": 5,
+            "text": "Half of {region.name} is under quarantine and quarrels break out."
+          },
+          {
+            "step": 6,
+            "text": "The source of the blight is moved to {site.stronghold}, beyond reach."
+          },
+          {
+            "step": 7,
+            "text": "The land fails; {villain.name} stands as its only hope, and its only owner."
+          }
+        ]
+      },
+      "conspiracy-unravels": {
+        "die": null,
+        "steps": [
+          {
+            "step": 1,
+            "text": "Another traveler vanishes; the bounty on the beast is raised."
+          },
+          {
+            "step": 2,
+            "text": "The ledger trail leads to a respected name in {home.name}."
+          },
+          {
+            "step": 3,
+            "text": "A witness is silenced before they can speak."
+          },
+          {
+            "step": 4,
+            "text": "{villain.name}'s people steer the hunt away from the truth."
+          },
+          {
+            "step": 5,
+            "text": "The beast is blamed for something it could not have done."
+          },
+          {
+            "step": 6,
+            "text": "A scapegoat is arrested and a false end to the hunt is announced."
+          },
+          {
+            "step": 7,
+            "text": "The conspiracy closes behind a tidy lie; {villain.name} escapes and begins again."
+          }
+        ]
+      },
+      "war-advances": {
+        "die": null,
+        "steps": [
+          {
+            "step": 1,
+            "text": "A skirmish at the border leaves three dead."
+          },
+          {
+            "step": 2,
+            "text": "Each side recalls its envoys and stockpiles grain."
+          },
+          {
+            "step": 3,
+            "text": "{villain.name}'s agents forge letters that inflame both sides."
+          },
+          {
+            "step": 4,
+            "text": "A caravan is burned and the blame is carefully placed."
+          },
+          {
+            "step": 5,
+            "text": "Armies march and refugees reach {home.name}."
+          },
+          {
+            "step": 6,
+            "text": "The decisive meeting is set at {site.stronghold}, and {villain.name} plans to be there."
+          },
+          {
+            "step": 7,
+            "text": "The first great battle is fought, and {villain.name} gets the war they wanted."
+          }
+        ]
+      },
+      "breach-widens": {
+        "die": null,
+        "steps": [
+          {
+            "step": 1,
+            "text": "Compasses spin and shadows lean the wrong way near {site.clue}."
+          },
+          {
+            "step": 2,
+            "text": "Strange lights hang over the old standing place."
+          },
+          {
+            "step": 3,
+            "text": "Something peers through, and a few folk go missing."
+          },
+          {
+            "step": 4,
+            "text": "Small things from elsewhere begin crossing over, bold and curious."
+          },
+          {
+            "step": 5,
+            "text": "{villain.name} opens a second seam above {home.name}."
+          },
+          {
+            "step": 6,
+            "text": "{artifact.name} is placed at {site.stronghold} to hold the door."
+          },
+          {
+            "step": 7,
+            "text": "The breach opens fully, and {region.short} joins the other side."
+          }
+        ]
+      },
+      "crime-closes": {
+        "die": null,
+        "steps": [
+          {
+            "step": 1,
+            "text": "A shop burns on Tin Street; no one saw anything."
+          },
+          {
+            "step": 2,
+            "text": "Protection is demanded from stalls and wagons alike."
+          },
+          {
+            "step": 3,
+            "text": "The two crews clash openly, and the watch looks away."
+          },
+          {
+            "step": 4,
+            "text": "{villain.name}'s hand shows in bribed officials."
+          },
+          {
+            "step": 5,
+            "text": "Honest merchants flee and prices soar."
+          },
+          {
+            "step": 6,
+            "text": "The crews are offered a truce arranged by {villain.name} at {site.stronghold}."
+          },
+          {
+            "step": 7,
+            "text": "Both crews swear to {villain.name}, and the whole region pays."
+          }
+        ]
+      }
+    }
+  }
+}

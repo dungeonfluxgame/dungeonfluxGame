@@ -4,7 +4,7 @@ Status: design plus authored roll tables; no code. Grounded in commit `c44c818` 
 
 Governing documents: AGENTS.md; [Gameplay tuning surface](gameplay-tuning.md) (pack and tuning files, revision pins, departures); [Generated content](generated-content.md) (typed templates, never executable; standard mode never silently changes rules); [Narrative engine](narrative-engine.md); [Runtime directors](runtime-directors.md); [Rules support](rules-support.md). Creature numbers come from the pinned SRD 5.2.1 (`development/rules-sources/manifest.json`, PDF SHA-256 `8974902d...5e3d87`, CC-BY-4.0). All table prose is original; nothing is copied from the Dungeon Master's Guide or any other non-SRD book.
 
-Tables live in `content/adventure-tables/` (index: `tables.json`). The art pool prompts are in `content/adventure-tables/art-manifest.json`.
+Tables live in `content/adventure-tables/` (index: `tables.json`). The art pool prompts are in `content/adventure-tables/art-manifest.json`. Sections 1-12 and Appendix A design the single adventure (the chapter generator); sections 13-18 and Appendix B add the campaign layer that chains chapters.
 
 ## 1. Purpose and non-goals
 
@@ -183,6 +183,160 @@ v2, in priority order: (1) data-driven beat script instead of fixed phases (see 
 
 Evaluation (ADR 0005): run three generated seeds end to end in a real browser, play both approaches and both outcomes, check the TV and phone text for each beat, the private clue visibility, and a restart mid-adventure.
 
+## 13. The campaign layer: frame
+
+Everything above generates one chapter. The campaign layer rolls a frame once per new campaign, then asks the chapter generator for one chapter at a time. Same principles: named dice, recorded rolls, original tables, tags for coherence, no model needed for structure.
+
+Frame stream: `Rng(seed XOR 0xCA3DA16B5EED)`, recorded in the same "DM's rolls" format. Order and dice are in `tables.json` under `campaign.frame_roll_order`.
+
+| Frame element | Source table (file) | Roll |
+|---|---|---|
+| Premise / storyline (16 classics: ancient evil, cult countdown, relic race, usurper and missing heir, blight, waking dungeon, monster-hunt conspiracy, border war and traitor, planar breach, thieves' war, dragon's tribute, drowned kingdom, false prophet, fey bargain, unfinished spell, saboteur on the trade road) | `premises` (campaign-premises.json) | d20 |
+| Title | premise `titles`, filled with region and artifact | d4 |
+| Villain type (12) | `villains.types`, restricted to the premise's `villain_types` | d12 |
+| Villain name and title ("Aldous, the Winter Regent") | `names.villain_he/she`, `villain_adjective`, type noun | d12, d12 |
+| Motive, scheme, method, resources, weakness, signature | `villains.motives/schemes/methods/resources/weaknesses/signatures` (scheme filtered by premise family) | d12, d12, d10, d8, d12, d12 |
+| Lieutenants (1, or 2 for 9-10 chapters) | `villains.lieutenants` (each is an SRD creature in `antagonists.json`; standard mode excludes simplified ones) | d8 |
+| Factions (2-4) with attitude toward the party and toward the villain | `factions` | d6 count, d12, d6, d6 |
+| Region name | `premises.region_names` | d12 |
+| Region: home base plus 5-8 sites from the 8 locations, each with a role (home base, first clue, lieutenant's lair, stronghold, plus rumor source, ally haven, old secret, neutral ground) | `locations`, `premises.site_roles` | d4 size, d8 per role (soft role preference, no repeats) |
+| Recurring allies: one patron archetype and one contact archetype with fixed names | `patrons`, `contacts`, `names` | d10, d6, d20 x2 each |
+| MacGuffin of the campaign | `premises.artifacts` (12 relics) | d12 |
+| Themes (2) and tone | `premises.themes`, `tones` | d12 x2, d6 |
+| Villain's clock (fronts style) | `clocks` selected by the premise | none |
+| Chapter count (6-10), act split and provisional chapter types | `act-structure.chapter_count`, `slots`, `chapter-types` | d6, then one roll per slot |
+| Act-break twists (2) | `twists`, restricted to the premise family | d12 x2 |
+
+The villain is built the way a DM builds one rather than rolled as a block: a type (what it is), a motive (why), a scheme (what it does, with the premise's family so a ritual premise never rolls "provoke a war"), a method (how it works on people), resources (what it can spend), a weakness the party can discover through two named clue lines, and a signature (the calling card that foreshadows it from chapter 1). Lieutenants are SRD creatures with a persistent name and epithet.
+
+Fronts and clocks. The clock is a 7-step timeline of what happens if nobody intervenes; step 1 is already true when play begins and step 7 is the doom (`clocks.json`). Position advances +1 at each act break, +1 when a chapter ends in defeat, and +1 when a lieutenant escapes. If the position reaches 6 before the finale, the finale uses the desperate framing (the finale may be replayed once after a defeat with the clock +1). Players never see the number; they see its signs (the `text` of the current step, rendered as an omen).
+
+Distinct frames. Counting independent choices (premise 16 x villain types 4 x schemes by family x name and title 144 x motive 12 x method 10 x resources 8 x weakness 12 x signature 12 x artifact 12 x region name 12 x site assignment x factions and attitudes x allies and names x lieutenants x themes x tone x chapter count and slot types x twists), the tables give on the order of 10^25 structural frames, more than 10^20 even with the premise fixed (an estimated product, not a proof: some fields correlate). In practice any two campaigns differ in storyline, villain, region, cast and clock.
+
+## 14. Campaign structure: named DM craft encoded as rules
+
+| Technique | Where it lives |
+|---|---|
+| Three-act structure with rising stakes (local, regional, existential) | `act-structure.acts`, `slots` per chapter count: 6 -> 2/2/2, 7 -> 2/3/2, 8 -> 3/3/2, 9 -> 3/3/3, 10 -> 3/4/3 |
+| Fronts and clocks | `clocks.json`, section 13 |
+| Node-based design: the party can never get stuck | `act-structure.nodes` (omens, villain, scheme, stronghold, weakness), `clues.json` |
+| Three-clue rule: every conclusion has at least three clues, by at least two vehicles, before the chapter that needs it | rules in `act-structure.rules`; vehicles are the private clue, the victory recap and the contact's line; rescue rule uses the public "Previously" line |
+| Five-room site | the `delve` chapter type (entrance, puzzle, setback, guardian, reward) played as the guardian room (section 17) |
+| Pillars of play (combat, social, exploration) | each chapter type has an intended mix; the generator repairs the outline until each pillar's mean is at least 25 percent and no two adjacent chapters share a type |
+| Twist or reversal at the act breaks, foreshadowed twice | `twists.json`: two hint lines must be delivered in earlier chapters before the reveal |
+| Villain foreshadowed from chapter 1 | the signature appears in chapter 1's recap clue; omens in the clock steps |
+| Lieutenant confrontation before the finale | slot template always contains `lieutenant` before `finale`; 9-10 chapters have two |
+| Rest and downtime beats | the Short Rest the engine already offers after each win; the `rest-interlude` slot is a recap screen between chapters |
+| Milestone rewards | `rewards.milestones` after every act; levels are v2 |
+| Callbacks | the campaign record keeps what each hero carried (for example chapter 1's stake); the twist `price-of-cure` reuses it |
+
+Chapter types (16, `chapter-types.json`): courier, escort, warning and retrieval (the four native shapes), mystery (three-clue), delve (five-room), defence/siege, heist/infiltration, hunt, parley/intrigue, race against the clock, rescue, escape, lieutenant confrontation, finale, and the rest interlude. Each lists its intended combat/social/exploration mix, the engine capabilities it really needs, whether it is native, faked or unavailable in v1, a mapping onto the single playable shape (hook kind, stake tags, antagonist role, location role), its own ask/help/stand labels, and `on_victory` and `on_defeat` types that bias what comes next.
+
+## 15. Chapters are generated one at a time
+
+Only the frame and the provisional slot types exist at creation. Chapter n is generated when chapter n-1 completes, from the frame plus the recorded outcomes of earlier chapters. Chapter seed: `finalize(campaign_seed + n * 0x9E3779B97F4A7C15 + finalize(outcome_digest))`, where the outcome digest is the first 8 bytes of SHA-256 of the canonical outcome record. Two tables playing the same campaign seed therefore diverge as soon as an outcome differs, and a replay needs only the stored record.
+
+Inputs (what truly differs between tables in v1): victory or defeat; which approach was chosen (ask or help) and by whom; whether the Short Rest completed; whether the destination was reached; each hero's private clue (who asked); the lieutenant's fate; the clock. Honest limit: mercy versus execution, the party's route and any skill result are not player choices in v1 (section 17); fate is a recorded die roll.
+
+Procedure for chapter n:
+1. Pick the type. The slot's allowed types are intersected with the previous chapter's `on_victory` or `on_defeat` list; if the intersection is empty the provisional type stands. A re-pick is a recorded roll.
+2. Apply the type's `beat` mapping: hook kind and stake tags; location from the site role (the opening is always the home base); antagonist from the villain's minions (the villain type's `lieutenant_pref` plus bandit) or, for `lieutenant` and `finale`, the named lieutenant or the strongest exact creature; patron and contact from the recurring cast or a faction agent; premise `family_hooks` bias the hook.
+3. Choose three leads for the two earliest unresolved nodes (private clue, recap, contact line). On a defeat the recap and contact lines never appear, so the delivery ledger marks a clue delivered only when its vehicle is shown, and the rescue rule moves a missing clue to the next chapter's public "Previously" line.
+4. If the previous slot ended an act, put the twist first: its reveal opens this chapter and the act milestone is granted.
+5. Run the standard chapter roll with forced entries (recorded as `forced`), then render with the standard patterns plus the campaign overlay: the room scene's title is the campaign title, its narration begins "Chapter n.", and its speaker line carries the "Previously" recap (chapter 1: the premise teaser).
+6. After the chapter: extract the outcome, roll the lieutenant's fate if one fell, update the clock, ledger, facts and attitudes (section 16).
+
+How a different earlier outcome changes the next chapter (examples in Appendix B): a defeat raises the clock, replaces the recap clue by the rescue rule and biases toward a rescue or defence chapter; choosing "help" instead of "ask" changes which hero holds the private clue and which attitude ticks up; a lieutenant who escapes returns once; an ally who was not escorted safely becomes a captive to rescue.
+
+## 16. Continuity state and the storyteller fact sheets
+
+Durable campaign record (`df-campaign-record/1`):
+- `frame`: the whole rolled frame including names (immutable, hashed), tables revision, rules mode, generator version, the frame's DM's-rolls list.
+- `clock`: position and history `[{chapter, delta, reason}]`.
+- `chapters[]`: `{n, slot, type, seed, outcome_digest_in, rolls_sha256, pack_sha256, tuning_sha256, run_database, result (victory|defeat|abandoned), approach, asker (member), rested, destination_reached, lieutenant_fate, campaign_time}`.
+- `facts[]`: `{id, text, audience (public | private:<hero> | dm), established_in, revealed}`; established facts include what each hero carried and every revealed twist.
+- `clues[]`: `{node, vehicle, chapter, audience, delivered}`.
+- `npcs[]`: `{id, name, role, attitude (allied | friendly | neutral | wary | hostile), status (active | captured | escaped | defected), last_seen}`; factions are npcs of kind faction.
+- `heroes[]`: `{member, name, creation choices, secrets: [fact ids]}`.
+
+Where it lives. Reused unchanged: the per-chapter pack and tuning pins (each chapter is a normal generated adventure with its own run database, `adventure.json` and pins; gameplay-tuning section 5). New: (1) a campaign database (`df_gameplay_campaign_<name>`) holding the immutable frame row, append-only chapter, fact, clue and attitude rows, written transactionally when a chapter ends; (2) a `campaign_id` and chapter number in each chapter's `adventure.json` and the frame hash as a suffix `:c-<16 hex>` on `BuildIdentity.configuration`, so every chapter's checkpoints bind to its campaign; (3) character carry-over: the next chapter's run starts with each member's saved creation choices pre-filled for one-tap confirmation (the engine has no persistent heroes across runs). The telemetry event `gameplay.campaign.chapter` records ids, hashes and the clock only.
+
+Storyteller sheets (both JSON, built by the server, never by a client; audience tags decide inclusion):
+- `recap_sheet` (listener-safe, for the TV "Previously..." and for models): premise teaser, region and campaign title, the last 3 chapters as `{title, result, approach in words}`, the public facts (at most 6, newest first), current open leads in plain words, the clock described by its latest sign (never the number), living NPCs with attitude words, and tone. It excludes `dm` and `private:*` facts, the villain's true name until revealed, hidden faction loyalties and unrevealed twists. A per-hero private recap for a phone may add that hero's own private facts.
+- `chapter_sheet` (server and model, never displayed): the chapter's rolled facts as in section 7 plus the DM-only facts the prose must foreshadow without revealing (each flagged `hint_only` with the strings that must not appear: the villain's true name, the twist, the secret alliances).
+
+Validators for recap text: at most 2 lines of 160 characters; must mention the last chapter's title or place and its result in plain words; no digits; no forbidden strings; no proper nouns outside the sheet; nothing from `dm` or another hero's private facts.
+
+### Model-written slots
+
+The dice and tables decide structure, antagonists and their numbers, who knows what, clock movement, twists and what is true. The language model (`gpt-6-luna`, already wired as a validated expression service: facts in, slot-bounded prose out, with must-mention and forbidden terms) may write only the following typed slots, each validated by the same pipeline the pattern text must pass, and each falling back to the table or pattern text on failure.
+
+| Slot | Written by | Bounds | Validation |
+|---|---|---|---|
+| Scene title, narration, spoken lines, offer labels (all chapter beats) | model re-expression of the rolled pattern | section 6 limits | section 7 validators 1-8 |
+| Private clue | model | <= 280 characters | validator 7 plus the node's content words; never in a display slot |
+| "Previously..." recap | model, from `recap_sheet` | 2 lines x 160 | recap validators above |
+| Proposed names: region, villain given name and epithet, faction names, lieutenant epithet, recurring NPC nicknames | model proposes, once, at frame creation | 2-28 characters, at most 3 words, letters, apostrophe, hyphen, space | not in the real-world deny list, not equal or within edit distance 2 of any existing name, vowel ratio 0.25-0.6, capitalised; chosen name is stored immutably in the frame, else the table name is used |
+| Colour lines: place sensory line, NPC catchphrase, villain omen line | model | 100 / 60 / 100 characters | no digits, no outcome verbs, no new proper nouns, omen line must keep the signature's keywords, catchphrase must not state facts |
+| Anything mechanical (numbers, creature choice, outcomes, checks, clock, who holds a secret) | never | n/a | not sent; mechanical sentences are fixed templates |
+
+## 17. Engine reality, and the roadmap that unlocks variety
+
+Honest summary: today the engine plays exactly one chapter shape (hook, two-approach roleplay with a private secret, one single-enemy melee fight, aftermath and rest, destination scene) with two level-1 fighters, in a run that is one database. A "campaign of linked single-shape chapters" is therefore real (new story, region, villain and clock every chapter, with continuity) but each chapter is mechanically the same fight. Status below is at commit `c44c818`.
+
+Capabilities:
+
+| Capability | Status | Evidence | What v1 can fake narratively | What needs engine work |
+|---|---|---|---|---|
+| Skill or ability checks with DCs | partial | `AbilityCheckResult` and `PlayerGameplayView.check` exist (`gameplay.proto:11,14`); nothing in `df-tools` or `df-rules/src/local_journey.rs` rolls or emits one | the "ask" approach reads as an insight check that always succeeds | a check action, DC from the beat, result in the view (roadmap 3) |
+| Multiple enemies | missing | one `BANDIT` entity (`journey.rs:40`), `initiative_order` takes exactly 3 actors (`local_journey.rs:405`); `df-encounter`/`df-combat` are not wired | "the thief and her hounds" in narration only; one stat block fights | N-actor encounters (roadmap 4) |
+| Ranged or spell actions | missing | only `greatsword-attack` and Second Wind (`wire.rs:68-90`) | enemies "shoot" in text | action catalog, ranges, spell handlers (roadmap 7) |
+| Branching beyond two approaches | missing | fixed phases (`narrative_phase.rs`), offers `ask-courier`/`escort-courier` | per-type relabelling of two buttons | beat-script interpreter (roadmap 2) |
+| Travel or exploration turns | missing | one `choose-harbor-scene` offer; `df-world` crate not wired to the journey | the destination scene and narration cover the trip | movement and route choice (roadmap 6) |
+| Loot and rewards | missing | no reward in the journey; challenge consequences are planned types in `df-encounter` | story-only reward lines and milestones | reward ledger and inventory (roadmap 5) |
+| Levelling | missing | level 1 only (`FIXED_GROUPS`, `pack.rs:78`) | milestone narration | level-up rules and per-level numbers (roadmap 5) |
+| More hero classes | missing | `fighter-1` only | none | creation and rules per class (roadmap 7) |
+| Persistent campaign state across sessions | partial | PostgreSQL checkpoints persist one run; a run is a database (gameplay-tuning section 5); no campaign object | none | campaign record and chapter chaining (roadmap 1) |
+| Higher-CR creatures, boss features | missing | damage dice 1-2, HP 1-200 allowed but untested above CR 1/2 | a "champion" persona on the strongest creature | legendary-lite features, multi-attack (roadmap 8) |
+| A scene shape with no fight | missing | every run goes Opening -> Dialogue -> Combat -> Complete | the rest interlude is a recap screen outside the pack | beat-script interpreter |
+
+Chapter types:
+
+| Type | Needs | v1 | What is faked |
+|---|---|---|---|
+| Courier, escort, warning, retrieval | the native shape | native | nothing |
+| Mystery (three-clue) | checks, branching | faked | clue-heavy warning chapter; the three clues are the three leads |
+| Delve (five-room) | multiple enemies, checks, exploration | faked | only the guardian room is played; the site is the destination scene |
+| Defence/siege | multiple enemies, ranged | faked | one assailant, the rally point is the destination |
+| Heist/infiltration | checks, branching | faked | "case it" is the ask approach, "go in together" is the help approach, the guard is the fight |
+| Hunt | tracking, packs | faked | one creature; tracking is the ask approach |
+| Parley/intrigue | checks, branching | faked | talks fail into one fight at the table |
+| Race against the clock | travel | faked | clock +1 on a defeat |
+| Rescue / escape | multiple enemies, travel | faked | the captive is the stake; destination is the rendezvous |
+| Lieutenant | multiple enemies, higher CR | faked | the named lieutenant is one CR 1/8-1/2 creature |
+| Finale | higher CR, checks | faked | the strongest exact creature as the villain's champion; the villain's fate is told in the epilogue patterns |
+| Rest interlude | a non-fight shape | not in the pack | recap screen |
+
+Roadmap (smallest first, most variety per unit of work):
+1. Campaign record and chapter chaining: campaign database, chapter run creation from the record, character carry-over by saved creation choices, outcome extraction. Unlocks every generated campaign in this document, with continuity and divergence. Mostly new, no rules changes.
+2. Data-driven beat-script interpreter replacing the hard-coded journey phases (`narrative_phase.rs`, `journey.rs` transitions, the `SceneKey` set): beats, offers and transitions become pack data validated against a closed handler set. Unlocks 3-4 approaches, no-fight chapters (mystery, parley, interludes), per-chapter beat counts and real branching without touching rules.
+3. Ability-check action using the existing proto message: DC and ability in the beat, result recorded and shown. Unlocks mystery, heist, parley and race chapters and gives skills (already chosen at creation) a purpose.
+4. N-enemy encounters (entities, initiative, targeting) over the same melee model. Unlocks delve, defence, hunt packs and lieutenants with minions, and makes fights tense.
+5. Reward ledger, inventory deltas and milestone levels. Unlocks retrieval and heist payoffs and act-break advancement.
+6. Travel and exploration turns using the world crate. Unlocks race and hunt as written.
+7. Ranged and spell actions and additional hero classes. Unlocks party variety and defence.
+8. Boss features and higher-CR creatures with disclosed custom rules where needed. Unlocks real lieutenant and finale fights.
+
+## 18. Campaign tables, counts and implementation additions
+
+New files in `content/adventure-tables/`: `campaign-premises.json` (16 premises, 12 relics, 12 themes, 6 tones, 12 region names, 8 site roles), `villains.json` (12 types, 12 motives, 12 schemes, 10 methods, 8 resources, 12 weaknesses with two clue lines each, 12 signatures, 8 lieutenants), `factions.json` (12 factions, 6 attitudes each way), `chapter-types.json` (16 types), `act-structure.json` (3 acts, chapter-count table, slot templates for 6-10 chapters, 5 nodes, 6 lieutenant fates, rules, family hooks), `clocks.json` (9 clocks of 7 steps), `twists.json` (12), `clues.json` (5 nodes x 3 clues x 3 voices), `rewards.json` (the 12 chapter lines plus 12 milestones), `names.json` (extended with villain names and title adjectives), `art-manifest.json` (12 villain portraits added: 56 images in all). Lieutenants and minions reuse the antagonist portraits.
+
+Reference-model checks (in the design session): 3,000 random frames with all slots, clocks, clues, twists and milestones rendered, no unresolved braces, every frame with a lieutenant before the finale and the finale last, no adjacent identical chapter types, every pillar mean at least 25 percent; fallbacks (a compatible entry not found in 64 rolls) occur in roughly 1 frame in 1,500, which is the recorded, deterministic path. This is design evidence, not verification of the running game.
+
+Implementation additions (after section 12): (9) `adventure/campaign.rs`: frame roll, outline, repair, clock, ledger; (10) forced entries in the chapter generator (`force` map, recorded as `forced`); (11) campaign overlay patterns and the room-scene recap line (a proposed `recap` pack field, or reuse of `speaker`/`dialogue` as in the appendix); (12) campaign database and chapter chaining (roadmap 1); (13) recap and chapter fact sheets and the name and colour slot validators; (14) golden tests: the Appendix B frame and chapter 1 reproduce byte for byte; (15) evaluation: play chapters 1-3 of a generated campaign twice with different outcomes and check that chapter 2 and 3 differ and the recap is listener-safe.
+
+Open choices for the owner are listed in the report that accompanies this commit.
+
 ## Appendix A. Three worked adventures (standard mode)
 
 The texts below are produced by the reference model with the tables as committed; an implementation must reproduce them. Titles, narration, spoken lines, labels, the private clue and the antagonist numbers are complete. Entry ids in the roll tables are table ids.
@@ -358,4 +512,89 @@ Remaining rolls (names, traits, atmosphere, prose variants) in order: name.patro
 
 Remaining rolls (names, traits, atmosphere, prose variants) in order: name.patron.given=d20:11, name.patron.surname=d20:11, name.contact.given=d20:15, name.contact.surname=d20:12, name.antagonist.adjective=d12:2, trait.patron.mannerism=d12:9, trait.patron.speech=d12:12, trait.contact.mannerism=d12:4, trait.contact.speech=d12:12, atmosphere.a=d6:6, atmosphere.b=d6:4, atmosphere.c=d6:4, atmosphere.c=d6:3, prose.begin_label=d4:3, prose.room_title=d4:3, prose.room_narration=d4:1, prose.opening_narration=d4:1, prose.foreshadow_beast=d4:4, prose.ask_label=d4:4, prose.help_label=d4:3, prose.stand_label=d4:3, prose.continue_label=d4:1, prose.ask_title=d4:1, prose.ask_narration=d4:3, antagonist.arrival=d4:4, prose.help_title=d4:3, prose.help_narration=d4:1, prose.route_retrieve=d4:2, prose.clue=d4:1, prose.combat_title=d4:2, prose.combat_open_beast=d4:3, prose.victory_title=d4:1, prose.victory_lead=d4:2, prose.victory_dialogue=d4:1, prose.defeat_title=d4:4, prose.defeat_retrieve=d4:4, prose.inn_title=d4:2, prose.inn_intro=d4:4, prose.inn_dialogue=d4:4.
 
+## Appendix B. A worked campaign
+
+Campaign seed `0x79a53da6463aaeed`, standard rules mode (all lieutenants and minions are exact SRD creatures). Everything in the frame below is a table result; the outline paragraphs are the DM-eye reading of the rolled slots (in the product, only the frame and the slot types exist at creation, and each chapter is written when it is reached).
+
+### B.1 The frame: *A Bargain at Hollow Hill*
+
+- **Premise:** A fey bargain comes due (family `blight`). Generations ago, the region's founders struck a bargain with something in the hills, and the term has run out. Someone is quietly trying to pay with other people's lives.
+- **Villain:** Aldous, the Winter Regent: a smiling usurper in borrowed finery (voice: smooth, charming man). Motive: Aldous has lost the thread of reason and calls it clarity. Scheme: to call in a bargain that hands over the whole region. Method: bargains with fine print. Resources: a pack of trained beasts. Weakness the party can discover: Aldous still protects one person they once loved (clues: "A grave is tended every night with fresh flowers." and "A letter in an unfamiliar hand begs someone to stop."). Signature: Aldous turns every nearby lamp flame faintly blue. Lieutenant: the Bone Sentinel (an oathbound Skeleton, SRD p.325).
+- **MacGuffin:** the Tidehorn, a spiral horn that calls the water; it commands tide and flood. Whoever sounds it at the hill can call in the debt.
+- **Region:** the Tarn Marches. Sites and roles: the Orrery Library (home-base); the Windward Pass (first-clue); the Reedmoor Boardwalk (lieutenant-lair); the Pinewood Trail (stronghold); the Rookhill Gate (ally-haven); Thistledown Farm (old-secret); the Salt Quay (rumor-source); the Lamplit Market (neutral-ground).
+- **Factions:** the Gray Mantle (collect secrets and trade them for influence); toward the party neutral, open to a good argument, toward the villain wary; the Ashen Court (restore a fallen noble house to power); toward the party wary and testing, toward the villain foe.
+- **Recurring cast:** Dessa Quillon, a brisk young archivist (voice: brisk young woman); Rudd Cobb, a brisk watch sergeant (voice: brisk, no-nonsense man). Rival and minions: the Regent's guards and trained beasts.
+- **Themes and tone:** mercy against vengeance, the cost of power; heroic and warm.
+- **Clock (blight spreads, 7 steps):**
+  1. Crops yellow near the Windward Pass; healers shrug.
+  2. The sickness reaches the outskirts of the Orrery Library.
+  3. Wells and streams turn bitter, and rumors accuse neighbors.
+  4. Aldous offers a cure, and the desperate begin paying.
+  5. Half of the Tarn Marches is under quarantine and quarrels break out.
+  6. The source of the blight is moved to the Pinewood Trail, beyond reach.
+  7. The land fails; Aldous stands as its only hope, and its only owner.
+- **Act-break twists:** end of Act I, `price-of-cure`; end of Act II, `villain-right`.
+
+### B.2 Act and chapter outline
+
+Eight chapters: Act I (3), Act II (3), Act III (2). Pillar balance (combat/social/exploration, intended): 36/34/30. Each paragraph names the slot type, the place (a site from the region), the SRD creature that fights, the three leads and how it bends with an earlier outcome.
+
+- **1. A Light Going Out (warning, opening; the Orrery Library).** Dessa, the archivist, runs in with the news that the old wards are failing and Rudd must be told before dawn. A hired guard of the Winter Regent blocks the way (Guard, AC 16, HP 11). Leads: Dessa's private whisper that animals are leaving the Marches; Rudd's remark that something strange is happening at the Windward Pass; the recap that whoever sent the guard 'turns every nearby lamp flame faintly blue' and is called the Winter Regent. The stake is a steady lantern that Dessa will not explain (hint 1 for the Act I twist). If the party loses, the clock moves to step 2, Rudd hears too late, and chapter 2 opens with him hurt.
+- **2. Tracks in the Snow (hunt, first site; the Windward Pass).** Shepherds are losing flocks to something that follows lamplight. Hook: if chapter 1 was won, Rudd asks the party to guide a trapper; if lost, the trapper is the one who was never warned. The hunted thing is a raider (Goblin Warrior, AC 15, HP 10) leading the Regent's trained beasts. 'Ask' is reading the tracks (private clue: the Regent's title), 'help' is taking the lead. Leads: omens (public recap), villain (private), a first scrap of the scheme. If the party helped instead of asked, the trapper becomes an ally npc; if they asked, the asker holds a secret the others do not.
+- **3. A Table in the Lamplight (parley, ally; the Lamplit Market).** The Ashen Court (wary, an enemy of the Regent) and the Gray Mantle (neutral) each want the party's account. The party escorts an Ashen Court envoy to the Gray Mantle's table; the Regent's agents try to seize her (Bandit, AC 12, HP 11). Leads: the scheme (the Regent means to call in the founders' bargain), a second villain clue, and a physician's glance at the steady lantern (hint 2). If the envoy is not delivered, she is taken, the Ashen Court turns hostile, and she is the hostage of chapter 7.
+- **Act I break (twist `price-of-cure`).** The Gray Mantle's physician explains that the blight can only be paid off with a flame that never gutters, carried to Hollow Hill: the lantern the party carried in chapter 1. The party now owns the only cure and the Regent will want it. Milestone: the Gray Mantle owes the party a favor. Clock +1.
+- **4. Three Trails to One Door (mystery, midpoint; Thistledown Farm).** A farmer says the blight began in the old orchard. Three trails (a grave tended every night with fresh flowers, an unsigned letter begging someone to stop, the founders' charter hidden in the orchard) all lead to Hollow Hill. Leads: the stronghold (Pinewood Trail), the first weakness clue (the tended grave), the scheme. A Kobold Warrior (AC 14, HP 7) bursts from the cellar to scare them off. Played as a clue-heavy warning chapter; the three trails are the three leads. If an earlier chapter was lost, the missing clue arrives by the rescue rule in the Previously line.
+- **5. Under the Founders' Stones (delve, pressure; the Rookhill Gate crypt).** The charter points to a writ kept in the old founders' crypt. The entrance, the puzzle and the setback are told in the narration; the party plays the guardian room against a Giant Rat swollen by the crypt's strange air (AC 13, HP 7). Leads: the letter's author (weakness clue two), the stronghold (second), and the founders' writ itself (reward). If the Bone Sentinel was alerted by a lost chapter 3, it patrols the crypt stair and appears early.
+- **6. The Bone Sentinel (lieutenant; the Reedmoor Boardwalk).** The Regent's oathbound dead guards a shrine on stilts where the 'cure' is brewed (Skeleton, AC 14, HP 13, SRD p.325). Leads: the stronghold, the weakness (a loved one), the Regent's method (bargains with fine print). After the fight the lieutenant's fate is rolled: captured and talking (a missing clue), escaped (clock +1, returns once), or informant (a lead and an obligation). Act II ends.
+- **Act II break (twist `villain-right`).** The founders' writ shows the founders cheated the hill-folk and took more than they promised. The Winter Regent is, in one respect, right. The party must decide, in the story told by their approach labels, whether to finish the Regent or renegotiate the bargain (themes: mercy against vengeance). Milestone: the party's name is known to the Gray Mantle's council. Clock +1.
+- **7. The Lantern-Maker's Shop (rescue, approach; the Lamplit Market).** The Regent's agents hold a hostage in a lantern-maker's shop: Rudd or Dessa if either was lost, otherwise the envoy of chapter 3. A Guard captain-for-hire (Guard, AC 16, HP 11) holds the door. Leads: the final stronghold confirmation and the loved-one clue (a name on the hostage's letter). If the clock reached step 5, the hostage is moved to the stronghold and chapter 7 becomes a pursuit.
+- **8. The Hollow Hill (finale; the Pinewood Trail).** The Winter Regent speaks from the hilltop; his champion, an oathsworn Guard, bars the way (AC 16, HP 11; in custom mode the Scout, CR 1/2). 'Ask' is using the weakness (speaking the loved one's name from the letter), 'help' is rallying the allies. The fight is the same single melee; the epilogue differs: mercy (the bargain renegotiated and the debt shared) or vengeance (the bargain broken and the hill sealed, at a cost). Both epilogues are narration patterns keyed by the approach and by the clock step.
+
+### B.3 What the storyteller is given for chapter 2
+
+`recap_sheet` (listener-safe) after chapter 1 won, asked by the first hero:
+
+```json
+{"campaign": "A Bargain at Hollow Hill", "region": "the Tarn Marches", "tone": "heroic and warm",
+ "teaser": "Generations ago, the region's founders struck a bargain with something in the hills, and the term has run out.",
+ "chapters": [{"title": "A Light Going Out", "result": "won", "approach": "asked Dessa privately"}],
+ "public_facts": ["Dessa Quillon's warning reached Rudd Cobb at the Archivist's Study.", "A guard in the pay of someone called the Winter Regent tried to stop it.", "Animals are leaving the Marches."],
+ "open_leads": ["strange doings near the Windward Pass"], "latest_sign": "Crops yellow near the Windward Pass.",
+ "npcs": [{"name": "Dessa Quillon", "attitude": "friendly"}, {"name": "Rudd Cobb", "attitude": "friendly"}]}
+```
+
+Pattern fallback for the Previously line: "Previously in A Bargain at Hollow Hill: Dessa's warning reached Rudd, but a guard in the Winter Regent's pay tried to stop it. Animals are leaving the Marches, and the old folk will not speak of the Windward Pass." The `chapter_sheet` additionally carries, flagged `hint_only`, the villain's true name (Aldous) and the Act I twist; the validators forbid both strings in any chapter 2 output.
+
+### B.4 Chapter 1, fully written in the playable shape
+
+Chapter seed `0xa2a2671963a4e9d7` (campaign seed, chapter 1, outcome digest 0). Forced by the campaign: location (home base), hook kind `warn` (type warning) with premise-biased hook `failing-ward`, patron and contact (the recurring allies), antagonist from the villain's minions, the three leads, the type's ask/help/stand labels. Antagonist: Halden Thorne, Guard, SRD 5.2.1 p.296 (exact): HP 11, AC 16, attack +3, spear 1d6+1.
+
+**Offer labels:** `begin-story` = "Walk into the Orrery Library"; `ask-courier` = "Ask how bad it really is"; `escort-courier` = "Offer to carry the word"; `defend-courier` = "Keep the word alive"; `choose-harbor-scene` = "Press on to the study"; destination option "the Archivist's Study".
+
+**Private clue** (asking player only): Dessa whispers to you alone: Rudd Cobb at the Archivist's Study must hear it before dawn. Animals have been leaving the Marches, and nobody can say what scared them. Keep it between us.
+
+- **room** | *A Bargain at Hollow Hill* | art `loc-orrery-library-arrival`
+  - Narration: Chapter 1. Rain taps the tall windows in patient rhythm. Dust motes drift through a shaft of moonlight. Share the room with your companions, then bring your heroes into the story.
+  - The tale begins: "Generations ago, the region's founders struck a bargain with something in the hills, and the term has run out."
+- **opening** | *A Light Going Out* | art `loc-orrery-library-arrival`
+  - Narration: A brisk young archivist hurries toward you, shielding a small flame with her hand just as you arrive at the Orrery Library. A shadow detaches itself from the dark behind her.
+  - Dessa: "The old wards are failing, and Rudd must be told before they fail completely. Please, help me reach him."
+- **dialogue-seal** | *Whispers in the Dark* | art `loc-orrery-library-arrival`
+  - Narration: Dessa draws you aside, breathing hard. Halden Thorne steps into the light, spear ready and a stubborn frown fixed in place.
+  - Dessa: "Nobody listens to me. But the steady lantern proves it, and Rudd will know what it means."
+- **dialogue-escort** | *Walk Together* | art `loc-orrery-library-arrival`
+  - Narration: Relief crosses Dessa's face, and she moves to your side. Halden Thorne steps into the light, spear ready and a stubborn frown fixed in place.
+  - Dessa: "The Archivist's Study is the place. Walk with me, and if anyone stops us, let them see you're ready."
+- **combat** | *Trouble at the library* | art `loc-orrery-library-arrival`
+  - Narration: Halden Thorne raises his weapon in answer. Both heroes are within 5 feet of the guard, and everyone fights in the open: no surprise, cover or movement. This encounter uses nonlethal melee attacks.
+  - Halden Thorne: "I have my orders. Surrender the steady lantern, or I will make you."
+- **inn** | *Safe at Last* | art `loc-orrery-library-interior`
+  - Narration: The study is narrow and tall, its ladder-reached shelves lit by one bright reading lamp. Rudd, a brisk watch sergeant, looks up at once, rubbing his tired eyes.
+  - Rudd: "Strange doings near the Windward Pass; I have been watching. On your next road, I will send word ahead that you are friends."
+- **victory** | *A Moment of Quiet* | art `loc-orrery-library-arrival`
+  - Narration: Halden Thorne falls unconscious with 1 HP. When the shaking stops, the pieces fit together. The attackers wore no marks, yet whoever sent them turns every nearby lamp flame faintly blue and is called the Winter Regent. His Short Rest has begun; campaign time has not completed it.
+  - Dessa: "Let's go before anything else finds us. The Archivist's Study is close."
+- **defeat** | *The Night Turns Against You* | Narration: Both heroes are unconscious with 1 HP after nonlethal attacks. The warning goes undelivered, and Rudd will hear the news too late. Their Short Rests have begun; campaign time has not completed them.
+
+Ledger after chapter 1 if the party wins, asks, reaches the destination: omens 2/3 clues, villain 1/3; clock step 1; facts: the party carried the steady lantern; Dessa and Rudd friendly. If the party loses: omens 1/3 (private only, if asked), villain 0/3 (the recap never appears), clock step 2, Rudd wounded.
 

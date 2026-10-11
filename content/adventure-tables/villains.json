@@ -1,0 +1,958 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "villains",
+  "description": "The villain is built from independent rollable columns, the way a DM builds one: type, name and title, motive, scheme, method, resources, a discoverable weakness with two clue lines, a signature, and lieutenants (SRD creatures from antagonists.json).",
+  "title_nouns": {
+    "sleeping-horror": "Sleeper",
+    "ritualist": "Scholar",
+    "usurper": "Regent",
+    "prophet": "Voice",
+    "dragon": "Wyrm",
+    "fey-lord": "Lord",
+    "warlord": "Marshal",
+    "spymaster": "Shade",
+    "fallen-champion": "Knight",
+    "blight-druid": "Gardener",
+    "lich": "Sovereign",
+    "fiend-envoy": "Envoy"
+  },
+  "name_tables": "names.json: villain_he, villain_she (given name), villain_adjective (title adjective). Title = adjective + type noun.",
+  "tables": {
+    "types": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "sleeping-horror",
+          "label": "an ancient horror stirring in its tomb",
+          "gender": "he",
+          "families": [
+            "waking",
+            "ritual"
+          ],
+          "voice": "deep, slow, unhurried voice",
+          "art": "villain-sleeping-horror",
+          "lieutenant_pref": [
+            "skeleton",
+            "kobold-warrior"
+          ]
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "ritualist",
+          "label": "a driven scholar-ritualist",
+          "gender": "she",
+          "families": [
+            "ritual",
+            "breach",
+            "relic",
+            "waking"
+          ],
+          "voice": "precise, cold woman",
+          "art": "villain-ritualist",
+          "lieutenant_pref": [
+            "cultist",
+            "skeleton"
+          ]
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "usurper",
+          "label": "a smiling usurper in borrowed finery",
+          "gender": "he",
+          "families": [
+            "succession",
+            "war",
+            "crime",
+            "hunt"
+          ],
+          "voice": "smooth, charming man",
+          "art": "villain-usurper",
+          "lieutenant_pref": [
+            "guard",
+            "scout"
+          ]
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "prophet",
+          "label": "a gentle, magnetic prophet",
+          "gender": "she",
+          "families": [
+            "ritual",
+            "blight",
+            "succession"
+          ],
+          "voice": "warm, hypnotic woman",
+          "art": "villain-prophet",
+          "lieutenant_pref": [
+            "cultist",
+            "guard"
+          ]
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "dragon",
+          "label": "a wyrm with an old claim",
+          "gender": "she",
+          "families": [
+            "war",
+            "waking"
+          ],
+          "voice": "vast, amused voice",
+          "art": "villain-dragon",
+          "lieutenant_pref": [
+            "kobold-warrior",
+            "goblin-warrior"
+          ]
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "fey-lord",
+          "label": "a fey lord who keeps every bargain to the letter",
+          "gender": "he",
+          "families": [
+            "blight",
+            "breach",
+            "relic",
+            "ritual"
+          ],
+          "voice": "light, playful, dangerous voice",
+          "art": "villain-fey-lord",
+          "lieutenant_pref": [
+            "wolf",
+            "giant-weasel"
+          ]
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "warlord",
+          "label": "a warlord with a ledger of grievances",
+          "gender": "she",
+          "families": [
+            "war",
+            "crime",
+            "succession"
+          ],
+          "voice": "blunt, commanding woman",
+          "art": "villain-warlord",
+          "lieutenant_pref": [
+            "goblin-warrior",
+            "bandit",
+            "guard"
+          ]
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "spymaster",
+          "label": "a spymaster who is never in the room",
+          "gender": "he",
+          "families": [
+            "crime",
+            "succession",
+            "war",
+            "hunt"
+          ],
+          "voice": "quiet, courteous man",
+          "art": "villain-spymaster",
+          "lieutenant_pref": [
+            "scout",
+            "bandit"
+          ]
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "fallen-champion",
+          "label": "a once-honored champion turned bitter",
+          "gender": "he",
+          "families": [
+            "relic",
+            "war",
+            "ritual"
+          ],
+          "voice": "weary, resolute man",
+          "art": "villain-fallen-champion",
+          "lieutenant_pref": [
+            "guard",
+            "skeleton"
+          ]
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "blight-druid",
+          "label": "a druid who has chosen decay",
+          "gender": "she",
+          "families": [
+            "blight",
+            "waking",
+            "hunt"
+          ],
+          "voice": "soft, patient woman",
+          "art": "villain-blight-druid",
+          "lieutenant_pref": [
+            "wolf",
+            "giant-rat"
+          ]
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "lich",
+          "label": "an undead sovereign who wants a kingdom back",
+          "gender": "he",
+          "families": [
+            "waking",
+            "ritual",
+            "relic"
+          ],
+          "voice": "dry, courtly whisper",
+          "art": "villain-lich",
+          "lieutenant_pref": [
+            "skeleton",
+            "zombie"
+          ]
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "fiend-envoy",
+          "label": "an envoy of something from beyond",
+          "gender": "she",
+          "families": [
+            "breach",
+            "ritual",
+            "crime"
+          ],
+          "voice": "polite, layered voice",
+          "art": "villain-fiend-envoy",
+          "lieutenant_pref": [
+            "cultist",
+            "kobold-warrior"
+          ]
+        }
+      ]
+    },
+    "motives": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "hungers for power and has stopped counting the cost"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "hopes to bring back someone lost, whatever it takes"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "is driven by an old, unforgiven wrong"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "fears death above all and is buying more time"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "believes sincerely that the world must be remade"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "wants wealth and the quiet that comes with it"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "is bound by a bargain and has run out of time to pay"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "wants to protect their own people, and has decided the rest are expendable"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "has lost the thread of reason and calls it clarity"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "craves legitimacy that blood never gave them"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "is simply curious, and treats other lives as experiments"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "has despaired and wants an ending, any ending"
+        }
+      ]
+    },
+    "schemes": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "ritual-awakening",
+          "families": [
+            "ritual",
+            "waking",
+            "breach"
+          ],
+          "text": "finish the ritual that will wake what sleeps below {region.short}"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "seize-throne",
+          "families": [
+            "succession"
+          ],
+          "text": "take the high seat before the true heir can claim it"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "poison-the-land",
+          "families": [
+            "blight"
+          ],
+          "text": "spread a slow ruin through field, well and river"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "open-the-breach",
+          "families": [
+            "breach"
+          ],
+          "text": "tear open a door between worlds and hold it open"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "provoke-war",
+          "families": [
+            "war"
+          ],
+          "text": "provoke a war and profit from both sides"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "own-the-streets",
+          "families": [
+            "crime"
+          ],
+          "text": "bring every guild, gang and toll under one hand"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "claim-the-relic",
+          "families": [
+            "relic"
+          ],
+          "text": "gather the pieces of {artifact.name} and wield it"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "feed-the-thing",
+          "families": [
+            "waking",
+            "hunt"
+          ],
+          "text": "feed the thing it serves until it can walk free"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "call-in-the-pact",
+          "families": [
+            "ritual",
+            "relic",
+            "blight",
+            "breach"
+          ],
+          "text": "call in a bargain that hands over the whole region"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "silence-witnesses",
+          "families": [
+            "hunt",
+            "crime",
+            "succession"
+          ],
+          "text": "hide an old crime by silencing everyone who saw it"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "drown-the-valley",
+          "families": [
+            "waking",
+            "war"
+          ],
+          "text": "flood the low country and uncover what lies beneath"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "crown-a-puppet",
+          "families": [
+            "succession",
+            "war",
+            "crime"
+          ],
+          "text": "rule through a chosen figurehead nobody suspects"
+        }
+      ]
+    },
+    "methods": {
+      "die": 10,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "bribery and blackmail"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "terror and omens"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "disguise and false friendship"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "armies of hired blades"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "corrupting trusted allies"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "sabotage and slow ruin"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "bargains with fine print"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "public persuasion and rumor"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "assassins who leave no trace"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "forged orders and stolen seals"
+        }
+      ]
+    },
+    "resources": {
+      "die": 8,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "a private company of hired blades"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "a hidden fortress"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "a wealthy guild that does not ask questions"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "an ancient library of forbidden notes"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "a powerful relic they cannot yet fully use"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "informants in every tavern"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "an unwitting noble patron"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "a pack of trained beasts"
+        }
+      ]
+    },
+    "weaknesses": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "true-name",
+          "text": "is bound by a true name that was never spoken aloud",
+          "clues": [
+            "An old scribe copied a name and then refused to speak it.",
+            "A child's rhyme in the region seems to describe someone's real name."
+          ]
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "cannot-sacrifice",
+          "text": "cannot bring themselves to make one particular sacrifice",
+          "clues": [
+            "Each ritual site was left unfinished at one precise step.",
+            "A servant says their master always leaves one chair empty."
+          ]
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "a-loved-one",
+          "text": "still protects one person they once loved",
+          "clues": [
+            "A grave is tended every night with fresh flowers.",
+            "A letter in an unfamiliar hand begs someone to stop."
+          ]
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "needs-the-site",
+          "text": "must return to one place at each turn of the moon to renew their power",
+          "clues": [
+            "Every attack falls on the night after the moon is full.",
+            "A route on the map loops back to the same ruin."
+          ]
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "vain",
+          "text": "cannot resist an audience and will gloat to a persuasive listener",
+          "clues": [
+            "Their agents quote speeches that no one heard them give.",
+            "A poster shows an elaborate, self-flattering coat of arms."
+          ]
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "fears-exposure",
+          "text": "cannot survive being seen for who they truly are",
+          "clues": [
+            "Witnesses describe three different faces for the same person.",
+            "Mirrors in their haunts are always covered."
+          ]
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "flawed-rite",
+          "text": "built their ritual on a flaw that one counter-rite can exploit",
+          "clues": [
+            "A scholar crossed out a line in the margins and wrote 'no'.",
+            "Notes mention a missing fourth lantern in the ritual circle."
+          ]
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "old-oath",
+          "text": "is held by an oath they cannot break without losing everything",
+          "clues": [
+            "The old charter binds the rulers by one simple promise.",
+            "Elders recall the oath sworn at the founding of the region."
+          ]
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "old-promise",
+          "text": "keeps one old promise out of pride",
+          "clues": [
+            "A debt to an old rival has never been collected.",
+            "Every offered bribe was refused except one."
+          ]
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "loyalty-cracks",
+          "text": "relies on a lieutenant whose loyalty is starting to crack",
+          "clues": [
+            "A captain keeps asking questions that should not need asking.",
+            "A lieutenant was seen paying a debt to a rival faction."
+          ]
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "unmaking-relic",
+          "text": "can be undone by a relic that sits somewhere in the region",
+          "clues": [
+            "A shrine hides an object nobody is allowed to touch.",
+            "Old tales name a blade, a bell or a lamp that ends the dark."
+          ]
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "mortal-limit",
+          "text": "has a physical limit that a patient plan can reach",
+          "clues": [
+            "Every battle ends before nightfall.",
+            "Survivors report that the strong one tires after the third strike."
+          ]
+        }
+      ]
+    },
+    "signatures": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "leaves a single black feather at every scene"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "ties a red thread around a doorknob before striking"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "turns every nearby lamp flame faintly blue"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "signs messages with a drawn eye in place of a name"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "is always preceded by the smell of cold rain"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "arranges small stones in a spiral"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "leaves a perfectly set table behind them"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "is announced by a bell no one is ringing"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "chalks a crescent on a nearby door"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "speaks only in rhymes when angry"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "is followed by a wind that moves nothing but the lamps"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "leaves coins stacked in threes"
+        }
+      ]
+    },
+    "lieutenants": {
+      "die": 8,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "sworn-captain",
+          "antagonist": "guard",
+          "title": "the Sworn Captain"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "hooded-acolyte",
+          "antagonist": "cultist",
+          "title": "the Hooded Acolyte"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "hired-tracker",
+          "antagonist": "scout",
+          "title": "the Hired Tracker"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "raider-chief",
+          "antagonist": "goblin-warrior",
+          "title": "the Raider Chief"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "bone-sentinel",
+          "antagonist": "skeleton",
+          "title": "the Bone Sentinel"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "beast-handler",
+          "antagonist": "wolf",
+          "title": "the Beast-Handler's Wolf"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "vermin-lord",
+          "antagonist": "giant-rat",
+          "title": "the Vermin Lord's Hound"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "turncoat",
+          "antagonist": "bandit",
+          "title": "the Turncoat"
+        }
+      ]
+    }
+  }
+}

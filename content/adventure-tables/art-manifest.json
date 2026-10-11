@@ -350,5 +350,101 @@
     "aspect": "2:3",
     "used_by": "contacts.miller",
     "prompt": "Fantasy character portrait of a hearty middle-aged woman, a miller dusted with flour, rolled sleeves, strong forearms, a broad welcoming smile. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-sleeping-horror",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-sleeping-horror",
+    "aspect": "2:3",
+    "used_by": "villains.types.sleeping-horror (campaign layer)",
+    "prompt": "Fantasy villain portrait of an ancient horror half-emerged from stone and shadow, a tall robed figure with a crown of dark roots and pale, patient eyes, majestic and unsettling rather than gruesome. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-ritualist",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-ritualist",
+    "aspect": "2:3",
+    "used_by": "villains.types.ritualist (campaign layer)",
+    "prompt": "Fantasy villain portrait of a driven woman scholar-ritualist in dark layered robes with chalk-dusted hands, a lantern of pale fire at her shoulder, cold exacting eyes. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-usurper",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-usurper",
+    "aspect": "2:3",
+    "used_by": "villains.types.usurper (campaign layer)",
+    "prompt": "Fantasy villain portrait of a smiling man in borrowed finery, a velvet coat too fine for him, a signet ring, a gracious smile that does not reach his eyes. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-prophet",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-prophet",
+    "aspect": "2:3",
+    "used_by": "villains.types.prophet (campaign layer)",
+    "prompt": "Fantasy villain portrait of a gentle, magnetic woman prophet in pale robes with a soft halo of candlelight, open hands raised in welcome, serene and unnervingly sure. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-dragon",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-dragon",
+    "aspect": "2:3",
+    "used_by": "villains.types.dragon (campaign layer)",
+    "prompt": "Fantasy villain portrait of the head and neck of an enormous ancient dragon in profile, bronze and ember scales, a single amber eye, smoke curling from its nostrils, vast and amused. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-fey-lord",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-fey-lord",
+    "aspect": "2:3",
+    "used_by": "villains.types.fey-lord (campaign layer)",
+    "prompt": "Fantasy villain portrait of a tall fey lord with antler-like crown and moss-green cloak, elegant and sharp-featured, a playful smile, leaves and moonlight in his hair. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-warlord",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-warlord",
+    "aspect": "2:3",
+    "used_by": "villains.types.warlord (campaign layer)",
+    "prompt": "Fantasy villain portrait of a broad-shouldered woman warlord in battered plate and a red-rimmed cloak, a scar across her brow, a commander's steady, weary stare. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-spymaster",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-spymaster",
+    "aspect": "2:3",
+    "used_by": "villains.types.spymaster (campaign layer)",
+    "prompt": "Fantasy villain portrait of a quiet man in a gray coat with a high collar, half his face in shadow, a courteous smile, a ring of keys at his belt. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-fallen-champion",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-fallen-champion",
+    "aspect": "2:3",
+    "used_by": "villains.types.fallen-champion (campaign layer)",
+    "prompt": "Fantasy villain portrait of a once-heroic knight in dented silver armor tarnished black at the edges, a cracked tabard of a forgotten order, bitter but dignified. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-blight-druid",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-blight-druid",
+    "aspect": "2:3",
+    "used_by": "villains.types.blight-druid (campaign layer)",
+    "prompt": "Fantasy villain portrait of a woman druid with bark-like skin on her hands, antlers of dead branches, wilted flowers woven in gray hair, soft eyes and a patient smile. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-lich",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-lich",
+    "aspect": "2:3",
+    "used_by": "villains.types.lich (campaign layer)",
+    "prompt": "Fantasy villain portrait of an undead sovereign in tattered royal robes, a hollow crown, skeletal hands, faint blue light behind the eyes, courtly and dry, not gory. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "villain-fiend-envoy",
+    "kind": "portrait",
+    "file_stem": "portrait-villain-fiend-envoy",
+    "aspect": "2:3",
+    "used_by": "villains.types.fiend-envoy (campaign layer)",
+    "prompt": "Fantasy villain portrait of a polite envoy from beyond, a woman with too-bright eyes, an elegant dark coat, subtle horns hidden beneath a veil, a layered, unreadable smile. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
   }
 ]

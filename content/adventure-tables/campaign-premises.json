@@ -1,0 +1,953 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "campaign-premises",
+  "description": "Sixteen classic storylines. family selects compatible schemes and twists; clock selects a clock in clocks.json; villain_types lists the villain builds that suit it; hooks for chapters come from act-structure.family_hooks.",
+  "tables": {
+    "premises": {
+      "die": 20,
+      "entries": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "id": "waking-evil",
+          "family": "waking",
+          "archetype": "A rising ancient evil",
+          "titles": [
+            "The Waking Throne",
+            "What Sleeps Beneath {region.short}",
+            "The Long Dark",
+            "A Crown of Ashes"
+          ],
+          "pitch": "Something old and patient is stirring under the region, and the omens grow bolder each week. Someone is helping it wake.",
+          "clock": "creeping-dark",
+          "villain_types": [
+            "sleeping-horror",
+            "lich",
+            "ritualist",
+            "fiend-envoy"
+          ],
+          "region_tags": [
+            "grave",
+            "mountain",
+            "sacred"
+          ]
+        },
+        {
+          "faces": [
+            3,
+            4
+          ],
+          "id": "cult-countdown",
+          "family": "ritual",
+          "archetype": "A cult's ritual countdown",
+          "titles": [
+            "The Last Candle",
+            "Seven Nights to Moonfall",
+            "The Quiet Rite",
+            "Under a Borrowed Moon"
+          ],
+          "pitch": "A hidden circle is racing toward a ritual timed to a rare night in the sky. Every kidnapped scholar and stolen candle is another step.",
+          "clock": "ritual-countdown",
+          "villain_types": [
+            "ritualist",
+            "prophet",
+            "fiend-envoy",
+            "fey-lord"
+          ],
+          "region_tags": [
+            "sacred",
+            "scholar",
+            "grave"
+          ]
+        },
+        {
+          "faces": [
+            5,
+            6
+          ],
+          "id": "relic-race",
+          "family": "relic",
+          "archetype": "A lost relic everyone wants",
+          "titles": [
+            "Who Holds the Crown",
+            "The Race for {artifact.short}",
+            "Three Hands on One Prize",
+            "The Thing Everyone Wants"
+          ],
+          "pitch": "A relic long believed lost has surfaced in pieces, and every faction in the region is quietly hunting the rest. One of them means to use it.",
+          "clock": "relic-race",
+          "villain_types": [
+            "fallen-champion",
+            "ritualist",
+            "spymaster",
+            "lich"
+          ],
+          "region_tags": [
+            "scholar",
+            "market",
+            "mountain"
+          ]
+        },
+        {
+          "faces": [
+            7,
+            8
+          ],
+          "id": "missing-heir",
+          "family": "succession",
+          "archetype": "A usurper and a missing heir",
+          "titles": [
+            "The Hollow Seat",
+            "An Heir in Hiding",
+            "The Crown Without a Head",
+            "A Name Kept Quiet"
+          ],
+          "pitch": "The old ruler is dead, the rightful heir is missing, and the one sitting in the high seat smiles too easily. Someone knows where the heir went.",
+          "clock": "usurper-rises",
+          "villain_types": [
+            "usurper",
+            "spymaster",
+            "prophet",
+            "warlord"
+          ],
+          "region_tags": [
+            "town",
+            "market",
+            "farm"
+          ]
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "blight",
+          "family": "blight",
+          "archetype": "A plague or curse upon the land",
+          "titles": [
+            "The Gray Harvest",
+            "A Sickness in the Wells",
+            "The Withering",
+            "Salt on the Fields"
+          ],
+          "pitch": "Crops fail, wells turn bitter and the sick grow quiet. The healers swear it is no natural illness, and someone profits from it.",
+          "clock": "blight-spreads",
+          "villain_types": [
+            "blight-druid",
+            "fey-lord",
+            "prophet",
+            "fiend-envoy"
+          ],
+          "region_tags": [
+            "farm",
+            "wild",
+            "water"
+          ]
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "waking-dungeon",
+          "family": "waking",
+          "archetype": "A dungeon waking beneath the town",
+          "titles": [
+            "Beneath the Lanterns",
+            "The Door Under the Market",
+            "Stairs No One Built",
+            "What the Cellars Remember"
+          ],
+          "pitch": "Cellars break through to passages that were never dug, and the sounds below grow more purposeful each night. Someone has been mapping the way down.",
+          "clock": "creeping-dark",
+          "villain_types": [
+            "sleeping-horror",
+            "lich",
+            "ritualist",
+            "warlord"
+          ],
+          "region_tags": [
+            "town",
+            "market",
+            "scholar"
+          ]
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "monster-conspiracy",
+          "family": "hunt",
+          "archetype": "A monster hunt that uncovers a conspiracy",
+          "titles": [
+            "The Beast of {region.short}",
+            "What Hunts the Hunters",
+            "Teeth in the Reeds",
+            "The Monster Is a Distraction"
+          ],
+          "pitch": "Livestock and then travelers vanish, and the lord offers a bounty on the beast. The trail of the beast keeps running through someone's ledger.",
+          "clock": "conspiracy-unravels",
+          "villain_types": [
+            "spymaster",
+            "usurper",
+            "blight-druid",
+            "warlord"
+          ],
+          "region_tags": [
+            "wild",
+            "farm",
+            "water"
+          ]
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "border-war",
+          "family": "war",
+          "archetype": "A border war and a traitor",
+          "titles": [
+            "A Knife in the Garrison",
+            "The Road to the Border",
+            "Two Banners, One Betrayer",
+            "The Quiet Before the War"
+          ],
+          "pitch": "Skirmishes along the border grow bloodier, and each side swears the other struck first. Someone inside the walls is feeding the fire.",
+          "clock": "war-advances",
+          "villain_types": [
+            "warlord",
+            "spymaster",
+            "usurper",
+            "fallen-champion"
+          ],
+          "region_tags": [
+            "mountain",
+            "town",
+            "farm"
+          ]
+        },
+        {
+          "faces": [
+            13,
+            13
+          ],
+          "id": "planar-breach",
+          "family": "breach",
+          "archetype": "A planar breach",
+          "titles": [
+            "The Seam in the Sky",
+            "Where the Stars Leak",
+            "A Door Without a Wall",
+            "The Wrong Kind of Quiet"
+          ],
+          "pitch": "Compasses spin, shadows lean the wrong way, and strange lights hang over an old standing place. A door is being pried open from both sides.",
+          "clock": "breach-widens",
+          "villain_types": [
+            "fiend-envoy",
+            "ritualist",
+            "fey-lord",
+            "sleeping-horror"
+          ],
+          "region_tags": [
+            "sacred",
+            "scholar",
+            "wild"
+          ]
+        },
+        {
+          "faces": [
+            14,
+            14
+          ],
+          "id": "thieves-war",
+          "family": "crime",
+          "archetype": "A thieves' war",
+          "titles": [
+            "Knives at Midnight",
+            "The Syndicate Wars",
+            "Honor Among the Dark Alleys",
+            "Who Owns the Night"
+          ],
+          "pitch": "Two rival crews are carving up the markets, and honest folk keep getting caught between them. A third hand is nudging both toward open war.",
+          "clock": "crime-closes",
+          "villain_types": [
+            "spymaster",
+            "usurper",
+            "fiend-envoy",
+            "fallen-champion"
+          ],
+          "region_tags": [
+            "market",
+            "town",
+            "water"
+          ]
+        },
+        {
+          "faces": [
+            15,
+            15
+          ],
+          "id": "dragon-tribute",
+          "family": "war",
+          "archetype": "A dragon's tribute",
+          "titles": [
+            "The Tithe of Ash",
+            "What the Wyrm Is Owed",
+            "Smoke on the Ridge",
+            "A Debt Older Than the Town"
+          ],
+          "pitch": "Every season the region pays a tribute to the wyrm on the ridge, and this year the price has doubled. Someone is skimming from the tribute, and the wyrm knows.",
+          "clock": "war-advances",
+          "villain_types": [
+            "dragon",
+            "usurper",
+            "spymaster",
+            "warlord"
+          ],
+          "region_tags": [
+            "mountain",
+            "town",
+            "farm"
+          ]
+        },
+        {
+          "faces": [
+            16,
+            16
+          ],
+          "id": "drowned-return",
+          "family": "waking",
+          "archetype": "A drowned kingdom returns",
+          "titles": [
+            "What the Tide Returns",
+            "The Bells Beneath the Water",
+            "A City in the Reeds",
+            "The Drowned Court"
+          ],
+          "pitch": "Bells ring beneath the water, old stone surfaces after storms, and the dead walk the shoreline at ebb. A sunken court wants its throne back.",
+          "clock": "creeping-dark",
+          "villain_types": [
+            "lich",
+            "sleeping-horror",
+            "fey-lord",
+            "fallen-champion"
+          ],
+          "region_tags": [
+            "water",
+            "grave",
+            "sacred"
+          ]
+        },
+        {
+          "faces": [
+            17,
+            17
+          ],
+          "id": "false-prophet",
+          "family": "ritual",
+          "archetype": "A false prophet",
+          "titles": [
+            "The Gilded Voice",
+            "A Light That Asks for Everything",
+            "The Congregation of Embers",
+            "Follow the Lamp"
+          ],
+          "pitch": "A gentle preacher is drawing crowds with true miracles, and the crowds are giving away more than their coin. The miracles have a source, and a price.",
+          "clock": "ritual-countdown",
+          "villain_types": [
+            "prophet",
+            "fiend-envoy",
+            "fey-lord",
+            "ritualist"
+          ],
+          "region_tags": [
+            "town",
+            "sacred",
+            "market"
+          ]
+        },
+        {
+          "faces": [
+            18,
+            18
+          ],
+          "id": "fey-bargain",
+          "family": "blight",
+          "archetype": "A fey bargain comes due",
+          "titles": [
+            "A Bargain at Hollow Hill",
+            "The Summer That Would Not End",
+            "What the Hill Remembers",
+            "Three Wishes and a Debt"
+          ],
+          "pitch": "Generations ago, the region's founders struck a bargain with something in the hills, and the term has run out. Someone is quietly trying to pay with other people's lives.",
+          "clock": "blight-spreads",
+          "villain_types": [
+            "fey-lord",
+            "blight-druid",
+            "usurper",
+            "prophet"
+          ],
+          "region_tags": [
+            "wild",
+            "farm",
+            "sacred"
+          ]
+        },
+        {
+          "faces": [
+            19,
+            19
+          ],
+          "id": "unfinished-spell",
+          "family": "breach",
+          "archetype": "An unfinished spell",
+          "titles": [
+            "The Unfinished Spell",
+            "A Tower Humming in the Night",
+            "What the Orrery Predicts",
+            "Arithmetic of Ruin"
+          ],
+          "pitch": "A great working was abandoned half-finished, and its leftover force is bending weather, memory and the light itself. Someone means to finish it.",
+          "clock": "breach-widens",
+          "villain_types": [
+            "ritualist",
+            "fallen-champion",
+            "lich",
+            "fiend-envoy"
+          ],
+          "region_tags": [
+            "scholar",
+            "town",
+            "mountain"
+          ]
+        },
+        {
+          "faces": [
+            20,
+            20
+          ],
+          "id": "broken-road",
+          "family": "crime",
+          "archetype": "The saboteur on the trade road",
+          "titles": [
+            "The Broken Road",
+            "Caravans That Never Arrive",
+            "A Toll in Blood",
+            "The Long Way Round"
+          ],
+          "pitch": "Caravans vanish on the one road that feeds the region, and the price of bread climbs. Everyone blames bandits, but bandits do not burn bridges so neatly.",
+          "clock": "crime-closes",
+          "villain_types": [
+            "spymaster",
+            "warlord",
+            "usurper",
+            "fiend-envoy"
+          ],
+          "region_tags": [
+            "wild",
+            "mountain",
+            "market"
+          ]
+        }
+      ]
+    },
+    "artifacts": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "ember-crown",
+          "name": "the Ember Crown",
+          "short": "the Crown",
+          "form": "a circlet of black iron with a core of living ember",
+          "power": "speaks to whoever wears it",
+          "hunger": "legitimacy and fire"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "seventh-lantern",
+          "name": "the Seventh Lantern",
+          "short": "the Lantern",
+          "form": "a lantern of pale glass that burns without fuel",
+          "power": "shows the way to places that are hidden",
+          "hunger": "the door it can open"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "oathbell",
+          "name": "the Oathbell",
+          "short": "the Oathbell",
+          "form": "a bronze handbell that rings true to promises",
+          "power": "binds anyone who answers it",
+          "hunger": "control over oaths"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "glass-compass",
+          "name": "the Glass Compass",
+          "short": "the Compass",
+          "form": "a compass whose needle points to what the holder fears",
+          "power": "finds the hidden",
+          "hunger": "a way to find a lost thing"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "thornwood-seal",
+          "name": "the Thornwood Seal",
+          "short": "the Seal",
+          "form": "a carved seal of living wood",
+          "power": "proves a claim no court can refuse",
+          "hunger": "the right to rule"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "sleepers-key",
+          "name": "the Sleeper's Key",
+          "short": "the Key",
+          "form": "a long key cut from pale bone",
+          "power": "opens what should stay shut",
+          "hunger": "a door beneath the hills"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "starward-lens",
+          "name": "the Starward Lens",
+          "short": "the Lens",
+          "form": "a lens ground from fallen starlight",
+          "power": "reads the sky and its warnings",
+          "hunger": "knowledge of the coming night"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "tidehorn",
+          "name": "the Tidehorn",
+          "short": "the Tidehorn",
+          "form": "a spiral horn that calls the water",
+          "power": "commands tide and flood",
+          "hunger": "the drowned places"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "ashen-reliquary",
+          "name": "the Ashen Reliquary",
+          "short": "the Reliquary",
+          "form": "a small grey casket tied with silver cord",
+          "power": "holds something that will not stay dead",
+          "hunger": "a returning"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "hollow-sceptre",
+          "name": "the Hollow Sceptre",
+          "short": "the Sceptre",
+          "form": "a sceptre of old gold with nothing inside it",
+          "power": "makes crowds listen",
+          "hunger": "a following"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "mirrorblade",
+          "name": "the Mirrorblade",
+          "short": "the Mirrorblade",
+          "form": "a blade as bright and flat as a mirror",
+          "power": "turns back what is struck against it",
+          "hunger": "invincibility"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "silent-chalice",
+          "name": "the Silent Chalice",
+          "short": "the Chalice",
+          "form": "a plain chalice that never makes a sound",
+          "power": "drains the voice from whatever it touches",
+          "hunger": "silence"
+        }
+      ]
+    },
+    "themes": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "trust and betrayal"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "old debts coming due"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "the cost of power"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "home and belonging"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "mercy against vengeance"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "truth against comfortable lies"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "text": "memory and loss"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "text": "duty against desire"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "text": "found family"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "text": "what is owed to the dead"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "text": "pride and its price"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "text": "hope in a dark season"
+        }
+      ]
+    },
+    "tones": {
+      "die": 6,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "text": "heroic and warm"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "text": "grim but hopeful"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "text": "mystery and dread"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "text": "swashbuckling and bright"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "text": "pastoral and uncanny"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "text": "epic and mournful"
+        }
+      ]
+    },
+    "region_names": {
+      "die": 12,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "name": "the Tarn Marches",
+          "short": "the Marches"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "name": "the Vale of Lanterns",
+          "short": "the Vale"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "name": "the Ashgrove Reach",
+          "short": "the Reach"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "name": "the Cinder Downs",
+          "short": "the Downs"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "name": "the Saltmere Coast",
+          "short": "the Coast"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "name": "the Hollow Wolds",
+          "short": "the Wolds"
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "name": "the Greywater Basin",
+          "short": "the Basin"
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "name": "the Briar Counties",
+          "short": "the Counties"
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "name": "the Starling Heights",
+          "short": "the Heights"
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "name": "the Mistral Fens",
+          "short": "the Fens"
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "name": "the Kingfisher Shore",
+          "short": "the Shore"
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "name": "the Oakwell Marches",
+          "short": "the Marches"
+        }
+      ]
+    },
+    "site_roles": {
+      "die": 8,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "home-base",
+          "text": "the party's base: where rest, rumor and recaps happen",
+          "prefer": [
+            "town",
+            "farm",
+            "water"
+          ]
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "first-clue",
+          "text": "where the first strange thing happened",
+          "prefer": []
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "rumor-source",
+          "text": "where gossip, merchants and tavern talk gather",
+          "prefer": [
+            "market",
+            "town",
+            "water"
+          ]
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "ally-haven",
+          "text": "where a faction or friend offers shelter",
+          "prefer": [
+            "sacred",
+            "farm",
+            "scholar"
+          ]
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "lieutenant-lair",
+          "text": "where the villain's lieutenant holds a post",
+          "prefer": [
+            "wild",
+            "mountain",
+            "water",
+            "grave"
+          ]
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "neutral-ground",
+          "text": "a place to rest, resupply and think",
+          "prefer": [
+            "farm",
+            "sacred",
+            "town"
+          ]
+        },
+        {
+          "faces": [
+            7,
+            7
+          ],
+          "id": "old-secret",
+          "text": "where the old truth is buried or archived",
+          "prefer": [
+            "scholar",
+            "grave",
+            "sacred"
+          ]
+        },
+        {
+          "faces": [
+            8,
+            8
+          ],
+          "id": "stronghold",
+          "text": "where the villain's plan finally comes to a head",
+          "prefer": [
+            "grave",
+            "mountain",
+            "scholar",
+            "wild"
+          ]
+        }
+      ]
+    }
+  }
+}

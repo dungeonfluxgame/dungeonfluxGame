@@ -1,0 +1,654 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "act-structure",
+  "description": "Three-act structure with 6 to 10 chapters, slot templates per chapter count, the node/clue rules and the balance rules the generator must satisfy.",
+  "slots": {
+    "6": [
+      {
+        "act": "act-1",
+        "role": "opening",
+        "allowed": [
+          "courier",
+          "escort",
+          "warning"
+        ]
+      },
+      {
+        "act": "act-1",
+        "role": "first-site",
+        "allowed": [
+          "mystery",
+          "retrieval",
+          "delve",
+          "hunt"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "midpoint",
+        "allowed": [
+          "heist",
+          "parley",
+          "rescue",
+          "mystery"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "lieutenant",
+        "allowed": [
+          "lieutenant"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "approach",
+        "allowed": [
+          "race-clock",
+          "rescue",
+          "heist",
+          "defence"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "finale",
+        "allowed": [
+          "finale"
+        ]
+      }
+    ],
+    "7": [
+      {
+        "act": "act-1",
+        "role": "opening",
+        "allowed": [
+          "courier",
+          "escort",
+          "warning"
+        ]
+      },
+      {
+        "act": "act-1",
+        "role": "first-site",
+        "allowed": [
+          "mystery",
+          "retrieval",
+          "delve",
+          "hunt"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "midpoint",
+        "allowed": [
+          "heist",
+          "parley",
+          "rescue",
+          "mystery"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "interlude",
+        "allowed": [
+          "rest-interlude"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "lieutenant",
+        "allowed": [
+          "lieutenant"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "approach",
+        "allowed": [
+          "race-clock",
+          "rescue",
+          "heist",
+          "defence"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "finale",
+        "allowed": [
+          "finale"
+        ]
+      }
+    ],
+    "8": [
+      {
+        "act": "act-1",
+        "role": "opening",
+        "allowed": [
+          "courier",
+          "escort",
+          "warning"
+        ]
+      },
+      {
+        "act": "act-1",
+        "role": "first-site",
+        "allowed": [
+          "mystery",
+          "retrieval",
+          "delve",
+          "hunt"
+        ]
+      },
+      {
+        "act": "act-1",
+        "role": "ally",
+        "allowed": [
+          "parley",
+          "escort",
+          "retrieval"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "midpoint",
+        "allowed": [
+          "heist",
+          "parley",
+          "rescue",
+          "mystery"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "pressure",
+        "allowed": [
+          "hunt",
+          "rescue",
+          "defence",
+          "delve"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "lieutenant",
+        "allowed": [
+          "lieutenant"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "approach",
+        "allowed": [
+          "race-clock",
+          "rescue",
+          "heist",
+          "defence"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "finale",
+        "allowed": [
+          "finale"
+        ]
+      }
+    ],
+    "9": [
+      {
+        "act": "act-1",
+        "role": "opening",
+        "allowed": [
+          "courier",
+          "escort",
+          "warning"
+        ]
+      },
+      {
+        "act": "act-1",
+        "role": "first-site",
+        "allowed": [
+          "mystery",
+          "retrieval",
+          "delve",
+          "hunt"
+        ]
+      },
+      {
+        "act": "act-1",
+        "role": "ally",
+        "allowed": [
+          "parley",
+          "escort",
+          "retrieval"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "pressure",
+        "allowed": [
+          "hunt",
+          "rescue",
+          "defence",
+          "delve"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "midpoint",
+        "allowed": [
+          "heist",
+          "parley",
+          "rescue",
+          "mystery"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "lieutenant",
+        "allowed": [
+          "lieutenant"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "approach",
+        "allowed": [
+          "race-clock",
+          "rescue",
+          "heist",
+          "defence"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "lieutenant-2",
+        "allowed": [
+          "lieutenant"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "finale",
+        "allowed": [
+          "finale"
+        ]
+      }
+    ],
+    "10": [
+      {
+        "act": "act-1",
+        "role": "opening",
+        "allowed": [
+          "courier",
+          "escort",
+          "warning"
+        ]
+      },
+      {
+        "act": "act-1",
+        "role": "first-site",
+        "allowed": [
+          "mystery",
+          "retrieval",
+          "delve",
+          "hunt"
+        ]
+      },
+      {
+        "act": "act-1",
+        "role": "ally",
+        "allowed": [
+          "parley",
+          "escort",
+          "retrieval"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "pressure",
+        "allowed": [
+          "hunt",
+          "rescue",
+          "defence",
+          "delve"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "midpoint",
+        "allowed": [
+          "heist",
+          "parley",
+          "rescue",
+          "mystery"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "interlude",
+        "allowed": [
+          "rest-interlude"
+        ]
+      },
+      {
+        "act": "act-2",
+        "role": "lieutenant",
+        "allowed": [
+          "lieutenant"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "approach",
+        "allowed": [
+          "race-clock",
+          "rescue",
+          "heist",
+          "defence"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "lieutenant-2",
+        "allowed": [
+          "lieutenant"
+        ]
+      },
+      {
+        "act": "act-3",
+        "role": "finale",
+        "allowed": [
+          "finale"
+        ]
+      }
+    ]
+  },
+  "family_hooks": {
+    "waking": [
+      "failing-ward",
+      "urgent-warning",
+      "frightened-traveler",
+      "the-witness"
+    ],
+    "ritual": [
+      "the-witness",
+      "urgent-warning",
+      "secret-errand",
+      "failing-ward"
+    ],
+    "relic": [
+      "late-parcel",
+      "dying-promise",
+      "stolen-heirloom",
+      "secret-errand",
+      "old-favor"
+    ],
+    "succession": [
+      "secret-errand",
+      "the-witness",
+      "old-favor",
+      "frightened-traveler"
+    ],
+    "blight": [
+      "promised-remedy",
+      "failing-ward",
+      "urgent-warning",
+      "pilgrim-vow"
+    ],
+    "war": [
+      "urgent-warning",
+      "frightened-traveler",
+      "late-parcel",
+      "missed-signal"
+    ],
+    "hunt": [
+      "the-witness",
+      "frightened-traveler",
+      "missed-signal",
+      "stolen-heirloom"
+    ],
+    "breach": [
+      "missed-signal",
+      "failing-ward",
+      "urgent-warning",
+      "the-witness"
+    ],
+    "crime": [
+      "secret-errand",
+      "stolen-heirloom",
+      "the-witness",
+      "late-parcel"
+    ]
+  },
+  "minion_rule": "Chapter antagonists of role 'minion' come from the villain type's lieutenant_pref plus 'bandit', filtered by location and rules mode; relax to the full compatible set if empty.",
+  "rules": [
+    "Three acts; the last chapter of Act I and of Act II ends with a rolled twist whose two hints were delivered in earlier chapters.",
+    "No two adjacent chapters share a type; each pillar's mean intended share is at least 25 percent; fix by rerolling a mutable slot (recorded as repair).",
+    "At least one 'lieutenant' chapter precedes the finale; campaigns of 9 or 10 chapters have two.",
+    "Every chapter delivers three leads (private clue, victory recap, contact line) aimed at the two earliest unresolved nodes; each node needs at least 3 clues from at least 2 vehicles by its needed_by slot.",
+    "Rescue rule: if a node has fewer than 3 delivered clues at its deadline, the next chapter's public recap line carries a missing clue.",
+    "Clock: +1 when a chapter ends in defeat, +1 at each act break, +1 when a lieutenant escapes; never decreases except by a milestone noted in the record.",
+    "Rest: a chapter that ends in victory offers the Short Rest; a rest-interlude slot is a recap screen between chapters, not a pack.",
+    "Milestone reward after every act; levels are v2 (engine missing)."
+  ],
+  "overlay": {
+    "chapter_title_prefix": [
+      "Chapter {n}",
+      "Part {n}",
+      "Chapter {n}",
+      "Part {n}"
+    ],
+    "room_title": [
+      "{campaign.title}: {chapter.label}"
+    ],
+    "recap_lead": [
+      "Previously in {campaign.title}",
+      "Last time, in {region.name}",
+      "When we left {region.name}",
+      "Earlier in the story of {campaign.title}"
+    ]
+  },
+  "recap_budget": "Previously-line: at most 160 characters spoken; two lines allowed on the TV.",
+  "tables": {
+    "acts": {
+      "die": 4,
+      "entries": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "id": "act-1",
+          "name": "Act I: The Hook and the Hint",
+          "purpose": "Introduce the region, the allies and one wrong thing; deliver the first omen and leave the party holding a thread.",
+          "stakes": "local",
+          "milestone": "the party becomes known to the region's people"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "act-2",
+          "name": "Act II: The Widening Dark",
+          "purpose": "Complications, a reversal at the midpoint, the first lieutenant, and proof that the threat is bigger than it looked.",
+          "stakes": "regional",
+          "milestone": "the party earns an ally, a title or a stronghold"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "act-3",
+          "name": "Act III: The Reckoning",
+          "purpose": "Every thread converges; the weakness is used; the villain's champion falls and the region is saved or changed.",
+          "stakes": "existential",
+          "milestone": "the end of the campaign"
+        }
+      ]
+    },
+    "chapter_count": {
+      "die": 6,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "chapters": 6
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "chapters": 7
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "chapters": 8
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "chapters": 8
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "chapters": 9
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "chapters": 10
+        }
+      ]
+    },
+    "nodes": {
+      "die": 6,
+      "entries": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "id": "omens",
+          "label": "Something is wrong",
+          "needed_by": "first-site",
+          "count": 3
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "villain",
+          "label": "Who is behind it",
+          "needed_by": "midpoint",
+          "count": 3
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "scheme",
+          "label": "What they want",
+          "needed_by": "lieutenant",
+          "count": 3
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "stronghold",
+          "label": "Where it ends",
+          "needed_by": "approach",
+          "count": 3
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "weakness",
+          "label": "How to beat it",
+          "needed_by": "finale",
+          "count": 3
+        }
+      ]
+    },
+    "lieutenant_fate": {
+      "die": 6,
+      "entries": [
+        {
+          "faces": [
+            1,
+            1
+          ],
+          "id": "captured-talks",
+          "text": "is captured and answers questions",
+          "effect": "delivers one missing clue publicly; ally attitude +1"
+        },
+        {
+          "faces": [
+            2,
+            2
+          ],
+          "id": "captured-silent",
+          "text": "is captured but refuses to speak",
+          "effect": "no clue; lieutenant removed from the story"
+        },
+        {
+          "faces": [
+            3,
+            3
+          ],
+          "id": "escapes",
+          "text": "slips away in the confusion",
+          "effect": "clock +1; may return once, unchanged"
+        },
+        {
+          "faces": [
+            4,
+            4
+          ],
+          "id": "escapes-wounded",
+          "text": "escapes with a lasting grudge",
+          "effect": "clock +1; returns later as an extra minion chapter"
+        },
+        {
+          "faces": [
+            5,
+            5
+          ],
+          "id": "informant",
+          "text": "offers to inform on the villain, for a price",
+          "effect": "a lead on the next node; an obligation recorded"
+        },
+        {
+          "faces": [
+            6,
+            6
+          ],
+          "id": "rescued",
+          "text": "is carried off by the villain's agents",
+          "effect": "clock +1; the villain learns the party's approach"
+        }
+      ]
+    }
+  }
+}

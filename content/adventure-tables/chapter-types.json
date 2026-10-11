@@ -1,0 +1,778 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "chapter-types",
+  "description": "Sixteen chapter types. intended = combat/social/exploration percentages the story form implies. v1 = native (the engine plays it as written), faked (played as the single fixed shape, with this chapter's labels and framing), no (needs engine work). beat maps the type onto the single playable shape. on_victory/on_defeat bias the next chapter's type.",
+  "capability_names": [
+    "skill checks with DCs",
+    "multiple enemies",
+    "ranged/spell actions",
+    "branching beyond two approaches",
+    "travel/exploration turns",
+    "loot and rewards",
+    "levelling",
+    "more hero classes",
+    "persistent campaign state across sessions",
+    "higher-CR creatures",
+    "a non-combat scene shape"
+  ],
+  "tables": {
+    "chapter_types": {
+      "die": 20,
+      "entries": [
+        {
+          "faces": [
+            1,
+            2
+          ],
+          "id": "courier",
+          "label": "Courier run",
+          "intended": [
+            30,
+            30,
+            40
+          ],
+          "needs": [
+            "travel/exploration turns"
+          ],
+          "v1": "native",
+          "beat": {
+            "hook_kind": "deliver",
+            "stake_tags": [
+              "carry",
+              "message"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "rumor-source"
+          },
+          "asks": [
+            "Ask what is really in it",
+            "Ask who else knows"
+          ],
+          "helps": [
+            "Offer to carry it together",
+            "Take the far end of the load"
+          ],
+          "stands": [
+            "Hold the road",
+            "Cover the carrier"
+          ],
+          "lens": "Something must change hands before moonset, and someone does not want it to.",
+          "on_victory": [
+            "mystery",
+            "parley",
+            "delve"
+          ],
+          "on_defeat": [
+            "rescue",
+            "race-clock"
+          ]
+        },
+        {
+          "faces": [
+            3,
+            4
+          ],
+          "id": "escort",
+          "label": "Escort",
+          "intended": [
+            35,
+            25,
+            40
+          ],
+          "needs": [
+            "travel/exploration turns"
+          ],
+          "v1": "native",
+          "beat": {
+            "hook_kind": "escort",
+            "stake_tags": [
+              "carry",
+              "message",
+              "heirloom"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "ally-haven"
+          },
+          "asks": [
+            "Ask what they are running from",
+            "Ask what they know"
+          ],
+          "helps": [
+            "Offer to see them safely through",
+            "Walk at their side"
+          ],
+          "stands": [
+            "Guard the traveler",
+            "Block the pursuer"
+          ],
+          "lens": "A traveler with a secret needs safe passage across dangerous ground.",
+          "on_victory": [
+            "parley",
+            "mystery",
+            "delve"
+          ],
+          "on_defeat": [
+            "rescue",
+            "hunt"
+          ]
+        },
+        {
+          "faces": [
+            5,
+            6
+          ],
+          "id": "warning",
+          "label": "Warning",
+          "intended": [
+            25,
+            45,
+            30
+          ],
+          "needs": [
+            "travel/exploration turns"
+          ],
+          "v1": "native",
+          "beat": {
+            "hook_kind": "warn",
+            "stake_tags": [
+              "message",
+              "heirloom"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "first-clue"
+          },
+          "asks": [
+            "Ask how bad it really is",
+            "Ask who must be told"
+          ],
+          "helps": [
+            "Offer to carry the word",
+            "Vow to see it delivered"
+          ],
+          "stands": [
+            "Keep the word alive",
+            "Hold off the silencer"
+          ],
+          "lens": "Bad news has to reach the right ears before it is too late.",
+          "on_victory": [
+            "defence",
+            "mystery",
+            "parley"
+          ],
+          "on_defeat": [
+            "race-clock",
+            "defence"
+          ]
+        },
+        {
+          "faces": [
+            7,
+            8
+          ],
+          "id": "retrieval",
+          "label": "Retrieval",
+          "intended": [
+            35,
+            30,
+            35
+          ],
+          "needs": [
+            "loot and rewards"
+          ],
+          "v1": "native",
+          "beat": {
+            "hook_kind": "retrieve",
+            "stake_tags": [
+              "heirloom",
+              "remedy",
+              "carry"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "ally-haven"
+          },
+          "asks": [
+            "Ask where it was last seen",
+            "Ask who had it"
+          ],
+          "helps": [
+            "Offer to recover it",
+            "Promise to stand witness"
+          ],
+          "stands": [
+            "Keep the thief off",
+            "Guard the way"
+          ],
+          "lens": "Something precious must be fetched from someone who holds it.",
+          "on_victory": [
+            "mystery",
+            "delve",
+            "escort"
+          ],
+          "on_defeat": [
+            "heist",
+            "hunt"
+          ]
+        },
+        {
+          "faces": [
+            9,
+            9
+          ],
+          "id": "mystery",
+          "label": "Mystery (three-clue)",
+          "intended": [
+            10,
+            50,
+            40
+          ],
+          "needs": [
+            "skill checks with DCs",
+            "branching beyond two approaches"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "warn",
+            "stake_tags": [
+              "message",
+              "heirloom"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "old-secret"
+          },
+          "asks": [
+            "Question the witness privately",
+            "Study the evidence alone"
+          ],
+          "helps": [
+            "Share what you know openly",
+            "Compare notes with the witness"
+          ],
+          "stands": [
+            "Keep the witness safe",
+            "Stop the cover-up"
+          ],
+          "lens": "The truth has three trails; every one of them leads to the same door.",
+          "on_victory": [
+            "delve",
+            "heist",
+            "parley"
+          ],
+          "on_defeat": [
+            "hunt",
+            "race-clock"
+          ]
+        },
+        {
+          "faces": [
+            10,
+            10
+          ],
+          "id": "delve",
+          "label": "Delve (five-room site)",
+          "intended": [
+            50,
+            10,
+            40
+          ],
+          "needs": [
+            "multiple enemies",
+            "skill checks with DCs",
+            "travel/exploration turns"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "retrieve",
+            "stake_tags": [
+              "heirloom",
+              "carry"
+            ],
+            "antagonist_role": "guardian",
+            "location_role": "old-secret"
+          },
+          "asks": [
+            "Study the old map first",
+            "Ask the guide about the traps"
+          ],
+          "helps": [
+            "Lead the way inside",
+            "Go in together"
+          ],
+          "stands": [
+            "Hold the threshold",
+            "Face the guardian"
+          ],
+          "lens": "A site with a guardian, a puzzle, a setback, a boss and a reward, played here as its hardest room.",
+          "on_victory": [
+            "parley",
+            "heist",
+            "lieutenant"
+          ],
+          "on_defeat": [
+            "rescue",
+            "escort"
+          ]
+        },
+        {
+          "faces": [
+            11,
+            11
+          ],
+          "id": "defence",
+          "label": "Defence / siege",
+          "intended": [
+            70,
+            10,
+            20
+          ],
+          "needs": [
+            "multiple enemies",
+            "ranged/spell actions"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "warn",
+            "stake_tags": [
+              "message",
+              "heirloom"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "home-base"
+          },
+          "asks": [
+            "Ask what the walls can hold",
+            "Ask where the weak point is"
+          ],
+          "helps": [
+            "Take the weak point",
+            "Stand with the defenders"
+          ],
+          "stands": [
+            "Hold the line",
+            "Break the assault"
+          ],
+          "lens": "A place the party has come to care about is attacked.",
+          "on_victory": [
+            "parley",
+            "rest-interlude",
+            "delve"
+          ],
+          "on_defeat": [
+            "rescue",
+            "race-clock"
+          ]
+        },
+        {
+          "faces": [
+            12,
+            12
+          ],
+          "id": "heist",
+          "label": "Heist / infiltration",
+          "intended": [
+            15,
+            45,
+            40
+          ],
+          "needs": [
+            "skill checks with DCs",
+            "branching beyond two approaches"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "retrieve",
+            "stake_tags": [
+              "heirloom",
+              "message"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "faction-seat"
+          },
+          "asks": [
+            "Case the place quietly",
+            "Study the guards' habits"
+          ],
+          "helps": [
+            "Go in together",
+            "Cover for each other"
+          ],
+          "stands": [
+            "Fight clear",
+            "Hold the door"
+          ],
+          "lens": "Something guarded must be taken, copied or planted without a fuss.",
+          "on_victory": [
+            "race-clock",
+            "parley",
+            "lieutenant"
+          ],
+          "on_defeat": [
+            "escape",
+            "rescue"
+          ]
+        },
+        {
+          "faces": [
+            13,
+            13
+          ],
+          "id": "hunt",
+          "label": "Hunt",
+          "intended": [
+            40,
+            20,
+            40
+          ],
+          "needs": [
+            "travel/exploration turns",
+            "multiple enemies"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "escort",
+            "stake_tags": [
+              "carry",
+              "message"
+            ],
+            "antagonist_role": "beast",
+            "location_role": "lieutenant-lair"
+          },
+          "asks": [
+            "Read the tracks",
+            "Ask the trapper what changed"
+          ],
+          "helps": [
+            "Take the lead",
+            "Draw it out"
+          ],
+          "stands": [
+            "Face the beast",
+            "Hold the clearing"
+          ],
+          "lens": "Something is stalking the region, and the party goes after it.",
+          "on_victory": [
+            "mystery",
+            "lieutenant",
+            "parley"
+          ],
+          "on_defeat": [
+            "rescue",
+            "defence"
+          ]
+        },
+        {
+          "faces": [
+            14,
+            14
+          ],
+          "id": "parley",
+          "label": "Parley / intrigue",
+          "intended": [
+            10,
+            70,
+            20
+          ],
+          "needs": [
+            "skill checks with DCs",
+            "branching beyond two approaches"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "escort",
+            "stake_tags": [
+              "message",
+              "heirloom"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "faction-seat"
+          },
+          "asks": [
+            "Probe for what they want",
+            "Listen between the lines"
+          ],
+          "helps": [
+            "Speak up for them",
+            "Offer a guarantee"
+          ],
+          "stands": [
+            "Defend the table",
+            "Keep the peace by force"
+          ],
+          "lens": "Two or three sides must be brought to a table, and someone wants that table kicked over.",
+          "on_victory": [
+            "heist",
+            "delve",
+            "lieutenant"
+          ],
+          "on_defeat": [
+            "defence",
+            "hunt"
+          ]
+        },
+        {
+          "faces": [
+            15,
+            15
+          ],
+          "id": "race-clock",
+          "label": "Race against the clock",
+          "intended": [
+            20,
+            20,
+            60
+          ],
+          "needs": [
+            "travel/exploration turns",
+            "skill checks with DCs"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "deliver",
+            "stake_tags": [
+              "carry",
+              "message"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "neutral-ground"
+          },
+          "asks": [
+            "Check the fastest route",
+            "Ask how much time is left"
+          ],
+          "helps": [
+            "Set the pace",
+            "Take the hard road"
+          ],
+          "stands": [
+            "Clear the road",
+            "Buy time"
+          ],
+          "lens": "Every hour counts, and the road is long.",
+          "on_victory": [
+            "lieutenant",
+            "parley",
+            "delve"
+          ],
+          "on_defeat": [
+            "rescue",
+            "escape"
+          ]
+        },
+        {
+          "faces": [
+            16,
+            16
+          ],
+          "id": "rescue",
+          "label": "Rescue",
+          "intended": [
+            40,
+            30,
+            30
+          ],
+          "needs": [
+            "multiple enemies",
+            "travel/exploration turns"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "retrieve",
+            "stake_tags": [
+              "heirloom"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "lieutenant-lair"
+          },
+          "asks": [
+            "Ask where they are held",
+            "Ask who guards them"
+          ],
+          "helps": [
+            "Go in after them",
+            "Divide the guards"
+          ],
+          "stands": [
+            "Hold the exit",
+            "Cover the retreat"
+          ],
+          "lens": "Someone the party values is held, and time is short.",
+          "on_victory": [
+            "parley",
+            "mystery",
+            "lieutenant"
+          ],
+          "on_defeat": [
+            "escape",
+            "hunt"
+          ]
+        },
+        {
+          "faces": [
+            17,
+            17
+          ],
+          "id": "escape",
+          "label": "Escape / pursuit",
+          "intended": [
+            30,
+            10,
+            60
+          ],
+          "needs": [
+            "travel/exploration turns",
+            "multiple enemies"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "escort",
+            "stake_tags": [
+              "carry"
+            ],
+            "antagonist_role": "minion",
+            "location_role": "neutral-ground"
+          },
+          "asks": [
+            "Ask which way is clear",
+            "Ask how long we have"
+          ],
+          "helps": [
+            "Break the pursuit",
+            "Lead the way out"
+          ],
+          "stands": [
+            "Hold the choke point",
+            "Slow them down"
+          ],
+          "lens": "The party and those it is protecting must get out alive.",
+          "on_victory": [
+            "rest-interlude",
+            "parley",
+            "mystery"
+          ],
+          "on_defeat": [
+            "rescue",
+            "defence"
+          ]
+        },
+        {
+          "faces": [
+            18,
+            18
+          ],
+          "id": "lieutenant",
+          "label": "Lieutenant confrontation",
+          "intended": [
+            60,
+            20,
+            20
+          ],
+          "needs": [
+            "multiple enemies",
+            "higher-CR creatures"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "retrieve",
+            "stake_tags": [
+              "heirloom",
+              "message"
+            ],
+            "antagonist_role": "lieutenant",
+            "location_role": "lieutenant-lair"
+          },
+          "asks": [
+            "Learn what they guard",
+            "Weigh their loyalty"
+          ],
+          "helps": [
+            "Draw them into the open",
+            "Take the fight to them"
+          ],
+          "stands": [
+            "Face the lieutenant",
+            "Hold your ground"
+          ],
+          "lens": "One of the villain's trusted hands stands between the party and the next door.",
+          "on_victory": [
+            "rest-interlude",
+            "parley",
+            "race-clock"
+          ],
+          "on_defeat": [
+            "escape",
+            "rescue"
+          ]
+        },
+        {
+          "faces": [
+            19,
+            19
+          ],
+          "id": "finale",
+          "label": "Finale",
+          "intended": [
+            50,
+            30,
+            20
+          ],
+          "needs": [
+            "multiple enemies",
+            "higher-CR creatures",
+            "skill checks with DCs"
+          ],
+          "v1": "faked",
+          "beat": {
+            "hook_kind": "warn",
+            "stake_tags": [
+              "heirloom",
+              "message"
+            ],
+            "antagonist_role": "champion",
+            "location_role": "stronghold"
+          },
+          "asks": [
+            "Use what you have learned",
+            "Test the weakness"
+          ],
+          "helps": [
+            "Rally the allies",
+            "Open the way together"
+          ],
+          "stands": [
+            "Face the villain's champion",
+            "Finish it"
+          ],
+          "lens": "Everything the party has learned is used at once.",
+          "on_victory": [],
+          "on_defeat": [
+            "finale"
+          ]
+        },
+        {
+          "faces": [
+            20,
+            20
+          ],
+          "id": "rest-interlude",
+          "label": "Rest and downtime interlude",
+          "intended": [
+            0,
+            60,
+            40
+          ],
+          "needs": [
+            "a non-combat scene shape",
+            "levelling"
+          ],
+          "v1": "no",
+          "beat": null,
+          "asks": [],
+          "helps": [],
+          "stands": [],
+          "lens": "A recap, a rest and a decision about where to go next.",
+          "on_victory": [],
+          "on_defeat": []
+        }
+      ]
+    }
+  }
+}
