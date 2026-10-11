@@ -1496,7 +1496,14 @@ fn equal_detached_changed_empty_and_unsupported_action_inputs_cannot_use_receipt
             command: selected,
             supplied_draws: &[],
         };
-        let final_handler = handler(&current, input);
+        // Build a valid candidate fixture while the rejected input reaches Engine unchanged.
+        let final_handler = handler(
+            &current,
+            RulesCommandInput {
+                command: &offers[0],
+                supplied_draws: &[],
+            },
+        );
         let expected = if (2..=4).contains(&case) {
             TacticalActionError::UnsupportedCommand
         } else {
@@ -1535,11 +1542,15 @@ fn action_receipt_current_basis_and_pins_are_rechecked_after_enumeration() {
         } else {
             basis.revision = basis.revision.next_sequence().unwrap();
         }
+        let mut state = preview.state().clone();
+        for pending in &mut state.pending {
+            pending.basis = basis;
+        }
         let current = Checkpoint::new(
             CHECKPOINT_SCHEMA,
             basis,
             pins,
-            preview.state().clone(),
+            state,
             ReferenceInventory {
                 rules: &[rule()],
                 content: &[content()],
