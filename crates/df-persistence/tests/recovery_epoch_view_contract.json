@@ -1,0 +1,15 @@
+[
+  {"case":"OriginalAcceptance1","result":"game RPO honest"},
+  {"case":"OriginalAcceptance2","result":"The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."},
+  {"case":"decision","result":"disclose exact lost acknowledged game revisions under qualified fixture; recovery epoch remains a candidate"},
+  {"case":"rejected_alternatives","result":"revision count as elapsed RPO, guessed no-loss, old backup as unsent proof, reused old command namespace and fixture as epoch issuance"},
+  {"case":"exact_loss_view","result":"loss:7:11..7:12;candidate:8:0"},
+  {"case":"qualified_no_acknowledged_loss","result":"no_loss:7:10;missing_head:closed"},
+  {"case":"composite_order_and_ordinary_restart","result":"8:0>7:max;ordinary_next:7:11"},
+  {"case":"missing_conflicting_or_invalid_history","result":"closed:MissingJournal,MissingHead,MissingKey,Unqualified,Incomplete,HeadConflict,InvalidRange"},
+  {"case":"suppression_and_unknown_survive_game_rollback","result":"suppression_first;hold:900;loss:7:11..7:12;retire:7;no_resend_or_refund"},
+  {"case":"old_and_future_namespace","result":"old_retained:lookup_only;old_missing:expired_or_indeterminate;future:expired_or_indeterminate"},
+  {"case":"exhausted_epoch","result":"closed:EpochExhausted"},
+  {"case":"elapsed_RPO_and_RTO","result":"proposed_RPO300seconds_RTO3600seconds;unmeasured;revision_range_is_not_elapsed_time"},
+  {"case":"unresolved","result":"authenticated_latest_head,protected_backing,key_custody,epoch_CAS,mounted_restored_view,backup_PITR_and_restore_drill:unperformed;no_issued_epoch_or_served_PG"}
+]
