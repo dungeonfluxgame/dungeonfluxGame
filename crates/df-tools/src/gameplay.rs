@@ -10,6 +10,9 @@ mod dialogue_tests;
 mod inn_qualification;
 mod journey;
 mod model;
+mod pack;
+#[cfg(test)]
+mod pack_tests;
 mod public_assets;
 mod qualification;
 #[cfg(test)]

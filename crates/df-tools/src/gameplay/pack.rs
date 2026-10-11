@@ -1,0 +1,1632 @@
+//! Gameplay pack and tuning loader (design: `planning/gameplay-tuning.md`, sections 3 to 5).
+//!
+//! Two checked-in JSON files describe the Lantern Wharf harbor journey: `pack.json` holds
+//! scenario content and `tuning.json` holds gameplay numbers. [`load`] reads each file once under
+//! a size cap, hashes the exact bytes it parsed, refuses unknown or duplicate keys and wrong types,
+//! enforces the bounds table, checks the cross-file references and reports the values that differ
+//! from the compiled SRD 5.2.1 baseline. Nothing here falls back to a default: a missing
+//! directory, missing file or any violation is a typed [`PackError`] naming the file and the JSON
+//! location.
+//!
+//! The SHA-256 values are development revisions of the exact file bytes. They are not a published
+//! content-pack version or a rights-backed identity (decision record D01).
+#![allow(
+    dead_code,
+    reason = "PLAY-B02 step 3 wires the loader into serve(); remove this allowance then"
+)]
+
+use serde::{Deserialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
+use std::{
+    fmt,
+    fs::File,
+    io::{self, Read},
+    path::{Path, PathBuf},
+};
+
+/// File name of the scenario content inside the pack directory.
+pub(super) const PACK_FILE_NAME: &str = "pack.json";
+/// File name of the gameplay numbers inside the pack directory.
+pub(super) const TUNING_FILE_NAME: &str = "tuning.json";
+/// Largest accepted size of either file, in bytes.
+pub(super) const MAX_FILE_BYTES: u64 = 256 * 1024;
+/// Required value of `schema` in `pack.json`.
+pub(super) const PACK_SCHEMA: &str = "df-gameplay-pack/1";
+/// Required value of `schema` in `tuning.json`.
+pub(super) const TUNING_SCHEMA: &str = "df-gameplay-tuning/1";
+
+const TEXT_CHARACTERS_MAX: usize = 1024;
+const LABEL_CHARACTERS_MAX: usize = 96;
+const ID_CHARACTERS_MAX: usize = 64;
+const DIE_SIDES: &[u8] = &[4, 6, 8, 10, 12];
+const ABILITY_SCORE_CAP: i64 = 20;
+
+/// Items the compiled journey can place in an inventory (`journey::CONTENT_ENTRIES`).
+pub(super) const COMPILED_ITEMS: &[&str] = &[
+    "chain-mail",
+    "greatsword",
+    "flail",
+    "javelin",
+    "dungeoneer-pack",
+    "spear",
+    "shortbow",
+    "arrow",
+    "gaming-set",
+    "healers-kit",
+    "quiver",
+    "travelers-clothes",
+    "gold-piece",
+    "scimitar",
+];
+/// Compiled items that may be configured as a weapon.
+const COMPILED_WEAPONS: &[&str] = &[
+    "greatsword",
+    "flail",
+    "javelin",
+    "spear",
+    "shortbow",
+    "scimitar",
+];
+/// Scene art the gameplay server serves (`public_assets.rs`), without the leading slash.
+pub(super) const SERVED_SCENE_ASSETS: &[&str] = &[
+    "assets/ui/scenes/mara-harbor-v4.png",
+    "assets/concept-art/scene-campfire-under-stars.webp",
+    "assets/concept-art/vell-avatar.webp",
+    "assets/concept-art/scene-tavern-barkeep-talk-rain.webp",
+];
+/// Single-option creation groups and the one option id the compiled validator accepts for each.
+const FIXED_GROUPS: &[(&str, &str)] = &[
+    ("species", "dwarf"),
+    ("class", "fighter-1"),
+    ("background", "soldier"),
+    ("equipment", "fighter-a-soldier-a"),
+    ("style-masteries", "defense-greatsword-flail-javelin"),
+    ("allied-ties", "join-order"),
+];
+const ARRAY_GROUP: &str = "array";
+const ARRAY_TEMPLATE_PLACEHOLDERS: &[&str] =
+    &["0", "1", "2", "3", "4", "5", "bonus_str", "bonus_con"];
+
+/// Which of the two files an error or value belongs to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SourceFile {
+    Pack,
+    Tuning,
+}
+
+impl SourceFile {
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::Pack => PACK_FILE_NAME,
+            Self::Tuning => TUNING_FILE_NAME,
+        }
+    }
+}
+
+/// Broad class of a JSON parse failure, taken from the parser rather than from message text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ParseErrorKind {
+    /// Not well-formed JSON (including trailing data after the document).
+    Syntax,
+    /// The document ended early.
+    UnexpectedEnd,
+    /// Well-formed JSON that does not match the schema: unknown key, duplicate key, missing key,
+    /// wrong type or a number outside the field's integer type.
+    Data,
+}
+
+/// Why a reference between or inside the files does not resolve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CrossRefReason {
+    PackIdMismatch,
+    DuplicateId,
+    UnknownGroup,
+    DuplicateGroup,
+    MissingGroup,
+    UnknownOption,
+    TemplateMisplaced,
+    ArrayWithoutOption,
+    OptionWithoutArray,
+    UnknownPickValue,
+    UnknownItem,
+    AssetNotServed,
+    DuplicateScene,
+    MissingScene,
+    RestedNarrationMismatch,
+}
+
+impl fmt::Display for CrossRefReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::PackIdMismatch => "tuning names a different pack than pack.json",
+            Self::DuplicateId => "duplicate entry",
+            Self::UnknownGroup => "creation group is not supported by the compiled validator",
+            Self::DuplicateGroup => "creation group appears more than once",
+            Self::MissingGroup => "required creation group is missing",
+            Self::UnknownOption => "option is not accepted by the compiled validator",
+            Self::TemplateMisplaced => {
+                "description_template belongs only to the ability array group"
+            }
+            Self::ArrayWithoutOption => {
+                "ability array has no matching creation option in pack.json"
+            }
+            Self::OptionWithoutArray => {
+                "creation option has no matching ability array in tuning.json"
+            }
+            Self::UnknownPickValue => "value is not accepted by the compiled validator",
+            Self::UnknownItem => "item is not in the compiled item set",
+            Self::AssetNotServed => "asset is not in the served scene allowlist",
+            Self::DuplicateScene => "scene key appears more than once",
+            Self::MissingScene => "required scene is missing",
+            Self::RestedNarrationMismatch => {
+                "narration_rested is required for victory and defeat and forbidden elsewhere"
+            }
+        })
+    }
+}
+
+/// Typed refusal to load the pack. Every variant names the file; `Display` never prints file
+/// contents beyond a short, truncated parser message.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum PackError {
+    /// The file (or its directory) does not exist.
+    Missing { file: SourceFile, path: PathBuf },
+    /// The file exists but could not be read.
+    Io {
+        file: SourceFile,
+        path: PathBuf,
+        kind: io::ErrorKind,
+    },
+    /// The file exceeds [`MAX_FILE_BYTES`].
+    TooLarge {
+        file: SourceFile,
+        bytes: u64,
+        limit: u64,
+    },
+    /// Not valid for the schema: syntax, unknown key, duplicate key, missing key, wrong type.
+    /// `path` is the JSON path (`.` for the document root).
+    Parse {
+        file: SourceFile,
+        path: String,
+        line: usize,
+        column: usize,
+        kind: ParseErrorKind,
+        message: String,
+    },
+    /// The `schema` marker is not the version this loader reads.
+    Schema {
+        file: SourceFile,
+        found: String,
+        expected: &'static str,
+    },
+    /// A number or text length is outside its range.
+    Bounds {
+        file: SourceFile,
+        path: String,
+        actual: i64,
+        min: i64,
+        max: i64,
+    },
+    /// A number is not one of a fixed set of allowed values.
+    NotAllowed {
+        file: SourceFile,
+        path: String,
+        actual: i64,
+        allowed: &'static [u8],
+    },
+    /// Text that must have a given form (identifier, locale, placeholders) does not.
+    Malformed {
+        file: SourceFile,
+        path: String,
+        expected: &'static str,
+    },
+    /// A reference does not resolve.
+    CrossRef {
+        file: SourceFile,
+        path: String,
+        reason: CrossRefReason,
+    },
+}
+
+impl fmt::Display for PackError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing { file, path } => write!(
+                formatter,
+                "gameplay file {} is missing (expected at {})",
+                file.name(),
+                path.display()
+            ),
+            Self::Io { file, path, kind } => write!(
+                formatter,
+                "gameplay file {} could not be read at {}: {kind}",
+                file.name(),
+                path.display()
+            ),
+            Self::TooLarge { file, bytes, limit } => write!(
+                formatter,
+                "gameplay file {} is {bytes} bytes, above the {limit} byte limit",
+                file.name()
+            ),
+            Self::Parse {
+                file,
+                path,
+                line,
+                column,
+                message,
+                ..
+            } => write!(
+                formatter,
+                "gameplay file {} is invalid at {path} (line {line}, column {column}): {message}",
+                file.name()
+            ),
+            Self::Schema {
+                file,
+                found,
+                expected,
+            } => write!(
+                formatter,
+                "gameplay file {} has schema {found:?}, expected {expected:?}",
+                file.name()
+            ),
+            Self::Bounds {
+                file,
+                path,
+                actual,
+                min,
+                max,
+            } => write!(
+                formatter,
+                "gameplay file {} value at {path} is {actual}, outside {min}..={max}",
+                file.name()
+            ),
+            Self::NotAllowed {
+                file,
+                path,
+                actual,
+                allowed,
+            } => write!(
+                formatter,
+                "gameplay file {} value at {path} is {actual}, not one of {allowed:?}",
+                file.name()
+            ),
+            Self::Malformed {
+                file,
+                path,
+                expected,
+            } => write!(
+                formatter,
+                "gameplay file {} value at {path} must be {expected}",
+                file.name()
+            ),
+            Self::CrossRef { file, path, reason } => {
+                write!(
+                    formatter,
+                    "gameplay file {} at {path}: {reason}",
+                    file.name()
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for PackError {}
+
+/// SHA-256 of the exact bytes of one file: a development revision, not a published version.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Revision([u8; 32]);
+
+impl Revision {
+    pub(super) fn of(bytes: &[u8]) -> Self {
+        Self(Sha256::digest(bytes).into())
+    }
+
+    pub(super) const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Lowercase hexadecimal form (64 characters).
+    pub(super) fn to_hex(self) -> String {
+        self.to_string()
+    }
+}
+
+impl fmt::Display for Revision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0
+            .iter()
+            .try_for_each(|byte| write!(formatter, "{byte:02x}"))
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// tuning.json
+// ---------------------------------------------------------------------------------------------
+
+/// Typed `tuning.json`. Ability score order is STR, DEX, CON, INT, WIS, CHA.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TuningFile {
+    pub(super) schema: String,
+    /// Id of the pack these numbers belong to; must equal `pack.json`'s `id`.
+    pub(super) pack: String,
+    pub(super) hero: HeroTuning,
+    pub(super) bandit: BanditTuning,
+    pub(super) combat: CombatTuning,
+    pub(super) rest: RestTuning,
+    pub(super) narrative: NarrativeTuning,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct HeroTuning {
+    pub(super) armor_class: u8,
+    pub(super) proficiency_bonus: u8,
+    /// Hit points before the Constitution modifier is added.
+    pub(super) base_hit_points: u8,
+    pub(super) ability_arrays: Vec<AbilityArray>,
+    pub(super) background_bonus: BackgroundBonus,
+    pub(super) second_wind: SecondWindTuning,
+    pub(super) weapon: WeaponTuning,
+}
+
+/// One selectable standard array. `scores` are before the background bonus.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AbilityArray {
+    pub(super) id: String,
+    pub(super) scores: [u8; 6],
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BackgroundBonus {
+    pub(super) strength: u8,
+    pub(super) constitution: u8,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SecondWindTuning {
+    pub(super) uses_max: u8,
+    pub(super) die_sides: u8,
+    pub(super) flat_bonus: u8,
+    pub(super) recharge_per_short_rest: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WeaponTuning {
+    pub(super) item: String,
+    pub(super) damage_dice: u8,
+    pub(super) damage_sides: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BanditTuning {
+    pub(super) hit_points: u8,
+    pub(super) armor_class: u8,
+    pub(super) abilities: AbilityScores,
+    pub(super) attack_bonus: i8,
+    pub(super) damage_modifier: u8,
+    pub(super) weapon: WeaponTuning,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AbilityScores {
+    pub(super) strength: u8,
+    pub(super) dexterity: u8,
+    pub(super) constitution: u8,
+    pub(super) intelligence: u8,
+    pub(super) wisdom: u8,
+    pub(super) charisma: u8,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CombatTuning {
+    /// Campaign ticks in one combat round.
+    pub(super) round_ticks: u32,
+    /// Lowest natural d20 face that is a critical hit.
+    pub(super) critical_threshold: u8,
+    /// Combat log entries sent to clients.
+    pub(super) combat_log_entries: u8,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RestTuning {
+    pub(super) short_rest_seconds: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NarrativeTuning {
+    pub(super) intervention_budget: u8,
+}
+
+// ---------------------------------------------------------------------------------------------
+// pack.json
+// ---------------------------------------------------------------------------------------------
+
+/// Typed `pack.json`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PackFile {
+    pub(super) schema: String,
+    pub(super) id: String,
+    pub(super) locale: String,
+    pub(super) room_code: String,
+    pub(super) creation: CreationPack,
+    pub(super) equipment: Vec<EquipmentRow>,
+    pub(super) bandit: BanditPack,
+    pub(super) offer_labels: OfferLabels,
+    pub(super) courier_clue: String,
+    /// Appended to scene narration after a space; contains the `{name}` placeholder once.
+    pub(super) escort_support_suffix: String,
+    pub(super) scenes: Vec<Scene>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CreationPack {
+    pub(super) description: String,
+    pub(super) groups: Vec<CreationGroup>,
+    pub(super) pick_lists: PickLists,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CreationGroup {
+    pub(super) id: String,
+    pub(super) label: String,
+    /// Only the `array` group has a template. Placeholders: `{0}` to `{5}` are the six ability
+    /// scores after the background bonus, `{bonus_str}` and `{bonus_con}` the bonuses; see
+    /// [`render_array_description`].
+    #[serde(default)]
+    pub(super) description_template: Option<String>,
+    pub(super) options: Vec<CreationOption>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CreationOption {
+    pub(super) id: String,
+    pub(super) label: String,
+    #[serde(default)]
+    pub(super) description: Option<String>,
+}
+
+/// Selectable values for the free pick-list groups; each must be accepted by the compiled
+/// validator, so a pack can only narrow them.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PickLists {
+    pub(super) alignment: Vec<String>,
+    pub(super) language: Vec<String>,
+    pub(super) skill: Vec<String>,
+    #[serde(rename = "gaming-set")]
+    pub(super) gaming_set: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct EquipmentRow {
+    pub(super) item: String,
+    pub(super) quantity: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BanditPack {
+    pub(super) name: String,
+}
+
+/// Player-facing label of each of the ten journey actions (JSON keys are kebab-case).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(super) struct OfferLabels {
+    pub(super) create_character: String,
+    pub(super) begin_story: String,
+    pub(super) ask_courier: String,
+    pub(super) escort_courier: String,
+    pub(super) defend_courier: String,
+    pub(super) greatsword_attack: String,
+    pub(super) second_wind: String,
+    pub(super) end_turn: String,
+    pub(super) short_rest: String,
+    pub(super) choose_harbor_scene: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum SceneKey {
+    Room,
+    Opening,
+    DialogueSeal,
+    DialogueEscort,
+    Combat,
+    Inn,
+    Victory,
+    Defeat,
+}
+
+impl SceneKey {
+    pub(super) const ALL: [Self; 8] = [
+        Self::Room,
+        Self::Opening,
+        Self::DialogueSeal,
+        Self::DialogueEscort,
+        Self::Combat,
+        Self::Inn,
+        Self::Victory,
+        Self::Defeat,
+    ];
+
+    const fn needs_rested_narration(self) -> bool {
+        matches!(self, Self::Victory | Self::Defeat)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Scene {
+    pub(super) key: SceneKey,
+    pub(super) title: String,
+    pub(super) narration: String,
+    /// Narration once the Short Rest has completed; present for victory and defeat only.
+    #[serde(default)]
+    pub(super) narration_rested: Option<String>,
+    pub(super) speaker: String,
+    pub(super) dialogue: String,
+    /// Served asset path without a leading slash.
+    pub(super) asset: String,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Loading
+// ---------------------------------------------------------------------------------------------
+
+/// A pack and tuning that parsed, passed every bound and cross-reference, and the revisions of
+/// the exact bytes they were parsed from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct LoadedPack {
+    pub(super) pack: PackFile,
+    pub(super) tuning: TuningFile,
+    pub(super) pack_revision: Revision,
+    pub(super) tuning_revision: Revision,
+    /// JSON key paths of "standard" values that differ from the compiled SRD 5.2.1 baseline, in
+    /// a fixed order. Computed by the loader; the files cannot declare themselves standard.
+    pub(super) departures: Vec<&'static str>,
+}
+
+/// Load `pack.json` and `tuning.json` from `directory`.
+///
+/// Each file is read once under [`MAX_FILE_BYTES`]; the revision is the SHA-256 of those bytes
+/// and the same bytes are parsed. There is no fallback: a missing directory or file is
+/// [`PackError::Missing`]. This does blocking file I/O and is intended for server startup.
+pub(super) fn load(directory: &Path) -> Result<LoadedPack, PackError> {
+    let pack_bytes = read_file(SourceFile::Pack, &directory.join(PACK_FILE_NAME))?;
+    let tuning_bytes = read_file(SourceFile::Tuning, &directory.join(TUNING_FILE_NAME))?;
+    load_from_bytes(&pack_bytes, &tuning_bytes)
+}
+
+/// Validate and load the two documents from memory. Same checks as [`load`], used by tests and
+/// by callers that already hold the bytes.
+pub(super) fn load_from_bytes(
+    pack_bytes: &[u8],
+    tuning_bytes: &[u8],
+) -> Result<LoadedPack, PackError> {
+    let pack: PackFile = parse(SourceFile::Pack, pack_bytes)?;
+    require_schema(SourceFile::Pack, &pack.schema, PACK_SCHEMA)?;
+    let tuning: TuningFile = parse(SourceFile::Tuning, tuning_bytes)?;
+    require_schema(SourceFile::Tuning, &tuning.schema, TUNING_SCHEMA)?;
+    validate_pack(&pack)?;
+    validate_tuning(&tuning)?;
+    validate_cross_references(&pack, &tuning)?;
+    let departures = departures(&pack, &tuning);
+    Ok(LoadedPack {
+        pack,
+        tuning,
+        pack_revision: Revision::of(pack_bytes),
+        tuning_revision: Revision::of(tuning_bytes),
+        departures,
+    })
+}
+
+/// Fill the ability-array template for one array. `raw_scores` are the array's scores before the
+/// background bonus; `{0}` to `{5}` receive the scores after the Strength and Constitution bonus.
+pub(super) fn render_array_description(
+    template: &str,
+    raw_scores: [u8; 6],
+    bonus: BackgroundBonus,
+) -> String {
+    let mut scores = raw_scores.map(u16::from);
+    scores[0] += u16::from(bonus.strength);
+    scores[2] += u16::from(bonus.constitution);
+    let mut text = template.to_owned();
+    for (index, score) in scores.iter().enumerate() {
+        text = text.replace(&format!("{{{index}}}"), &score.to_string());
+    }
+    text.replace("{bonus_str}", &bonus.strength.to_string())
+        .replace("{bonus_con}", &bonus.constitution.to_string())
+}
+
+fn read_file(file: SourceFile, path: &Path) -> Result<Vec<u8>, PackError> {
+    let classify = |error: io::Error| match error.kind() {
+        io::ErrorKind::NotFound => PackError::Missing {
+            file,
+            path: path.to_owned(),
+        },
+        kind => PackError::Io {
+            file,
+            path: path.to_owned(),
+            kind,
+        },
+    };
+    let handle = File::open(path).map_err(classify)?;
+    let declared = handle.metadata().map_err(classify)?.len();
+    if declared > MAX_FILE_BYTES {
+        return Err(PackError::TooLarge {
+            file,
+            bytes: declared,
+            limit: MAX_FILE_BYTES,
+        });
+    }
+    // The cap applies to the bytes actually read too, in case the file grew after the check.
+    let mut bytes = Vec::new();
+    handle
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(classify)?;
+    Ok(bytes)
+}
+
+fn parse<T: DeserializeOwned>(file: SourceFile, bytes: &[u8]) -> Result<T, PackError> {
+    let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if length > MAX_FILE_BYTES {
+        return Err(PackError::TooLarge {
+            file,
+            bytes: length,
+            limit: MAX_FILE_BYTES,
+        });
+    }
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let value = serde_path_to_error::deserialize(&mut deserializer)
+        .map_err(|error| parse_error(file, error.path().to_string(), error.inner()))?;
+    deserializer
+        .end()
+        .map_err(|error| parse_error(file, ".".to_owned(), &error))?;
+    Ok(value)
+}
+
+fn parse_error(file: SourceFile, path: String, error: &serde_json::Error) -> PackError {
+    let kind = match error.classify() {
+        serde_json::error::Category::Data => ParseErrorKind::Data,
+        serde_json::error::Category::Eof => ParseErrorKind::UnexpectedEnd,
+        serde_json::error::Category::Io | serde_json::error::Category::Syntax => {
+            ParseErrorKind::Syntax
+        }
+    };
+    PackError::Parse {
+        file,
+        path,
+        line: error.line(),
+        column: error.column(),
+        kind,
+        message: truncated(&error.to_string()),
+    }
+}
+
+/// Parser messages can echo a value from the file; keep only a short prefix.
+fn truncated(message: &str) -> String {
+    const MESSAGE_CHARACTERS_MAX: usize = 160;
+    let mut short: String = message.chars().take(MESSAGE_CHARACTERS_MAX).collect();
+    if short.len() < message.len() {
+        short.push('…');
+    }
+    short
+}
+
+fn require_schema(file: SourceFile, found: &str, expected: &'static str) -> Result<(), PackError> {
+    if found == expected {
+        return Ok(());
+    }
+    Err(PackError::Schema {
+        file,
+        found: truncated(found),
+        expected,
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Validation helpers
+// ---------------------------------------------------------------------------------------------
+
+fn range(file: SourceFile, path: &str, actual: i64, min: i64, max: i64) -> Result<(), PackError> {
+    if (min..=max).contains(&actual) {
+        return Ok(());
+    }
+    Err(PackError::Bounds {
+        file,
+        path: path.to_owned(),
+        actual,
+        min,
+        max,
+    })
+}
+
+fn one_of(
+    file: SourceFile,
+    path: &str,
+    actual: u8,
+    allowed: &'static [u8],
+) -> Result<(), PackError> {
+    if allowed.contains(&actual) {
+        return Ok(());
+    }
+    Err(PackError::NotAllowed {
+        file,
+        path: path.to_owned(),
+        actual: i64::from(actual),
+        allowed,
+    })
+}
+
+/// Length in characters, bounded by the file size cap, so the conversion cannot overflow.
+fn length(value: usize) -> i64 {
+    value as i64
+}
+
+fn text(
+    file: SourceFile,
+    path: &str,
+    value: &str,
+    min: usize,
+    max: usize,
+) -> Result<(), PackError> {
+    range(
+        file,
+        path,
+        length(value.chars().count()),
+        length(min),
+        length(max),
+    )
+}
+
+fn malformed(file: SourceFile, path: &str, expected: &'static str) -> PackError {
+    PackError::Malformed {
+        file,
+        path: path.to_owned(),
+        expected,
+    }
+}
+
+fn cross_reference(file: SourceFile, path: &str, reason: CrossRefReason) -> PackError {
+    PackError::CrossRef {
+        file,
+        path: path.to_owned(),
+        reason,
+    }
+}
+
+/// Lowercase kebab-case identifier of 1 to 64 characters.
+fn identifier(file: SourceFile, path: &str, value: &str) -> Result<(), PackError> {
+    text(file, path, value, 1, ID_CHARACTERS_MAX)?;
+    let well_formed = value.split('-').all(|part| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    });
+    if well_formed {
+        return Ok(());
+    }
+    Err(malformed(file, path, "a lowercase kebab-case identifier"))
+}
+
+/// Fail on the first repeated value, reporting the location of the repeat.
+fn require_unique<'a>(
+    file: SourceFile,
+    path_of: impl Fn(usize) -> String,
+    values: impl Iterator<Item = &'a str>,
+) -> Result<(), PackError> {
+    let mut seen: Vec<&str> = Vec::new();
+    for (index, value) in values.enumerate() {
+        if seen.contains(&value) {
+            return Err(cross_reference(
+                file,
+                &path_of(index),
+                CrossRefReason::DuplicateId,
+            ));
+        }
+        seen.push(value);
+    }
+    Ok(())
+}
+
+/// True when every `{...}` in `text` names an allowed placeholder and no brace is stray.
+fn placeholders_are_defined(text: &str, allowed: &[&str]) -> bool {
+    let mut rest = text;
+    while let Some(position) = rest.find(['{', '}']) {
+        let Some(opened) = rest[position..].strip_prefix('{') else {
+            return false;
+        };
+        let Some((name, tail)) = opened.split_once('}') else {
+            return false;
+        };
+        if !allowed.contains(&name) {
+            return false;
+        }
+        rest = tail;
+    }
+    true
+}
+
+// ---------------------------------------------------------------------------------------------
+// tuning.json validation
+// ---------------------------------------------------------------------------------------------
+
+fn validate_tuning(tuning: &TuningFile) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Tuning;
+    identifier(FILE, "pack", &tuning.pack)?;
+    let hero = &tuning.hero;
+    range(
+        FILE,
+        "hero.armor_class",
+        i64::from(hero.armor_class),
+        10,
+        30,
+    )?;
+    range(
+        FILE,
+        "hero.proficiency_bonus",
+        i64::from(hero.proficiency_bonus),
+        2,
+        6,
+    )?;
+    range(
+        FILE,
+        "hero.base_hit_points",
+        i64::from(hero.base_hit_points),
+        1,
+        60,
+    )?;
+    range(
+        FILE,
+        "hero.background_bonus.strength",
+        i64::from(hero.background_bonus.strength),
+        0,
+        4,
+    )?;
+    range(
+        FILE,
+        "hero.background_bonus.constitution",
+        i64::from(hero.background_bonus.constitution),
+        0,
+        4,
+    )?;
+    range(
+        FILE,
+        "hero.ability_arrays",
+        length(hero.ability_arrays.len()),
+        1,
+        8,
+    )?;
+    for (index, array) in hero.ability_arrays.iter().enumerate() {
+        validate_ability_array(index, array, hero.background_bonus)?;
+    }
+    require_unique(
+        FILE,
+        |index| format!("hero.ability_arrays[{index}].id"),
+        hero.ability_arrays.iter().map(|array| array.id.as_str()),
+    )?;
+    let wind = hero.second_wind;
+    range(
+        FILE,
+        "hero.second_wind.uses_max",
+        i64::from(wind.uses_max),
+        0,
+        5,
+    )?;
+    one_of(
+        FILE,
+        "hero.second_wind.die_sides",
+        wind.die_sides,
+        DIE_SIDES,
+    )?;
+    range(
+        FILE,
+        "hero.second_wind.flat_bonus",
+        i64::from(wind.flat_bonus),
+        0,
+        10,
+    )?;
+    range(
+        FILE,
+        "hero.second_wind.recharge_per_short_rest",
+        i64::from(wind.recharge_per_short_rest),
+        0,
+        i64::from(wind.uses_max),
+    )?;
+    validate_weapon("hero.weapon", &hero.weapon)?;
+
+    let bandit = &tuning.bandit;
+    range(
+        FILE,
+        "bandit.hit_points",
+        i64::from(bandit.hit_points),
+        1,
+        200,
+    )?;
+    range(
+        FILE,
+        "bandit.armor_class",
+        i64::from(bandit.armor_class),
+        1,
+        30,
+    )?;
+    let abilities = bandit.abilities;
+    for (path, score) in [
+        ("bandit.abilities.strength", abilities.strength),
+        ("bandit.abilities.dexterity", abilities.dexterity),
+        ("bandit.abilities.constitution", abilities.constitution),
+        ("bandit.abilities.intelligence", abilities.intelligence),
+        ("bandit.abilities.wisdom", abilities.wisdom),
+        ("bandit.abilities.charisma", abilities.charisma),
+    ] {
+        range(FILE, path, i64::from(score), 1, ABILITY_SCORE_CAP)?;
+    }
+    range(
+        FILE,
+        "bandit.attack_bonus",
+        i64::from(bandit.attack_bonus),
+        -5,
+        20,
+    )?;
+    range(
+        FILE,
+        "bandit.damage_modifier",
+        i64::from(bandit.damage_modifier),
+        0,
+        10,
+    )?;
+    validate_weapon("bandit.weapon", &bandit.weapon)?;
+
+    range(
+        FILE,
+        "combat.round_ticks",
+        i64::from(tuning.combat.round_ticks),
+        1,
+        600,
+    )?;
+    range(
+        FILE,
+        "combat.critical_threshold",
+        i64::from(tuning.combat.critical_threshold),
+        15,
+        20,
+    )?;
+    range(
+        FILE,
+        "combat.combat_log_entries",
+        i64::from(tuning.combat.combat_log_entries),
+        1,
+        32,
+    )?;
+    range(
+        FILE,
+        "rest.short_rest_seconds",
+        i64::from(tuning.rest.short_rest_seconds),
+        60,
+        86_400,
+    )?;
+    range(
+        FILE,
+        "narrative.intervention_budget",
+        i64::from(tuning.narrative.intervention_budget),
+        1,
+        64,
+    )
+}
+
+fn validate_ability_array(
+    index: usize,
+    array: &AbilityArray,
+    bonus: BackgroundBonus,
+) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Tuning;
+    identifier(FILE, &format!("hero.ability_arrays[{index}].id"), &array.id)?;
+    for (position, score) in array.scores.iter().enumerate() {
+        let path = format!("hero.ability_arrays[{index}].scores[{position}]");
+        range(FILE, &path, i64::from(*score), 3, 18)?;
+        let bonus_applied = match position {
+            0 => i64::from(bonus.strength),
+            2 => i64::from(bonus.constitution),
+            _ => 0,
+        };
+        range(
+            FILE,
+            &path,
+            i64::from(*score) + bonus_applied,
+            3,
+            ABILITY_SCORE_CAP,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_weapon(prefix: &str, weapon: &WeaponTuning) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Tuning;
+    if !COMPILED_WEAPONS.contains(&weapon.item.as_str()) {
+        return Err(cross_reference(
+            FILE,
+            &format!("{prefix}.item"),
+            CrossRefReason::UnknownItem,
+        ));
+    }
+    range(
+        FILE,
+        &format!("{prefix}.damage_dice"),
+        i64::from(weapon.damage_dice),
+        1,
+        2,
+    )?;
+    one_of(
+        FILE,
+        &format!("{prefix}.damage_sides"),
+        weapon.damage_sides,
+        DIE_SIDES,
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
+// pack.json validation
+// ---------------------------------------------------------------------------------------------
+
+fn validate_pack(pack: &PackFile) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Pack;
+    identifier(FILE, "id", &pack.id)?;
+    if pack.locale != "en" {
+        return Err(malformed(
+            FILE,
+            "locale",
+            "\"en\" (the only supported locale)",
+        ));
+    }
+    text(FILE, "room_code", &pack.room_code, 1, 32)?;
+    if !pack
+        .room_code
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Err(malformed(
+            FILE,
+            "room_code",
+            "ASCII letters and digits only",
+        ));
+    }
+    validate_creation(&pack.creation)?;
+    validate_equipment(&pack.equipment)?;
+    text(FILE, "bandit.name", &pack.bandit.name, 1, 48)?;
+    validate_offer_labels(&pack.offer_labels)?;
+    range(
+        FILE,
+        "courier_clue",
+        length(pack.courier_clue.len()),
+        1,
+        512,
+    )?;
+    text(
+        FILE,
+        "escort_support_suffix",
+        &pack.escort_support_suffix,
+        1,
+        256,
+    )?;
+    let name_placeholders = pack.escort_support_suffix.matches("{name}").count();
+    if name_placeholders != 1 || !placeholders_are_defined(&pack.escort_support_suffix, &["name"]) {
+        return Err(malformed(
+            FILE,
+            "escort_support_suffix",
+            "text with exactly one {name} placeholder and no other braces",
+        ));
+    }
+    validate_scenes(&pack.scenes)
+}
+
+fn validate_creation(creation: &CreationPack) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Pack;
+    text(
+        FILE,
+        "creation.description",
+        &creation.description,
+        1,
+        TEXT_CHARACTERS_MAX,
+    )?;
+    for (index, group) in creation.groups.iter().enumerate() {
+        validate_group(index, group)?;
+    }
+    for required in FIXED_GROUPS.iter().map(|(id, _)| *id).chain([ARRAY_GROUP]) {
+        let occurrences = creation
+            .groups
+            .iter()
+            .filter(|group| group.id == required)
+            .count();
+        if occurrences == 0 {
+            return Err(cross_reference(
+                FILE,
+                "creation.groups",
+                CrossRefReason::MissingGroup,
+            ));
+        }
+        if occurrences > 1 {
+            let index = creation
+                .groups
+                .iter()
+                .enumerate()
+                .filter(|(_, group)| group.id == required)
+                .nth(1)
+                .map_or(0, |(index, _)| index);
+            return Err(cross_reference(
+                FILE,
+                &format!("creation.groups[{index}].id"),
+                CrossRefReason::DuplicateGroup,
+            ));
+        }
+    }
+    let pick_lists = &creation.pick_lists;
+    for (path, values, accepted) in [
+        (
+            "creation.pick_lists.alignment",
+            &pick_lists.alignment,
+            df_rules::local_journey::ALIGNMENTS,
+        ),
+        (
+            "creation.pick_lists.language",
+            &pick_lists.language,
+            df_rules::local_journey::STANDARD_LANGUAGES,
+        ),
+        (
+            "creation.pick_lists.skill",
+            &pick_lists.skill,
+            df_rules::local_journey::FIGHTER_SKILLS,
+        ),
+        (
+            "creation.pick_lists.gaming-set",
+            &pick_lists.gaming_set,
+            df_rules::local_journey::GAMING_SETS,
+        ),
+    ] {
+        validate_pick_list(path, values, accepted)?;
+    }
+    Ok(())
+}
+
+fn validate_group(index: usize, group: &CreationGroup) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Pack;
+    let at = format!("creation.groups[{index}]");
+    identifier(FILE, &format!("{at}.id"), &group.id)?;
+    text(
+        FILE,
+        &format!("{at}.label"),
+        &group.label,
+        1,
+        LABEL_CHARACTERS_MAX,
+    )?;
+    let fixed_option = FIXED_GROUPS
+        .iter()
+        .find(|(id, _)| *id == group.id)
+        .map(|(_, option)| *option);
+    if fixed_option.is_none() && group.id != ARRAY_GROUP {
+        return Err(cross_reference(
+            FILE,
+            &format!("{at}.id"),
+            CrossRefReason::UnknownGroup,
+        ));
+    }
+    match (&group.description_template, group.id == ARRAY_GROUP) {
+        (Some(template), true) => {
+            text(
+                FILE,
+                &format!("{at}.description_template"),
+                template,
+                1,
+                TEXT_CHARACTERS_MAX,
+            )?;
+            if !placeholders_are_defined(template, ARRAY_TEMPLATE_PLACEHOLDERS) {
+                return Err(malformed(
+                    FILE,
+                    &format!("{at}.description_template"),
+                    "text using only {0} to {5}, {bonus_str} and {bonus_con} placeholders",
+                ));
+            }
+        }
+        (None, true) => {
+            return Err(cross_reference(
+                FILE,
+                &format!("{at}.description_template"),
+                CrossRefReason::TemplateMisplaced,
+            ));
+        }
+        (Some(_), false) => {
+            return Err(cross_reference(
+                FILE,
+                &format!("{at}.description_template"),
+                CrossRefReason::TemplateMisplaced,
+            ));
+        }
+        (None, false) => {}
+    }
+    range(
+        FILE,
+        &format!("{at}.options"),
+        length(group.options.len()),
+        1,
+        16,
+    )?;
+    for (position, option) in group.options.iter().enumerate() {
+        let option_at = format!("{at}.options[{position}]");
+        identifier(FILE, &format!("{option_at}.id"), &option.id)?;
+        text(
+            FILE,
+            &format!("{option_at}.label"),
+            &option.label,
+            1,
+            LABEL_CHARACTERS_MAX,
+        )?;
+        if let Some(description) = &option.description {
+            text(
+                FILE,
+                &format!("{option_at}.description"),
+                description,
+                1,
+                TEXT_CHARACTERS_MAX,
+            )?;
+        }
+        if fixed_option.is_some_and(|accepted| accepted != option.id) {
+            return Err(cross_reference(
+                FILE,
+                &format!("{option_at}.id"),
+                CrossRefReason::UnknownOption,
+            ));
+        }
+    }
+    require_unique(
+        FILE,
+        |position| format!("{at}.options[{position}].id"),
+        group.options.iter().map(|option| option.id.as_str()),
+    )
+}
+
+fn validate_pick_list(path: &str, values: &[String], accepted: &[&str]) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Pack;
+    range(FILE, path, length(values.len()), 1, 32)?;
+    for (index, value) in values.iter().enumerate() {
+        let at = format!("{path}[{index}]");
+        identifier(FILE, &at, value)?;
+        if !accepted.contains(&value.as_str()) {
+            return Err(cross_reference(FILE, &at, CrossRefReason::UnknownPickValue));
+        }
+    }
+    require_unique(
+        FILE,
+        |index| format!("{path}[{index}]"),
+        values.iter().map(String::as_str),
+    )
+}
+
+fn validate_equipment(equipment: &[EquipmentRow]) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Pack;
+    range(FILE, "equipment", length(equipment.len()), 1, 32)?;
+    for (index, row) in equipment.iter().enumerate() {
+        if !COMPILED_ITEMS.contains(&row.item.as_str()) {
+            return Err(cross_reference(
+                FILE,
+                &format!("equipment[{index}].item"),
+                CrossRefReason::UnknownItem,
+            ));
+        }
+        range(
+            FILE,
+            &format!("equipment[{index}].quantity"),
+            i64::from(row.quantity),
+            1,
+            99,
+        )?;
+    }
+    require_unique(
+        FILE,
+        |index| format!("equipment[{index}].item"),
+        equipment.iter().map(|row| row.item.as_str()),
+    )
+}
+
+fn validate_offer_labels(labels: &OfferLabels) -> Result<(), PackError> {
+    for (path, label) in [
+        ("offer_labels.create-character", &labels.create_character),
+        ("offer_labels.begin-story", &labels.begin_story),
+        ("offer_labels.ask-courier", &labels.ask_courier),
+        ("offer_labels.escort-courier", &labels.escort_courier),
+        ("offer_labels.defend-courier", &labels.defend_courier),
+        ("offer_labels.greatsword-attack", &labels.greatsword_attack),
+        ("offer_labels.second-wind", &labels.second_wind),
+        ("offer_labels.end-turn", &labels.end_turn),
+        ("offer_labels.short-rest", &labels.short_rest),
+        (
+            "offer_labels.choose-harbor-scene",
+            &labels.choose_harbor_scene,
+        ),
+    ] {
+        text(SourceFile::Pack, path, label, 1, LABEL_CHARACTERS_MAX)?;
+    }
+    Ok(())
+}
+
+fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Pack;
+    for (index, scene) in scenes.iter().enumerate() {
+        let at = format!("scenes[{index}]");
+        text(
+            FILE,
+            &format!("{at}.title"),
+            &scene.title,
+            1,
+            TEXT_CHARACTERS_MAX,
+        )?;
+        text(
+            FILE,
+            &format!("{at}.narration"),
+            &scene.narration,
+            1,
+            TEXT_CHARACTERS_MAX,
+        )?;
+        text(
+            FILE,
+            &format!("{at}.speaker"),
+            &scene.speaker,
+            0,
+            TEXT_CHARACTERS_MAX,
+        )?;
+        text(
+            FILE,
+            &format!("{at}.dialogue"),
+            &scene.dialogue,
+            0,
+            TEXT_CHARACTERS_MAX,
+        )?;
+        if let Some(rested) = &scene.narration_rested {
+            text(
+                FILE,
+                &format!("{at}.narration_rested"),
+                rested,
+                1,
+                TEXT_CHARACTERS_MAX,
+            )?;
+        }
+        if scene.narration_rested.is_some() != scene.key.needs_rested_narration() {
+            return Err(cross_reference(
+                FILE,
+                &format!("{at}.narration_rested"),
+                CrossRefReason::RestedNarrationMismatch,
+            ));
+        }
+        if !SERVED_SCENE_ASSETS.contains(&scene.asset.as_str()) {
+            return Err(cross_reference(
+                FILE,
+                &format!("{at}.asset"),
+                CrossRefReason::AssetNotServed,
+            ));
+        }
+    }
+    for key in SceneKey::ALL {
+        let mut matches = scenes
+            .iter()
+            .enumerate()
+            .filter(|(_, scene)| scene.key == key);
+        if matches.next().is_none() {
+            return Err(cross_reference(
+                FILE,
+                "scenes",
+                CrossRefReason::MissingScene,
+            ));
+        }
+        if let Some((index, _)) = matches.next() {
+            return Err(cross_reference(
+                FILE,
+                &format!("scenes[{index}].key"),
+                CrossRefReason::DuplicateScene,
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Cross-file checks and baseline comparison
+// ---------------------------------------------------------------------------------------------
+
+fn validate_cross_references(pack: &PackFile, tuning: &TuningFile) -> Result<(), PackError> {
+    if tuning.pack != pack.id {
+        return Err(cross_reference(
+            SourceFile::Tuning,
+            "pack",
+            CrossRefReason::PackIdMismatch,
+        ));
+    }
+    let Some((group_index, group)) = pack
+        .creation
+        .groups
+        .iter()
+        .enumerate()
+        .find(|(_, group)| group.id == ARRAY_GROUP)
+    else {
+        return Err(cross_reference(
+            SourceFile::Pack,
+            "creation.groups",
+            CrossRefReason::MissingGroup,
+        ));
+    };
+    for (index, array) in tuning.hero.ability_arrays.iter().enumerate() {
+        if !group.options.iter().any(|option| option.id == array.id) {
+            return Err(cross_reference(
+                SourceFile::Tuning,
+                &format!("hero.ability_arrays[{index}].id"),
+                CrossRefReason::ArrayWithoutOption,
+            ));
+        }
+    }
+    for (index, option) in group.options.iter().enumerate() {
+        if !tuning
+            .hero
+            .ability_arrays
+            .iter()
+            .any(|array| array.id == option.id)
+        {
+            return Err(cross_reference(
+                SourceFile::Pack,
+                &format!("creation.groups[{group_index}].options[{index}].id"),
+                CrossRefReason::OptionWithoutArray,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The compiled SRD 5.2.1 baseline for the standard arrays (before the background bonus).
+const BASELINE_ARRAYS: &[(&str, [u8; 6])] = &[
+    ("stalwart", [15, 13, 14, 10, 12, 8]),
+    ("vanguard", [15, 14, 13, 8, 10, 12]),
+];
+/// The compiled starting equipment (item, quantity).
+const BASELINE_EQUIPMENT: &[(&str, u8)] = &[
+    ("chain-mail", 1),
+    ("greatsword", 1),
+    ("flail", 1),
+    ("javelin", 8),
+    ("dungeoneer-pack", 1),
+    ("spear", 1),
+    ("shortbow", 1),
+    ("arrow", 20),
+    ("gaming-set", 1),
+    ("healers-kit", 1),
+    ("quiver", 1),
+    ("travelers-clothes", 1),
+    ("gold-piece", 18),
+];
+
+fn same_members(actual: &[String], baseline: &[&str]) -> bool {
+    actual.len() == baseline.len() && baseline.iter().all(|item| actual.iter().any(|a| a == item))
+}
+
+/// Standard-sensitive keys whose value differs from the compiled baseline. Hard-coded literals
+/// mirror `df-rules/src/local_journey.rs` and `journey.rs`; the parity tests in `pack_tests.rs`
+/// guard the ones reachable from tests.
+fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<&'static str> {
+    let hero = &tuning.hero;
+    let bandit = &tuning.bandit;
+    let arrays_match = hero.ability_arrays.len() == BASELINE_ARRAYS.len()
+        && BASELINE_ARRAYS.iter().all(|(id, scores)| {
+            hero.ability_arrays
+                .iter()
+                .any(|array| array.id == *id && array.scores == *scores)
+        });
+    let equipment_matches = pack.equipment.len() == BASELINE_EQUIPMENT.len()
+        && BASELINE_EQUIPMENT.iter().all(|(item, quantity)| {
+            pack.equipment
+                .iter()
+                .any(|row| row.item == *item && row.quantity == *quantity)
+        });
+    let pick_lists = &pack.creation.pick_lists;
+    let checks = [
+        (hero.armor_class != 17, "hero.armor_class"),
+        (hero.proficiency_bonus != 2, "hero.proficiency_bonus"),
+        (hero.base_hit_points != 11, "hero.base_hit_points"),
+        (!arrays_match, "hero.ability_arrays"),
+        (
+            hero.background_bonus.strength != 2,
+            "hero.background_bonus.strength",
+        ),
+        (
+            hero.background_bonus.constitution != 1,
+            "hero.background_bonus.constitution",
+        ),
+        (hero.second_wind.uses_max != 2, "hero.second_wind.uses_max"),
+        (
+            hero.second_wind.die_sides != 10,
+            "hero.second_wind.die_sides",
+        ),
+        (
+            hero.second_wind.flat_bonus != 1,
+            "hero.second_wind.flat_bonus",
+        ),
+        (
+            hero.second_wind.recharge_per_short_rest != 1,
+            "hero.second_wind.recharge_per_short_rest",
+        ),
+        (hero.weapon.damage_dice != 2, "hero.weapon.damage_dice"),
+        (hero.weapon.damage_sides != 6, "hero.weapon.damage_sides"),
+        (bandit.hit_points != 11, "bandit.hit_points"),
+        (bandit.armor_class != 12, "bandit.armor_class"),
+        (bandit.abilities.strength != 11, "bandit.abilities.strength"),
+        (
+            bandit.abilities.dexterity != 12,
+            "bandit.abilities.dexterity",
+        ),
+        (
+            bandit.abilities.constitution != 12,
+            "bandit.abilities.constitution",
+        ),
+        (
+            bandit.abilities.intelligence != 10,
+            "bandit.abilities.intelligence",
+        ),
+        (bandit.abilities.wisdom != 10, "bandit.abilities.wisdom"),
+        (bandit.abilities.charisma != 10, "bandit.abilities.charisma"),
+        (bandit.attack_bonus != 3, "bandit.attack_bonus"),
+        (bandit.damage_modifier != 1, "bandit.damage_modifier"),
+        (bandit.weapon.damage_dice != 1, "bandit.weapon.damage_dice"),
+        (
+            bandit.weapon.damage_sides != 6,
+            "bandit.weapon.damage_sides",
+        ),
+        (
+            tuning.combat.critical_threshold != 20,
+            "combat.critical_threshold",
+        ),
+        (tuning.combat.round_ticks != 6, "combat.round_ticks"),
+        (
+            tuning.rest.short_rest_seconds != 3600,
+            "rest.short_rest_seconds",
+        ),
+        (
+            !same_members(&pick_lists.alignment, df_rules::local_journey::ALIGNMENTS),
+            "creation.pick_lists.alignment",
+        ),
+        (
+            !same_members(
+                &pick_lists.language,
+                df_rules::local_journey::STANDARD_LANGUAGES,
+            ),
+            "creation.pick_lists.language",
+        ),
+        (
+            !same_members(&pick_lists.skill, df_rules::local_journey::FIGHTER_SKILLS),
+            "creation.pick_lists.skill",
+        ),
+        (
+            !same_members(&pick_lists.gaming_set, df_rules::local_journey::GAMING_SETS),
+            "creation.pick_lists.gaming-set",
+        ),
+        (!equipment_matches, "equipment"),
+        // Weapon items change the sheet's weapon, so they are reported with the dice.
+        (hero.weapon.item != "greatsword", "hero.weapon.item"),
+        (bandit.weapon.item != "scimitar", "bandit.weapon.item"),
+    ];
+    checks
+        .into_iter()
+        .filter_map(|(differs, key)| differs.then_some(key))
+        .collect()
+}
