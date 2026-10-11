@@ -70,7 +70,8 @@ impl Drop for Client {
 thread_local! {static CLIENTS:RefCell<Vec<Rc<RefCell<Client>>>>=const {RefCell::new(Vec::new())};}
 
 /// Local-demo credential store: the player's room binding and scope ids live in this
-/// browser's `localStorage` so a reload or a sleeping phone can resume the same hero.
+/// tab's `sessionStorage` so a reload can resume the same hero. It is per tab on purpose:
+/// two players sharing one browser each keep their own seat.
 /// Real guest sign-in (df-auth) replaces this store later. Nothing here is game data;
 /// the server still authenticates every request and may refuse the saved credential.
 mod saved_player {
@@ -92,8 +93,8 @@ mod saved_player {
     fn storage() -> Result<web_sys::Storage, JsValue> {
         web_sys::window()
             .ok_or_else(|| JsValue::from_str("window absent"))?
-            .local_storage()?
-            .ok_or_else(|| JsValue::from_str("local storage unavailable"))
+            .session_storage()?
+            .ok_or_else(|| JsValue::from_str("session storage unavailable"))
     }
 
     fn encode(bytes: &[u8]) -> String {
