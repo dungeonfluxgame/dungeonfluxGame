@@ -105,6 +105,7 @@ impl Fixture {
                     }
                     Err(error) => panic!("fixture accept: {error}"),
                 };
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
