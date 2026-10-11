@@ -54,3 +54,8 @@ crate-type = ["cdylib"]
 name = "dual_scene_image_fixture"
 path = "tests/fixtures/dual_scene_image_fixture.rs"
 crate-type = ["cdylib"]
+
+[[example]]
+name = "action_draft_lifecycle_fixture"
+path = "tests/fixtures/action_draft_lifecycle_fixture.rs"
+crate-type = ["cdylib"]
