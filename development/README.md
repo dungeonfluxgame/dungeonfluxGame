@@ -92,3 +92,17 @@ all baseline execution fields and history, plus intake dependencies outside the
 seed. No planning seed enables dispatch. Only frozen `atomic`/`operational` roles
 can enter the worker selection view; aggregates use a separate coordinator-owned
 evidence-review attempt under the same integration triggers.
+
+## Play the game locally
+
+Run `development/run-gameplay.sh` to build and start the local game server and
+PostgreSQL. Open the `display` URL from the server's `READY` line, then open the
+`player` URL in two browser tabs to play both seats. Press Ctrl-C to stop the
+server; the launcher also stops PostgreSQL when it started it. To resume a saved
+game, use `development/run-gameplay.sh --no-build --database <name>` with the
+database name printed by the launcher. For LAN access, set the listen address
+and allowed origin to your machine's IP:
+
+```sh
+DF_GAMEPLAY_LISTEN=0.0.0.0:63309 DF_GAMEPLAY_ALLOWED_ORIGINS=http://<this-machine-ip>:63309 development/run-gameplay.sh
+```
