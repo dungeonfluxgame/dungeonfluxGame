@@ -654,3 +654,93 @@ fn another_participants_only_offers_return_no_action_without_staging_or_ranking_
     assert_eq!(handler.calls.get(), 0);
     assert!(current.state().decisions.is_empty());
 }
+
+#[test]
+fn hidden_player_and_npc_context_cannot_change_the_registered_selected_command() {
+    let make = |hidden: &str, extra_grant: bool| {
+        waiting(|state| {
+            state.members.push(MembershipLink {
+                member: member(12),
+                character: None,
+            });
+            state.knowledge.push(KnowledgeGrant {
+                observer: member(12),
+                fact: FactId::from_bytes(&[7; 16]).unwrap(),
+                source: FactId::from_bytes(&[7; 16]).unwrap(),
+            });
+            if extra_grant {
+                state.knowledge.push(KnowledgeGrant {
+                    observer: member(12),
+                    fact: FactId::from_bytes(&[8; 16]).unwrap(),
+                    source: FactId::from_bytes(&[7; 16]).unwrap(),
+                });
+                state.facts.push(fact(8, 1));
+            }
+            state.beliefs.push(AttributedClaim {
+                id: RecordId::from_bytes(&[19; 16]).unwrap(),
+                holder: entity(4),
+                subject: entity(4),
+                claim: hidden.to_owned(),
+                evidence: vec![FactId::from_bytes(&[7; 16]).unwrap()],
+                audience: AudienceScope::Members(vec![member(12)]),
+                source: content(),
+            });
+        })
+    };
+    let first = make("private player weakness", false);
+    let second = make("different private player plan", true);
+    for (observer, evidence) in [
+        (
+            KnowledgeObserver::Member(member(3)),
+            UtilityEvidence::Fact(FactId::from_bytes(&[7; 16]).unwrap()),
+        ),
+        (
+            KnowledgeObserver::Entity(entity(4)),
+            UtilityEvidence::Belief(RecordId::from_bytes(&[18; 16]).unwrap()),
+        ),
+    ] {
+        let first_handler = FixtureHandler::new(None);
+        let second_handler = FixtureHandler::new(None);
+        let selected_first = choose(&first, &first_handler, observer, evidence, &[1, 8])
+            .unwrap()
+            .unwrap();
+        let selected_second = choose(&second, &second_handler, observer, evidence, &[1, 8])
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected_first.input(), selected_second.input());
+        assert_eq!(first_handler.calls.get(), 3);
+        assert_eq!(second_handler.calls.get(), 3);
+        assert!(first.state().decisions.is_empty());
+        assert!(second.state().decisions.is_empty());
+        let safe = format!("{:?}", selected_first.input());
+        assert!(!safe.contains("private player"));
+        assert!(!safe.contains("RecordId"));
+    }
+}
+
+#[test]
+fn hidden_member_grant_cannot_authorize_selection_after_the_actor_grant_is_revoked() {
+    let current = waiting(|state| {
+        state.members.push(MembershipLink {
+            member: member(12),
+            character: None,
+        });
+        state.knowledge.first_mut().unwrap().observer = member(12);
+    });
+    let before = current.clone();
+    let handler = FixtureHandler::new(None);
+    assert!(matches!(
+        choose(
+            &current,
+            &handler,
+            KnowledgeObserver::Member(member(3)),
+            UtilityEvidence::Fact(FactId::from_bytes(&[7; 16]).unwrap()),
+            &[i64::MAX, 1]
+        ),
+        Err(FixtureError::Ranking(CurrentResponseRankingError::Ranking(
+            UtilityRankingError::UndisclosedEvidence
+        )))
+    ));
+    assert_eq!(handler.calls.get(), 2);
+    assert_eq!(current, before);
+}

@@ -140,27 +140,57 @@ impl<'a, Offer> TacticalRanking<'a, Offer> {
     }
 }
 
-fn permits_evidence(knowledge: &TacticalKnowledge<'_>, evidence: UtilityEvidence) -> bool {
-    match (knowledge.observer, evidence) {
-        (KnowledgeObserver::Member(observer), UtilityEvidence::Fact(fact)) => knowledge
-            .grants
-            .iter()
-            .any(|grant| grant.observer == observer && grant.fact == fact),
-        (KnowledgeObserver::Entity(holder), UtilityEvidence::Fact(fact)) => knowledge
-            .npcs
-            .iter()
-            .any(|npc| npc.entity == holder && npc.known_facts.contains(&fact)),
-        (KnowledgeObserver::Entity(holder), UtilityEvidence::Belief(id)) => {
-            knowledge
-                .npcs
-                .iter()
-                .any(|npc| npc.entity == holder && npc.beliefs.contains(&id))
-                && knowledge
-                    .beliefs
-                    .iter()
-                    .any(|belief| belief.holder == holder && belief.id == id)
+// Scoring retains only actor-authorized IDs, never world truth or private claim text.
+struct PerceivedKnowledge {
+    evidence: Vec<UtilityEvidence>,
+}
+
+impl PerceivedKnowledge {
+    fn from_current(knowledge: &TacticalKnowledge<'_>) -> Result<Self, UtilityRankingError> {
+        let mut perceived = Self {
+            evidence: Vec::new(),
+        };
+        match knowledge.observer {
+            KnowledgeObserver::Member(observer) => {
+                for grant in knowledge.grants {
+                    if grant.observer == observer {
+                        perceived.retain(UtilityEvidence::Fact(grant.fact))?;
+                    }
+                }
+            }
+            KnowledgeObserver::Entity(holder) => {
+                for npc in knowledge.npcs {
+                    if npc.entity == holder {
+                        for fact in &npc.known_facts {
+                            perceived.retain(UtilityEvidence::Fact(*fact))?;
+                        }
+                    }
+                }
+                for belief in knowledge.beliefs {
+                    if belief.holder == holder
+                        && knowledge
+                            .npcs
+                            .iter()
+                            .any(|npc| npc.entity == holder && npc.beliefs.contains(&belief.id))
+                    {
+                        perceived.retain(UtilityEvidence::Belief(belief.id))?;
+                    }
+                }
+            }
         }
-        _ => false,
+        Ok(perceived)
+    }
+
+    fn retain(&mut self, evidence: UtilityEvidence) -> Result<(), UtilityRankingError> {
+        self.evidence
+            .try_reserve(1)
+            .map_err(|_| UtilityRankingError::AllocationCapacity)?;
+        self.evidence.push(evidence);
+        Ok(())
+    }
+
+    fn permits(&self, evidence: UtilityEvidence) -> bool {
+        self.evidence.contains(&evidence)
     }
 }
 
@@ -227,10 +257,11 @@ pub fn rank_tactics<'a, Offer>(
             .filter(|count| *count <= limits.contributions)
             .ok_or(UtilityRankingError::ContributionCapacity)?;
     }
+    let perceived = PerceivedKnowledge::from_current(knowledge)?;
     // Authorize the complete batch before inspecting any score, including duplicates.
     for assignment in assignments {
         for contribution in assignment.contributions {
-            if !permits_evidence(knowledge, contribution.evidence) {
+            if !perceived.permits(contribution.evidence) {
                 return Err(UtilityRankingError::UndisclosedEvidence);
             }
         }
