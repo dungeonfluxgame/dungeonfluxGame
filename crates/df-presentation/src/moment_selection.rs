@@ -112,12 +112,26 @@ pub fn select_committed_moment_plan<'a>(
         state.presentation.len(),
         state.continuity.shots.len(),
         state.continuity.demands.len(),
+        state.facts.len(),
+        state.decisions.len(),
     ] {
         add_items(&mut records, count, limits.maximum_items)?;
+    }
+    for decision in &state.decisions {
+        add_items(&mut records, decision.facts.len(), limits.maximum_items)?;
     }
     if state.mode != current.mode
         || !state.continuity.moments.contains(current.moment)
         || !state.presentation.contains(current.presentation)
+    {
+        return Err(MomentError::InvalidCurrentContext);
+    }
+    // Background moment facts can be seeded. Only causal outcomes claim decision lineage.
+    if current
+        .presentation
+        .causal_facts
+        .iter()
+        .any(|id| checkpoint.committed_outcome(*id).is_none())
     {
         return Err(MomentError::InvalidCurrentContext);
     }

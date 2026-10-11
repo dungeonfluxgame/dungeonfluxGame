@@ -2300,3 +2300,53 @@ fn retained_bookend_mode_difference_does_not_bypass_resume_basis_or_source_pins(
         Err(CheckpointError::ContentMismatch)
     );
 }
+
+#[test]
+fn committed_outcome_reference_borrows_exact_retained_fact_and_decision() {
+    let retained = checkpoint(accepted_draw_decision()).unwrap();
+    let id = retained.state().facts[0].id;
+    let (fact, decision) = retained.committed_outcome(id).unwrap();
+
+    assert!(std::ptr::eq(fact, &retained.state().facts[0]));
+    assert!(std::ptr::eq(decision, &retained.state().decisions[0]));
+    assert_eq!(fact.operation, decision.operation);
+    assert_eq!(fact.revision, decision.revision);
+    assert_eq!(decision.facts, vec![id]);
+    assert_eq!(decision.source_policy, label("fixture-policy-1"));
+    assert_eq!(
+        decision.semantic_output.as_deref(),
+        Some("accepted exact outcome")
+    );
+    assert!(
+        retained
+            .committed_outcome(FactId::from_bytes(&[120; 16]).unwrap())
+            .is_none()
+    );
+}
+
+#[test]
+fn seed_facts_remain_valid_without_committed_outcome_provenance() {
+    let mut supplied = state();
+    let seeded = fact(118, 0);
+    supplied.facts.push(seeded.clone());
+    supplied.continuity.moments.push(NarrativeMoment {
+        id: RecordId::from_bytes(&[119; 16]).unwrap(),
+        location: entity(4),
+        characters: vec![entity(4)],
+        facts: vec![seeded.id],
+        attributed_claims: vec![],
+        audience: AudienceScope::Shared,
+        semantic_focus: content(),
+        identity_revision: label("fixture-entity-1"),
+    });
+    let mut identity_only = supplied.continuity.moments[0].clone();
+    identity_only.id = RecordId::from_bytes(&[120; 16]).unwrap();
+    identity_only.facts.clear();
+    supplied.continuity.moments.push(identity_only);
+    let original = supplied.clone();
+    let retained = checkpoint(supplied).unwrap();
+
+    assert!(retained.committed_outcome(seeded.id).is_none());
+    assert_eq!(retained.state(), &original);
+    assert!(retained.validate_resume(basis(), &pins()).is_ok());
+}

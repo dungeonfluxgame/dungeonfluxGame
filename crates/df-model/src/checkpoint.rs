@@ -676,6 +676,13 @@ impl Checkpoint {
     pub fn state(&self) -> &GameState {
         &self.state
     }
+
+    /// Borrows an exact retained fact and the accepted decision that produced it.
+    /// Seed facts may exist without a decision and return None. This lookup does not
+    /// recheck current source/access admission or classify an outcome as successful.
+    pub fn committed_outcome(&self, id: FactId) -> Option<(&GameFact, &AcceptedDecision)> {
+        committed_fact(&self.state, id)
+    }
     pub fn validate_resume(
         &self,
         expected: Basis,
@@ -737,23 +744,24 @@ impl Checkpoint {
     }
 }
 
+fn committed_fact(state: &GameState, id: FactId) -> Option<(&GameFact, &AcceptedDecision)> {
+    let record = state.facts.iter().find(|record| record.id == id)?;
+    let decision = state.decisions.iter().find(|decision| {
+        decision.operation == record.operation
+            && decision.revision == record.revision
+            && decision.facts.contains(&id)
+    })?;
+    Some((record, decision))
+}
+
 fn accepted_fact<'a>(
     state: &'a GameState,
     id: FactId,
     source_policy: &RevisionLabel,
 ) -> Result<&'a GameFact, CheckpointError> {
-    let record = state
-        .facts
-        .iter()
-        .find(|record| record.id == id)
-        .ok_or(CheckpointError::InvalidReference)?;
+    let (record, decision) = committed_fact(state, id).ok_or(CheckpointError::InvalidReference)?;
     require(
-        state.decisions.iter().any(|decision| {
-            decision.operation == record.operation
-                && decision.revision == record.revision
-                && decision.source_policy == *source_policy
-                && decision.facts.contains(&id)
-        }),
+        decision.source_policy == *source_policy,
         CheckpointError::InvalidReference,
     )?;
     Ok(record)
