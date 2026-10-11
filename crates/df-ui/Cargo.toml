@@ -83,3 +83,8 @@ df-assets = { path = "../df-assets" }
 name = "campaign_scene_resource_fixture"
 path = "tests/fixtures/campaign_scene_resource_fixture.rs"
 crate-type = ["cdylib"]
+
+[[example]]
+name = "pending_rejection_contract"
+path = "tests/fixtures/pending_rejection_contract.rs"
+crate-type = ["cdylib"]
