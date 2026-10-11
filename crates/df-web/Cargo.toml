@@ -27,3 +27,8 @@ crate-type = ["cdylib"]
 name = "playable_gameplay_scene_preview"
 path = "tests/fixtures/playable_gameplay_scene_preview.rs"
 crate-type = ["cdylib"]
+
+[[example]]
+name = "campaign_panel_fixture"
+path = "tests/fixtures/campaign_panel_fixture.rs"
+crate-type = ["cdylib"]
