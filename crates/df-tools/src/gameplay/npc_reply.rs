@@ -92,7 +92,8 @@ impl NpcReplyContext {
             );
             facts["forbidden"] = json!(secret_terms(secret_clue, &public));
         } else {
-            facts["secret_this_player_already_knows"] = json!(player.private_clue);
+            facts["secret_clue_this_player_was_privately_told_and_may_be_reminded_of"] =
+                json!(player.private_clue);
             facts["forbidden"] = json!([]);
         }
         Some(Self { member, facts })
@@ -337,7 +338,11 @@ mod tests {
             json!(["Ask the courier what he knows"])
         );
         assert_eq!(facts["forbidden"], json!(["Vell", "Harbor Inn", "Inn"]));
-        assert!(facts.get("secret_this_player_already_knows").is_none());
+        assert!(
+            facts
+                .get("secret_clue_this_player_was_privately_told_and_may_be_reminded_of")
+                .is_none()
+        );
         assert!(!facts.to_string().contains("addressed to"));
     }
 
@@ -365,7 +370,7 @@ mod tests {
 
         assert_eq!(context.facts["forbidden"], json!([]));
         assert_eq!(
-            context.facts["secret_this_player_already_knows"],
+            context.facts["secret_clue_this_player_was_privately_told_and_may_be_reminded_of"],
             "The packet is addressed to Vell at the Harbor Inn."
         );
     }

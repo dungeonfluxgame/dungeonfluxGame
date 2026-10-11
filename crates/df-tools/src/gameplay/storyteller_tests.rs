@@ -21,6 +21,9 @@ pub(in crate::gameplay) enum Reply {
     Output(Value),
     /// A complete response whose assistant text is exactly this string.
     OutputText(String),
+    /// Like [`Reply::Output`], inside a response padded far beyond the schema's own size, as
+    /// the live API's echo of the request is.
+    Verbose(Value),
     /// A bare HTTP status with a JSON body.
     Status(u16, Value),
     /// Accept the connection and never answer.
@@ -70,6 +73,11 @@ impl FakeEndpoint {
                     match script.next() {
                         Some(Reply::Output(slots)) => {
                             respond(&mut socket, 200, &completed(&body, slots.to_string()))
+                        }
+                        Some(Reply::Verbose(slots)) => {
+                            let mut body = completed(&body, slots.to_string());
+                            body["echo"] = json!({"items": (0..400).map(|n| json!({"n": n, "k": "padding"})).collect::<Vec<_>>()});
+                            respond(&mut socket, 200, &body)
                         }
                         Some(Reply::OutputText(text)) => {
                             respond(&mut socket, 200, &completed(&body, text))
@@ -246,6 +254,41 @@ async fn a_valid_answer_is_returned_cached_and_charged_at_the_reported_usage() {
     );
     assert_eq!(storyteller.remaining_tokens(), Some(20_000 - 140));
     std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_response_much_larger_than_the_schema_is_still_accepted() {
+    let endpoint = FakeEndpoint::start(vec![Reply::Verbose(json!({"reply": "Padded but fine."}))]);
+    let cache = cache_directory("verbose");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let (facts, slots) = (facts(), slots());
+
+    let values = storyteller
+        .express(&expression(&facts, &slots))
+        .await
+        .unwrap();
+
+    assert_eq!(values["reply"], "Padded but fine.");
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_unparseable_response_is_not_retried() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Status(200, json!([1, 2, 3])),
+        reply("never used"),
+    ]);
+    let cache = cache_directory("unparseable");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let (facts, slots) = (facts(), slots());
+
+    let error = storyteller
+        .express(&expression(&facts, &slots))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, StorytellerError::Provider(_)));
+    assert_eq!(endpoint.connections(), 1);
 }
 
 #[tokio::test(flavor = "current_thread")]

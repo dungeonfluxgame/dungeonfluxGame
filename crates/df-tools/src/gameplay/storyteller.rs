@@ -398,7 +398,13 @@ impl Storyteller {
                     complaint = Some(failure.complaint());
                     last = StorytellerError::Rejected(failure);
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    span.event(
+                        "storyteller.failed",
+                        &[("storyteller.error", error.to_string())],
+                    );
+                    return Err(error);
+                }
             }
         }
         Err(last)
@@ -533,7 +539,7 @@ impl Online {
                     | TextResponseContract::Schema
                     | TextResponseContract::Output,
                 ..
-            } => Ok(Attempt::BadShape),
+            } if error.supplier_usage().is_some() => Ok(Attempt::BadShape),
             TextResponseError::Owner(df_provider_api::RequestError::DeadlineExceeded)
             | TextResponseError::Transport(NativeHttpRefusal::Deadline) => {
                 Err(StorytellerError::DeadlineExceeded)
@@ -683,9 +689,11 @@ fn output_schema(slots: &[Slot]) -> Result<TextOutputSchema, &'static str> {
         "storyteller_expression",
         &bytes,
         TextSchemaLimits {
-            maximum_schema_bytes: 8192,
-            maximum_depth: 8,
-            maximum_nodes: 64,
+            // These also bound the parse of the supplier's whole response, which echoes the
+            // schema and carries usage details, so they are well above the schema's own size.
+            maximum_schema_bytes: 65_536,
+            maximum_depth: 32,
+            maximum_nodes: 4096,
         },
     )
     .map_err(|_| "schema")
