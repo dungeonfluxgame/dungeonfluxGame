@@ -212,6 +212,7 @@ impl RunningActor {
             voice: super::voice::Voice::disabled(
                 super::startup_configuration::VoiceOff::Qualification,
             ),
+            npc_voice: Arc::new(super::npc_reply::NpcVoice::silent()),
         };
         Ok(Self {
             service,

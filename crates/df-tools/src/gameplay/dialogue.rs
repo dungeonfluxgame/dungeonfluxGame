@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 
-use super::{Service, actor, credential, journey, model, wire};
+use super::{Service, actor, credential, journey, model, npc_reply::NpcReplyContext, wire};
 
 const MAXIMUM_MESSAGE_BYTES: usize = 8192;
 const MAXIMUM_TEXT_BYTES: usize = 4096;
@@ -34,7 +34,8 @@ impl DialogueRequest {
 }
 
 pub(super) enum DialogueReply {
-    Raw(rpc::DialogueResponse),
+    /// The response, plus what a spoken in-character reply needs when the line qualifies.
+    Raw(rpc::DialogueResponse, Option<NpcReplyContext>),
     Confirmed(rpc::SubmitActionResponse),
     Cancelled(rpc::DialogueResponse),
 }
@@ -109,7 +110,16 @@ impl rpc::dialogue_service_server::DialogueService for Service {
             .dialogue_call(credential, DialogueRequest::Raw(encode(&request)?))
             .await?
         {
-            DialogueReply::Raw(response) => Ok(Response::new(response)),
+            DialogueReply::Raw(mut response, npc) => {
+                // The model call runs here, off the actor thread; on any failure the
+                // response is exactly the classification the actor produced.
+                if let Some(context) = npc
+                    && let Some(reply) = self.npc_voice.reply(context).await
+                {
+                    response.npc_reply = reply;
+                }
+                Ok(Response::new(response))
+            }
             _ => Err(Status::internal("dialogue response binding invalid")),
         }
     }
@@ -237,7 +247,7 @@ impl actor::Actor {
                 let request = rpc::RawDialogueRequest::decode(bytes.as_slice())
                     .map_err(|_| Status::invalid_argument("dialogue input invalid"))?;
                 self.raw_dialogue(credential, request)
-                    .map(DialogueReply::Raw)
+                    .map(|(response, npc)| DialogueReply::Raw(response, npc))
             }
             DialogueRequest::Confirm(bytes) => {
                 let request = rpc::ConfirmDialogueRequest::decode(bytes.as_slice())
@@ -258,7 +268,7 @@ impl actor::Actor {
         &mut self,
         credential: [u8; 32],
         request: rpc::RawDialogueRequest,
-    ) -> Result<rpc::DialogueResponse, Status> {
+    ) -> Result<(rpc::DialogueResponse, Option<NpcReplyContext>), Status> {
         let member = self.dialogue_member(&credential)?;
         if self.fenced || self.owner.has_uncertain_operation() {
             return Err(Status::unavailable(
@@ -337,13 +347,39 @@ impl actor::Actor {
                 },
             );
         }
-        Ok(rpc::DialogueResponse {
-            input_id: request.input_id,
-            disposition: disposition(result) as i32,
-            confirmation_required: !token.is_empty(),
-            confirmation_token: token,
-            revision: Some(wire::revision(basis.revision)),
-        })
+        // Conversation addressed to the scene's speaker is answered in character; a pending
+        // confirmation ticket means the player is clarifying an action, which is not.
+        let npc = (token.is_empty()
+            && finality == InputFinality::Final
+            && matches!(
+                result,
+                IntentDisposition::Question
+                    | IntentDisposition::Social
+                    | IntentDisposition::Joke
+                    | IntentDisposition::Clarify
+            ))
+        .then(|| self.npc_reply_context(member, &request.text))
+        .flatten();
+        Ok((
+            rpc::DialogueResponse {
+                input_id: request.input_id,
+                disposition: disposition(result) as i32,
+                confirmation_required: !token.is_empty(),
+                confirmation_token: token,
+                revision: Some(wire::revision(basis.revision)),
+                npc_reply: String::new(),
+            },
+            npc,
+        ))
+    }
+
+    /// The facts for the speaker's reply, taken from this member's own view. Failing to build
+    /// them only means this line gets today's response without a spoken reply.
+    fn npc_reply_context(&self, member: MemberId, typed: &str) -> Option<NpcReplyContext> {
+        let view =
+            wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member).ok()?;
+        let clue = super::pack::with_content(|pack| pack.courier_clue.clone());
+        NpcReplyContext::from_view(&view, member, typed, &clue)
     }
 
     fn confirm_dialogue(
@@ -458,6 +494,7 @@ impl actor::Actor {
             confirmation_token: Vec::new(),
             confirmation_required: false,
             revision: Some(wire::revision(self.owner.checkpoint().basis().revision)),
+            npc_reply: String::new(),
         })
     }
 }

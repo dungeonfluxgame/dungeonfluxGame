@@ -15,6 +15,47 @@ pub(super) struct DialogueRecovery {
     message: String,
     restore_focus: bool,
     selection: Option<(u32, u32)>,
+    exchange: Option<Exchange>,
+}
+
+/// The player's last spoken line and the scene speaker's in-character answer to it. It is
+/// shown only while the revision it answered is still current.
+struct Exchange {
+    revision: Option<rpc::SessionRevision>,
+    you: String,
+    speaker: String,
+    reply: String,
+}
+
+/// A model-voiced reply is a short line; anything longer is not shown.
+const MAXIMUM_REPLY_BYTES: usize = 1024;
+/// The typed-dialogue request also waits for the speaker's reply, so it gets longer than the
+/// ordinary five seconds.
+const RAW_DIALOGUE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+fn portrait_url(speaker: &str) -> &'static str {
+    match speaker {
+        "Courier" => "/assets/ui/generated/portrait-courier",
+        "Bandit" => "/assets/ui/generated/portrait-bandit",
+        "Vell" => "/assets/concept-art/vell-avatar.webp",
+        _ => "/assets/concept-art/dm-avatar.webp",
+    }
+}
+
+fn current_speaker(client: &Client) -> String {
+    match client
+        .views
+        .as_ref()
+        .and_then(|views| views.current())
+        .and_then(|view| view.audience.as_ref())
+    {
+        Some(rpc::view_message::Audience::Player(player)) => player
+            .journey
+            .as_ref()
+            .map(|journey| journey.speaker.clone())
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 
 impl DialogueRecovery {
@@ -164,6 +205,32 @@ pub(super) fn mount(
         "scope",
         "Type what you want to say or do. Nothing happens until you confirm a choice.",
     )?;
+    let revision = client.borrow().revision;
+    {
+        let state = client.borrow();
+        if let Some(exchange) = state
+            .dialogue
+            .exchange
+            .as_ref()
+            .filter(|exchange| exchange.revision == revision)
+        {
+            let you: String = exchange.you.chars().take(300).collect();
+            let thread = node(&document, &panel, "div", "npc-exchange", "")?;
+            node(&document, &thread, "p", "npc-you", &format!("You: {you}"))?;
+            let bubble = node(&document, &thread, "div", "npc-bubble", "")?;
+            let portrait = node(&document, &bubble, "img", "npc-bubble-portrait", "")?;
+            portrait.set_attribute("src", portrait_url(&exchange.speaker))?;
+            portrait.set_attribute("alt", "")?;
+            let body = node(&document, &bubble, "div", "npc-bubble-body", "")?;
+            let name = if exchange.speaker.is_empty() {
+                "Narrator"
+            } else {
+                &exchange.speaker
+            };
+            node(&document, &body, "p", "npc-bubble-name", name)?;
+            node(&document, &body, "p", "npc-bubble-reply", &exchange.reply)?;
+        }
+    }
     panel.append_child(&editor)?;
     panel.append_child(&context)?;
     let previous = selector.value();
@@ -446,6 +513,7 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
         let generation = state.generation;
         if matches!(&call, Call::Raw(_)) {
             state.dialogue.ticket = None;
+            state.dialogue.exchange = None;
         }
         if let Call::Confirm(body) = &call {
             let action = body.action.clone().ok_or("Separate typed action absent")?;
@@ -480,12 +548,16 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
         let run =
             async {
                 match &call {
-                    Call::Raw(body) => channel
-                        .submit(request(body.clone(), &credential).map_err(|_| {
+                    Call::Raw(body) => {
+                        let mut raw = request(body.clone(), &credential).map_err(|_| {
                             tonic::Status::unauthenticated("input binding unavailable")
-                        })?)
-                        .await
-                        .map(|reply| (Some(reply.into_inner()), None)),
+                        })?;
+                        raw.set_timeout(RAW_DIALOGUE_TIMEOUT);
+                        channel
+                            .submit(raw)
+                            .await
+                            .map(|reply| (Some(reply.into_inner()), None))
+                    }
                     Call::Cancel(body) => channel
                         .cancel(request(body.clone(), &credential).map_err(|_| {
                             tonic::Status::unauthenticated("input binding unavailable")
@@ -540,7 +612,21 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                                     && kind != rpc::DialogueDisposition::Unspecified =>
                             {
                                 state.dialogue.ticket = None;
+                                if !reply.npc_reply.is_empty()
+                                    && reply.npc_reply.len() <= MAXIMUM_REPLY_BYTES
+                                {
+                                    state.dialogue.exchange = Some(Exchange {
+                                        revision: input.observed_revision,
+                                        you: input.text.clone(),
+                                        speaker: current_speaker(&state),
+                                        reply: reply.npc_reply.clone(),
+                                    });
+                                    if let Some(editor) = &state.dialogue.editor {
+                                        editor.set_value("");
+                                    }
+                                }
                                 match kind {
+                                    _ if state.dialogue.exchange.is_some() => "Only spoken words: no action or check was made.",
                                     rpc::DialogueDisposition::Clarify => "Clarification required. Choose a supported offer or edit your draft.",
                                     rpc::DialogueDisposition::Rejected => "The native owner declined this input. Your draft remains editable.",
                                     _ => "The native owner classified this as conversation, not an action.",

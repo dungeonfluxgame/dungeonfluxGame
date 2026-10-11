@@ -962,7 +962,7 @@ fn mechanics_mentions(lowered: &str) -> Vec<String> {
 }
 
 /// Whole-word, case-folded containment; a plural `s` or possessive `'s` still counts.
-fn contains_whole_word(lowered: &str, term: &str) -> bool {
+pub(super) fn contains_whole_word(lowered: &str, term: &str) -> bool {
     let term = term.trim();
     if term.is_empty() {
         return false;
@@ -1015,4 +1015,4 @@ async fn write_cache(file: PathBuf, values: &BTreeMap<String, String>) -> io::Re
 
 #[cfg(test)]
 #[path = "storyteller_tests.rs"]
-mod tests;
+pub(super) mod tests;

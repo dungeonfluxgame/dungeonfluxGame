@@ -13,6 +13,12 @@ export TMPDIR=${DUNGEONFLUX_TMP_ROOT:-$ARTIFACT_ROOT/tmp/play}
 export PATH="$CARGO_HOME/bin:$PATH"
 PG=${DUNGEONFLUX_POSTGRES_BIN:-$ARTIFACT_ROOT/build/postgres-g05/install/bin}
 PLAY="$ARTIFACT_ROOT/tmp/play"
+# Storyteller (text model): export only OPENAI_API_KEY from the gitignored .env, never echoed.
+if test -z "${OPENAI_API_KEY:-}" && test -f "$ROOT/.env"; then
+  OPENAI_API_KEY=$(sed -n 's/^OPENAI_API_KEY=//p' "$ROOT/.env" | head -n 1 | tr -d "\"'\r")
+  if test -n "$OPENAI_API_KEY"; then export OPENAI_API_KEY; else unset OPENAI_API_KEY; fi
+fi
+export DF_GAMEPLAY_TEXT_CACHE=${DF_GAMEPLAY_TEXT_CACHE:-$PLAY/text-cache}
 DATABASE=
 NO_BUILD=0
 

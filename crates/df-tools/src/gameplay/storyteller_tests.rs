@@ -16,7 +16,7 @@ use super::*;
 const CREDENTIAL: &str = "credential-private-sentinel";
 
 /// What the fake endpoint answers to one connection.
-enum Reply {
+pub(in crate::gameplay) enum Reply {
     /// A complete response whose assistant text is this JSON.
     Output(Value),
     /// A complete response whose assistant text is exactly this string.
@@ -27,8 +27,8 @@ enum Reply {
     Hang,
 }
 
-struct FakeEndpoint {
-    address: SocketAddr,
+pub(in crate::gameplay) struct FakeEndpoint {
+    pub(in crate::gameplay) address: SocketAddr,
     connections: Arc<AtomicUsize>,
     bodies: Arc<Mutex<Vec<Value>>>,
     heads: Arc<Mutex<Vec<String>>>,
@@ -37,7 +37,7 @@ struct FakeEndpoint {
 }
 
 impl FakeEndpoint {
-    fn start(script: Vec<Reply>) -> Self {
+    pub(in crate::gameplay) fn start(script: Vec<Reply>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -94,11 +94,11 @@ impl FakeEndpoint {
         }
     }
 
-    fn connections(&self) -> usize {
+    pub(in crate::gameplay) fn connections(&self) -> usize {
         self.connections.load(Ordering::SeqCst)
     }
 
-    fn bodies(&self) -> Vec<Value> {
+    pub(in crate::gameplay) fn bodies(&self) -> Vec<Value> {
         self.bodies.lock().unwrap().clone()
     }
 }
@@ -163,14 +163,19 @@ fn completed(sent: &Value, assistant_text: String) -> Value {
             "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}})
 }
 
-fn cache_directory(name: &str) -> PathBuf {
+pub(in crate::gameplay) fn cache_directory(name: &str) -> PathBuf {
     let directory =
         std::env::temp_dir().join(format!("df-storyteller-test-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);
     directory
 }
 
-fn teller(address: SocketAddr, budget: u64, deadline: Duration, cache: &Path) -> Storyteller {
+pub(in crate::gameplay) fn teller(
+    address: SocketAddr,
+    budget: u64,
+    deadline: Duration,
+    cache: &Path,
+) -> Storyteller {
     Storyteller::new(StorytellerSettings {
         credential: CREDENTIAL.to_owned(),
         model: "gpt-test-model".to_owned(),

@@ -44,6 +44,15 @@ main .client.display{background:transparent}
 .client.player .live-dock summary::-webkit-details-marker{display:none}
 .client.player .live-dock summary .say-more-icon{width:24px;height:24px;transform:translateY(-50%)}
 .client.player .live-dock .say-more[open] summary{margin-bottom:10px}
+
+/* The speaker's in-character answer: the player's own line, then a gold-framed bubble. */
+.client.player .live-dock .npc-exchange{margin:2px 0 16px}
+.client.player .live-dock .npc-you{margin:0 0 8px;padding:0 4px;font:15px/1.4 var(--serif);color:#cfc3a8;overflow-wrap:anywhere}
+.client.player .live-dock .npc-bubble{display:flex;gap:14px;align-items:flex-start;padding:14px;background:linear-gradient(135deg,#142133f2,#080f19f5);border:1px solid #c9a35fb3;border-radius:8px 18px 18px 18px;box-shadow:0 6px 22px #0009,inset 0 0 0 1px #e8cb9422}
+.client.player .live-dock .npc-bubble-portrait{flex:none;width:60px;height:60px;border-radius:10px;border:1px solid #cba466b3;object-fit:cover;object-position:center 20%;background:#05090f}
+.client.player .live-dock .npc-bubble-body{min-width:0}
+.client.player .live-dock .npc-bubble-name{margin:0 0 4px;font:400 19px/1.2 var(--serif);color:var(--gold)}
+.client.player .live-dock .npc-bubble-reply{margin:0;font:italic 18px/1.5 var(--serif);color:#f3ead6;overflow-wrap:anywhere}
 .client.player .live-dock .scene-actions{margin-top:12px}
 
 /* Join and lobby */

@@ -10,6 +10,7 @@ mod dialogue_tests;
 mod inn_qualification;
 mod journey;
 mod model;
+mod npc_reply;
 mod pack;
 #[cfg(test)]
 mod pack_tests;
@@ -58,6 +59,8 @@ struct Service {
     updates: watch::Receiver<df_model::checkpoint::Checkpoint>,
     streams: Arc<Semaphore>,
     voice: voice::Voice,
+    /// Speaks for the scene's NPC when the storyteller is on; silent otherwise.
+    npc_voice: Arc<npc_reply::NpcVoice>,
 }
 fn credential<T>(request: &Request<T>) -> Result<[u8; 32], Status> {
     let value = request
@@ -398,6 +401,24 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         startup_configuration::VoiceSettings::Off(startup_configuration::VoiceOff::Qualification)
     })?;
+    let storyteller = std::sync::Arc::new(if interactive {
+        let mode = startup_configuration::storyteller_mode(
+            startup_configuration::StorytellerInputs::from_environment(),
+            &std::env::current_dir()?,
+        )?;
+        match &mode {
+            startup_configuration::StorytellerMode::On(settings) => println!(
+                "STORYTELLER on model={} budget={}",
+                settings.model, settings.token_budget
+            ),
+            startup_configuration::StorytellerMode::Off(reason) => {
+                println!("STORYTELLER off ({reason})");
+            }
+        }
+        storyteller::Storyteller::from_mode(mode)
+    } else {
+        storyteller::Storyteller::disabled()
+    });
     let npc_phase = courier_npc_qualification::phase();
     let npc_budget = npc_phase
         .map(courier_npc_qualification::call_budget)
@@ -856,6 +877,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         updates: receiver,
         streams: Arc::new(Semaphore::new(settings.max_watch_streams)),
         voice: voice.clone(),
+        npc_voice: Arc::new(npc_reply::NpcVoice::new(storyteller)),
     };
     let (incoming_sender, incoming) =
         NativeIncoming::bounded(NonZeroUsize::new(4).ok_or("invalid native incoming bound")?)?;

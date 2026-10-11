@@ -315,6 +315,7 @@ field dungeonflux.public.v1.DialogueResponse 2 disposition type=14 label=1 prese
 field dungeonflux.public.v1.DialogueResponse 3 confirmation_token type=12 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DialogueResponse 4 revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
 field dungeonflux.public.v1.DialogueResponse 5 confirmation_required type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DialogueResponse 6 npc_reply type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.RawDialogueRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
 field dungeonflux.public.v1.RawDialogueRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
 field dungeonflux.public.v1.RawDialogueRequest 3 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-

@@ -51,4 +51,4 @@ enum DialogueDisposition { DIALOGUE_DISPOSITION_UNSPECIFIED = 0; DIALOGUE_DISPOS
 message RawDialogueRequest { SessionId session_id = 1; RunId run_id = 2; SessionRevision observed_revision = 3; OperationId input_id = 4; string text = 5; DialogueContext context = 6; DialogueFinality finality = 7; string offer_id = 8; }
 message ConfirmDialogueRequest { OperationId input_id = 1; bytes confirmation_token = 2; SubmitActionRequest action = 3; }
 message CancelDialogueRequest { OperationId input_id = 1; bytes confirmation_token = 2; }
-message DialogueResponse { OperationId input_id = 1; DialogueDisposition disposition = 2; bytes confirmation_token = 3; SessionRevision revision = 4; bool confirmation_required = 5; }
+message DialogueResponse { OperationId input_id = 1; DialogueDisposition disposition = 2; bytes confirmation_token = 3; SessionRevision revision = 4; bool confirmation_required = 5; string npc_reply = 6; }
