@@ -44,19 +44,13 @@ fn hit_points(member: &rpc::PartyMemberView) -> String {
     )
 }
 
-/// "Victory" when every opposing creature the server lists is unconscious, otherwise "Defeat".
-/// Participants are the party in join order followed by the opposing creatures.
+/// "Victory" when the server projects the courier's closing line, which only the won encounter
+/// has; otherwise "Defeat".
 fn outcome_word(view: &LiveView<'_>) -> &'static str {
-    let opposing: Vec<&rpc::PartyMemberView> = view
-        .journey
-        .combat
-        .iter()
-        .flat_map(|combat| combat.participants.iter().skip(view.journey.party.len()))
-        .collect();
-    if !opposing.is_empty() && opposing.iter().all(|member| member.unconscious) {
-        "Victory"
-    } else {
+    if view.journey.dialogue.is_empty() {
         "Defeat"
+    } else {
+        "Victory"
     }
 }
 

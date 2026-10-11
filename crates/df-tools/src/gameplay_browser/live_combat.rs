@@ -13,8 +13,8 @@ pub(super) mod sheet;
 mod style;
 
 use super::{
-    Client, button, dialogue_recovery, feedback, live_screens, live_tv::TvStage, node,
-    recovery_needs, recovery_prompt, replay,
+    Client, button, dialogue_recovery, live_screens, live_tv::TvStage, node, recovery_needs,
+    recovery_prompt, replay,
 };
 use df_protocol::common as rpc;
 use df_types::{RecoveryEpoch, SessionRevision};
@@ -337,9 +337,4 @@ pub(super) fn dispose(client: &mut Client) -> Result<(), JsValue> {
         host.remove();
     }
     cleanup.map(|_| ())
-}
-
-/// Shown to the user when an input cannot be sent.
-fn refuse(client: &Rc<RefCell<Client>>, text: &str) {
-    feedback(&client.borrow(), text);
 }
