@@ -1,0 +1,115 @@
+{
+  "generator": "ElevenLabs sound generation (POST /v1/sound-generation), prompt_influence 0.5, generated once",
+  "post_processing": "ffmpeg: leading silence below -42 dB trimmed, loudnorm two-pass to -16 LUFS / -1.5 dBTP, limiter at -3 dBFS before encoding (encoded peaks measured at or below -0.5 dB), 44.1 kHz mono mp3 128 kbps",
+  "generation_calls": 12,
+  "effects": [
+    {
+      "file": "dice-rattle.mp3",
+      "prompt": "Two polyhedral dice rattling and tumbling inside a wooden cup, then rolling across a hardwood table, close microphone, dry foley, no music",
+      "requested_duration_seconds": 1.2,
+      "duration_seconds": 1.23,
+      "mean_volume_db": -25.1,
+      "peak_volume_db": -0.9,
+      "sha256": "752d6b47826eba4ed40b747e510e50b0d0e3090bf11952356a3905d636a70ca6"
+    },
+    {
+      "file": "dice-land.mp3",
+      "prompt": "A single heavy die landing on a wooden tabletop with a solid thud and a short clack, then settling, dry close foley",
+      "requested_duration_seconds": 0.6,
+      "duration_seconds": 0.63,
+      "mean_volume_db": -31.4,
+      "peak_volume_db": -0.6,
+      "sha256": "0d53eca6da1100602ecb61a2bb92b556bc9e9e5e79005bb424ac7c467a2a5d4f"
+    },
+    {
+      "file": "hit.mp3",
+      "prompt": "A steel sword striking leather armor with a short solid meaty impact, dry fantasy combat foley, no music",
+      "requested_duration_seconds": 0.8,
+      "duration_seconds": 0.84,
+      "mean_volume_db": -23.2,
+      "peak_volume_db": -2.5,
+      "sha256": "681370a0b706e4eeb52fa122ff4fe2c48101e65839332ba7cc15ea08b0d5fafa"
+    },
+    {
+      "file": "miss.mp3",
+      "prompt": "A steel sword swinging through the air with a quick whoosh and a faint scrape glancing off stone, dry foley",
+      "requested_duration_seconds": 0.8,
+      "duration_seconds": 0.84,
+      "mean_volume_db": -17.5,
+      "peak_volume_db": -0.8,
+      "sha256": "19cc123740e3c8f9a9335e3e4073e4932d0e98f43373923a58b54006a55b01e0"
+    },
+    {
+      "file": "critical.mp3",
+      "prompt": "A powerful heavy steel sword strike with a deep thump and a bright metallic ring, dramatic fantasy foley, short",
+      "requested_duration_seconds": 1.5,
+      "duration_seconds": 1.52,
+      "mean_volume_db": -22.5,
+      "peak_volume_db": -3.4,
+      "sha256": "285eba22ac8040f4abeb69c412495b1b200f3615c9bbe306cb2c2335d5b3c87c"
+    },
+    {
+      "file": "turn-chime.mp3",
+      "prompt": "A single soft small brass hand bell chime, gentle and warm, short natural reverb, tabletop game",
+      "requested_duration_seconds": 1.2,
+      "duration_seconds": 1.23,
+      "mean_volume_db": -22.2,
+      "peak_volume_db": -1.2,
+      "sha256": "bd45cacf4670bc6e986850cdb324323a06fdc67faada450c979cd4e25bc9031c"
+    },
+    {
+      "file": "hero-ready.mp3",
+      "prompt": "A short heroic sparkle: a soft brass chime rising with a gentle magical shimmer, warm fantasy confirmation sound",
+      "requested_duration_seconds": 1.8,
+      "duration_seconds": 1.8,
+      "mean_volume_db": -23.4,
+      "peak_volume_db": -5.9,
+      "sha256": "1936a907a774f8f2d93eda2a2355e2df9d2f8d1f2faf804aee7bbd7c560792fd"
+    },
+    {
+      "file": "party-gathered.mp3",
+      "prompt": "Two small brass chimes followed by a soft warm harp glissando, a gentle gathering flourish, fantasy tavern",
+      "requested_duration_seconds": 2.5,
+      "duration_seconds": 2.51,
+      "mean_volume_db": -22.2,
+      "peak_volume_db": -1.5,
+      "sha256": "365637568300c75834f976b1aa3f67f5daa6461c7648443f772a896093fb8ef1"
+    },
+    {
+      "file": "scene-transition.mp3",
+      "prompt": "A soft parchment page turn with a gentle airy whoosh, quiet, library wooden table",
+      "requested_duration_seconds": 1.5,
+      "duration_seconds": 1.02,
+      "mean_volume_db": -26.7,
+      "peak_volume_db": -0.5,
+      "sha256": "6c07e67a69619dca7bbbcbb1075c4ce48f886e5f02598fa7669670b7c84f614b"
+    },
+    {
+      "file": "victory-fanfare.mp3",
+      "prompt": "A short triumphant medieval fantasy brass fanfare with warm horns and a soft cymbal shimmer, no drum loop",
+      "requested_duration_seconds": 3.0,
+      "duration_seconds": 3.03,
+      "mean_volume_db": -18.4,
+      "peak_volume_db": -6.1,
+      "sha256": "579e700b87f688f2f92b00f9fb1e6d96cc9316d3abeba1880e11b2c12e303138"
+    },
+    {
+      "file": "defeat-toll.mp3",
+      "prompt": "A low slow church bell toll, a single deep bell strike with a long dark decay, somber",
+      "requested_duration_seconds": 3.0,
+      "duration_seconds": 3.03,
+      "mean_volume_db": -18.5,
+      "peak_volume_db": -0.6,
+      "sha256": "8e59fe7745177151d98961a0b1745c6a87b1bf11c1023ffd6b2a0133f3707874"
+    },
+    {
+      "file": "bubble-pop.mp3",
+      "prompt": "A soft small wooden pop and tap, light and subtle, short",
+      "requested_duration_seconds": 0.5,
+      "duration_seconds": 0.44,
+      "mean_volume_db": -23.9,
+      "peak_volume_db": -0.7,
+      "sha256": "4667ca91059e3294a52f8279d1c9d64343a28f4544a598b7f5840f6e92fafab7"
+    }
+  ]
+}
