@@ -6,6 +6,12 @@ ARTIFACT_ROOT=${DUNGEONFLUX_ARTIFACT_ROOT:-$ROOT/artifacts}
 if test "${DF_GAMEPLAY_PACK_DIR+x}" != x; then
   export DF_GAMEPLAY_PACK_DIR="$ROOT/content/harbor-journey"
 fi
+if test "${DF_GAMEPLAY_ADVENTURE+x}" != x; then
+  export DF_GAMEPLAY_ADVENTURE=random
+fi
+if test "${DF_GAMEPLAY_ADVENTURE_TABLES+x}" != x; then
+  export DF_GAMEPLAY_ADVENTURE_TABLES="$ROOT/content/adventure-tables"
+fi
 export RUSTUP_HOME="$ARTIFACT_ROOT/cache/rustup"
 export CARGO_HOME="$ARTIFACT_ROOT/cache/cargo"
 export CARGO_TARGET_DIR=${DUNGEONFLUX_BUILD_ROOT:-$ARTIFACT_ROOT/build/play}
@@ -17,12 +23,18 @@ DATABASE=
 NO_BUILD=0
 
 usage() {
-  echo 'usage: run-gameplay.sh [--no-build] [--database <name>]'
+  echo 'usage: run-gameplay.sh [--no-build] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor]'
 }
 
 while test "$#" -gt 0; do
   case "$1" in
     --no-build) NO_BUILD=1; shift ;;
+    --harbor) export DF_GAMEPLAY_ADVENTURE=harbor; shift ;;
+    --seed)
+      if test "$#" -lt 2; then usage >&2; exit 2; fi
+      export DF_GAMEPLAY_ADVENTURE_SEED=$2
+      shift 2
+      ;;
     --database)
       if test "$#" -lt 2; then usage >&2; exit 2; fi
       DATABASE=$2
@@ -92,8 +104,8 @@ fi
 export DF_GAMEPLAY_VOICE_CACHE=${DF_GAMEPLAY_VOICE_CACHE:-$ARTIFACT_ROOT/tmp/play/voice-cache}
 cd "$ROOT"
 if test "$NO_BUILD" -eq 0; then
-  cargo build --locked --offline -p df-tools --bin df-transport-fixture
-  cargo build --locked --offline -p df-tools --lib --target wasm32-unknown-unknown
+  cargo build --locked --offline -j 3 -p df-tools --bin df-transport-fixture
+  cargo build --locked --offline -j 3 -p df-tools --lib --target wasm32-unknown-unknown
   STAGING=$(mktemp -d "$TMPDIR/wasm-bindgen.XXXXXXXX")
   wasm-bindgen --target web --out-name df_tools --out-dir "$STAGING" "$CARGO_TARGET_DIR/wasm32-unknown-unknown/debug/df_tools.wasm"
   OLD_WEB="$TMPDIR/play-web.old.$$"
@@ -145,8 +157,16 @@ if test -z "$("$PG/psql" -h 127.0.0.1 -p 55517 -U df_gameplay_demo_admin_2026100
 fi
 
 echo "Playing with database: $DATABASE"
-echo "Edit content/harbor-journey/tuning.json (or pack.json), then re-run without --database for a new game with the new values."
-echo "To resume this game later: development/run-gameplay.sh --no-build --database $DATABASE"
+if test "$DF_GAMEPLAY_ADVENTURE" = harbor; then
+  echo "Edit content/harbor-journey/tuning.json (or pack.json), then re-run without --database for a new game with the new values."
+else
+  echo "A fresh database rolls a new adventure; --seed reproduces the chapter. Existing databases resume their stored chapter."
+fi
+if test "$DF_GAMEPLAY_ADVENTURE" = harbor; then
+  echo "To resume this game later: development/run-gameplay.sh --no-build --harbor --database $DATABASE"
+else
+  echo "To resume this game later: development/run-gameplay.sh --no-build --database $DATABASE"
+fi
 DF_GAMEPLAY_DEMO_DATABASE=$DATABASE "$CARGO_TARGET_DIR/debug/df-transport-fixture" --gameplay-demo "$CARGO_TARGET_DIR/play-web" "$ROOT/assets/ui" &
 SERVER_PID=$!
 wait "$SERVER_PID" || SERVER_STATUS=$?

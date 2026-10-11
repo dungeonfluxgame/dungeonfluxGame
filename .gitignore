@@ -81,3 +81,6 @@ development/evidence/journey/journal.lock
 
 # Local runtime state is durable and must not be removed by artifact cleanup
 /development/runtime/
+
+# Generated adventure run caches are private durable data, never source.
+/development/runs/

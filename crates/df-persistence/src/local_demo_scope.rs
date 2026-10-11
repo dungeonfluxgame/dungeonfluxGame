@@ -1,10 +1,13 @@
 //! Explicitly local-development grants for the single gameplay demonstration.
 //! The caller owns a dedicated loopback database, connection driver, and actor thread.
 //! No production bootstrap, arbitrary scope constructor, or hosted identity is provided.
+mod adventure;
 mod recovery;
+pub use adventure::{AdventureStartup, DemoAdventure, stored_adventure};
 mod startup;
 pub use startup::{
-    DemoStartup, DemoStartupIdentity, admit_startup, release_owner, stored_startup_configuration,
+    DemoStartup, DemoStartupIdentity, admit_startup, admit_startup_with_adventure, release_owner,
+    stored_startup_configuration,
 };
 
 use std::time::Duration;
@@ -560,6 +563,29 @@ pub async fn initialize(
     display_credential: [u8; 32],
     codec_limits: NativeCodecLimits,
 ) -> Result<(), DemoInitializationError> {
+    initialize_with_adventure(
+        client,
+        checkpoint,
+        fence,
+        player_credential,
+        display_credential,
+        codec_limits,
+        None,
+    )
+    .await
+}
+async fn initialize_with_adventure(
+    client: &mut Client,
+    checkpoint: &Checkpoint,
+    fence: [u8; 16],
+    player_credential: [u8; 32],
+    display_credential: [u8; 32],
+    codec_limits: NativeCodecLimits,
+    adventure: Option<&DemoAdventure>,
+) -> Result<(), DemoInitializationError> {
+    if let Some(adventure) = adventure {
+        adventure.validate_bounds()?;
+    }
     if fence == [0; 16]
         || player_credential == [0; 32]
         || display_credential == [0; 32]
@@ -607,6 +633,9 @@ pub async fn initialize(
         CREATE TABLE df_local_demo.room_grants (operation_id bytea PRIMARY KEY CHECK(octet_length(operation_id)=16), canonical_fingerprint bytea NOT NULL CHECK(octet_length(canonical_fingerprint)=32), principal_id bytea NOT NULL UNIQUE CHECK(octet_length(principal_id)=16), credential bytea NOT NULL UNIQUE REFERENCES df_local_demo.grants);
         CREATE TABLE df_local_demo.scope_proofs (binding bytea PRIMARY KEY CHECK(octet_length(binding)=32), credential bytea REFERENCES df_local_demo.grants, tenant_id bytea NOT NULL, principal_id bytea NOT NULL, campaign_id bytea NOT NULL, effective_role bytea NOT NULL, access_revision bytea NOT NULL, session_id bytea NOT NULL, operation_id bytea NOT NULL, command_namespace bytea NOT NULL, recovery_epoch text NOT NULL, fingerprint_version integer NOT NULL, canonical_fingerprint bytea NOT NULL, owner_fence bytea NOT NULL, execution_mode smallint NOT NULL, lookup_only boolean NOT NULL);").await.map_err(|_| DemoInitializationError { stage:"local_schema",class:RepositoryError::Unavailable })?;
     transaction.batch_execute("CREATE TABLE df_local_demo.rejected_operations (tenant_id bytea NOT NULL, session_id bytea NOT NULL, principal_id bytea NOT NULL, command_namespace bytea NOT NULL, recovery_epoch numeric(20,0) NOT NULL, operation_id bytea NOT NULL, fingerprint_version integer NOT NULL CHECK(fingerprint_version=1), canonical_fingerprint bytea NOT NULL CHECK(octet_length(canonical_fingerprint)=32), checkpoint_epoch numeric(20,0) NOT NULL, checkpoint_sequence numeric(20,0) NOT NULL, typed_receipt_version integer NOT NULL CHECK(typed_receipt_version=1), typed_receipt bytea CHECK(octet_length(typed_receipt)<=4096), PRIMARY KEY(tenant_id,session_id,principal_id,command_namespace,recovery_epoch,operation_id), FOREIGN KEY(tenant_id,session_id,checkpoint_epoch,checkpoint_sequence) REFERENCES df_game.checkpoints(tenant_id,session_id,recovery_epoch,in_epoch_sequence));").await.map_err(|_|DemoInitializationError { stage:"rejected_schema",class:RepositoryError::Unavailable })?;
+    if let Some(adventure) = adventure {
+        adventure::insert(&transaction, adventure).await?;
+    }
     let basis = checkpoint.basis();
     let epoch = basis.revision.epoch().get().to_string();
     let sequence = basis.revision.sequence().to_string();

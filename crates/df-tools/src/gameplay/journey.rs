@@ -658,6 +658,7 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
         destination: rpc::HarborDestination::HarborInn as i32,
         title: pack::scene(pack::SceneKey::Inn).title,
         scene_asset: pack::scene(pack::SceneKey::Inn).asset,
+        speaker_portrait: pack::scene(pack::SceneKey::Inn).speaker_portrait,
     }
 }
 pub(super) fn accepted(
@@ -2783,6 +2784,79 @@ mod tests {
             .unwrap(),
         );
         checkpoints
+    }
+
+    #[test]
+    fn every_generated_creature_plays_the_integrated_melee_rest_and_destination() {
+        use crate::gameplay::adventure::{
+            ForcedEntries, GenerateOptions, RulesMode, Tables, generate,
+        };
+        let tables = Tables::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../content/adventure-tables")
+                .as_path(),
+        )
+        .unwrap();
+        for creature in &df_rules::SRD_521_CREATURES {
+            let location = if ["skeleton", "wolf"].contains(&creature.id) {
+                "pinewood-trail"
+            } else {
+                "salt-quay"
+            };
+            let generated = generate(
+                &tables,
+                42,
+                GenerateOptions {
+                    rules_mode: RulesMode::CustomAllowed,
+                },
+                &ForcedEntries::from([
+                    ("location".into(), location.into()),
+                    ("antagonist".into(), creature.id.into()),
+                ]),
+            )
+            .unwrap();
+            let loaded = pack::load_from_bytes(
+                &serde_json::to_vec(&generated.pack).unwrap(),
+                &serde_json::to_vec(&generated.tuning).unwrap(),
+            )
+            .unwrap();
+            pack::with_test_pack(loaded, || {
+                let checkpoints = tuning_journey();
+                let combat = &checkpoints[2];
+                let enemy = entity(BANDIT).unwrap();
+                assert_eq!(
+                    value(combat.state(), enemy, "hit-points").unwrap(),
+                    u32::from(creature.rules.hit_points)
+                );
+                assert_eq!(
+                    value(combat.state(), enemy, "armor-class").unwrap(),
+                    u32::from(creature.rules.armor_class)
+                );
+                assert_eq!(
+                    name(combat.state(), enemy).unwrap(),
+                    generated.pack.bandit.name
+                );
+                let final_state = checkpoints.last().unwrap();
+                assert_eq!(
+                    inn_scene().speaker_portrait,
+                    generated
+                        .pack
+                        .scenes
+                        .iter()
+                        .find(|s| s.key == pack::SceneKey::Inn)
+                        .unwrap()
+                        .speaker_portrait
+                );
+                assert!(
+                    final_state
+                        .state()
+                        .narrative
+                        .active_beats
+                        .contains(&model::content("harbor-inn").unwrap())
+                );
+                assert_eq!(pack::bandit_weapon_item(), "scimitar");
+            });
+        }
     }
 
     #[test]

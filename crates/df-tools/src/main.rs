@@ -4,7 +4,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<_> = std::env::args_os().skip(1).take(7).collect();
     if arguments
         .first()
-        .is_some_and(|argument| argument == "--gameplay-demo")
+        .is_some_and(|argument| argument == "--gameplay-demo" || argument == "--roll-adventure")
     {
         df_tools::gameplay::serve().await
     } else {

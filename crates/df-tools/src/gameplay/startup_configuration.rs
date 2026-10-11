@@ -443,7 +443,11 @@ pub(super) fn load_extra_assets(
     let mut loaded = Vec::new();
     let mut total = 0usize;
     let mut candidates = Vec::new();
-    for stem in GENERATED_STEMS {
+    for stem in GENERATED_STEMS.iter().copied().chain(
+        super::adventure::generated_stems()
+            .iter()
+            .map(String::as_str),
+    ) {
         for (extension, mime) in GENERATED_EXTENSIONS {
             candidates.push((
                 asset_root
@@ -684,5 +688,201 @@ mod tests {
         let mut bad = inputs([None; 6]);
         bad.call_budget = Err(VarError::NotUnicode("x".into()));
         assert!(session_settings(bad).is_err());
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AdventureMode {
+    Harbor,
+    Random,
+}
+pub(super) struct AdventureInputs {
+    pub(super) mode: Result<String, VarError>,
+    pub(super) seed: Result<String, VarError>,
+    pub(super) creatures: Result<String, VarError>,
+    pub(super) tables: Result<String, VarError>,
+}
+impl AdventureInputs {
+    pub(super) fn from_environment() -> Self {
+        Self {
+            mode: std::env::var("DF_GAMEPLAY_ADVENTURE"),
+            seed: std::env::var("DF_GAMEPLAY_ADVENTURE_SEED"),
+            creatures: std::env::var("DF_GAMEPLAY_ADVENTURE_CREATURES"),
+            tables: std::env::var("DF_GAMEPLAY_ADVENTURE_TABLES"),
+        }
+    }
+}
+pub(super) struct AdventureSettings {
+    pub(super) mode: AdventureMode,
+    pub(super) seed: Option<u64>,
+    pub(super) tables: std::path::PathBuf,
+    pub(super) rules_mode: super::adventure::RulesMode,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct AdventureSettingsError {
+    pub(super) variable: &'static str,
+    pub(super) expected: &'static str,
+}
+impl std::fmt::Display for AdventureSettingsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} must be {}", self.variable, self.expected)
+    }
+}
+impl std::error::Error for AdventureSettingsError {}
+fn adventure_input(
+    input: Result<String, VarError>,
+    variable: &'static str,
+) -> Result<Option<String>, AdventureSettingsError> {
+    match input {
+        Ok(value) => Ok(Some(value)),
+        Err(VarError::NotPresent) => Ok(None),
+        Err(_) => Err(AdventureSettingsError {
+            variable,
+            expected: "Unicode text",
+        }),
+    }
+}
+pub(super) fn adventure_seed(value: &str) -> Result<u64, AdventureSettingsError> {
+    let (digits, radix) = match value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        Some(hex) => (hex, 16),
+        None => (value, 10),
+    };
+    if digits.is_empty()
+        || !digits.bytes().all(|byte| {
+            if radix == 16 {
+                byte.is_ascii_hexdigit()
+            } else {
+                byte.is_ascii_digit()
+            }
+        })
+    {
+        return Err(AdventureSettingsError {
+            variable: "DF_GAMEPLAY_ADVENTURE_SEED",
+            expected: "a hexadecimal or decimal u64",
+        });
+    }
+    u64::from_str_radix(digits, radix).map_err(|_| AdventureSettingsError {
+        variable: "DF_GAMEPLAY_ADVENTURE_SEED",
+        expected: "a hexadecimal or decimal u64",
+    })
+}
+pub(super) fn adventure_creature_mode(
+    input: Result<String, VarError>,
+) -> Result<super::adventure::RulesMode, AdventureSettingsError> {
+    match adventure_input(input, "DF_GAMEPLAY_ADVENTURE_CREATURES")?.as_deref() {
+        None | Some("standard") => Ok(super::adventure::RulesMode::Standard),
+        Some("all") => Ok(super::adventure::RulesMode::CustomAllowed),
+        _ => Err(AdventureSettingsError {
+            variable: "DF_GAMEPLAY_ADVENTURE_CREATURES",
+            expected: "standard or all",
+        }),
+    }
+}
+pub(super) fn adventure_settings(
+    inputs: AdventureInputs,
+    current: &Path,
+) -> Result<AdventureSettings, AdventureSettingsError> {
+    let mode = match adventure_input(inputs.mode, "DF_GAMEPLAY_ADVENTURE")?.as_deref() {
+        None | Some("harbor") => AdventureMode::Harbor,
+        Some("random") => AdventureMode::Random,
+        _ => {
+            return Err(AdventureSettingsError {
+                variable: "DF_GAMEPLAY_ADVENTURE",
+                expected: "harbor or random",
+            });
+        }
+    };
+    let seed = adventure_input(inputs.seed, "DF_GAMEPLAY_ADVENTURE_SEED")?
+        .map(|seed| adventure_seed(&seed))
+        .transpose()?;
+    let rules_mode = adventure_creature_mode(inputs.creatures)?;
+    let tables = adventure_input(inputs.tables, "DF_GAMEPLAY_ADVENTURE_TABLES")?
+        .unwrap_or_else(|| "content/adventure-tables".into());
+    if tables.is_empty() {
+        return Err(AdventureSettingsError {
+            variable: "DF_GAMEPLAY_ADVENTURE_TABLES",
+            expected: "a nonempty directory path",
+        });
+    }
+    let tables = std::path::PathBuf::from(tables);
+    Ok(AdventureSettings {
+        mode,
+        seed,
+        rules_mode,
+        tables: if tables.is_absolute() {
+            tables
+        } else {
+            current.join(tables)
+        },
+    })
+}
+#[cfg(test)]
+mod adventure_settings_tests {
+    use super::*;
+    fn inputs() -> AdventureInputs {
+        AdventureInputs {
+            mode: Err(VarError::NotPresent),
+            seed: Err(VarError::NotPresent),
+            creatures: Err(VarError::NotPresent),
+            tables: Err(VarError::NotPresent),
+        }
+    }
+    #[test]
+    fn defaults_and_seed_spellings_are_explicit() {
+        let default = adventure_settings(inputs(), Path::new("/game")).unwrap();
+        assert_eq!(default.mode, AdventureMode::Harbor);
+        assert_eq!(default.seed, None);
+        assert_eq!(
+            default.rules_mode,
+            super::super::adventure::RulesMode::Standard
+        );
+        for (text, value) in [
+            ("0", 0),
+            ("18446744073709551615", u64::MAX),
+            ("0xFFFFFFFFFFFFFFFF", u64::MAX),
+            ("0X2a", 42),
+            ("42", 42),
+        ] {
+            assert_eq!(adventure_seed(text), Ok(value));
+        }
+    }
+    #[test]
+    fn invalid_environment_values_refuse_with_the_variable_name() {
+        for text in ["", "-1", "+1", " 1", "0x", "0xz", "18446744073709551616"] {
+            assert_eq!(
+                adventure_seed(text).unwrap_err().variable,
+                "DF_GAMEPLAY_ADVENTURE_SEED"
+            );
+        }
+        let mut raw = inputs();
+        raw.mode = Ok("other".into());
+        assert_eq!(
+            adventure_settings(raw, Path::new("/game"))
+                .err()
+                .unwrap()
+                .variable,
+            "DF_GAMEPLAY_ADVENTURE"
+        );
+        let mut raw = inputs();
+        raw.creatures = Ok("other".into());
+        assert_eq!(
+            adventure_settings(raw, Path::new("/game"))
+                .err()
+                .unwrap()
+                .variable,
+            "DF_GAMEPLAY_ADVENTURE_CREATURES"
+        );
+        let mut raw = inputs();
+        raw.tables = Ok(String::new());
+        assert_eq!(
+            adventure_settings(raw, Path::new("/game"))
+                .err()
+                .unwrap()
+                .variable,
+            "DF_GAMEPLAY_ADVENTURE_TABLES"
+        );
     }
 }

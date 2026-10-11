@@ -4,7 +4,9 @@ use df_session::submission::RepositoryError;
 use df_types::SessionId;
 use tokio_postgres::{Client, Transaction};
 
-use super::{CAMPAIGN, DISPLAY, DemoInitializationError, PLAYER, TENANT, initialize};
+use super::{
+    CAMPAIGN, DISPLAY, DemoInitializationError, PLAYER, TENANT, initialize_with_adventure,
+};
 use crate::{NativeCodecLimits, NativeRecoverySource};
 
 /// Credentials remain private to the native owner; this type intentionally has no Debug.
@@ -31,6 +33,19 @@ pub async fn admit_startup(
     identity: DemoStartupIdentity,
     codec: NativeCodecLimits,
     recovery: &NativeRecoverySource,
+    validate: impl FnMut(&Checkpoint) -> Result<(), RepositoryError>,
+) -> Result<DemoStartup, DemoInitializationError> {
+    admit_startup_with_adventure(client, cold, identity, codec, recovery, None, validate).await
+}
+/// The optional adventure joins the same bootstrap transaction as the first checkpoint.
+/// Restore compares all three authoritative documents before claiming the existing run.
+pub async fn admit_startup_with_adventure(
+    client: &mut Client,
+    cold: &Checkpoint,
+    identity: DemoStartupIdentity,
+    codec: NativeCodecLimits,
+    recovery: &NativeRecoverySource,
+    adventure: Option<&super::DemoAdventure>,
     mut validate: impl FnMut(&Checkpoint) -> Result<(), RepositoryError>,
 ) -> Result<DemoStartup, DemoInitializationError> {
     let DemoStartupIdentity {
@@ -58,13 +73,24 @@ pub async fn admit_startup(
     let fresh = classify_catalog(game, local)?;
     if fresh {
         validate(cold).map_err(|e| error("cold_validation", e))?;
-        initialize(client, cold, fence, player, display, codec).await?;
+        initialize_with_adventure(client, cold, fence, player, display, codec, adventure).await?;
         return Ok(DemoStartup {
             checkpoint: cold.clone(),
             player_credential: player,
             display_credential: display,
             restored: false,
         });
+    }
+    if let Some(adventure) = adventure {
+        match super::stored_adventure(client).await? {
+            super::AdventureStartup::Stored(stored) if &stored == adventure => {}
+            _ => {
+                return Err(error(
+                    "adventure_revision",
+                    RepositoryError::InvalidCandidate,
+                ));
+            }
+        }
     }
     let tx = client
         .transaction()

@@ -1,4 +1,5 @@
-//! The one authored, prepared-only courier recording. No general AI or provider fallback.
+//! The installed run's private clue, admitted as a prepared-only recording.
+//! Its exact bytes are digest-bound to the requesting operation; no provider fallback.
 use df_ai::admission::{
     CompleteRecord, RecordEvent, RecordIdentity, RecordLimits, RecordingPublisher,
     admit_complete_record,

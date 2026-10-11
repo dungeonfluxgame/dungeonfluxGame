@@ -69,6 +69,7 @@ pub(super) struct Live {
     choices: BTreeMap<String, bool>,
     shown: Option<(u64, u64)>,
     redraws: u16,
+    scene_image: Option<live_screens::ServerImage>,
 }
 impl Live {
     fn choice(&self, group: &str) -> bool {
@@ -366,10 +367,31 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     };
     let host = ensure_host(client, view.surface, screen)?;
     let player = client.borrow().role == "player";
+    let mut assets = String::new();
+    if let Some(url) = live_screens::asset_url(&view.scene.scene_asset) {
+        assets.push_str(&format!("--asset-scene-courier-road:url({url});"));
+    }
+    if let Some(url) = live_screens::asset_url(&view.scene.speaker_portrait)
+        && screen == Screen::Combat
+    {
+        assets.push_str(&format!("--asset-portrait-bandit:url({url}),url(/assets/ui/generated/portrait-bandit);--asset-portrait-bandit-full:url({url}),url(/assets/ui/generated/portrait-bandit-full);"));
+    }
+    host.set_attribute("style", &assets)?;
     match (screen, player) {
         (Screen::Combat, _) => combat::present(client, &host, view)?,
         (Screen::Aftermath, false) => aftermath::present_display(client, &host, view)?,
         (Screen::Aftermath, true) => aftermath::present_rest(client, &host, view)?,
+    }
+    client.borrow_mut().combat.scene_image = None;
+    if screen == Screen::Combat
+        && let Some(url) = live_screens::asset_url(&view.scene.scene_asset)
+        && let Some(image) = host.query_selector(".combat-art")?
+    {
+        client.borrow_mut().combat.scene_image = Some(live_screens::ServerImage::install(
+            image,
+            &url,
+            Some(style::COMBAT_ART_URL.into()),
+        )?);
     }
     mount_chrome(client, &host, view)?;
     mount_rules_badge(client, &host, custom_rules)?;

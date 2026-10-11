@@ -901,11 +901,6 @@ fn duplicate_ability_array_ids_are_refused() {
 fn items_outside_the_compiled_set_are_refused() {
     let equipment = set(&shipped_pack(), "/equipment/0/item", json!("lightsaber"));
     let hero_weapon = set(&shipped_tuning(), "/hero/weapon/item", json!("lightsaber"));
-    let bandit_weapon = set(
-        &shipped_tuning(),
-        "/bandit/weapon/item",
-        json!("chain-mail"),
-    );
 
     assert_cross_ref(
         refusal(&equipment, &shipped_tuning()),
@@ -917,12 +912,6 @@ fn items_outside_the_compiled_set_are_refused() {
         refusal(&shipped_pack(), &hero_weapon),
         SourceFile::Tuning,
         "hero.weapon.item",
-        CrossRefReason::UnknownItem,
-    );
-    assert_cross_ref(
-        refusal(&shipped_pack(), &bandit_weapon),
-        SourceFile::Tuning,
-        "bandit.weapon.item",
         CrossRefReason::UnknownItem,
     );
 }
@@ -1365,4 +1354,24 @@ fn selected_hero_weapon_requires_starting_equipment() {
         file: SourceFile::Tuning, path, reason: CrossRefReason::WeaponNotEquipped
     } if path == "hero.weapon.item")
     );
+}
+
+#[test]
+fn antagonist_weapon_is_a_bounded_display_label() {
+    let tuning = set(
+        &shipped_tuning(),
+        "/bandit/weapon/item",
+        json!("ritual sickle"),
+    );
+    let loaded = load_from_bytes(shipped_pack().as_bytes(), tuning.as_bytes()).unwrap();
+    assert_eq!(loaded.tuning.bandit.weapon.item, "ritual sickle");
+    let tuning = set(
+        &shipped_tuning(),
+        "/bandit/weapon/item",
+        json!("x".repeat(33)),
+    );
+    assert!(matches!(
+        load_from_bytes(shipped_pack().as_bytes(), tuning.as_bytes()),
+        Err(PackError::Bounds { .. })
+    ));
 }

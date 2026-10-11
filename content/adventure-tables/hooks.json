@@ -157,7 +157,7 @@
             "heirloom"
           ],
           "title": "A Vow Before Dawn",
-          "entrance": "limps up to you on a walking stick, holding {stake.full}",
+          "entrance": "limps up to you on a staff, holding {stake.full}",
           "pitch": "I vowed to bring {stake.short} to {contact.first} by dawn, and my legs won't carry me there alone.",
           "answer": "It is an old vow, and I'm too proud to break it. Too tired to keep it, though, without help.",
           "accept": "To {dest.name}, then. {contact.first} will be waiting. Thank you; the road has been long and lonely."

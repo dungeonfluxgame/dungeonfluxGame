@@ -1,6 +1,7 @@
 //! A finite, explicitly local gameplay slice. Authentication is preconfigured development
 //! membership, not production bootstrap. The action and its outcome use generated RPC.
 mod actor;
+mod adventure;
 mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
@@ -324,6 +325,22 @@ async fn credits() -> Html<&'static str> {
 /// argument keeps the fixed loopback address, 290-second limit, and small connection,
 /// stream, and call bounds the qualification harnesses were written against.
 pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|argument| argument == "--roll-adventure")
+    {
+        return adventure::cli::run(&std::env::args_os().skip(2).collect::<Vec<_>>());
+    }
+    let interactive = std::env::args().nth(4).is_none();
+    let adventure_settings = if interactive {
+        Some(startup_configuration::adventure_settings(
+            startup_configuration::AdventureInputs::from_environment(),
+            &std::env::current_dir()?,
+        )?)
+    } else {
+        None
+    };
+    let mut generated_adventure: Option<adventure::startup::PreparedAdventure> = None;
     let web_root = std::env::args()
         .nth(2)
         .ok_or("generated gameplay web directory required")?;
@@ -342,7 +359,6 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&web_root),
         std::path::Path::new(&asset_root),
     )?;
-    let interactive = std::env::args().nth(4).is_none();
     let settings = if interactive {
         startup_configuration::session_settings(
             startup_configuration::SessionInputs::from_environment(),
@@ -351,11 +367,48 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         startup_configuration::SessionSettings::qualification()
     };
     if interactive {
-        let directory = startup_configuration::pack_directory(
-            std::env::var("DF_GAMEPLAY_PACK_DIR"),
-            &std::env::current_dir()?,
-        )?;
-        let loaded = pack::load(&directory).map_err(|error| io::Error::other(error.to_string()))?;
+        let settings = adventure_settings
+            .as_ref()
+            .ok_or("adventure settings absent")?;
+        let (directory, loaded) = match settings.mode {
+            startup_configuration::AdventureMode::Harbor => {
+                let directory = startup_configuration::pack_directory(
+                    std::env::var("DF_GAMEPLAY_PACK_DIR"),
+                    &std::env::current_dir()?,
+                )?;
+                let loaded =
+                    pack::load(&directory).map_err(|error| io::Error::other(error.to_string()))?;
+                (directory, loaded)
+            }
+            startup_configuration::AdventureMode::Random => {
+                let prepared = adventure::startup::prepare(
+                    settings,
+                    &database_config()?,
+                    &std::env::current_dir()?,
+                )
+                .await?;
+                let opening = prepared
+                    .loaded
+                    .pack
+                    .scenes
+                    .iter()
+                    .find(|scene| scene.key == pack::SceneKey::Opening)
+                    .ok_or("generated opening absent")?;
+                println!(
+                    "ADVENTURE seed={} title={:?} location={} patron={} antagonist={} rolls={}",
+                    prepared.record.seed,
+                    opening.title,
+                    prepared.record.entry("location")?,
+                    prepared.record.entry("patron")?,
+                    prepared.record.entry("antagonist")?,
+                    prepared.record.rolls.len()
+                );
+                let directory = prepared.directory.clone();
+                let loaded = prepared.loaded.clone();
+                generated_adventure = Some(prepared);
+                (directory, loaded)
+            }
+        };
         println!(
             "GAMEPLAY PACK directory={} pack={} tuning={} {}",
             directory.display(),
@@ -387,6 +440,44 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                 ("gameplay.departures", loaded.departures.join(", ")),
             ],
         );
+        if let Some(prepared) = &generated_adventure
+            && prepared.fresh
+        {
+            span.event(
+                "gameplay.adventure.generated",
+                &[
+                    ("gameplay.adventure.seed", prepared.record.seed.clone()),
+                    (
+                        "gameplay.adventure.tables_revision",
+                        prepared.record.tables_revision().to_owned(),
+                    ),
+                    (
+                        "gameplay.adventure.rules_mode",
+                        match prepared.record.rules_mode() {
+                            adventure::RulesMode::Standard => "standard",
+                            adventure::RulesMode::CustomAllowed => "custom_allowed",
+                        }
+                        .to_owned(),
+                    ),
+                    (
+                        "gameplay.adventure.pack_sha256",
+                        loaded.pack_revision.to_hex(),
+                    ),
+                    (
+                        "gameplay.adventure.tuning_sha256",
+                        loaded.tuning_revision.to_hex(),
+                    ),
+                    (
+                        "gameplay.adventure.roll_count",
+                        prepared.record.rolls.len().to_string(),
+                    ),
+                    (
+                        "gameplay.adventure.seeded_dice",
+                        prepared.record.seeded_dice.to_string(),
+                    ),
+                ],
+            );
+        }
         span.finish_unmeasured("loaded");
         pack::install(loaded)?;
     }
@@ -469,7 +560,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     }
     let initialization = tokio::time::timeout(
         Duration::from_secs(5),
-        df_persistence::local_demo_scope::admit_startup(
+        df_persistence::local_demo_scope::admit_startup_with_adventure(
             &mut grant_client,
             &cold,
             df_persistence::local_demo_scope::DemoStartupIdentity {
@@ -479,6 +570,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             },
             codec,
             &recovery,
+            generated_adventure
+                .as_ref()
+                .map(|prepared| &prepared.documents),
             |checkpoint| {
                 df_session::submission::SessionEngine::<
                     df_persistence::NativeScope<LocalDemoAuthority>,
