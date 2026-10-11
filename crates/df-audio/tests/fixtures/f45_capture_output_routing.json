@@ -1,0 +1,476 @@
+{
+  "Original": {
+    "bytes": 8702,
+    "path": "/Users/earlcameron/Desktop/dungeonflux/artifacts/tmp/wave51-session-submission-20261006/B-F45-D03-whole-pure-Original-20261011-01.json",
+    "sha256": "359d9a765ddbe1760a5ce84a0c44c668d19031670df7c3725d3994c2edb5e22c"
+  },
+  "Original_acceptance_json": "[\"private leases distinct\", \"The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit.\"]",
+  "Original_objective": "Specify capture and output routing; expected: private leases distinct.",
+  "Original_verification_json": "[\"Freeze the cited source decision and a bounded contract example; compare private leases distinct. Retain decision, alternatives and unresolved facts.\", \"Exact executable commands: TBD at G01 and scoped prerequisite resolution; this planned procedure is not a claim that Rust/browser/provider checks ran.\"]",
+  "Rust_contract_candidate": {
+    "bytes": 14875,
+    "path": "/Users/earlcameron/Desktop/dungeonflux/artifacts/tmp/wave51-session-submission-20261006/B-F45-D03-capture-output-routing-candidate-20261011-04.rs",
+    "sha256": "35d52c738f67f0b0fe8c2015c18ec6f655ca289f9c5ed8c728737e932c996007"
+  },
+  "alternatives_rejected": [
+    {
+      "alternative": "One generic capture/playback lease",
+      "reason": "Different capabilities, formats, offers and resource lifetimes require their existing distinct canonical contracts."
+    },
+    {
+      "alternative": "Projected binding/destination/ID or SpeechIdentity labels authorize a private output",
+      "reason": "Native equality retains member/audience and receipts retain actual owner/instance; labels alone cannot grant authority."
+    },
+    {
+      "alternative": "Denied private route falls back to public output",
+      "reason": "Governing remote-play requires only authorized private text/captions; full caller/projection fallback remains a production gate."
+    },
+    {
+      "alternative": "Reconnect or presence observation renews capture/audio access automatically",
+      "reason": "Explicit current admission and generation checks belong to the existing auth/session/recovery owner."
+    }
+  ],
+  "base_Root_attested": "86e312077e1d0188be2b6a623bd9461776bdcefe",
+  "behavior_cases": [
+    {
+      "boundary": "Actual SpeechScheduler -> original borrowed source chunk -> native AudioQueue admitted private lease -> PCM dispatch/completion",
+      "checks": "Source bytes remain opaque; independent synthetic PCM is not a decoder/provider or speaker proof.",
+      "expected": "Identical SpeechIdentity does not transfer the private owner receipt. Sibling private and public room owners return ForeignOwner with identical owned PCM pointer/data and unchanged snapshots. Actual media retains its original source byte until the correct private AudioQueue admits PCM; acknowledge and finish then preserve canonical job/operation/payload. Exact close/tail completes Drained and releases resources.",
+      "name": "private_receipts_cannot_route_pcm_to_a_sibling_listener_or_public_room"
+    },
+    {
+      "boundary": "Complete canonical AudioOutputLease -> existing native queue owner",
+      "checks": "A supplied canonical lease is trusted admission input; this does not mint authorization or validate arbitrary audience claims.",
+      "expected": "Changed private member, audience, generation or unlocked flag returns WrongLease despite unchanged lease ID/projected destination labels. Original PCM and queue snapshot survive every refusal; exact original lease admits afterward.",
+      "name": "canonical_member_and_audience_changes_are_refused_even_with_identical_output_labels"
+    },
+    {
+      "boundary": "Two actual CaptureSession owners and separately admitted AudioQueue",
+      "checks": "Capture cancellation does not revoke run-owned accepted jobs or decide an output lease; session/recovery owns that coordination.",
+      "expected": "Wrong permitted offer cannot construct capture. Another member/offer lease cannot supply a chunk even on the same binding/generation. Returned bytes/pointer and snapshots survive refusal; cancel Alice capture releases only its owned bytes. Bob capture remains current and finishes with exact canonical lease/bytes while separate output resources remain intact.",
+      "name": "cancelling_one_offer_capture_preserves_another_capture_and_its_separate_output"
+    },
+    {
+      "boundary": "Old and renewed actual capture and playback owners",
+      "checks": "Renewal is supplied admitted input; no disconnect observation or stable membership grants takeover.",
+      "expected": "Old capture generation cannot append or finish renewed capture. Old output owner receipt returns ForeignOwner and old output generation returns WrongLease in renewed owner. Cleanup of old owners leaves both renewed owners unchanged; current exact leases succeed.",
+      "name": "renewed_capture_and_output_owners_reject_old_leases_and_receipts_independently"
+    }
+  ],
+  "candidate_history": [
+    {
+      "pin": {
+        "bytes": 13057,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/artifacts/tmp/wave51-session-submission-20261006/B-F45-D03-capture-output-routing-candidate-20261011-01.rs",
+        "sha256": "d17895a6d9828af78f738d95fadcce937920dec3c05d94df680b9ac81b24fed8"
+      },
+      "status": "SUPERSEDED_UNEXECUTED"
+    },
+    {
+      "pin": {
+        "bytes": 13057,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/artifacts/tmp/wave51-session-submission-20261006/B-F45-D03-capture-output-routing-candidate-20261011-02.rs",
+        "sha256": "562f7c104f225d4d7d552b977addc36464570793cecd468a66fa3e3c7bfa5868"
+      },
+      "status": "SUPERSEDED_UNEXECUTED"
+    },
+    {
+      "pin": {
+        "bytes": 14641,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/artifacts/tmp/wave51-session-submission-20261006/B-F45-D03-capture-output-routing-candidate-20261011-03.rs",
+        "sha256": "1d1d9baf922fbc27421b201c7ac05eed3750744f6665f95082d6c1fa853ba52c"
+      },
+      "status": "SUPERSEDED_UNEXECUTED"
+    }
+  ],
+  "canonical_JSON_destination": "crates/df-audio/tests/fixtures/f45_capture_output_routing.json",
+  "canonical_Rust_destination": "crates/df-audio/tests/f45_capture_output_routing.rs",
+  "canonical_read_only_inputs": [
+    {
+      "bytes": 1648,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/src/lib.rs",
+      "sha256": "704771f92d74efa35d8c9da51757e267a26d351095df82cb4df2090c9e5f41f9"
+    },
+    {
+      "bytes": 15900,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/src/capture.rs",
+      "sha256": "c800ce40471f9f8920b36ff3fcf6de83870897adefc21c405617aab8a125ccad"
+    },
+    {
+      "bytes": 647,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/src/capabilities.rs",
+      "sha256": "aeae3d121caa473f6b6cfe8cac31a8ac69f5ab46e3c6877feab75eb311b2dbe0"
+    },
+    {
+      "bytes": 8948,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/src/native.rs",
+      "sha256": "6be9be5650fed6b0814b1e822bd124ee533cef9844bdc51860a403eae0bbb6a6"
+    },
+    {
+      "bytes": 21504,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/src/queue.rs",
+      "sha256": "90f2f580257517fa3fb93e5f8df2495749d831ce99501460e6e9b5f5891f4d92"
+    },
+    {
+      "bytes": 2774,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/src/pcm.rs",
+      "sha256": "4ed6c9cdb030d097fb0cf3bfa7668d7e7f59cf9fedb247ade7967d7e88853868"
+    },
+    {
+      "bytes": 3776,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/src/presentation.rs",
+      "sha256": "14a8e9a8e08388a9d7941ec81773aa96f3d77b4995d3231ec65d1c26bdfa7727"
+    },
+    {
+      "bytes": 2469,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/tests/common/mod.rs",
+      "sha256": "b1d1266122eeb6b66fe7cdcb0a85fe70005ee4d1b709c3e12c40496fbd9aa047"
+    },
+    {
+      "bytes": 8997,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/tests/consumers.rs",
+      "sha256": "a0cc2c3b595df1573cedefec1e11b4a9fad4aeebfb3f6f01ac4387d5f953d181"
+    },
+    {
+      "bytes": 11172,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/tests/browser_capture.rs",
+      "sha256": "4440bdf65ef30bbf4af14f2da822f9825584a457c7028e16ae62be312d0a1a1f"
+    },
+    {
+      "bytes": 21931,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/tests/queue.rs",
+      "sha256": "9a5a14cd70894918a78ea8a98b0fbd84936f619e74357745abbdd451c09ef487"
+    },
+    {
+      "bytes": 17551,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-media/src/speech.rs",
+      "sha256": "cea38457bffce81907efc1346c2e1a790bf40bec5d27f9bcf51192d22c541749"
+    },
+    {
+      "bytes": 12843,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-media/src/schedule.rs",
+      "sha256": "6fe083e7653159c17ad5a9a4311645359de89dc54e750b97e95844a7af6bc8d2"
+    },
+    {
+      "bytes": 111156,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-model/src/checkpoint.rs",
+      "sha256": "59b7b3b1781066942d6bc3d0dfe6b4c1c2a792912fbf2ac0b720c5e7817a5846"
+    },
+    {
+      "bytes": 1021,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/Cargo.toml",
+      "sha256": "6d479a25a219ff4942aed0a55866790118bce5f9f5bc0c903a541355849391f0"
+    },
+    {
+      "bytes": 177,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/rustfmt.toml",
+      "sha256": "7a142cbd3f5e9c09c6dc4a1850e053415530eb5450d27983dc26c75230b8c5ba"
+    },
+    {
+      "bytes": 123,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/rust-toolchain.toml",
+      "sha256": "9500030ccefd0bab631fb7f1763f79f4103eca3a344c36cf15be869e330683bb"
+    },
+    {
+      "bytes": 77173,
+      "path": "/Users/earlcameron/Desktop/dungeonflux/Cargo.lock",
+      "sha256": "8baa893c552b979c7affb7d133ea7bee165ce1b47a92c855202b942fc1883606"
+    }
+  ],
+  "current_behavior_already_implemented": "Static source inspection finds exact lease ownership/comparison in current CaptureSession and native AudioQueue; add only a finite actual-owner consumer qualification contract, not a second routing primitive. This can qualify the design boundary after genuine Root source/build-bound and independent running-output checks, while production integration remains unqualified.",
+  "decision": "Retain existing canonical AudioOutputLease and CaptureLease as separate admission facts and existing df-audio owners as separate resource lifetimes. Native playback retains whole canonical member/audience/binding/generation/device-unlock lease while canonical capture retains member/binding/generation/permitted-offer/format. Reuse owner-fenced receipts and exact lease equality; never combine capture permission with output access, treat projected output labels as authorization, or move private PCM through another output owner. Application admission/projection/recovery keep existing owners and all pending production gates.",
+  "delivery_kind": "WHOLE_ORIGINAL_CRATE_OWNED_RUST_JSON_DESIGN_CONTRACT",
+  "governing_sources": [
+    {
+      "current_equals_historical": true,
+      "current_pin": {
+        "bytes": 5251,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/planning/remote-play.md",
+        "sha256": "ddd81d0d427c3bd09c8ced551f60e65f360f0469b1b186033bf8b16874f9aacc"
+      },
+      "historical_Original_sha256": "ddd81d0d427c3bd09c8ced551f60e65f360f0469b1b186033bf8b16874f9aacc",
+      "path": "planning/remote-play.md",
+      "sections": [
+        "Model, permissions and audiovisual topology",
+        "Native ownership, failure and recovery",
+        "Gates, observability and acceptance"
+      ],
+      "sha256": "ddd81d0d427c3bd09c8ced551f60e65f360f0469b1b186033bf8b16874f9aacc"
+    },
+    {
+      "current_equals_historical": true,
+      "current_pin": {
+        "bytes": 12005,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/planning/feature-refinement.md",
+        "sha256": "9c4fdeec6ff22fd145bc392178fc898bb286d733c49ba72a7d61bc8ec98594ef"
+      },
+      "historical_Original_sha256": "9c4fdeec6ff22fd145bc392178fc898bb286d733c49ba72a7d61bc8ec98594ef",
+      "path": "planning/feature-refinement.md",
+      "sections": [
+        "Fifteen numbered ideas",
+        "Fifteen priority rows",
+        "Table stakes and phase delivery",
+        "Phones as contextual private world interfaces",
+        "Rumors, spotlight and grounded encounters",
+        "Planning completion and remaining evidence"
+      ],
+      "sha256": "9c4fdeec6ff22fd145bc392178fc898bb286d733c49ba72a7d61bc8ec98594ef"
+    },
+    {
+      "current_equals_historical": true,
+      "current_pin": {
+        "bytes": 1963891,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/development/backlog-catalog.json",
+        "sha256": "039b0a03b4085b43ad32c4063e2cb8fc789fc55fff7552aec6e951ec3b4704c3"
+      },
+      "historical_Original_sha256": "039b0a03b4085b43ad32c4063e2cb8fc789fc55fff7552aec6e951ec3b4704c3",
+      "path": "development/backlog-catalog.json",
+      "sections": [
+        "F45",
+        "B-F45-D03"
+      ],
+      "sha256": "039b0a03b4085b43ad32c4063e2cb8fc789fc55fff7552aec6e951ec3b4704c3"
+    },
+    {
+      "current_equals_historical": true,
+      "current_pin": {
+        "bytes": 20121,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/AGENTS.md",
+        "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+      },
+      "historical_Original_sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182",
+      "path": "AGENTS.md",
+      "sections": [
+        "1. Think Before Coding",
+        "2. Simplicity First",
+        "3. Surgical Changes",
+        "4. Goal-Driven Execution",
+        "Planning and project documentation",
+        "Mandatory coding style",
+        "Application architecture",
+        "Development strategies",
+        "Implementation and evaluation",
+        "Agent devlog",
+        "Generated files and artifacts",
+        "Changelog",
+        "Hosted-service authority",
+        "Visual development journey"
+      ],
+      "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+    },
+    {
+      "current_equals_historical": true,
+      "current_pin": {
+        "bytes": 9448,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/planning/coding-style.md",
+        "sha256": "2d8e327e4172643544bd80b591f38226c25b83940a10f1d9e18ada9044faeabb"
+      },
+      "historical_Original_sha256": "2d8e327e4172643544bd80b591f38226c25b83940a10f1d9e18ada9044faeabb",
+      "path": "planning/coding-style.md",
+      "sections": [
+        "Scope and enforcement",
+        "Names, modules, and public contracts",
+        "Functions, ownership, and errors",
+        "Async code and deterministic gameplay",
+        "Persistence, RPC, and instrumentation",
+        "Documentation, tests, and changes"
+      ],
+      "sha256": "2d8e327e4172643544bd80b591f38226c25b83940a10f1d9e18ada9044faeabb"
+    },
+    {
+      "current_equals_historical": true,
+      "current_pin": {
+        "bytes": 13664,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/ADR/0001-sqlite-agent-workflow.md",
+        "sha256": "acfe32a8d5e846aa4d3b2981529533b9f53cdcc11088424128e60c20b722adc8"
+      },
+      "historical_Original_sha256": "acfe32a8d5e846aa4d3b2981529533b9f53cdcc11088424128e60c20b722adc8",
+      "path": "ADR/0001-sqlite-agent-workflow.md",
+      "sections": [
+        "Context",
+        "Decision",
+        "Consequences"
+      ],
+      "sha256": "acfe32a8d5e846aa4d3b2981529533b9f53cdcc11088424128e60c20b722adc8"
+    },
+    {
+      "current_equals_historical": true,
+      "current_pin": {
+        "bytes": 8670,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/ADR/0004-development-reliability.md",
+        "sha256": "8f03d02d478086fd1f50d7aa10e8e7e766e3b15ae02f7f96efa43757c98a4dae"
+      },
+      "historical_Original_sha256": "8f03d02d478086fd1f50d7aa10e8e7e766e3b15ae02f7f96efa43757c98a4dae",
+      "path": "ADR/0004-development-reliability.md",
+      "sections": [
+        "Context",
+        "Decision",
+        "Evidence from the archive"
+      ],
+      "sha256": "8f03d02d478086fd1f50d7aa10e8e7e766e3b15ae02f7f96efa43757c98a4dae"
+    },
+    {
+      "current_equals_historical": true,
+      "current_pin": {
+        "bytes": 6534,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/ADR/0005-frontier-output-evaluation.md",
+        "sha256": "25ab35a57ee8516a272b1ff3d04bba4def91319255d89158c9be55283ca6c35c"
+      },
+      "historical_Original_sha256": "25ab35a57ee8516a272b1ff3d04bba4def91319255d89158c9be55283ca6c35c",
+      "path": "ADR/0005-frontier-output-evaluation.md",
+      "sections": [
+        "Context",
+        "Decision",
+        "Consequences"
+      ],
+      "sha256": "25ab35a57ee8516a272b1ff3d04bba4def91319255d89158c9be55283ca6c35c"
+    },
+    {
+      "current_pin": {
+        "bytes": 19544,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/planning/f45-d01-decision.md",
+        "sha256": "59b1e758fea82f8303fff516897adec20281ac5599e668a5b7a92348a6be4a64"
+      },
+      "path": "planning/f45-d01-decision.md",
+      "read_only_prerequisite_decision": true,
+      "sections": [
+        "Decision",
+        "Alternatives and rationale",
+        "Unresolved production gates"
+      ]
+    },
+    {
+      "current_pin": {
+        "bytes": 13002,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/planning/f45-d02-decision.md",
+        "sha256": "3417630c94fac98d82649689ba8bb1cfbca3bbb11c759a4ca73d3a909a8f8bcc"
+      },
+      "path": "planning/f45-d02-decision.md",
+      "read_only_prerequisite_decision": true,
+      "sections": [
+        "Decision",
+        "Alternatives and rationale",
+        "Unresolved production gates"
+      ]
+    }
+  ],
+  "integration_hooks": [
+    {
+      "hook": "Install only the new crate integration test and JSON design contract; actual owner APIs remain unchanged.",
+      "owner": "df-audio",
+      "status": "UNPERFORMED"
+    },
+    {
+      "hook": "Existing actual SpeechScheduler supplies current borrowed media bytes and receives acknowledgment only after native private output admission in the new contract. No source edits.",
+      "owner": "df-media",
+      "status": "AUTHORED_NOT_EXECUTED"
+    },
+    {
+      "hook": "Issue/revalidate private topology/capture/output admission; filter before serialization; current reconnect/revocation must reach owned cleanup and permitted private fallback.",
+      "owner": "df-auth/df-session/df-api/df-client",
+      "status": "PRODUCTION_UNQUALIFIED"
+    },
+    {
+      "hook": "Protect exact four roots before any access; claim unchanged Original through existing helper; install candidate in isolated registered source; run pinned checks and independent source/build-bound boundary; integrate sequentially and retain gaps.",
+      "owner": "/root",
+      "status": "UNPERFORMED"
+    }
+  ],
+  "literal_source_quotes": [
+    {
+      "literal_quotes": [
+        "Work from one bounded task/attempt.",
+        "Make connecting work explicit."
+      ],
+      "pin": {
+        "bytes": 20121,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/AGENTS.md",
+        "sha256": "55578ed92c477dfe3c306db38c6ad20390bfe8208ca998e6f3bf6f6bebbec182"
+      },
+      "read_whole_applicable_sections_required_for_author": true
+    },
+    {
+      "literal_quotes": [
+        "Start with ordinary functions and concrete types.",
+        "Borrow when ownership is unnecessary; move when ownership transfers."
+      ],
+      "pin": {
+        "bytes": 9448,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/planning/coding-style.md",
+        "sha256": "2d8e327e4172643544bd80b591f38226c25b83940a10f1d9e18ada9044faeabb"
+      },
+      "read_whole_applicable_sections_required_for_author": true
+    },
+    {
+      "literal_quotes": [
+        "failure uses authorized text/captions, never the public speaker.",
+        "Desktop viewport or local multi-tab success alone cannot prove remote readiness."
+      ],
+      "pin": {
+        "bytes": 5251,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/planning/remote-play.md",
+        "sha256": "ddd81d0d427c3bd09c8ced551f60e65f360f0469b1b186033bf8b16874f9aacc"
+      },
+      "read_whole_applicable_sections_required_for_author": true
+    },
+    {
+      "literal_quotes": [
+        "Projection is never an authorization check.",
+        "if lease != &self.lease {"
+      ],
+      "pin": {
+        "bytes": 8948,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/src/native.rs",
+        "sha256": "6be9be5650fed6b0814b1e822bd124ee533cef9844bdc51860a403eae0bbb6a6"
+      },
+      "read_whole_applicable_sections_required_for_author": true
+    },
+    {
+      "literal_quotes": [
+        "This crate has no microphone acquisition implementation, and",
+        "current_lease != &self.lease"
+      ],
+      "pin": {
+        "bytes": 15900,
+        "path": "/Users/earlcameron/Desktop/dungeonflux/crates/df-audio/src/capture.rs",
+        "sha256": "c800ce40471f9f8920b36ff3fcf6de83870897adefc21c405617aab8a125ccad"
+      },
+      "read_whole_applicable_sections_required_for_author": true
+    }
+  ],
+  "named_outcome": "private leases distinct",
+  "new_public_schema_or_helpers": false,
+  "numeric_fixture_bounds": {
+    "capture_chunk_allocation_bytes": 4,
+    "capture_chunks": 2,
+    "capture_total_allocation_bytes": 8,
+    "output_buffers": 2,
+    "output_sample_bytes": 32,
+    "source_bytes": 4,
+    "source_chunks": 1,
+    "source_execution_slots": 2,
+    "source_queue_bytes": 8,
+    "source_queue_items": 2,
+    "source_speech_bytes": 1,
+    "source_speech_items": 1,
+    "source_speech_slots": 1
+  },
+  "prerequisite_authority": {
+    "bytes": 5292,
+    "path": "/Users/earlcameron/Desktop/dungeonflux/artifacts/tmp/wave51-session-submission-20261006/B-F45-D03-dependency-authority-20261011-01.json",
+    "sha256": "309a9c282726d3857e70b8b42f35b3b927233ba66dc921e764e4078411b77195"
+  },
+  "qualification_limits": [
+    "Source-only candidate: compiler, native executable, independent output review, integrated Main applicability and approval are UNPERFORMED.",
+    "No browser microphone acquisition implementation exists in CaptureSession. SynchronousApiInvocationObserved/Opened are adapter observations in the finite fixture; no API invocation, device permission, capture hardware or format support is qualified.",
+    "Native AudioQueue trusts the supplied canonical admitted lease and preserves it; projection labels do not authorize. df-auth/df-session/df-api must supply and revalidate audience/principal/binding and exclude private bytes before serialization or public asset demand.",
+    "No browser/device audible output, authorized text/caption fallback, physical phone/TV, independently networked role routing or duplicate public-track coordination is proven.",
+    "Actual SpeechScheduler bytes and independently supplied PCM exercise ownership only; codec/decoder, provider waveform, durable asset readiness and synchronization are unqualified.",
+    "Revocation/reconnect must reach existing capture disposal, output stop acknowledgment, stream closure and cache invalidation from their canonical owners. This contract does not add those application consumers, membership policy or persisted state.",
+    "Fixed finite capture/media/PCM limits are test resource bounds, not measured participant/campaign/device capacity, lease duration or latency/cost promises.",
+    "No SQLite/schema/Git/canonical source/registry mutation or future worktree/build/scratch/evidence access occurred. Root claim and source authorization remain UNPERFORMED."
+  ],
+  "static_author_correction": "01 asserted StaleReceipt for foreign owners; exact existing queue check() returns ForeignOwner first. 02 corrects only those expectations. 03 connects actual SpeechScheduler. 04 adds exact consumer tail/drain accounting. All historical candidates retained and unexecuted.",
+  "task_id": "B-F45-D03",
+  "whole_original_unchanged": true
+}
