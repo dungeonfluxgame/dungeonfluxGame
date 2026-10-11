@@ -1994,18 +1994,44 @@ fn start_combat(
         .map(|link| link.character.ok_or(RepositoryError::InvalidCandidate))
         .chain([Ok(monster)])
         .collect::<Result<Vec<_>, _>>()?;
-    encounter_admission::validate(current, command, state, &participants).map_err(bad)?;
-    let mut initiative = Vec::new();
-    for (priority, who) in participants.iter().enumerate() {
-        let die = draw(operation, 20, draws, supplier)?;
-        let dex = rules::ability_modifier(value(state, *who, "dexterity")? as u8);
-        initiative.push((*who, die as i32 + dex, priority));
+    let admitted =
+        encounter_admission::admission(current, command, state, &participants).map_err(bad)?;
+    for _ in admitted.actors() {
+        draw(operation, 20, draws, supplier)?;
     }
-    initiative.sort_by_key(|(_, count, priority)| (std::cmp::Reverse(*count), *priority));
-    let order = initiative
-        .into_iter()
-        .map(|(who, _, _)| who)
-        .collect::<Vec<_>>();
+    let pins = model::pins()?;
+    let source = rule()?;
+    let input = GameInput::Game(command.clone());
+    let order = df_engine::encounter_start::local_journey_turn_order(
+        df_rules::RulesCommandInput {
+            command: &input,
+            supplied_draws: draws,
+        },
+        current,
+        df_engine::command_entry::CommandEntryContext {
+            current_basis: current.basis(),
+            admitted_pins: &pins,
+            inventory: ReferenceInventory {
+                rules: &[model::rule()?, source.clone()],
+                content: &model::contents()?,
+                resources: &resources()?,
+                assets: &[],
+            },
+            limits: df_engine::command_entry::CommandEntryLimits {
+                command: df_model::commands::CommandLimits {
+                    maximum_records: 32,
+                    maximum_text_bytes: 128,
+                    maximum_retained_bytes: 8192,
+                },
+                maximum_staged_bytes: 1024 * 1024,
+            },
+        },
+        &admitted,
+        state,
+        &source,
+    )
+    .map_err(bad)?
+    .to_vec();
     let active = order
         .first()
         .copied()
