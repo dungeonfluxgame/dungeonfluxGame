@@ -68,6 +68,119 @@ impl Drop for Client {
     }
 }
 thread_local! {static CLIENTS:RefCell<Vec<Rc<RefCell<Client>>>>=const {RefCell::new(Vec::new())};}
+
+/// Local-demo credential store: the player's room binding and scope ids live in this
+/// browser's `localStorage` so a reload or a sleeping phone can resume the same hero.
+/// Real guest sign-in (df-auth) replaces this store later. Nothing here is game data;
+/// the server still authenticates every request and may refuse the saved credential.
+mod saved_player {
+    use super::*;
+
+    const VERSION: &str = "v1";
+
+    pub(super) struct SavedPlayer {
+        pub(super) credential: String,
+        pub(super) session: rpc::SessionId,
+        pub(super) run: rpc::RunId,
+        pub(super) binding: rpc::ClientBindingId,
+    }
+
+    fn key(room_code: &str) -> String {
+        format!("df.gameplay.{room_code}.player")
+    }
+
+    fn storage() -> Result<web_sys::Storage, JsValue> {
+        web_sys::window()
+            .ok_or_else(|| JsValue::from_str("window absent"))?
+            .local_storage()?
+            .ok_or_else(|| JsValue::from_str("local storage unavailable"))
+    }
+
+    fn encode(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn decode_id(text: &str) -> Option<Vec<u8>> {
+        if text.len() != 32 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        text.as_bytes()
+            .chunks(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+            .collect()
+    }
+
+    fn parse(text: &str) -> Option<SavedPlayer> {
+        let mut parts = text.split('.');
+        let (version, credential, session, run, binding) = (
+            parts.next()?,
+            parts.next()?,
+            parts.next()?,
+            parts.next()?,
+            parts.next()?,
+        );
+        // The server accepts only lowercase hexadecimal, 64 characters.
+        if parts.next().is_some()
+            || version != VERSION
+            || credential.len() != 64
+            || !credential
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return None;
+        }
+        Some(SavedPlayer {
+            credential: credential.to_owned(),
+            session: rpc::SessionId {
+                value: Some(decode_id(session)?),
+            },
+            run: rpc::RunId {
+                value: Some(decode_id(run)?),
+            },
+            binding: rpc::ClientBindingId {
+                value: Some(decode_id(binding)?),
+            },
+        })
+    }
+
+    /// A malformed entry is removed and treated as absent; storage failures are returned.
+    pub(super) fn load(room_code: &str) -> Result<Option<SavedPlayer>, JsValue> {
+        let storage = storage()?;
+        let key = key(room_code);
+        let Some(text) = storage.get_item(&key)? else {
+            return Ok(None);
+        };
+        let saved = parse(&text);
+        if saved.is_none() {
+            storage.remove_item(&key)?;
+        }
+        Ok(saved)
+    }
+
+    pub(super) fn save(
+        room_code: &str,
+        credential: &str,
+        session: &rpc::SessionId,
+        run: &rpc::RunId,
+        binding: &rpc::ClientBindingId,
+    ) -> Result<(), JsValue> {
+        let id = |value: &Option<Vec<u8>>| encode(value.as_deref().unwrap_or_default());
+        storage()?.set_item(
+            &key(room_code),
+            &format!(
+                "{VERSION}.{credential}.{}.{}.{}",
+                id(&session.value),
+                id(&run.value),
+                id(&binding.value)
+            ),
+        )
+    }
+
+    pub(super) fn clear(room_code: &str) -> Result<(), JsValue> {
+        storage()?.remove_item(&key(room_code))
+    }
+}
+const SAVED_GAME_REFUSED: &str = "The server did not accept this saved game.";
 fn node(
     document: &Document,
     parent: &Element,
@@ -250,6 +363,70 @@ fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     node(&document, &body, "p", "feedback", "")?;
     Ok(())
 }
+const LEAVE_LABEL: &str = "Leave this game on this device";
+/// Shown while a saved player is reconnecting, and as the way out if that cannot finish.
+fn render_resume(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+    let (document, surface) = {
+        let mut state = client.borrow_mut();
+        clear_callbacks(&mut state);
+        (
+            state.document.clone(),
+            state
+                .root
+                .query_selector(".view")?
+                .ok_or_else(|| JsValue::from_str("view missing"))?,
+        )
+    };
+    surface.set_text_content(None);
+    let body = node(&document, &surface, "div", "scene-copy", "")?;
+    node(&document, &body, "div", "eyebrow", "Welcome back")?;
+    node(&document, &body, "h2", "", "Rejoining your adventure")?;
+    node(
+        &document,
+        &body,
+        "p",
+        "narration",
+        "Reconnecting to the hero saved on this device.",
+    )?;
+    let tools = node(&document, &body, "div", "tools", "")?;
+    button(client, &tools, "Try again", connect)?;
+    button(client, &tools, LEAVE_LABEL, leave_saved_game)?;
+    node(&document, &body, "p", "feedback", "")?;
+    Ok(())
+}
+fn leave_saved_game(client: Rc<RefCell<Client>>) {
+    forget_saved_game(
+        &client,
+        "You left the game on this device. Join again whenever you like.",
+    );
+}
+/// Forgets this device's credential and returns to the join screen. The server keeps the
+/// hero and the room membership; nothing is deleted there.
+fn forget_saved_game(client: &Rc<RefCell<Client>>, reason: &str) {
+    let cleared = {
+        let mut state = client.borrow_mut();
+        let cleared = saved_player::clear(&state.room_code);
+        retire_transport(&mut state);
+        let reset = clear_view_scope(&mut state);
+        state.credential.clear();
+        state.session = None;
+        state.run = None;
+        state.binding = None;
+        state.join_request = None;
+        cleared.and(reset)
+    };
+    let rendered = render_join(client);
+    let state = client.borrow();
+    status(&state, "Your adventure awaits.");
+    feedback(
+        &state,
+        if cleared.is_err() || rendered.is_err() {
+            "This browser could not fully forget the saved game. Clear this site's data, then reload."
+        } else {
+            reason
+        },
+    );
+}
 fn join_room(client: Rc<RefCell<Client>>) {
     let prepared = (|| -> Result<_, String> {
         let mut state = client.borrow_mut();
@@ -350,14 +527,30 @@ fn join_room(client: Rc<RefCell<Client>>) {
                         );
                         return;
                     }
-                    {
+                    let saved = {
                         let mut state = client.borrow_mut();
                         state.credential = joined.local_binding;
                         state.session = joined.session_id;
                         state.run = joined.run_id;
                         state.binding = joined.client_binding_id;
+                        match (&state.session, &state.run, &state.binding) {
+                            (Some(session), Some(run), Some(binding)) => saved_player::save(
+                                &state.room_code,
+                                &state.credential,
+                                session,
+                                run,
+                                binding,
+                            ),
+                            _ => Err(JsValue::from_str("joined scope absent")),
+                        }
+                    };
+                    connect(client.clone());
+                    if saved.is_err() {
+                        feedback(
+                            &client.borrow(),
+                            "This browser cannot remember your game, so a reload would start over.",
+                        );
                     }
-                    connect(client);
                 }
                 Some(rpc::join_room_response::Outcome::Refused(refusal)) => {
                     feedback(
@@ -479,7 +672,12 @@ fn connect(client: Rc<RefCell<Client>>) {
             let mut stream = sessions
                 .watch(request(body, &credential)?)
                 .await
-                .map_err(|_| "Saved game view unavailable")?
+                .map_err(|error| match error.code() {
+                    tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => {
+                        SAVED_GAME_REFUSED
+                    }
+                    _ => "Saved game view unavailable",
+                })?
                 .into_inner();
             status(&owned.borrow(), "Connected · server owns the saved game");
             while let Some(view) = stream
@@ -497,17 +695,29 @@ fn connect(client: Rc<RefCell<Client>>) {
         };
         let result = Abortable::new(run, registration).await;
         if owned.borrow().generation == generation {
+            if owned.borrow().role == "player"
+                && matches!(&result, Ok(Err(error)) if error == SAVED_GAME_REFUSED)
+            {
+                forget_saved_game(
+                    &owned,
+                    "Your saved game was not recognised by this server, so it was cleared. Join again to start over.",
+                );
+                return;
+            }
             if let Some(connection) = owned.borrow_mut().connection.take() {
                 connection.close();
             }
             owned.borrow_mut().action.take();
             owned.borrow_mut().dialogue.retire_transport();
+            // Redraw so the recovery controls reflect the lost connection.
+            let redrawn = redraw_current(&owned);
             status(
                 &owned.borrow(),
-                match result {
-                    Ok(Ok(())) => "Game connection closed.",
-                    Ok(Err(ref error)) => error.as_str(),
-                    Err(_) => "Connection cancelled.",
+                match (&result, redrawn.is_err()) {
+                    (_, true) => "Saved view could not be displayed.",
+                    (Ok(Ok(())), _) => "Game connection closed.",
+                    (Ok(Err(error)), _) => error.as_str(),
+                    (Err(_), _) => "Connection cancelled.",
                 },
             );
         }
@@ -940,21 +1150,23 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         creation(client, &surface, creation_offer, offered)?;
         dialogue_recovery::mount(client, &surface, &offers)?;
         // Recovery remains reachable while a creation submission is uncertain.
-        let tools = if let Some(tools) = surface.query_selector(".tools")? {
-            tools
-        } else {
-            node(&document, &surface, "div", "tools", "")?
-        };
-        tools.set_text_content(None);
-        button(client, &tools, "Reconnect", connect)?;
-        if client.borrow().last_request.is_some() {
-            button(client, &tools, "Confirm saved choice", |client| {
-                replay(client, false)
-            })?;
+        // The feedback node is kept (and moved last) so its message survives redraws.
+        let kept_feedback = surface.query_selector(".feedback")?;
+        for stale in [".recovery-needed", ".trouble"] {
+            if let Some(previous) = surface.query_selector(stale)? {
+                previous.remove();
+            }
         }
-        if surface.query_selector(".feedback")?.is_none() {
-            node(&document, &surface, "p", "feedback", "")?;
+        recovery_prompt(client, &surface)?;
+        match kept_feedback {
+            Some(feedback) => {
+                surface.append_child(&feedback)?;
+            }
+            None => {
+                node(&document, &surface, "p", "feedback", "")?;
+            }
         }
+        recovery_details(client, &surface)?;
         return Ok(());
     }
     if let Some(creation) = client.borrow_mut().creation.take() {
@@ -1229,19 +1441,97 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
     for offer in offers {
         action_button(client, &actions, offer)?;
     }
-    let tools = node(&document, &body, "div", "tools", "")?;
-    button(client, &tools, "Reconnect", connect)?;
-    if client.borrow().last_request.is_some() {
-        button(client, &tools, "Confirm saved choice", |client| {
-            replay(client, false)
-        })?;
+    recovery_prompt(client, &body)?;
+    node(&document, &body, "p", "feedback", "")?;
+    recovery_details(client, &body)?;
+    Ok(())
+}
+
+/// What currently needs recovery: a lost connection, or a choice whose outcome is unknown
+/// (sent, but no committed receipt seen yet and no request still in flight).
+struct RecoveryNeeds {
+    lost_connection: bool,
+    unknown_choice: bool,
+}
+fn recovery_needs(state: &Client) -> RecoveryNeeds {
+    RecoveryNeeds {
+        lost_connection: state.connection.is_none(),
+        unknown_choice: state.last_request.is_some() && !state.last_confirmed && !state.busy,
     }
-    if client.borrow().first_attack.is_some() {
+}
+fn confirm_saved_choice(client: &Rc<RefCell<Client>>, parent: &Element) -> Result<(), JsValue> {
+    button(client, parent, "Confirm saved choice", |client| {
+        replay(client, false)
+    })?;
+    Ok(())
+}
+/// Shows a recovery control prominently only while its condition holds. A dialogue
+/// confirmation of unknown outcome has its own retry button inside the dialogue panel.
+fn recovery_prompt(client: &Rc<RefCell<Client>>, parent: &Element) -> Result<(), JsValue> {
+    let (document, needs, dialogue_retry) = {
+        let state = client.borrow();
+        (
+            state.document.clone(),
+            recovery_needs(&state),
+            state.dialogue.has_confirmation(),
+        )
+    };
+    let confirm_here = needs.unknown_choice && !dialogue_retry;
+    if !needs.lost_connection && !confirm_here {
+        return Ok(());
+    }
+    let prompt = node(&document, parent, "div", "recovery-needed", "")?;
+    node(
+        &document,
+        &prompt,
+        "p",
+        "",
+        if needs.lost_connection {
+            "The connection to the game was lost."
+        } else {
+            "Your last choice may not have been saved. Confirm it to check; it will not be applied twice."
+        },
+    )?;
+    let tools = node(&document, &prompt, "div", "tools", "")?;
+    if needs.lost_connection {
+        button(client, &tools, "Reconnect", connect)?;
+    }
+    if confirm_here && client.borrow().last_request.is_some() {
+        confirm_saved_choice(client, &tools)?;
+    }
+    Ok(())
+}
+/// Every recovery control stays reachable at the bottom of the view, collapsed unless the
+/// control is already shown by `recovery_prompt`. Nothing here changes what a control does.
+fn recovery_details(client: &Rc<RefCell<Client>>, parent: &Element) -> Result<(), JsValue> {
+    let (document, needs, dialogue_retry, last_request, first_attack, player) = {
+        let state = client.borrow();
+        (
+            state.document.clone(),
+            recovery_needs(&state),
+            state.dialogue.has_confirmation(),
+            state.last_request.is_some(),
+            state.first_attack.is_some(),
+            state.role == "player",
+        )
+    };
+    let details = node(&document, parent, "details", "trouble", "")?;
+    node(&document, &details, "summary", "", "Connection trouble?")?;
+    let tools = node(&document, &details, "div", "tools", "")?;
+    if !needs.lost_connection {
+        button(client, &tools, "Reconnect", connect)?;
+    }
+    if last_request && !(needs.unknown_choice && !dialogue_retry) {
+        confirm_saved_choice(client, &tools)?;
+    }
+    if first_attack {
         button(client, &tools, "Confirm original strike", |client| {
             replay(client, true)
         })?;
     }
-    node(&document, &body, "p", "feedback", "")?;
+    if player {
+        button(client, &tools, LEAVE_LABEL, leave_saved_game)?;
+    }
     Ok(())
 }
 fn new_client(
@@ -1299,6 +1589,33 @@ fn new_client(
     })))
 }
 
+/// Resumes a credential saved on this device through the ordinary reconnect path.
+fn resume_or_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+    let saved = saved_player::load(&client.borrow().room_code);
+    match saved {
+        Ok(Some(saved)) => {
+            {
+                let mut state = client.borrow_mut();
+                state.credential = saved.credential;
+                state.session = Some(saved.session);
+                state.run = Some(saved.run);
+                state.binding = Some(saved.binding);
+            }
+            render_resume(client)?;
+            connect(client.clone());
+        }
+        Ok(None) => render_join(client)?,
+        Err(_) => {
+            render_join(client)?;
+            feedback(
+                &client.borrow(),
+                "This browser cannot remember your game, so a reload would start over.",
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn start() -> Result<(), JsValue> {
     if CLIENTS.with(|clients| !clients.borrow().is_empty()) {
         return Err(JsValue::from_str("gameplay clients already mounted"));
@@ -1313,7 +1630,7 @@ pub(super) fn start() -> Result<(), JsValue> {
         let client = new_client(&document, root, role)?;
         CLIENTS.with(|clients| clients.borrow_mut().push(client.clone()));
         if role == "player" {
-            render_join(&client)?;
+            resume_or_join(&client)?;
         } else {
             connect(client);
         }

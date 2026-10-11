@@ -154,12 +154,15 @@ pub(super) fn mount(
     }
     let panel = node(&document, parent, "section", "dialogue-recovery", "")?;
     node(&document, &panel, "h3", "", "Say what you mean")?;
+    // Technical meaning behind the player-facing line: typed text is only a draft, never an
+    // automatic action or check. A source-grounded ruling is unavailable here, so the player
+    // can only decline or explicitly confirm a supported offered action.
     node(
         &document,
         &panel,
         "p",
         "scope",
-        "Text is a draft, never an automatic action or check. A source-grounded ruling is unavailable here; decline or choose a supported offered action.",
+        "Type what you want to say or do. Nothing happens until you confirm a choice.",
     )?;
     panel.append_child(&editor)?;
     panel.append_child(&context)?;
@@ -218,13 +221,26 @@ pub(super) fn mount(
     let raw = button(client, &controls, "Ask for clarification", submit)?;
     let cancel = button(client, &controls, "Decline this choice", decline)?;
     let confirm = button(client, &controls, "Confirm offered choice", confirm)?;
-    let retry = button(client, &controls, "Retry the same confirmation", retry)?;
+    // Retry is a lost-response recovery path: it exists only while a confirmation's outcome
+    // is unknown. Otherwise the main view's "Connection trouble?" section covers recovery.
+    let retry = if client.borrow().dialogue.has_confirmation() {
+        Some(button(
+            client,
+            &controls,
+            "Retry the same confirmation",
+            retry,
+        )?)
+    } else {
+        None
+    };
     let state = client.borrow();
     let recovery = &state.dialogue;
     raw.set_attribute("data-dialogue", "submit")?;
     cancel.set_attribute("data-dialogue", "cancel")?;
     confirm.set_attribute("data-dialogue", "confirm")?;
-    retry.set_attribute("data-dialogue", "retry")?;
+    if let Some(retry) = &retry {
+        retry.set_attribute("data-dialogue", "retry")?;
+    }
     for (element, disabled) in [
         (
             &raw,
@@ -244,11 +260,13 @@ pub(super) fn mount(
                 || recovery.ticket.is_none()
                 || recovery.confirmation.is_some(),
         ),
-        (
-            &retry,
-            state.busy || recovery.channel.is_none() || recovery.confirmation.is_none(),
-        ),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        retry
+            .as_ref()
+            .map(|retry| (retry, state.busy || recovery.channel.is_none())),
+    ) {
         if disabled {
             element.set_attribute("disabled", "")?;
         }
