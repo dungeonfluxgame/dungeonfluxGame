@@ -638,3 +638,7 @@ mod durable_session {
         );
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "compound_discretionary_contract.rs"]
+mod compound_discretionary_contract;
