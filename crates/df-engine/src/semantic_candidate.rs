@@ -2,7 +2,9 @@
 use crate::command_entry::CommandEntryContext;
 use crate::pending_resumption::{ResumeError, ResumeFence, ResumeLimits, stage_pending_response};
 use df_intent::candidate::{CandidateError, CandidateOwner, validate_semantic_candidate};
-use df_model::checkpoint::{Checkpoint, ReferenceInventory};
+use df_intent::dialogue::{DialogueError, DialogueLimits, classify_dialogue, confirm_final_input};
+use df_model::checkpoint::{Checkpoint, GameInput, ReferenceInventory};
+use df_model::intent::{DiscourseContext, InputFinality, IntentDisposition, RawInputRef};
 use df_rules::preconditions::PreconditionedCommandHandler;
 use df_rules::{DispatchRegistry, RulesCommandHandler, RulesCommandInput};
 use df_types::RevisionLabel;
@@ -71,4 +73,93 @@ pub fn stage_semantic_response<H: RulesCommandHandler>(
         selector,
     )
     .map_err(SemanticResponseError::Resume)
+}
+
+/// A native dialogue result never treats an inert input as an accepted next checkpoint.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DialogueResponseOutcome {
+    NoMechanicalProposal(IntentDisposition),
+    Staged(Box<Checkpoint>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DialogueResponseError<R> {
+    Dialogue(DialogueError),
+    ConfirmationMismatch,
+    InputBindingMismatch,
+    ConfirmationOperationReuse,
+    Semantic(SemanticResponseError<R>),
+}
+
+/// Borrowed native capture and separately admitted confirmation; neither is a capability.
+/// The native caller owns the retained ticket, exact typed selection and authentication.
+pub struct DialogueResponseAdmission<'a> {
+    pub captured: &'a RawInputRef,
+    pub confirmed: Option<&'a RawInputRef>,
+    pub text: &'a str,
+    pub discourse: DiscourseContext,
+    pub limits: DialogueLimits,
+}
+
+/// Keep dialogue inert until a distinct, current, explicit final typed response is admitted.
+///
+/// Classification never promotes wording, a model disposition or tentative speech to mechanics.
+/// Non-action discourse stays inert even if a caller attaches a confirmation. Ambiguous final
+/// input requires the native owner's separately confirmed exact capture and a distinct command
+/// operation. The caller must first authenticate and lookup that operation, retain and check its
+/// ticket and exact current typed offer. These borrowed values do not prove those permissions.
+///
+/// Raw text is borrowed solely for bounded classification and is never retained in the result.
+/// Only a separately confirmed final response reaches the existing source-registered semantic
+/// path; its supplied draw slice, generation/cancellation and staging limits remain unchanged.
+/// The native session still owns durable commit, effects and publication.
+pub fn stage_dialogue_response<H: RulesCommandHandler>(
+    input: RulesCommandInput<'_>,
+    current: &Checkpoint,
+    context: CommandEntryContext<'_>,
+    dialogue: DialogueResponseAdmission<'_>,
+    admission: SemanticResponseAdmission<'_>,
+    registry: &DispatchRegistry<'_, PreconditionedCommandHandler<'_, H>>,
+    selector: &RevisionLabel,
+) -> Result<DialogueResponseOutcome, DialogueResponseError<H::Rejection>> {
+    let disposition = classify_dialogue(
+        dialogue.text,
+        dialogue.discourse,
+        dialogue.captured,
+        current,
+        admission.owner.member,
+        dialogue.limits,
+    )
+    .map_err(DialogueResponseError::Dialogue)?;
+    if dialogue.captured.finality == InputFinality::Partial
+        || disposition != IntentDisposition::Clarify
+    {
+        return Ok(DialogueResponseOutcome::NoMechanicalProposal(disposition));
+    }
+    let Some(confirmed) = dialogue.confirmed else {
+        return Ok(DialogueResponseOutcome::NoMechanicalProposal(disposition));
+    };
+    if confirmed != dialogue.captured {
+        return Err(DialogueResponseError::ConfirmationMismatch);
+    }
+    confirm_final_input(confirmed, current, admission.owner.member)
+        .map_err(DialogueResponseError::Dialogue)?;
+    if confirmed.member != admission.owner.member
+        || confirmed.basis != admission.owner.basis
+        || &confirmed.pins != admission.owner.pins
+    {
+        return Err(DialogueResponseError::InputBindingMismatch);
+    }
+    if confirmed.input == admission.owner.operation {
+        return Err(DialogueResponseError::ConfirmationOperationReuse);
+    }
+    if let GameInput::Game(command) = input.command
+        && (command.basis != confirmed.basis
+            || command.observed_revision != confirmed.basis.revision)
+    {
+        return Err(DialogueResponseError::InputBindingMismatch);
+    }
+    stage_semantic_response(input, current, context, admission, registry, selector)
+        .map(|candidate| DialogueResponseOutcome::Staged(Box::new(candidate)))
+        .map_err(DialogueResponseError::Semantic)
 }
