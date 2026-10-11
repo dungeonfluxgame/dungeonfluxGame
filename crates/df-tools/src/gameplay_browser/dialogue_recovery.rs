@@ -24,12 +24,11 @@ impl DialogueRecovery {
         if let Some(editor) = &self.editor {
             let element: &Element = editor.as_ref();
             self.restore_focus = document.active_element().as_ref() == Some(element);
-            if self.restore_focus {
-                if let (Some(start), Some(end)) =
+            if self.restore_focus
+                && let (Some(start), Some(end)) =
                     (editor.selection_start()?, editor.selection_end()?)
-                {
-                    self.selection = Some((start, end));
-                }
+            {
+                self.selection = Some((start, end));
             }
         }
         Ok(())
@@ -432,10 +431,10 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
         }
         if let Call::Confirm(body) = &call {
             let action = body.action.clone().ok_or("Separate typed action absent")?;
-            if let Some(original) = &state.dialogue.confirmation {
-                if original != body {
-                    return Err("Retry the exact original confirmation.".to_owned());
-                }
+            if let Some(original) = &state.dialogue.confirmation
+                && original != body
+            {
+                return Err("Retry the exact original confirmation.".to_owned());
             }
             state.last_request = Some(action);
             state.last_confirmed = false;
