@@ -619,6 +619,7 @@ impl Actor {
                                     })
                                     .collect::<Vec<_>>();
                                 df_rules::local_journey::validate_character(
+                                    &df_rules::local_journey::CreationRules::srd_521(),
                                     &character.name,
                                     &selections,
                                 )

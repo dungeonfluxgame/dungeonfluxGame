@@ -15,6 +15,7 @@ pub enum JourneyRuleError {
     ActionSpent,
     BonusActionSpent,
     ResourceMissing,
+    InvalidRules,
     InvalidRest,
     RestIncomplete,
     RestInterrupted,
@@ -82,13 +83,241 @@ pub const BUILD_GROUPS: &[&str] = &[
     "allied-ties",
 ];
 
+/// A compiled supported array identifier and its unmodified STR/DEX/CON/INT/WIS/CHA scores.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AbilityArray<'a> {
+    pub id: &'a str,
+    pub scores: [u8; 6],
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BackgroundBonus {
+    pub strength: u8,
+    pub constitution: u8,
+}
+/// Creation numbers; array IDs remain within the compiled supported offer set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CreationRules<'a> {
+    pub ability_arrays: &'a [AbilityArray<'a>],
+    pub background_bonus: BackgroundBonus,
+    pub base_hit_points: u8,
+    pub armor_class: u8,
+    pub proficiency_bonus: u8,
+    pub second_wind_uses_max: u8,
+}
+impl CreationRules<'_> {
+    pub const fn srd_521() -> Self {
+        SRD_521_BASELINE.creation
+    }
+    /// Reject out-of-bounds numbers, unsupported/duplicate IDs and nonpositive derived HP.
+    pub fn validate(&self) -> Result<(), JourneyRuleError> {
+        if !(1..=60).contains(&self.base_hit_points)
+            || !(10..=30).contains(&self.armor_class)
+            || !(2..=6).contains(&self.proficiency_bonus)
+            || self.second_wind_uses_max > 5
+            || self.background_bonus.strength > 4
+            || self.background_bonus.constitution > 4
+            || self.ability_arrays.is_empty()
+        {
+            return Err(JourneyRuleError::InvalidRules);
+        }
+        for (index, array) in self.ability_arrays.iter().enumerate() {
+            if !matches!(array.id, "stalwart" | "vanguard")
+                || self.ability_arrays[..index]
+                    .iter()
+                    .any(|previous| previous.id == array.id)
+                || array.scores.iter().any(|score| !(3..=18).contains(score))
+                || array.scores[0] + self.background_bonus.strength > 20
+                || array.scores[2] + self.background_bonus.constitution > 20
+                || i32::from(self.base_hit_points)
+                    + ability_modifier(array.scores[2] + self.background_bonus.constitution)
+                    <= 0
+            {
+                return Err(JourneyRuleError::InvalidRules);
+            }
+        }
+        Ok(())
+    }
+}
+/// Combat numbers shared with the native caller; d20 and dice-doubling mechanics stay fixed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CombatRules {
+    pub critical_threshold: u8,
+    pub round_ticks: u32,
+    pub combat_log_entries: u8,
+}
+impl CombatRules {
+    pub const fn srd_521() -> Self {
+        SRD_521_BASELINE.combat
+    }
+    pub fn validate(&self) -> Result<(), JourneyRuleError> {
+        if !(15..=20).contains(&self.critical_threshold)
+            || !(1..=600).contains(&self.round_ticks)
+            || !(1..=32).contains(&self.combat_log_entries)
+        {
+            return Err(JourneyRuleError::InvalidRules);
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SecondWindRules {
+    pub uses_max: u8,
+    pub die_sides: u8,
+    pub flat_bonus: u8,
+    pub recharge_per_short_rest: u8,
+}
+impl SecondWindRules {
+    pub const fn srd_521() -> Self {
+        SRD_521_BASELINE.second_wind
+    }
+    pub fn validate(&self) -> Result<(), JourneyRuleError> {
+        if self.uses_max > 5
+            || !permitted_damage_sides(self.die_sides)
+            || self.flat_bonus > 10
+            || self.recharge_per_short_rest > self.uses_max
+        {
+            return Err(JourneyRuleError::InvalidRules);
+        }
+        Ok(())
+    }
+}
+/// Rest duration in seconds of admitted campaign time, never wall-clock time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RestRules {
+    pub short_rest_seconds: u32,
+}
+impl RestRules {
+    pub const fn srd_521() -> Self {
+        SRD_521_BASELINE.rest
+    }
+    pub fn validate(&self) -> Result<(), JourneyRuleError> {
+        if !(60..=86400).contains(&self.short_rest_seconds) {
+            return Err(JourneyRuleError::InvalidRules);
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WeaponRules {
+    pub damage_dice: u8,
+    pub damage_sides: u8,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BanditRules {
+    pub hit_points: u8,
+    pub armor_class: u8,
+    pub abilities: [u8; 6],
+    pub attack_bonus: i32,
+    pub damage_modifier: i32,
+    pub weapon: WeaponRules,
+}
+/// Compiled defaults for every standard-sensitive tuning/pack field (§3).
+/// A loader compares against these values; input data cannot declare itself standard.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Srd521Baseline {
+    pub creation: CreationRules<'static>,
+    pub combat: CombatRules,
+    pub second_wind: SecondWindRules,
+    pub rest: RestRules,
+    pub hero_weapon: WeaponRules,
+    pub bandit: BanditRules,
+    pub equipment: &'static [(&'static str, u8)],
+    pub fighter_skills: &'static [&'static str],
+    pub standard_languages: &'static [&'static str],
+    pub alignments: &'static [&'static str],
+    pub gaming_sets: &'static [&'static str],
+}
+pub const SRD_521_BASELINE: Srd521Baseline = Srd521Baseline {
+    creation: CreationRules {
+        ability_arrays: &[
+            AbilityArray {
+                id: "stalwart",
+                scores: [15, 13, 14, 10, 12, 8],
+            },
+            AbilityArray {
+                id: "vanguard",
+                scores: [15, 14, 13, 8, 10, 12],
+            },
+        ],
+        background_bonus: BackgroundBonus {
+            strength: 2,
+            constitution: 1,
+        },
+        base_hit_points: 11,
+        armor_class: 17,
+        proficiency_bonus: 2,
+        second_wind_uses_max: 2,
+    },
+    combat: CombatRules {
+        critical_threshold: 20,
+        round_ticks: 6,
+        combat_log_entries: 6,
+    },
+    second_wind: SecondWindRules {
+        uses_max: 2,
+        die_sides: 10,
+        flat_bonus: 1,
+        recharge_per_short_rest: 1,
+    },
+    rest: RestRules {
+        short_rest_seconds: 3600,
+    },
+    hero_weapon: WeaponRules {
+        damage_dice: 2,
+        damage_sides: 6,
+    },
+    bandit: BanditRules {
+        hit_points: 11,
+        armor_class: 12,
+        abilities: [11, 12, 12, 10, 10, 10],
+        attack_bonus: 3,
+        damage_modifier: 1,
+        weapon: WeaponRules {
+            damage_dice: 1,
+            damage_sides: 6,
+        },
+    },
+    equipment: &[
+        ("chain-mail", 1),
+        ("greatsword", 1),
+        ("flail", 1),
+        ("javelin", 8),
+        ("dungeoneer-pack", 1),
+        ("spear", 1),
+        ("shortbow", 1),
+        ("arrow", 20),
+        ("gaming-set", 1),
+        ("healers-kit", 1),
+        ("quiver", 1),
+        ("travelers-clothes", 1),
+        ("gold-piece", 18),
+    ],
+    fighter_skills: FIGHTER_SKILLS,
+    standard_languages: STANDARD_LANGUAGES,
+    alignments: ALIGNMENTS,
+    gaming_sets: GAMING_SETS,
+};
+
+const MAXIMUM_CHARACTER_NAME_BYTES: usize = 24;
+const ATTACK_DIE_SIDES: u32 = 20;
+const NATURAL_MISS: u32 = 1;
+const MINIMUM_WEAPON_DICE: usize = 1;
+const MAXIMUM_WEAPON_DICE: usize = 2;
+const KNOCKOUT_HIT_POINTS: u32 = 1;
+
+const fn permitted_damage_sides(sides: u8) -> bool {
+    matches!(sides, 4 | 6 | 8 | 10 | 12)
+}
+
 /// Validate the explicit supported offers, never accept a client-derived stat or roll.
 pub fn validate_character(
+    rules: &CreationRules<'_>,
     name: &str,
     choices: &[(&str, &str)],
 ) -> Result<LegalCharacter, JourneyRuleError> {
+    rules.validate()?;
     if name.is_empty()
-        || name.len() > 24
+        || name.len() > MAXIMUM_CHARACTER_NAME_BYTES
         || !name
             .bytes()
             .all(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'-' | b'_'))
@@ -128,14 +357,15 @@ pub fn validate_character(
             return Err(JourneyRuleError::InvalidChoice);
         }
     }
-    let mut abilities = match choice("array")? {
-        "stalwart" => [15, 13, 14, 10, 12, 8],
-        "vanguard" => [15, 14, 13, 8, 10, 12],
-        _ => return Err(JourneyRuleError::InvalidChoice),
-    };
-    // Soldier permits +2 to Strength and +1 to a distinct Constitution.
-    abilities[0] += 2;
-    abilities[2] += 1;
+    let array_id = choice("array")?;
+    let mut abilities = rules
+        .ability_arrays
+        .iter()
+        .find(|array| array.id == array_id)
+        .map(|array| array.scores)
+        .ok_or(JourneyRuleError::InvalidChoice)?;
+    abilities[0] += rules.background_bonus.strength;
+    abilities[2] += rules.background_bonus.constitution;
     if !ALIGNMENTS.contains(&choice("alignment")?) || !GAMING_SETS.contains(&choice("gaming-set")?)
     {
         return Err(JourneyRuleError::InvalidChoice);
@@ -158,11 +388,10 @@ pub fn validate_character(
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect(),
         // Fighter maximum first die + Constitution modifier + Dwarven Toughness.
-        hit_points: (11 + ability_modifier(abilities[2])) as u32,
-        // Chain Mail16, Defense +1, no shield (Greatsword occupies both hands).
-        armor_class: 17,
-        proficiency_bonus: 2,
-        second_wind_uses: 2,
+        hit_points: (i32::from(rules.base_hit_points) + ability_modifier(abilities[2])) as u32,
+        armor_class: u32::from(rules.armor_class),
+        proficiency_bonus: u32::from(rules.proficiency_bonus),
+        second_wind_uses: u32::from(rules.second_wind_uses_max),
     })
 }
 pub const fn ability_modifier(score: u8) -> i32 {
@@ -234,6 +463,8 @@ pub struct AttackOutcome {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct NormalMeleeAttack<'a> {
+    pub critical_threshold: u8,
+    pub damage_sides: u8,
     pub die: u32,
     pub modifier: i32,
     pub armor_class: u32,
@@ -247,15 +478,21 @@ pub struct NormalMeleeAttack<'a> {
 /// Exact normal melee subset: no advantage, cover, surprise, resistance, or hidden target.
 /// Both combatants deliberately select source-defined knockout for this encounter.
 pub fn resolve_melee(input: NormalMeleeAttack<'_>) -> Result<AttackOutcome, JourneyRuleError> {
-    if !(1..=20).contains(&input.die) {
+    if !(15..=20).contains(&input.critical_threshold) || !permitted_damage_sides(input.damage_sides)
+    {
+        return Err(JourneyRuleError::InvalidRules);
+    }
+    if !(1..=ATTACK_DIE_SIDES).contains(&input.die) {
         return Err(JourneyRuleError::InvalidDie);
     }
-    if input.target_hit_points == 0 || !(1..=2).contains(&input.weapon_dice) {
+    if input.target_hit_points == 0
+        || !(MINIMUM_WEAPON_DICE..=MAXIMUM_WEAPON_DICE).contains(&input.weapon_dice)
+    {
         return Err(JourneyRuleError::InvalidTarget);
     }
     let total = input.die as i32 + input.modifier;
-    let critical = input.die == 20;
-    let hit = input.die != 1 && (critical || total >= input.armor_class as i32);
+    let critical = input.die >= u32::from(input.critical_threshold);
+    let hit = input.die != NATURAL_MISS && (critical || total >= input.armor_class as i32);
     let count = input.weapon_dice * if critical { 2 } else { 1 };
     let expected = if hit {
         count
@@ -268,7 +505,10 @@ pub fn resolve_melee(input: NormalMeleeAttack<'_>) -> Result<AttackOutcome, Jour
         0
     };
     if input.damage_dice.len() != expected
-        || input.damage_dice.iter().any(|die| !(1..=6).contains(die))
+        || input
+            .damage_dice
+            .iter()
+            .any(|die| !(1..=u32::from(input.damage_sides)).contains(die))
     {
         return Err(JourneyRuleError::InvalidDamageDice);
     }
@@ -301,7 +541,7 @@ pub fn resolve_melee(input: NormalMeleeAttack<'_>) -> Result<AttackOutcome, Jour
         damage_dice: input.damage_dice.to_vec(),
         damage,
         target_hit_points: if knocked_out {
-            1
+            KNOCKOUT_HIT_POINTS
         } else {
             input.target_hit_points - damage
         },
@@ -310,12 +550,14 @@ pub fn resolve_melee(input: NormalMeleeAttack<'_>) -> Result<AttackOutcome, Jour
     })
 }
 pub fn heal_second_wind(
+    rules: &SecondWindRules,
     die: u32,
     current: u32,
     maximum: u32,
     uses: u32,
 ) -> Result<(u32, u32), JourneyRuleError> {
-    if !(1..=10).contains(&die) {
+    rules.validate()?;
+    if !(1..=u32::from(rules.die_sides)).contains(&die) {
         return Err(JourneyRuleError::InvalidDie);
     }
     if uses == 0 {
@@ -324,17 +566,23 @@ pub fn heal_second_wind(
     if maximum == 0 || current == 0 || current > maximum {
         return Err(JourneyRuleError::InvalidTarget);
     }
-    Ok((maximum.min(current + die + 1), uses - 1))
+    let healed = u64::from(current) + u64::from(die) + u64::from(rules.flat_bonus);
+    Ok((u64::from(maximum).min(healed) as u32, uses - 1))
 }
 
-/// Source p187 fixed one-hour duration, expressed in admitted campaign ticks.
+/// Configured rest duration, expressed in admitted campaign ticks.
 /// This does not advance time or supply healing/dice.
-pub fn short_rest_due(started: u64, ticks_per_second: u32) -> Result<u64, JourneyRuleError> {
+pub fn short_rest_due(
+    started: u64,
+    ticks_per_second: u32,
+    short_rest_seconds: u32,
+) -> Result<u64, JourneyRuleError> {
+    RestRules { short_rest_seconds }.validate()?;
     if ticks_per_second == 0 {
         return Err(JourneyRuleError::InvalidRest);
     }
     started
-        .checked_add(u64::from(ticks_per_second) * 3600)
+        .checked_add(u64::from(ticks_per_second) * u64::from(short_rest_seconds))
         .ok_or(JourneyRuleError::InvalidRest)
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -353,23 +601,42 @@ pub struct ShortRestBenefits {
     pub fighter_second_wind_uses: Option<u32>,
     pub ends_knockout_unconscious: bool,
 }
-/// Selected no-Hit-Dice rest: unchanged HP, Fighter p48 +one use capped2,
+/// Selected no-Hit-Dice rest: unchanged HP, configured capped Second Wind recharge,
 /// and source p17 knockout unconsciousness ends. Prone/equipment stay with the caller.
 pub fn complete_no_hit_dice_short_rest(
+    rules: &RestRules,
     input: NoHitDiceShortRest,
+    uses_max: u8,
+    recharge: u8,
 ) -> Result<ShortRestBenefits, JourneyRuleError> {
+    rules.validate()?;
+    if uses_max > 5 || recharge > uses_max {
+        return Err(JourneyRuleError::InvalidRules);
+    }
     if input.interrupted {
         return Err(JourneyRuleError::RestInterrupted);
     }
-    if input.hit_points == 0 || input.fighter_second_wind_uses.is_some_and(|uses| uses > 2) {
+    if input.hit_points == 0
+        || input
+            .fighter_second_wind_uses
+            .is_some_and(|uses| uses > u32::from(uses_max))
+    {
         return Err(JourneyRuleError::InvalidRest);
     }
-    if input.finished < short_rest_due(input.started, input.ticks_per_second)? {
+    if input.finished
+        < short_rest_due(
+            input.started,
+            input.ticks_per_second,
+            rules.short_rest_seconds,
+        )?
+    {
         return Err(JourneyRuleError::RestIncomplete);
     }
     Ok(ShortRestBenefits {
         hit_points: input.hit_points,
-        fighter_second_wind_uses: input.fighter_second_wind_uses.map(|uses| 2.min(uses + 1)),
+        fighter_second_wind_uses: input
+            .fighter_second_wind_uses
+            .map(|uses| u32::from(uses_max).min(uses + u32::from(recharge))),
         ends_knockout_unconscious: input.knockout_unconscious,
     })
 }
@@ -431,7 +698,8 @@ mod tests {
     #[test]
     fn legal_build_and_illegal_duplicate_skill() {
         let mut values = choices();
-        let built = validate_character("Brynn", &values).expect("source-legal selection");
+        let built = validate_character(&CreationRules::srd_521(), "Brynn", &values)
+            .expect("source-legal selection");
         assert_eq!(built.abilities, [17, 13, 15, 10, 12, 8]);
         assert_eq!(
             (built.hit_points, built.armor_class, built.proficiency_bonus),
@@ -439,18 +707,20 @@ mod tests {
         );
         values[8].1 = "perception";
         assert_eq!(
-            validate_character("Brynn", &values),
+            validate_character(&CreationRules::srd_521(), "Brynn", &values),
             Err(JourneyRuleError::InvalidChoice)
         );
         values[8].1 = "athletics"; // Soldier already provides it.
         assert_eq!(
-            validate_character("Brynn", &values),
+            validate_character(&CreationRules::srd_521(), "Brynn", &values),
             Err(JourneyRuleError::InvalidChoice)
         );
     }
     #[test]
     fn critical_doubles_weapon_dice_and_knockout_precedes_zero() {
         let result = resolve_melee(NormalMeleeAttack {
+            critical_threshold: CombatRules::srd_521().critical_threshold,
+            damage_sides: SRD_521_BASELINE.hero_weapon.damage_sides,
             die: 20,
             modifier: 5,
             armor_class: 12,
@@ -469,6 +739,8 @@ mod tests {
     #[test]
     fn natural_one_graze_and_bad_dice_are_explicit() {
         let attack = NormalMeleeAttack {
+            critical_threshold: CombatRules::srd_521().critical_threshold,
+            damage_sides: SRD_521_BASELINE.hero_weapon.damage_sides,
             die: 1,
             modifier: 50,
             armor_class: 12,
@@ -504,9 +776,12 @@ mod tests {
             healed.second_wind(1),
             Err(JourneyRuleError::BonusActionSpent)
         );
-        assert_eq!(heal_second_wind(10, 5, 13, 2), Ok((13, 1)));
         assert_eq!(
-            heal_second_wind(1, 13, 13, 0),
+            heal_second_wind(&SecondWindRules::srd_521(), 10, 5, 13, 2),
+            Ok((13, 1))
+        );
+        assert_eq!(
+            heal_second_wind(&SecondWindRules::srd_521(), 1, 13, 13, 0),
             Err(JourneyRuleError::ResourceMissing)
         );
     }
@@ -522,27 +797,48 @@ mod tests {
             knockout_unconscious: true,
         };
         assert_eq!(
-            complete_no_hit_dice_short_rest(NoHitDiceShortRest {
-                finished: 3605,
-                ..rest
-            }),
+            complete_no_hit_dice_short_rest(
+                &RestRules::srd_521(),
+                NoHitDiceShortRest {
+                    finished: 3605,
+                    ..rest
+                },
+                SecondWindRules::srd_521().uses_max,
+                SecondWindRules::srd_521().recharge_per_short_rest
+            ),
             Err(JourneyRuleError::RestIncomplete)
         );
         assert_eq!(
-            complete_no_hit_dice_short_rest(NoHitDiceShortRest {
-                interrupted: true,
-                ..rest
-            }),
+            complete_no_hit_dice_short_rest(
+                &RestRules::srd_521(),
+                NoHitDiceShortRest {
+                    interrupted: true,
+                    ..rest
+                },
+                SecondWindRules::srd_521().uses_max,
+                SecondWindRules::srd_521().recharge_per_short_rest
+            ),
             Err(JourneyRuleError::RestInterrupted)
         );
         assert_eq!(
-            complete_no_hit_dice_short_rest(NoHitDiceShortRest {
-                hit_points: 0,
-                ..rest
-            }),
+            complete_no_hit_dice_short_rest(
+                &RestRules::srd_521(),
+                NoHitDiceShortRest {
+                    hit_points: 0,
+                    ..rest
+                },
+                SecondWindRules::srd_521().uses_max,
+                SecondWindRules::srd_521().recharge_per_short_rest
+            ),
             Err(JourneyRuleError::InvalidRest)
         );
-        let result = complete_no_hit_dice_short_rest(rest).unwrap();
+        let result = complete_no_hit_dice_short_rest(
+            &RestRules::srd_521(),
+            rest,
+            SecondWindRules::srd_521().uses_max,
+            SecondWindRules::srd_521().recharge_per_short_rest,
+        )
+        .unwrap();
         assert_eq!(
             result,
             ShortRestBenefits {
@@ -553,20 +849,522 @@ mod tests {
         );
         for uses in [1, 2] {
             assert_eq!(
-                complete_no_hit_dice_short_rest(NoHitDiceShortRest {
-                    fighter_second_wind_uses: Some(uses),
-                    ..rest
-                })
+                complete_no_hit_dice_short_rest(
+                    &RestRules::srd_521(),
+                    NoHitDiceShortRest {
+                        fighter_second_wind_uses: Some(uses),
+                        ..rest
+                    },
+                    SecondWindRules::srd_521().uses_max,
+                    SecondWindRules::srd_521().recharge_per_short_rest
+                )
                 .unwrap()
                 .fighter_second_wind_uses,
                 Some(2)
             );
         }
-        assert_eq!(short_rest_due(6, 2), Ok(7206));
         assert_eq!(
-            short_rest_due(u64::MAX, 1),
+            short_rest_due(6, 2, RestRules::srd_521().short_rest_seconds),
+            Ok(7206)
+        );
+        assert_eq!(
+            short_rest_due(u64::MAX, 1, RestRules::srd_521().short_rest_seconds),
             Err(JourneyRuleError::InvalidRest)
         );
-        assert_eq!(short_rest_due(0, 0), Err(JourneyRuleError::InvalidRest));
+        assert_eq!(
+            short_rest_due(0, 0, RestRules::srd_521().short_rest_seconds),
+            Err(JourneyRuleError::InvalidRest)
+        );
+    }
+    #[test]
+    fn baseline_arrays_preserve_both_character_sheets_and_owned_choices() {
+        let mut selected = choices();
+        for (array, abilities) in [
+            ("stalwart", [17, 13, 15, 10, 12, 8]),
+            ("vanguard", [17, 14, 14, 8, 10, 12]),
+        ] {
+            selected[3].1 = array;
+            assert_eq!(
+                validate_character(&CreationRules::srd_521(), "Brynn", &selected),
+                Ok(LegalCharacter {
+                    name: "Brynn".to_owned(),
+                    abilities,
+                    choices: selected
+                        .iter()
+                        .map(|(group, option)| (group.to_string(), option.to_string()))
+                        .collect(),
+                    hit_points: 13,
+                    armor_class: 17,
+                    proficiency_bonus: 2,
+                    second_wind_uses: 2,
+                })
+            );
+        }
+    }
+    #[test]
+    fn creation_numbers_and_array_subset_change_the_character() {
+        let arrays = [AbilityArray {
+            id: "stalwart",
+            scores: [16, 13, 16, 10, 12, 8],
+        }];
+        let rules = CreationRules {
+            ability_arrays: &arrays,
+            background_bonus: BackgroundBonus {
+                strength: 1,
+                constitution: 2,
+            },
+            base_hit_points: 20,
+            armor_class: 19,
+            proficiency_bonus: 4,
+            second_wind_uses_max: 3,
+        };
+        let mut selected = choices();
+        let built = validate_character(&rules, "Brynn", &selected).unwrap();
+        assert_eq!(built.abilities, [17, 13, 18, 10, 12, 8]);
+        assert_eq!(
+            (
+                built.hit_points,
+                built.armor_class,
+                built.proficiency_bonus,
+                built.second_wind_uses
+            ),
+            (24, 19, 4, 3)
+        );
+        selected[3].1 = "vanguard";
+        assert_eq!(
+            validate_character(&rules, "Brynn", &selected),
+            Err(JourneyRuleError::InvalidChoice)
+        );
+    }
+    #[test]
+    fn creation_rejects_invalid_parameter_bounds_and_array_ids() {
+        let baseline = CreationRules::srd_521();
+        for rules in [
+            CreationRules {
+                base_hit_points: 0,
+                ..baseline
+            },
+            CreationRules {
+                base_hit_points: 61,
+                ..baseline
+            },
+            CreationRules {
+                armor_class: 9,
+                ..baseline
+            },
+            CreationRules {
+                armor_class: 31,
+                ..baseline
+            },
+            CreationRules {
+                proficiency_bonus: 1,
+                ..baseline
+            },
+            CreationRules {
+                proficiency_bonus: 7,
+                ..baseline
+            },
+            CreationRules {
+                second_wind_uses_max: 6,
+                ..baseline
+            },
+            CreationRules {
+                background_bonus: BackgroundBonus {
+                    strength: 5,
+                    constitution: 1,
+                },
+                ..baseline
+            },
+            CreationRules {
+                background_bonus: BackgroundBonus {
+                    strength: 2,
+                    constitution: 5,
+                },
+                ..baseline
+            },
+            CreationRules {
+                ability_arrays: &[],
+                ..baseline
+            },
+        ] {
+            assert_eq!(
+                validate_character(&rules, "Brynn", &choices()),
+                Err(JourneyRuleError::InvalidRules)
+            );
+        }
+        for arrays in [
+            vec![AbilityArray {
+                id: "unknown",
+                scores: [10; 6],
+            }],
+            vec![
+                AbilityArray {
+                    id: "stalwart",
+                    scores: [10; 6]
+                };
+                2
+            ],
+            vec![AbilityArray {
+                id: "stalwart",
+                scores: [2, 10, 10, 10, 10, 10],
+            }],
+            vec![AbilityArray {
+                id: "stalwart",
+                scores: [19, 10, 10, 10, 10, 10],
+            }],
+            vec![AbilityArray {
+                id: "stalwart",
+                scores: [255; 6],
+            }],
+            vec![AbilityArray {
+                id: "stalwart",
+                scores: [18; 6],
+            }],
+        ] {
+            let rules = CreationRules {
+                ability_arrays: &arrays,
+                background_bonus: BackgroundBonus {
+                    strength: 4,
+                    constitution: 4,
+                },
+                ..baseline
+            };
+            assert_eq!(rules.validate(), Err(JourneyRuleError::InvalidRules));
+        }
+        let low_constitution = [AbilityArray {
+            id: "stalwart",
+            scores: [10, 10, 3, 10, 10, 10],
+        }];
+        assert_eq!(
+            CreationRules {
+                ability_arrays: &low_constitution,
+                base_hit_points: 1,
+                ..baseline
+            }
+            .validate(),
+            Err(JourneyRuleError::InvalidRules)
+        );
+    }
+    #[test]
+    fn baseline_character_rejections_keep_their_typed_errors() {
+        let rules = CreationRules::srd_521();
+        for name in ["", "Has Space", "123", "Åsa", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"] {
+            assert_eq!(
+                validate_character(&rules, name, &choices()),
+                Err(JourneyRuleError::InvalidName)
+            );
+        }
+        assert_eq!(
+            validate_character(&rules, "Brynn", &[]),
+            Err(JourneyRuleError::MissingChoice)
+        );
+        let mut selected = choices();
+        selected[1] = selected[0];
+        assert_eq!(
+            validate_character(&rules, "Brynn", &selected),
+            Err(JourneyRuleError::DuplicateChoice)
+        );
+        selected = choices();
+        selected[0].1 = "human";
+        assert_eq!(
+            validate_character(&rules, "Brynn", &selected),
+            Err(JourneyRuleError::InvalidChoice)
+        );
+        selected = choices();
+        selected[6].1 = selected[5].1;
+        assert_eq!(
+            validate_character(&rules, "Brynn", &selected),
+            Err(JourneyRuleError::InvalidChoice)
+        );
+    }
+    fn ordinary_attack() -> NormalMeleeAttack<'static> {
+        NormalMeleeAttack {
+            critical_threshold: CombatRules::srd_521().critical_threshold,
+            damage_sides: SRD_521_BASELINE.hero_weapon.damage_sides,
+            die: 15,
+            modifier: 5,
+            armor_class: 12,
+            damage_dice: &[6, 5],
+            weapon_dice: 2,
+            damage_modifier: 3,
+            savage_attacker_take_higher: false,
+            graze: false,
+            target_hit_points: 20,
+        }
+    }
+    #[test]
+    fn baseline_melee_preserves_the_entire_outcome_and_invalid_inputs() {
+        assert_eq!(
+            resolve_melee(ordinary_attack()),
+            Ok(AttackOutcome {
+                die: 15,
+                modifier: 5,
+                total: 20,
+                armor_class: 12,
+                hit: true,
+                critical: false,
+                damage_dice: vec![6, 5],
+                damage: 14,
+                target_hit_points: 6,
+                knocked_out: false,
+                grazed: false,
+            })
+        );
+        for die in [0, 21] {
+            assert_eq!(
+                resolve_melee(NormalMeleeAttack {
+                    die,
+                    ..ordinary_attack()
+                }),
+                Err(JourneyRuleError::InvalidDie)
+            );
+        }
+        for weapon_dice in [0, 3] {
+            assert_eq!(
+                resolve_melee(NormalMeleeAttack {
+                    weapon_dice,
+                    ..ordinary_attack()
+                }),
+                Err(JourneyRuleError::InvalidTarget)
+            );
+        }
+        for damage_dice in [&[0, 5][..], &[7, 5], &[6]] {
+            assert_eq!(
+                resolve_melee(NormalMeleeAttack {
+                    damage_dice,
+                    ..ordinary_attack()
+                }),
+                Err(JourneyRuleError::InvalidDamageDice)
+            );
+        }
+        assert_eq!(
+            resolve_melee(NormalMeleeAttack {
+                target_hit_points: 0,
+                ..ordinary_attack()
+            }),
+            Err(JourneyRuleError::InvalidTarget)
+        );
+    }
+    #[test]
+    fn configured_weapon_faces_counts_and_critical_threshold_change_damage() {
+        for damage_sides in [4, 6, 8, 10, 12] {
+            let dice = [u32::from(damage_sides)];
+            let result = resolve_melee(NormalMeleeAttack {
+                damage_sides,
+                damage_dice: &dice,
+                weapon_dice: 1,
+                ..ordinary_attack()
+            })
+            .unwrap();
+            assert_eq!(result.damage, u32::from(damage_sides) + 3);
+        }
+        assert_eq!(
+            resolve_melee(NormalMeleeAttack {
+                damage_sides: 8,
+                damage_dice: &[8, 7],
+                ..ordinary_attack()
+            })
+            .unwrap()
+            .damage,
+            18
+        );
+        assert_eq!(
+            resolve_melee(NormalMeleeAttack {
+                damage_dice: &[8, 7],
+                ..ordinary_attack()
+            }),
+            Err(JourneyRuleError::InvalidDamageDice)
+        );
+        let result = resolve_melee(NormalMeleeAttack {
+            die: 19,
+            critical_threshold: 19,
+            damage_dice: &[6, 5, 4, 3],
+            armor_class: 100,
+            ..ordinary_attack()
+        })
+        .unwrap();
+        assert!(result.hit && result.critical);
+        assert_eq!(result.damage, 21);
+        for critical_threshold in [14, 21] {
+            assert_eq!(
+                resolve_melee(NormalMeleeAttack {
+                    critical_threshold,
+                    ..ordinary_attack()
+                }),
+                Err(JourneyRuleError::InvalidRules)
+            );
+        }
+        for damage_sides in [0, 5, 20] {
+            assert_eq!(
+                resolve_melee(NormalMeleeAttack {
+                    damage_sides,
+                    ..ordinary_attack()
+                }),
+                Err(JourneyRuleError::InvalidRules)
+            );
+        }
+    }
+    #[test]
+    fn second_wind_die_bonus_and_boundaries_are_explicit() {
+        let baseline = SecondWindRules::srd_521();
+        let changed = SecondWindRules {
+            die_sides: 6,
+            flat_bonus: 4,
+            ..baseline
+        };
+        assert_eq!(heal_second_wind(&baseline, 6, 1, 20, 2), Ok((8, 1)));
+        assert_eq!(heal_second_wind(&changed, 6, 1, 20, 2), Ok((11, 1)));
+        assert_eq!(
+            heal_second_wind(&changed, 7, 1, 20, 2),
+            Err(JourneyRuleError::InvalidDie)
+        );
+        for rules in [
+            SecondWindRules {
+                uses_max: 6,
+                ..baseline
+            },
+            SecondWindRules {
+                die_sides: 20,
+                ..baseline
+            },
+            SecondWindRules {
+                flat_bonus: 11,
+                ..baseline
+            },
+            SecondWindRules {
+                recharge_per_short_rest: 3,
+                ..baseline
+            },
+        ] {
+            assert_eq!(
+                heal_second_wind(&rules, 1, 1, 20, 2),
+                Err(JourneyRuleError::InvalidRules)
+            );
+        }
+        for (current, maximum) in [(0, 13), (14, 13), (1, 0)] {
+            assert_eq!(
+                heal_second_wind(&baseline, 1, current, maximum, 2),
+                Err(JourneyRuleError::InvalidTarget)
+            );
+        }
+        assert_eq!(
+            heal_second_wind(&baseline, 0, 1, 13, 2),
+            Err(JourneyRuleError::InvalidDie)
+        );
+        assert_eq!(
+            heal_second_wind(&baseline, 11, 1, 13, 2),
+            Err(JourneyRuleError::InvalidDie)
+        );
+        assert_eq!(
+            heal_second_wind(&baseline, 10, u32::MAX, u32::MAX, 2),
+            Ok((u32::MAX, 1))
+        );
+    }
+    #[test]
+    fn configured_rest_duration_and_recharge_change_only_selected_benefits() {
+        let rules = RestRules {
+            short_rest_seconds: 60,
+        };
+        let rest = NoHitDiceShortRest {
+            started: 6,
+            finished: 66,
+            ticks_per_second: 1,
+            interrupted: false,
+            hit_points: 1,
+            fighter_second_wind_uses: Some(1),
+            knockout_unconscious: true,
+        };
+        assert_eq!(short_rest_due(6, 2, rules.short_rest_seconds), Ok(126));
+        assert_eq!(
+            complete_no_hit_dice_short_rest(&RestRules::srd_521(), rest, 2, 1),
+            Err(JourneyRuleError::RestIncomplete)
+        );
+        assert_eq!(
+            complete_no_hit_dice_short_rest(&rules, rest, 4, 2),
+            Ok(ShortRestBenefits {
+                hit_points: 1,
+                fighter_second_wind_uses: Some(3),
+                ends_knockout_unconscious: true,
+            })
+        );
+        assert_eq!(
+            complete_no_hit_dice_short_rest(&rules, rest, 2, 0)
+                .unwrap()
+                .fighter_second_wind_uses,
+            Some(1)
+        );
+        assert_eq!(
+            complete_no_hit_dice_short_rest(
+                &rules,
+                NoHitDiceShortRest {
+                    fighter_second_wind_uses: None,
+                    ..rest
+                },
+                2,
+                1
+            )
+            .unwrap()
+            .fighter_second_wind_uses,
+            None
+        );
+        for seconds in [59, 86401] {
+            assert_eq!(
+                short_rest_due(0, 1, seconds),
+                Err(JourneyRuleError::InvalidRules)
+            );
+        }
+        for (uses_max, recharge) in [(6, 1), (2, 3)] {
+            assert_eq!(
+                complete_no_hit_dice_short_rest(&rules, rest, uses_max, recharge),
+                Err(JourneyRuleError::InvalidRules)
+            );
+        }
+        assert_eq!(
+            complete_no_hit_dice_short_rest(
+                &rules,
+                NoHitDiceShortRest {
+                    fighter_second_wind_uses: Some(3),
+                    ..rest
+                },
+                2,
+                1
+            ),
+            Err(JourneyRuleError::InvalidRest)
+        );
+    }
+    #[test]
+    fn combat_configuration_rejects_each_out_of_bounds_field() {
+        let baseline = CombatRules::srd_521();
+        for rules in [
+            CombatRules {
+                critical_threshold: 14,
+                ..baseline
+            },
+            CombatRules {
+                critical_threshold: 21,
+                ..baseline
+            },
+            CombatRules {
+                round_ticks: 0,
+                ..baseline
+            },
+            CombatRules {
+                round_ticks: 601,
+                ..baseline
+            },
+            CombatRules {
+                combat_log_entries: 0,
+                ..baseline
+            },
+            CombatRules {
+                combat_log_entries: 33,
+                ..baseline
+            },
+        ] {
+            assert_eq!(rules.validate(), Err(JourneyRuleError::InvalidRules));
+        }
+        assert_eq!(baseline.validate(), Ok(()));
+        assert_eq!(SecondWindRules::srd_521().validate(), Ok(()));
+        assert_eq!(RestRules::srd_521().validate(), Ok(()));
     }
 }

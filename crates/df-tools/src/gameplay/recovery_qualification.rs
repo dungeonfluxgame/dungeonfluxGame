@@ -1483,9 +1483,20 @@ fn recovery_creation_body_passes_actual_source_character_validator() {
         .iter()
         .map(|choice| (choice.group_id.as_str(), choice.option_id.as_str()))
         .collect::<Vec<_>>();
-    assert!(df_rules::local_journey::validate_character(&character.name, &selections).is_ok());
+    assert!(
+        df_rules::local_journey::validate_character(
+            &df_rules::local_journey::CreationRules::srd_521(),
+            &character.name,
+            &selections
+        )
+        .is_ok()
+    );
     assert!(matches!(
-        df_rules::local_journey::validate_character("Recovery Fighter", &selections),
+        df_rules::local_journey::validate_character(
+            &df_rules::local_journey::CreationRules::srd_521(),
+            "Recovery Fighter",
+            &selections
+        ),
         Err(df_rules::local_journey::JourneyRuleError::InvalidName)
     ));
 }

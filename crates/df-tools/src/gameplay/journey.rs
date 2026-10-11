@@ -1525,6 +1525,7 @@ fn start_knockout_rest(
         ticks: rules::short_rest_due(
             state.logical_time.ticks,
             state.logical_time.ticks_per_second,
+            rules::RestRules::srd_521().short_rest_seconds,
         )
         .map_err(bad)?,
         ticks_per_second: state.logical_time.ticks_per_second,
@@ -1654,6 +1655,7 @@ fn prepare_short_rest(current: &Checkpoint) -> Result<df_world::DueSelection<'_>
         ticks: rules::short_rest_due(
             current.state().logical_time.ticks,
             current.state().logical_time.ticks_per_second,
+            rules::RestRules::srd_521().short_rest_seconds,
         )
         .map_err(bad)?,
         ticks_per_second: current.state().logical_time.ticks_per_second,
@@ -1719,19 +1721,24 @@ fn complete_short_rest(current: &Checkpoint, state: &mut GameState) -> Result<()
             .transpose()?
             .unwrap_or(current.state().logical_time.ticks);
         let fighter = fighters.contains(&who);
-        let benefits = rules::complete_no_hit_dice_short_rest(rules::NoHitDiceShortRest {
-            started: start,
-            finished: selection.proposed_time.ticks,
-            ticks_per_second: selection.proposed_time.ticks_per_second,
-            interrupted: false,
-            hit_points: value(state, who, "hit-points")?,
-            fighter_second_wind_uses: if fighter {
-                Some(value(state, who, "second-wind")?)
-            } else {
-                None
+        let benefits = rules::complete_no_hit_dice_short_rest(
+            &rules::RestRules::srd_521(),
+            rules::NoHitDiceShortRest {
+                started: start,
+                finished: selection.proposed_time.ticks,
+                ticks_per_second: selection.proposed_time.ticks_per_second,
+                interrupted: false,
+                hit_points: value(state, who, "hit-points")?,
+                fighter_second_wind_uses: if fighter {
+                    Some(value(state, who, "second-wind")?)
+                } else {
+                    None
+                },
+                knockout_unconscious: value(state, who, "unconscious")? != 0,
             },
-            knockout_unconscious: value(state, who, "unconscious")? != 0,
-        })
+            rules::SecondWindRules::srd_521().uses_max,
+            rules::SecondWindRules::srd_521().recharge_per_short_rest,
+        )
         .map_err(bad)?;
         if let Some(uses) = benefits.fighter_second_wind_uses {
             set(state, who, "second-wind", uses)?;
@@ -1782,6 +1789,8 @@ fn attack(
         }
     }
     let outcome = rules::resolve_melee(rules::NormalMeleeAttack {
+        critical_threshold: rules::CombatRules::srd_521().critical_threshold,
+        damage_sides: rules::SRD_521_BASELINE.hero_weapon.damage_sides,
         die,
         modifier,
         armor_class: ac,
@@ -2066,7 +2075,8 @@ fn accept_character(
         .filter(|(group, _)| group.as_str() != "name")
         .map(|(group, option)| (group.as_str(), option.as_str()))
         .collect::<Vec<_>>();
-    let build = rules::validate_character(name, &options).map_err(bad)?;
+    let build =
+        rules::validate_character(&rules::CreationRules::srd_521(), name, &options).map_err(bad)?;
     if state
         .characters
         .iter()
@@ -2291,6 +2301,7 @@ fn stage_using(
             .map_err(bad)?;
             let die = draw(command.operation, 10, &mut draws, supplier)?;
             let (hp, uses) = rules::heal_second_wind(
+                &rules::SecondWindRules::srd_521(),
                 die,
                 value(&state, *who, "hit-points")?,
                 13,
@@ -2628,7 +2639,7 @@ mod tests {
         )
         .expect("canonical structural admission");
         assert_eq!(
-            rules::validate_character("", &[]),
+            rules::validate_character(&rules::CreationRules::srd_521(), "", &[]),
             Err(rules::JourneyRuleError::InvalidName)
         );
         let before = current.clone();
