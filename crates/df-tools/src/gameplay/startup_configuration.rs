@@ -364,6 +364,23 @@ pub(super) fn database_config(
     Ok(configuration)
 }
 
+/// Resolve once at startup; missing files are diagnosed by the typed pack loader.
+pub(super) fn pack_directory(
+    input: Result<String, VarError>,
+    current: &Path,
+) -> Result<std::path::PathBuf, io::Error> {
+    let directory = optional(input)?.unwrap_or_else(|| "content/harbor-journey".to_owned());
+    if directory.is_empty() {
+        return Err(refused("DF_GAMEPLAY_PACK_DIR"));
+    }
+    let directory = std::path::PathBuf::from(directory);
+    Ok(if directory.is_absolute() {
+        directory
+    } else {
+        current.join(directory)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

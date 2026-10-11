@@ -964,3 +964,39 @@ fn capacity_one_wake_coalesces_and_disconnected_executor_is_explicit() {
 
 #[path = "cache_replay_locale_contract.rs"]
 mod cache_replay_locale_contract;
+
+#[test]
+fn edited_courier_clue_is_recorded_and_only_revealed_to_its_recipient() {
+    let mut content: serde_json::Value =
+        serde_json::from_slice(include_bytes!("fixtures/harbor-journey-pack-baseline.json"))
+            .unwrap();
+    let clue = "The courier whispers: find Mira at the east pier.";
+    content["courier_clue"] = clue.into();
+    let loaded = crate::gameplay::pack::load_from_bytes(
+        &serde_json::to_vec(&content).unwrap(),
+        include_bytes!("../../../../content/harbor-journey/tuning.json"),
+    )
+    .unwrap();
+    crate::gameplay::pack::with_test_pack(loaded, || {
+        let (current, first, second) = pending();
+        let effect = intent(&current);
+        let completion = execute(&current, effect).unwrap();
+        let staged =
+            stage_completion(&current, &completion, completion_operation(effect).unwrap()).unwrap();
+        assert_eq!(player_clue(&staged, first), clue);
+        assert!(player_clue(&staged, second).is_empty());
+        let display = wire::journey_view(
+            &staged,
+            LocalDemoRole::Display,
+            MemberId::from_bytes(&df_persistence::local_demo_scope::DISPLAY).unwrap(),
+        )
+        .unwrap();
+        use prost::Message;
+        assert!(
+            !display
+                .encode_to_vec()
+                .windows(clue.len())
+                .any(|bytes| bytes == clue.as_bytes())
+        );
+    });
+}

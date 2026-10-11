@@ -9,7 +9,7 @@ use df_session::submission::RepositoryError;
 
 use super::{
     BANDIT, ENCOUNTER, THREAD_POLICY, accepted, entity, model, narrative_phase, offered, phase,
-    player_entity, rule, rules, value,
+    player_entity, rule, value,
 };
 
 fn invalid<T>() -> Result<T, RepositoryError> {
@@ -241,7 +241,7 @@ fn terminal(
         || !accepted(decision)?
             .combat
             .iter()
-            .all(|outcome| outcome.source_revision == rules::SOURCE_REVISION)
+            .all(|outcome| outcome.source_revision == model::source_revision())
     {
         return invalid();
     }

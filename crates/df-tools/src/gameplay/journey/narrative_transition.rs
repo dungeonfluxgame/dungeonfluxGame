@@ -108,16 +108,16 @@ pub(super) fn story_permitted(
     }
 }
 
-/// The active source profile authorizes earned routes only. Its preexisting eight-unit
-/// balance is capped explicitly; no strong-event tariff or free-play trigger was supplied.
+/// The active source profile authorizes earned routes only. Its configured balance is
+/// capped explicitly; no strong-event tariff or free-play trigger was supplied.
 /// Source-selected events/rates must be published before either list can be populated.
 fn native_budget()
 -> Result<df_content::narrative::NarrativeBudgetPolicy<ContentReference>, RepositoryError> {
     Ok(df_content::narrative::NarrativeBudgetPolicy {
         definition: model::content("narrative-intervention-policy")?,
-        // The registered room journey initializes eight units; the older harbor profile
-        // initializes one. Retain the registered source balance without authoring tariffs.
-        maximum: 8,
+        // The registered room journey uses the same initial and maximum tuned balance.
+        // The older harbor profile initializes one; no tariff is authored here.
+        maximum: super::pack::narrative_budget(),
         strong_events: vec![],
         free_play_events: vec![],
     })

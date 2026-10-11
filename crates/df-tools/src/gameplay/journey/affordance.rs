@@ -9,7 +9,7 @@ use df_world::affordance::{
 
 pub(in crate::gameplay) struct CurrentOffer<'a> {
     pub kind: rpc::GameplayActionKind,
-    pub label: &'static str,
+    pub label: String,
     pub set: AffordanceSet<'a>,
 }
 
@@ -118,7 +118,7 @@ pub(in crate::gameplay) fn current(
 pub(in crate::gameplay) fn offered(
     checkpoint: &Checkpoint,
     member: MemberId,
-) -> Result<Vec<(rpc::GameplayActionKind, &'static str)>, NativeTargetError> {
+) -> Result<Vec<(rpc::GameplayActionKind, String)>, NativeTargetError> {
     let rules = [
         model::rule().map_err(NativeTargetError::State)?,
         rule().map_err(NativeTargetError::State)?,

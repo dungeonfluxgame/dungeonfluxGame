@@ -90,7 +90,9 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
                 .logical_time
                 .ticks
                 .checked_sub(self.current.state().logical_time.ticks)
-                .is_none_or(|elapsed| !matches!(elapsed, 0 | 6))
+                .is_none_or(|elapsed| {
+                    elapsed != 0 && elapsed != u64::from(super::pack::combat().round_ticks)
+                })
             || observation.policy != model::content("normal-nonlethal-melee")?
             || self.staged.members != self.current.state().members
             || self.staged.characters != self.current.state().characters
@@ -130,7 +132,7 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
             || self.resource(monster, "unconscious")? != 0
             || self.resource(monster, "hit-points")? == 0
             || self.resource(monster, "prone")? != 0
-            || self.resource(monster, "dexterity")? != 12
+            || self.resource(monster, "dexterity")? != u32::from(super::pack::bandit().abilities[1])
         {
             return Err(RepositoryError::InvalidCandidate);
         }
@@ -145,7 +147,7 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
     ) -> Result<bool, RepositoryError> {
         if offer.actor != observation.actor
             || offer.weapon != held_weapon_id(observation.actor)?
-            || offer.action != model::content("scimitar")?
+            || offer.action != model::content(&super::pack::bandit_weapon_item())?
             || offer.source != rule()?
         {
             return Err(RepositoryError::InvalidCandidate);
@@ -297,7 +299,7 @@ pub(super) fn select(
                 actor,
                 target: entity(target)?,
                 weapon: held_weapon_id(actor)?,
-                action: model::content("scimitar")?,
+                action: model::content(&super::pack::bandit_weapon_item())?,
                 source: rule()?,
             })
         })

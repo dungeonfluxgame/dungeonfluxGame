@@ -1327,92 +1327,10 @@ fn shipped_resource_bounds_equal_the_journey_resource_constraints() {
         (bandit_armor_class, bandit_armor_class)
     );
 }
-
-#[test]
-fn shipped_bandit_and_equipment_values_appear_in_the_journey_source() {
-    // The bandit's starting resources and the starting inventory are inline literals in
-    // journey.rs that no test can reach, so audit the source text instead.
-    let source = include_str!("journey.rs");
-    let loaded = load(&shipped_directory()).expect("shipped files must load");
-    let bandit = &loaded.tuning.bandit;
-
-    for (name, value) in [
-        ("hit-points", u32::from(bandit.hit_points)),
-        ("armor-class", u32::from(bandit.armor_class)),
-        ("strength", u32::from(bandit.abilities.strength)),
-        ("dexterity", u32::from(bandit.abilities.dexterity)),
-        ("constitution", u32::from(bandit.abilities.constitution)),
-        ("intelligence", u32::from(bandit.abilities.intelligence)),
-        ("wisdom", u32::from(bandit.abilities.wisdom)),
-        ("charisma", u32::from(bandit.abilities.charisma)),
-    ] {
-        let line = format!("(\"{name}\", {value}),");
-        assert!(
-            source.contains(&line),
-            "journey.rs no longer contains {line}"
-        );
-    }
-    for row in &loaded.pack.equipment {
-        let line = format!("({}, \"{}\"),", row.quantity, row.item);
-        assert!(
-            source.contains(&line),
-            "journey.rs no longer contains {line}"
-        );
-    }
-    assert!(source.contains(&format!("\"{}\".to_owned()", loaded.pack.bandit.name)));
-}
-
-#[test]
-fn shipped_texts_appear_verbatim_in_the_compiled_sources() {
-    let loaded = load(&shipped_directory()).expect("shipped files must load");
-    let sources = [include_str!("wire.rs"), include_str!("journey.rs")].join("\n");
-    let quoted = |text: &str| format!("\"{text}\"");
-    let labels = &loaded.pack.offer_labels;
-
-    for label in [
-        &labels.create_character,
-        &labels.begin_story,
-        &labels.ask_courier,
-        &labels.escort_courier,
-        &labels.defend_courier,
-        &labels.greatsword_attack,
-        &labels.second_wind,
-        &labels.end_turn,
-        &labels.short_rest,
-        &labels.choose_harbor_scene,
-    ] {
-        assert!(
-            sources.contains(&quoted(label)),
-            "no source literal for label {label:?}"
-        );
-    }
-    for scene in &loaded.pack.scenes {
-        let texts = [
-            Some(&scene.title),
-            Some(&scene.narration),
-            scene.narration_rested.as_ref(),
-            Some(&scene.speaker),
-            Some(&scene.dialogue),
-        ];
-        for text in texts.into_iter().flatten().filter(|text| !text.is_empty()) {
-            assert!(
-                sources.contains(&quoted(text)),
-                "no source literal for {text:?}"
-            );
-        }
-    }
-    let suffix = &loaded.pack.escort_support_suffix;
-    assert!(
-        sources.contains(suffix.as_str()),
-        "no source literal for the escort suffix"
-    );
-}
-
 #[test]
 fn shipped_scene_assets_are_the_served_paths() {
     let loaded = load(&shipped_directory()).expect("shipped files must load");
     let served = include_str!("public_assets.rs");
-    let sources = [include_str!("wire.rs"), include_str!("journey.rs")].join("\n");
 
     for path in SERVED_SCENE_ASSETS {
         assert!(
@@ -1422,7 +1340,7 @@ fn shipped_scene_assets_are_the_served_paths() {
     }
     for scene in &loaded.pack.scenes {
         assert!(
-            sources.contains(&format!("\"{}\"", scene.asset)),
+            SERVED_SCENE_ASSETS.contains(&scene.asset.as_str()),
             "{} unused",
             scene.asset
         );
@@ -1437,4 +1355,14 @@ fn compiled_item_set_is_contained_in_the_journey_content_entries() {
             "{item} is not a content entry"
         );
     }
+}
+
+#[test]
+fn selected_hero_weapon_requires_starting_equipment() {
+    let tuning = set(&shipped_tuning(), "/hero/weapon/item", json!("scimitar"));
+    assert!(
+        matches!(refusal(&shipped_pack(), &tuning), PackError::CrossRef {
+        file: SourceFile::Tuning, path, reason: CrossRefReason::WeaponNotEquipped
+    } if path == "hero.weapon.item")
+    );
 }

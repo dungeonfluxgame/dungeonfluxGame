@@ -22,6 +22,10 @@ pub(super) const MODEL: &str = "authored-courier-recording-1";
 const SOURCE_LOCALE: &str = "en";
 pub(super) const RESPONSE: &str = "The courier quietly tells you: the sealed packet is addressed to Vell at the Harbor Inn. Keep its destination between you.";
 
+fn response() -> String {
+    super::pack::with_content(|pack| pack.courier_clue.clone())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CourierError {
     Unavailable,
@@ -105,7 +109,7 @@ pub(super) fn expected_completion(intent: &DurableIntent) -> Result<JobCompletio
         job: intent.job.ok_or(CourierError::Source)?,
         generation: intent.generation,
         outcome: JobOutcome::Ai {
-            semantic_output: RESPONSE.to_owned(),
+            semantic_output: response(),
             policy: model::content(POLICY).map_err(|_| CourierError::Source)?,
             model: model::label(MODEL).map_err(|_| CourierError::Source)?,
         },
@@ -279,17 +283,18 @@ struct AuthoredRecording<'a> {
     intent: &'a DurableIntent,
     key: ContentReference,
     basis: RecordingBasis,
+    response: String,
 }
 impl PreparedRead for AuthoredRecording<'_> {
     type Key = ContentReference;
     type Basis = RecordingBasis;
-    type Artifact = &'static str;
+    type Artifact = String;
     type Failure = CourierError;
     fn read_prepared(
         &self,
         _: &Self::Key,
     ) -> ReadResult<'_, Self::Key, Self::Basis, Self::Artifact, Self::Failure> {
-        Ok(Some((&self.key, &self.basis, &RESPONSE)))
+        Ok(Some((&self.key, &self.basis, &self.response)))
     }
     fn read_replay(
         &self,
@@ -373,7 +378,7 @@ impl RecordingPublisher for ResponseAdmission<'_> {
         record: CompleteRecord<JobId, Basis>,
     ) -> Result<JobCompletion, CourierError> {
         recipient(self.current, self.intent)?;
-        if self.intent.status != DurableStatus::Pending || record.bytes() != RESPONSE.as_bytes() {
+        if self.intent.status != DurableStatus::Pending || record.bytes() != response().as_bytes() {
             return Err(CourierError::Record);
         }
         // Transfer a complete candidate to the session owner; this is not reusable storage
@@ -384,7 +389,7 @@ impl RecordingPublisher for ResponseAdmission<'_> {
             job: record.identity().key,
             generation: self.intent.generation,
             outcome: JobOutcome::Ai {
-                semantic_output: RESPONSE.to_owned(),
+                semantic_output: response(),
                 policy: model::content(POLICY).map_err(|_| CourierError::Source)?,
                 model: model::label(MODEL).map_err(|_| CourierError::Source)?,
             },
@@ -406,6 +411,7 @@ pub(super) fn execute(
         intent,
         key: model::content(DEFINITION).map_err(|_| CourierError::Source)?,
         basis: basis.clone(),
+        response: response(),
     };
     let text = lookup_authorized_prepared(&recording, &intent.definition, &basis)
         .map_err(|_| CourierError::Unavailable)?;
@@ -479,7 +485,7 @@ pub(super) fn stage_completion(
     else {
         return Err(CourierError::Unavailable);
     };
-    if semantic_output != RESPONSE
+    if semantic_output.as_str() != response()
         || *policy != model::content(POLICY).map_err(|_| CourierError::Source)?
         || *recording_model != model::label(MODEL).map_err(|_| CourierError::Source)?
     {
@@ -545,7 +551,7 @@ pub(super) fn saved_response(
             .semantic_output
             .as_deref()
             .ok_or(RepositoryError::InvalidCandidate)?;
-        if text != RESPONSE {
+        if text != response() {
             return Err(RepositoryError::InvalidCandidate);
         }
         return Ok(Some(text));

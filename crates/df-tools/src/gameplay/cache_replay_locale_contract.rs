@@ -10,6 +10,7 @@ fn authored(current: &Checkpoint) -> AuthoredRecording<'_> {
         intent: effect,
         key: model::content(DEFINITION).unwrap(),
         basis: recording_basis(current, effect).unwrap(),
+        response: response(),
     }
 }
 

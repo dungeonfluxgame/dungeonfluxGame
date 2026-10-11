@@ -506,6 +506,34 @@ pub(crate) fn decode_checkpoint(
     Ok(checkpoint)
 }
 
+/// Read bounded header provenance for refusal diagnostics only. This never admits state;
+/// recovery still decodes the complete envelope with trusted pins and inventory.
+pub(crate) fn decode_checkpoint_configuration(
+    bytes: &[u8],
+    codec_limits: CodecLimits,
+) -> Result<RevisionLabel, CodecError> {
+    let limits = codec_limits.validate()?;
+    if bytes.len() > limits.maximum_document_bytes {
+        return Err(CodecError::Capacity);
+    }
+    let mut input = Decoder {
+        bytes,
+        offset: 0,
+        allocation_remaining: limits.maximum_allocated_bytes,
+        items_remaining: limits.maximum_collection_items,
+        maximum_text_bytes: limits.maximum_text_bytes,
+    };
+    if input.take(MAGIC.len())? != MAGIC || u16::read(&mut input)? != CODEC_VERSION {
+        return Err(CodecError::UnsupportedCodec);
+    }
+    if u16::read(&mut input)? != CHECKPOINT_SCHEMA {
+        return Err(CodecError::Checkpoint(CheckpointError::UnsupportedSchema));
+    }
+    Basis::read(&mut input)?;
+    let pins = CheckpointPins::read(&mut input)?;
+    Ok(pins.build.revision(BuildRevision::Configuration).clone())
+}
+
 // Explicit schema-2 mapping; schema 1 cannot supply social or agreement provenance.
 record_wire!(AcceptedChoice {
     participant,
@@ -2286,6 +2314,42 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn startup_configuration_diagnostics_read_real_codec_and_preserve_resume_refusal() {
+        let checkpoint = checkpoint(state()).unwrap();
+        let bytes = encode_checkpoint(&checkpoint, codec_limits()).unwrap();
+        assert_eq!(
+            decode_checkpoint_configuration(&bytes, codec_limits()).unwrap(),
+            *checkpoint
+                .pins()
+                .build
+                .revision(BuildRevision::Configuration)
+        );
+        let mut current = checkpoint.pins().clone();
+        current.build = BuildIdentity::new(
+            Some("source"),
+            Some("native"),
+            Some("wasm"),
+            Some("config:t-new:p-new"),
+            Some("content"),
+        )
+        .unwrap();
+        assert_ne!(
+            decode_checkpoint_configuration(&bytes, codec_limits()).unwrap(),
+            *current.build.revision(BuildRevision::Configuration)
+        );
+        assert!(decode(&bytes, checkpoint.basis(), &current).is_err());
+        for end in [0, 5, 20] {
+            assert!(decode_checkpoint_configuration(&bytes[..end], codec_limits()).is_err());
+        }
+        let mut bounds = codec_limits();
+        bounds.maximum_document_bytes = bytes.len() - 1;
+        assert_eq!(
+            decode_checkpoint_configuration(&bytes, bounds),
+            Err(CodecError::Capacity)
+        );
+    }
+
     #[test]
     fn complete_recovery_state_preserves_retired_epochs_exactly() {
         let mut supplied = state();

@@ -10,11 +10,6 @@
 //!
 //! The SHA-256 values are development revisions of the exact file bytes. They are not a published
 //! content-pack version or a rights-backed identity (decision record D01).
-#![allow(
-    dead_code,
-    reason = "PLAY-B02 step 3 wires the loader into serve(); remove this allowance then"
-)]
-
 use serde::{Deserialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
@@ -129,6 +124,7 @@ pub(super) enum CrossRefReason {
     OptionWithoutArray,
     UnknownPickValue,
     UnknownItem,
+    WeaponNotEquipped,
     AssetNotServed,
     DuplicateScene,
     MissingScene,
@@ -155,6 +151,7 @@ impl fmt::Display for CrossRefReason {
             }
             Self::UnknownPickValue => "value is not accepted by the compiled validator",
             Self::UnknownItem => "item is not in the compiled item set",
+            Self::WeaponNotEquipped => "hero weapon has no starting equipment row in pack.json",
             Self::AssetNotServed => "asset is not in the served scene allowlist",
             Self::DuplicateScene => "scene key appears more than once",
             Self::MissingScene => "required scene is missing",
@@ -327,7 +324,10 @@ impl Revision {
 
     /// Lowercase hexadecimal form (64 characters).
     pub(super) fn to_hex(self) -> String {
-        self.to_string()
+        self.as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 }
 
@@ -917,6 +917,16 @@ fn validate_tuning(tuning: &TuningFile) -> Result<(), PackError> {
     )?;
     for (index, array) in hero.ability_arrays.iter().enumerate() {
         validate_ability_array(index, array, hero.background_bonus)?;
+        range(
+            FILE,
+            &format!("hero.ability_arrays[{index}].scores[2]"),
+            i64::from(hero.base_hit_points)
+                + i64::from(df_rules::local_journey::ability_modifier(
+                    array.scores[2] + hero.background_bonus.constitution,
+                )),
+            1,
+            65,
+        )?;
     }
     require_unique(
         FILE,
@@ -1449,6 +1459,17 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
 // ---------------------------------------------------------------------------------------------
 
 fn validate_cross_references(pack: &PackFile, tuning: &TuningFile) -> Result<(), PackError> {
+    if !pack
+        .equipment
+        .iter()
+        .any(|row| row.item == tuning.hero.weapon.item)
+    {
+        return Err(cross_reference(
+            SourceFile::Tuning,
+            "hero.weapon.item",
+            CrossRefReason::WeaponNotEquipped,
+        ));
+    }
     if tuning.pack != pack.id {
         return Err(cross_reference(
             SourceFile::Tuning,
@@ -1495,129 +1516,149 @@ fn validate_cross_references(pack: &PackFile, tuning: &TuningFile) -> Result<(),
     Ok(())
 }
 
-/// The compiled SRD 5.2.1 baseline for the standard arrays (before the background bonus).
-const BASELINE_ARRAYS: &[(&str, [u8; 6])] = &[
-    ("stalwart", [15, 13, 14, 10, 12, 8]),
-    ("vanguard", [15, 14, 13, 8, 10, 12]),
-];
-/// The compiled starting equipment (item, quantity).
-const BASELINE_EQUIPMENT: &[(&str, u8)] = &[
-    ("chain-mail", 1),
-    ("greatsword", 1),
-    ("flail", 1),
-    ("javelin", 8),
-    ("dungeoneer-pack", 1),
-    ("spear", 1),
-    ("shortbow", 1),
-    ("arrow", 20),
-    ("gaming-set", 1),
-    ("healers-kit", 1),
-    ("quiver", 1),
-    ("travelers-clothes", 1),
-    ("gold-piece", 18),
-];
-
 fn same_members(actual: &[String], baseline: &[&str]) -> bool {
     actual.len() == baseline.len() && baseline.iter().all(|item| actual.iter().any(|a| a == item))
 }
 
-/// Standard-sensitive keys whose value differs from the compiled baseline. Hard-coded literals
-/// mirror `df-rules/src/local_journey.rs` and `journey.rs`; the parity tests in `pack_tests.rs`
-/// guard the ones reachable from tests.
+/// Standard-sensitive keys compared with the single compiled rules baseline.
 fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<&'static str> {
+    let baseline = df_rules::local_journey::SRD_521_BASELINE;
     let hero = &tuning.hero;
     let bandit = &tuning.bandit;
-    let arrays_match = hero.ability_arrays.len() == BASELINE_ARRAYS.len()
-        && BASELINE_ARRAYS.iter().all(|(id, scores)| {
+    let arrays_match = hero.ability_arrays.len() == baseline.creation.ability_arrays.len()
+        && baseline.creation.ability_arrays.iter().all(|expected| {
             hero.ability_arrays
                 .iter()
-                .any(|array| array.id == *id && array.scores == *scores)
+                .any(|array| array.id == expected.id && array.scores == expected.scores)
         });
-    let equipment_matches = pack.equipment.len() == BASELINE_EQUIPMENT.len()
-        && BASELINE_EQUIPMENT.iter().all(|(item, quantity)| {
+    let equipment_matches = pack.equipment.len() == baseline.equipment.len()
+        && baseline.equipment.iter().all(|(item, quantity)| {
             pack.equipment
                 .iter()
                 .any(|row| row.item == *item && row.quantity == *quantity)
         });
     let pick_lists = &pack.creation.pick_lists;
     let checks = [
-        (hero.armor_class != 17, "hero.armor_class"),
-        (hero.proficiency_bonus != 2, "hero.proficiency_bonus"),
-        (hero.base_hit_points != 11, "hero.base_hit_points"),
+        (
+            hero.armor_class != baseline.creation.armor_class,
+            "hero.armor_class",
+        ),
+        (
+            hero.proficiency_bonus != baseline.creation.proficiency_bonus,
+            "hero.proficiency_bonus",
+        ),
+        (
+            hero.base_hit_points != baseline.creation.base_hit_points,
+            "hero.base_hit_points",
+        ),
         (!arrays_match, "hero.ability_arrays"),
         (
-            hero.background_bonus.strength != 2,
+            hero.background_bonus.strength != baseline.creation.background_bonus.strength,
             "hero.background_bonus.strength",
         ),
         (
-            hero.background_bonus.constitution != 1,
+            hero.background_bonus.constitution != baseline.creation.background_bonus.constitution,
             "hero.background_bonus.constitution",
         ),
-        (hero.second_wind.uses_max != 2, "hero.second_wind.uses_max"),
         (
-            hero.second_wind.die_sides != 10,
+            hero.second_wind.uses_max != baseline.second_wind.uses_max,
+            "hero.second_wind.uses_max",
+        ),
+        (
+            hero.second_wind.die_sides != baseline.second_wind.die_sides,
             "hero.second_wind.die_sides",
         ),
         (
-            hero.second_wind.flat_bonus != 1,
+            hero.second_wind.flat_bonus != baseline.second_wind.flat_bonus,
             "hero.second_wind.flat_bonus",
         ),
         (
-            hero.second_wind.recharge_per_short_rest != 1,
+            hero.second_wind.recharge_per_short_rest
+                != baseline.second_wind.recharge_per_short_rest,
             "hero.second_wind.recharge_per_short_rest",
         ),
-        (hero.weapon.damage_dice != 2, "hero.weapon.damage_dice"),
-        (hero.weapon.damage_sides != 6, "hero.weapon.damage_sides"),
-        (bandit.hit_points != 11, "bandit.hit_points"),
-        (bandit.armor_class != 12, "bandit.armor_class"),
-        (bandit.abilities.strength != 11, "bandit.abilities.strength"),
         (
-            bandit.abilities.dexterity != 12,
+            hero.weapon.damage_dice != baseline.hero_weapon.damage_dice,
+            "hero.weapon.damage_dice",
+        ),
+        (
+            hero.weapon.damage_sides != baseline.hero_weapon.damage_sides,
+            "hero.weapon.damage_sides",
+        ),
+        (
+            i32::from(bandit.hit_points) != i32::from(baseline.bandit.hit_points),
+            "bandit.hit_points",
+        ),
+        (
+            i32::from(bandit.armor_class) != i32::from(baseline.bandit.armor_class),
+            "bandit.armor_class",
+        ),
+        (
+            bandit.abilities.strength != baseline.bandit.abilities[0],
+            "bandit.abilities.strength",
+        ),
+        (
+            bandit.abilities.dexterity != baseline.bandit.abilities[1],
             "bandit.abilities.dexterity",
         ),
         (
-            bandit.abilities.constitution != 12,
+            bandit.abilities.constitution != baseline.bandit.abilities[2],
             "bandit.abilities.constitution",
         ),
         (
-            bandit.abilities.intelligence != 10,
+            bandit.abilities.intelligence != baseline.bandit.abilities[3],
             "bandit.abilities.intelligence",
         ),
-        (bandit.abilities.wisdom != 10, "bandit.abilities.wisdom"),
-        (bandit.abilities.charisma != 10, "bandit.abilities.charisma"),
-        (bandit.attack_bonus != 3, "bandit.attack_bonus"),
-        (bandit.damage_modifier != 1, "bandit.damage_modifier"),
-        (bandit.weapon.damage_dice != 1, "bandit.weapon.damage_dice"),
         (
-            bandit.weapon.damage_sides != 6,
+            bandit.abilities.wisdom != baseline.bandit.abilities[4],
+            "bandit.abilities.wisdom",
+        ),
+        (
+            bandit.abilities.charisma != baseline.bandit.abilities[5],
+            "bandit.abilities.charisma",
+        ),
+        (
+            i32::from(bandit.attack_bonus) != baseline.bandit.attack_bonus,
+            "bandit.attack_bonus",
+        ),
+        (
+            i32::from(bandit.damage_modifier) != baseline.bandit.damage_modifier,
+            "bandit.damage_modifier",
+        ),
+        (
+            bandit.weapon.damage_dice != baseline.bandit.weapon.damage_dice,
+            "bandit.weapon.damage_dice",
+        ),
+        (
+            bandit.weapon.damage_sides != baseline.bandit.weapon.damage_sides,
             "bandit.weapon.damage_sides",
         ),
         (
-            tuning.combat.critical_threshold != 20,
+            tuning.combat.critical_threshold != baseline.combat.critical_threshold,
             "combat.critical_threshold",
         ),
-        (tuning.combat.round_ticks != 6, "combat.round_ticks"),
         (
-            tuning.rest.short_rest_seconds != 3600,
+            tuning.combat.round_ticks != baseline.combat.round_ticks,
+            "combat.round_ticks",
+        ),
+        (
+            tuning.rest.short_rest_seconds != baseline.rest.short_rest_seconds,
             "rest.short_rest_seconds",
         ),
         (
-            !same_members(&pick_lists.alignment, df_rules::local_journey::ALIGNMENTS),
+            !same_members(&pick_lists.alignment, baseline.alignments),
             "creation.pick_lists.alignment",
         ),
         (
-            !same_members(
-                &pick_lists.language,
-                df_rules::local_journey::STANDARD_LANGUAGES,
-            ),
+            !same_members(&pick_lists.language, baseline.standard_languages),
             "creation.pick_lists.language",
         ),
         (
-            !same_members(&pick_lists.skill, df_rules::local_journey::FIGHTER_SKILLS),
+            !same_members(&pick_lists.skill, baseline.fighter_skills),
             "creation.pick_lists.skill",
         ),
         (
-            !same_members(&pick_lists.gaming_set, df_rules::local_journey::GAMING_SETS),
+            !same_members(&pick_lists.gaming_set, baseline.gaming_sets),
             "creation.pick_lists.gaming-set",
         ),
         (!equipment_matches, "equipment"),
@@ -1629,4 +1670,244 @@ fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<&'static str> {
         .into_iter()
         .filter_map(|(differs, key)| differs.then_some(key))
         .collect()
+}
+
+// Startup installs one immutable revision before constructing any game state. Qualification
+// deliberately leaves this empty: all mechanics then use the compiled rules baseline.
+static ACTIVE: std::sync::OnceLock<std::sync::Arc<LoadedPack>> = std::sync::OnceLock::new();
+
+pub(super) fn install(loaded: LoadedPack) -> Result<(), io::Error> {
+    ACTIVE
+        .set(std::sync::Arc::new(loaded))
+        .map_err(|_| io::Error::other("gameplay pack already installed"))
+}
+
+pub(super) fn active() -> Option<std::sync::Arc<LoadedPack>> {
+    #[cfg(test)]
+    if let Some(loaded) = TEST_ACTIVE.with(|slot| slot.borrow().clone()) {
+        return Some(loaded);
+    }
+    ACTIVE.get().cloned()
+}
+
+#[cfg(test)]
+thread_local! { static TEST_ACTIVE: std::cell::RefCell<Option<std::sync::Arc<LoadedPack>>> = const { std::cell::RefCell::new(None) }; }
+
+#[cfg(test)]
+pub(super) fn with_test_pack<T>(loaded: LoadedPack, run: impl FnOnce() -> T) -> T {
+    struct Reset(Option<std::sync::Arc<LoadedPack>>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_ACTIVE.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _reset = Reset(TEST_ACTIVE.with(|slot| slot.replace(Some(std::sync::Arc::new(loaded)))));
+    run()
+}
+
+pub(super) fn with_creation<T>(
+    run: impl FnOnce(&df_rules::local_journey::CreationRules<'_>) -> T,
+) -> T {
+    use df_rules::local_journey as rules;
+    let Some(loaded) = active() else {
+        return run(&rules::SRD_521_BASELINE.creation);
+    };
+    let hero = &loaded.tuning.hero;
+    let arrays = hero
+        .ability_arrays
+        .iter()
+        .map(|array| rules::AbilityArray {
+            id: &array.id,
+            scores: array.scores,
+        })
+        .collect::<Vec<_>>();
+    run(&rules::CreationRules {
+        ability_arrays: &arrays,
+        background_bonus: rules::BackgroundBonus {
+            strength: hero.background_bonus.strength,
+            constitution: hero.background_bonus.constitution,
+        },
+        base_hit_points: hero.base_hit_points,
+        armor_class: hero.armor_class,
+        proficiency_bonus: hero.proficiency_bonus,
+        second_wind_uses_max: hero.second_wind.uses_max,
+    })
+}
+
+pub(super) fn validate_character(
+    name: &str,
+    choices: &[(&str, &str)],
+) -> Result<df_rules::local_journey::LegalCharacter, df_rules::local_journey::JourneyRuleError> {
+    let allowed = with_content(|pack| {
+        choices.iter().all(|(group, option)| {
+            let list = match *group {
+                "alignment" => Some(&pack.creation.pick_lists.alignment),
+                "language-1" | "language-2" => Some(&pack.creation.pick_lists.language),
+                "skill-1" | "skill-2" => Some(&pack.creation.pick_lists.skill),
+                "gaming-set" => Some(&pack.creation.pick_lists.gaming_set),
+                _ => None,
+            };
+            match list {
+                Some(list) => list.iter().any(|value| value == option),
+                None => pack.creation.groups.iter().any(|candidate| {
+                    candidate.id == *group
+                        && candidate
+                            .options
+                            .iter()
+                            .any(|candidate| candidate.id == *option)
+                }),
+            }
+        })
+    });
+    if !allowed {
+        return Err(df_rules::local_journey::JourneyRuleError::InvalidChoice);
+    }
+    with_creation(|rules| df_rules::local_journey::validate_character(rules, name, choices))
+}
+
+pub(super) fn combat() -> df_rules::local_journey::CombatRules {
+    active().map_or(df_rules::local_journey::SRD_521_BASELINE.combat, |loaded| {
+        let value = loaded.tuning.combat;
+        df_rules::local_journey::CombatRules {
+            critical_threshold: value.critical_threshold,
+            round_ticks: value.round_ticks,
+            combat_log_entries: value.combat_log_entries,
+        }
+    })
+}
+pub(super) fn second_wind() -> df_rules::local_journey::SecondWindRules {
+    active().map_or(
+        df_rules::local_journey::SRD_521_BASELINE.second_wind,
+        |loaded| {
+            let value = loaded.tuning.hero.second_wind;
+            df_rules::local_journey::SecondWindRules {
+                uses_max: value.uses_max,
+                die_sides: value.die_sides,
+                flat_bonus: value.flat_bonus,
+                recharge_per_short_rest: value.recharge_per_short_rest,
+            }
+        },
+    )
+}
+pub(super) fn rest() -> df_rules::local_journey::RestRules {
+    active().map_or(df_rules::local_journey::SRD_521_BASELINE.rest, |loaded| {
+        df_rules::local_journey::RestRules {
+            short_rest_seconds: loaded.tuning.rest.short_rest_seconds,
+        }
+    })
+}
+pub(super) fn hero_weapon() -> df_rules::local_journey::WeaponRules {
+    active().map_or(
+        df_rules::local_journey::SRD_521_BASELINE.hero_weapon,
+        |loaded| df_rules::local_journey::WeaponRules {
+            damage_dice: loaded.tuning.hero.weapon.damage_dice,
+            damage_sides: loaded.tuning.hero.weapon.damage_sides,
+        },
+    )
+}
+pub(super) fn bandit() -> df_rules::local_journey::BanditRules {
+    active().map_or(df_rules::local_journey::SRD_521_BASELINE.bandit, |loaded| {
+        let value = &loaded.tuning.bandit;
+        let abilities = value.abilities;
+        df_rules::local_journey::BanditRules {
+            hit_points: value.hit_points,
+            armor_class: value.armor_class,
+            abilities: [
+                abilities.strength,
+                abilities.dexterity,
+                abilities.constitution,
+                abilities.intelligence,
+                abilities.wisdom,
+                abilities.charisma,
+            ],
+            attack_bonus: i32::from(value.attack_bonus),
+            damage_modifier: i32::from(value.damage_modifier),
+            weapon: df_rules::local_journey::WeaponRules {
+                damage_dice: value.weapon.damage_dice,
+                damage_sides: value.weapon.damage_sides,
+            },
+        }
+    })
+}
+pub(super) fn narrative_budget() -> u64 {
+    active().map_or(8, |loaded| {
+        u64::from(loaded.tuning.narrative.intervention_budget)
+    })
+}
+
+/// Qualification text is frozen separately from editable content. Startup never uses this
+/// compiled fixture as a fallback for interactive play; serve() must load and install first.
+pub(super) fn with_content<T>(run: impl FnOnce(&PackFile) -> T) -> T {
+    if let Some(loaded) = active() {
+        return run(&loaded.pack);
+    }
+    static QUALIFICATION: std::sync::OnceLock<PackFile> = std::sync::OnceLock::new();
+    let content = QUALIFICATION.get_or_init(|| {
+        // Internal invariant: this frozen compiled fixture is checked against the loader and
+        // captured pre-tuning views in tests; it cannot be supplied by a running client/file.
+        parse(
+            SourceFile::Pack,
+            include_bytes!("fixtures/harbor-journey-pack-baseline.json"),
+        )
+        .expect("compiled qualification content is valid")
+    });
+    run(content)
+}
+
+pub(super) fn scene(key: SceneKey) -> Scene {
+    with_content(|pack| {
+        pack.scenes
+            .iter()
+            .find(|scene| scene.key == key)
+            .expect("validated pack contains every compiled scene")
+            .clone()
+    })
+}
+
+pub(super) fn hero_weapon_item() -> String {
+    active().map_or_else(
+        || "greatsword".to_owned(),
+        |loaded| loaded.tuning.hero.weapon.item.clone(),
+    )
+}
+pub(super) fn hero_weapon_quantity() -> u64 {
+    let weapon = hero_weapon_item();
+    with_content(|content| {
+        u64::from(
+            content
+                .equipment
+                .iter()
+                .find(|row| row.item == weapon)
+                .expect("validated hero weapon has starting equipment")
+                .quantity,
+        )
+    })
+}
+
+pub(super) fn bandit_weapon_item() -> String {
+    active().map_or_else(
+        || "scimitar".to_owned(),
+        |loaded| loaded.tuning.bandit.weapon.item.clone(),
+    )
+}
+
+pub(super) fn offer_label(kind: df_protocol::common::GameplayActionKind) -> String {
+    use df_protocol::common::GameplayActionKind as Action;
+    with_content(|pack| {
+        let labels = &pack.offer_labels;
+        match kind {
+            Action::CreateCharacter => &labels.create_character,
+            Action::BeginStory => &labels.begin_story,
+            Action::AskCourier => &labels.ask_courier,
+            Action::EscortCourier => &labels.escort_courier,
+            Action::DefendCourier => &labels.defend_courier,
+            Action::GreatswordAttack => &labels.greatsword_attack,
+            Action::SecondWind => &labels.second_wind,
+            Action::EndTurn => &labels.end_turn,
+            Action::ShortRest => &labels.short_rest,
+            Action::ChooseHarborScene => &labels.choose_harbor_scene,
+            _ => unreachable!("only compiled authored offers have labels"),
+        }
+        .clone()
+    })
 }

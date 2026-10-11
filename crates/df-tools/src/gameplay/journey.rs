@@ -8,7 +8,7 @@ use df_types::{MemberId, OperationId};
 use prost::Message;
 use std::time::Duration;
 
-use super::{model, wire};
+use super::{model, pack, wire};
 
 pub(super) mod affordance;
 #[cfg(test)]
@@ -32,8 +32,13 @@ mod objective_outcome;
 mod objective_outcome_tests;
 #[cfg(test)]
 mod session_flow_tests;
+#[cfg(test)]
+mod text_pack_tests;
 
 pub(super) const ROOM_CODE: &str = "LANTERN";
+pub(super) fn room_code() -> String {
+    pack::with_content(|pack| pack.room_code.clone())
+}
 pub(super) const ROOM_ENTITY: [u8; 16] = [0x45; 16];
 const MEMBERS: [[u8; 16]; 2] = [[0x61; 16], [0x62; 16]];
 const ENTITIES: [[u8; 16]; 2] = [[0x63; 16], [0x64; 16]];
@@ -160,7 +165,7 @@ pub(super) fn initial() -> Result<Checkpoint, RepositoryError> {
     state.characters.clear();
     state.narrative.definition = model::content("room")?;
     state.narrative.active_beats = vec![model::content("room")?];
-    state.narrative.remaining_budget = 8;
+    state.narrative.remaining_budget = pack::narrative_budget();
     model::checkpoint(model::basis()?, state)
 }
 pub(super) fn phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryError> {
@@ -169,14 +174,47 @@ pub(super) fn phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, Repositor
     Ok(phase)
 }
 pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
+    let hero_hp = pack::with_creation(|rules| {
+        Ok::<_, RepositoryError>(
+            i64::from(rules.base_hit_points)
+                + rules
+                    .ability_arrays
+                    .iter()
+                    .map(|array| {
+                        i64::from(rules::ability_modifier(
+                            array.scores[2] + rules.background_bonus.constitution,
+                        ))
+                    })
+                    .max()
+                    .ok_or(RepositoryError::InvalidCandidate)?,
+        )
+    })?;
+    let hero_ac = pack::with_creation(|rules| i64::from(rules.armor_class));
+    let bandit = pack::bandit();
     let mut result = Vec::new();
     for owner in ENTITIES.into_iter().chain([BANDIT]) {
         for (name, minimum, maximum) in [
-            ("hit-points", 1, if owner == BANDIT { 11 } else { 13 }),
+            (
+                "hit-points",
+                1,
+                if owner == BANDIT {
+                    i64::from(bandit.hit_points)
+                } else {
+                    hero_hp
+                },
+            ),
             (
                 "armor-class",
-                if owner == BANDIT { 12 } else { 17 },
-                if owner == BANDIT { 12 } else { 17 },
+                if owner == BANDIT {
+                    i64::from(bandit.armor_class)
+                } else {
+                    hero_ac
+                },
+                if owner == BANDIT {
+                    i64::from(bandit.armor_class)
+                } else {
+                    hero_ac
+                },
             ),
             ("strength", 1, 20),
             ("dexterity", 1, 20),
@@ -184,7 +222,7 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
             ("intelligence", 1, 20),
             ("wisdom", 1, 20),
             ("charisma", 1, 20),
-            ("second-wind", 0, 2),
+            ("second-wind", 0, i64::from(pack::second_wind().uses_max)),
             ("unconscious", 0, 1),
             ("prone", 0, 1),
             ("held-weapon", 0, 1),
@@ -249,7 +287,7 @@ fn set(
 }
 pub(super) fn name(state: &GameState, who: EntityId) -> Result<String, RepositoryError> {
     if who == entity(BANDIT)? {
-        return Ok("Dockside Bandit".to_owned());
+        return Ok(pack::with_content(|pack| pack.bandit.name.clone()));
     }
     let character = state
         .characters
@@ -263,20 +301,71 @@ pub(super) fn name(state: &GameState, who: EntityId) -> Result<String, Repositor
         .map(|choice| choice.selected.as_str().to_owned())
         .ok_or(RepositoryError::InvalidCandidate)
 }
+pub(super) fn maximum_hit_points(state: &GameState, who: EntityId) -> Result<u32, RepositoryError> {
+    let constitution = value(state, who, "constitution")?;
+    let base = pack::with_creation(|rules| rules.base_hit_points);
+    u32::try_from(i32::from(base) + rules::ability_modifier(constitution as u8)).map_err(bad)
+}
+fn weapon_display_name(item: &str) -> String {
+    item.split('-')
+        .map(|word| {
+            let mut letters = word.chars();
+            match letters.next() {
+                Some(first) => format!(
+                    "{}{rest}",
+                    first.to_ascii_uppercase(),
+                    rest = letters.as_str()
+                ),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 pub(super) fn character_sheet(
     state: &GameState,
     who: EntityId,
 ) -> Result<rpc::CharacterSheet, RepositoryError> {
     let mut facts = Vec::new();
+    if pack::active().is_some_and(|loaded| !loaded.departures.is_empty()) {
+        facts.push(rpc::SheetFact {
+            label: "Supported rules".to_owned(),
+            value: model::source_revision(),
+        });
+    }
+    let option_label = |group: &str| -> Result<String, RepositoryError> {
+        pack::with_content(|pack| {
+            pack.creation
+                .groups
+                .iter()
+                .find(|candidate| candidate.id == group)
+                .and_then(|group| group.options.first())
+                .map(|option| option.label.clone())
+                .ok_or(RepositoryError::InvalidCandidate)
+        })
+    };
+    let gold = pack::with_content(|pack| {
+        pack.equipment
+            .iter()
+            .filter(|row| row.item == "gold-piece")
+            .map(|row| u32::from(row.quantity))
+            .sum::<u32>()
+    });
     for (label, value) in [
-        ("Species", "Dwarf"),
-        ("Class", "Fighter · level 1"),
-        ("Background", "Soldier"),
-        ("Armor", "Chain Mail · Defense"),
-        ("Weapon", "Greatsword · Graze"),
-        ("Origin feat", "Savage Attacker"),
-        ("Masteries", "Greatsword, Flail, Javelin"),
-        ("Starting equipment", "Fighter A + Soldier A · 18 GP"),
+        ("Species", option_label("species")?),
+        ("Class", option_label("class")?),
+        ("Background", option_label("background")?),
+        ("Armor", "Chain Mail · Defense".to_owned()),
+        (
+            "Weapon",
+            format!("{} · Graze", weapon_display_name(&pack::hero_weapon_item())),
+        ),
+        ("Origin feat", "Savage Attacker".to_owned()),
+        ("Masteries", "Greatsword, Flail, Javelin".to_owned()),
+        (
+            "Starting equipment",
+            format!("{} · {gold} GP", option_label("equipment")?),
+        ),
     ] {
         facts.push(rpc::SheetFact {
             label: label.to_owned(),
@@ -336,7 +425,7 @@ pub(super) fn character_sheet(
         .to_owned(),
     });
     facts.push(rpc::SheetFact {
-        label: "Greatsword".to_owned(),
+        label: weapon_display_name(&pack::hero_weapon_item()),
         value: if value(state, who, "held-weapon")? != 0 {
             "Held"
         } else {
@@ -348,9 +437,9 @@ pub(super) fn character_sheet(
         name: name(state, who)?,
         facts,
         hit_points: value(state, who, "hit-points")?,
-        maximum_hit_points: 13,
+        maximum_hit_points: maximum_hit_points(state, who)?,
         armor_class: value(state, who, "armor-class")?,
-        source_revision: rules::SOURCE_REVISION.to_owned(),
+        source_revision: model::source_revision(),
     })
 }
 fn beat(state: &mut GameState, next: &str) -> Result<(), RepositoryError> {
@@ -398,14 +487,14 @@ pub(super) fn offer_id(current: &Checkpoint, kind: rpc::GameplayActionKind) -> S
 pub(super) fn offered(
     current: &Checkpoint,
     member: MemberId,
-) -> Result<Vec<(rpc::GameplayActionKind, &'static str)>, RepositoryError> {
+) -> Result<Vec<(rpc::GameplayActionKind, String)>, RepositoryError> {
     affordance::offered(current, member).map_err(bad)
 }
 
 fn authored_offered(
     current: &Checkpoint,
     member: MemberId,
-) -> Result<Vec<(rpc::GameplayActionKind, &'static str)>, RepositoryError> {
+) -> Result<Vec<(rpc::GameplayActionKind, String)>, RepositoryError> {
     let phase = phase(current)?;
     let who = player_entity(member, current)?;
     let ready = current
@@ -416,7 +505,7 @@ fn authored_offered(
     if !ready {
         return Ok(vec![(
             rpc::GameplayActionKind::CreateCharacter,
-            "Bring your hero to life",
+            pack::offer_label(rpc::GameplayActionKind::CreateCharacter),
         )]);
     }
     let result = match phase {
@@ -426,24 +515,24 @@ fn authored_offered(
         {
             vec![(
                 rpc::GameplayActionKind::BeginStory,
-                "Enter the Lantern Wharf",
+                pack::offer_label(rpc::GameplayActionKind::BeginStory),
             )]
         }
         rpc::JourneyPhase::Room => vec![],
         rpc::JourneyPhase::Opening => vec![
             (
                 rpc::GameplayActionKind::AskCourier,
-                "Ask about the broken seal",
+                pack::offer_label(rpc::GameplayActionKind::AskCourier),
             ),
             (
                 rpc::GameplayActionKind::EscortCourier,
-                "Offer to protect the courier",
+                pack::offer_label(rpc::GameplayActionKind::EscortCourier),
             ),
         ],
         rpc::JourneyPhase::Dialogue if narrative_phase::courier_encounter_permitted(current)? => {
             vec![(
                 rpc::GameplayActionKind::DefendCourier,
-                "Stand between the courier and the bandit",
+                pack::offer_label(rpc::GameplayActionKind::DefendCourier),
             )]
         }
         rpc::JourneyPhase::Dialogue => vec![],
@@ -462,7 +551,7 @@ fn authored_offered(
                 if combat_transition::available(current, who)? {
                     offered.push((
                         rpc::GameplayActionKind::GreatswordAttack,
-                        "Greatsword strike · nonlethal",
+                        pack::offer_label(rpc::GameplayActionKind::GreatswordAttack),
                     ));
                 }
                 if value(current.state(), who, "bonus-used")? == 0
@@ -470,10 +559,13 @@ fn authored_offered(
                 {
                     offered.push((
                         rpc::GameplayActionKind::SecondWind,
-                        "Second Wind · bonus action",
+                        pack::offer_label(rpc::GameplayActionKind::SecondWind),
                     ));
                 }
-                offered.push((rpc::GameplayActionKind::EndTurn, "End your turn"));
+                offered.push((
+                    rpc::GameplayActionKind::EndTurn,
+                    pack::offer_label(rpc::GameplayActionKind::EndTurn),
+                ));
                 offered
             }
         }
@@ -481,12 +573,12 @@ fn authored_offered(
             prepare_short_rest(current)?;
             let mut result = vec![(
                 rpc::GameplayActionKind::ShortRest,
-                "Short Rest · 1 hour, no Hit Point Dice",
+                pack::offer_label(rpc::GameplayActionKind::ShortRest),
             )];
             if inn_source(current)?.is_some() && value(current.state(), who, "unconscious")? == 0 {
                 result.push((
                     rpc::GameplayActionKind::ChooseHarborScene,
-                    "Continue with the courier",
+                    pack::offer_label(rpc::GameplayActionKind::ChooseHarborScene),
                 ));
             }
             result
@@ -564,8 +656,8 @@ fn inn_source(current: &Checkpoint) -> Result<Option<FactId>, RepositoryError> {
 pub(super) fn inn_scene() -> rpc::GameplayScene {
     rpc::GameplayScene {
         destination: rpc::HarborDestination::HarborInn as i32,
-        title: "The Harbor Inn".to_owned(),
-        scene_asset: "assets/concept-art/scene-tavern-barkeep-talk-rain.webp".to_owned(),
+        title: pack::scene(pack::SceneKey::Inn).title,
+        scene_asset: pack::scene(pack::SceneKey::Inn).asset,
     }
 }
 pub(super) fn accepted(
@@ -785,7 +877,13 @@ pub(super) fn combat_round(current: &Checkpoint) -> Result<u32, CombatRoundError
         time = after;
     }
     for (_, duration, combat) in advances {
-        if duration != if combat { 6 } else { 3600 } {
+        if duration
+            != if combat {
+                u64::from(pack::combat().round_ticks)
+            } else {
+                u64::from(pack::rest().short_rest_seconds)
+            }
+        {
             return Err(Error::Duration);
         }
         if combat {
@@ -1098,7 +1196,10 @@ fn finish(
                 ticks: scheduled
                     .due
                     .ticks
-                    .checked_sub(u64::from(scheduled.due.ticks_per_second) * 3600)
+                    .checked_sub(
+                        u64::from(scheduled.due.ticks_per_second)
+                            * u64::from(pack::rest().short_rest_seconds),
+                    )
                     .ok_or(RepositoryError::InvalidCandidate)?,
                 ticks_per_second: scheduled.due.ticks_per_second,
             };
@@ -1427,7 +1528,14 @@ fn choice<'a>(
 }
 type DiceSource<'a> = &'a mut dyn FnMut(u32) -> Result<u32, RepositoryError>;
 fn sample_face(sides: u32) -> Result<u32, RepositoryError> {
-    if !matches!(sides, 6 | 10 | 20) {
+    if sides != 20
+        && ![
+            u32::from(pack::hero_weapon().damage_sides),
+            u32::from(pack::bandit().weapon.damage_sides),
+            u32::from(pack::second_wind().die_sides),
+        ]
+        .contains(&sides)
+    {
         return Err(RepositoryError::InvalidCandidate);
     }
     for _ in 0..16 {
@@ -1476,7 +1584,18 @@ struct AttackOptions {
 fn held_weapon_id(who: EntityId) -> Result<EntityId, RepositoryError> {
     let mut id = *who.as_bytes();
     id[0] ^= 0x80;
-    id[15] ^= if who == entity(BANDIT)? { 1 } else { 2 };
+    id[15] ^= if who == entity(BANDIT)? {
+        1
+    } else {
+        u8::try_from(
+            pack::COMPILED_ITEMS
+                .iter()
+                .position(|item| *item == pack::hero_weapon_item())
+                .ok_or(RepositoryError::InvalidCandidate)?
+                + 1,
+        )
+        .map_err(bad)?
+    };
     entity(id)
 }
 fn knockout_rest_id(
@@ -1525,7 +1644,7 @@ fn start_knockout_rest(
         ticks: rules::short_rest_due(
             state.logical_time.ticks,
             state.logical_time.ticks_per_second,
-            rules::RestRules::srd_521().short_rest_seconds,
+            pack::rest().short_rest_seconds,
         )
         .map_err(bad)?,
         ticks_per_second: state.logical_time.ticks_per_second,
@@ -1558,7 +1677,7 @@ fn knockout_rest_started(
         return Err(RepositoryError::InvalidCandidate);
     }
     let duration = u64::from(event.due.ticks_per_second)
-        .checked_mul(3600)
+        .checked_mul(u64::from(pack::rest().short_rest_seconds))
         .ok_or(RepositoryError::Capacity)?;
     let started = event
         .due
@@ -1655,7 +1774,7 @@ fn prepare_short_rest(current: &Checkpoint) -> Result<df_world::DueSelection<'_>
         ticks: rules::short_rest_due(
             current.state().logical_time.ticks,
             current.state().logical_time.ticks_per_second,
-            rules::RestRules::srd_521().short_rest_seconds,
+            pack::rest().short_rest_seconds,
         )
         .map_err(bad)?,
         ticks_per_second: current.state().logical_time.ticks_per_second,
@@ -1722,7 +1841,7 @@ fn complete_short_rest(current: &Checkpoint, state: &mut GameState) -> Result<()
             .unwrap_or(current.state().logical_time.ticks);
         let fighter = fighters.contains(&who);
         let benefits = rules::complete_no_hit_dice_short_rest(
-            &rules::RestRules::srd_521(),
+            &pack::rest(),
             rules::NoHitDiceShortRest {
                 started: start,
                 finished: selection.proposed_time.ticks,
@@ -1736,8 +1855,8 @@ fn complete_short_rest(current: &Checkpoint, state: &mut GameState) -> Result<()
                 },
                 knockout_unconscious: value(state, who, "unconscious")? != 0,
             },
-            rules::SecondWindRules::srd_521().uses_max,
-            rules::SecondWindRules::srd_521().recharge_per_short_rest,
+            pack::second_wind().uses_max,
+            pack::second_wind().recharge_per_short_rest,
         )
         .map_err(bad)?;
         if let Some(uses) = benefits.fighter_second_wind_uses {
@@ -1770,32 +1889,53 @@ fn attack(
         return Err(RepositoryError::InvalidCandidate);
     }
     let monster = who == entity(BANDIT)?;
+    let bandit = pack::bandit();
+    let weapon = if monster {
+        bandit.weapon
+    } else {
+        pack::hero_weapon()
+    };
     let ability = if monster {
-        1
+        bandit.damage_modifier
     } else {
         rules::ability_modifier(value(state, who, "strength")? as u8)
     };
-    let modifier = ability + 2;
+    let modifier = if monster {
+        bandit.attack_bonus
+    } else {
+        ability + pack::with_creation(|rules| i32::from(rules.proficiency_bonus))
+    };
     let die = draw(operation, 20, draws, supplier)?;
     let ac = value(state, target, "armor-class")?;
-    let hit = die != 1 && (die == 20 || die as i32 + modifier >= ac as i32);
+    let hit = die != 1
+        && (die >= u32::from(pack::combat().critical_threshold)
+            || die as i32 + modifier >= ac as i32);
     let mut dice = Vec::new();
-    let count = (if monster { 1 } else { 2 })
-        * (if die == 20 { 2 } else { 1 })
+    let count = u32::from(weapon.damage_dice)
+        * (if die >= u32::from(pack::combat().critical_threshold) {
+            2
+        } else {
+            1
+        })
         * (if savage { 2 } else { 1 });
     if hit {
         for _ in 0..count {
-            dice.push(draw(operation, 6, draws, supplier)?);
+            dice.push(draw(
+                operation,
+                u32::from(weapon.damage_sides),
+                draws,
+                supplier,
+            )?);
         }
     }
     let outcome = rules::resolve_melee(rules::NormalMeleeAttack {
-        critical_threshold: rules::CombatRules::srd_521().critical_threshold,
-        damage_sides: rules::SRD_521_BASELINE.hero_weapon.damage_sides,
+        critical_threshold: pack::combat().critical_threshold,
+        damage_sides: weapon.damage_sides,
         die,
         modifier,
         armor_class: ac,
         damage_dice: &dice,
-        weapon_dice: if monster { 1 } else { 2 },
+        weapon_dice: usize::from(weapon.damage_dice),
         damage_modifier: ability,
         savage_attacker_take_higher: savage,
         graze,
@@ -1820,7 +1960,7 @@ fn attack(
         target_hit_points: outcome.target_hit_points,
         knocked_out: outcome.knocked_out,
         grazed: outcome.grazed,
-        source_revision: rules::SOURCE_REVISION.to_owned(),
+        source_revision: model::source_revision(),
         actor_id: who.as_bytes().to_vec(),
         target_id: target.as_bytes().to_vec(),
     })
@@ -1878,7 +2018,7 @@ fn advance(state: &mut GameState) -> Result<(), RepositoryError> {
                 state.logical_time.ticks = state
                     .logical_time
                     .ticks
-                    .checked_add(6)
+                    .checked_add(u64::from(pack::combat().round_ticks))
                     .ok_or(RepositoryError::Capacity)?;
             }
             state
@@ -1963,14 +2103,14 @@ fn start_combat(
         identity_revision: model::label("srd521-bandit-1")?,
     });
     for (key, value) in [
-        ("hit-points", 11),
-        ("armor-class", 12),
-        ("strength", 11),
-        ("dexterity", 12),
-        ("constitution", 12),
-        ("intelligence", 10),
-        ("wisdom", 10),
-        ("charisma", 10),
+        ("hit-points", i64::from(pack::bandit().hit_points)),
+        ("armor-class", i64::from(pack::bandit().armor_class)),
+        ("strength", i64::from(pack::bandit().abilities[0])),
+        ("dexterity", i64::from(pack::bandit().abilities[1])),
+        ("constitution", i64::from(pack::bandit().abilities[2])),
+        ("intelligence", i64::from(pack::bandit().abilities[3])),
+        ("wisdom", i64::from(pack::bandit().abilities[4])),
+        ("charisma", i64::from(pack::bandit().abilities[5])),
         ("second-wind", 0),
         ("unconscious", 0),
         ("prone", 0),
@@ -1983,7 +2123,7 @@ fn start_combat(
     let weapon = held_weapon_id(monster)?;
     state.entities.push(WorldEntity {
         id: weapon,
-        definition: model::content("scimitar")?,
+        definition: model::content(&pack::bandit_weapon_item())?,
         location: Some(monster),
         position: None,
         identity_revision: model::label("source-held-scimitar-1")?,
@@ -1993,7 +2133,7 @@ fn start_combat(
         owner: monster,
         quantity: 1,
         source: rule()?,
-        origin: model::content("scimitar")?,
+        origin: model::content(&pack::bandit_weapon_item())?,
         attunement_owner: None,
     });
     let participants = state
@@ -2075,8 +2215,7 @@ fn accept_character(
         .filter(|(group, _)| group.as_str() != "name")
         .map(|(group, option)| (group.as_str(), option.as_str()))
         .collect::<Vec<_>>();
-    let build =
-        rules::validate_character(&rules::CreationRules::srd_521(), name, &options).map_err(bad)?;
+    let build = pack::validate_character(name, &options).map_err(bad)?;
     if state
         .characters
         .iter()
@@ -2133,24 +2272,14 @@ fn accept_character(
         add_resource(state, who, key, i64::from(value))?;
     }
     // The source-selected bundles are inventory, not cosmetic rewards or generated loot.
-    for (index, (quantity, entry)) in [
-        (1, "chain-mail"),
-        (1, "greatsword"),
-        (1, "flail"),
-        (8, "javelin"),
-        (1, "dungeoneer-pack"),
-        (1, "spear"),
-        (1, "shortbow"),
-        (20, "arrow"),
-        (1, "gaming-set"),
-        (1, "healers-kit"),
-        (1, "quiver"),
-        (1, "travelers-clothes"),
-        (18, "gold-piece"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    let equipment = pack::with_content(|pack| pack.equipment.clone());
+    for row in equipment {
+        let entry = row.item.as_str();
+        let quantity = u64::from(row.quantity);
+        let index = pack::COMPILED_ITEMS
+            .iter()
+            .position(|item| *item == entry)
+            .ok_or(RepositoryError::InvalidCandidate)?;
         let mut id = *who.as_bytes();
         id[0] ^= 0x80;
         id[15] ^= (index as u8) + 1;
@@ -2299,12 +2428,17 @@ fn stage_using(
             }
             .second_wind(value(&state, *who, "second-wind")?)
             .map_err(bad)?;
-            let die = draw(command.operation, 10, &mut draws, supplier)?;
+            let die = draw(
+                command.operation,
+                u32::from(pack::second_wind().die_sides),
+                &mut draws,
+                supplier,
+            )?;
             let (hp, uses) = rules::heal_second_wind(
-                &rules::SecondWindRules::srd_521(),
+                &pack::second_wind(),
                 die,
                 value(&state, *who, "hit-points")?,
-                13,
+                maximum_hit_points(&state, *who)?,
                 value(&state, *who, "second-wind")?,
             )
             .map_err(bad)?;
@@ -2585,6 +2719,220 @@ mod tests {
         })
         .collect()
     }
+    pub(super) fn tuning_journey() -> Vec<Checkpoint> {
+        let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+        let mut checkpoints = vec![opening_story()];
+        let mut apply =
+            |member,
+             operation,
+             action: &str,
+             choices,
+             faces: &mut dyn FnMut(u32) -> Result<u32, RepositoryError>| {
+                let current = checkpoints.last().unwrap();
+                checkpoints.push(
+                    stage_with_supplier(
+                        current,
+                        &input(current, member, operation, action, choices),
+                        faces,
+                    )
+                    .unwrap(),
+                );
+            };
+        apply(first, 6, "escort-courier", vec![], &mut |_| {
+            panic!("dialogue dice")
+        });
+        let mut initiative = [20, 10, 1].into_iter();
+        apply(first, 7, "defend-courier", vec![], &mut |_| {
+            Ok(initiative.next().unwrap())
+        });
+        apply(first, 8, "end-turn", vec![], &mut |_| {
+            panic!("first end dice")
+        });
+        apply(second, 9, "end-turn", vec![], &mut |sides| {
+            Ok(if sides == 20 { 10 } else { sides })
+        });
+        apply(first, 10, "second-wind", vec![], &mut |sides| Ok(sides));
+        apply(
+            first,
+            11,
+            "greatsword-attack",
+            vec![
+                (
+                    model::label("savage-attacker").unwrap(),
+                    model::label("no").unwrap(),
+                ),
+                (model::label("graze").unwrap(), model::label("no").unwrap()),
+            ],
+            &mut |sides| {
+                Ok(if sides == 20 {
+                    u32::from(pack::combat().critical_threshold)
+                } else {
+                    sides
+                })
+            },
+        );
+        apply(first, 12, "short-rest", vec![], &mut |_| {
+            panic!("rest dice")
+        });
+        let current = checkpoints.last().unwrap();
+        checkpoints.push(
+            stage_with_supplier(current, &inn_command(current, first, 13), &mut |_| {
+                panic!("inn dice")
+            })
+            .unwrap(),
+        );
+        checkpoints
+    }
+
+    #[test]
+    fn shipped_tuning_reproduces_full_compiled_baseline_journey() {
+        let baseline = tuning_journey();
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../content/harbor-journey/pack.json"),
+            include_bytes!("../../../../content/harbor-journey/tuning.json"),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            for (actual, expected) in tuning_journey().iter().zip(&baseline) {
+                assert_eq!(actual.state(), expected.state());
+                assert_eq!(actual.basis(), expected.basis());
+            }
+        });
+    }
+
+    #[test]
+    fn tuned_journey_changes_creation_attack_healing_rest_and_completes() {
+        let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../content/harbor-journey/tuning.json"
+        ))
+        .unwrap();
+        tuning["hero"]["armor_class"] = 15.into();
+        tuning["hero"]["proficiency_bonus"] = 3.into();
+        tuning["hero"]["base_hit_points"] = 18.into();
+        tuning["hero"]["background_bonus"]["constitution"] = 2.into();
+        tuning["hero"]["ability_arrays"][0]["scores"][2] = 16.into();
+        tuning["hero"]["second_wind"]["die_sides"] = 12.into();
+        tuning["hero"]["second_wind"]["flat_bonus"] = 3.into();
+        tuning["hero"]["second_wind"]["uses_max"] = 3.into();
+        tuning["hero"]["second_wind"]["recharge_per_short_rest"] = 2.into();
+        tuning["hero"]["weapon"]["damage_sides"] = 8.into();
+        tuning["bandit"]["hit_points"] = 30.into();
+        tuning["bandit"]["armor_class"] = 15.into();
+        tuning["bandit"]["abilities"]["dexterity"] = 16.into();
+        tuning["bandit"]["attack_bonus"] = 7.into();
+        tuning["bandit"]["damage_modifier"] = 2.into();
+        tuning["bandit"]["weapon"]["damage_sides"] = 4.into();
+        tuning["combat"]["round_ticks"] = 7.into();
+        tuning["combat"]["critical_threshold"] = 18.into();
+        tuning["combat"]["combat_log_entries"] = 1.into();
+        tuning["rest"]["short_rest_seconds"] = 600.into();
+        tuning["narrative"]["intervention_budget"] = 16.into();
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../content/harbor-journey/pack.json"),
+            &serde_json::to_vec(&tuning).unwrap(),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            assert_eq!(initial().unwrap().state().narrative.remaining_budget, 16);
+            assert_eq!(
+                rules::heal_second_wind(&pack::second_wind(), 12, 1, 22, 2).unwrap(),
+                (16, 1)
+            );
+            let checkpoints = tuning_journey();
+            let hero = entity(ENTITIES[0]).unwrap();
+            let monster = entity(BANDIT).unwrap();
+            let sheet = character_sheet(checkpoints[0].state(), hero).unwrap();
+            assert_eq!(
+                (
+                    sheet.hit_points,
+                    sheet.maximum_hit_points,
+                    sheet.armor_class
+                ),
+                (22, 22, 15)
+            );
+            assert!(
+                wire::creation_offer()
+                    .groups
+                    .iter()
+                    .find(|group| group.group_id == "array")
+                    .unwrap()
+                    .options[0]
+                    .description
+                    .contains("CON18")
+            );
+            assert_eq!(
+                value(checkpoints[2].state(), monster, "hit-points").unwrap(),
+                30
+            );
+            assert_eq!(
+                value(checkpoints[2].state(), monster, "armor-class").unwrap(),
+                15
+            );
+            let hurt = checkpoints[4].state();
+            assert_eq!(hurt.logical_time.ticks, 7);
+            assert_eq!(value(hurt, hero, "hit-points").unwrap(), 16);
+            let enemy = accepted(hurt.decisions.last().unwrap())
+                .unwrap()
+                .combat
+                .remove(0);
+            assert_eq!((enemy.attack_modifier, enemy.damage), (7, 6));
+            assert_eq!(
+                value(checkpoints[5].state(), hero, "hit-points").unwrap(),
+                22
+            );
+            assert_eq!(
+                value(checkpoints[5].state(), hero, "second-wind").unwrap(),
+                2
+            );
+            let outcome = accepted(checkpoints[6].state().decisions.last().unwrap())
+                .unwrap()
+                .combat
+                .remove(0);
+            assert_eq!(outcome.attack_modifier, 6);
+            assert!(outcome.critical);
+            assert_eq!(outcome.attack_die, 18);
+            assert_eq!(outcome.damage_dice, [8, 8, 8, 8]);
+            assert_eq!(outcome.target_armor_class, 15);
+            assert_eq!(checkpoints[7].state().logical_time.ticks, 607);
+            assert_eq!(
+                value(checkpoints[7].state(), hero, "second-wind").unwrap(),
+                3
+            );
+            let restored = rules::complete_no_hit_dice_short_rest(
+                &pack::rest(),
+                rules::NoHitDiceShortRest {
+                    started: 0,
+                    finished: 600,
+                    ticks_per_second: 1,
+                    interrupted: false,
+                    hit_points: 1,
+                    fighter_second_wind_uses: Some(1),
+                    knockout_unconscious: false,
+                },
+                pack::second_wind().uses_max,
+                pack::second_wind().recharge_per_short_rest,
+            )
+            .unwrap();
+            assert_eq!(restored.fighter_second_wind_uses, Some(3));
+            let view = wire::journey_view(
+                &checkpoints[6],
+                df_persistence::local_demo_scope::LocalDemoRole::Player,
+                MemberId::from_bytes(&MEMBERS[0]).unwrap(),
+            )
+            .unwrap();
+            let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+                panic!("player");
+            };
+            let outcomes = player.journey.unwrap().combat.unwrap().outcomes;
+            assert_eq!(outcomes, vec![outcome]);
+            assert_eq!(
+                phase(checkpoints.last().unwrap()).unwrap(),
+                rpc::JourneyPhase::Complete
+            );
+        });
+    }
+
     #[test]
     fn empty_character_name_crosses_codec_but_cannot_create_or_draw() {
         let initial = initial().expect("empty room");

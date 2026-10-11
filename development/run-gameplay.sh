@@ -3,6 +3,9 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ARTIFACT_ROOT=${DUNGEONFLUX_ARTIFACT_ROOT:-$ROOT/artifacts}
+if test "${DF_GAMEPLAY_PACK_DIR+x}" != x; then
+  export DF_GAMEPLAY_PACK_DIR="$ROOT/content/harbor-journey"
+fi
 export RUSTUP_HOME="$ARTIFACT_ROOT/cache/rustup"
 export CARGO_HOME="$ARTIFACT_ROOT/cache/cargo"
 export CARGO_TARGET_DIR=${DUNGEONFLUX_BUILD_ROOT:-$ARTIFACT_ROOT/build/play}
@@ -135,6 +138,7 @@ if test -z "$("$PG/psql" -h 127.0.0.1 -p 55517 -U df_gameplay_demo_admin_2026100
 fi
 
 echo "Playing with database: $DATABASE"
+echo "Edit content/harbor-journey/tuning.json (or pack.json), then re-run without --database for a new game with the new values."
 echo "To resume this game later: development/run-gameplay.sh --no-build --database $DATABASE"
 DF_GAMEPLAY_DEMO_DATABASE=$DATABASE "$CARGO_TARGET_DIR/debug/df-transport-fixture" --gameplay-demo "$CARGO_TARGET_DIR/play-web" "$ROOT/assets/ui" &
 SERVER_PID=$!
