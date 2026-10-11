@@ -5,11 +5,15 @@ use df_content::catalog::{CatalogEntry, CatalogLimits, CatalogSnapshot};
 use df_engine::command_entry::{CommandEntryContext, CommandEntryLimits, CommandRejection};
 use df_engine::pending_resumption::{ResumeError, ResumeFence, ResumeLimits};
 use df_engine::semantic_candidate::{
-    SemanticResponseAdmission, SemanticResponseError, stage_semantic_response,
+    DialogueResponseAdmission, DialogueResponseError, DialogueResponseOutcome,
+    SemanticResponseAdmission, SemanticResponseError, stage_dialogue_response,
+    stage_semantic_response,
 };
 use df_intent::candidate::{CandidateError, CandidateOwner};
+use df_intent::dialogue::{DialogueError, DialogueLimits};
 use df_model::checkpoint::*;
 use df_model::commands::{CommandError, CommandLimits};
+use df_model::intent::{DiscourseContext, InputFinality, IntentDisposition, RawInputRef};
 use df_rules::preconditions::{
     CurrentRuleContext, PreconditionError, PreconditionLimits, PreconditionedCommandHandler,
     PreconditionedRejection, RuleDependency, RulePreconditions,
@@ -908,4 +912,582 @@ mod durable_session {
             (1, 1, 1, 1, 1)
         );
     }
+}
+
+fn invoke_dialogue(
+    input: RulesCommandInput<'_>,
+    current: &Checkpoint,
+    prepared: &Checkpoint,
+    handler: &SuppliedHandler,
+    admission: Admission,
+    dialogue: DialogueResponseAdmission<'_>,
+) -> Result<DialogueResponseOutcome, DialogueResponseError<FixtureRejection>> {
+    let contents = [content()];
+    let resources = resource_constraints();
+    let dependencies = [
+        RuleDependency::Resource {
+            owner: entity(4),
+            resource: label("fixture-resource-1"),
+        },
+        RuleDependency::PendingResolutions,
+    ];
+    let source = rule();
+    let registered_selector = label("fixture-continuation-position-1");
+    let inventory = || ReferenceInventory {
+        rules: &admission.rules,
+        content: &contents,
+        resources: &resources,
+        assets: &[],
+    };
+    let wrapper = PreconditionedCommandHandler::new(
+        handler,
+        &source,
+        CurrentRuleContext {
+            checkpoint: current,
+            basis: current.basis(),
+            pins: current.pins(),
+            inventory: inventory(),
+            command_limits: admission.command,
+        },
+        RulePreconditions {
+            prepared,
+            sources: &admission.rules,
+            dependencies: &dependencies,
+        },
+        PreconditionLimits {
+            maximum_dependencies: 8,
+            maximum_comparisons: BYTES,
+            maximum_checkpoint_bytes: BYTES,
+        },
+    );
+    let entries = [CatalogEntry::new(&source, b"synthetic-clause")];
+    let catalog = CatalogSnapshot::from_published(
+        &current.pins().rules.catalog,
+        current.pins(),
+        b"synthetic-publication",
+        &entries,
+        CatalogLimits {
+            max_complete_bytes: 128,
+            max_entries: 4,
+            max_item_bytes: 64,
+            max_total_item_bytes: 128,
+        },
+    )
+    .unwrap();
+    let registrations = [HandlerRegistration::new(
+        &registered_selector,
+        &source,
+        &wrapper,
+    )];
+    let registry = DispatchRegistry::from_catalog(catalog, &registrations, 1).unwrap();
+    stage_dialogue_response(
+        input,
+        current,
+        CommandEntryContext {
+            current_basis: current.basis(),
+            admitted_pins: current.pins(),
+            inventory: inventory(),
+            limits: CommandEntryLimits {
+                command: admission.command,
+                maximum_staged_bytes: admission.maximum_bytes,
+            },
+        },
+        dialogue,
+        SemanticResponseAdmission {
+            owner: CandidateOwner {
+                basis: admission.basis,
+                pins: &admission.pins,
+                member: admission.member,
+                operation: admission.operation,
+            },
+            fence: admission.fence,
+            limits: ResumeLimits {
+                maximum_checkpoint_bytes: admission.maximum_bytes,
+            },
+        },
+        &registry,
+        &admission.selector,
+    )
+}
+
+fn captured_dialogue(current: &Checkpoint) -> RawInputRef {
+    RawInputRef {
+        input: OperationId::from_bytes(&[30; 16]).unwrap(),
+        member: member(3),
+        basis: current.basis(),
+        pins: current.pins().clone(),
+        finality: InputFinality::Final,
+    }
+}
+
+fn dialogue_admission<'a>(
+    captured: &'a RawInputRef,
+    confirmed: Option<&'a RawInputRef>,
+    discourse: DiscourseContext,
+    text: &'a str,
+) -> DialogueResponseAdmission<'a> {
+    DialogueResponseAdmission {
+        captured,
+        confirmed,
+        discourse,
+        text,
+        limits: DialogueLimits {
+            maximum_text_bytes: 64,
+        },
+    }
+}
+
+#[test]
+fn nonaction_discourse_and_partials_never_enter_registered_mechanics() {
+    let current = waiting(2);
+    let original = current.clone();
+    let input = response(2);
+    let draws = [native_roll_draw(0)];
+    let envelope = RulesCommandInput {
+        command: &input,
+        supplied_draws: &draws,
+    };
+    let handler = handler(&current, envelope);
+    for (discourse, expected) in [
+        (DiscourseContext::Question, IntentDisposition::Question),
+        (DiscourseContext::Social, IntentDisposition::Social),
+        (DiscourseContext::PlanOnly, IntentDisposition::PlanOnly),
+        (DiscourseContext::Meta, IntentDisposition::Meta),
+        (DiscourseContext::Joke, IntentDisposition::Joke),
+        (DiscourseContext::Clarify, IntentDisposition::Clarify),
+        (DiscourseContext::Unspecified, IntentDisposition::Clarify),
+    ] {
+        for finality in [InputFinality::Partial, InputFinality::Final] {
+            let mut captured = captured_dialogue(&current);
+            captured.finality = finality;
+            assert_eq!(
+                invoke_dialogue(
+                    envelope,
+                    &current,
+                    &current,
+                    &handler,
+                    admission(&current),
+                    dialogue_admission(&captured, None, discourse, "roll fixture-option-1"),
+                ),
+                Ok(DialogueResponseOutcome::NoMechanicalProposal(expected))
+            );
+            // Even an attached caller confirmation cannot authorize a partial or non-action class.
+            if finality == InputFinality::Partial || expected != IntentDisposition::Clarify {
+                assert_eq!(
+                    invoke_dialogue(
+                        envelope,
+                        &current,
+                        &current,
+                        &handler,
+                        admission(&current),
+                        dialogue_admission(
+                            &captured,
+                            Some(&captured),
+                            discourse,
+                            "roll fixture-option-1",
+                        ),
+                    ),
+                    Ok(DialogueResponseOutcome::NoMechanicalProposal(expected))
+                );
+            }
+            assert_eq!(handler.calls.get(), 0);
+            assert_eq!(handler.observed_draw_pointer.get(), std::ptr::null());
+            assert_eq!(current, original);
+        }
+    }
+}
+
+#[test]
+fn exact_offered_wording_is_inert_without_separate_confirmation() {
+    let current = waiting(0);
+    let input = response(0);
+    let envelope = RulesCommandInput {
+        command: &input,
+        supplied_draws: &[],
+    };
+    let handler = handler(&current, envelope);
+    let captured = captured_dialogue(&current);
+    assert_eq!(
+        invoke_dialogue(
+            envelope,
+            &current,
+            &current,
+            &handler,
+            admission(&current),
+            dialogue_admission(
+                &captured,
+                None,
+                DiscourseContext::Unspecified,
+                "Select fixture-offer-1 fixture-option-1 now",
+            ),
+        ),
+        Ok(DialogueResponseOutcome::NoMechanicalProposal(
+            IntentDisposition::Clarify
+        ))
+    );
+    assert_eq!(handler.calls.get(), 0);
+}
+
+#[test]
+fn separately_confirmed_dialogue_uses_same_choice_reaction_roll_and_draw_slice() {
+    for kind in 0..3 {
+        let current = waiting(kind);
+        let original = current.clone();
+        let input = response(kind);
+        let draws = if kind == 2 {
+            vec![native_roll_draw(0)]
+        } else {
+            vec![]
+        };
+        let envelope = RulesCommandInput {
+            command: &input,
+            supplied_draws: &draws,
+        };
+        let handler = handler(&current, envelope);
+        let captured = captured_dialogue(&current);
+        let result = invoke_dialogue(
+            envelope,
+            &current,
+            &current,
+            &handler,
+            admission(&current),
+            dialogue_admission(
+                &captured,
+                Some(&captured),
+                DiscourseContext::Unspecified,
+                "Do that",
+            ),
+        )
+        .unwrap();
+        let DialogueResponseOutcome::Staged(staged) = result else {
+            panic!("explicit final fixture response must stage")
+        };
+        assert_eq!(*staged, handler.candidate);
+        assert_eq!(handler.calls.get(), 1);
+        assert!(std::ptr::eq(
+            handler.observed_draw_pointer.get(),
+            draws.as_ptr()
+        ));
+        assert_eq!(staged.state().draws, draws);
+        assert_eq!(current, original);
+        assert_eq!(
+            invoke_semantic(envelope, &current, &current, &handler, admission(&current)).unwrap(),
+            *staged
+        );
+    }
+}
+
+#[test]
+fn confirmation_must_match_every_captured_input_field_before_dispatch() {
+    let current = waiting(0);
+    let input = response(0);
+    let envelope = RulesCommandInput {
+        command: &input,
+        supplied_draws: &[],
+    };
+    let handler = handler(&current, envelope);
+    let captured = captured_dialogue(&current);
+    for index in 0..5 {
+        let mut changed = captured.clone();
+        match index {
+            0 => changed.input = OperationId::from_bytes(&[99; 16]).unwrap(),
+            1 => changed.member = member(99),
+            2 => changed.basis.revision = changed.basis.revision.next_sequence().unwrap(),
+            3 => changed.pins.content.content = label("foreign-content"),
+            4 => changed.finality = InputFinality::Partial,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            invoke_dialogue(
+                envelope,
+                &current,
+                &current,
+                &handler,
+                admission(&current),
+                dialogue_admission(
+                    &captured,
+                    Some(&changed),
+                    DiscourseContext::Unspecified,
+                    "Do that",
+                ),
+            ),
+            Err(DialogueResponseError::ConfirmationMismatch)
+        );
+    }
+    assert_eq!(handler.calls.get(), 0);
+}
+
+#[test]
+fn confirmed_dialogue_keeps_exact_current_owner_and_distinct_operation_bindings() {
+    let current = waiting(0);
+    let original = current.clone();
+    let input = response(0);
+    let envelope = RulesCommandInput {
+        command: &input,
+        supplied_draws: &[],
+    };
+    let handler = handler(&current, envelope);
+    let captured = captured_dialogue(&current);
+    for index in 0..5 {
+        let mut owner = admission(&current);
+        let expected = match index {
+            0 => {
+                owner.member = member(99);
+                DialogueResponseError::Dialogue(DialogueError::MemberMismatch)
+            }
+            1 => {
+                owner.operation = OperationId::from_bytes(&[99; 16]).unwrap();
+                DialogueResponseError::Semantic(SemanticResponseError::Candidate(
+                    CandidateError::OperationMismatch,
+                ))
+            }
+            2 => {
+                owner.basis.revision = owner.basis.revision.next_sequence().unwrap();
+                DialogueResponseError::InputBindingMismatch
+            }
+            3 => {
+                owner.pins.rules.handler = label("foreign-handler");
+                DialogueResponseError::InputBindingMismatch
+            }
+            4 => {
+                owner.operation = captured.input;
+                DialogueResponseError::ConfirmationOperationReuse
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            invoke_dialogue(
+                envelope,
+                &current,
+                &current,
+                &handler,
+                owner,
+                dialogue_admission(
+                    &captured,
+                    Some(&captured),
+                    DiscourseContext::Unspecified,
+                    "Do that",
+                ),
+            ),
+            Err(expected)
+        );
+    }
+    let mut older_command = input.clone();
+    let GameInput::Game(command) = &mut older_command else {
+        unreachable!()
+    };
+    command.observed_revision = revision(2, 1);
+    assert_eq!(
+        invoke_dialogue(
+            RulesCommandInput {
+                command: &older_command,
+                supplied_draws: &[],
+            },
+            &current,
+            &current,
+            &handler,
+            admission(&current),
+            dialogue_admission(
+                &captured,
+                Some(&captured),
+                DiscourseContext::Unspecified,
+                "Do that",
+            ),
+        ),
+        Err(DialogueResponseError::InputBindingMismatch)
+    );
+    for index in 0..3 {
+        let mut stale = captured.clone();
+        match index {
+            0 => stale.member = member(99),
+            1 => stale.basis.revision = stale.basis.revision.next_sequence().unwrap(),
+            2 => stale.pins.rules.handler = label("foreign-handler"),
+            _ => unreachable!(),
+        }
+        assert!(matches!(
+            invoke_dialogue(
+                envelope,
+                &current,
+                &current,
+                &handler,
+                admission(&current),
+                dialogue_admission(
+                    &stale,
+                    Some(&stale),
+                    DiscourseContext::Unspecified,
+                    "Do that",
+                ),
+            ),
+            Err(DialogueResponseError::Dialogue(_))
+        ));
+    }
+    assert_eq!(handler.calls.get(), 0);
+    assert_eq!(current, original);
+}
+
+#[test]
+fn confirmed_dialogue_revalidates_offers_capacity_generation_and_cancellation() {
+    let current = waiting(0);
+    let original = current.clone();
+    let input = response(0);
+    let envelope = RulesCommandInput {
+        command: &input,
+        supplied_draws: &[],
+    };
+    let handler = handler(&current, envelope);
+    let captured = captured_dialogue(&current);
+    for index in 0..3 {
+        let mut owner = admission(&current);
+        let expected = match index {
+            0 => {
+                owner.fence.current_generation += 1;
+                ResumeError::StaleGeneration
+            }
+            1 => {
+                owner.fence.cancel_before_admission = true;
+                ResumeError::CancelledBeforeAdmission
+            }
+            2 => {
+                owner.maximum_bytes = 1;
+                ResumeError::Capacity
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            invoke_dialogue(
+                envelope,
+                &current,
+                &current,
+                &handler,
+                owner,
+                dialogue_admission(
+                    &captured,
+                    Some(&captured),
+                    DiscourseContext::Unspecified,
+                    "Do that",
+                ),
+            ),
+            Err(DialogueResponseError::Semantic(
+                SemanticResponseError::Resume(expected)
+            ))
+        );
+    }
+    let mut unoffered = input.clone();
+    let GameInput::Game(command) = &mut unoffered else {
+        unreachable!()
+    };
+    let GameCommand::SelectChoice { option, .. } = &mut command.command else {
+        unreachable!()
+    };
+    *option = label("not-offered");
+    assert_eq!(
+        invoke_dialogue(
+            RulesCommandInput {
+                command: &unoffered,
+                supplied_draws: &[],
+            },
+            &current,
+            &current,
+            &handler,
+            admission(&current),
+            dialogue_admission(
+                &captured,
+                Some(&captured),
+                DiscourseContext::Unspecified,
+                "Do that",
+            ),
+        ),
+        Err(DialogueResponseError::Semantic(
+            SemanticResponseError::Candidate(CandidateError::Command(
+                CommandError::UnofferedResponse
+            ))
+        ))
+    );
+    assert_eq!(handler.calls.get(), 0);
+    assert_eq!(current, original);
+}
+
+#[test]
+fn dialogue_text_limits_and_source_refusal_stay_explicit_without_hidden_effects() {
+    let current = waiting(0);
+    let original = current.clone();
+    let input = response(0);
+    let envelope = RulesCommandInput {
+        command: &input,
+        supplied_draws: &[],
+    };
+    let mut handler = handler(&current, envelope);
+    let captured = captured_dialogue(&current);
+    for (text, maximum, expected) in [
+        (" ", 64, DialogueError::EmptyInput),
+        ("Do that", 0, DialogueError::Capacity),
+        ("Do that", 2, DialogueError::Capacity),
+    ] {
+        let mut dialogue = dialogue_admission(
+            &captured,
+            Some(&captured),
+            DiscourseContext::Unspecified,
+            text,
+        );
+        dialogue.limits.maximum_text_bytes = maximum;
+        assert_eq!(
+            invoke_dialogue(
+                envelope,
+                &current,
+                &current,
+                &handler,
+                admission(&current),
+                dialogue,
+            ),
+            Err(DialogueResponseError::Dialogue(expected))
+        );
+    }
+    let mut missing_source = admission(&current);
+    missing_source.rules.clear();
+    assert!(matches!(
+        invoke_dialogue(
+            envelope,
+            &current,
+            &current,
+            &handler,
+            missing_source,
+            dialogue_admission(
+                &captured,
+                Some(&captured),
+                DiscourseContext::Unspecified,
+                "Do that",
+            ),
+        ),
+        Err(DialogueResponseError::Semantic(
+            SemanticResponseError::Candidate(CandidateError::Command(
+                CommandError::InvalidReference
+            ))
+        ))
+    ));
+    assert_eq!(handler.calls.get(), 0);
+    handler.refuse = true;
+    assert!(matches!(
+        invoke_dialogue(
+            envelope,
+            &current,
+            &current,
+            &handler,
+            admission(&current),
+            dialogue_admission(
+                &captured,
+                Some(&captured),
+                DiscourseContext::Unspecified,
+                "Do that",
+            ),
+        ),
+        Err(DialogueResponseError::Semantic(
+            SemanticResponseError::Resume(ResumeError::Command(CommandRejection::Invocation(
+                InvocationError::Handler(PreconditionedRejection::Handler(
+                    FixtureRejection::Unsupported
+                ))
+            )))
+        ))
+    ));
+    assert_eq!(handler.calls.get(), 1);
+    assert_eq!(current, original);
 }
