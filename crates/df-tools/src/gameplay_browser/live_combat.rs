@@ -3,15 +3,19 @@
 //!
 //! The server stays authoritative: each module here only maps the received `ViewMessage`
 //! onto borrowed df-ui props, and every input goes through the existing `prepare`/`send`
-//! path. Surfaces are created once per phase, updated in place for every accepted view
-//! and disposed when the phase changes.
+//! path. Surfaces are created once per phase, updated in place for every accepted view and
+//! disposed when the phase changes. The shared display mounts inside its persistent
+//! `.tv-stage`; a player's screen is mounted in the player's view.
 
 mod aftermath;
 mod combat;
 pub(super) mod sheet;
 mod style;
 
-use super::{Client, dialogue_recovery, node, recovery_details, recovery_prompt};
+use super::{
+    Client, button, dialogue_recovery, feedback, live_screens, live_tv::TvStage, node,
+    recovery_needs, recovery_prompt, replay,
+};
 use df_protocol::common as rpc;
 use df_types::{RecoveryEpoch, SessionRevision};
 use df_ui::{CampfireSurface, CombatPhaseSurface, EncounterAftermathSurface};
@@ -55,8 +59,8 @@ impl Mounted {
     }
 }
 
-/// Client state owned by the live screens: the mounted surface, its host element, local
-/// attack choices, the open character sheet and the local presentation ordering.
+/// Client state owned by these screens: the mounted surface, its host element, local attack
+/// choices, the open character sheet and the local presentation ordering.
 #[derive(Default)]
 pub(super) struct Live {
     host: Option<Element>,
@@ -93,7 +97,7 @@ fn presentation_revision(
     revision: SessionRevision,
 ) -> Result<SessionRevision, JsValue> {
     let mut state = client.borrow_mut();
-    let live = &mut state.live;
+    let live = &mut state.combat;
     let key = (revision.epoch().get(), revision.sequence());
     if live.shown == Some(key) {
         live.redraws = live
@@ -145,8 +149,32 @@ fn ensure_style(document: &Document) -> Result<(), JsValue> {
     Ok(())
 }
 
-/// The host sits before the plain scene view, which stays hidden while a live screen shows.
-/// It is full-viewport only for a display that is the page's single client.
+/// Where the live host is mounted. A player's screen replaces what the player's view held; the
+/// display's persistent stage is reused (or created) and switched to its combat mode.
+fn host_parent(client: &Rc<RefCell<Client>>, scene_view: &Element) -> Result<Element, JsValue> {
+    let (document, player) = {
+        let state = client.borrow();
+        (state.document.clone(), state.role == "player")
+    };
+    if let Some(stage) = client.borrow().live.tv.as_ref() {
+        return Ok(stage.root().clone());
+    }
+    live_screens::release(client, scene_view)?;
+    if let Some(scene) = &client.borrow().scene_delivery {
+        scene
+            .retire()
+            .map_err(|_| JsValue::from_str("retired scene cleanup failed"))?;
+    }
+    scene_view.set_text_content(None);
+    if player {
+        return Ok(scene_view.clone());
+    }
+    let stage = TvStage::mount(&document, scene_view)?;
+    let root = stage.root().clone();
+    client.borrow_mut().live.tv = Some(stage);
+    Ok(root)
+}
+
 fn ensure_host(
     client: &Rc<RefCell<Client>>,
     scene_view: &Element,
@@ -154,23 +182,33 @@ fn ensure_host(
 ) -> Result<Element, JsValue> {
     let (document, role, existing) = {
         let state = client.borrow();
-        (state.document.clone(), state.role, state.live.host.clone())
+        (
+            state.document.clone(),
+            state.role,
+            state.combat.host.clone(),
+        )
     };
     ensure_style(&document)?;
-    let host = match existing {
+    let player = role == "player";
+    let host = match existing.filter(|host| host.is_connected()) {
         Some(host) => host,
         None => {
+            let stale = client.borrow_mut().combat.mounted.take();
+            if let Some(stale) = stale {
+                stale.dispose()?;
+            }
+            let parent = host_parent(client, scene_view)?;
             let host = document.create_element("div")?;
             host.set_class_name("live-screen");
-            scene_view.insert_adjacent_element("beforebegin", &host)?;
-            client.borrow_mut().live.host = Some(host.clone());
+            parent.append_child(&host)?;
+            client.borrow_mut().combat.host = Some(host.clone());
             host
         }
     };
-    let name = screen.name(role == "player");
+    let name = screen.name(player);
     if host.get_attribute("data-screen").as_deref() != Some(name) {
         // A different screen starts from a clean host.
-        let previous = client.borrow_mut().live.mounted.take();
+        let previous = client.borrow_mut().combat.mounted.take();
         if let Some(previous) = previous {
             previous.dispose()?;
         }
@@ -178,66 +216,90 @@ fn ensure_host(
         host.set_attribute("data-screen", name)?;
     }
     host.set_attribute("data-role", role)?;
-    host.set_attribute(
-        "data-fit",
-        if role == "display" && document.get_element_by_id("player").is_none() {
-            "viewport"
-        } else {
-            "card"
-        },
-    )?;
-    scene_view.set_attribute("hidden", "")?;
+    if let Some(stage) = client.borrow().live.tv.as_ref() {
+        stage.root().set_attribute("data-tv-mode", "combat")?;
+    }
     Ok(host)
 }
 
-/// Recovery, free-text dialogue and the sheet button stay reachable below (or over) the screen.
-fn mount_extras(
+fn party_portrait(view: &LiveView<'_>, own: &rpc::CharacterSheet) -> &'static str {
+    sheet::portrait_token(&view.journey.party, own)
+}
+
+/// Feedback and recovery controls, shown only when their condition holds.
+fn recovery(client: &Rc<RefCell<Client>>, parent: &Element) -> Result<(), JsValue> {
+    let document = client.borrow().document.clone();
+    for stale in [".recovery-needed", ".live-confirm"] {
+        if let Some(previous) = parent.query_selector(stale)? {
+            previous.remove();
+        }
+    }
+    recovery_prompt(client, parent)?;
+    // The feedback node is kept (and moved last) so its message survives redraws.
+    match parent.query_selector(".feedback")? {
+        Some(node) => {
+            parent.append_child(&node)?;
+        }
+        None => {
+            node(&document, parent, "p", "feedback", "")?;
+        }
+    }
+    let confirm_strike = {
+        let state = client.borrow();
+        let needs = recovery_needs(&state);
+        state.first_attack.is_some() && (needs.lost_connection || needs.unknown_choice)
+    };
+    if confirm_strike {
+        let confirm = button(client, parent, "Confirm original strike", |client| {
+            replay(client, true);
+        })?;
+        confirm.set_class_name("live-confirm");
+    }
+    Ok(())
+}
+
+/// The player's hero header, character sheet, free-text dialogue and recovery controls, or the
+/// display's recovery dock.
+fn mount_chrome(
     client: &Rc<RefCell<Client>>,
     host: &Element,
     view: &LiveView<'_>,
 ) -> Result<(), JsValue> {
-    let (document, player) = {
-        let state = client.borrow();
-        (state.document.clone(), state.role == "player")
-    };
+    let document = client.borrow().document.clone();
+    if client.borrow().role != "player" {
+        let dock = client
+            .borrow()
+            .live
+            .tv
+            .as_ref()
+            .map(|stage| stage.dock().clone())
+            .ok_or_else(|| JsValue::from_str("display stage absent"))?;
+        dock.set_text_content(None);
+        return recovery(client, &dock);
+    }
     let extras = match host.query_selector(":scope > .live-extras")? {
         Some(extras) => extras,
         None => node(&document, host, "div", "live-extras", "")?,
     };
-    for stale in [".live-sheet-open", ".recovery-needed", ".trouble"] {
-        if let Some(previous) = extras.query_selector(stale)? {
-            previous.remove();
-        }
+    host.append_child(&extras)?;
+    if let Some(previous) = extras.query_selector(".live-sheet-inline")? {
+        previous.remove();
     }
-    if player && let Some(own) = view.journey.own_character.as_ref() {
-        sheet::summary_button(client, &extras, own)?;
+    if let Some(own) = view.journey.own_character.as_ref() {
+        let portrait = party_portrait(view, own);
+        sheet::mount_head(client, host, own, portrait)?;
+        sheet::mount_inline(client, &extras, own, portrait)?;
     }
     dialogue_recovery::mount(client, &extras, view.offers)?;
-    recovery_prompt(client, &extras)?;
-    // The feedback node is kept (and moved last) so its message survives redraws.
-    match extras.query_selector(".feedback")? {
-        Some(feedback) => {
-            extras.append_child(&feedback)?;
-        }
-        None => {
-            node(&document, &extras, "p", "feedback", "")?;
-        }
-    }
-    recovery_details(client, &extras)?;
-    Ok(())
+    recovery(client, &extras)
 }
 
 /// Presents combat or the aftermath when the accepted view is one. Returns false for every
-/// other view, which the plain scene renderer shows.
+/// other view, which the other renderers show.
 pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Result<bool, JsValue> {
     let Some(screen) = classify(view) else {
         return Ok(false);
     };
-    if let Some(scene) = &client.borrow().scene_delivery {
-        scene
-            .retire()
-            .map_err(|_| JsValue::from_str("retired scene cleanup failed"))?;
-    }
     let host = ensure_host(client, view.surface, screen)?;
     let player = client.borrow().role == "player";
     match (screen, player) {
@@ -245,38 +307,39 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
         (Screen::Aftermath, false) => aftermath::present_display(client, &host, view)?,
         (Screen::Aftermath, true) => aftermath::present_rest(client, &host, view)?,
     }
-    mount_extras(client, &host, view)?;
+    mount_chrome(client, &host, view)?;
     Ok(true)
 }
 
-/// Returns to the plain scene view after a live screen, or does nothing if none is shown.
-pub(super) fn release(client: &Rc<RefCell<Client>>, scene_view: &Element) -> Result<(), JsValue> {
+/// Removes the live screen so another renderer can show the view; does nothing if none is shown.
+pub(super) fn release(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let (mounted, host) = {
         let mut state = client.borrow_mut();
-        (state.live.mounted.take(), state.live.host.take())
+        (state.combat.mounted.take(), state.combat.host.take())
     };
     let cleanup = mounted.map(|mounted| mounted.dispose()).transpose();
     if let Some(host) = host {
         host.remove();
-        scene_view.remove_attribute("hidden")?;
     }
     cleanup.map(|_| ())
 }
 
 /// Disposes everything this module owns. Used when the view scope is replaced and on drop.
 pub(super) fn dispose(client: &mut Client) -> Result<(), JsValue> {
-    let mounted = client.live.mounted.take();
-    let overlay = client.live.sheet.take();
-    let host = client.live.host.take();
-    client.live.shown = None;
-    client.live.redraws = 0;
+    let mounted = client.combat.mounted.take();
+    let overlay = client.combat.sheet.take();
+    let host = client.combat.host.take();
+    client.combat.shown = None;
+    client.combat.redraws = 0;
     let cleanup = mounted.map(|mounted| mounted.dispose()).transpose();
     drop(overlay);
     if let Some(host) = host {
         host.remove();
-        if let Some(scene_view) = client.root.query_selector(".view")? {
-            scene_view.remove_attribute("hidden")?;
-        }
     }
     cleanup.map(|_| ())
+}
+
+/// Shown to the user when an input cannot be sent.
+fn refuse(client: &Rc<RefCell<Client>>, text: &str) {
+    feedback(&client.borrow(), text);
 }

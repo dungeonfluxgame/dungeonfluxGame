@@ -230,6 +230,114 @@ pub(super) fn load_assets(web_root: &Path, asset_root: &Path) -> Result<StartupA
     })
 }
 
+/// Fixed names of the optional generated interface art. A file is looked up as
+/// `assets/ui/generated/<stem>.<webp|png|jpg>` and served at `/assets/ui/generated/<stem>`
+/// (no extension), so the artwork format can change without touching the browser client.
+const GENERATED_STEMS: &[&str] = &[
+    "wordmark",
+    "panel-frame",
+    "button-frame",
+    "divider",
+    "ribbon-success",
+    "ribbon-failure",
+    "d20",
+    "icon-sword",
+    "icon-shield",
+    "icon-heart",
+    "icon-lantern",
+    "icon-speech",
+    "icon-compass",
+    "icon-bag",
+    "icon-book",
+    "portrait-hero-1",
+    "portrait-hero-2",
+    "portrait-bandit",
+    "portrait-courier",
+    "scene-lobby-harbor",
+    "scene-wharf-arrival",
+    "scene-whisper-in-the-rain",
+    "scene-courier-road",
+    "scene-harbor-inn",
+    "icon-attack",
+    "icon-second-wind",
+    "icon-end-turn",
+    "icon-short-rest",
+    "icon-journey",
+    "icon-talk",
+    "icon-investigate",
+    "icon-character",
+    "icon-journal",
+    "icon-map",
+    "icon-menu",
+    "icon-dice",
+    "icon-players",
+    "portrait-hero-1-full",
+    "portrait-hero-2-full",
+    "portrait-bandit-full",
+    "portrait-courier-full",
+];
+const GENERATED_EXTENSIONS: [(&str, &str); 3] = [
+    ("webp", "image/webp"),
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+];
+/// Existing authored concept art the browser client references by its original path.
+const CONCEPT_FILES: &[&str] = &[
+    "dm-avatar.webp",
+    "establishing-harbor-canal-rowboat-bridge.webp",
+];
+const MAXIMUM_EXTRA_ASSET_BYTES: u64 = 8 * 1024 * 1024;
+const MAXIMUM_EXTRA_ASSET_TOTAL_BYTES: usize = 96 * 1024 * 1024;
+
+/// Loads the allowlisted optional interface art under the same startup byte bounds as the
+/// other public files. A missing file is simply not served; an oversized or unreadable one
+/// refuses startup. Nothing outside the fixed name lists is ever read or routed.
+pub(super) fn load_extra_assets(
+    asset_root: &Path,
+) -> Result<Vec<super::public_assets::ExtraAsset>, io::Error> {
+    let mut loaded = Vec::new();
+    let mut total = 0usize;
+    let mut candidates = Vec::new();
+    for stem in GENERATED_STEMS {
+        for (extension, mime) in GENERATED_EXTENSIONS {
+            candidates.push((
+                asset_root
+                    .join("generated")
+                    .join(format!("{stem}.{extension}")),
+                format!("/assets/ui/generated/{stem}"),
+                mime,
+            ));
+        }
+    }
+    for file in CONCEPT_FILES {
+        candidates.push((
+            asset_root.join("../concept-art").join(file),
+            format!("/assets/concept-art/{file}"),
+            "image/webp",
+        ));
+    }
+    for (path, url, mime) in candidates {
+        if loaded
+            .iter()
+            .any(|asset: &super::public_assets::ExtraAsset| asset.url == url)
+        {
+            continue;
+        }
+        match super::bounded_asset(path, MAXIMUM_EXTRA_ASSET_BYTES) {
+            Ok(bytes) => {
+                total += bytes.len();
+                if total > MAXIMUM_EXTRA_ASSET_TOTAL_BYTES {
+                    return Err(io::Error::other("owned asset total bound refused"));
+                }
+                loaded.push(super::public_assets::ExtraAsset { url, mime, bytes });
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(loaded)
+}
+
 /// Accepts only the current local database-name input; never a credential or endpoint URI.
 pub(super) fn database_config(
     input: Result<String, VarError>,

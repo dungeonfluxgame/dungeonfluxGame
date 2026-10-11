@@ -44,6 +44,22 @@ fn hit_points(member: &rpc::PartyMemberView) -> String {
     )
 }
 
+/// "Victory" when every opposing creature the server lists is unconscious, otherwise "Defeat".
+/// Participants are the party in join order followed by the opposing creatures.
+fn outcome_word(view: &LiveView<'_>) -> &'static str {
+    let opposing: Vec<&rpc::PartyMemberView> = view
+        .journey
+        .combat
+        .iter()
+        .flat_map(|combat| combat.participants.iter().skip(view.journey.party.len()))
+        .collect();
+    if !opposing.is_empty() && opposing.iter().all(|member| member.unconscious) {
+        "Victory"
+    } else {
+        "Defeat"
+    }
+}
+
 fn error(client: &Rc<RefCell<Client>>, reason: &str) -> JsValue {
     let _ = client
         .borrow()
@@ -90,7 +106,7 @@ pub(super) fn present_display(
     let aftermath = EncounterAftermathView {
         generation: revision.epoch().get(),
         revision: presentation.sequence(),
-        chapter: "Encounter resolved",
+        chapter: outcome_word(view),
         title: &view.scene.title,
         narrative: view.narration,
         party_heading: "The party",
@@ -101,7 +117,7 @@ pub(super) fn present_display(
         next_scene: None,
         feedback: None,
     };
-    let mounted = match &client.borrow().live.mounted {
+    let mounted = match &client.borrow().combat.mounted {
         Some(Mounted::Aftermath(surface)) => Some(Rc::clone(surface)),
         _ => None,
     };
@@ -110,7 +126,7 @@ pub(super) fn present_display(
             return Ok(());
         }
         // A replaced owner or refused view is rebuilt from the accepted snapshot.
-        client.borrow_mut().live.mounted = None;
+        client.borrow_mut().combat.mounted = None;
         surface
             .dispose()
             .map_err(|_| error(client, "aftermath-cleanup"))?;
@@ -118,7 +134,7 @@ pub(super) fn present_display(
     let surface = EncounterAftermathSurface::create(&document, &aftermath, |_| {})
         .map_err(|_| error(client, "aftermath-create"))?;
     host.insert_before(surface.root(), host.first_child().as_ref())?;
-    client.borrow_mut().live.mounted = Some(Mounted::Aftermath(Rc::new(surface)));
+    client.borrow_mut().combat.mounted = Some(Mounted::Aftermath(Rc::new(surface)));
     Ok(())
 }
 
@@ -184,17 +200,26 @@ pub(super) fn present_rest(
         _ => offer.label.clone(),
     });
     let single_destination = proceed.is_some_and(|offer| offer.destinations.len() == 1);
+    let location = format!("{} · The Lantern Wharf", outcome_word(view));
+    let result_line = if view.journey.dialogue.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{}: “{}”",
+            view.journey.speaker, view.journey.dialogue
+        ))
+    };
     let campfire = CampfireView {
         owner_generation: revision.epoch().get(),
         revision: revision.sequence(),
         title: &view.scene.title,
-        location: "The Lantern Wharf · Greyhaven harbor",
+        location: &location,
         narration: view.narration,
         party_label: "Your party",
-        notice: if rest.is_some() || proceed.is_some() {
-            "Choose how the party spends its time. The server records the result."
-        } else {
-            "Waiting for the next choice."
+        notice: match (&result_line, rest.is_some() || proceed.is_some()) {
+            (Some(line), _) => line,
+            (None, true) => "Choose how the party spends its time. The server records the result.",
+            (None, false) => "Waiting for the next choice.",
         },
         connected,
         members: &members,
@@ -213,7 +238,7 @@ pub(super) fn present_rest(
             }
         }),
     };
-    let mounted = match &client.borrow().live.mounted {
+    let mounted = match &client.borrow().combat.mounted {
         Some(Mounted::Rest(surface)) => Some(Rc::clone(surface)),
         _ => None,
     };
@@ -222,7 +247,7 @@ pub(super) fn present_rest(
             return Ok(());
         }
         // The surface disposes itself when its owner changes; rebuild from the accepted view.
-        client.borrow_mut().live.mounted = None;
+        client.borrow_mut().combat.mounted = None;
     }
     let weak = Rc::downgrade(client);
     let surface = CampfireSurface::create(&document, &campfire, move |selection| {
@@ -232,7 +257,7 @@ pub(super) fn present_rest(
     })
     .map_err(|_| error(client, "rest-create"))?;
     host.insert_before(surface.root(), host.first_child().as_ref())?;
-    client.borrow_mut().live.mounted = Some(Mounted::Rest(Rc::new(surface)));
+    client.borrow_mut().combat.mounted = Some(Mounted::Rest(Rc::new(surface)));
     Ok(())
 }
 

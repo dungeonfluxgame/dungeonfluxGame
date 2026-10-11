@@ -1,6 +1,11 @@
 //! Thin server-projected room, creation, dialogue and combat clients.
 mod dialogue_recovery;
-mod live;
+mod live_combat;
+mod live_exploration;
+mod live_lobby;
+mod live_screens;
+mod live_theme;
+mod live_tv;
 mod public_scene_assets;
 mod view_delivery;
 
@@ -47,9 +52,10 @@ struct Client {
     watch_abort: Option<AbortHandle>,
     callbacks: Vec<Callback>,
     creation: Option<CharacterPhaseSurface>,
+    live: live_screens::LiveScreens,
     scene_delivery: Option<Rc<PublicSceneDelivery>>,
     dialogue: dialogue_recovery::DialogueRecovery,
-    live: live::Live,
+    combat: live_combat::Live,
     busy: bool,
 }
 impl Drop for Client {
@@ -67,7 +73,8 @@ impl Drop for Client {
         if let Some(creation) = self.creation.take() {
             let _cleanup = creation.dispose();
         }
-        let _cleanup = live::dispose(self);
+        let _cleanup = live_combat::dispose(self);
+        let _cleanup = self.live.dispose();
     }
 }
 thread_local! {static CLIENTS:RefCell<Vec<Rc<RefCell<Client>>>>=const {RefCell::new(Vec::new())};}
@@ -299,76 +306,27 @@ fn clear_view_scope(client: &mut Client) -> Result<(), JsValue> {
     client.first_attack = None;
     client.last_confirmed = false;
     clear_callbacks(client);
-    let live_cleanup = live::dispose(client);
+    let combat_cleanup = live_combat::dispose(client);
     let cleanup = client
         .creation
         .take()
         .map(|creation| creation.dispose())
         .transpose();
+    let live_cleanup = client.live.dispose();
     if let Some(surface) = client.root.query_selector(".view")? {
         surface.set_text_content(None);
         surface.remove_attribute("data-destination")?;
-        surface.remove_attribute("hidden")?;
     }
     client.root.remove_attribute("data-phase")?;
     client.root.remove_attribute("data-last-receipt-sequence")?;
     client.root.remove_attribute("data-last-receipt-replayed")?;
     cleanup.map_err(|_| JsValue::from_str("retired character scope cleanup failed"))?;
     live_cleanup.map_err(|_| JsValue::from_str("retired live screen cleanup failed"))?;
+    combat_cleanup.map_err(|_| JsValue::from_str("retired combat screen cleanup failed"))?;
     Ok(())
 }
 fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let (document, surface, code, uncertain) = {
-        let mut state = client.borrow_mut();
-        clear_callbacks(&mut state);
-        (
-            state.document.clone(),
-            state
-                .root
-                .query_selector(".view")?
-                .ok_or_else(|| JsValue::from_str("view missing"))?,
-            state.room_code.clone(),
-            state.join_request.is_some(),
-        )
-    };
-    surface.set_text_content(None);
-    let art = node(&document, &surface, "img", "art", "")?;
-    art.set_attribute("src", "/assets/concept-art/scene-campfire-under-stars.webp")?;
-    art.set_attribute(
-        "alt",
-        "A campfire beneath the stars, concept artwork for your adventure",
-    )?;
-    let body = node(&document, &surface, "div", "scene-copy", "")?;
-    node(&document, &body, "div", "eyebrow", "An adventure awaits")?;
-    node(&document, &body, "h2", "", "Join your companions")?;
-    node(
-        &document,
-        &body,
-        "p",
-        "narration",
-        "Connect to the shared room, create your own hero, and decide what happens at the Lantern Wharf.",
-    )?;
-    node(&document, &body, "div", "room-code", &code)?;
-    let join = button(
-        client,
-        &body,
-        if uncertain {
-            "Confirm the same join"
-        } else {
-            "Join this room"
-        },
-        join_room,
-    )?;
-    join.set_class_name("offered join-room");
-    node(
-        &document,
-        &body,
-        "p",
-        "scope",
-        "Local browser room · supported SRD 5.2.1 character options · two players",
-    )?;
-    node(&document, &body, "p", "feedback", "")?;
-    Ok(())
+    live_screens::render_join(client)
 }
 const LEAVE_LABEL: &str = "Leave this game on this device";
 /// Shown while a saved player is reconnecting, and as the way out if that cannot finish.
@@ -384,6 +342,7 @@ fn render_resume(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 .ok_or_else(|| JsValue::from_str("view missing"))?,
         )
     };
+    live_screens::release(client, &surface)?;
     surface.set_text_content(None);
     let body = node(&document, &surface, "div", "scene-copy", "")?;
     node(&document, &body, "div", "eyebrow", "Welcome back")?;
@@ -1141,7 +1100,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         .query_selector(".view")?
         .ok_or_else(|| JsValue::from_str("view absent"))?;
     root.set_attribute("data-phase", &journey.phase.to_string())?;
-    live::sheet::sync(client)?;
+    live_combat::sheet::sync(client)?;
     if let Some(creation_offer) = journey.creation.as_ref() {
         if let Some(scene) = &client.borrow().scene_delivery {
             scene
@@ -1152,6 +1111,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
             .iter()
             .find(|offer| offer.action_kind == rpc::GameplayActionKind::CreateCharacter as i32)
             .ok_or_else(|| JsValue::from_str("character action missing"))?;
+        live_screens::release(client, &surface)?;
         if client.borrow().creation.is_none() {
             surface.set_text_content(None);
         }
@@ -1182,18 +1142,41 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
             .dispose()
             .map_err(|_| JsValue::from_str("character retirement failed"))?;
     }
+    let journey_phase = rpc::JourneyPhase::try_from(journey.phase)
+        .map_err(|_| JsValue::from_str("unknown required phase"))?;
+    if let Some(shown) = scene.as_ref()
+        && live_screens::takes_over(journey_phase, &journey, shown)
+    {
+        public_scene_assets::resolve(&shown.scene_asset)
+            .map_err(|_| JsValue::from_str("unknown required public scene asset"))?;
+        surface.set_attribute("data-destination", &shown.destination.to_string())?;
+        live_combat::release(client)?;
+        return live_screens::render(
+            client,
+            &surface,
+            &live_screens::SceneInput {
+                phase: journey_phase,
+                narration: &narration,
+                scene: shown,
+                journey: &journey,
+                offers: &offers,
+                clue: &clue,
+            },
+        );
+    }
     let scene = scene.ok_or_else(|| JsValue::from_str("server scene missing"))?;
-    let live_view = live::LiveView {
+    let live_view = live_combat::LiveView {
         surface: &surface,
         narration: &narration,
         scene: &scene,
         journey: &journey,
         offers: &offers,
     };
-    if live::present(client, &live_view)? {
+    if live_combat::present(client, &live_view)? {
         return Ok(());
     }
-    live::release(client, &surface)?;
+    live_screens::release(client, &surface)?;
+    live_combat::release(client)?;
     public_scene_assets::resolve(&scene.scene_asset)
         .map_err(|_| JsValue::from_str("unknown required public scene asset"))?;
     let (delivery, scope, revision) = {
@@ -1310,7 +1293,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         node(&document, &body, "p", "clue", &clue)?;
     }
     if let Some(sheet) = journey.own_character.as_ref() {
-        live::sheet::summary(client, &body, sheet)?;
+        live_combat::sheet::summary(client, &body, sheet)?;
     }
     dialogue_recovery::mount(client, &body, &offers)?;
     let actions = node(&document, &body, "div", "scene-actions", "")?;
@@ -1415,6 +1398,7 @@ fn new_client(
     root: Element,
     role: &'static str,
 ) -> Result<Rc<RefCell<Client>>, JsValue> {
+    live_theme::install(document)?;
     let credential = root.get_attribute("data-local-binding").unwrap_or_default();
     root.remove_attribute("data-local-binding")?;
     let room_code = root
@@ -1459,9 +1443,10 @@ fn new_client(
         watch_abort: None,
         callbacks: Vec::new(),
         creation: None,
+        live: live_screens::LiveScreens::default(),
         scene_delivery: None,
         dialogue: dialogue_recovery::DialogueRecovery::default(),
-        live: live::Live::default(),
+        combat: live_combat::Live::default(),
         busy: false,
     })))
 }

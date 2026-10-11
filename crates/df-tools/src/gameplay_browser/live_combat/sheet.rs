@@ -387,64 +387,238 @@ fn hit_point_bar(
     Ok(())
 }
 
-/// Compact hero card used where the scene shows the player's own hero. It replaces the plain
-/// collapsed list and opens the designed sheet.
-pub(in crate::gameplay_browser) fn summary(
+fn initial(name: &str) -> String {
+    name.chars()
+        .next()
+        .map_or_else(|| "?".to_owned(), |first| first.to_uppercase().collect())
+}
+
+fn class_line(sheet: &rpc::CharacterSheet) -> String {
+    let species = fact(sheet, "Species").unwrap_or("Adventurer");
+    match fact(sheet, "Class") {
+        Some(class) => format!("{species} {class}").replace("level", "Level"),
+        None => species.to_owned(),
+    }
+}
+
+/// Portrait token by party order: the first joined hero uses `hero-1`, the second `hero-2`.
+pub(in crate::gameplay_browser) fn portrait_token(
+    party: &[rpc::PartyMemberView],
+    own: &rpc::CharacterSheet,
+) -> &'static str {
+    let mut matches = party
+        .iter()
+        .enumerate()
+        .filter(|(_, member)| member.name == own.name);
+    match (matches.next(), matches.next()) {
+        (Some((1, _)), None) => "hero-2",
+        _ => "hero-1",
+    }
+}
+
+/// The modifier printed beside an ability score on a character sheet. This is display
+/// formatting of the published ability-score table only; the wire carries scores alone.
+fn modifier_text(score: &str) -> Option<String> {
+    let score: i32 = score.trim().parse().ok()?;
+    Some(format!("{:+}", (score - 10).div_euclid(2)))
+}
+
+fn portrait(
     client: &Rc<RefCell<Client>>,
     parent: &Element,
-    sheet: &rpc::CharacterSheet,
+    token: &str,
+    name: &str,
 ) -> Result<(), JsValue> {
-    super::ensure_style(&client.borrow().document)?;
     let document = client.borrow().document.clone();
-    let card = node(&document, parent, "div", "live-hero", "")?;
+    let portrait = node(&document, parent, "div", "live-portrait", "")?;
+    portrait.set_attribute("data-portrait", token)?;
+    node(&document, &portrait, "span", "", &initial(name))?;
+    Ok(())
+}
+
+/// The hero's portrait, name, class, hit points and Second Wind, shown above a player screen.
+pub(super) fn mount_head(
+    client: &Rc<RefCell<Client>>,
+    host: &Element,
+    sheet: &rpc::CharacterSheet,
+    token: &str,
+) -> Result<(), JsValue> {
+    let document = client.borrow().document.clone();
+    if let Some(previous) = host.query_selector(":scope > .live-hero-head")? {
+        previous.remove();
+    }
+    let head = node(&document, host, "div", "live-hero-head", "")?;
+    portrait(client, &head, token, &sheet.name)?;
+    let meta = node(&document, &head, "div", "live-hero-meta", "")?;
     node(
         &document,
-        &card,
+        &meta,
         "strong",
         "live-hero-name",
         nonblank(&sheet.name),
     )?;
     node(
         &document,
-        &card,
+        &meta,
         "span",
         "live-hero-line",
-        &format!(
-            "{} · Armor Class {}",
-            identity_line(sheet),
-            sheet.armor_class
-        ),
+        &class_line(sheet),
     )?;
     hit_point_bar(
         &client.borrow(),
-        &card,
+        &meta,
         sheet.hit_points,
         sheet.maximum_hit_points,
     )?;
     if let Some(uses) = fact(sheet, "Second Wind uses") {
         node(
             &document,
-            &card,
+            &meta,
             "span",
             "live-hero-line wind-uses",
-            &format!("Second Wind · {} uses remaining", nonblank(uses)),
+            &format!("Second Wind · {} remaining", nonblank(uses)),
         )?;
     }
-    let open = button(client, &card, "Open character sheet", open_from_button)?;
+    host.insert_before(&head, host.first_child().as_ref())?;
+    Ok(())
+}
+
+fn list(
+    client: &Rc<RefCell<Client>>,
+    parent: &Element,
+    heading: &str,
+    items: &[(&str, String)],
+) -> Result<(), JsValue> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let document = client.borrow().document.clone();
+    let group = node(&document, parent, "div", "", "")?;
+    node(&document, &group, "h3", "", heading)?;
+    let list = node(&document, &group, "ul", "", "")?;
+    for (label, value) in items {
+        let item = node(&document, &list, "li", "", "")?;
+        node(&document, &item, "b", "", label)?;
+        item.append_with_str_1(&format!(" {}", nonblank(value)))?;
+    }
+    Ok(())
+}
+
+fn joined(sheet: &rpc::CharacterSheet, labels: &[&str]) -> String {
+    labels
+        .iter()
+        .filter_map(|label| fact(sheet, label))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The accepted character sheet as an inline `#hero-sheet` section: portrait, name, class,
+/// hit points, the six ability scores, then proficiencies, equipment and features.
+pub(in crate::gameplay_browser) fn mount_inline(
+    client: &Rc<RefCell<Client>>,
+    parent: &Element,
+    sheet: &rpc::CharacterSheet,
+    token: &str,
+) -> Result<(), JsValue> {
+    let document = client.borrow().document.clone();
+    super::ensure_style(&document)?;
+    if let Some(previous) = parent.query_selector("#hero-sheet")? {
+        previous.remove();
+    }
+    let section = node(&document, parent, "section", "live-sheet-inline", "")?;
+    section.set_id("hero-sheet");
+    section.set_attribute("aria-label", "Character sheet")?;
+    let head = node(&document, &section, "div", "live-sheet-head", "")?;
+    portrait(client, &head, token, &sheet.name)?;
+    let meta = node(&document, &head, "div", "live-hero-meta", "")?;
+    node(
+        &document,
+        &meta,
+        "strong",
+        "live-hero-name",
+        nonblank(&sheet.name),
+    )?;
+    node(
+        &document,
+        &meta,
+        "span",
+        "live-hero-line",
+        &class_line(sheet),
+    )?;
+    hit_point_bar(
+        &client.borrow(),
+        &meta,
+        sheet.hit_points,
+        sheet.maximum_hit_points,
+    )?;
+    node(
+        &document,
+        &meta,
+        "span",
+        "live-hero-line",
+        &format!("Armor Class {}", sheet.armor_class),
+    )?;
+    let grid = node(&document, &section, "div", "live-abilities", "")?;
+    for (short, long) in ABILITIES {
+        let Some(score) = fact(sheet, short) else {
+            continue;
+        };
+        let cell = node(&document, &grid, "div", "live-ability", "")?;
+        cell.set_attribute("title", long)?;
+        node(&document, &cell, "span", "live-ability-label", short)?;
+        node(
+            &document,
+            &cell,
+            "span",
+            "live-ability-score",
+            nonblank(score),
+        )?;
+        node(
+            &document,
+            &cell,
+            "span",
+            "live-ability-mod",
+            &modifier_text(score).unwrap_or_default(),
+        )?;
+    }
+    let mut proficiencies = Vec::new();
+    let skills = joined(sheet, &["First class skill", "Second class skill"]);
+    if !skills.is_empty() {
+        proficiencies.push(("Skills", skills));
+    }
+    if let Some(set) = fact(sheet, "Gaming set") {
+        proficiencies.push(("Gaming set", set.to_owned()));
+    }
+    let languages = joined(
+        sheet,
+        &["Base language", "First language", "Second language"],
+    );
+    if !languages.is_empty() {
+        proficiencies.push(("Languages", languages));
+    }
+    list(client, &section, "Proficiencies", &proficiencies)?;
+    let gear: Vec<(&str, String)> = EQUIPMENT
+        .iter()
+        .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
+        .collect();
+    list(client, &section, "Equipment", &gear)?;
+    let features: Vec<(&str, String)> = ["Origin feat", "Masteries", "Alignment"]
+        .iter()
+        .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
+        .collect();
+    list(client, &section, "Features", &features)?;
+    let open = button(client, &section, "Full character sheet", open_from_button)?;
     open.set_class_name("live-sheet-open");
     Ok(())
 }
 
-/// The sheet button alone, for screens that already show the hero's state.
-pub(super) fn summary_button(
+/// The inline sheet for the generic scene, where the hero has no party portrait context.
+pub(in crate::gameplay_browser) fn summary(
     client: &Rc<RefCell<Client>>,
     parent: &Element,
-    _sheet: &rpc::CharacterSheet,
+    sheet: &rpc::CharacterSheet,
 ) -> Result<(), JsValue> {
-    super::ensure_style(&client.borrow().document)?;
-    let open = button(client, parent, "Open character sheet", open_from_button)?;
-    open.set_class_name("live-sheet-open");
-    Ok(())
+    mount_inline(client, parent, sheet, "hero-1")
 }
 
 fn open_from_button(client: Rc<RefCell<Client>>) {
@@ -455,7 +629,7 @@ fn open_from_button(client: Rc<RefCell<Client>>) {
 
 /// Opens the designed sheet over the page for the current accepted view.
 pub(super) fn open_sheet(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    if client.borrow().live.sheet.is_some() {
+    if client.borrow().combat.sheet.is_some() {
         return Ok(());
     }
     let (document, root, sheet, owner, revision) = {
@@ -501,7 +675,7 @@ pub(super) fn open_sheet(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     if let Ok(focusable) = close_button.clone().dyn_into::<web_sys::HtmlElement>() {
         focusable.focus()?;
     }
-    client.borrow_mut().live.sheet = Some(SheetOverlay {
+    client.borrow_mut().combat.sheet = Some(SheetOverlay {
         host,
         surface,
         close_button,
@@ -512,7 +686,7 @@ pub(super) fn open_sheet(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
 }
 
 pub(super) fn close_sheet(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let overlay = client.borrow_mut().live.sheet.take();
+    let overlay = client.borrow_mut().combat.sheet.take();
     overlay.map_or(Ok(()), |overlay| overlay.dispose())
 }
 
@@ -521,13 +695,13 @@ pub(super) fn close_sheet(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
 pub(in crate::gameplay_browser) fn sync(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let updated = {
         let state = client.borrow();
-        if state.live.sheet.is_none() {
+        if state.combat.sheet.is_none() {
             return Ok(());
         }
         current(&state).map(|(sheet, owner, revision)| {
             with_view(&sheet, owner, revision, |view| {
                 state
-                    .live
+                    .combat
                     .sheet
                     .as_ref()
                     .map(|open| open.surface.update(view))

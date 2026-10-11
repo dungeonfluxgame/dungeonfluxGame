@@ -261,7 +261,7 @@ fn offers(state: &Client, view: &LiveView<'_>, blocked: bool) -> Result<Vec<Offe
                 offer: identity.clone(),
                 option: Some(label(&group.group_id)?),
                 kind: CombatOfferKind::Choice {
-                    selected: state.live.choice(&group.group_id),
+                    selected: state.combat.choice(&group.group_id),
                 },
                 label: group.label.clone(),
                 explanation: description.to_owned(),
@@ -292,9 +292,9 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         title: view.scene.title.clone(),
         narration: view.narration.to_owned(),
         connection: if state.connection.is_some() {
-            "Connected · the server rolls and resolves every action"
+            "The server rolls and resolves every action"
         } else {
-            "Connection lost · use Reconnect below"
+            "Reconnecting to the game"
         },
         notice: if player {
             "Your private view"
@@ -309,7 +309,7 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         active,
         action_empty: match (player, active_name) {
             (false, _) => "Actions appear on each player's device.".to_owned(),
-            (true, Some(name)) => format!("Waiting for {name} to act."),
+            (true, Some(name)) => format!("Waiting for {name}…"),
             (true, None) => "The encounter is resolved.".to_owned(),
         },
         busy: state.busy,
@@ -440,7 +440,7 @@ pub(super) fn present(
         )
     };
     let presentation = presentation_revision(client, revision)?;
-    let mounted = match &client.borrow().live.mounted {
+    let mounted = match &client.borrow().combat.mounted {
         Some(Mounted::Combat(surface)) => Some(Rc::clone(surface)),
         _ => None,
     };
@@ -469,7 +469,7 @@ pub(super) fn present(
         })
         .map_err(|_| render_error(client, "combat-intent"))?;
     host.insert_before(surface.root(), host.first_child().as_ref())?;
-    client.borrow_mut().live.mounted = Some(Mounted::Combat(Rc::new(surface)));
+    client.borrow_mut().combat.mounted = Some(Mounted::Combat(Rc::new(surface)));
     Ok(())
 }
 
@@ -477,7 +477,7 @@ pub(super) fn present(
 fn handle_intent(client: &Rc<RefCell<Client>>, intent: CombatIntent) {
     if let CombatOfferKind::Choice { .. } = intent.kind {
         if let Some(group) = &intent.option {
-            client.borrow_mut().live.toggle_choice(group.as_str());
+            client.borrow_mut().combat.toggle_choice(group.as_str());
         }
         if redraw_current(client).is_err() {
             status(&client.borrow(), "Saved view could not be displayed.");
@@ -510,7 +510,10 @@ fn handle_intent(client: &Rc<RefCell<Client>>, intent: CombatIntent) {
     };
     let (savage, graze) = {
         let state = client.borrow();
-        (state.live.choice(SAVAGE_ATTACKER), state.live.choice(GRAZE))
+        (
+            state.combat.choice(SAVAGE_ATTACKER),
+            state.combat.choice(GRAZE),
+        )
     };
     match prepare(
         client,

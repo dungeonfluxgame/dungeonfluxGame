@@ -1,0 +1,755 @@
+{
+  "schema_version": 1,
+  "kit": "DungeonFlux generated interface art",
+  "generated_at": "2026-10-11",
+  "source_origin": "Synthetic artwork generated for DungeonFlux from text prompts with the preserved ShellHacks concept art as style reference. Illustrative only; adds no gameplay requirements.",
+  "style_references": [
+    "assets/concept-art/ui-tv-title-screen-join-lobby.webp",
+    "assets/concept-art/ui-phone-tavern-persuasion-sheet-screens.webp",
+    "assets/concept-art/ui-tv-tavern-barkeep-dialogue-choices.webp",
+    "assets/concept-art/combat-harbor-docks-wide-lanterns.webp"
+  ],
+  "assets": [
+    {
+      "name": "portrait-hero-1-full",
+      "path": "assets/ui/generated/portrait-hero-1-full.webp",
+      "kind": "portrait",
+      "bytes": 322150,
+      "sha256": "6e75b6ffba65c78d5e4048ece343a5105f1891ab9a0c85d3cc8b1ce8aaacbaa0",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "hero-dwarf-fighter-a.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nCreate one premium AAA fantasy-game character portrait for DungeonFlux at native 1024x1536 pixels, vertical 2:3, highest available quality, opaque PNG.\nThe two supplied images are approved STYLE REFERENCES ONLY: match their cinematic painterly realism, richly modeled believable faces, deep navy moonlit harbor atmosphere, warm amber lantern illumination, subtly textured painted surfaces and exquisite grounded material detail. Do not reproduce their interface, borders, lettering or compositions.\nSubject: a male mountain dwarf fighter, former soldier, approximately 45. A weathered broad dwarven face, powerful compact neck and shoulders, braided copper-red beard with several small plain iron rings, steady grey eyes, scarred brow. Chain mail beneath a dark blue soldier tabard; a credible greatsword hilt visible over one shoulder.\nComposition: intimate head-and-shoulders to chest portrait, three-quarter body turn facing the viewer, entire head and beard comfortably inside frame, strong readable face, natural dwarf anatomy. No hands required. Background softly blurred rainy medieval moonlit harbor with warm amber lantern bokeh and subtle masts. Cool navy moonlight and warm amber lantern key light shape the face; quiet steadfast veteran dignity.\nPainted realism with sharp focal facial detail, clear individual eyes, natural skin pores and weathering, convincing interlinked chain mail, cloth weave and wet highlights; soft cinematic depth, no muddy detail.\nNo text, letters, numbers, symbols, watermark, signature, logo, frame, ornamental border, card outline, UI, panels or typography. Image fills entire canvas.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "portrait-hero-1",
+      "path": "assets/ui/generated/portrait-hero-1.webp",
+      "kind": "portrait",
+      "bytes": 142008,
+      "sha256": "f1a47c719404e3284191dec3cce2a1ed09793b70bcd6a8f72728931940601a73",
+      "dimensions": [
+        768,
+        768
+      ],
+      "synthetic": true,
+      "source_file": "hero-dwarf-fighter-a.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nCreate one premium AAA fantasy-game character portrait for DungeonFlux at native 1024x1536 pixels, vertical 2:3, highest available quality, opaque PNG.\nThe two supplied images are approved STYLE REFERENCES ONLY: match their cinematic painterly realism, richly modeled believable faces, deep navy moonlit harbor atmosphere, warm amber lantern illumination, subtly textured painted surfaces and exquisite grounded material detail. Do not reproduce their interface, borders, lettering or compositions.\nSubject: a male mountain dwarf fighter, former soldier, approximately 45. A weathered broad dwarven face, powerful compact neck and shoulders, braided copper-red beard with several small plain iron rings, steady grey eyes, scarred brow. Chain mail beneath a dark blue soldier tabard; a credible greatsword hilt visible over one shoulder.\nComposition: intimate head-and-shoulders to chest portrait, three-quarter body turn facing the viewer, entire head and beard comfortably inside frame, strong readable face, natural dwarf anatomy. No hands required. Background softly blurred rainy medieval moonlit harbor with warm amber lantern bokeh and subtle masts. Cool navy moonlight and warm amber lantern key light shape the face; quiet steadfast veteran dignity.\nPainted realism with sharp focal facial detail, clear individual eyes, natural skin pores and weathering, convincing interlinked chain mail, cloth weave and wet highlights; soft cinematic depth, no muddy detail.\nNo text, letters, numbers, symbols, watermark, signature, logo, frame, ornamental border, card outline, UI, panels or typography. Image fills entire canvas.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "portrait-hero-2-full",
+      "path": "assets/ui/generated/portrait-hero-2-full.webp",
+      "kind": "portrait",
+      "bytes": 361004,
+      "sha256": "d5f90bb717b9cff43d50bad42314c130868164bc4ddfd375c568a43789283734",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "hero-dwarf-fighter-b.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nCreate one premium AAA fantasy-game character portrait for DungeonFlux at native 1024x1536 pixels, vertical 2:3, highest available quality, opaque PNG.\nInput images: images 1 and 2 are approved STYLE REFERENCES ONLY; image 3 is the matching party portrait reference. Match cinematic painterly realism, believable sharply modeled faces, deep navy rainy moonlit harbor, amber lantern key light, cool blue rim light, subtle painted texture and grounded detailed materials. Use the same scene treatment and scale of face as image 3, making this unmistakably one party.\nSubject: a female mountain dwarf fighter, veteran soldier, about 40. Broad strong jaw, compact powerful dwarven build, dark auburn hair in tight practical warrior braids, steady hazel eyes. Her LEFT ear has a small clearly visible healed notch missing from its outer rim; arrange her head turn so that her left ear (on image right) is visible. Weathered believable veteran face. Chain mail, a worn leather pauldron and dark blue garment accents; a medieval flail secured at her belt, identifiable short handle and chain with a single steel ball at the lower edge.\nComposition: head, shoulders and chest dominate; three-quarter facing viewer. Extend lower framing only enough to show the top of the belt and secured flail near bottom edge, no legs. Entire head and braids inside frame. Hands need not appear. Softly blurred rainy moonlit harbor and amber lantern bokeh behind her, like image 3.\nWarm amber light models the face and leather, navy shadows and blue moonlight define damp hair and chain mail. Calm veteran resolve; finely painted skin and natural eyes, exquisite chain links and worn leather, crisp focal detail with soft cinematic background.\nNo text, letters, numbers, watermark, signature, logo, frame, border, card outline, UI, panels or typography. Do not copy any interface from references. Fill entire canvas.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "portrait-hero-2",
+      "path": "assets/ui/generated/portrait-hero-2.webp",
+      "kind": "portrait",
+      "bytes": 142878,
+      "sha256": "69d546d589e47fbf041cdd94e0b20a1bc979a15321d91969308006968adbb486",
+      "dimensions": [
+        768,
+        768
+      ],
+      "synthetic": true,
+      "source_file": "hero-dwarf-fighter-b.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nCreate one premium AAA fantasy-game character portrait for DungeonFlux at native 1024x1536 pixels, vertical 2:3, highest available quality, opaque PNG.\nInput images: images 1 and 2 are approved STYLE REFERENCES ONLY; image 3 is the matching party portrait reference. Match cinematic painterly realism, believable sharply modeled faces, deep navy rainy moonlit harbor, amber lantern key light, cool blue rim light, subtle painted texture and grounded detailed materials. Use the same scene treatment and scale of face as image 3, making this unmistakably one party.\nSubject: a female mountain dwarf fighter, veteran soldier, about 40. Broad strong jaw, compact powerful dwarven build, dark auburn hair in tight practical warrior braids, steady hazel eyes. Her LEFT ear has a small clearly visible healed notch missing from its outer rim; arrange her head turn so that her left ear (on image right) is visible. Weathered believable veteran face. Chain mail, a worn leather pauldron and dark blue garment accents; a medieval flail secured at her belt, identifiable short handle and chain with a single steel ball at the lower edge.\nComposition: head, shoulders and chest dominate; three-quarter facing viewer. Extend lower framing only enough to show the top of the belt and secured flail near bottom edge, no legs. Entire head and braids inside frame. Hands need not appear. Softly blurred rainy moonlit harbor and amber lantern bokeh behind her, like image 3.\nWarm amber light models the face and leather, navy shadows and blue moonlight define damp hair and chain mail. Calm veteran resolve; finely painted skin and natural eyes, exquisite chain links and worn leather, crisp focal detail with soft cinematic background.\nNo text, letters, numbers, watermark, signature, logo, frame, border, card outline, UI, panels or typography. Do not copy any interface from references. Fill entire canvas.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "portrait-bandit-full",
+      "path": "assets/ui/generated/portrait-bandit-full.webp",
+      "kind": "portrait",
+      "bytes": 304536,
+      "sha256": "1066e6132bf246bbe47985181d831e0e45bba2c19e8c9dfac5144c1f56d158ca",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "npc-dockside-bandit.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nCreate one premium AAA fantasy-game character portrait for DungeonFlux at native 1024x1536 pixels, vertical 2:3, highest available quality, opaque PNG.\nThe two supplied images are approved STYLE REFERENCES ONLY: match their cinematic painterly realism, believable faces, deep navy night palette with warm amber lantern light, subtly painted textures and premium grounded fantasy detail. Exclude all interface, frames and lettering in references.\nSubject: a lean human dockside enforcer/bandit, shaved head with subtle stubble on scalp and jaw, a previously broken crooked nose, wary cruel natural eyes, weathered face. Salt-stained dark leather jerkin, rain beading across shoulders. One bare hand rests naturally on the hilt of a sheathed medieval scimitar at his belt; show that hand clearly with correct five-finger anatomy, relaxed grip and convincing wrist.\nComposition: head-and-shoulders to chest portrait extended just enough at bottom to include hand and scimitar hilt. Three-quarter facing viewer with wary sideways gaze; entire head inside frame. He is menacing but grounded, a believable tough dock worker, never a caricature, monster or exaggerated villain. Closed mouth.\nBackground a dark wet medieval wharf, blurred harbor masts and rain. A SINGLE amber lantern at one side is the only warm source, sharply modeling face and wet leather with cool navy ambient darkness on opposite side. Strong readability despite night setting, delicate painted skin, convincing leather wear, crisp facial detail, cinematic depth.\nNo text, letters, numbers, watermark, signature, logo, frame, border, card outline, UI, panels or typography. No extra characters. Fill entire canvas.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "portrait-bandit",
+      "path": "assets/ui/generated/portrait-bandit.webp",
+      "kind": "portrait",
+      "bytes": 138186,
+      "sha256": "fca916ec81e0fc33a3ae8fe85c8efda497c67a4167d609a34e76f939aa5b3033",
+      "dimensions": [
+        768,
+        768
+      ],
+      "synthetic": true,
+      "source_file": "npc-dockside-bandit.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nCreate one premium AAA fantasy-game character portrait for DungeonFlux at native 1024x1536 pixels, vertical 2:3, highest available quality, opaque PNG.\nThe two supplied images are approved STYLE REFERENCES ONLY: match their cinematic painterly realism, believable faces, deep navy night palette with warm amber lantern light, subtly painted textures and premium grounded fantasy detail. Exclude all interface, frames and lettering in references.\nSubject: a lean human dockside enforcer/bandit, shaved head with subtle stubble on scalp and jaw, a previously broken crooked nose, wary cruel natural eyes, weathered face. Salt-stained dark leather jerkin, rain beading across shoulders. One bare hand rests naturally on the hilt of a sheathed medieval scimitar at his belt; show that hand clearly with correct five-finger anatomy, relaxed grip and convincing wrist.\nComposition: head-and-shoulders to chest portrait extended just enough at bottom to include hand and scimitar hilt. Three-quarter facing viewer with wary sideways gaze; entire head inside frame. He is menacing but grounded, a believable tough dock worker, never a caricature, monster or exaggerated villain. Closed mouth.\nBackground a dark wet medieval wharf, blurred harbor masts and rain. A SINGLE amber lantern at one side is the only warm source, sharply modeling face and wet leather with cool navy ambient darkness on opposite side. Strong readability despite night setting, delicate painted skin, convincing leather wear, crisp facial detail, cinematic depth.\nNo text, letters, numbers, watermark, signature, logo, frame, border, card outline, UI, panels or typography. No extra characters. Fill entire canvas.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "portrait-courier-full",
+      "path": "assets/ui/generated/portrait-courier-full.webp",
+      "kind": "portrait",
+      "bytes": 298718,
+      "sha256": "4c22973ca14e8902bae5ecff48125afd42835dccc323743639cd6faa41aefb0a",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "npc-harbor-courier.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nCreate one premium AAA fantasy-game character portrait for DungeonFlux at native 1024x1536 pixels, vertical 2:3, highest available quality, opaque PNG.\nThe two supplied images are approved STYLE REFERENCES ONLY: match cinematic painterly realism, richly modeled believable faces, deep navy night palette with warm amber lantern light, subtly painted textures and exquisite grounded medieval materials. Exclude all interface, borders and lettering from the references.\nSubject: a frightened young HUMAN courier, approximately 20, sympathetic and vulnerable. A soaked hooded oilskin cloak, hood worn up, rain beading and streaking across waterproof fabric. Young natural human face with wide anxious eyes, head turned to glance back over his shoulder at an unseen pursuer outside frame. Eyes share a coherent gaze direction, mouth closed or slightly parted with no visible teeth.\nHe clutches a sealed brown leather dispatch packet tightly to his chest with both hands: a tied flap secured with a visibly BROKEN dark red wax seal, the two cracked wax pieces still attached on either side of the cord, a conspicuous split crossing the wax disc. This is a leather packet rather than a paper envelope. Show the packet, wax and natural hands clearly; credible five-finger anatomy, no extra or fused fingers. Fingers curl naturally around packet edges.\nComposition: intimate head-and-shoulders to chest portrait, three-quarter body facing near the viewer while head looks over shoulder; full hood and hands contained within frame. Face and packet are focal points. Background lantern-lit rain on a moonlit medieval harbor, softly blurred masts behind; no other people.\nAmber side light softly illuminates anxious young face, warm rain glints and leather packet; navy blue moonlight fills the shadows. Detailed painted realism, nuanced expressive eyes, natural skin and hands, wet cloth, quiet dramatic tension, cinematic depth with a soft background. Premium key-art quality without muddy detail.\nNo text, letters, numbers, inscriptions, watermark, signature, logo, frame, border, card outline, UI, panels or typography. No readable seal emblem. Fill entire canvas.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "portrait-courier",
+      "path": "assets/ui/generated/portrait-courier.webp",
+      "kind": "portrait",
+      "bytes": 147028,
+      "sha256": "de1121f37fd26ef1d636101e2252486e004e984a89cfff1f616fd53a6f907520",
+      "dimensions": [
+        768,
+        768
+      ],
+      "synthetic": true,
+      "source_file": "npc-harbor-courier.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nCreate one premium AAA fantasy-game character portrait for DungeonFlux at native 1024x1536 pixels, vertical 2:3, highest available quality, opaque PNG.\nThe two supplied images are approved STYLE REFERENCES ONLY: match cinematic painterly realism, richly modeled believable faces, deep navy night palette with warm amber lantern light, subtly painted textures and exquisite grounded medieval materials. Exclude all interface, borders and lettering from the references.\nSubject: a frightened young HUMAN courier, approximately 20, sympathetic and vulnerable. A soaked hooded oilskin cloak, hood worn up, rain beading and streaking across waterproof fabric. Young natural human face with wide anxious eyes, head turned to glance back over his shoulder at an unseen pursuer outside frame. Eyes share a coherent gaze direction, mouth closed or slightly parted with no visible teeth.\nHe clutches a sealed brown leather dispatch packet tightly to his chest with both hands: a tied flap secured with a visibly BROKEN dark red wax seal, the two cracked wax pieces still attached on either side of the cord, a conspicuous split crossing the wax disc. This is a leather packet rather than a paper envelope. Show the packet, wax and natural hands clearly; credible five-finger anatomy, no extra or fused fingers. Fingers curl naturally around packet edges.\nComposition: intimate head-and-shoulders to chest portrait, three-quarter body facing near the viewer while head looks over shoulder; full hood and hands contained within frame. Face and packet are focal points. Background lantern-lit rain on a moonlit medieval harbor, softly blurred masts behind; no other people.\nAmber side light softly illuminates anxious young face, warm rain glints and leather packet; navy blue moonlight fills the shadows. Detailed painted realism, nuanced expressive eyes, natural skin and hands, wet cloth, quiet dramatic tension, cinematic depth with a soft background. Premium key-art quality without muddy detail.\nNo text, letters, numbers, inscriptions, watermark, signature, logo, frame, border, card outline, UI, panels or typography. No readable seal emblem. Fill entire canvas.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-lobby-harbor",
+      "path": "assets/ui/generated/scene-lobby-harbor.webp",
+      "kind": "scene",
+      "bytes": 312034,
+      "sha256": "a16a1911c7ee8912c2bc06fc4b91f7c1db1ae7aec6eaa8184f737252c685f77c",
+      "dimensions": [
+        1659,
+        948
+      ],
+      "synthetic": true,
+      "source_file": "scene-lobby-harbor.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: opaque wide cinematic scene painting for DungeonFlux. Create a NEW illustration; supplied images are STYLE REFERENCES ONLY. Match their premium AAA fantasy key-art quality, grounded cinematic painterly realism, deep midnight navy shadows, cool moonlight and warm amber lantern light, precise believable timber, stone, clothing and rain textures, rich atmospheric depth and crisp focal detail. Do not reproduce their interface. Render native 1792x1024 or largest available wide 16:9-ish resolution at highest available quality, without downscaling. Full bleed landscape, no lettering anywhere, no logo, no watermark, no signature, no UI, no panels, no border or ornamental frame. All signs must be unlettered. Naturally darker, quieter lower third of the composition, using scene surfaces and shadows with subdued reflections, leaving room for later interface copy; no artificial black panel. Anatomy, eyes and visible hands must be correct, poses natural.\nPrimary request: DungeonFlux title backdrop without any title or interface. A grand moonlit fantasy harbor town, matching the third reference's setting: immense many-towered medieval castle crowning high cliffs in the background, dramatic silver waterfalls descending beneath the castle into mist and connected canals, lantern-lit stone bridges crossing the water, layered timber-and-stone harbor houses and ship masts. On the RIGHT foreground/middle ground is a richly detailed inviting tavern, warm amber light from arched door and windows, wooden hanging sign bearing ONLY a simple lantern pictogram without lettering. Grand full moon partly behind clouds illuminates the castle and water. Wide breathtaking cinematic establishing composition with castle/waterfalls in the upper center, canal as an inviting leading line, right tavern grounding the image. No large foreground characters, no portraits. Lower third naturally darker and calmer: gently rippling deep navy canal and shadowed quay with soft restrained highlights, spacious uncluttered areas for future title-screen interface. Premium AAA game environment key-art, painterly realism with crisp architectural focal detail, believable engineering, exquisite wet stone and aged timber materials, warm and mysterious. Absolutely no logo, no text, no runes or writing, no UI, no panels, no borders, no watermark.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-wharf-arrival",
+      "path": "assets/ui/generated/scene-wharf-arrival.webp",
+      "kind": "scene",
+      "bytes": 251704,
+      "sha256": "7c31cc4d50da1540d3141f0a5bfa07c3f6c5f7d5040d5e2b1dcddf90abcb0dc6",
+      "dimensions": [
+        1659,
+        948
+      ],
+      "synthetic": true,
+      "source_file": "scene-wharf-arrival.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: opaque wide cinematic scene painting for DungeonFlux. Create a NEW illustration; supplied images are STYLE REFERENCES ONLY. Match their premium AAA fantasy key-art quality, grounded cinematic painterly realism, deep midnight navy shadows, cool moonlight and warm amber lantern light, precise believable timber, stone, clothing and rain textures, rich atmospheric depth and crisp focal detail. Do not reproduce their interface. Render native 1792x1024 or largest available wide 16:9-ish resolution at highest available quality, without downscaling. Full bleed landscape, no lettering anywhere, no logo, no watermark, no signature, no UI, no panels, no border or ornamental frame. All signs must be unlettered. Naturally darker, quieter lower third of the composition, using scene surfaces and shadows with subdued reflections, leaving room for later interface copy; no artificial black panel. Anatomy, eyes and visible hands must be correct, poses natural.\nPrimary request: The Broken Seal. Night at Lantern Wharf in steady rain. A frightened hooded courier slips from the shadows between stacked wooden crates toward the viewer, clutching a small folded parchment packet closed with a red wax seal to his chest. Courier continuity: lean adult human man with a narrow weary face, short dark stubble, charcoal hooded wool coat and rain-darkened brown leather gloves. One believable gloved hand holds the packet, with its other edges sheltered inside his coat. Wet wooden planks catch restrained amber lantern reflections. Behind him are tall ship masts and rigging, moonlit harbor water and an old fantasy harbor town. A second figure is only faintly hinted as a distant silhouette among the crate shadows. Wide cinematic establishing composition, courier in the middle distance with his face readable; foreground lower third predominantly empty dark wet planks, not a close-up cut-off portrait. Suspense and vulnerability, clear elegant silhouettes, moody layered rain.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-whisper-in-the-rain",
+      "path": "assets/ui/generated/scene-whisper-in-the-rain.webp",
+      "kind": "scene",
+      "bytes": 194328,
+      "sha256": "2646d2b2c02cf8d3fcbe7cfa69fd8e16671f6666bc73caf37f7576f1d5be1063",
+      "dimensions": [
+        1659,
+        948
+      ],
+      "synthetic": true,
+      "source_file": "scene-whisper-in-the-rain.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: opaque wide cinematic scene painting for DungeonFlux. Create a NEW illustration; supplied images are STYLE REFERENCES ONLY. Match their premium AAA fantasy key-art quality, grounded cinematic painterly realism, deep midnight navy shadows, cool moonlight and warm amber lantern light, precise believable timber, stone, clothing and rain textures, rich atmospheric depth and crisp focal detail. Do not reproduce their interface. Render native 1792x1024 or largest available wide 16:9-ish resolution at highest available quality, without downscaling. Full bleed landscape, no lettering anywhere, no logo, no watermark, no signature, no UI, no panels, no border or ornamental frame. All signs must be unlettered. Naturally darker, quieter lower third of the composition, using scene surfaces and shadows with subdued reflections, leaving room for later interface copy; no artificial black panel. Anatomy, eyes and visible hands must be correct, poses natural.\nPrimary request: A Whisper in the Rain. A close cinematic two-shot beneath a single hanging amber lantern at the rain-soaked fantasy harbor dock. The frightened hooded courier leans close to quietly whisper to an adult cloaked traveler. Courier continuity must match the fourth reference: lean adult human man, narrow weary face, short dark stubble, charcoal rain-soaked hooded wool coat, brown leather gloves; clutch the small folded parchment packet with red wax seal against his chest. His mouth slightly parted in a believable whisper, lips and eyes anatomically natural. Listener shown mainly from behind in three-quarter profile with dark cloak, attentive. Faces and packet in upper and middle image. Rain streaks through the lone lantern glow. In the background, softly out of focus, one dockside enforcer approaches with one hand resting on the hilt of a sheathed scimitar; threatening but not a new focal character. Wet stacked crates, ship rigging and navy harbor darkness form backdrop. Lower third is shadowed coat fabric and dark quiet dock surfaces, minimal small detail. Intimate suspense, controlled depth of field, faces in sharp painterly detail, no forced smile, no exposed teeth.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-courier-road",
+      "path": "assets/ui/generated/scene-courier-road.webp",
+      "kind": "scene",
+      "bytes": 285780,
+      "sha256": "ae6e58c77f3a97e98ba5048526f8a4e36b8995a70e00590b7bcc3361734cd043",
+      "dimensions": [
+        1659,
+        948
+      ],
+      "synthetic": true,
+      "source_file": "scene-courier-road.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: opaque wide cinematic scene painting for DungeonFlux. Create a NEW illustration; supplied images are STYLE REFERENCES ONLY. Match their premium AAA fantasy key-art quality, grounded cinematic painterly realism, deep midnight navy shadows, cool moonlight and warm amber lantern light, precise believable timber, stone, clothing and rain textures, rich atmospheric depth and crisp focal detail. Do not reproduce their interface. Render native 1792x1024 or largest available wide 16:9-ish resolution at highest available quality, without downscaling. Full bleed landscape, no lettering anywhere, no logo, no watermark, no signature, no UI, no panels, no border or ornamental frame. All signs must be unlettered. Naturally darker, quieter lower third of the composition, using scene surfaces and shadows with subdued reflections, leaving room for later interface copy; no artificial black panel. Anatomy, eyes and visible hands must be correct, poses natural.\nPrimary request: The Courier's Road. After the fight, a calm relieved night scene of a rain-washed cobbled fantasy harbor street rising gently uphill toward a warmly lit timber-and-stone inn. Seen from behind, exactly two stout broad-shouldered armored dwarves and one taller lean hooded courier walk away together toward the welcoming amber doorway. Dwarves have unmistakably short sturdy proportions, layered practical plate and leather armor, each anatomically natural with two arms and legs. Courier has the same charcoal hooded wool coat and brown leather gloves as reference four, packet safely tucked under coat; hood up, face not shown. Place the three walking figures in the middle distance in the middle band, small enough for the street and inn to establish the scene, full bodies above most of the quiet foreground. The inn has a hanging lantern sign rendered as an unlettered pictorial lantern symbol, no words, no writing. Rain has eased to a faint mist, cool moonlit wet stone and subtle amber puddle reflections. Harbor lanterns and masts glimpsed downhill between buildings. Lower third is empty shadowed cobbles with subdued reflection detail. Quiet relief and safety, subtle warmth, no combat, no fallen bodies, no celebratory gesturing.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-harbor-inn",
+      "path": "assets/ui/generated/scene-harbor-inn.webp",
+      "kind": "scene",
+      "bytes": 250186,
+      "sha256": "ce9e8665c1e99b593735cf01c7e59061849641bfea1eee065070117d76f6f9ca",
+      "dimensions": [
+        1659,
+        948
+      ],
+      "synthetic": true,
+      "source_file": "scene-harbor-inn.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: opaque wide cinematic scene painting for DungeonFlux. Create a NEW illustration; supplied images are STYLE REFERENCES ONLY. Match their premium AAA fantasy key-art quality, grounded cinematic painterly realism, deep midnight navy shadows, cool moonlight and warm amber lantern light, precise believable timber, stone, clothing and rain textures, rich atmospheric depth and crisp focal detail. Do not reproduce their interface. Render native 1792x1024 or largest available wide 16:9-ish resolution at highest available quality, without downscaling. Full bleed landscape, no lettering anywhere, no logo, no watermark, no signature, no UI, no panels, no border or ornamental frame. All signs must be unlettered. Naturally darker, quieter lower third of the composition, using scene surfaces and shadows with subdued reflections, leaving room for later interface copy; no artificial black panel. Anatomy, eyes and visible hands must be correct, poses natural.\nPrimary request: The Harbor Inn. A warm fantasy harbor tavern interior seen from the open doorway, expansive welcoming room with old timber beams, amber oil lamplight, a long polished worn wooden bar, and a watchful barkeep behind it polishing a single plain pewter mug with a cloth. Match the woman barkeep from reference one: adult dark-haired woman, wavy hair loosely pinned back, simple ivory linen blouse and dark brown practical bodice, calm alert expression. Her two hands have natural believable grip and fingers, one holds mug and other cloth; restrained small figure in the middle distance behind bar rather than a portrait. Rain beads and streaks on tall windows with cool blue harbor lights and ship masts beyond. Empty wooden table in the foreground, without candles or objects on its tabletop, edge extending across a quiet shadowed lower third. Bar and barkeep occupy middle/right area, strong layered doorway perspective. Few stools, shelves of plain bottles and mugs, maritime nets and simple unlettered decor kept refined. Warm sanctuary after rain, cinematic natural light, high-detail wood and linen. No menu boards, no lettering, no signs with text, no interface, no text, no frame. Keep foreground dark and gently blurred, richly lit focal bar and barkeep above it.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "wordmark",
+      "path": "assets/ui/generated/wordmark.webp",
+      "kind": "ornament",
+      "bytes": 260770,
+      "sha256": "0fda9c8392a4b564e7eb1ab2cde644da691e28536fdaa039e5982d2d829d4386",
+      "dimensions": [
+        1955,
+        490
+      ],
+      "synthetic": true,
+      "source_file": "wordmark-dungeonflux.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: logo-brand. Create a premium AAA fantasy game production wordmark asset matching the supplied title-screen and phone concept art. Reference images are style references only; extract the typography style, not any scene or UI. Output exactly 2048x768 PNG with a genuinely transparent alpha background. Subject is ONLY the single word \"DungeonFlux\", spelled D-u-n-g-e-o-n-F-l-u-x, capital D and F. Match the title-screen logo closely: tall ornate angular fantasy serif, sharp clean engraved letterforms and tapered pointed serifs, Dungeon in burnished antique gold with warm highlights, Flux transitioning to luminous ice-blue with white icy highlights. Subtle bevel and restrained soft glow, painterly cinematic material realism with crisp typography. Single line, centered, occupy most of canvas width with clear transparent padding, whole word uncropped. No tagline, no symbols, no ornament surrounding the word, no background, no frame, no other elements, no watermark, no signature. Actual transparent pixels behind and inside letters, never a rendered checkerboard.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "panel-frame",
+      "path": "assets/ui/generated/panel-frame.webp",
+      "kind": "ornament",
+      "bytes": 42480,
+      "sha256": "1cc2e17287195ae0ac8986645a2bf38eda7eff0548744354ee064c35c70f19cf",
+      "dimensions": [
+        1434,
+        929
+      ],
+      "synthetic": true,
+      "source_file": "frame-panel-gold.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. A production UI ornamental border sprite for DungeonFlux. EXACT image canvas 1536x1024 PNG RGBA, genuine transparent exterior and completely transparent interior. Draw only a perfectly straight rectangular THIN DOUBLE GOLD RULE. The OUTER STRAIGHT RULE MUST run at x=40, x=1496, y=40, y=984, inner rule spaced 5 pixels inward. Tiny engraved identical corner flourishes within 25 pixels of each corner. No wide glow whatsoever. Antique warm gold metal line work with tiny bevel highlights, restrained AAA cinematic fantasy finish matching the reference UI. Four identical symmetric corners, orthographic front view, correct aspect ratio. Entire rectangle visible, no cropping, no perspective, no bends. Nothing else anywhere: absolutely no panel fill, NO COLORED HAZE, no backdrop, no black field, no scene, no text, no watermark or signature. Beyond a 2-pixel soft antialiased edge around gold lines, all pixels must be alpha=0. Border intended for 9-slice use; leave only 40 pixels of canvas margin, not 75 or 90.",
+        "attempts": 3
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "button-frame",
+      "path": "assets/ui/generated/button-frame.webp",
+      "kind": "ornament",
+      "bytes": 63456,
+      "sha256": "cb2f54dad1b8ebf7f81f92078803970d8058d27802c8b227b1f6aff2b742a8da",
+      "dimensions": [
+        1965,
+        366
+      ],
+      "synthetic": true,
+      "source_file": "frame-button-gold.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one exact 1536x384 PNG RGBA sprite, aspect ratio exactly 4:1. DungeonFlux thin antique-gold button frame. Only a hairline gold outline around a long empty rectangle with clipped corners and a small pointed diamond notch at midpoint of each vertical end. Entire border centered with 35px padding around it. Gold line thickness ONLY 2 to 3 pixels, not a thick metal molding, no rounded corners, no medallions. Transparent background AND transparent empty center, actual alpha=0. Restrained elegant antique-gold fine engraving and subtle 3px warm glow, premium cinematic fantasy game finish. Single orthographic sprite matching thin reference phone buttons. No text, no UI icons, no background, no surface fill, no watermark, no signature. Exact resolution 1536 pixels wide and 384 pixels tall is mandatory, do not generate 2048x682.",
+        "attempts": 3
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "divider",
+      "path": "assets/ui/generated/divider.webp",
+      "kind": "ornament",
+      "bytes": 26308,
+      "sha256": "7795a618709ae271ae3437247ec820933e5433175c6f62bd62a972bd8bba34a2",
+      "dimensions": [
+        1815,
+        142
+      ],
+      "synthetic": true,
+      "source_file": "ornament-divider.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. DungeonFlux premium AAA fantasy UI ornament sprite matching delicate antique-gold dividers in reference phone panels. Exact PNG canvas 1536x192, aspect ratio8:1. Genuine transparent alpha background. ONE horizontal thin antique-gold line running across the middle and gracefully fading to transparency at both ends. Small four-point star / elongated diamond motif exactly centered. Extremely restrained 2-pixel engraved gold rule, tiny warm highlights, no large ornament, no medallion. Center star height24px, clean symmetric four points, gold color. Painterly cinematic metal realism with crisp ornament edges. Entire line and motif visible with transparent padding. No text, no frame, no UI, no panel surface, no background, no scene, no watermark or signature. Deliver actual alpha=0 background, no rendered checkerboard. Exact1536x192 dimensions.",
+        "attempts": 3
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "ribbon-success",
+      "path": "assets/ui/generated/ribbon-success.webp",
+      "kind": "ornament",
+      "bytes": 121776,
+      "sha256": "5e2e35e8bb2e6467759b671b194fced73d39a1c314ead152e8ec568225a1938d",
+      "dimensions": [
+        1994,
+        251
+      ],
+      "synthetic": true,
+      "source_file": "ribbon-success.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. DungeonFlux premium AAA fantasy UI success ribbon asset. Supplied phone screenshot is style reference, especially its restrained Success ribbon silhouette; do not reproduce its text. Exact1536x384 PNG RGBA, wide4:1canvas. Genuine transparent alpha exterior. ONE empty emerald-green horizontal ribbon banner with fine antique-gold trim and identical pointed/notched ends, matching slim symmetric polygonal ribbon in the phone concept art. Flat orthographic front view, centered, large across canvas with transparent padding. Deep emerald green surface with subtle velvet-like painterly texture, warm gold edge highlights; no folds blocking label area, no hanging tails. Empty broad center ready for overlaid text. Elegant restrained engraving, cinematic painterly realism, clean fine sharp outline, not cartoon. NO TEXT of any kind, no letters, no Success wording, no icon, no star, no frame beyond ribbon gold trim, no background, no scene, no watermark/signature. Actual alpha=0 around ribbon. Canvas must1536x384.\nREPAIR: gold trim must be much thinner, delicate 2pixel antique-gold line instead of thick metal molding. Ends must have small angular notched indentations on their shoulders like the reference Success banner. No corner ornament hooks. Ribbon surface deep emerald velvet, thin restrained luminous-green inner edge. Exact1536x384 canvas, centered with only40px outer padding.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "ribbon-failure",
+      "path": "assets/ui/generated/ribbon-failure.webp",
+      "kind": "ornament",
+      "bytes": 106200,
+      "sha256": "e4b97002e54c75b19b09269e44ba8e72606e3ff028f6515cde9b2881254fb1fe",
+      "dimensions": [
+        2033,
+        262
+      ],
+      "synthetic": true,
+      "source_file": "ribbon-failure.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: precise-object-edit. Input image is the final DungeonFlux emerald success ribbon asset. Produce matching failure ribbon. Change ONLY the emerald-green ribbon surface and green inner glow to DEEP CRIMSON RED. Keep the EXACT same ribbon silhouette, fine antique-gold trim, notches, dimensions, centered position, surface texture, empty center, lighting and alpha silhouette. No text whatsoever. Same premium AAA cinematic painterly fantasy game style. Output requested1536x384 PNG with genuine transparent alpha exterior; all pixels outside ribbon remain transparent. Do not add any text, icon, background, watermark or signature. Deep crimson velvet tone, not bright scarlet, gold trim stays antique gold.\nCORRECTION: Deep dark burgundy/crimson, muted night palette, red inner glow dim and restrained. Do not use bright scarlet/neon red. Preserve original success ribbon exact geometry and gold trim. Native shape must match reference; requested canvas1536x384.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "d20",
+      "path": "assets/ui/generated/d20.webp",
+      "kind": "ornament",
+      "bytes": 382076,
+      "sha256": "c94e2b69d9a9c5922f8c8498e012732d31399ee85d59fce86be2b674c485cea8",
+      "dimensions": [
+        988,
+        1088
+      ],
+      "synthetic": true,
+      "source_file": "d20-blank-top.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. DungeonFlux premium AAA fantasy dice asset matching the obsidian die in supplied phone Persuasion Check screenshot. References for materials, cinematic painterly realism, moonlit navy highlights and warm antique gold only, no UI. EXACT1024x1024 PNG with genuinely transparent alpha background. ONE single twenty-sided die, a geometrically coherent regular icosahedron with twenty triangular facets. Polished obsidian black stone facets with thin antique-gold engraved edges. Die floating centered, fully visible, generous transparent padding. Camera shows a large upward-facing front/top triangular face oriented to the viewer, and multiple smaller SIDE triangles. The LARGE CENTRAL UPWARD-FACING FRONT/TOP TRIANGLE IS COMPLETELY BLANK POLISHED OBSIDIAN: no number, no symbol, no engraving on this face, ready for a number overlay. Gold numerals ONLY on visible smaller SIDE faces, clean legible engraved digits such as 3,7,10,19, softly glowing warm gold. No extra numerals outside die. Faint delicate ice-blue arcane mist curls immediately around the die, with transparent alpha between and beyond curls. Crisp elegant facets, cool reflected highlights, subtle worn stone texture, realistic cinematic lighting and deep navy fantasy palette. No pedestal, no shadow plane, no scene/backdrop, no frame or UI, no floating text, no watermark/signature. Real alpha transparency, not a checkerboard. Exact1024x1024.\nREPAIR: Generate EXACT1024x1024 pixels (not1280x1280). Arcane mist must be very faint, wispy translucent blue threads, at most10% visual opacity, not thick bright swirls. Obsidian central blank triangle must be polished and clean with subtle reflective sheen, not cracked pavement. Maintain coherent icosahedron, blank upward front/top face and gold side numerals only. Die occupies approximately70% canvas width.",
+        "attempts": 3
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-attack",
+      "path": "assets/ui/generated/icon-attack.webp",
+      "kind": "icon",
+      "bytes": 67630,
+      "sha256": "2243b77b5b97955ad8c33fc4bcba1c4e84398ec6b844fadbcd81a8c233f9f222",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-attack.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux AAA fantasy game UI icon. Output square 512x512 PNG with genuine transparent alpha. Draw a single centered minimalist engraved LINE-ART emblem with hollow transparent interiors, occupying 70% canvas. Use antique-gold medium-weight contour strokes, restrained warm amber glow, crisp elegant contours with subtle etched highlights. The entire drawing is gold strokes only, like an engraving traced in luminous antique-gold ink, with empty transparent spaces inside and outside. Uniform stroke weight roughly 3% of emblem width; legible at 32px. This belongs on deep navy fantasy game UI panels with cinematic painterly harbor art, but do not include any panel or scenery. Keep design simple, polished and refined, balanced visual weight. Absolutely no solid metallic fill, no 3D object rendering, no bronze sculpture, no black fill, no backdrop, no background plate, no enclosing frame or border, no text/letters/numbers, no watermark/signature, no UI. Subject: exactly two crossed swords, blades upper left and upper right, hilts below, clean simple sword outline shapes with a single blade engraving line. Gold contour lines only, transparent blade interiors.",
+        "attempts": 3
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-sword",
+      "path": "assets/ui/generated/icon-sword.webp",
+      "kind": "icon",
+      "bytes": 67630,
+      "sha256": "2243b77b5b97955ad8c33fc4bcba1c4e84398ec6b844fadbcd81a8c233f9f222",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-attack.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux AAA fantasy game UI icon. Output square 512x512 PNG with genuine transparent alpha. Draw a single centered minimalist engraved LINE-ART emblem with hollow transparent interiors, occupying 70% canvas. Use antique-gold medium-weight contour strokes, restrained warm amber glow, crisp elegant contours with subtle etched highlights. The entire drawing is gold strokes only, like an engraving traced in luminous antique-gold ink, with empty transparent spaces inside and outside. Uniform stroke weight roughly 3% of emblem width; legible at 32px. This belongs on deep navy fantasy game UI panels with cinematic painterly harbor art, but do not include any panel or scenery. Keep design simple, polished and refined, balanced visual weight. Absolutely no solid metallic fill, no 3D object rendering, no bronze sculpture, no black fill, no backdrop, no background plate, no enclosing frame or border, no text/letters/numbers, no watermark/signature, no UI. Subject: exactly two crossed swords, blades upper left and upper right, hilts below, clean simple sword outline shapes with a single blade engraving line. Gold contour lines only, transparent blade interiors.",
+        "attempts": 3
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-second-wind",
+      "path": "assets/ui/generated/icon-second-wind.webp",
+      "kind": "icon",
+      "bytes": 59424,
+      "sha256": "19d2a9840a60777ad0cea55256641daf5bad1f48eb5681c4b923895430729a4d",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-second-wind.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a heart outline wrapped by one fluid swirl of wind, three curved wind lines sweep from lower left around the heart to upper right. Hollow heart with transparent interior. Gold engraved line emblem only.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-heart",
+      "path": "assets/ui/generated/icon-heart.webp",
+      "kind": "icon",
+      "bytes": 59424,
+      "sha256": "19d2a9840a60777ad0cea55256641daf5bad1f48eb5681c4b923895430729a4d",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-second-wind.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a heart outline wrapped by one fluid swirl of wind, three curved wind lines sweep from lower left around the heart to upper right. Hollow heart with transparent interior. Gold engraved line emblem only.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-end-turn",
+      "path": "assets/ui/generated/icon-end-turn.webp",
+      "kind": "icon",
+      "bytes": 40524,
+      "sha256": "97a2bc131fb5cf3b4a3a9e9fdfb6f55ab990f4833ea128c99d3dc2e7ec694f5c",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-end-turn.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a clean upright hourglass outline, two horizontal caps and two inward-curving glass contours, small sand triangle in each chamber. Simple symmetric gold engraving.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-short-rest",
+      "path": "assets/ui/generated/icon-short-rest.webp",
+      "kind": "icon",
+      "bytes": 61268,
+      "sha256": "96ac40685c0b353f2c4d5f71d170089fd5884f916d06a7220954da6945b4973f",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-short-rest.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a small campfire with exactly three distinct logs at its base, three elegant flame contours rising above. Gold engraved line art flames and logs only.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-journey",
+      "path": "assets/ui/generated/icon-journey.webp",
+      "kind": "icon",
+      "bytes": 38874,
+      "sha256": "2033d82119cb5e2e5581d5d9f8864fdc595f31dfdda082678f55f35c8216b8d2",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-journey.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a winding road drawn as two simple curving gold lines converging toward a distant small arched lit doorway. No landscape, no building facade, no scenery; a compact single emblem of road and doorway.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-compass",
+      "path": "assets/ui/generated/icon-compass.webp",
+      "kind": "icon",
+      "bytes": 38874,
+      "sha256": "2033d82119cb5e2e5581d5d9f8864fdc595f31dfdda082678f55f35c8216b8d2",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-journey.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a winding road drawn as two simple curving gold lines converging toward a distant small arched lit doorway. No landscape, no building facade, no scenery; a compact single emblem of road and doorway.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-talk",
+      "path": "assets/ui/generated/icon-talk.webp",
+      "kind": "icon",
+      "bytes": 42118,
+      "sha256": "d4bd1c1884b7646fe4ec5a6914a8a0ad75c2056835ad4978bb95ed37a85167c1",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-talk.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a large dominant speech bubble outline, empty transparent interior, with a TINY quill tucked at its lower-right edge. Quill height only ONE THIRD of speech bubble height, subordinate accent. Bubble occupies most of emblem. Quill must be small. No text.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-speech",
+      "path": "assets/ui/generated/icon-speech.webp",
+      "kind": "icon",
+      "bytes": 42118,
+      "sha256": "d4bd1c1884b7646fe4ec5a6914a8a0ad75c2056835ad4978bb95ed37a85167c1",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-talk.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a large dominant speech bubble outline, empty transparent interior, with a TINY quill tucked at its lower-right edge. Quill height only ONE THIRD of speech bubble height, subordinate accent. Bubble occupies most of emblem. Quill must be small. No text.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-investigate",
+      "path": "assets/ui/generated/icon-investigate.webp",
+      "kind": "icon",
+      "bytes": 51788,
+      "sha256": "3b0fcdb452b7d6a11887ea19d10bc2a571b4b01bdf653a7e0e0dd1606d101859",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-investigate.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a single magnifying glass, circular hollow ring lens with fully transparent interior and a simple diagonal handle lower right.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-character",
+      "path": "assets/ui/generated/icon-character.webp",
+      "kind": "icon",
+      "bytes": 51008,
+      "sha256": "cf35c96bf0afd7252096f6372c04fe58e12165a7ce6724f535a91324a0e2986a",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-character.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a hooded bust silhouette with ONLY a simple outer hood arch, one inner opening line, and a single shoulder contour beneath. Faceless fully empty transparent hood opening. Minimal symbol, absolutely no folds, drapery etchings, decorative clothing, or additional detail. Clean unbroken contours.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-journal",
+      "path": "assets/ui/generated/icon-journal.webp",
+      "kind": "icon",
+      "bytes": 50244,
+      "sha256": "05de9fa68ecfc6b9429f8c350754ee4d0b4234c935931f4e450f9d9b390f7224",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-journal.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: an open book outlined in gold, two facing pages with a clear center spine and a single ribbon marker. Blank transparent pages, no writing.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-book",
+      "path": "assets/ui/generated/icon-book.webp",
+      "kind": "icon",
+      "bytes": 50244,
+      "sha256": "05de9fa68ecfc6b9429f8c350754ee4d0b4234c935931f4e450f9d9b390f7224",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-journal.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: an open book outlined in gold, two facing pages with a clear center spine and a single ribbon marker. Blank transparent pages, no writing.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-map",
+      "path": "assets/ui/generated/icon-map.webp",
+      "kind": "icon",
+      "bytes": 53644,
+      "sha256": "be63c6e41ba510b7c3d664ad063ac029c1bca7eba654daa5cc5acd3fd11f7fd6",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-map.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a folded map with three accordion-folded panels, minimal route lines and one small clear location pin. Transparent panel interiors, no labels or lettering.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-menu",
+      "path": "assets/ui/generated/icon-menu.webp",
+      "kind": "icon",
+      "bytes": 40816,
+      "sha256": "5a34f143309466140da893e503207a6f2422176ef9ba6625cd4965171f4d9530",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-menu.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: exactly three stacked parallel horizontal gold bars, each like a slender lens shape with widest body at middle and steadily NARROWING to sharp tapered pointed tips at both ends. Ends narrower than middle, no diamond finials, no flared ends. Equal lengths, clear equal spacing. ONLY three simple tapered bars.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-dice",
+      "path": "assets/ui/generated/icon-dice.webp",
+      "kind": "icon",
+      "bytes": 72884,
+      "sha256": "b09c1e022177bfd2e6db0a3519de1184f01ba9015c8350b694322f73611d06e9",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-dice.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a twenty-sided die outline, isometric regular icosahedron emblem with clean triangular facet lines. No numbers, hollow transparent facets.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-players",
+      "path": "assets/ui/generated/icon-players.webp",
+      "kind": "icon",
+      "bytes": 48694,
+      "sha256": "ff6370ed21a6f49ff954e4dede4e7fdab82c17e001baabf9119341fe86afee70",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-players.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: exactly three small anonymous figure silhouettes shoulder to shoulder, central bust slightly taller, three round heads and simple shoulder contours, no faces or anatomy details. Gold outline silhouette emblem.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "icon-shield",
+      "path": "assets/ui/generated/icon-shield.webp",
+      "kind": "icon",
+      "bytes": 33364,
+      "sha256": "0036cbe86d05488cee4005e161eb9a53b257aee2670a6081495278ead7fc1fce",
+      "dimensions": [
+        384,
+        384
+      ],
+      "synthetic": true,
+      "source_file": "icon-shield.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a traditional medieval HEATER shield outline: straight horizontal flat top edge, two short vertical upper sides then curving inward sides meeting in pointed bottom. Absolutely no point or peak at top. One SMALL five-point star centered within, star width only one quarter shield width. Hollow transparent interior. Simple classic heater shield silhouette.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    }
+  ]
+}

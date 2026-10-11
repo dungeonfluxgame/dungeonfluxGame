@@ -10,6 +10,9 @@ mod dialogue_tests;
 mod inn_qualification;
 mod journey;
 mod model;
+mod pack;
+#[cfg(test)]
+mod pack_tests;
 mod public_assets;
 mod qualification;
 #[cfg(test)]
@@ -817,7 +820,10 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             portrait: portrait_bytes,
             inn: inn_bytes,
             combat: combat_bytes,
-        }));
+        }))
+        .merge(public_assets::extra_router(
+            startup_configuration::load_extra_assets(std::path::Path::new(&asset_root))?,
+        ));
     let npc = npc_phase.map(|phase| {
         tokio::spawn(courier_npc_qualification::run(
             service.clone(),
