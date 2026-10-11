@@ -10,7 +10,7 @@
 //!
 //! The SHA-256 values are development revisions of the exact file bytes. They are not a published
 //! content-pack version or a rights-backed identity (decision record D01).
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     fmt,
@@ -344,7 +344,7 @@ impl fmt::Display for Revision {
 // ---------------------------------------------------------------------------------------------
 
 /// Typed `tuning.json`. Ability score order is STR, DEX, CON, INT, WIS, CHA.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TuningFile {
     pub(super) schema: String,
@@ -357,7 +357,7 @@ pub(super) struct TuningFile {
     pub(super) narrative: NarrativeTuning,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct HeroTuning {
     pub(super) armor_class: u8,
@@ -371,21 +371,21 @@ pub(super) struct HeroTuning {
 }
 
 /// One selectable standard array. `scores` are before the background bonus.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AbilityArray {
     pub(super) id: String,
     pub(super) scores: [u8; 6],
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BackgroundBonus {
     pub(super) strength: u8,
     pub(super) constitution: u8,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SecondWindTuning {
     pub(super) uses_max: u8,
@@ -394,15 +394,16 @@ pub(super) struct SecondWindTuning {
     pub(super) recharge_per_short_rest: u8,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WeaponTuning {
+    #[serde(alias = "label")]
     pub(super) item: String,
     pub(super) damage_dice: u8,
     pub(super) damage_sides: u8,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BanditTuning {
     pub(super) hit_points: u8,
@@ -410,10 +411,19 @@ pub(super) struct BanditTuning {
     pub(super) abilities: AbilityScores,
     pub(super) attack_bonus: i8,
     pub(super) damage_modifier: u8,
-    pub(super) weapon: WeaponTuning,
+    pub(super) weapon: AntagonistWeaponTuning,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AntagonistWeaponTuning {
+    #[serde(rename = "label", alias = "item")]
+    pub(super) item: String,
+    pub(super) damage_dice: u8,
+    pub(super) damage_sides: u8,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AbilityScores {
     pub(super) strength: u8,
@@ -424,7 +434,7 @@ pub(super) struct AbilityScores {
     pub(super) charisma: u8,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CombatTuning {
     /// Campaign ticks in one combat round.
@@ -435,13 +445,13 @@ pub(super) struct CombatTuning {
     pub(super) combat_log_entries: u8,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RestTuning {
     pub(super) short_rest_seconds: u32,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct NarrativeTuning {
     pub(super) intervention_budget: u8,
@@ -452,7 +462,7 @@ pub(super) struct NarrativeTuning {
 // ---------------------------------------------------------------------------------------------
 
 /// Typed `pack.json`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PackFile {
     pub(super) schema: String,
@@ -461,7 +471,10 @@ pub(super) struct PackFile {
     pub(super) room_code: String,
     pub(super) creation: CreationPack,
     pub(super) equipment: Vec<EquipmentRow>,
+    #[serde(rename = "antagonist", alias = "bandit")]
     pub(super) bandit: BanditPack,
+    #[serde(default)]
+    pub(super) destination_label: Option<String>,
     pub(super) offer_labels: OfferLabels,
     pub(super) courier_clue: String,
     /// Appended to scene narration after a space; contains the `{name}` placeholder once.
@@ -469,7 +482,7 @@ pub(super) struct PackFile {
     pub(super) scenes: Vec<Scene>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CreationPack {
     pub(super) description: String,
@@ -477,7 +490,7 @@ pub(super) struct CreationPack {
     pub(super) pick_lists: PickLists,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CreationGroup {
     pub(super) id: String,
@@ -490,7 +503,7 @@ pub(super) struct CreationGroup {
     pub(super) options: Vec<CreationOption>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CreationOption {
     pub(super) id: String,
@@ -501,7 +514,7 @@ pub(super) struct CreationOption {
 
 /// Selectable values for the free pick-list groups; each must be accepted by the compiled
 /// validator, so a pack can only narrow them.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PickLists {
     pub(super) alignment: Vec<String>,
@@ -511,21 +524,23 @@ pub(super) struct PickLists {
     pub(super) gaming_set: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct EquipmentRow {
     pub(super) item: String,
     pub(super) quantity: u8,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BanditPack {
     pub(super) name: String,
+    #[serde(default)]
+    pub(super) srd_id: Option<String>,
 }
 
 /// Player-facing label of each of the ten journey actions (JSON keys are kebab-case).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(super) struct OfferLabels {
     pub(super) create_character: String,
@@ -540,7 +555,7 @@ pub(super) struct OfferLabels {
     pub(super) choose_harbor_scene: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum SceneKey {
     Room,
@@ -570,7 +585,7 @@ impl SceneKey {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Scene {
     pub(super) key: SceneKey,
@@ -583,6 +598,8 @@ pub(super) struct Scene {
     pub(super) dialogue: String,
     /// Served asset path without a leading slash.
     pub(super) asset: String,
+    #[serde(default)]
+    pub(super) speaker_portrait: String,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -599,7 +616,7 @@ pub(super) struct LoadedPack {
     pub(super) tuning_revision: Revision,
     /// JSON key paths of "standard" values that differ from the compiled SRD 5.2.1 baseline, in
     /// a fixed order. Computed by the loader; the files cannot declare themselves standard.
-    pub(super) departures: Vec<&'static str>,
+    pub(super) departures: Vec<String>,
 }
 
 /// Load `pack.json` and `tuning.json` from `directory`.
@@ -961,7 +978,12 @@ fn validate_tuning(tuning: &TuningFile) -> Result<(), PackError> {
         0,
         i64::from(wind.uses_max),
     )?;
-    validate_weapon("hero.weapon", &hero.weapon)?;
+    validate_weapon(
+        "hero.weapon",
+        &hero.weapon.item,
+        hero.weapon.damage_dice,
+        hero.weapon.damage_sides,
+    )?;
 
     let bandit = &tuning.bandit;
     range(
@@ -1003,7 +1025,12 @@ fn validate_tuning(tuning: &TuningFile) -> Result<(), PackError> {
         0,
         10,
     )?;
-    validate_weapon("bandit.weapon", &bandit.weapon)?;
+    validate_weapon(
+        "bandit.weapon",
+        &bandit.weapon.item,
+        bandit.weapon.damage_dice,
+        bandit.weapon.damage_sides,
+    )?;
 
     range(
         FILE,
@@ -1068,9 +1095,16 @@ fn validate_ability_array(
     Ok(())
 }
 
-fn validate_weapon(prefix: &str, weapon: &WeaponTuning) -> Result<(), PackError> {
+fn validate_weapon(
+    prefix: &str,
+    item: &str,
+    damage_dice: u8,
+    damage_sides: u8,
+) -> Result<(), PackError> {
     const FILE: SourceFile = SourceFile::Tuning;
-    if !COMPILED_WEAPONS.contains(&weapon.item.as_str()) {
+    if prefix == "bandit.weapon" {
+        text(FILE, &format!("{prefix}.label"), item, 1, 32)?;
+    } else if !COMPILED_WEAPONS.contains(&item) {
         return Err(cross_reference(
             FILE,
             &format!("{prefix}.item"),
@@ -1080,14 +1114,14 @@ fn validate_weapon(prefix: &str, weapon: &WeaponTuning) -> Result<(), PackError>
     range(
         FILE,
         &format!("{prefix}.damage_dice"),
-        i64::from(weapon.damage_dice),
+        i64::from(damage_dice),
         1,
         2,
     )?;
     one_of(
         FILE,
         &format!("{prefix}.damage_sides"),
-        weapon.damage_sides,
+        damage_sides,
         DIE_SIDES,
     )
 }
@@ -1121,6 +1155,19 @@ fn validate_pack(pack: &PackFile) -> Result<(), PackError> {
     validate_creation(&pack.creation)?;
     validate_equipment(&pack.equipment)?;
     text(FILE, "bandit.name", &pack.bandit.name, 1, 48)?;
+    if let Some(id) = &pack.bandit.srd_id {
+        if !df_rules::SRD_521_CREATURES.iter().any(|c| c.id == id) {
+            return Err(malformed(
+                FILE,
+                "antagonist.srd_id",
+                "known SRD 5.2.1 creature id",
+            ));
+        }
+        text(FILE, "antagonist.name", &pack.bandit.name, 1, 28)?;
+    }
+    if let Some(label) = &pack.destination_label {
+        text(FILE, "destination_label", label, 1, 40)?;
+    }
     validate_offer_labels(&pack.offer_labels)?;
     range(
         FILE,
@@ -1375,6 +1422,11 @@ fn validate_offer_labels(labels: &OfferLabels) -> Result<(), PackError> {
     Ok(())
 }
 
+/// Generated art uses the same compile-time manifest as the route allowlist.
+fn served_asset(path: &str) -> bool {
+    SERVED_SCENE_ASSETS.contains(&path) || super::adventure::generated_asset(path)
+}
+
 fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
     const FILE: SourceFile = SourceFile::Pack;
     for (index, scene) in scenes.iter().enumerate() {
@@ -1423,7 +1475,9 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
                 CrossRefReason::RestedNarrationMismatch,
             ));
         }
-        if !SERVED_SCENE_ASSETS.contains(&scene.asset.as_str()) {
+        if !served_asset(&scene.asset)
+            || (!scene.speaker_portrait.is_empty() && !served_asset(&scene.speaker_portrait))
+        {
             return Err(cross_reference(
                 FILE,
                 &format!("{at}.asset"),
@@ -1521,8 +1575,15 @@ fn same_members(actual: &[String], baseline: &[&str]) -> bool {
 }
 
 /// Standard-sensitive keys compared with the single compiled rules baseline.
-fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<&'static str> {
+fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<String> {
     let baseline = df_rules::local_journey::SRD_521_BASELINE;
+    let creature = pack
+        .bandit
+        .srd_id
+        .as_ref()
+        .and_then(|id| df_rules::SRD_521_CREATURES.iter().find(|c| c.id == id));
+    // Absence is the explicitly supported legacy harbor Bandit, not an unknown creature.
+    let expected = creature.map_or(baseline.bandit, |c| c.rules);
     let hero = &tuning.hero;
     let bandit = &tuning.bandit;
     let arrays_match = hero.ability_arrays.len() == baseline.creation.ability_arrays.len()
@@ -1586,51 +1647,51 @@ fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<&'static str> {
             "hero.weapon.damage_sides",
         ),
         (
-            i32::from(bandit.hit_points) != i32::from(baseline.bandit.hit_points),
+            i32::from(bandit.hit_points) != i32::from(expected.hit_points),
             "bandit.hit_points",
         ),
         (
-            i32::from(bandit.armor_class) != i32::from(baseline.bandit.armor_class),
+            i32::from(bandit.armor_class) != i32::from(expected.armor_class),
             "bandit.armor_class",
         ),
         (
-            bandit.abilities.strength != baseline.bandit.abilities[0],
+            bandit.abilities.strength != expected.abilities[0],
             "bandit.abilities.strength",
         ),
         (
-            bandit.abilities.dexterity != baseline.bandit.abilities[1],
+            bandit.abilities.dexterity != expected.abilities[1],
             "bandit.abilities.dexterity",
         ),
         (
-            bandit.abilities.constitution != baseline.bandit.abilities[2],
+            bandit.abilities.constitution != expected.abilities[2],
             "bandit.abilities.constitution",
         ),
         (
-            bandit.abilities.intelligence != baseline.bandit.abilities[3],
+            bandit.abilities.intelligence != expected.abilities[3],
             "bandit.abilities.intelligence",
         ),
         (
-            bandit.abilities.wisdom != baseline.bandit.abilities[4],
+            bandit.abilities.wisdom != expected.abilities[4],
             "bandit.abilities.wisdom",
         ),
         (
-            bandit.abilities.charisma != baseline.bandit.abilities[5],
+            bandit.abilities.charisma != expected.abilities[5],
             "bandit.abilities.charisma",
         ),
         (
-            i32::from(bandit.attack_bonus) != baseline.bandit.attack_bonus,
+            i32::from(bandit.attack_bonus) != expected.attack_bonus,
             "bandit.attack_bonus",
         ),
         (
-            i32::from(bandit.damage_modifier) != baseline.bandit.damage_modifier,
+            i32::from(bandit.damage_modifier) != expected.damage_modifier,
             "bandit.damage_modifier",
         ),
         (
-            bandit.weapon.damage_dice != baseline.bandit.weapon.damage_dice,
+            bandit.weapon.damage_dice != expected.weapon.damage_dice,
             "bandit.weapon.damage_dice",
         ),
         (
-            bandit.weapon.damage_sides != baseline.bandit.weapon.damage_sides,
+            bandit.weapon.damage_sides != expected.weapon.damage_sides,
             "bandit.weapon.damage_sides",
         ),
         (
@@ -1664,12 +1725,22 @@ fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<&'static str> {
         (!equipment_matches, "equipment"),
         // Weapon items change the sheet's weapon, so they are reported with the dice.
         (hero.weapon.item != "greatsword", "hero.weapon.item"),
-        (bandit.weapon.item != "scimitar", "bandit.weapon.item"),
+        (
+            bandit.weapon.item != creature.map_or("scimitar", |c| c.weapon_label),
+            "bandit.weapon.label",
+        ),
     ];
-    checks
+    let mut departures: Vec<String> = checks
         .into_iter()
-        .filter_map(|(differs, key)| differs.then_some(key))
-        .collect()
+        .filter(|(differs, _)| *differs)
+        .map(|(_, key)| key.to_owned())
+        .collect();
+    if let Some(creature) = creature
+        && !creature.exact
+    {
+        departures.push(format!("antagonist.simplified:{}", creature.id));
+    }
+    departures
 }
 
 // Startup installs one immutable revision before constructing any game state. Qualification
@@ -1884,11 +1955,20 @@ pub(super) fn hero_weapon_quantity() -> u64 {
     })
 }
 
+/// The digest-bound internal melee slot remains scimitar for every creature.
 pub(super) fn bandit_weapon_item() -> String {
-    active().map_or_else(
-        || "scimitar".to_owned(),
-        |loaded| loaded.tuning.bandit.weapon.item.clone(),
-    )
+    "scimitar".to_owned()
+}
+
+pub(super) fn destination_label() -> String {
+    with_content(|pack| {
+        pack.destination_label.clone().unwrap_or_else(|| {
+            scene(SceneKey::Inn)
+                .title
+                .trim_start_matches("The ")
+                .to_owned()
+        })
+    })
 }
 
 pub(super) fn offer_label(kind: df_protocol::common::GameplayActionKind) -> String {

@@ -12,3 +12,6 @@ pub mod current_responses;
 pub mod preconditions;
 
 pub mod local_journey;
+
+mod srd_creatures;
+pub use srd_creatures::{SRD_521_CREATURES, SrdCreature};

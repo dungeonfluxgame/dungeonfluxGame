@@ -542,10 +542,7 @@ pub(super) fn journey_view(
                 destinations: if kind == rpc::GameplayActionKind::ChooseHarborScene {
                     vec![rpc::HarborSceneOption {
                         destination: rpc::HarborDestination::HarborInn as i32,
-                        label: super::pack::scene(super::pack::SceneKey::Inn)
-                            .title
-                            .trim_start_matches("The ")
-                            .to_owned(),
+                        label: super::pack::destination_label(),
                     }]
                 } else {
                     Vec::new()
@@ -692,6 +689,7 @@ pub(super) fn journey_view(
             destination: rpc::HarborDestination::Unspecified as i32,
             title: authored.title,
             scene_asset: authored.asset,
+            speaker_portrait: authored.speaker_portrait,
         }
     };
 

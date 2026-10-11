@@ -107,7 +107,10 @@ fn join_label(path: &str) -> String {
     format!("{origin}{path}")
 }
 
-fn art(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> (&'static str, &'static str) {
+fn fallback_art(
+    phase: rpc::JourneyPhase,
+    scene: &rpc::GameplayScene,
+) -> (&'static str, &'static str) {
     if phase == rpc::JourneyPhase::Room {
         return ("scene-lobby-harbor", HARBOR_ESTABLISHING);
     }
@@ -119,6 +122,57 @@ fn art(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> (&'static str, &
         rpc::JourneyPhase::Dialogue => ("scene-whisper-in-the-rain", HARBOR_WHARF),
         _ => ("scene-courier-road", HARBOR_WHARF),
     }
+}
+
+/// Public asset paths are presentation data; only local asset URLs enter CSS/image sources.
+pub(super) fn asset_url(path: &str) -> Option<String> {
+    let path = path.trim_start_matches('/');
+    (path.starts_with("assets/")
+        && path
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'.' | b'_')))
+    .then(|| format!("/{path}"))
+}
+pub(super) struct ServerImage {
+    image: Element,
+    callback: Closure<dyn FnMut(web_sys::Event)>,
+}
+impl ServerImage {
+    pub(super) fn install(
+        image: Element,
+        source: &str,
+        fallback: Option<String>,
+    ) -> Result<Self, JsValue> {
+        let target = image.clone();
+        let callback = Closure::wrap(Box::new(move |_: web_sys::Event| {
+            if let Some(fallback) = &fallback {
+                if target.get_attribute("src").as_ref() != Some(fallback) {
+                    let _ = target.set_attribute("src", fallback);
+                }
+            } else {
+                let _ = target.set_attribute("hidden", "");
+            }
+        }) as Box<dyn FnMut(web_sys::Event)>);
+        image.add_event_listener_with_callback("error", callback.as_ref().unchecked_ref())?;
+        image.set_attribute("src", source)?;
+        image.remove_attribute("hidden")?;
+        Ok(Self { image, callback })
+    }
+}
+impl Drop for ServerImage {
+    fn drop(&mut self) {
+        let _ = self
+            .image
+            .remove_event_listener_with_callback("error", self.callback.as_ref().unchecked_ref());
+    }
+}
+
+fn art(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> (String, &'static str) {
+    let (stem, fallback) = fallback_art(phase, scene);
+    (
+        asset_url(&scene.scene_asset).unwrap_or_else(|| format!("/assets/ui/generated/{stem}")),
+        fallback,
+    )
 }
 
 fn speaker_portrait_stem(name: &str) -> Option<&'static str> {
@@ -146,7 +200,10 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
             input.journey.speaker.clone()
         },
         line: input.journey.dialogue.clone(),
-        portrait: speaker_portrait_stem(&input.journey.speaker),
+        portrait: asset_url(&input.scene.speaker_portrait).or_else(|| {
+            speaker_portrait_stem(&input.journey.speaker)
+                .map(|stem| format!("/assets/ui/generated/{stem}"))
+        }),
     });
     Ok(TvModel {
         mode: if lobby { TvMode::Lobby } else { TvMode::Scene },
@@ -313,7 +370,7 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
     } else {
         input.clue.to_owned()
     };
-    let art_scene = match art(input.phase, input.scene).0 {
+    let art_scene = match fallback_art(input.phase, input.scene).0 {
         "scene-harbor-inn" => ConceptScene::HarborInn,
         "scene-wharf-arrival" => ConceptScene::WharfArrival,
         "scene-whisper-in-the-rain" => ConceptScene::WhisperInTheRain,
@@ -335,6 +392,8 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         },
     });
     Ok(ExplorationModel {
+        scene_asset: asset_url(&input.scene.scene_asset),
+        portrait_asset: asset_url(&input.scene.speaker_portrait),
         has_whisper: !input.clue.is_empty(),
         binding,
         scene: art_scene,

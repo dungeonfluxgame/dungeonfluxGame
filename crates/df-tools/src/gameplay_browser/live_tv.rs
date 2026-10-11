@@ -31,7 +31,7 @@ pub(super) struct TvMember {
 pub(super) struct TvSpeaker {
     pub(super) name: String,
     pub(super) line: String,
-    pub(super) portrait: Option<&'static str>,
+    pub(super) portrait: Option<String>,
 }
 
 /// Everything the stage shows, already chosen from the accepted server view.
@@ -45,7 +45,7 @@ pub(super) struct TvModel {
     pub(super) join_label: String,
     pub(super) join_path: String,
     pub(super) party: Vec<TvMember>,
-    pub(super) art: &'static str,
+    pub(super) art: String,
     pub(super) art_fallback: &'static str,
 }
 
@@ -88,7 +88,7 @@ pub(super) struct TvStage {
 
 /// The generated painting is the top layer; the authored fallback shows where it is absent.
 fn image_layers(stem: &str, fallback: &str) -> String {
-    format!("background-image:url({GENERATED}/{stem}),url({fallback})")
+    format!("background-image:url({stem}),url({fallback})")
 }
 
 fn set_hidden(element: &Element, hidden: bool) -> Result<(), JsValue> {
@@ -237,7 +237,7 @@ impl TvStage {
         self.root
             .set_attribute("data-tv-mode", if lobby { "lobby" } else { "scene" })?;
         self.art
-            .set_attribute("style", &image_layers(model.art, model.art_fallback))?;
+            .set_attribute("style", &image_layers(&model.art, model.art_fallback))?;
         self.title.set_text_content(Some(&model.title));
         self.lede.set_text_content(Some(&model.lede));
         self.narration.set_text_content(Some(&model.narration));
@@ -271,7 +271,8 @@ impl TvStage {
                     "style",
                     &speaker
                         .portrait
-                        .map(|stem| format!("background-image:url({GENERATED}/{stem})"))
+                        .as_deref()
+                        .map(|url| format!("background-image:url({url})"))
                         .unwrap_or_default(),
                 )?;
             }

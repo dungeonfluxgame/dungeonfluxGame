@@ -1535,6 +1535,7 @@ pub mod fixture {
                 "assets/ui/scenes/mara-harbor-v4.png"
             }
             .to_owned(),
+            speaker_portrait: String::new(),
         };
         let journey = rpc::JourneyView {
             phase: rpc::JourneyPhase::Opening as i32,

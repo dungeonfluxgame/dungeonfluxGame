@@ -1,0 +1,608 @@
+use super::*;
+fn tables() -> Tables {
+    Tables::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/adventure-tables")
+            .as_path(),
+    )
+    .unwrap()
+}
+#[test]
+fn appendix_facts_and_determinism() {
+    let tables = tables();
+    for (seed, location, hook, patron, contact, ant) in [
+        (
+            0x3c6ef378dd81de97,
+            "lamplit-market",
+            "missed-signal",
+            "Ilsa Greaves",
+            "Lorcan Nettleby",
+            "Snag the Goblin",
+        ),
+        (
+            0xdaa66d325ccc5aac,
+            "pinewood-trail",
+            "dying-promise",
+            "Brisa Ashdown",
+            "Odalys Ravensby",
+            "the Ash-Pale Sentinel",
+        ),
+        (
+            0x11a25cdccc7d808f,
+            "thistledown-farm",
+            "promised-remedy",
+            "Kestrel Marlow",
+            "Odalys Nettleby",
+            "the Scarred Giant Rat",
+        ),
+    ] {
+        let adventure = generate(
+            &tables,
+            seed,
+            GenerateOptions::default(),
+            &ForcedEntries::new(),
+        )
+        .unwrap();
+        let (
+            patron_id,
+            stake_id,
+            ant_id,
+            complication_id,
+            secret_id,
+            destination_id,
+            contact_id,
+            reward_face,
+            roll_count,
+            rejections,
+            hp,
+            ac,
+            bonus,
+            damage,
+            abilities,
+            clue,
+        ) = match seed {
+            0x3c6ef378dd81de97 => (
+                "bell-ringer",
+                "debt-ledger",
+                "goblin-warrior",
+                "afraid",
+                "my-fault",
+                "lantern-makers-shop",
+                "watch-sergeant",
+                11,
+                55,
+                5,
+                10,
+                15,
+                4,
+                2,
+                [8, 15, 10, 10, 8, 8],
+                "Ilsa draws you close. The warning is for Lorcan Nettleby at the Lantern-Maker's Shop. This is partly my fault. I left something unguarded, and I am ashamed. Keep it between us.",
+            ),
+            0xdaa66d325ccc5aac => (
+                "acolyte",
+                "cradle-blanket",
+                "skeleton",
+                "careless-hand",
+                "passphrase",
+                "woodcutters-lodge",
+                "river-healer",
+                5,
+                51,
+                3,
+                13,
+                14,
+                5,
+                3,
+                [10, 16, 15, 6, 8, 5],
+                "Brisa lowers her voice so only you can hear. Odalys Ravensby waits at the Woodcutters' Lodge for the blanket. At the door, say that the lamps are low. Odalys will know you are friends. Tell no one.",
+            ),
+            _ => (
+                "innkeeper",
+                "fever-herb",
+                "giant-rat",
+                "hunger-and-light",
+                "leak",
+                "farmhouse-kitchen",
+                "miller",
+                7,
+                63,
+                15,
+                7,
+                13,
+                5,
+                3,
+                [7, 16, 11, 2, 10, 4],
+                "Kestrel whispers to you alone: Odalys Nettleby is keeping the fever-herb for me at the Farmhouse Kitchen. Someone I trust sold word of this errand. I do not know who. Keep it between us.",
+            ),
+        };
+        for (key, expected) in [
+            ("patron.id", patron_id),
+            ("stake.id", stake_id),
+            ("ant.id", ant_id),
+            ("complication.id", complication_id),
+            ("secret.id", secret_id),
+            ("dest.id", destination_id),
+            ("contact.id", contact_id),
+        ] {
+            assert_eq!(adventure.facts[key], expected);
+        }
+        assert_eq!(adventure.rolls.len(), roll_count);
+        assert_eq!(
+            adventure
+                .rolls
+                .iter()
+                .filter(|r| r.status == RollStatus::Rejected)
+                .count(),
+            rejections
+        );
+        assert_eq!(
+            adventure
+                .rolls
+                .iter()
+                .find(|r| r.table == "reward")
+                .unwrap()
+                .natural,
+            reward_face
+        );
+        assert_eq!(adventure.pack.courier_clue, clue);
+        let stats = &adventure.tuning.bandit;
+        assert_eq!(
+            (
+                stats.hit_points,
+                stats.armor_class,
+                stats.attack_bonus,
+                stats.damage_modifier
+            ),
+            (hp, ac, bonus, damage)
+        );
+        let a = stats.abilities;
+        assert_eq!(
+            [
+                a.strength,
+                a.dexterity,
+                a.constitution,
+                a.intelligence,
+                a.wisdom,
+                a.charisma
+            ],
+            abilities
+        );
+        assert_eq!(stats.weapon.damage_dice, 1);
+        assert_eq!(
+            stats.weapon.damage_sides,
+            if ant_id == "giant-rat" { 4 } else { 6 }
+        );
+        assert_eq!(adventure.seed, seed);
+        assert_eq!(adventure.tables_revision, tables.revision);
+        assert_eq!(adventure.rules_mode, RulesMode::Standard);
+        assert_eq!(adventure.facts["loc.id"], location);
+        assert_eq!(adventure.facts["hook.id"], hook);
+        assert_eq!(adventure.facts["patron.full"], patron);
+        assert_eq!(adventure.facts["contact.full"], contact);
+        assert_eq!(adventure.facts["ant.short"], ant);
+        let repeated = generate(
+            &tables,
+            seed,
+            GenerateOptions::default(),
+            &ForcedEntries::new(),
+        )
+        .unwrap();
+        assert_eq!(adventure.pack, repeated.pack);
+        assert_eq!(adventure.tuning, repeated.tuning);
+        assert_eq!(adventure.rolls, repeated.rolls);
+    }
+}
+#[test]
+fn five_thousand_standard_seeds_validate() {
+    let tables = tables();
+    for seed in 0..5000 {
+        let adventure = generate(
+            &tables,
+            seed,
+            GenerateOptions::default(),
+            &ForcedEntries::new(),
+        )
+        .unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+        let creature = tables
+            .antagonists
+            .entries
+            .iter()
+            .find(|e| e.id == adventure.facts["ant.id"])
+            .unwrap();
+        assert_eq!(creature.fidelity, "exact");
+        let row = df_rules::SRD_521_CREATURES
+            .iter()
+            .find(|c| c.id == creature.id)
+            .unwrap();
+        assert!(row.exact);
+        let a = adventure.tuning.bandit.abilities;
+        assert_eq!(
+            [
+                a.strength,
+                a.dexterity,
+                a.constitution,
+                a.intelligence,
+                a.wisdom,
+                a.charisma
+            ],
+            row.rules.abilities
+        );
+        assert_eq!(adventure.tuning.bandit.hit_points, row.rules.hit_points);
+        assert_eq!(adventure.tuning.bandit.armor_class, row.rules.armor_class);
+        assert_eq!(
+            i32::from(adventure.tuning.bandit.attack_bonus),
+            row.rules.attack_bonus
+        );
+        assert_eq!(
+            i32::from(adventure.tuning.bandit.damage_modifier),
+            row.rules.damage_modifier
+        );
+        assert_eq!(
+            adventure.tuning.bandit.weapon.damage_dice,
+            row.rules.weapon.damage_dice
+        );
+        assert_eq!(
+            adventure.tuning.bandit.weapon.damage_sides,
+            row.rules.weapon.damage_sides
+        );
+        assert_eq!(adventure.tuning.bandit.weapon.item, row.weapon_label);
+        for sheet in &adventure.fact_sheet {
+            assert!(sheet.baseline.chars().count() <= sheet.bounds);
+            assert!(!sheet.baseline.contains(['{', '}']));
+        }
+        let text = serde_json::to_string(&adventure.pack).unwrap();
+        for old in [
+            "Dockside Bandit",
+            "Harbor Inn",
+            "Lantern Wharf",
+            "sealed packet",
+        ] {
+            assert!(!text.contains(old), "seed {seed}: {old}");
+        }
+    }
+}
+#[test]
+fn forced_entries_are_checked_and_recorded() {
+    let tables = tables();
+    let forced = ForcedEntries::from([("location".into(), "pinewood-trail".into())]);
+    let adventure = generate(&tables, 1, GenerateOptions::default(), &forced).unwrap();
+    assert_eq!(adventure.rolls[0].status, RollStatus::Forced);
+    assert_eq!(adventure.rolls[0].natural, 0);
+    let forced = ForcedEntries::from([("location".into(), "unknown".into())]);
+    assert!(generate(&tables, 1, GenerateOptions::default(), &forced).is_err());
+}
+
+#[test]
+fn longest_coherent_opening_fits_the_narration_bound() {
+    let tables = tables();
+    let forced = ForcedEntries::from([
+        ("location".into(), "pinewood-trail".into()),
+        ("patron".into(), "acolyte".into()),
+        ("hook".into(), "pilgrim-vow".into()),
+        ("stake".into(), "steady-lantern".into()),
+        ("antagonist".into(), "skeleton".into()),
+        (
+            "prose.opening_narration".into(),
+            tables.prose["opening_narration"].variants[1].text.clone(),
+        ),
+        (
+            "prose.foreshadow_undead".into(),
+            tables.prose["foreshadow_undead"].variants[1].text.clone(),
+        ),
+        (
+            "atmosphere.c".into(),
+            "Mist threads between the dark trunks like slow smoke.".into(),
+        ),
+    ]);
+    // Force distinct other atmosphere values to keep this exact long sentence compatible.
+    let mut forced = forced;
+    forced.insert(
+        "atmosphere.a".into(),
+        tables.locations.entries[1].atmosphere.entries[0]
+            .text
+            .clone(),
+    );
+    forced.insert(
+        "atmosphere.b".into(),
+        tables.locations.entries[1].atmosphere.entries[1]
+            .text
+            .clone(),
+    );
+    let generated = generate(&tables, 1, GenerateOptions::default(), &forced).unwrap();
+    let opening = generated
+        .pack
+        .scenes
+        .iter()
+        .find(|s| s.key == super::super::pack::SceneKey::Opening)
+        .unwrap();
+    assert!(opening.narration.chars().count() <= 220);
+    assert!(opening.narration.contains("on a staff"));
+    assert!(opening.narration.contains("Nearby, something dry rattles"));
+}
+
+#[test]
+fn table_errors_name_the_source_and_json_path() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/play-g1/table-errors");
+    std::fs::create_dir_all(&directory).unwrap();
+    let originals =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/adventure-tables");
+    for entry in std::fs::read_dir(&originals).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), directory.join(entry.file_name())).unwrap();
+    }
+    let original = std::fs::read(directory.join("hooks.json")).unwrap();
+    for (pointer, value) in [
+        (
+            "/tables/hooks/entries/0/unexpected",
+            serde_json::json!(true),
+        ),
+        (
+            "/tables/hooks/entries/0/pitch",
+            serde_json::json!("{unknown.path}"),
+        ),
+        (
+            "/tables/hooks/entries/0/fits",
+            serde_json::json!(["unknown"]),
+        ),
+    ] {
+        let mut hooks: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        let (parent, key) = pointer.rsplit_once('/').unwrap();
+        hooks
+            .pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(key.into(), value);
+        std::fs::write(
+            directory.join("hooks.json"),
+            serde_json::to_vec(&hooks).unwrap(),
+        )
+        .unwrap();
+        let error = match Tables::load(&directory) {
+            Err(error) => error,
+            Ok(_) => panic!("invalid table admitted"),
+        };
+        assert!(error.to_string().contains("hooks.json"));
+        assert!(error.to_string().contains("tables"));
+    }
+    std::fs::write(directory.join("hooks.json"), &original).unwrap();
+    for filename in ["prose-patterns.json", "locations.json", "names.json"] {
+        let original = std::fs::read(originals.join(filename)).unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        match filename {
+            "prose-patterns.json" => {
+                value["tables"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("opening_narration");
+            }
+            "locations.json" => {
+                for entry in value["tables"]["locations"]["entries"][0]["atmosphere"]["entries"]
+                    .as_array_mut()
+                    .unwrap()
+                {
+                    entry["text"] = "The same atmosphere.".into();
+                }
+            }
+            _ => {
+                for entry in value["tables"]["he"]["entries"].as_array_mut().unwrap() {
+                    entry["text"] = "Tomas".into();
+                }
+            }
+        }
+        std::fs::write(
+            directory.join(filename),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        let error = match Tables::load(&directory) {
+            Err(error) => error,
+            Ok(_) => panic!("uncovered downstream table admitted"),
+        };
+        assert!(error.to_string().contains(filename));
+        std::fs::write(directory.join(filename), original).unwrap();
+    }
+    let mut mechanical: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(originals.join("prose-patterns.json")).unwrap())
+            .unwrap();
+    mechanical["tables"]["combat_mech"]["variants"][0]["text"] = "All foes are slain.".into();
+    std::fs::write(
+        directory.join("prose-patterns.json"),
+        serde_json::to_vec(&mechanical).unwrap(),
+    )
+    .unwrap();
+    let error = match Tables::load(&directory) {
+        Err(error) => error,
+        Ok(_) => panic!("altered mechanics admitted"),
+    };
+    assert!(error.to_string().contains("mechanical template differs"));
+    std::fs::remove_dir_all(directory).unwrap();
+    assert!(matches!(
+        generate(
+            &tables(),
+            1,
+            GenerateOptions::default(),
+            &ForcedEntries::from([("unsupported".into(), "entry".into())])
+        ),
+        Err(GenerateError::UnknownForced(_))
+    ));
+}
+
+#[test]
+fn every_compiled_creature_has_table_parity_and_loader_disclosure() {
+    let tables = tables();
+    assert_eq!(
+        tables.antagonists.entries.len(),
+        df_rules::SRD_521_CREATURES.len()
+    );
+    for creature in &df_rules::SRD_521_CREATURES {
+        let archetype = tables
+            .antagonists
+            .entries
+            .iter()
+            .find(|e| e.id == creature.id)
+            .unwrap();
+        let location = tables
+            .locations
+            .entries
+            .iter()
+            .find(|e| super::tables::intersects(&e.tags, &archetype.fits))
+            .unwrap();
+        let forced = ForcedEntries::from([
+            ("location".into(), location.id.clone()),
+            ("antagonist".into(), creature.id.into()),
+        ]);
+        let generated = generate(
+            &tables,
+            42,
+            GenerateOptions {
+                rules_mode: RulesMode::CustomAllowed,
+            },
+            &forced,
+        )
+        .unwrap();
+        let combat = generated
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == super::super::pack::SceneKey::Combat)
+            .unwrap();
+        assert_eq!(
+            combat.speaker_portrait, tables.art[&archetype.art],
+            "{} combat portrait",
+            creature.id
+        );
+        if !archetype.speaks {
+            assert!(combat.speaker.is_empty());
+            assert!(combat.dialogue.is_empty());
+        }
+        let loaded = super::super::pack::load_from_bytes(
+            &serde_json::to_vec(&generated.pack).unwrap(),
+            &serde_json::to_vec(&generated.tuning).unwrap(),
+        )
+        .unwrap();
+        if creature.exact {
+            assert!(
+                loaded.departures.is_empty(),
+                "{}: {:?}",
+                creature.id,
+                loaded.departures
+            );
+        } else {
+            assert_eq!(
+                loaded.departures,
+                vec![format!("antagonist.simplified:{}", creature.id)]
+            );
+        }
+        let mut tampered = generated.tuning.clone();
+        tampered.bandit.hit_points += 1;
+        let loaded = super::super::pack::load_from_bytes(
+            &serde_json::to_vec(&generated.pack).unwrap(),
+            &serde_json::to_vec(&tampered).unwrap(),
+        )
+        .unwrap();
+        assert!(loaded.departures.iter().any(|d| d == "bandit.hit_points"));
+    }
+}
+
+#[test]
+fn stored_adventure_resumes_identical_bytes_without_tables_or_new_seed() {
+    use super::super::startup_configuration::{AdventureMode, AdventureSettings};
+    use df_persistence::local_demo_scope::AdventureStartup;
+    let tables = tables();
+    let generated = generate(
+        &tables,
+        0x3c6ef378dd81de97,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+    let documents = generated.documents(true).unwrap();
+    assert!(documents == generated.documents(true).unwrap());
+    let current = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/play-g1/resume-{}",
+        std::process::id()
+    ));
+    let directory = current.join("development/runs/df_gameplay_demo_record_test");
+    super::record::create_cache(&directory, &documents).unwrap();
+    let settings = AdventureSettings {
+        mode: AdventureMode::Random,
+        seed: Some(999),
+        rules_mode: RulesMode::CustomAllowed,
+        tables: current.join("does-not-exist"),
+    };
+    let resumed = super::startup::select(
+        &settings,
+        &current,
+        "df_gameplay_demo_record_test",
+        AdventureStartup::Stored(documents.clone()),
+    )
+    .unwrap();
+    assert!(!resumed.fresh);
+    assert_eq!(resumed.record.seed, "0x3c6ef378dd81de97");
+    assert_eq!(resumed.loaded.pack, generated.pack);
+    assert_eq!(resumed.loaded.tuning, generated.tuning);
+    assert!(resumed.documents == documents);
+    assert!(super::record::create_cache(&directory, &documents).is_err());
+    std::fs::write(directory.join("pack.json"), b"edited cache").unwrap();
+    assert!(
+        super::startup::select(
+            &settings,
+            &current,
+            "df_gameplay_demo_record_test",
+            AdventureStartup::Stored(documents.clone())
+        )
+        .is_err()
+    );
+    std::fs::write(directory.join("pack.json"), &documents.pack).unwrap();
+    std::fs::remove_file(directory.join("tuning.json")).unwrap();
+    assert!(
+        super::startup::select(
+            &settings,
+            &current,
+            "df_gameplay_demo_record_test",
+            AdventureStartup::Stored(documents)
+        )
+        .is_err()
+    );
+    std::fs::remove_dir_all(current).unwrap();
+}
+
+#[test]
+fn record_binding_and_compiled_mechanical_text_fail_closed() {
+    let tables = tables();
+    let generated = generate(
+        &tables,
+        42,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+    let documents = generated.documents(false).unwrap();
+    assert!(super::record::reload(&documents).is_ok());
+    for key in ["seed", "pack_sha256", "tuning_sha256", "generator_version"] {
+        let mut altered = documents.clone();
+        let mut record: serde_json::Value = serde_json::from_slice(&altered.record).unwrap();
+        record[key] = "changed".into();
+        altered.record = serde_json::to_vec(&record).unwrap();
+        assert!(super::record::reload(&altered).is_err());
+    }
+    struct UnvalidatedProse;
+    impl ProseSource for UnvalidatedProse {
+        fn express(&self, _: &FactSheet) -> Result<String, GenerateError> {
+            Ok("A different unvalidated story.".into())
+        }
+    }
+    assert!(
+        generate_with_prose(
+            &tables,
+            42,
+            GenerateOptions::default(),
+            &ForcedEntries::new(),
+            &UnvalidatedProse
+        )
+        .is_err()
+    );
+}

@@ -45,6 +45,8 @@ pub(super) struct ExplorationSpeaker {
 }
 
 pub(super) struct ExplorationModel {
+    pub(super) scene_asset: Option<String>,
+    pub(super) portrait_asset: Option<String>,
     pub(super) has_whisper: bool,
     pub(super) binding: ClientBindingId,
     pub(super) scene: ConceptScene,
@@ -63,6 +65,27 @@ pub(super) struct ExplorationModel {
 pub(super) struct ExplorationScreen {
     phase: ExplorationPhase,
     stamp: Cell<u64>,
+    image_fallbacks: RefCell<Vec<live_screens::ServerImage>>,
+}
+
+fn server_image(
+    screen: &ExplorationScreen,
+    selector: &str,
+    source: &Option<String>,
+    fallback: Option<String>,
+) -> Result<(), JsValue> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    let Some(image) = screen.phase.root().query_selector(selector)? else {
+        return Ok(());
+    };
+    if selector == ".exploration-portrait" {
+        image.set_class_name("exploration-portrait");
+    }
+    let owner = live_screens::ServerImage::install(image, source, fallback)?;
+    screen.image_fallbacks.borrow_mut().push(owner);
+    Ok(())
 }
 
 fn with_view<R>(
@@ -135,8 +158,26 @@ fn render_error(client: &Rc<RefCell<Client>>, error: &dyn std::fmt::Display) -> 
 
 /// Marks the mounted surface for the player theme: whether the narration box carries a private
 /// whisper, and which icon leads each choice. Both are presentation only.
-fn decorate(phase: &ExplorationPhase, model: &ExplorationModel) -> Result<(), JsValue> {
-    let root = phase.root();
+fn decorate(screen: &ExplorationScreen, model: &ExplorationModel) -> Result<(), JsValue> {
+    let root = screen.phase.root();
+    screen.image_fallbacks.borrow_mut().clear();
+    server_image(
+        screen,
+        ".scene-art",
+        &model.scene_asset,
+        Some(format!("/{}", model.scene.asset_path())),
+    )?;
+    let portrait_fallback = model
+        .speaker
+        .as_ref()
+        .and_then(|s| s.portrait)
+        .map(|p| format!("/{}", p.asset_path()));
+    server_image(
+        screen,
+        ".exploration-portrait",
+        &model.portrait_asset,
+        portrait_fallback,
+    )?;
     if model.has_whisper {
         root.set_attribute("data-whisper", "")?;
     } else {
@@ -174,7 +215,7 @@ impl ExplorationScreen {
                 screen.phase.update(view).map_err(|error| error.to_string())
             })
             .map_err(|error| render_error(client, &error))?;
-            return decorate(&screen.phase, model);
+            return decorate(screen, model);
         }
         let document = client.borrow().document.clone();
         let phase = with_view(model, 1, |view| {
@@ -194,12 +235,14 @@ impl ExplorationScreen {
                 }
             })
             .map_err(|error| render_error(client, &error))?;
-        decorate(&phase, model)?;
-        parent.append_child(phase.root())?;
-        client.borrow_mut().live.exploration = Some(ExplorationScreen {
+        let screen = ExplorationScreen {
             phase,
             stamp: Cell::new(1),
-        });
+            image_fallbacks: RefCell::new(Vec::new()),
+        };
+        decorate(&screen, model)?;
+        parent.append_child(screen.phase.root())?;
+        client.borrow_mut().live.exploration = Some(screen);
         Ok(())
     }
 
