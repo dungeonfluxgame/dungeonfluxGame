@@ -49,7 +49,7 @@ font: inherit; color: var(--df-text); background: var(--df-background);
 border: 1px solid var(--df-engine); border-radius: var(--df-radius);
 min-height: var(--df-target); min-width: 0; max-width: 100%; padding: 10px 16px;
 }}
-.df-ui-root .df-ui-action {{ cursor: pointer; touch-action: manipulation; }}
+.df-ui-root .df-ui-action {{ min-width: var(--df-target); cursor: pointer; touch-action: manipulation; }}
 .df-ui-root .df-ui-action:disabled {{ cursor: default; color: var(--df-secondary); }}
 .df-ui-root .df-ui-field {{ display: grid; gap: 8px; min-width: 0; }}
 .df-ui-root :focus-visible {{ outline: 3px solid var(--df-story); outline-offset: 3px; }}
@@ -58,7 +58,17 @@ min-height: var(--df-target); min-width: 0; max-width: 100%; padding: 10px 16px;
 grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start;
 }}
 }}
+/* Explicit reduction adds to the OS preference; it never forces motion on. */
+.df-ui-root[data-df-reduced-motion="true"],
+.df-ui-root[data-df-reduced-motion="true"]::before,
+.df-ui-root[data-df-reduced-motion="true"]::after,
+.df-ui-root[data-df-reduced-motion="true"] *,
+.df-ui-root[data-df-reduced-motion="true"] *::before,
+.df-ui-root[data-df-reduced-motion="true"] *::after {{
+animation: none !important; transition: none !important; scroll-behavior: auto !important;
+}}
 @media (prefers-reduced-motion: reduce) {{
+.df-ui-root, .df-ui-root::before, .df-ui-root::after,
 .df-ui-root *, .df-ui-root *::before, .df-ui-root *::after {{
 animation: none !important; transition: none !important; scroll-behavior: auto !important;
 }}
