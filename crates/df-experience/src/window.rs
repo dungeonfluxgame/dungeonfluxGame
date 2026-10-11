@@ -1,7 +1,11 @@
 use std::mem::size_of;
 use std::time::Duration;
 
-use df_types::{OperationId, RunId, SessionId, SessionRevision};
+use df_model::checkpoint::{
+    AcceptedDecision, Basis, Checkpoint, CheckpointError, CheckpointLimits, CheckpointPins, FactId,
+    GameFact, ReferenceInventory,
+};
+use df_types::{MemberId, OperationId, RunId, SessionId, SessionRevision};
 
 const MAX_EVENTS: usize = 4096;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
@@ -234,6 +238,107 @@ impl<ParticipantId: Copy + Eq, EventId: Copy + Eq> ActivityWindow<ParticipantId,
 
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
+    }
+}
+
+/// Exact retained checkpoint evidence and caller-supplied logical time.
+/// Construction does not authenticate a member or prove a durable commit.
+pub struct CheckpointActivityRequest<'a> {
+    pub checkpoint: &'a Checkpoint,
+    pub basis: Basis,
+    pub pins: &'a CheckpointPins,
+    pub inventory: ReferenceInventory<'a>,
+    pub checkpoint_limits: CheckpointLimits,
+    pub activity: AcceptedActivity<MemberId, FactId>,
+    pub ordinal: u32,
+    pub now: Duration,
+}
+
+/// Native source admission owns participant mapping and stable logical event time.
+/// It must admit this exact retained fact/decision under the current consent and
+/// supplied run clock. A fact's subject alone never establishes participation.
+pub trait ActivitySourceOwner {
+    fn admits_activity(
+        &self,
+        checkpoint: &Checkpoint,
+        fact: &GameFact,
+        decision: &AcceptedDecision,
+        activity: &AcceptedActivity<MemberId, FactId>,
+        now: Duration,
+    ) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckpointActivityError {
+    Checkpoint(CheckpointError),
+    Window(WindowError),
+    MissingMember,
+    NotOptedIn,
+    AmbiguousConsent,
+    UnacceptedFact,
+    FactMismatch,
+    SourceRefused,
+}
+
+impl ActivityWindow<MemberId, FactId> {
+    /// Observes only source-admitted accepted activity under current explicit consent.
+    /// Every admission check precedes the existing atomic window observation.
+    /// Neither checkpoint facts nor preferences are changed. Production native
+    /// callback registration and durable consent administration remain caller-owned.
+    pub fn observe_checkpoint(
+        &mut self,
+        request: CheckpointActivityRequest<'_>,
+        owner: &impl ActivitySourceOwner,
+    ) -> Result<Observation, CheckpointActivityError> {
+        let checkpoint = request
+            .checkpoint
+            .validate_admitted(
+                request.basis,
+                request.pins,
+                request.inventory,
+                request.checkpoint_limits,
+            )
+            .map_err(CheckpointActivityError::Checkpoint)?;
+        let activity = request.activity;
+        if activity.session != request.basis.session || activity.run != request.basis.run {
+            return Err(CheckpointActivityError::FactMismatch);
+        }
+        if !checkpoint
+            .state()
+            .members
+            .iter()
+            .any(|member| member.member == activity.participant)
+        {
+            return Err(CheckpointActivityError::MissingMember);
+        }
+        let mut consent = checkpoint
+            .state()
+            .activity
+            .iter()
+            .filter(|preference| preference.member == activity.participant);
+        let opted_in = consent
+            .next()
+            .is_some_and(|preference| preference.spotlight_opt_in);
+        if consent.next().is_some() {
+            return Err(CheckpointActivityError::AmbiguousConsent);
+        }
+        if !opted_in {
+            return Err(CheckpointActivityError::NotOptedIn);
+        }
+        let (fact, decision) = checkpoint
+            .committed_outcome(activity.event)
+            .ok_or(CheckpointActivityError::UnacceptedFact)?;
+        if fact.operation != activity.operation
+            || fact.revision != activity.revision
+            || fact.ordinal != request.ordinal
+        {
+            return Err(CheckpointActivityError::FactMismatch);
+        }
+        if !owner.admits_activity(checkpoint, fact, decision, &activity, request.now) {
+            return Err(CheckpointActivityError::SourceRefused);
+        }
+        self.observe(activity, request.basis.revision, request.now)
+            .map_err(CheckpointActivityError::Window)
     }
 }
 
