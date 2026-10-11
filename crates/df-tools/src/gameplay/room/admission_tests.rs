@@ -34,6 +34,7 @@ impl ActorInput for Key {
 struct Scope {
     basis: Basis,
     operation: OperationId,
+    fingerprint: [u8; 32],
 }
 impl ActorInput for Scope {
     fn retained_heap_bytes(&self) -> Option<usize> {
@@ -55,7 +56,7 @@ impl OperationScope for Scope {
             epoch: self.basis.revision.epoch(),
             operation: self.operation,
             fingerprint_version: 1,
-            fingerprint: [3; 32],
+            fingerprint: self.fingerprint,
         })
     }
     fn session(&self) -> SessionId {
@@ -96,7 +97,9 @@ fn receipt(candidate: &Checkpoint, operation: OperationId) -> DecisionReceipt {
         .find(|decision| decision.operation == operation)
         .unwrap()
         .clone();
-    DecisionReceipt::new(candidate.basis(), decision, RECEIPT_BYTES).unwrap()
+    let mut basis = candidate.basis();
+    basis.revision = decision.revision;
+    DecisionReceipt::new(basis, decision, RECEIPT_BYTES).unwrap()
 }
 
 #[derive(Clone, Copy)]
@@ -104,6 +107,7 @@ enum Observation {
     Fresh,
     LookupCommitted,
     CommitPreviouslyCommitted,
+    CommitIndeterminate,
     CommitRefused(RepositoryError),
     LookupRefused(RepositoryError),
     Expired,
@@ -133,10 +137,22 @@ impl SessionRepository for Repository {
     ) -> Result<OperationLookup, RepositoryError> {
         self.calls.borrow_mut().lookup += 1;
         match self.observation {
-            Observation::LookupCommitted => Ok(OperationLookup::Committed(receipt(
-                &self.committed,
-                scope.operation,
-            ))),
+            Observation::LookupCommitted => {
+                if self
+                    .committed
+                    .state()
+                    .decisions
+                    .iter()
+                    .any(|decision| decision.operation == scope.operation)
+                {
+                    Ok(OperationLookup::Committed(receipt(
+                        &self.committed,
+                        scope.operation,
+                    )))
+                } else {
+                    Ok(OperationLookup::NotRecorded)
+                }
+            }
             Observation::LookupRefused(error) => Err(error),
             Observation::Expired => Ok(OperationLookup::ExpiredOrIndeterminate),
             _ => Ok(OperationLookup::NotRecorded),
@@ -155,12 +171,19 @@ impl SessionRepository for Repository {
             Observation::CommitPreviouslyCommitted => Ok(CommitOutcome::PreviouslyCommitted(
                 receipt(&self.committed, scope.operation),
             )),
-            Observation::Fresh => {
+            Observation::Fresh
+            | Observation::LookupCommitted
+            | Observation::CommitIndeterminate => {
                 self.committed = candidate.clone();
-                Ok(CommitOutcome::Confirmed(receipt(
-                    candidate,
-                    scope.operation,
-                )))
+                if matches!(self.observation, Observation::CommitIndeterminate) {
+                    self.observation = Observation::LookupCommitted;
+                    Ok(CommitOutcome::Indeterminate)
+                } else {
+                    Ok(CommitOutcome::Confirmed(receipt(
+                        candidate,
+                        scope.operation,
+                    )))
+                }
             }
             _ => panic!("lookup-only observation reached commit"),
         }
@@ -218,6 +241,7 @@ fn submit(observation: Observation, reload_fails: bool) -> Submission {
     let scope = Scope {
         basis: initial.basis(),
         operation: OperationId::from_bytes(&[0x31; 16]).unwrap(),
+        fingerprint: [3; 32],
     };
     let input = join_input(&scope);
     let committed = journey::stage_join(&initial, &input).unwrap();
@@ -417,4 +441,199 @@ fn missing_owner_reply_still_fences_noncurrent_view_before_reporting_error() {
     assert!(fenced);
     assert!(watch.has_changed().unwrap());
     assert!(actor::require_readable(fenced).is_err());
+}
+
+fn retry_scope(initial: &Checkpoint, operation: u8, fingerprint: u8) -> Scope {
+    Scope {
+        basis: initial.basis(),
+        operation: OperationId::from_bytes(&[operation; 16]).unwrap(),
+        fingerprint: [fingerprint; 32],
+    }
+}
+
+fn recovery_context() -> OperationContext {
+    OperationContext {
+        trace_parent: String::new(),
+        build: "controlled-room-recovery".to_owned(),
+    }
+}
+
+fn submit_again(
+    owner: &mut DurableOwner<Repository, Engine, Publication>,
+    scope: Scope,
+) -> SubmissionOutcome {
+    let input = join_input(&scope);
+    let (item, reply) = OwnedInput::new(recovery_context(), scope, input);
+    owner.reduce(AdmissionSequence(1), item);
+    reply.try_recv().unwrap()
+}
+
+#[test]
+fn ambiguous_join_exact_retry_preserves_member_and_receipt_before_second_join() {
+    let mut submission = submit(Observation::CommitIndeterminate, false);
+    assert_eq!(submission.raw, SubmissionOutcome::LookupRequired);
+    assert!(submission.owner.has_uncertain_operation());
+    let scope = retry_scope(&submission.initial, 0x31, 3);
+    let input = join_input(&scope);
+    let expected = journey::stage_join(&submission.initial, &input).unwrap();
+    let original = receipt(&expected, scope.operation);
+    let original_member = journey::decode_join(original.decision()).unwrap();
+    prepare_join_recovery(&mut submission.owner, &scope, &input, &recovery_context()).unwrap();
+    // Preparation admits only exact lookup. It has not fabricated a current cache.
+    assert!(!submission.owner.is_current());
+    let SubmissionOutcome::Confirmed(recovered) = submit_again(&mut submission.owner, scope) else {
+        panic!("exact uncertain Join did not recover its receipt");
+    };
+    assert_eq!(recovered, original);
+    assert!(submission.owner.is_current());
+    assert_eq!(submission.owner.checkpoint(), &expected);
+    assert_eq!(
+        journey::decode_join(recovered.decision()).unwrap(),
+        original_member
+    );
+    assert!(
+        submission
+            .owner
+            .checkpoint()
+            .state()
+            .members
+            .iter()
+            .any(|link| {
+                link.member.as_bytes() == &original_member.0
+                    && link
+                        .character
+                        .is_some_and(|entity| entity.as_bytes() == &original_member.1)
+            })
+    );
+    let calls = submission.calls.borrow();
+    assert_eq!(
+        (calls.lookup, calls.engine, calls.commit, calls.reload),
+        (2, 1, 1, 1)
+    );
+    assert_eq!((calls.publication, calls.intent_wakeup), (0, 0));
+    drop(calls);
+
+    let second = retry_scope(&submission.initial, 0x32, 4);
+    assert!(matches!(
+        submit_again(&mut submission.owner, second),
+        SubmissionOutcome::Confirmed(_)
+    ));
+    assert_eq!(
+        journey::participants(submission.owner.checkpoint()).len(),
+        2
+    );
+    let stable = submission.owner.checkpoint().clone();
+    // The original receipt remains exact even after the next independent commit.
+    assert_eq!(
+        submit_again(
+            &mut submission.owner,
+            retry_scope(&submission.initial, 0x31, 3)
+        ),
+        SubmissionOutcome::Confirmed(original)
+    );
+    assert_eq!(submission.owner.checkpoint(), &stable);
+    let calls = submission.calls.borrow();
+    assert_eq!(
+        (
+            calls.engine,
+            calls.commit,
+            calls.publication,
+            calls.intent_wakeup
+        ),
+        (2, 2, 1, 1)
+    );
+    drop(calls);
+    let third = retry_scope(&submission.initial, 0x33, 5);
+    assert_eq!(
+        submit_again(&mut submission.owner, third),
+        SubmissionOutcome::Refused(RepositoryError::Capacity)
+    );
+    assert_eq!(submission.owner.checkpoint(), &stable);
+    let calls = submission.calls.borrow();
+    assert_eq!(
+        (calls.commit, calls.publication, calls.intent_wakeup),
+        (2, 1, 1)
+    );
+}
+
+#[test]
+fn uncertain_join_recovery_rejects_changed_operation_or_fingerprint_before_lookup() {
+    let mut submission = submit(Observation::CommitIndeterminate, false);
+    for (operation, fingerprint) in [(0x32, 3), (0x31, 4)] {
+        let scope = retry_scope(&submission.initial, operation, fingerprint);
+        assert_eq!(
+            prepare_join_recovery(
+                &mut submission.owner,
+                &scope,
+                &join_input(&scope),
+                &recovery_context()
+            ),
+            Err(RepositoryError::UnresolvedCommit)
+        );
+        assert!(submission.owner.has_uncertain_operation());
+        assert_eq!(submission.owner.checkpoint(), &submission.initial);
+        let calls = submission.calls.borrow();
+        assert_eq!(
+            (calls.lookup, calls.engine, calls.commit, calls.reload),
+            (1, 1, 1, 0)
+        );
+        assert_eq!((calls.publication, calls.intent_wakeup), (0, 0));
+    }
+}
+
+#[test]
+fn exact_join_receipt_with_failed_reload_keeps_recovery_and_watches_fenced() {
+    let mut submission = submit(Observation::CommitIndeterminate, true);
+    let scope = retry_scope(&submission.initial, 0x31, 3);
+    prepare_join_recovery(
+        &mut submission.owner,
+        &scope,
+        &join_input(&scope),
+        &recovery_context(),
+    )
+    .unwrap();
+    submission.raw = submit_again(&mut submission.owner, scope);
+    assert!(matches!(submission.raw, SubmissionOutcome::Confirmed(_)));
+    assert!(submission.owner.has_uncertain_operation());
+    assert_eq!(submission.calls.borrow().reload, 1);
+    assert_noncurrent_fenced(submission, SubmissionOutcome::LookupRequired);
+}
+
+#[test]
+fn known_stale_join_requires_valid_reload_before_new_decisions() {
+    for reload_fails in [false, true] {
+        let mut submission = submit(
+            Observation::CommitRefused(RepositoryError::RevisionConflict),
+            reload_fails,
+        );
+        assert!(!submission.owner.has_uncertain_operation());
+        assert!(!submission.owner.is_current());
+        let scope = retry_scope(&submission.initial, 0x31, 3);
+        let result = prepare_join_recovery(
+            &mut submission.owner,
+            &scope,
+            &join_input(&scope),
+            &recovery_context(),
+        );
+        assert_eq!(
+            result,
+            if reload_fails {
+                Err(RepositoryError::Unavailable)
+            } else {
+                Ok(())
+            }
+        );
+        assert_eq!(submission.owner.is_current(), !reload_fails);
+        let calls = submission.calls.borrow();
+        assert_eq!((calls.engine, calls.commit, calls.reload), (1, 1, 1));
+        assert_eq!((calls.publication, calls.intent_wakeup), (0, 0));
+        if reload_fails {
+            assert_eq!(submission.owner.checkpoint(), &submission.initial);
+        } else {
+            assert_eq!(
+                journey::participants(submission.owner.checkpoint()).len(),
+                1
+            );
+        }
+    }
 }
