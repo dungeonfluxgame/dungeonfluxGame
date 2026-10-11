@@ -84,7 +84,7 @@ fn with_view<R>(
         },
         stage: model.stage,
         campaign: CampaignView {
-            scene: ConceptScene::Harbor,
+            scene: ConceptScene::LobbyHarbor,
             chapter: "An adventure awaits",
             title: &model.title,
             description: &model.narration,

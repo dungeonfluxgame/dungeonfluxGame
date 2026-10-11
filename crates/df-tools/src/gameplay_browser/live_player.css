@@ -1,0 +1,94 @@
+/* Page base shared by both roles; the HTML shell carries no styling of its own. */
+:root{--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;--gold:#e8cb94;--icon-talk:url(/assets/ui/generated/icon-talk);--icon-investigate:url(/assets/ui/generated/icon-investigate);--icon-shield:url(/assets/ui/generated/icon-shield);--icon-journey:url(/assets/ui/generated/icon-journey);--icon-short-rest:url(/assets/ui/generated/icon-short-rest)}
+main.clients{display:block;max-width:none;margin:0;padding:0;min-height:0}
+main .client{border:0;border-radius:0;box-shadow:none;background:#0a131b;overflow:visible}
+main .client.display{background:transparent}
+.client .connection,.scene-copy>.eyebrow:first-child{display:none}
+
+/* Player: phone first. The df-ui surfaces keep their own responsive layout. */
+.client.player{min-height:100svh;padding-bottom:calc(84px + env(safe-area-inset-bottom));background:#05090f}
+.client.player .live-dock{width:min(1100px,92%);margin:0 auto;padding:0 0 24px;position:relative;z-index:1;font-family:var(--serif)}
+.client.player .df-campaign{font-family:var(--serif)}
+.client.player .df-campaign .connection,.client.player .df-campaign .toolbar{display:none}
+.client.player .df-campaign .brand{font-size:0;color:transparent;width:154px;height:40px;background:url(/assets/ui/generated/wordmark) left center/contain no-repeat}
+.client.player .df-campaign .brand span{display:none}
+.client.player .df-campaign .preview-badge{border:0;background:none;padding:0;font:15px/1.3 var(--serif);letter-spacing:.06em;color:var(--gold);text-align:right;text-transform:none}
+.client.player .df-campaign .topbar{border-bottom:0;background:linear-gradient(#05090fcc,#05090f00)}
+.client.player .df-campaign h1{font-family:var(--serif);font-weight:400}
+.client.player .df-exploration .exploration-choice-detail,.client.player .df-exploration .exploration-choice-reason:empty{display:none}
+.client.player .df-exploration .exploration-actions .df-ui-field,.client.player .df-exploration .exploration-submit,.client.player .df-exploration .exploration-empty,.client.player .df-exploration .party-section,.client.player .df-exploration .scene-panel,.client.player .df-exploration .location,.client.player .df-exploration .chapter{display:none}
+.client.player .df-exploration:not([data-whisper]) .stage>.narration{display:none}
+.client.player .df-exploration .exploration-heading{font:13px/1.4 var(--serif);letter-spacing:.18em;text-transform:uppercase;color:var(--gold);border:0;padding:0;margin:0 0 10px}
+
+/* Choices: full-width gold-frame buttons with a leading icon. */
+.client.player .df-exploration .exploration-choice{border:0;background:none;box-shadow:none;overflow:visible}
+.client.player .df-exploration .exploration-choice button,.client.player .df-campaign[data-join-phase] .join-panel button,.client.player .live-dock summary,.client.player .live-sheet-body button,.client.player .live-credits{position:relative;display:flex;align-items:center;width:100%;min-height:58px;padding:0 30px 0 64px;border:0;border-radius:0;background:url(/assets/ui/generated/button-frame) center/100% 100% no-repeat;color:#f3e2bd;font:18px/1.25 var(--serif);letter-spacing:0;text-align:left;text-shadow:none;box-shadow:none;cursor:pointer;touch-action:manipulation;text-decoration:none}
+.client.player .df-exploration .exploration-choice button::before,.client.player .df-campaign[data-join-phase] .join-lobby button::before,.client.player .live-dock summary .say-more-icon{content:'';position:absolute;left:26px;top:50%;width:26px;height:26px;transform:translateY(-50%);background:var(--icon-talk) center/contain no-repeat}
+.client.player .df-exploration .exploration-choice button[data-icon=icon-investigate]::before{background-image:var(--icon-investigate)}
+.client.player .df-exploration .exploration-choice button[data-icon=icon-shield]::before{background-image:var(--icon-shield)}
+.client.player .df-exploration .exploration-choice button[data-icon=icon-journey]::before,.client.player .df-campaign[data-join-phase] .join-lobby button::before{background-image:var(--icon-journey)}
+.client.player .df-exploration .exploration-choice button[data-icon=icon-short-rest]::before{background-image:var(--icon-short-rest)}
+.client.player .df-exploration .exploration-choice button:hover:enabled,.client.player .df-campaign[data-join-phase] .join-panel button:hover:enabled{background-color:#e8cb9422;color:#fff0c8}
+.client.player .df-exploration .exploration-choice button:disabled,.client.player .df-campaign[data-join-phase] .join-panel button:disabled{opacity:.55;background-color:transparent;color:#cfc3a8}
+.client.player .df-exploration .exploration-choices{gap:12px}
+.client.player .df-exploration .exploration-actions{background:none;border:0;box-shadow:none;padding:10px 0}
+.client.player .df-exploration .exploration-npc{background:linear-gradient(135deg,#142133e6,#080f19ee);border:1px solid #c9a35f66;border-radius:8px}
+.client.player .df-exploration .exploration-npc-name{font:400 22px var(--serif);color:var(--gold)}
+.client.player .df-exploration .exploration-context{display:none}
+.client.player .df-exploration .exploration-portrait{width:76px;height:76px;border-radius:10px;border:1px solid #cba466b3;object-position:center 20%}
+.client.player .df-exploration .exploration-dialogue{font:italic 18px/1.5 var(--serif);color:#f3ead6}
+
+/* Typed dialogue stays collapsed behind one row. */
+.client.player .live-dock .say-more{margin:12px 0 0}
+.client.player .live-dock summary{list-style:none;color:#cfc3a8;min-height:52px}
+.client.player .live-dock summary::-webkit-details-marker{display:none}
+.client.player .live-dock summary .say-more-icon{width:24px;height:24px;transform:translateY(-50%)}
+.client.player .live-dock .say-more[open] summary{margin-bottom:10px}
+.client.player .live-dock .scene-actions{margin-top:12px}
+
+/* Join and lobby */
+.client.player .df-campaign[data-join-phase] .lower,.client.player .df-campaign[data-join-phase] .join-pairing,.client.player .df-campaign[data-join-phase] .location,.client.player .df-campaign[data-join-phase] .chapter{display:none}
+.client.player .df-campaign[data-join-phase] .join-panel{background:linear-gradient(145deg,#142031ee,#080f19f2);border:1px solid #c9a35f88;border-radius:8px}
+.client.player .df-campaign[data-join-phase] .join-panel button{justify-content:center;padding:0 30px;font-weight:400;letter-spacing:.02em}
+.client.player .df-campaign[data-join-phase] .join-lobby button{padding-left:64px;justify-content:flex-start}
+.client.player .df-campaign[data-join-phase] .join-heading{font-family:var(--serif)}
+
+/* Tab bar and menu sheet */
+.live-tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:space-around;align-items:stretch;padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:linear-gradient(180deg,#070c13ee,#05090f);border-top:1px solid #c9a35f55}
+.live-tab{flex:1;max-width:130px;min-height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:none;border:0;border-radius:6px;color:#cfc3a8;font:12px/1 var(--serif);letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+.live-tab[hidden]{display:none}
+.live-tab-icon{width:26px;height:26px;object-fit:contain}
+.live-tab[aria-current=page]{color:var(--gold);background:url(/assets/ui/generated/button-frame) center/100% 100% no-repeat}
+.live-sheet{position:fixed;inset:0;z-index:50;display:none;align-items:flex-end;background:#02040ab8}
+.live-sheet[data-open]{display:flex}
+.live-sheet-panel{width:100%;max-height:82vh;overflow:auto;padding:20px 16px calc(20px + env(safe-area-inset-bottom));background:linear-gradient(#101b29,#070d15);border-top:1px solid #c9a35f99;border-radius:16px 16px 0 0}
+.live-sheet-panel h2{margin:0 0 14px;font:400 24px var(--serif);color:var(--gold)}
+.live-sheet-body{display:grid;gap:10px}
+.client.player .live-sheet-body button,.client.player .live-sheet-body .live-credits{padding-left:30px;min-height:52px}
+.live-sheet-close{margin-top:14px;width:100%;min-height:48px;background:none;border:1px solid #7c8a825e;border-radius:6px;color:#d7ddd1;font:16px var(--serif)}
+.client.player>.live-toast{position:fixed;z-index:35;left:12px;right:12px;bottom:calc(84px + env(safe-area-inset-bottom));padding:12px 14px;background:#080f19f5;border:1px solid #c9a35f99;border-radius:10px;box-shadow:0 8px 28px #000a}
+
+/* Phone layout of the exploration surface */
+.client.player .df-exploration{background:#05090f}
+.client.player .df-exploration .narration{background:linear-gradient(135deg,#142133e6,#080f19ee);border:1px solid #c9a35f66;border-radius:8px}
+.client.player .df-exploration .narration:before{display:none}
+@media(max-width:700px){
+.client.player .df-exploration .scene-art{height:320px;object-position:center 30%}
+.client.player .df-exploration:before{background:linear-gradient(180deg,#03060e99,#03060e00 22%,#05090f66 55%,#05090f 330px)}
+.client.player .df-exploration .topbar{padding:12px 16px}
+.client.player .df-exploration .hero{padding-top:128px}
+.client.player .df-exploration h1{font-size:34px;line-height:1.1;margin-bottom:8px}
+.client.player .df-exploration .description{font:italic 16px/1.5 var(--serif);color:#eadfc6;max-width:none}
+.client.player .df-exploration .exploration-npc,.client.player .df-exploration .exploration-actions{width:92%}
+.client.player .df-exploration .exploration-choices{grid-template-columns:1fr}
+.client.player .df-exploration .exploration-dialogue{font-size:17px}
+.client.player .df-exploration .stage>.narration{width:92%}
+.client.player .df-exploration .narration blockquote{font-size:16px;line-height:1.5}
+.client.player .live-dock{width:92%}
+.client.player .df-campaign[data-join-phase] .scene-art{height:340px}
+.client.player .df-campaign[data-join-phase] .topbar{padding:12px 16px}
+.client.player .df-campaign[data-join-phase] .stage{padding-top:150px}
+.client.player .df-campaign[data-join-phase] h1{font-size:38px}
+.client.player .df-campaign[data-join-phase] .description,.client.player .df-campaign[data-join-phase] .join-description,.client.player .df-campaign[data-join-phase] .join-presence,.client.player .df-campaign[data-join-phase] .join-readiness,.client.player .df-campaign[data-join-phase] .join-status{font-size:16px}
+.client.player .live-dock .tools button,.client.player .live-dock .dialogue-controls button{min-height:48px;font-size:16px}
+}

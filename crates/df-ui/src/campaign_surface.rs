@@ -9,6 +9,12 @@ pub enum ConceptScene {
     Mountain,
     SunkenHall,
     Campfire,
+    /// Generated scene paintings, served extensionless; a missing file shows the art-failed state.
+    LobbyHarbor,
+    WharfArrival,
+    WhisperInTheRain,
+    CourierRoad,
+    HarborInn,
 }
 
 impl ConceptScene {
@@ -20,6 +26,11 @@ impl ConceptScene {
             Self::Mountain => "assets/concept-art/scene-mountain-ruins-snowy-ridge-trek.webp",
             Self::SunkenHall => "assets/concept-art/scene-flooded-hall-party-wading-torchlit.webp",
             Self::Campfire => "assets/concept-art/scene-campfire-under-stars.webp",
+            Self::LobbyHarbor => "assets/ui/generated/scene-lobby-harbor",
+            Self::WharfArrival => "assets/ui/generated/scene-wharf-arrival",
+            Self::WhisperInTheRain => "assets/ui/generated/scene-whisper-in-the-rain",
+            Self::CourierRoad => "assets/ui/generated/scene-courier-road",
+            Self::HarborInn => "assets/ui/generated/scene-harbor-inn",
         }
     }
     pub const fn description(self) -> &'static str {
@@ -30,6 +41,11 @@ impl ConceptScene {
             Self::Mountain => "Adventurers trekking toward snowy mountain ruins",
             Self::SunkenHall => "A torchlit party wading through a flooded hall",
             Self::Campfire => "A campfire beneath the stars",
+            Self::LobbyHarbor => "Rain-soaked harbor lanterns and a waiting tavern at night",
+            Self::WharfArrival => "A hooded courier clutching a broken-sealed packet on the wharf",
+            Self::WhisperInTheRain => "A rain-soaked wharf where a whispered warning is shared",
+            Self::CourierRoad => "A lantern-lit road beside the harbor after the fight",
+            Self::HarborInn => "A warm harbor inn with lamplight and rain on the windows",
         }
     }
 }

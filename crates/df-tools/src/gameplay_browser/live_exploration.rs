@@ -33,6 +33,7 @@ pub(super) struct ExplorationMember {
 pub(super) struct ExplorationChoiceModel {
     pub(super) id: String,
     pub(super) label: String,
+    pub(super) icon: &'static str,
     pub(super) disabled_reason: Option<&'static str>,
 }
 
@@ -44,6 +45,7 @@ pub(super) struct ExplorationSpeaker {
 }
 
 pub(super) struct ExplorationModel {
+    pub(super) has_whisper: bool,
     pub(super) binding: ClientBindingId,
     pub(super) scene: ConceptScene,
     pub(super) title: String,
@@ -131,6 +133,28 @@ fn render_error(client: &Rc<RefCell<Client>>, error: &dyn std::fmt::Display) -> 
     JsValue::from_str(&format!("The scene could not be displayed: {error}"))
 }
 
+/// Marks the mounted surface for the player theme: whether the narration box carries a private
+/// whisper, and which icon leads each choice. Both are presentation only.
+fn decorate(phase: &ExplorationPhase, model: &ExplorationModel) -> Result<(), JsValue> {
+    let root = phase.root();
+    if model.has_whisper {
+        root.set_attribute("data-whisper", "")?;
+    } else {
+        root.remove_attribute("data-whisper")?;
+    }
+    for choice in &model.choices {
+        if choice.id.contains(['"', '\\']) {
+            continue;
+        }
+        if let Some(button) =
+            root.query_selector(&format!("[data-exploration-offer=\"{}\"]", choice.id))?
+        {
+            button.set_attribute("data-icon", choice.icon)?;
+        }
+    }
+    Ok(())
+}
+
 impl ExplorationScreen {
     /// Presents `model` in place, mounting the surface under `parent` on first use.
     pub(super) fn present(
@@ -146,10 +170,11 @@ impl ExplorationScreen {
             };
             let sequence = screen.stamp.get() + 1;
             screen.stamp.set(sequence);
-            return with_view(model, sequence, |view| {
+            with_view(model, sequence, |view| {
                 screen.phase.update(view).map_err(|error| error.to_string())
             })
-            .map_err(|error| render_error(client, &error));
+            .map_err(|error| render_error(client, &error))?;
+            return decorate(&screen.phase, model);
         }
         let document = client.borrow().document.clone();
         let phase = with_view(model, 1, |view| {
@@ -169,6 +194,7 @@ impl ExplorationScreen {
                 }
             })
             .map_err(|error| render_error(client, &error))?;
+        decorate(&phase, model)?;
         parent.append_child(phase.root())?;
         client.borrow_mut().live.exploration = Some(ExplorationScreen {
             phase,

@@ -10,7 +10,6 @@ use super::live_tv::{TvMember, TvMode, TvModel, TvSpeaker, TvStage};
 use super::*;
 use df_ui::{ConceptScene, ExplorationPortrait, JoinStage};
 
-const SHARED_EYEBROW: &str = "Your shared adventure";
 const HARBOR_ESTABLISHING: &str =
     "/assets/concept-art/establishing-harbor-canal-rowboat-bridge.webp";
 const HARBOR_WHARF: &str = "/assets/ui/scenes/mara-harbor-v4.png";
@@ -151,7 +150,6 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
     });
     Ok(TvModel {
         mode: if lobby { TvMode::Lobby } else { TvMode::Scene },
-        eyebrow: SHARED_EYEBROW.to_owned(),
         title: input.scene.title.clone(),
         lede: first_sentence(input.narration).to_owned(),
         narration: input.narration.to_owned(),
@@ -215,6 +213,23 @@ fn party_members(journey: &rpc::JourneyView) -> (Vec<LobbyMember>, Vec<Explorati
         });
     }
     (lobby, exploration)
+}
+
+/// The generated icon stem shown beside a choice; presentation only.
+fn choice_icon(action_kind: i32) -> &'static str {
+    match rpc::GameplayActionKind::try_from(action_kind) {
+        Ok(rpc::GameplayActionKind::AskCourier | rpc::GameplayActionKind::ExamineHarborSeal) => {
+            "icon-investigate"
+        }
+        Ok(rpc::GameplayActionKind::EscortCourier | rpc::GameplayActionKind::DefendCourier) => {
+            "icon-shield"
+        }
+        Ok(rpc::GameplayActionKind::BeginStory | rpc::GameplayActionKind::ChooseHarborScene) => {
+            "icon-journey"
+        }
+        Ok(rpc::GameplayActionKind::ShortRest) => "icon-short-rest",
+        _ => "icon-talk",
+    }
 }
 
 /// Offers that need no extra typed input become scene choices; the rest keep their
@@ -283,6 +298,7 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         .map(|offer| ExplorationChoiceModel {
             id: offer.offer_id.clone(),
             label: offer.label.clone(),
+            icon: choice_icon(offer.action_kind),
             disabled_reason: unconfirmed.then_some("Confirm your last choice first."),
         })
         .collect();
@@ -297,10 +313,11 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
     } else {
         input.clue.to_owned()
     };
-    let art_scene = if input.scene.destination == rpc::HarborDestination::HarborInn as i32 {
-        ConceptScene::Tavern
-    } else {
-        ConceptScene::MaraHarbor
+    let art_scene = match art(input.phase, input.scene).0 {
+        "scene-harbor-inn" => ConceptScene::HarborInn,
+        "scene-wharf-arrival" => ConceptScene::WharfArrival,
+        "scene-whisper-in-the-rain" => ConceptScene::WhisperInTheRain,
+        _ => ConceptScene::CourierRoad,
     };
     let speaker = (!input.journey.dialogue.is_empty()).then(|| ExplorationSpeaker {
         name: if input.journey.speaker.is_empty() {
@@ -318,6 +335,7 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         },
     });
     Ok(ExplorationModel {
+        has_whisper: !input.clue.is_empty(),
         binding,
         scene: art_scene,
         title: input.scene.title.clone(),
@@ -377,6 +395,8 @@ pub(super) fn submit_offer(client: &Rc<RefCell<Client>>, offer_id: &str) {
     }
 }
 
+/// The player's area under the surface. It persists across renders so a draft and the open
+/// "say something else" row survive; only the offer buttons are rebuilt.
 fn ensure_dock(document: &Document, view: &Element) -> Result<Element, JsValue> {
     let dock = match view.query_selector(".live-dock")? {
         Some(dock) => dock,
@@ -385,15 +405,26 @@ fn ensure_dock(document: &Document, view: &Element) -> Result<Element, JsValue> 
     if dock.next_element_sibling().is_some() {
         view.append_child(&dock)?;
     }
-    dock.set_text_content(None);
     Ok(dock)
 }
 
-/// Recovery controls and the feedback line, rebuilt after every render pass.
+/// The typed-dialogue panel is collapsed behind one row until the player asks for it.
+fn ensure_say_more(document: &Document, dock: &Element) -> Result<Element, JsValue> {
+    if let Some(existing) = dock.query_selector("details.say-more")? {
+        return Ok(existing);
+    }
+    let details = node(document, dock, "details", "say-more", "")?;
+    let summary = node(document, &details, "summary", "", "")?;
+    let icon = node(document, &summary, "img", "say-more-icon", "")?;
+    icon.set_attribute("src", &format!("{}/icon-talk", live_tv::GENERATED))?;
+    icon.set_attribute("alt", "")?;
+    node(document, &summary, "span", "", "Say something else…")?;
+    Ok(details)
+}
+
+/// Recovery controls: the toast when something needs attention, the menu items for the rest.
 fn recovery(client: &Rc<RefCell<Client>>, dock: &Element) -> Result<(), JsValue> {
-    let document = client.borrow().document.clone();
     recovery_prompt(client, dock)?;
-    node(&document, dock, "p", "feedback", "")?;
     recovery_details(client, dock)
 }
 
@@ -448,8 +479,14 @@ pub(super) fn render(
         ExplorationScreen::present(client, view, &model)?;
     }
     let dock = ensure_dock(&document, view)?;
-    if !lobby {
-        dialogue_recovery::mount(client, &dock, input.offers)?;
+    if lobby {
+        dock.set_text_content(None);
+    } else {
+        let say = ensure_say_more(&document, &dock)?;
+        dialogue_recovery::mount(client, &say, input.offers)?;
+        if let Some(previous) = dock.query_selector(".scene-actions")? {
+            previous.remove();
+        }
         let actions = node(&document, &dock, "div", "scene-actions", "")?;
         for offer in input.offers.iter().filter(|offer| !is_simple_offer(offer)) {
             action_button(client, &actions, offer.clone())?;
@@ -477,7 +514,6 @@ fn render_display(
         stage.update(&model)?;
         stage.dock().clone()
     };
-    dock.set_text_content(None);
     recovery(client, &dock)
 }
 
@@ -527,6 +563,6 @@ pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     };
     LobbyScreen::present(client, &view, &model)?;
     let dock = ensure_dock(&document, &view)?;
-    node(&document, &dock, "p", "feedback", "")?;
-    Ok(())
+    dock.set_text_content(None);
+    recovery_details(client, &dock)
 }

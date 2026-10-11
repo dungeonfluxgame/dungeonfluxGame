@@ -1,5 +1,6 @@
 //! Thin server-projected room, creation, dialogue and combat clients.
 mod dialogue_recovery;
+mod live_chrome;
 mod live_exploration;
 mod live_lobby;
 mod live_screens;
@@ -52,6 +53,7 @@ struct Client {
     callbacks: Vec<Callback>,
     creation: Option<CharacterPhaseSurface>,
     live: live_screens::LiveScreens,
+    chrome: live_chrome::Chrome,
     scene_delivery: Option<Rc<PublicSceneDelivery>>,
     dialogue: dialogue_recovery::DialogueRecovery,
     busy: bool,
@@ -72,6 +74,7 @@ impl Drop for Client {
             let _cleanup = creation.dispose();
         }
         let _cleanup = self.live.dispose();
+        self.chrome.dispose();
     }
 }
 thread_local! {static CLIENTS:RefCell<Vec<Rc<RefCell<Client>>>>=const {RefCell::new(Vec::new())};}
@@ -1044,6 +1047,8 @@ fn receive_view(
             .as_ref()
             .and_then(|views| views.current().and_then(|view| view.revision));
         drop(state);
+        // A fresh server view supersedes the last message shown in the toast.
+        feedback(&client.borrow(), "");
         redraw_current(client)?;
     }
     Ok(())
@@ -1451,72 +1456,12 @@ fn confirm_saved_choice(client: &Rc<RefCell<Client>>, parent: &Element) -> Resul
 }
 /// Shows a recovery control prominently only while its condition holds. A dialogue
 /// confirmation of unknown outcome has its own retry button inside the dialogue panel.
-fn recovery_prompt(client: &Rc<RefCell<Client>>, parent: &Element) -> Result<(), JsValue> {
-    let (document, needs, dialogue_retry) = {
-        let state = client.borrow();
-        (
-            state.document.clone(),
-            recovery_needs(&state),
-            state.dialogue.has_confirmation(),
-        )
-    };
-    let confirm_here = needs.unknown_choice && !dialogue_retry;
-    if !needs.lost_connection && !confirm_here {
-        return Ok(());
-    }
-    let prompt = node(&document, parent, "div", "recovery-needed", "")?;
-    node(
-        &document,
-        &prompt,
-        "p",
-        "",
-        if needs.lost_connection {
-            "The connection to the game was lost."
-        } else {
-            "Your last choice may not have been saved. Confirm it to check; it will not be applied twice."
-        },
-    )?;
-    let tools = node(&document, &prompt, "div", "tools", "")?;
-    if needs.lost_connection {
-        button(client, &tools, "Reconnect", connect)?;
-    }
-    if confirm_here && client.borrow().last_request.is_some() {
-        confirm_saved_choice(client, &tools)?;
-    }
-    Ok(())
+fn recovery_prompt(client: &Rc<RefCell<Client>>, _parent: &Element) -> Result<(), JsValue> {
+    live_chrome::prompt(client)
 }
-/// Every recovery control stays reachable at the bottom of the view, collapsed unless the
-/// control is already shown by `recovery_prompt`. Nothing here changes what a control does.
-fn recovery_details(client: &Rc<RefCell<Client>>, parent: &Element) -> Result<(), JsValue> {
-    let (document, needs, dialogue_retry, last_request, first_attack, player) = {
-        let state = client.borrow();
-        (
-            state.document.clone(),
-            recovery_needs(&state),
-            state.dialogue.has_confirmation(),
-            state.last_request.is_some(),
-            state.first_attack.is_some(),
-            state.role == "player",
-        )
-    };
-    let details = node(&document, parent, "details", "trouble", "")?;
-    node(&document, &details, "summary", "", "Connection trouble?")?;
-    let tools = node(&document, &details, "div", "tools", "")?;
-    if !needs.lost_connection {
-        button(client, &tools, "Reconnect", connect)?;
-    }
-    if last_request && !(needs.unknown_choice && !dialogue_retry) {
-        confirm_saved_choice(client, &tools)?;
-    }
-    if first_attack {
-        button(client, &tools, "Confirm original strike", |client| {
-            replay(client, true)
-        })?;
-    }
-    if player {
-        button(client, &tools, LEAVE_LABEL, leave_saved_game)?;
-    }
-    Ok(())
+/// The rarely used recovery controls live in the player's menu sheet, not in the view.
+fn recovery_details(client: &Rc<RefCell<Client>>, _parent: &Element) -> Result<(), JsValue> {
+    live_chrome::fill_menu(client)
 }
 fn new_client(
     document: &Document,
@@ -1529,7 +1474,7 @@ fn new_client(
     let room_code = root
         .get_attribute("data-room")
         .unwrap_or_else(|| "LANTERN".to_owned());
-    Ok(Rc::new(RefCell::new(Client {
+    let client = Rc::new(RefCell::new(Client {
         document: document.clone(),
         root,
         role,
@@ -1569,10 +1514,13 @@ fn new_client(
         callbacks: Vec::new(),
         creation: None,
         live: live_screens::LiveScreens::default(),
+        chrome: live_chrome::Chrome::default(),
         scene_delivery: None,
         dialogue: dialogue_recovery::DialogueRecovery::default(),
         busy: false,
-    })))
+    }));
+    live_chrome::mount(&client)?;
+    Ok(client)
 }
 
 /// Resumes a credential saved on this device through the ordinary reconnect path.
