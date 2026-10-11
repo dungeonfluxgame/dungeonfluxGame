@@ -23,11 +23,13 @@ const MAXIMUM_CLIP_BYTES: u32 = 4 * 1024 * 1024;
 /// A zero-length WAV played inside the first gesture so Safari lets this element play later.
 const UNLOCK_CLIP: &str =
     "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
-const CONTROL_STYLE: &str = "position:fixed;right:18px;bottom:18px;z-index:40;display:flex;\
-align-items:center;gap:8px;min-height:40px;padding:8px 12px;border-radius:999px;\
-border:1px solid rgba(239,230,206,.35);background:rgba(8,15,23,.72);color:#efe6ce;\
-font:12px system-ui;letter-spacing:.4px;cursor:pointer;opacity:.85";
-const ICON_ATTRIBUTES: &str = "viewBox=\"0 0 24 24\" width=\"20\" height=\"20\" aria-hidden=\"true\" \
+// Sized for a TV seen from across a room: the label never drops below 24px.
+const CONTROL_STYLE: &str = "position:fixed;right:2.4vw;bottom:2.6vh;z-index:40;display:flex;\
+align-items:center;gap:.6em;min-height:2.4em;padding:.45em 1em;border-radius:999px;\
+border:1px solid rgba(223,185,116,.55);background:rgba(8,15,23,.78);color:#efe6ce;\
+font:clamp(24px,1.35vw,34px) \"Iowan Old Style\",\"Palatino Linotype\",Palatino,Georgia,serif;\
+letter-spacing:.03em;cursor:pointer;opacity:.92";
+const ICON_ATTRIBUTES: &str = "viewBox=\"0 0 24 24\" width=\"1.1em\" height=\"1.1em\" aria-hidden=\"true\" \
 fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"";
 const SPEAKER_PATHS: &str = "<path d=\"M11 5 6 9H3v6h3l5 4z\"/>";
 const WAVE_PATHS: &str =
