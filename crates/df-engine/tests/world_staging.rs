@@ -1340,3 +1340,742 @@ mod durable_session {
         );
     }
 }
+
+mod accepted_time_schedule {
+    use super::*;
+    use df_engine::director_staging::{DirectorLimits, ScheduleDirectorLimits};
+    use df_world::{AdmittedScheduleDestination, DueSelectionLimits, ScheduleAdvancementLimits};
+    use std::time::Duration;
+
+    #[derive(Clone, Copy)]
+    enum Fault {
+        None,
+        Withdrawn,
+        MissingTime,
+        WrongTime,
+        RepeatedTime,
+        MissingMovement,
+        WrongMovement,
+        ExtraMovement,
+        ChangedSchedule,
+        Pending,
+    }
+
+    // Deliberately finite compiled source fixture. It does not qualify a production time source,
+    // persisted host pause, travel/rest mechanics, source rights or native durable persistence.
+    struct TimeProducer<'a> {
+        fixture: &'a Fixture,
+        target: LogicalTime,
+        moves: &'a [u8],
+        fault: Fault,
+        calls: Cell<usize>,
+    }
+    impl<'a> TimeProducer<'a> {
+        fn new(fixture: &'a Fixture, moves: &'a [u8]) -> Self {
+            Self {
+                fixture,
+                target: LogicalTime {
+                    ticks: 125,
+                    ticks_per_second: 10,
+                },
+                moves,
+                fault: Fault::None,
+                calls: Cell::new(0),
+            }
+        }
+    }
+    impl RulesCommandHandler for TimeProducer<'_> {
+        type Rejection = SourceRefusal;
+        fn pins(&self) -> &CheckpointPins {
+            &self.fixture.pins
+        }
+        fn bound_source(&self) -> Option<&RuleReference> {
+            Some(&self.fixture.registration.source)
+        }
+        fn stage(
+            &self,
+            input: RulesCommandInput<'_>,
+            current: &Checkpoint,
+        ) -> Result<Checkpoint, Self::Rejection> {
+            self.calls.set(self.calls.get() + 1);
+            if matches!(self.fault, Fault::Withdrawn) {
+                return Err(SourceRefusal::Withdrawn);
+            }
+            let GameInput::Game(command) = input.command else {
+                return Err(SourceRefusal::ActorControl);
+            };
+            let GameInput::Game(expected) = self.fixture.input(current.basis()) else {
+                unreachable!()
+            };
+            if command.member != expected.member || command.command != expected.command {
+                return Err(SourceRefusal::ActorControl);
+            }
+            let mut basis = current.basis();
+            basis.revision = basis.revision.next_sequence().unwrap();
+            let mut state = current.state().clone();
+            state.logical_time = self.target;
+            let start = state.facts.len();
+            let base_id = 200 + (command.operation.as_bytes()[0] % 10) * 5;
+            let mut values = Vec::new();
+            if !matches!(self.fault, Fault::MissingTime) {
+                let mut before = current.state().logical_time;
+                if matches!(self.fault, Fault::WrongTime) {
+                    before.ticks -= 1;
+                }
+                values.push(FactValue::TimeAdvanced {
+                    before,
+                    after: self.target,
+                });
+                if matches!(self.fault, Fault::RepeatedTime) {
+                    values.push(FactValue::TimeAdvanced {
+                        before,
+                        after: self.target,
+                    });
+                }
+            }
+            state.draws.extend_from_slice(input.supplied_draws);
+            for draw in input.supplied_draws {
+                values.push(FactValue::DrawAccepted {
+                    operation: draw.operation,
+                    ordinal: draw.ordinal,
+                });
+            }
+            for destination in self.moves {
+                state
+                    .entities
+                    .iter_mut()
+                    .find(|entity| entity.id == fixture::entity(4))
+                    .unwrap()
+                    .location = Some(fixture::entity(*destination));
+                if !matches!(self.fault, Fault::MissingMovement) {
+                    values.push(FactValue::EntityMoved {
+                        entity: fixture::entity(4),
+                        destination: fixture::entity(
+                            if matches!(self.fault, Fault::WrongMovement) {
+                                5
+                            } else {
+                                *destination
+                            },
+                        ),
+                        position: Position { x: 0, y: 0, z: 0 },
+                    });
+                }
+            }
+            if matches!(self.fault, Fault::ExtraMovement) {
+                values.push(FactValue::EntityMoved {
+                    entity: fixture::entity(5),
+                    destination: fixture::entity(6),
+                    position: Position { x: 0, y: 0, z: 0 },
+                });
+            }
+            for (ordinal, value) in values.into_iter().enumerate() {
+                state.facts.push(GameFact {
+                    id: fact(base_id + ordinal as u8),
+                    revision: basis.revision,
+                    operation: command.operation,
+                    ordinal: ordinal as u32,
+                    cause: None,
+                    audience: AudienceScope::Members(vec![command.member]),
+                    value,
+                });
+            }
+            state.decisions.push(AcceptedDecision {
+                operation: command.operation,
+                revision: basis.revision,
+                facts: state.facts[start..].iter().map(|fact| fact.id).collect(),
+                draws: input
+                    .supplied_draws
+                    .iter()
+                    .map(|draw| draw.ordinal)
+                    .collect(),
+                effects: vec![],
+                source_policy: fixture::label("synthetic-accepted-time-source"),
+                semantic_output: None,
+            });
+            if matches!(self.fault, Fault::ChangedSchedule) {
+                state.schedules.pop();
+            }
+            if matches!(self.fault, Fault::Pending) {
+                let mut pending = pending(basis);
+                pending.window.causal_fact = state.facts[start].id;
+                state.pending.push(pending);
+            }
+            state.facts.shrink_to_fit();
+            state.decisions.shrink_to_fit();
+            Checkpoint::new(
+                current.schema(),
+                basis,
+                self.pins().clone(),
+                state,
+                self.fixture.inventory(),
+                fixture::limits(),
+            )
+            .map_err(|_| SourceRefusal::Binding)
+        }
+    }
+
+    fn current(fixture: &Fixture) -> Checkpoint {
+        let mut state = fixture.state();
+        for (id, ticks) in [(80, 121), (81, 122), (82, 130)] {
+            state.schedules.push(ScheduledEvent {
+                id: RecordId::from_bytes(&[id; 16]).unwrap(),
+                definition: fixture::content(),
+                entity: fixture::entity(4),
+                due: LogicalTime {
+                    ticks,
+                    ticks_per_second: 10,
+                },
+            });
+        }
+        fixture.checkpoint(fixture::basis(), state)
+    }
+    fn destinations(current: &Checkpoint) -> Vec<AdmittedScheduleDestination<'_>> {
+        current
+            .state()
+            .schedules
+            .iter()
+            .zip([(None, 5), (Some(5), 6), (Some(6), 5)])
+            .map(|(event, (before, after))| AdmittedScheduleDestination {
+                event: event.id,
+                definition: &event.definition,
+                entity: event.entity,
+                expected_location: before.map(fixture::entity),
+                destination: fixture::entity(after),
+            })
+            .collect()
+    }
+    fn limits() -> ScheduleDirectorLimits {
+        let selection = DueSelectionLimits {
+            queue_events: 32,
+            selected_events: 2,
+            output_bytes: 32 * 1024,
+        };
+        ScheduleDirectorLimits {
+            directors: DirectorLimits {
+                maximum_checkpoint_bytes: 1024 * 1024,
+                maximum_pass_bytes: 8 * 1024 * 1024,
+                maximum_relationships: 32,
+                world: selection,
+            },
+            schedule: ScheduleAdvancementLimits {
+                selection,
+                entities: 32,
+                destinations: 32,
+                movements: 32,
+                output_bytes: 64 * 1024,
+            },
+            checkpoint: fixture::limits(),
+        }
+    }
+    type Error = CommandRejection<TimeScheduleError<SourceRefusal>>;
+    fn registered(
+        fixture: &Fixture,
+        current: &Checkpoint,
+        input: &GameInput,
+        producer: &TimeProducer<'_>,
+        destinations: &[AdmittedScheduleDestination<'_>],
+        limits: ScheduleDirectorLimits,
+        paused: bool,
+    ) -> Result<Checkpoint, Error> {
+        registered_with_input(
+            fixture,
+            current,
+            RulesCommandInput {
+                command: input,
+                supplied_draws: &[],
+            },
+            producer,
+            destinations,
+            limits,
+            paused,
+        )
+    }
+    fn registered_with_input(
+        fixture: &Fixture,
+        current: &Checkpoint,
+        input: RulesCommandInput<'_>,
+        producer: &TimeProducer<'_>,
+        destinations: &[AdmittedScheduleDestination<'_>],
+        limits: ScheduleDirectorLimits,
+        paused: bool,
+    ) -> Result<Checkpoint, Error> {
+        let handler = AcceptedTimeScheduleHandler {
+            producer,
+            current_basis: current.basis(),
+            inventory: fixture.inventory(),
+            paused,
+            deadline_remaining: Duration::from_secs(1),
+            policy: &fixture.content[0],
+            destinations,
+            limits,
+        };
+        let selector = fixture::label("synthetic-accepted-time-source");
+        let entries = [CatalogEntry::new(
+            &fixture.registration.source,
+            b"synthetic time source",
+        )];
+        let catalog = CatalogSnapshot::from_published(
+            &fixture.pins.rules.catalog,
+            &fixture.pins,
+            b"synthetic complete time catalog",
+            &entries,
+            CatalogLimits {
+                max_complete_bytes: 64,
+                max_entries: 1,
+                max_item_bytes: 64,
+                max_total_item_bytes: 64,
+            },
+        )
+        .unwrap();
+        let registrations = [HandlerRegistration::new(
+            &selector,
+            &fixture.registration.source,
+            &handler,
+        )];
+        let registry = DispatchRegistry::from_catalog(catalog, &registrations, 1).unwrap();
+        decide_registered_command(
+            input,
+            current,
+            CommandEntryContext {
+                current_basis: current.basis(),
+                admitted_pins: &fixture.pins,
+                inventory: fixture.inventory(),
+                limits: CommandEntryLimits {
+                    command: command_limits(),
+                    maximum_staged_bytes: 1024 * 1024,
+                },
+            },
+            &registry,
+            &selector,
+            &fixture.registration.source,
+        )
+    }
+    fn refused(error: TimeScheduleError<SourceRefusal>) -> Error {
+        CommandRejection::Invocation(InvocationError::Handler(error))
+    }
+
+    #[test]
+    fn registered_time_and_ordered_movement_facts_compose_one_exact_source_candidate() {
+        let fixture = Fixture::new();
+        let current = current(&fixture);
+        let original = current.clone();
+        let producer = TimeProducer::new(&fixture, &[5, 6]);
+        let next = registered(
+            &fixture,
+            &current,
+            &fixture.input(current.basis()),
+            &producer,
+            &destinations(&current),
+            limits(),
+            false,
+        )
+        .unwrap();
+        let mut expected = original.state().clone();
+        expected.logical_time = producer.target;
+        expected.entities[0].location = Some(fixture::entity(6));
+        expected
+            .facts
+            .extend_from_slice(&next.state().facts[original.state().facts.len()..]);
+        expected
+            .decisions
+            .push(next.state().decisions.last().unwrap().clone());
+        expected.continuity.catch_up = next.state().continuity.catch_up.clone();
+        assert_eq!(next.state(), &expected);
+        assert_eq!(current, original);
+        assert_eq!(producer.calls.get(), 1);
+        assert_eq!(next.state().decisions.last().unwrap().facts.len(), 3);
+        let cursor = next.state().continuity.catch_up.as_ref().unwrap();
+        assert_eq!(cursor.last_processed, Some(current.state().schedules[1].id));
+        assert_eq!(cursor.time, producer.target);
+        assert!(cursor.pending_events.is_empty());
+        assert_eq!(next.pins(), current.pins());
+    }
+
+    #[test]
+    fn paused_time_calls_no_producer_and_preserves_complete_world_and_pending_state() {
+        let fixture = Fixture::new();
+        let mut producer = TimeProducer::new(&fixture, &[5, 6]);
+        producer.target.ticks = 999_999;
+        for has_pending in [false, true] {
+            let mut state = current(&fixture).state().clone();
+            if has_pending {
+                state.pending.push(pending(fixture::basis()));
+            }
+            let current = fixture.checkpoint(fixture::basis(), state);
+            let original = current.clone();
+            assert_eq!(
+                registered(
+                    &fixture,
+                    &current,
+                    &fixture.input(current.basis()),
+                    &producer,
+                    &destinations(&current),
+                    limits(),
+                    true,
+                ),
+                Err(refused(TimeScheduleError::Paused))
+            );
+            assert_eq!(current, original);
+            assert_eq!(producer.calls.get(), 0);
+        }
+    }
+
+    #[test]
+    fn bounded_resume_keeps_backlog_and_never_repeats_processed_event_or_accepted_operation() {
+        let fixture = Fixture::new();
+        let current = current(&fixture);
+        let first_producer = TimeProducer::new(&fixture, &[5]);
+        let mut bounded = limits();
+        bounded.directors.world.selected_events = 1;
+        bounded.schedule.selection = bounded.directors.world;
+        let first = registered(
+            &fixture,
+            &current,
+            &fixture.input(current.basis()),
+            &first_producer,
+            &destinations(&current),
+            bounded,
+            false,
+        )
+        .unwrap();
+        let cursor = first.state().continuity.catch_up.as_ref().unwrap();
+        assert_eq!(cursor.last_processed, Some(current.state().schedules[0].id));
+        assert_eq!(cursor.pending_events, vec![current.state().schedules[1].id]);
+        let resumed_producer = TimeProducer::new(&fixture, &[6]);
+        let mut input = fixture.input(first.basis());
+        let GameInput::Game(command) = &mut input else {
+            unreachable!()
+        };
+        command.operation = operation(51);
+        let resumed = registered(
+            &fixture,
+            &first,
+            &input,
+            &resumed_producer,
+            &destinations(&first),
+            bounded,
+            false,
+        )
+        .unwrap();
+        assert_eq!(resumed.state().logical_time, first.state().logical_time);
+        assert_eq!(
+            resumed.state().entities[0].location,
+            Some(fixture::entity(6))
+        );
+        assert!(
+            resumed
+                .state()
+                .continuity
+                .catch_up
+                .as_ref()
+                .unwrap()
+                .pending_events
+                .is_empty()
+        );
+        assert_eq!(resumed.state().facts.len() - first.state().facts.len(), 2);
+        let duplicate = fixture.input(first.basis());
+        assert_eq!(
+            registered(
+                &fixture,
+                &first,
+                &duplicate,
+                &first_producer,
+                &destinations(&first),
+                bounded,
+                false,
+            ),
+            Err(refused(TimeScheduleError::Producer(
+                InvocationError::AlreadyAccepted
+            )))
+        );
+        assert_eq!(first_producer.calls.get(), 1);
+    }
+
+    #[test]
+    fn source_withdrawal_and_stale_command_leave_no_time_or_movement_candidate() {
+        let fixture = Fixture::new();
+        let current = current(&fixture);
+        let mut producer = TimeProducer::new(&fixture, &[5, 6]);
+        producer.fault = Fault::Withdrawn;
+        assert_eq!(
+            registered(
+                &fixture,
+                &current,
+                &fixture.input(current.basis()),
+                &producer,
+                &destinations(&current),
+                limits(),
+                false,
+            ),
+            Err(refused(TimeScheduleError::Producer(
+                InvocationError::Handler(SourceRefusal::Withdrawn),
+            )))
+        );
+        let mut old = fixture.input(current.basis());
+        let GameInput::Game(command) = &mut old else {
+            unreachable!()
+        };
+        command.observed_revision = fixture::revision(2, 7);
+        assert!(
+            registered(
+                &fixture,
+                &current,
+                &old,
+                &producer,
+                &destinations(&current),
+                limits(),
+                false,
+            )
+            .is_err()
+        );
+        assert_eq!(producer.calls.get(), 1);
+        assert_eq!(current, self::current(&fixture));
+    }
+
+    #[test]
+    fn missing_wrong_and_repeated_time_facts_cannot_authorize_schedule_advancement() {
+        let fixture = Fixture::new();
+        let current = current(&fixture);
+        for fault in [Fault::MissingTime, Fault::WrongTime, Fault::RepeatedTime] {
+            let mut producer = TimeProducer::new(&fixture, &[5, 6]);
+            producer.fault = fault;
+            assert_eq!(
+                registered(
+                    &fixture,
+                    &current,
+                    &fixture.input(current.basis()),
+                    &producer,
+                    &destinations(&current),
+                    limits(),
+                    false,
+                ),
+                Err(refused(TimeScheduleError::InvalidTimeFact))
+            );
+            assert_eq!(current, self::current(&fixture));
+        }
+    }
+
+    #[test]
+    fn every_selected_movement_requires_its_exact_ordered_source_fact() {
+        let fixture = Fixture::new();
+        let current = current(&fixture);
+        for fault in [
+            Fault::MissingMovement,
+            Fault::WrongMovement,
+            Fault::ExtraMovement,
+        ] {
+            let mut producer = TimeProducer::new(&fixture, &[5, 6]);
+            producer.fault = fault;
+            assert_eq!(
+                registered(
+                    &fixture,
+                    &current,
+                    &fixture.input(current.basis()),
+                    &producer,
+                    &destinations(&current),
+                    limits(),
+                    false,
+                ),
+                Err(refused(TimeScheduleError::MissingMovementFact))
+            );
+            assert_eq!(current, self::current(&fixture));
+        }
+    }
+
+    #[test]
+    fn pending_rules_unmapped_due_event_and_source_schedule_change_refuse_atomically() {
+        let fixture = Fixture::new();
+        let current = current(&fixture);
+        let producer = TimeProducer::new(&fixture, &[5, 6]);
+        assert_eq!(
+            registered(
+                &fixture,
+                &current,
+                &fixture.input(current.basis()),
+                &producer,
+                &[],
+                limits(),
+                false,
+            ),
+            Err(refused(TimeScheduleError::WorldPending))
+        );
+        for (fault, expected) in [
+            (
+                Fault::ChangedSchedule,
+                TimeScheduleError::SourceWorldConflict,
+            ),
+            (Fault::Pending, TimeScheduleError::PendingResolution),
+        ] {
+            let mut producer = TimeProducer::new(&fixture, &[5, 6]);
+            producer.fault = fault;
+            assert_eq!(
+                registered(
+                    &fixture,
+                    &current,
+                    &fixture.input(current.basis()),
+                    &producer,
+                    &destinations(&current),
+                    limits(),
+                    false,
+                ),
+                Err(refused(expected))
+            );
+        }
+        let mut state = current.state().clone();
+        state.pending.push(pending(current.basis()));
+        let blocked = fixture.checkpoint(current.basis(), state);
+        let untouched = TimeProducer::new(&fixture, &[5, 6]);
+        assert_eq!(
+            registered(
+                &fixture,
+                &blocked,
+                &fixture.input(blocked.basis()),
+                &untouched,
+                &destinations(&blocked),
+                limits(),
+                false,
+            ),
+            Err(refused(TimeScheduleError::PendingResolution))
+        );
+        assert_eq!(untouched.calls.get(), 0);
+        assert_eq!(current, self::current(&fixture));
+    }
+
+    #[test]
+    fn pass_budget_due_output_and_final_checkpoint_refusals_never_publish_partial_world() {
+        let fixture = Fixture::new();
+        let current = current(&fixture);
+        let producer = TimeProducer::new(&fixture, &[5, 6]);
+        let mut bounded = limits();
+        bounded.directors.maximum_pass_bytes = 1;
+        assert_eq!(
+            registered(
+                &fixture,
+                &current,
+                &fixture.input(current.basis()),
+                &producer,
+                &destinations(&current),
+                bounded,
+                false,
+            ),
+            Err(refused(TimeScheduleError::Capacity))
+        );
+        assert_eq!(producer.calls.get(), 0);
+        let input = fixture.input(current.basis());
+        let raw = producer
+            .stage(
+                RulesCommandInput {
+                    command: &input,
+                    supplied_draws: &[],
+                },
+                &current,
+            )
+            .unwrap();
+        producer.calls.set(0);
+        let mut bounded = limits();
+        bounded.checkpoint.maximum_retained_bytes = raw.retained_bytes().unwrap();
+        assert!(matches!(
+            registered(
+                &fixture,
+                &current,
+                &input,
+                &producer,
+                &destinations(&current),
+                bounded,
+                false,
+            ),
+            Err(CommandRejection::Invocation(InvocationError::Handler(
+                TimeScheduleError::InvalidCandidate(CheckpointError::Capacity)
+            )))
+        ));
+        assert_eq!(producer.calls.get(), 1);
+        let mut bounded = limits();
+        bounded.directors.world.output_bytes = 1;
+        bounded.schedule.selection = bounded.directors.world;
+        assert!(matches!(
+            registered(
+                &fixture,
+                &current,
+                &input,
+                &producer,
+                &destinations(&current),
+                bounded,
+                false,
+            ),
+            Err(CommandRejection::Invocation(InvocationError::Handler(
+                TimeScheduleError::World(_)
+            )))
+        ));
+        assert_eq!(current, self::current(&fixture));
+    }
+
+    #[test]
+    fn unchanged_source_inputs_replay_exact_candidate_without_a_clock_or_new_draw() {
+        let fixture = Fixture::new();
+        let current = current(&fixture);
+        let producer = TimeProducer::new(&fixture, &[5, 6]);
+        let input = fixture.input(current.basis());
+        let first = registered(
+            &fixture,
+            &current,
+            &input,
+            &producer,
+            &destinations(&current),
+            limits(),
+            false,
+        )
+        .unwrap();
+        let second = registered(
+            &fixture,
+            &current,
+            &input,
+            &producer,
+            &destinations(&current),
+            limits(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(current, self::current(&fixture));
+        assert_eq!(first.state().draws, current.state().draws);
+        assert_eq!(first.state().resources, current.state().resources);
+        assert_eq!(first.state().threats, current.state().threats);
+    }
+    #[test]
+    fn actual_supplied_draws_remain_owned_by_the_same_source_decision() {
+        let fixture = Fixture::new();
+        let current = current(&fixture);
+        let producer = TimeProducer::new(&fixture, &[5, 6]);
+        let input = fixture.input(current.basis());
+        let draws = [ActualDraw {
+            operation: operation(50),
+            ordinal: 0,
+            resolution: ResolutionId::from_bytes(&[9; 16]).unwrap(),
+            window: WindowId::from_bytes(&[10; 16]).unwrap(),
+            sides: 20,
+            value: 7,
+            source: fixture::rule(),
+        }];
+        let next = registered_with_input(
+            &fixture,
+            &current,
+            RulesCommandInput {
+                command: &input,
+                supplied_draws: &draws,
+            },
+            &producer,
+            &destinations(&current),
+            limits(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(next.state().draws, draws);
+        assert_eq!(next.state().decisions.last().unwrap().draws, vec![0]);
+        assert!(next.state().facts.iter().any(|fact| matches!(
+            fact.value, FactValue::DrawAccepted { operation: id, ordinal: 0 }
+                if id == operation(50)
+        )));
+        assert_eq!(producer.calls.get(), 1);
+        assert_eq!(current, self::current(&fixture));
+    }
+}
