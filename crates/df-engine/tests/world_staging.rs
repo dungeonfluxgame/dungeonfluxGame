@@ -1784,9 +1784,9 @@ mod accepted_time_schedule {
                 bounded,
                 false,
             ),
-            Err(refused(TimeScheduleError::Producer(
+            Err(CommandRejection::Invocation(
                 InvocationError::AlreadyAccepted
-            )))
+            ))
         );
         assert_eq!(first_producer.calls.get(), 1);
     }
