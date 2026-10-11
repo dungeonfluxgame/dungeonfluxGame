@@ -1,6 +1,7 @@
 //! Admission for the current authored Defend Courier candidate before initiative.
 use df_encounter::participants::{
-    ParticipantError, ParticipantLimits, ParticipantOwner, ParticipantStatus, validate_participants,
+    ParticipantError, ParticipantLimits, ParticipantOwner, ParticipantStatus,
+    ValidatedParticipants, validate_participants,
 };
 use df_model::checkpoint::{
     AudienceScope, Basis, Checkpoint, CommandInput, EntityId, FactValue, GameCommand, GameState,
@@ -195,13 +196,23 @@ impl ParticipantOwner for CurrentJourney<'_> {
     }
 }
 
+#[cfg(test)]
 pub(super) fn validate(
     current: &Checkpoint,
     command: &CommandInput,
     staged: &GameState,
     actors: &[EntityId],
 ) -> Result<(), ParticipantError<RepositoryError>> {
-    let current_basis = current.basis();
+    admission(current, command, staged, actors).map(|_| ())
+}
+
+/// Retain the canonical owner's exact borrowed admission for Engine composition.
+pub(super) fn admission<'a>(
+    current: &Checkpoint,
+    command: &'a CommandInput,
+    staged: &GameState,
+    actors: &'a [EntityId],
+) -> Result<ValidatedParticipants<'a, EntityId, Basis>, ParticipantError<RepositoryError>> {
     let owner = CurrentJourney {
         current,
         command,
@@ -210,7 +221,7 @@ pub(super) fn validate(
     let admitted = validate_participants(
         &owner,
         &command.basis,
-        &current_basis,
+        &command.basis,
         actors,
         ParticipantLimits {
             max_participants: 3,
@@ -228,7 +239,7 @@ pub(super) fn validate(
     if expected.len() != 3 || admitted.actors() != expected.as_slice() {
         return Err(ParticipantError::Owner(RepositoryError::InvalidCandidate));
     }
-    Ok(())
+    Ok(admitted)
 }
 
 #[cfg(test)]
@@ -271,6 +282,294 @@ mod tests {
             &mut |_| Ok(10),
         )
         .unwrap()
+    }
+
+    fn engine_order(
+        current: &Checkpoint,
+        input: &GameInput,
+        staged: &GameState,
+        admitted: &ValidatedParticipants<'_, EntityId, Basis>,
+        draws: &[df_model::checkpoint::ActualDraw],
+        resources: &[df_model::checkpoint::ResourceConstraint],
+        pins: &df_model::checkpoint::CheckpointPins,
+    ) -> Result<[EntityId; 3], df_engine::encounter_start::EncounterStartError> {
+        let source = super::super::rule().unwrap();
+        df_engine::encounter_start::local_journey_turn_order(
+            df_rules::RulesCommandInput {
+                command: input,
+                supplied_draws: draws,
+            },
+            current,
+            df_engine::command_entry::CommandEntryContext {
+                current_basis: current.basis(),
+                admitted_pins: pins,
+                inventory: ReferenceInventory {
+                    rules: &[model::rule().unwrap(), source.clone()],
+                    content: &model::contents().unwrap(),
+                    resources,
+                    assets: &[],
+                },
+                limits: df_engine::command_entry::CommandEntryLimits {
+                    command: df_model::commands::CommandLimits {
+                        maximum_records: 32,
+                        maximum_text_bytes: 128,
+                        maximum_retained_bytes: 8192,
+                    },
+                    maximum_staged_bytes: 1024 * 1024,
+                },
+            },
+            admitted,
+            staged,
+            &source,
+        )
+    }
+
+    #[test]
+    fn canonical_engine_initiative_preserves_source_draws_and_admitted_identities() {
+        let current = dialogue();
+        let untouched = current.clone();
+        let combat = candidate(&current);
+        let staged_before = combat.state().clone();
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let input = input(&current, member, 7, "defend-courier", vec![]);
+        let GameInput::Game(command) = &input else {
+            panic!("game input")
+        };
+        let actors = combat.state().encounters[0].participants.clone();
+        let admitted = admission(&current, command, combat.state(), &actors).unwrap();
+        assert_eq!(admitted.current_basis(), &command.basis);
+        assert_eq!(admitted.actors().as_ptr(), actors.as_ptr());
+        let draws = combat
+            .state()
+            .draws
+            .iter()
+            .filter(|draw| draw.operation == command.operation)
+            .cloned()
+            .collect::<Vec<_>>();
+        let original_draws = draws.clone();
+        let pins = model::pins().unwrap();
+        let resources = super::super::resources().unwrap();
+        assert_eq!(
+            engine_order(
+                &current,
+                &input,
+                combat.state(),
+                &admitted,
+                &draws,
+                &resources,
+                &pins
+            ),
+            Ok(actors.clone().try_into().unwrap())
+        );
+        assert_eq!(draws, original_draws);
+        assert_eq!(combat.state(), &staged_before);
+        assert_eq!(current, untouched);
+        let mut faces = [8, 14, 4].into_iter();
+        let mixed = stage_with_supplier(&current, &input, &mut |sides| {
+            assert_eq!(sides, 20);
+            Ok(faces
+                .next()
+                .expect("exactly three supplied initiative faces"))
+        })
+        .unwrap();
+        assert_eq!(
+            mixed.state().encounters[0].turn_order,
+            vec![actors[1], actors[0], actors[2]]
+        );
+        assert_eq!(faces.next(), None);
+        assert_eq!(current, untouched);
+        println!(
+            "F11_INITIATIVE_NATIVE_WITNESS source_revision={} draws={} ordered={:?} pins={pins:?}",
+            df_rules::local_journey::SOURCE_REVISION,
+            draws.len(),
+            actors
+        );
+    }
+
+    #[test]
+    fn canonical_engine_initiative_refuses_stale_inputs_and_pin_context() {
+        let current = dialogue();
+        let combat = candidate(&current);
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let input = input(&current, member, 7, "defend-courier", vec![]);
+        let GameInput::Game(command) = &input else {
+            panic!("game input")
+        };
+        let actors = combat.state().encounters[0].participants.clone();
+        let admitted = admission(&current, command, combat.state(), &actors).unwrap();
+        let draws = combat
+            .state()
+            .draws
+            .iter()
+            .filter(|draw| draw.operation == command.operation)
+            .cloned()
+            .collect::<Vec<_>>();
+        let pins = model::pins().unwrap();
+        let resources = super::super::resources().unwrap();
+        let before = current.clone();
+        let mut stale_pins = pins.clone();
+        stale_pins.rules.handler_digest = ContentDigest([99; 32]);
+        assert!(
+            engine_order(
+                &current,
+                &input,
+                combat.state(),
+                &admitted,
+                &draws,
+                &resources,
+                &stale_pins
+            )
+            .is_err()
+        );
+        let mut stale_input = input.clone();
+        let GameInput::Game(stale_command) = &mut stale_input else {
+            panic!("game input")
+        };
+        stale_command.basis.revision = stale_command.basis.revision.next_sequence().unwrap();
+        assert!(
+            engine_order(
+                &current,
+                &stale_input,
+                combat.state(),
+                &admitted,
+                &draws,
+                &resources,
+                &pins
+            )
+            .is_err()
+        );
+        assert_eq!(current, before);
+    }
+
+    #[test]
+    fn canonical_engine_initiative_rejects_malformed_supplied_draw_envelopes_without_mutation() {
+        use df_engine::encounter_start::EncounterStartError;
+        use df_model::checkpoint::{ResolutionId, WindowId};
+        let current = dialogue();
+        let before = current.clone();
+        let combat = candidate(&current);
+        let staged_before = combat.state().clone();
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let input = input(&current, member, 7, "defend-courier", vec![]);
+        let GameInput::Game(command) = &input else {
+            panic!("game input")
+        };
+        let actors = combat.state().encounters[0].participants.clone();
+        let admitted = admission(&current, command, combat.state(), &actors).unwrap();
+        let exact = combat
+            .state()
+            .draws
+            .iter()
+            .filter(|draw| draw.operation == command.operation)
+            .cloned()
+            .collect::<Vec<_>>();
+        let pins = model::pins().unwrap();
+        let resources = super::super::resources().unwrap();
+        for case in 0..11 {
+            let mut draws = exact.clone();
+            match case {
+                0 => {
+                    draws.pop();
+                }
+                1 => draws.push(exact[2].clone()),
+                2 => draws[0].operation = df_types::OperationId::from_bytes(&[0x88; 16]).unwrap(),
+                3 => draws[0].ordinal += 1,
+                4 => draws[0].resolution = ResolutionId::from_bytes(&[0x88; 16]).unwrap(),
+                5 => draws[0].window = WindowId::from_bytes(&[0x88; 16]).unwrap(),
+                6 => draws[0].sides = 6,
+                7 => draws[0].value = 0,
+                8 => draws[0].value = 21,
+                9 => draws[0].source = model::rule().unwrap(),
+                _ => draws.swap(0, 1),
+            }
+            let supplied_before = draws.clone();
+            assert_eq!(
+                engine_order(
+                    &current,
+                    &input,
+                    combat.state(),
+                    &admitted,
+                    &draws,
+                    &resources,
+                    &pins
+                ),
+                Err(EncounterStartError::InvalidDraws),
+                "draw case {case}"
+            );
+            assert_eq!(draws, supplied_before);
+            assert_eq!(combat.state(), &staged_before);
+            assert_eq!(current, before);
+        }
+    }
+
+    #[test]
+    fn canonical_engine_initiative_rejects_forged_missing_and_duplicate_dexterity_resources() {
+        use df_engine::encounter_start::EncounterStartError;
+        let current = dialogue();
+        let before = current.clone();
+        let combat = candidate(&current);
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let input = input(&current, member, 7, "defend-courier", vec![]);
+        let GameInput::Game(command) = &input else {
+            panic!("game input")
+        };
+        let actors = combat.state().encounters[0].participants.clone();
+        let admitted = admission(&current, command, combat.state(), &actors).unwrap();
+        let draws = combat
+            .state()
+            .draws
+            .iter()
+            .filter(|draw| draw.operation == command.operation)
+            .cloned()
+            .collect::<Vec<_>>();
+        let pins = model::pins().unwrap();
+        let exact_resources = super::super::resources().unwrap();
+        for case in 0..11 {
+            let mut staged = combat.state().clone();
+            let mut resources = exact_resources.clone();
+            let state_index = staged
+                .resources
+                .iter()
+                .position(|record| {
+                    record.owner == actors[0] && record.resource.as_str() == "dexterity"
+                })
+                .unwrap();
+            let constraint_index = resources
+                .iter()
+                .position(|record| {
+                    record.owner == actors[0] && record.resource.as_str() == "dexterity"
+                })
+                .unwrap();
+            match case {
+                0 => {
+                    staged.resources.remove(state_index);
+                }
+                1 => staged.resources.push(staged.resources[state_index].clone()),
+                2 => staged.resources[state_index].source = model::rule().unwrap(),
+                3 => staged.resources[state_index].minimum = 0,
+                4 => staged.resources[state_index].maximum = 21,
+                5 => staged.resources[state_index].value = 0,
+                6 => staged.resources[state_index].value = 21,
+                7 => {
+                    resources.remove(constraint_index);
+                }
+                8 => resources.push(resources[constraint_index].clone()),
+                9 => resources[constraint_index].source = model::rule().unwrap(),
+                _ => resources[constraint_index].maximum = 21,
+            }
+            let staged_before = staged.clone();
+            let resources_before = resources.clone();
+            assert_eq!(
+                engine_order(
+                    &current, &input, &staged, &admitted, &draws, &resources, &pins
+                ),
+                Err(EncounterStartError::InvalidDexterity),
+                "resource case {case}"
+            );
+            assert_eq!(staged, staged_before);
+            assert_eq!(resources, resources_before);
+            assert_eq!(current, before);
+        }
     }
     #[test]
     fn actual_combat_start_admits_exact_shared_party_and_authored_bandit_before_ordered_initiative()

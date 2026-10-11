@@ -169,6 +169,27 @@ pub const fn ability_modifier(score: u8) -> i32 {
     (score as i32 - 10).div_euclid(2)
 }
 
+/// Order this local three-participant subset from supplied d20 faces and Dexterity scores.
+/// Initiative uses the cited SRD d20 + Dexterity modifier; equal totals retain the
+/// existing authored participant order. General player/DM tie choices remain outside
+/// this subset. No draw, identity, state mutation or implicit random input occurs here.
+pub fn initiative_order(participants: [(u32, u8); 3]) -> Result<[usize; 3], JourneyRuleError> {
+    if participants.iter().any(|(die, _)| !(1..=20).contains(die)) {
+        return Err(JourneyRuleError::InvalidDie);
+    }
+    if participants
+        .iter()
+        .any(|(_, dexterity)| !(1..=20).contains(dexterity))
+    {
+        return Err(JourneyRuleError::InvalidChoice);
+    }
+    let totals = participants.map(|(die, dexterity)| die as i32 + ability_modifier(dexterity));
+    let mut order = [0, 1, 2];
+    // All indices are internal members of the fixed participant array.
+    order.sort_by_key(|index| (std::cmp::Reverse(totals[*index]), *index));
+    Ok(order)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActionEconomy {
     pub action_used: bool,
@@ -372,6 +393,40 @@ mod tests {
             ("style-masteries", "defense-greatsword-flail-javelin"),
             ("allied-ties", "join-order"),
         ]
+    }
+
+    #[test]
+    fn initiative_uses_supplied_faces_and_modifier_and_retains_authored_tie_order() {
+        assert_eq!(
+            initiative_order([(10, 13), (9, 14), (10, 12)]),
+            Ok([0, 1, 2])
+        );
+        assert_eq!(
+            initiative_order([(8, 13), (14, 14), (4, 12)]),
+            Ok([1, 0, 2])
+        );
+        assert_eq!(
+            initiative_order([(1, 1), (20, 20), (10, 10)]),
+            Ok([1, 2, 0])
+        );
+    }
+    #[test]
+    fn initiative_rejects_invalid_local_faces_and_ability_scores() {
+        for position in 0..3 {
+            for invalid in [0, 21] {
+                let mut supplied = [(10, 12); 3];
+                supplied[position].0 = invalid;
+                assert_eq!(
+                    initiative_order(supplied),
+                    Err(JourneyRuleError::InvalidDie)
+                );
+                supplied[position] = (10, invalid as u8);
+                assert_eq!(
+                    initiative_order(supplied),
+                    Err(JourneyRuleError::InvalidChoice)
+                );
+            }
+        }
     }
     #[test]
     fn legal_build_and_illegal_duplicate_skill() {
