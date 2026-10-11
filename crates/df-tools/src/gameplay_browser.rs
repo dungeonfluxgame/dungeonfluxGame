@@ -1068,7 +1068,11 @@ fn redraw_current(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         .as_ref()
         .and_then(|views| views.current().cloned());
     if let Some(view) = view {
-        render(client, view)?;
+        if let Err(error) = render(client, view) {
+            // A view that cannot be drawn must never fail silently into a blank screen.
+            web_sys::console::error_2(&JsValue::from_str("gameplay view not drawn:"), &error);
+            return Err(error);
+        }
     }
     Ok(())
 }
@@ -1154,8 +1158,13 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
     if let Some(shown) = scene.as_ref()
         && live_screens::takes_over(journey_phase, &journey, shown)
     {
-        public_scene_assets::resolve(&shown.scene_asset)
-            .map_err(|_| JsValue::from_str("unknown required public scene asset"))?;
+        // Generated adventures name their own art from the served pool; the screens fall back
+        // to a built-in scene when a file is absent, so any well-formed local path is accepted.
+        if public_scene_assets::resolve(&shown.scene_asset).is_err()
+            && live_screens::asset_url(&shown.scene_asset).is_none()
+        {
+            return Err(JsValue::from_str("unknown required public scene asset"));
+        }
         surface.set_attribute("data-destination", &shown.destination.to_string())?;
         live_combat::release(client)?;
         return live_screens::render(
