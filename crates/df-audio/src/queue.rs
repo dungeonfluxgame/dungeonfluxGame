@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::rc::Rc;
+use std::time::Duration;
 
 use crate::{PcmSource, PlaybackBasis, PlaybackCue, PlaybackOutput};
 use df_assets::AssetManifest;
@@ -105,6 +106,141 @@ impl AudioReceipt {
     }
     pub fn presentation_identity(&self) -> PlaybackCue {
         self.identity
+    }
+}
+
+/// Checked caption association failure, without exposing private approved text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptionError {
+    Queue(QueueError),
+    InvalidLimit,
+    Empty,
+    Capacity,
+    Allocation,
+}
+
+impl From<QueueError> for CaptionError {
+    fn from(error: QueueError) -> Self {
+        Self::Queue(error)
+    }
+}
+
+/// One caller-approved text/source association, fenced to its exact admission receipt.
+/// This does not verify that encoded or decoded sound speaks the supplied text.
+/// The caller owns approval, source authorization and the actual sound/text provenance.
+pub struct CaptionBinding {
+    receipt: AudioReceipt,
+    source: PcmSource,
+    text: Box<str>,
+}
+
+impl fmt::Debug for CaptionBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CaptionBinding")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Invalid supplied observation. No local clock or authoritative state is consulted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimelineError {
+    BeforeAnchor,
+    BeforeFirstFrame,
+    ArithmeticOverflow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriftDirection {
+    Behind,
+    Aligned,
+    Ahead,
+}
+
+/// Exact drift in nanoseconds is numerator / sample_rate, with no rounded budget comparison.
+/// This is a caller-observed timing fact, not evidence of audible sound or server authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlaybackDrift {
+    direction: DriftDirection,
+    nanoseconds_numerator: u128,
+    sample_rate: u32,
+    within_budget: bool,
+}
+
+impl PlaybackDrift {
+    pub fn direction(self) -> DriftDirection {
+        self.direction
+    }
+    pub fn nanoseconds_numerator(self) -> u128 {
+        self.nanoseconds_numerator
+    }
+    pub fn sample_rate(self) -> u32 {
+        self.sample_rate
+    }
+    pub fn within_budget(self) -> bool {
+        self.within_budget
+    }
+}
+
+/// Immutable caller-supplied server anchor for one PCM timeline.
+/// Clock mapping and actual playback observations belong to the mounted caller.
+/// Chunk arrival cannot change this anchor, and no observation mutates game state.
+#[derive(Clone, Copy, Debug)]
+pub struct ServerPlaybackTimeline {
+    first_frame: u64,
+    anchor_server_time: Duration,
+    format: PcmFormat,
+}
+
+impl ServerPlaybackTimeline {
+    /// Existing PcmFormat construction guarantees a nonzero sample rate.
+    pub fn new(first_frame: u64, anchor_server_time: Duration, format: PcmFormat) -> Self {
+        Self {
+            first_frame,
+            anchor_server_time,
+            format,
+        }
+    }
+
+    /// Compare observed frames against elapsed server time using exact integer units.
+    /// The caller supplies its admissible drift budget explicitly, including zero.
+    /// Before-anchor time or frames before the first frame are refused, never saturated.
+    pub fn observe(
+        self,
+        server_time: Duration,
+        observed_playback_frame: u64,
+        maximum_drift: Duration,
+    ) -> Result<PlaybackDrift, TimelineError> {
+        let elapsed = server_time
+            .checked_sub(self.anchor_server_time)
+            .ok_or(TimelineError::BeforeAnchor)?;
+        let frames = observed_playback_frame
+            .checked_sub(self.first_frame)
+            .ok_or(TimelineError::BeforeFirstFrame)?;
+        let rate = u128::from(self.format.sample_rate());
+        let expected = elapsed
+            .as_nanos()
+            .checked_mul(rate)
+            .ok_or(TimelineError::ArithmeticOverflow)?;
+        let observed = u128::from(frames)
+            .checked_mul(1_000_000_000)
+            .ok_or(TimelineError::ArithmeticOverflow)?;
+        let budget = maximum_drift
+            .as_nanos()
+            .checked_mul(rate)
+            .ok_or(TimelineError::ArithmeticOverflow)?;
+        let direction = match observed.cmp(&expected) {
+            std::cmp::Ordering::Less => DriftDirection::Behind,
+            std::cmp::Ordering::Equal => DriftDirection::Aligned,
+            std::cmp::Ordering::Greater => DriftDirection::Ahead,
+        };
+        let difference = expected.abs_diff(observed);
+        Ok(PlaybackDrift {
+            direction,
+            nanoseconds_numerator: difference,
+            sample_rate: self.format.sample_rate(),
+            within_budget: difference <= budget,
+        })
     }
 }
 
@@ -321,6 +457,78 @@ impl PresentationQueue {
             state: CueState::Accepting,
         });
         Ok(Replacement { receipt, retired })
+    }
+
+    /// Bind caller-approved text to the exact current cue and selected PCM source.
+    /// Retained text is bounded before allocation. Approval and sound/text fidelity
+    /// are caller responsibilities; source equality grants no access by itself.
+    pub fn bind_caption(
+        &self,
+        receipt: &AudioReceipt,
+        lease: &PlaybackOutput,
+        selected_source: &PcmSource,
+        caller_approved_caption: &str,
+        maximum_caption_bytes: usize,
+    ) -> Result<CaptionBinding, CaptionError> {
+        self.check_caption_source(receipt, lease, selected_source)?;
+        if maximum_caption_bytes == 0 || maximum_caption_bytes > 16_384 {
+            return Err(CaptionError::InvalidLimit);
+        }
+        if caller_approved_caption.len() > maximum_caption_bytes {
+            return Err(CaptionError::Capacity);
+        }
+        if caller_approved_caption.trim().is_empty() {
+            return Err(CaptionError::Empty);
+        }
+        let mut text = String::new();
+        text.try_reserve_exact(caller_approved_caption.len())
+            .map_err(|_| CaptionError::Allocation)?;
+        text.push_str(caller_approved_caption);
+        Ok(CaptionBinding {
+            receipt: receipt.clone(),
+            source: selected_source.clone(),
+            text: text.into_boxed_str(),
+        })
+    }
+
+    /// Return text only for its original current admission and exact source.
+    /// Even a replacement reusing identical labels must create a fresh association.
+    /// A stop/drain/disposal or pending old-source stop cannot authorize new captions.
+    pub fn caption<'a>(
+        &self,
+        binding: &'a CaptionBinding,
+        receipt: &AudioReceipt,
+        lease: &PlaybackOutput,
+        selected_source: &PcmSource,
+    ) -> Result<&'a str, CaptionError> {
+        self.check_caption_source(receipt, lease, selected_source)?;
+        if !Rc::ptr_eq(&binding.receipt.owner, &receipt.owner)
+            || !Rc::ptr_eq(&binding.receipt.instance, &receipt.instance)
+            || binding.receipt.identity != receipt.identity
+        {
+            return Err(QueueError::StaleReceipt.into());
+        }
+        if binding.source != *selected_source {
+            return Err(QueueError::WrongAsset.into());
+        }
+        Ok(&binding.text)
+    }
+
+    fn check_caption_source(
+        &self,
+        receipt: &AudioReceipt,
+        lease: &PlaybackOutput,
+        selected_source: &PcmSource,
+    ) -> Result<(), QueueError> {
+        let cue = self.check(receipt, lease)?;
+        if cue.asset != *selected_source {
+            return Err(QueueError::WrongAsset);
+        }
+        match self.snapshot().state {
+            QueueState::Accepting | QueueState::Draining => Ok(()),
+            QueueState::WaitingForStop => Err(QueueError::WaitingForStop),
+            _ => Err(QueueError::Closed),
+        }
     }
 
     /// Refusal returns the unchanged decoded buffer, enabling backpressure without loss.

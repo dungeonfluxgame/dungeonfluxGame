@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "task_id": "B-C-df-audio-D02",
+  "decision": "Bind one caller-approved caption to the exact selected PCM source and current admission receipt; compare immutable caller-supplied server timeline with actual observed playback frames in exact integer units.",
+  "identity": "Existing SpeechIdentity projects to PlaybackCue; AudioReceipt private owner/instance fences reuse, source key and complete manifest remain exact.",
+  "bounds": {
+    "maximum_caption_bytes": "Explicit caller value in 1..=16384; each move-only boxed association owns only its text/source/receipt labels.",
+    "maximum_drift": "Explicit caller Duration, including zero; no default or measured device budget."
+  },
+  "timebase": "Existing PcmFormat.sample_rate and u64 frame offsets. Exact nanosecond difference is nanoseconds_numerator/sample_rate; budget comparison has no rounding.",
+  "constructor_refinement": "ServerPlaybackTimeline::new is infallible: PcmFormat is already validated, Duration/u64 anchor are supplied values. observe returns checked ordering/arithmetic refusals.",
+  "alternatives_rejected": [
+    "Independent caption selection or implicit old text on fallback",
+    "Equality of job/cue labels without receipt instance",
+    "Chunk offsets recomputed from arrival time",
+    "Default drift budget or local clock advancing game authority",
+    "New utterance identity issuer, shared DTO, decoder or second production queue"
+  ],
+  "unresolved": [
+    "Caller owns actual approval, source authorization and evidence that selected sound speaks supplied text; association is not a semantic audio validator.",
+    "Mounted production source/time observation and caption/audio consumer remain unwired.",
+    "No provider call, decoder, playback, audible caption synchronization, device support or game-authority claim."
+  ],
+  "verification": "Nine native contract groups consume actual canonical native identity projection, PresentationQueue/PCM and pure PlaybackTimeline. BrowserPlayback is cfg(wasm32) and no browser/audio observation is implied."
+}
