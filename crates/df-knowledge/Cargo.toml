@@ -7,3 +7,7 @@ license.workspace = true
 [dependencies]
 df-types = { path = "../df-types" }
 df-model = { path = "../df-model" }
+
+[[test]]
+name = "witness_audience_contract"
+path = "tests/witness_audience_contract.rs"

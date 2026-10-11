@@ -320,10 +320,12 @@ fn shared_source_decision(
 }
 
 fn witnessed_courier_support(
-    state: &GameState,
+    current: &Checkpoint,
+    audience_observer: df_knowledge::perception::ObserverScope,
     selected: &[&GameFact],
     party: &[rpc::PartyMemberView],
 ) -> Result<Option<String>, RepositoryError> {
+    let state = current.state();
     let reaction_definition = model::content("courier-escort-reaction")?;
     let mut reactions = selected.iter().copied().filter(|fact| {
         matches!(&fact.value, FactValue::ContentEvent { definition, .. }
@@ -371,6 +373,39 @@ fn witnessed_courier_support(
     )?;
     let witness_source = model::content("courier-escort-perception")?;
     let expected_witness = super::journey::courier_reaction::witness_id(contact.id)?;
+    let (audience_basis, witness, witnessed) =
+        df_knowledge::witness_projection::perceive_witnessed_fact(
+            current,
+            current.basis(),
+            &model::pins()?,
+            audience_observer,
+            expected_witness,
+            df_knowledge::perception::PerceptionLimits {
+                maximum_scan_records: 512,
+                maximum_member_comparisons: 512,
+                maximum_selected_facts: 512,
+            },
+        )
+        .map_err(|error| match error {
+            df_knowledge::perception::PerceptionError::ObserverUnavailable => {
+                RepositoryError::Unauthorized
+            }
+            df_knowledge::perception::PerceptionError::ScanCapacity
+            | df_knowledge::perception::PerceptionError::ComparisonCapacity
+            | df_knowledge::perception::PerceptionError::ResultCapacity
+            | df_knowledge::perception::PerceptionError::AllocationCapacity => {
+                RepositoryError::Capacity
+            }
+            _ => RepositoryError::InvalidCandidate,
+        })?
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    if audience_basis != current.basis()
+        || witness.observer != courier
+        || witnessed.id != contact.id
+        || witness.source != witness_source
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
     let relationship_policy = model::content("courier-escort-relationship")?;
     let courier_definition = model::content("lantern-wharf-courier")?;
     let courier_revision = model::label("lantern-wharf-courier-1")?;
@@ -387,11 +422,6 @@ fn witnessed_courier_support(
             && npc.personality == personality
             && npc.motivations.as_slice() == std::slice::from_ref(&motivation)
             && npc.known_facts.contains(&contact.id)
-    }) || !state.continuity.witnesses.iter().any(|witness| {
-        witness.id == expected_witness
-            && witness.observer == courier
-            && witness.fact == contact.id
-            && witness.source == witness_source
     }) || !state.relationships.iter().any(|relationship| {
         relationship.subject == courier
             && relationship.object == *hero
@@ -637,7 +667,7 @@ pub(super) fn journey_view(
         }
         _ => return Err(RepositoryError::InvalidCandidate),
     };
-    let narration = match witnessed_courier_support(state, perceived.facts(), &party)? {
+    let narration = match witnessed_courier_support(current, observer, perceived.facts(), &party)? {
         Some(name) => {
             format!("{narration} The courier now looks to {name} for support on the escort.")
         }
