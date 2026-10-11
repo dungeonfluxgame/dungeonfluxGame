@@ -647,6 +647,12 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let (sender, inbox) = bounded_inbox::<actor::Call>();
+    let call_budget = npc_budget
+        .or(inn_budget)
+        .or(courier_budget)
+        .or(restart_budget)
+        .or(rest_budget)
+        .or(settings.call_budget);
     let actor = actor::Actor {
         owner,
         dialogue: dialogue::DialogueState::default(),
@@ -656,12 +662,8 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         fenced: false,
         recovery_wakeup: updates,
         intent_notifications,
-        calls_remaining: npc_budget
-            .or(inn_budget)
-            .or(courier_budget)
-            .or(restart_budget)
-            .or(rest_budget)
-            .unwrap_or(settings.call_budget),
+        calls_remaining: call_budget.unwrap_or(u16::MAX),
+        calls_unbounded: call_budget.is_none(),
         qualification_joins: if npc_phase.is_some()
             || inn_phase.is_some()
             || courier_phase.is_some()

@@ -153,6 +153,7 @@ impl RunningActor {
             recovery_wakeup: updates,
             intent_notifications,
             calls_remaining,
+            calls_unbounded: false,
             qualification_inputs: Some(Vec::new()),
             qualification_joins: Some(Vec::new()),
             completion_retry: None,

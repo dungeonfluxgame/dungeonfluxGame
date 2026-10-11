@@ -281,6 +281,8 @@ pub(super) struct Actor {
     pub recovery_wakeup: watch::Sender<Checkpoint>,
     pub intent_notifications: std::sync::mpsc::Receiver<()>,
     pub calls_remaining: u16,
+    /// Plain play without `DF_GAMEPLAY_CALL_BUDGET`: calls are neither refused nor counted down.
+    pub calls_unbounded: bool,
     pub qualification_inputs: Option<Vec<QualificationInput>>,
     pub qualification_joins: Option<Vec<QualificationJoin>>,
     pub completion_retry: Option<CompletionRetry>,
@@ -780,7 +782,7 @@ impl Reducer<Call> for Actor {
         if dispatch_committed_jobs {
             self.run_committed_intents();
         }
-        if self.calls_remaining == 0 {
+        if !self.calls_unbounded && self.calls_remaining == 0 {
             match call {
                 Call::QualificationInputs { reply } => {
                     let _ = reply.send(Err(tonic::Status::resource_exhausted(
@@ -810,7 +812,9 @@ impl Reducer<Call> for Actor {
             }
             return;
         }
-        self.calls_remaining -= 1;
+        if !self.calls_unbounded {
+            self.calls_remaining -= 1;
+        }
         let context = OperationContext {
             trace_parent: String::new(),
             build: crate::BUILD_ID.to_owned(),

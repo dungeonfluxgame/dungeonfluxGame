@@ -37,13 +37,14 @@ impl SessionInputs {
 /// Listener, origin and lifetime bounds of one demonstration run.
 ///
 /// `allowed_origins` is never empty; its first entry is the origin shown to players.
-/// `session` of `None` runs until interrupted. `call_budget` counts every actor call,
-/// including view refreshes, and is the actor's bounded lifetime work limit.
+/// `session` of `None` runs until interrupted. `call_budget` of `None` (plain play with
+/// `DF_GAMEPLAY_CALL_BUDGET` unset) is unlimited; `Some` counts every actor call, including
+/// view refreshes, as a finite lifetime work limit.
 pub(super) struct SessionSettings {
     pub(super) listen: SocketAddr,
     pub(super) allowed_origins: Vec<String>,
     pub(super) session: Option<Duration>,
-    pub(super) call_budget: u16,
+    pub(super) call_budget: Option<u16>,
     pub(super) max_connections: usize,
     pub(super) max_watch_streams: usize,
 }
@@ -55,7 +56,7 @@ impl SessionSettings {
             listen: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), QUALIFICATION_PORT),
             allowed_origins: vec![format!("http://127.0.0.1:{QUALIFICATION_PORT}")],
             session: Some(Duration::from_secs(290)),
-            call_budget: 128,
+            call_budget: Some(128),
             max_connections: 4,
             max_watch_streams: 6,
         }
@@ -113,7 +114,7 @@ pub(super) fn session_settings(inputs: SessionInputs) -> Result<SessionSettings,
         listen,
         allowed_origins,
         session,
-        call_budget: bounded_count(inputs.call_budget, u16::MAX, "DF_GAMEPLAY_CALL_BUDGET")?,
+        call_budget: optional_bounded_count(inputs.call_budget, "DF_GAMEPLAY_CALL_BUDGET")?,
         max_connections: usize::from(bounded_count(
             inputs.max_connections,
             16,
@@ -144,12 +145,19 @@ fn bounded_count(
     default: u16,
     name: &str,
 ) -> Result<u16, io::Error> {
+    Ok(optional_bounded_count(input, name)?.unwrap_or(default))
+}
+
+fn optional_bounded_count(
+    input: Result<String, VarError>,
+    name: &str,
+) -> Result<Option<u16>, io::Error> {
     match optional(input)? {
         Some(value) => value
             .parse::<NonZeroU16>()
-            .map(NonZeroU16::get)
+            .map(|count| Some(count.get()))
             .map_err(|_| refused(name)),
-        None => Ok(default),
+        None => Ok(None),
     }
 }
 
@@ -256,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_loopback_untimed_and_generous_but_bounded() {
+    fn defaults_are_loopback_untimed_unbudgeted_and_bounded() {
         let settings = session_settings(inputs([None; 6])).unwrap();
         assert_eq!(settings.listen, "127.0.0.1:63309".parse().unwrap());
         assert_eq!(
@@ -264,7 +272,7 @@ mod tests {
             ["http://127.0.0.1:63309", "http://localhost:63309"]
         );
         assert_eq!(settings.session, None);
-        assert_eq!(settings.call_budget, u16::MAX);
+        assert_eq!(settings.call_budget, None);
         assert_eq!(settings.max_connections, 16);
         assert_eq!(settings.max_watch_streams, 24);
     }
@@ -275,7 +283,7 @@ mod tests {
         assert_eq!(settings.listen, "127.0.0.1:63309".parse().unwrap());
         assert_eq!(settings.allowed_origins, ["http://127.0.0.1:63309"]);
         assert_eq!(settings.session, Some(Duration::from_secs(290)));
-        assert_eq!(settings.call_budget, 128);
+        assert_eq!(settings.call_budget, Some(128));
         assert_eq!(settings.max_connections, 4);
         assert_eq!(settings.max_watch_streams, 6);
     }
@@ -297,7 +305,7 @@ mod tests {
             ["http://example.test:4000", "https://example.test"]
         );
         assert_eq!(settings.session, Some(Duration::from_secs(3600)));
-        assert_eq!(settings.call_budget, 500);
+        assert_eq!(settings.call_budget, Some(500));
         assert_eq!(settings.max_connections, 3);
         assert_eq!(settings.max_watch_streams, 5);
     }
