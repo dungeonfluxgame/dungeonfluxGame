@@ -190,6 +190,7 @@ impl rpc::session_service_server::SessionService for Service {
 struct PageState {
     incoming: NativeAdmission,
     connections: Arc<Semaphore>,
+    allowed_origins: Arc<[String]>,
     display: [u8; 32],
     glue: bytes::Bytes,
     wasm: bytes::Bytes,
@@ -199,7 +200,16 @@ async fn socket(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> axum::response::Response {
-    if headers.get("origin").and_then(|v| v.to_str().ok()) != Some("http://127.0.0.1:63309") {
+    if !headers
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|origin| {
+            state
+                .allowed_origins
+                .iter()
+                .any(|allowed| allowed == origin)
+        })
+    {
         return axum::http::StatusCode::FORBIDDEN.into_response();
     }
     let Ok(permit) = state.connections.clone().try_acquire_owned() else {
@@ -291,7 +301,14 @@ const HTML: &str = r#"<!doctype html><html lang="en"><head><meta charset="utf-8"
 .room-code{font-size:38px;letter-spacing:8px;color:#f2ce90;margin:16px 0}.room-share{border:1px solid #caa56c70;background:#071922d9;border-radius:14px;padding:18px;max-width:450px}.join-link{color:#d9e6be}.party{display:flex;gap:8px;flex-wrap:wrap}.party-member{padding:8px 12px;border:1px solid #78968670;border-radius:999px;font:12px system-ui;background:#122c27}.hero-summary{display:grid;gap:8px;padding:16px;border:1px solid #bd966580;border-radius:12px;background:#102c26}.hero-summary strong{font-size:24px;color:#ead2a0}.hero-summary span,.sheet-facts{font:13px system-ui;line-height:1.6}.dialogue{border:1px solid #c6a87970;border-radius:14px;background:#12222ee8;padding:18px;margin:20px 0;min-height:94px}.speaker-portrait{width:60px;height:60px;object-fit:cover;border-radius:50%;float:left;margin:0 14px 8px 0}.dialogue blockquote{margin:8px 0;font-style:italic;font-size:20px;line-height:1.4}.combat-roster{display:flex;gap:8px;flex-wrap:wrap}.combatant{display:grid;gap:8px;padding:12px;background:#12202de8;border:1px solid #778e8050;border-radius:10px;flex:1;min-width:100px;font:12px system-ui}.combatant.active{border-color:#e7bf6f;box-shadow:0 0 20px #e7bf6f22}.hp{width:100%;height:10px;accent-color:#7eb38a}.battle{margin-top:22px}.combat-history{display:grid;gap:10px;margin:16px 0}.combat-result{position:relative;padding:16px 16px 16px 64px;border:1px solid #bba27460;border-radius:12px;background:#10242eea;font:13px system-ui;animation:reveal-result .65s ease-out}.combat-result p{line-height:1.6}.roll-number{position:absolute;left:12px;top:18px;font:30px Georgia;color:#ecc278;animation:reveal-die .7s ease-out}.attack-option{display:grid;grid-template-columns:1fr 90px;gap:12px;margin:12px 0;font:13px system-ui;color:#bfd0b9}.attack-option select{padding:8px;background:#13272b;color:#efe6ce;border:1px solid #a88e66;border-radius:6px}.offered{margin-top:10px}.display .battle{max-width:860px}.display .scene-copy{max-height:75vh;overflow:auto}.display .art{min-height:650px}.player .view>[data-character-phase]{width:100%}.player .character-reference{display:none}@keyframes reveal-result{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}@keyframes reveal-die{from{transform:rotate(-18deg) scale(.8)}to{transform:none}}@media(prefers-reduced-motion:reduce){.roll-number,.combat-result{animation:none}}
 </style></head><body><header><strong>DUNGEONFLUX</strong><span>The Lantern Wharf · your shared adventure</span></header><main class="__LAYOUT__">__ROOTS__</main><footer>Local browser journey · player-created Dwarf Fighter / Soldier · selected SRD 5.2.1 rules. Other character options and mechanics remain in development. Authored concept art illustrates the setting; character artwork is not generated here. This work includes material from the System Reference Document 5.2.1 (“SRD 5.2.1”) by Wizards of the Coast LLC, available at <a href="https://www.dndbeyond.com/srd">dndbeyond.com/srd</a>. The SRD 5.2.1 is licensed under the <a href="https://creativecommons.org/licenses/by/4.0/legalcode">Creative Commons Attribution 4.0 International License</a>.</footer><script type="module">import init from '/pkg/df_tools.js'; await init();</script></body></html>"#;
 
-/// Run a 170-second loopback demonstration using an already owned empty PG cluster.
+/// Run the gameplay demonstration using an already owned empty PG cluster.
+///
+/// A plain `--gameplay-demo <web> <assets>` run is interactive: it listens and accepts
+/// browser origins as configured by the `DF_GAMEPLAY_*` variables read by
+/// [`startup_configuration::session_settings`], runs until interrupted unless a session
+/// length is set, and prints one `READY` line. A qualification flag as the fourth
+/// argument keeps the fixed loopback address, 290-second limit, and small connection,
+/// stream, and call bounds the qualification harnesses were written against.
 pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let web_root = std::env::args()
         .nth(2)
@@ -310,6 +327,14 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&web_root),
         std::path::Path::new(&asset_root),
     )?;
+    let interactive = std::env::args().nth(4).is_none();
+    let settings = if interactive {
+        startup_configuration::session_settings(
+            startup_configuration::SessionInputs::from_environment(),
+        )?
+    } else {
+        startup_configuration::SessionSettings::qualification()
+    };
     let npc_phase = courier_npc_qualification::phase();
     let npc_budget = npc_phase
         .map(courier_npc_qualification::call_budget)
@@ -555,7 +580,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         released.map_err(|_| io::Error::other("setup exact-fence release failed"))?;
         return Err(io::Error::other("native recovery configuration refused").into());
     }
-    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 63309)).await {
+    let listener = match tokio::net::TcpListener::bind(settings.listen).await {
         Ok(listener) => listener,
         Err(error) => {
             let closed = repository.close_owned().await;
@@ -635,7 +660,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             .or(courier_budget)
             .or(restart_budget)
             .or(rest_budget)
-            .unwrap_or(128),
+            .unwrap_or(settings.call_budget),
         qualification_joins: if npc_phase.is_some()
             || inn_phase.is_some()
             || courier_phase.is_some()
@@ -735,7 +760,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let service = Service {
         actor: sender.clone(),
         updates: receiver,
-        streams: Arc::new(Semaphore::new(6)),
+        streams: Arc::new(Semaphore::new(settings.max_watch_streams)),
     };
     let (incoming_sender, incoming) =
         NativeIncoming::bounded(NonZeroUsize::new(4).ok_or("invalid native incoming bound")?)?;
@@ -768,7 +793,8 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .serve_with_incoming(incoming);
     let state = PageState {
         incoming: incoming_sender,
-        connections: Arc::new(Semaphore::new(4)),
+        connections: Arc::new(Semaphore::new(settings.max_connections)),
+        allowed_origins: settings.allowed_origins.clone().into(),
         display: display_credential,
         glue: glue_bytes,
         wasm: wasm_bytes,
@@ -851,10 +877,15 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    if interactive {
+        let origin = &settings.allowed_origins[0];
+        println!("READY display={origin}/gameplay/display player={origin}/gameplay/player");
+    }
     let outcome: Result<(), Box<dyn std::error::Error>> = {
         tokio::select! {
             result=grpc=>result.map_err(Into::into),result=axum::serve(listener,router)=>result.map_err(Into::into),
-            result=tokio::signal::ctrl_c()=>result.map_err(Into::into),_=tokio::time::sleep(Duration::from_secs(290))=>Ok(()),
+            result=tokio::signal::ctrl_c()=>result.map_err(Into::into),
+            _=async{match settings.session{Some(session)=>tokio::time::sleep(session).await,None=>std::future::pending().await}}=>Ok(()),
         }
     };
     let qualification_outcome = if let Some((cancel, task)) = qualification {
