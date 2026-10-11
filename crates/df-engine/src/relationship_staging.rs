@@ -585,3 +585,174 @@ where
         Ok(self.stage_with_outcomes(input, current)?.checkpoint)
     }
 }
+/// Native current-command admission, separate from accepted consequence admission.
+pub trait RelationshipAxisApplicationOwner: RelationshipAxisOwner {
+    fn admit_axis_application(
+        &self,
+        current: &Checkpoint,
+        command: &CommandInput,
+        changes: &[RelationshipAxisChange],
+    ) -> Result<(), Self::Refusal>;
+}
+
+/// Refusals publish neither mechanics nor any earlier axis in the detached pass.
+#[derive(Debug, Eq, PartialEq)]
+pub enum RelationshipAxisCommandError<CommandRefusal, SourceRefusal> {
+    Snapshot(CheckpointError),
+    UnsupportedInput,
+    StaleCommand,
+    PendingResolution,
+    WrongActor,
+    Source(SourceRefusal),
+    Command(InvocationError<CommandRefusal>),
+    RelationshipConflict,
+    UnacceptedConsequence,
+    Axis(RelationshipAxisStagingError<SourceRefusal>),
+}
+
+/// Register this borrowed wrapper with the source handler's exact selector/clause.
+/// An accepted next-revision fact from this operation is required for every axis.
+/// Categorical reaction state is retained; the inner handler cannot rewrite axes,
+/// directional identity or policy. No source qualification, commit or publication
+/// authority follows from constructing this value.
+pub struct RelationshipAxisHandler<'a, Handler, Owner> {
+    pub command_handler: &'a Handler,
+    pub owner: &'a Owner,
+    pub current_basis: Basis,
+    pub admitted_pins: &'a CheckpointPins,
+    pub inventory: ReferenceInventory<'a>,
+    pub changes: &'a [RelationshipAxisChange],
+    pub limits: RelationshipAxisStagingLimits,
+}
+
+impl<Handler, Owner> RulesCommandHandler for RelationshipAxisHandler<'_, Handler, Owner>
+where
+    Handler: RulesCommandHandler,
+    Owner: RelationshipAxisApplicationOwner,
+{
+    type Rejection = RelationshipAxisCommandError<Handler::Rejection, Owner::Refusal>;
+
+    fn pins(&self) -> &CheckpointPins {
+        self.admitted_pins
+    }
+
+    fn bound_source(&self) -> Option<&df_model::checkpoint::RuleReference> {
+        self.command_handler.bound_source()
+    }
+
+    fn stage(
+        &self,
+        input: RulesCommandInput<'_>,
+        current: &Checkpoint,
+    ) -> Result<Checkpoint, Self::Rejection> {
+        current
+            .validate_resume(self.current_basis, self.admitted_pins)
+            .map_err(RelationshipAxisCommandError::Snapshot)?;
+        check_axis_capacity(current, &self.inventory, self.changes, self.limits)
+            .map_err(RelationshipAxisCommandError::Axis)?;
+        current
+            .validate_admitted(
+                self.current_basis,
+                self.admitted_pins,
+                self.inventory,
+                self.limits.checkpoint,
+            )
+            .map_err(RelationshipAxisCommandError::Snapshot)?;
+        let GameInput::Game(command) = input.command else {
+            return Err(RelationshipAxisCommandError::UnsupportedInput);
+        };
+        if command.basis != self.current_basis
+            || command.observed_revision != self.current_basis.revision
+        {
+            return Err(RelationshipAxisCommandError::StaleCommand);
+        }
+        if !current.state().pending.is_empty() {
+            return Err(RelationshipAxisCommandError::PendingResolution);
+        }
+        let GameCommand::ProposeAction { actor, .. } = &command.command else {
+            return Err(RelationshipAxisCommandError::UnsupportedInput);
+        };
+        if !current
+            .state()
+            .members
+            .iter()
+            .any(|link| link.member == command.member && link.character == Some(*actor))
+            || !current
+                .state()
+                .characters
+                .iter()
+                .any(|character| character.entity == *actor && character.owner == command.member)
+        {
+            return Err(RelationshipAxisCommandError::WrongActor);
+        }
+        self.owner
+            .admit_axis_application(current, command, self.changes)
+            .map_err(RelationshipAxisCommandError::Source)?;
+        let staged = stage_handler(
+            self.command_handler,
+            self.admitted_pins,
+            input,
+            current,
+            self.limits.maximum_checkpoint_bytes,
+        )
+        .map_err(RelationshipAxisCommandError::Command)?;
+        if !staged.state().pending.is_empty() {
+            return Err(RelationshipAxisCommandError::PendingResolution);
+        }
+        if staged.state().relationships.len() != current.state().relationships.len()
+            || !staged.state().relationships.iter().all(|next| {
+                current.state().relationships.iter().any(|prior| {
+                    next.subject == prior.subject
+                        && next.object == prior.object
+                        && next.policy == prior.policy
+                        && next.trust == prior.trust
+                        && next.affection == prior.affection
+                        && next.respect == prior.respect
+                        && next.fear == prior.fear
+                        && next.suspicion == prior.suspicion
+                        && next.debt == prior.debt
+                        && next.familiarity == prior.familiarity
+                })
+            })
+        {
+            return Err(RelationshipAxisCommandError::RelationshipConflict);
+        }
+        for change in self.changes {
+            let RelationshipAxisProvenance::AcceptedFact {
+                fact,
+                source_policy,
+                ..
+            } = &change.replacement.provenance
+            else {
+                return Err(RelationshipAxisCommandError::UnacceptedConsequence);
+            };
+            let accepted = staged.state().facts.iter().any(|record| {
+                record.id == *fact
+                    && record.operation == command.operation
+                    && record.revision == staged.basis().revision
+                    && staged.state().decisions.iter().any(|decision| {
+                        decision.operation == command.operation
+                            && decision.revision == record.revision
+                            && decision.source_policy == *source_policy
+                            && usize::try_from(record.ordinal)
+                                .ok()
+                                .and_then(|ordinal| decision.facts.get(ordinal))
+                                == Some(fact)
+                    })
+            });
+            if !accepted {
+                return Err(RelationshipAxisCommandError::UnacceptedConsequence);
+            }
+        }
+        apply_relationship_axis_changes(
+            self.owner,
+            staged.basis(),
+            &staged,
+            self.admitted_pins,
+            self.inventory,
+            self.changes,
+            self.limits,
+        )
+        .map_err(RelationshipAxisCommandError::Axis)
+    }
+}

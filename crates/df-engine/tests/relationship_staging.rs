@@ -863,7 +863,7 @@ mod session {
         }
     }
     struct Engine {
-        axis: super::AxisOwner,
+        axis: super::RegisteredAxisOwner,
         fixture: Fixture,
         source: SourceOwner,
         database: Rc<RefCell<Database>>,
@@ -876,30 +876,20 @@ mod session {
             input: &GameInput,
         ) -> Result<Checkpoint, RepositoryError> {
             self.database.borrow_mut().decisions += 1;
-            let captured_basis = current.basis();
             let with_axes = self.database.borrow().with_axes;
-            let result = registered(&self.fixture, &self.source, current, input)
+            let result = if with_axes {
+                super::registered_completed_axis(
+                    &self.fixture,
+                    &self.source,
+                    &self.axis,
+                    current,
+                    input,
+                )
                 .map_err(|_| RepositoryError::InvalidCandidate)
-                .and_then(|candidate| {
-                    if !with_axes {
-                        return Ok(candidate);
-                    }
-                    let mut expected = captured_basis;
-                    expected.revision = expected
-                        .revision
-                        .next_sequence()
-                        .map_err(|_| RepositoryError::InvalidCandidate)?;
-                    super::apply_relationship_axis_changes(
-                        &self.axis,
-                        expected,
-                        &candidate,
-                        &self.fixture.pins,
-                        self.fixture.inventory(),
-                        &[super::delivery_axis_change()],
-                        super::axis_staging_limits(),
-                    )
+            } else {
+                registered(&self.fixture, &self.source, current, input)
                     .map_err(|_| RepositoryError::InvalidCandidate)
-                });
+            };
             let mut db = self.database.borrow_mut();
             db.command_stages = self.source.command_calls.get();
             db.entry_checks = self.source.entry_calls.get();
@@ -939,7 +929,7 @@ mod session {
             if db.with_axes {
                 assert_eq!(
                     checkpoint.state().relationships[1].affection,
-                    super::delivery_axis_change().replacement
+                    super::completed_axis_change(RelationshipAxis::Affection).replacement
                 );
             }
             db.publications += 1;
@@ -984,7 +974,7 @@ mod session {
                 database: Rc::clone(&database),
             },
             Engine {
-                axis: super::AxisOwner::default(),
+                axis: super::RegisteredAxisOwner::default(),
                 fixture,
                 source,
                 database: Rc::clone(&database),
@@ -1041,7 +1031,8 @@ mod session {
             let db = database.borrow();
             assert_eq!(db.checkpoint, committed);
             let mut expected = original.state().relationships[1].clone();
-            expected.affection = super::delivery_axis_change().replacement;
+            expected.affection =
+                super::completed_axis_change(RelationshipAxis::Affection).replacement;
             assert_eq!(committed.state().relationships[1], expected);
             let mut reverse = original.state().relationships[0].clone();
             reverse.state = model::label("receptive");
@@ -1092,7 +1083,7 @@ mod session {
         assert_eq!(db.checkpoint, committed);
         assert_eq!(
             committed.state().relationships[1].affection,
-            super::delivery_axis_change().replacement
+            super::completed_axis_change(RelationshipAxis::Affection).replacement
         );
         assert_eq!(
             committed.state().obligations[0].status,
@@ -1605,6 +1596,669 @@ fn exact_event_acceptance_and_prior_cause_acceptance_cannot_be_replaced_by_fact_
                 ReactionError::UnacceptedEvent
             ))
         ));
+        assert_eq!(current, original);
+    }
+}
+
+#[derive(Default)]
+struct RegisteredAxisOwner {
+    application_calls: Cell<usize>,
+    admissions: Cell<usize>,
+    validations: Cell<usize>,
+    withdrawn: Cell<bool>,
+    refuse_at: Cell<Option<usize>>,
+}
+
+impl RelationshipOwner for RegisteredAxisOwner {
+    type Subject = EntityId;
+    type Basis = Basis;
+    type Value = RevisionLabel;
+    type Provenance = RelationshipAxisProvenance;
+    type Refusal = AxisOwnerRefusal;
+
+    fn validate_axis_change(
+        &self,
+        _: RelationshipAxis,
+        _: &RelationshipAxisValue<Self::Value, Self::Provenance>,
+        _: &RelationshipAxisValue<Self::Value, Self::Provenance>,
+    ) -> Result<(), Self::Refusal> {
+        self.validations.set(self.validations.get() + 1);
+        Ok(())
+    }
+}
+
+impl RelationshipAxisApplicationOwner for RegisteredAxisOwner {
+    fn admit_axis_application(
+        &self,
+        current: &Checkpoint,
+        command: &CommandInput,
+        changes: &[RelationshipAxisChange],
+    ) -> Result<(), Self::Refusal> {
+        self.application_calls.set(self.application_calls.get() + 1);
+        if self.withdrawn.get()
+            || command.member != model::member(3)
+            || command.operation != operation(50)
+            || !matches!(&command.command,
+                GameCommand::ProposeAction { actor, action, targets, choices }
+                    if *actor == model::entity(4)
+                        && action == &content("explicit-agreement")
+                        && targets.as_slice() == [model::entity(5)]
+                        && choices.is_empty())
+            || changes.iter().any(|change| {
+                change.subject != model::entity(4)
+                    || change.target != model::entity(5)
+                    || !current.state().relationships.iter().any(|relationship| {
+                        relationship.subject == change.subject
+                            && relationship.object == change.target
+                            && relationship.policy == content("directional-policy")
+                    })
+            })
+        {
+            return Err(AxisOwnerRefusal::UnacceptedSource);
+        }
+        Ok(())
+    }
+}
+
+impl RelationshipAxisOwner for RegisteredAxisOwner {
+    fn admit_axis_change(
+        &self,
+        candidate: &Checkpoint,
+        change: &RelationshipAxisChange,
+    ) -> Result<(), Self::Refusal> {
+        let calls = self.admissions.get() + 1;
+        self.admissions.set(calls);
+        if self.withdrawn.get() || self.refuse_at.get() == Some(calls) {
+            return Err(AxisOwnerRefusal::UnacceptedSource);
+        }
+        let RelationshipAxisProvenance::AcceptedFact {
+            source,
+            fact: id,
+            source_policy,
+            witness,
+        } = &change.replacement.provenance
+        else {
+            return Err(AxisOwnerRefusal::UnacceptedSource);
+        };
+        let admitted = candidate.state().facts.iter().any(|record| {
+            record.id == *id
+                && matches!(&record.value, FactValue::ContentEvent { definition, subjects }
+                    if definition == &content("agreement-completed")
+                        && subjects.as_slice() == [change.subject, change.target])
+        });
+        if admitted
+            && source == &content("directional-policy")
+            && source_policy == &model::label("compiled-completion-policy")
+            && witness.is_none()
+        {
+            Ok(())
+        } else {
+            Err(AxisOwnerRefusal::UnacceptedSource)
+        }
+    }
+}
+
+fn completed_axis_change(axis: RelationshipAxis) -> RelationshipAxisChange {
+    RelationshipAxisChange {
+        subject: model::entity(4),
+        target: model::entity(5),
+        axis,
+        replacement: RelationshipAxisState {
+            value: model::label("axis-after-completion"),
+            provenance: RelationshipAxisProvenance::AcceptedFact {
+                source: content("directional-policy"),
+                fact: fact(50),
+                source_policy: model::label("compiled-completion-policy"),
+                witness: None,
+            },
+        },
+    }
+}
+
+fn registered_axis<H: RulesCommandHandler>(
+    fixture: &Fixture,
+    current: &Checkpoint,
+    input: RulesCommandInput<'_>,
+    handler: &H,
+) -> Result<Checkpoint, df_engine::command_entry::CommandRejection<H::Rejection>> {
+    use df_content::catalog::{CatalogEntry, CatalogLimits, CatalogSnapshot};
+    use df_engine::command_entry::{
+        CommandEntryContext, CommandEntryLimits, decide_registered_command,
+    };
+    use df_model::commands::CommandLimits;
+    use df_rules::{DispatchRegistry, HandlerRegistration};
+
+    let selector = model::label("actual-completion-with-axes");
+    let entries = [CatalogEntry::new(
+        &fixture.registration.source,
+        b"complete synthetic source clause",
+    )];
+    let catalog = CatalogSnapshot::from_published(
+        &fixture.pins.rules.catalog,
+        &fixture.pins,
+        b"complete synthetic catalog",
+        &entries,
+        CatalogLimits {
+            max_complete_bytes: 64,
+            max_entries: 1,
+            max_item_bytes: 64,
+            max_total_item_bytes: 64,
+        },
+    )
+    .unwrap();
+    let registrations = [HandlerRegistration::new(
+        &selector,
+        &fixture.registration.source,
+        handler,
+    )];
+    let registry = DispatchRegistry::from_catalog(catalog, &registrations, 1).unwrap();
+    decide_registered_command(
+        input,
+        current,
+        CommandEntryContext {
+            current_basis: current.basis(),
+            admitted_pins: &fixture.pins,
+            inventory: fixture.inventory(),
+            limits: CommandEntryLimits {
+                command: CommandLimits {
+                    maximum_records: 100,
+                    maximum_text_bytes: 256,
+                    maximum_retained_bytes: 1024 * 1024,
+                },
+                maximum_staged_bytes: 1024 * 1024,
+            },
+        },
+        &registry,
+        &selector,
+        &fixture.registration.source,
+    )
+}
+
+fn registered_completed_axis(
+    fixture: &Fixture,
+    source: &SourceOwner,
+    axis_owner: &RegisteredAxisOwner,
+    current: &Checkpoint,
+    input: &GameInput,
+) -> Result<
+    Checkpoint,
+    df_engine::command_entry::CommandRejection<
+        RelationshipAxisCommandError<Error, AxisOwnerRefusal>,
+    >,
+> {
+    let inner = fixture.inner(source, current);
+    let requests = fixture.requests(current);
+    let reactions = RelationshipReactionHandler {
+        command_handler: &inner,
+        owner: source,
+        current_basis: current.basis(),
+        admitted_pins: &fixture.pins,
+        inventory: fixture.inventory(),
+        requests: &requests,
+        entries: &fixture.entries,
+        limits: limits(),
+    };
+    let changes = [completed_axis_change(RelationshipAxis::Affection)];
+    let axes = RelationshipAxisHandler {
+        command_handler: &reactions,
+        owner: axis_owner,
+        current_basis: current.basis(),
+        admitted_pins: &fixture.pins,
+        inventory: fixture.inventory(),
+        changes: &changes,
+        limits: axis_staging_limits(),
+    };
+    registered_axis(
+        fixture,
+        current,
+        RulesCommandInput {
+            command: input,
+            supplied_draws: &[],
+        },
+        &axes,
+    )
+}
+
+#[test]
+fn registered_axis_completion_preserves_categorical_reaction_and_exact_replay() {
+    let fixture = Fixture::new();
+    let current = fixture.current();
+    let input = fixture.input(&current);
+    let source = SourceOwner::new(&fixture);
+    let owner = RegisteredAxisOwner::default();
+    let original = current.clone();
+    let staged = registered(&fixture, &source, &current, &input).unwrap();
+    let mut expected = staged.state().clone();
+    expected.relationships[1].affection =
+        completed_axis_change(RelationshipAxis::Affection).replacement;
+    let candidate = registered_completed_axis(&fixture, &source, &owner, &current, &input).unwrap();
+    assert_eq!(candidate.state(), &expected);
+    assert_eq!(
+        candidate.state().relationships[0].state,
+        model::label("receptive")
+    );
+    assert_eq!(
+        candidate.state().relationships[1].affection,
+        completed_axis_change(RelationshipAxis::Affection).replacement
+    );
+    assert_eq!(current, original);
+    assert_eq!(
+        registered_completed_axis(&fixture, &source, &owner, &current, &input).unwrap(),
+        candidate
+    );
+}
+
+#[test]
+fn registered_axis_handler_admits_all_seven_axes_without_touching_siblings() {
+    let fixture = Fixture::new();
+    let current = fixture.current();
+    let original = current.clone();
+    let input = fixture.input(&current);
+    for axis in [
+        RelationshipAxis::Trust,
+        RelationshipAxis::Affection,
+        RelationshipAxis::Respect,
+        RelationshipAxis::Fear,
+        RelationshipAxis::Suspicion,
+        RelationshipAxis::Debt,
+        RelationshipAxis::Familiarity,
+    ] {
+        let source = SourceOwner::new(&fixture);
+        let owner = RegisteredAxisOwner::default();
+        let inner = fixture.inner(&source, &current);
+        let changes = [completed_axis_change(axis)];
+        let handler = RelationshipAxisHandler {
+            command_handler: &inner,
+            owner: &owner,
+            current_basis: current.basis(),
+            admitted_pins: &fixture.pins,
+            inventory: fixture.inventory(),
+            changes: &changes,
+            limits: axis_staging_limits(),
+        };
+        let staged = stage_handler(
+            &inner,
+            &fixture.pins,
+            RulesCommandInput {
+                command: &input,
+                supplied_draws: &[],
+            },
+            &current,
+            1024 * 1024,
+        )
+        .unwrap();
+        let candidate = registered_axis(
+            &fixture,
+            &current,
+            RulesCommandInput {
+                command: &input,
+                supplied_draws: &[],
+            },
+            &handler,
+        )
+        .unwrap();
+        let mut expected = staged.state().clone();
+        let record = &mut expected.relationships[1];
+        let destination = match axis {
+            RelationshipAxis::Trust => &mut record.trust,
+            RelationshipAxis::Affection => &mut record.affection,
+            RelationshipAxis::Respect => &mut record.respect,
+            RelationshipAxis::Fear => &mut record.fear,
+            RelationshipAxis::Suspicion => &mut record.suspicion,
+            RelationshipAxis::Debt => &mut record.debt,
+            RelationshipAxis::Familiarity => &mut record.familiarity,
+        };
+        *destination = completed_axis_change(axis).replacement;
+        assert_eq!(candidate.state(), &expected);
+        assert_eq!(candidate.pins(), &fixture.pins);
+        assert_eq!(
+            (
+                owner.application_calls.get(),
+                owner.admissions.get(),
+                owner.validations.get()
+            ),
+            (1, 1, 1)
+        );
+        assert_eq!(current, original);
+    }
+}
+
+#[test]
+fn axis_command_stale_actor_source_and_pending_refuse_before_mechanics() {
+    let fixture = Fixture::new();
+    let mut pending = fixture.state();
+    pending.pending.push(PendingResolution {
+        id: ResolutionId::from_bytes(&[71; 16]).unwrap(),
+        basis: model::basis(),
+        continuation: model::label("continuation"),
+        window: ResolutionWindow {
+            id: WindowId::from_bytes(&[72; 16]).unwrap(),
+            phase: TriggerPhase::BeforeConsequence,
+            causal_fact: fact(30),
+            source: model::rule(),
+            timer: None,
+        },
+        next: PendingInput::Roll {
+            participant: model::member(3),
+            sides: vec![6],
+            source: model::rule(),
+        },
+        choices: vec![],
+        draw_ordinals: vec![],
+        spent: vec![],
+        rulings: vec![],
+    });
+    let pending = fixture.checkpoint(pending);
+    let base = fixture.current();
+    for dimension in ["basis", "revision", "actor", "source", "pending", "pins"] {
+        let current = if dimension == "pending" {
+            &pending
+        } else {
+            &base
+        };
+        let original = current.clone();
+        let source = SourceOwner::new(&fixture);
+        let owner = RegisteredAxisOwner::default();
+        let mut input = fixture.input(current);
+        let GameInput::Game(command) = &mut input else {
+            unreachable!()
+        };
+        let mut pins = fixture.pins.clone();
+        match dimension {
+            "basis" => command.basis.revision = model::revision(2, 7),
+            "revision" => command.observed_revision = model::revision(2, 7),
+            "actor" => {
+                let GameCommand::ProposeAction { actor, .. } = &mut command.command else {
+                    unreachable!()
+                };
+                *actor = model::entity(5);
+            }
+            "source" => owner.withdrawn.set(true),
+            "pins" => pins.content.content = model::label("stale-content"),
+            "pending" => {}
+            _ => unreachable!(),
+        }
+        let inner = fixture.inner(&source, current);
+        let changes = [completed_axis_change(RelationshipAxis::Affection)];
+        let handler = RelationshipAxisHandler {
+            command_handler: &inner,
+            owner: &owner,
+            current_basis: current.basis(),
+            admitted_pins: &pins,
+            inventory: fixture.inventory(),
+            changes: &changes,
+            limits: axis_staging_limits(),
+        };
+        assert!(
+            handler
+                .stage(
+                    RulesCommandInput {
+                        command: &input,
+                        supplied_draws: &[]
+                    },
+                    current,
+                )
+                .is_err(),
+            "{dimension}"
+        );
+        assert_eq!(source.command_calls.get(), 0, "{dimension}");
+        assert_eq!(owner.admissions.get(), 0, "{dimension}");
+        assert_eq!(current, &original);
+    }
+}
+
+#[test]
+fn axis_command_requires_current_operation_fact_and_exact_source_policy() {
+    let fixture = Fixture::new();
+    let current = fixture.current();
+    let original = current.clone();
+    let input = fixture.input(&current);
+    for dimension in [
+        "historical",
+        "missing",
+        "policy",
+        "source",
+        "witness",
+        "baseline",
+    ] {
+        let source = SourceOwner::new(&fixture);
+        let owner = RegisteredAxisOwner::default();
+        let inner = fixture.inner(&source, &current);
+        let mut change = completed_axis_change(RelationshipAxis::Affection);
+        let RelationshipAxisProvenance::AcceptedFact {
+            source: source_ref,
+            fact: id,
+            source_policy,
+            witness,
+        } = &mut change.replacement.provenance
+        else {
+            unreachable!()
+        };
+        match dimension {
+            "historical" => *id = fact(30),
+            "missing" => *id = fact(99),
+            "policy" => *source_policy = model::label("unaccepted-policy"),
+            "source" => *source_ref = content("authored-reaction"),
+            "witness" => *witness = Some(record(31)),
+            "baseline" => {
+                change.replacement.provenance = RelationshipAxisProvenance::AuthoredBaseline {
+                    source: content("directional-policy"),
+                }
+            }
+            _ => unreachable!(),
+        }
+        let handler = RelationshipAxisHandler {
+            command_handler: &inner,
+            owner: &owner,
+            current_basis: current.basis(),
+            admitted_pins: &fixture.pins,
+            inventory: fixture.inventory(),
+            changes: &[change],
+            limits: axis_staging_limits(),
+        };
+        assert!(
+            handler
+                .stage(
+                    RulesCommandInput {
+                        command: &input,
+                        supplied_draws: &[]
+                    },
+                    &current,
+                )
+                .is_err(),
+            "{dimension}"
+        );
+        assert_eq!(current, original);
+        assert_eq!(owner.validations.get(), 0);
+    }
+}
+
+#[test]
+fn axis_command_duplicate_and_last_source_refusal_publish_no_partial_candidate() {
+    let fixture = Fixture::new();
+    let current = fixture.current();
+    let original = current.clone();
+    let input = fixture.input(&current);
+    for duplicate in [true, false] {
+        let source = SourceOwner::new(&fixture);
+        let owner = RegisteredAxisOwner::default();
+        if !duplicate {
+            owner.refuse_at.set(Some(2));
+        }
+        let inner = fixture.inner(&source, &current);
+        let changes = [
+            completed_axis_change(RelationshipAxis::Affection),
+            completed_axis_change(if duplicate {
+                RelationshipAxis::Affection
+            } else {
+                RelationshipAxis::Trust
+            }),
+        ];
+        let handler = RelationshipAxisHandler {
+            command_handler: &inner,
+            owner: &owner,
+            current_basis: current.basis(),
+            admitted_pins: &fixture.pins,
+            inventory: fixture.inventory(),
+            changes: &changes,
+            limits: axis_staging_limits(),
+        };
+        let result = handler.stage(
+            RulesCommandInput {
+                command: &input,
+                supplied_draws: &[],
+            },
+            &current,
+        );
+        assert_eq!(
+            result,
+            Err(RelationshipAxisCommandError::Axis(if duplicate {
+                RelationshipAxisStagingError::DuplicateDirection
+            } else {
+                RelationshipAxisStagingError::Source(AxisOwnerRefusal::UnacceptedSource)
+            }))
+        );
+        assert_eq!(current, original);
+        assert_eq!(owner.validations.get(), usize::from(!duplicate));
+    }
+}
+
+#[test]
+fn axis_command_capacity_refuses_before_native_owner_or_inner_stage() {
+    let fixture = Fixture::new();
+    let current = fixture.current();
+    let original = current.clone();
+    let input = fixture.input(&current);
+    let mut count = axis_staging_limits();
+    count.maximum_changes = 0;
+    let mut inventory = axis_staging_limits();
+    inventory.maximum_inventory_records = 1;
+    let mut retained = axis_staging_limits();
+    retained.maximum_checkpoint_bytes = 1;
+    let mut pass = axis_staging_limits();
+    pass.maximum_pass_bytes = 1;
+    let mut records = axis_staging_limits();
+    records.checkpoint.maximum_records = 1;
+    for limits in [count, inventory, retained, pass, records] {
+        let source = SourceOwner::new(&fixture);
+        let owner = RegisteredAxisOwner::default();
+        let inner = fixture.inner(&source, &current);
+        let changes = [completed_axis_change(RelationshipAxis::Affection)];
+        let handler = RelationshipAxisHandler {
+            command_handler: &inner,
+            owner: &owner,
+            current_basis: current.basis(),
+            admitted_pins: &fixture.pins,
+            inventory: fixture.inventory(),
+            changes: &changes,
+            limits,
+        };
+        assert!(
+            handler
+                .stage(
+                    RulesCommandInput {
+                        command: &input,
+                        supplied_draws: &[]
+                    },
+                    &current,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            (
+                owner.application_calls.get(),
+                owner.admissions.get(),
+                source.command_calls.get()
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(current, original);
+    }
+}
+
+struct ObservedAxisInner<'a> {
+    fixture: &'a Fixture,
+    owner: &'a SourceOwner,
+    command: Cell<usize>,
+    draws: Cell<usize>,
+    corrupt_axis: bool,
+}
+impl RulesCommandHandler for ObservedAxisInner<'_> {
+    type Rejection = FulfillmentError<SourceRefusal>;
+    fn pins(&self) -> &CheckpointPins {
+        &self.fixture.pins
+    }
+    fn bound_source(&self) -> Option<&RuleReference> {
+        Some(&self.fixture.registration.source)
+    }
+    fn stage(
+        &self,
+        input: RulesCommandInput<'_>,
+        current: &Checkpoint,
+    ) -> Result<Checkpoint, Self::Rejection> {
+        self.command.set(input.command as *const GameInput as usize);
+        self.draws.set(input.supplied_draws.as_ptr() as usize);
+        let staged = self
+            .fixture
+            .inner(self.owner, current)
+            .stage(input, current)?;
+        if !self.corrupt_axis {
+            return Ok(staged);
+        }
+        let mut state = staged.state().clone();
+        state.relationships[0].trust.value = model::label("conflicting-inner-axis");
+        Ok(Checkpoint::new(
+            staged.schema(),
+            staged.basis(),
+            staged.pins().clone(),
+            state,
+            self.fixture.inventory(),
+            model::limits(),
+        )
+        .unwrap())
+    }
+}
+
+#[test]
+fn axis_command_preserves_borrowed_input_source_and_rejects_inner_axis_conflict() {
+    let fixture = Fixture::new();
+    let current = fixture.current();
+    let original = current.clone();
+    let input = fixture.input(&current);
+    let supplied: [ActualDraw; 0] = [];
+    for corrupt_axis in [false, true] {
+        let source = SourceOwner::new(&fixture);
+        let owner = RegisteredAxisOwner::default();
+        let inner = ObservedAxisInner {
+            fixture: &fixture,
+            owner: &source,
+            command: Cell::new(0),
+            draws: Cell::new(0),
+            corrupt_axis,
+        };
+        let changes = [completed_axis_change(RelationshipAxis::Affection)];
+        let handler = RelationshipAxisHandler {
+            command_handler: &inner,
+            owner: &owner,
+            current_basis: current.basis(),
+            admitted_pins: &fixture.pins,
+            inventory: fixture.inventory(),
+            changes: &changes,
+            limits: axis_staging_limits(),
+        };
+        assert_eq!(handler.bound_source(), Some(&fixture.registration.source));
+        let result = registered_axis(
+            &fixture,
+            &current,
+            RulesCommandInput {
+                command: &input,
+                supplied_draws: &supplied,
+            },
+            &handler,
+        );
+        assert_eq!(result.is_err(), corrupt_axis);
+        assert_eq!(inner.command.get(), &input as *const GameInput as usize);
+        assert_eq!(inner.draws.get(), supplied.as_ptr() as usize);
         assert_eq!(current, original);
     }
 }
