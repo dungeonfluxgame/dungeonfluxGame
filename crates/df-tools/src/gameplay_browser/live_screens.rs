@@ -259,6 +259,9 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
             .collect(),
         art,
         art_fallback,
+        cast: Vec::new(),
+        family: crate::presentation::scene_family(&input.scene.scene_asset),
+        scene_key: input.scene.title.clone(),
     })
 }
 
@@ -585,12 +588,24 @@ pub(super) fn render(
     recovery(client, &dock)
 }
 
+/// The cast of the view being drawn, from the one function that derives it.
+pub(super) fn current_cast(client: &Rc<RefCell<Client>>) -> Vec<crate::presentation::StageActor> {
+    client
+        .borrow()
+        .views
+        .as_ref()
+        .and_then(|views| views.current())
+        .map(crate::presentation::scene_cast)
+        .unwrap_or_default()
+}
+
 fn render_display(
     client: &Rc<RefCell<Client>>,
     view: &Element,
     input: &SceneInput<'_>,
 ) -> Result<(), JsValue> {
-    let model = tv_model(input)?;
+    let mut model = tv_model(input)?;
+    model.cast = current_cast(client);
     if client.borrow().live.tv.is_none() {
         let document = client.borrow().document.clone();
         let stage = TvStage::mount(&document, view)?;

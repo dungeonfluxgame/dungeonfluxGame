@@ -11,6 +11,7 @@ use super::*;
 const LEGACY: &str = include_str!("live_legacy.css");
 const PLAYER: &str = include_str!("live_player.css");
 const TV: &str = include_str!("live_tv.css");
+const MOTION: &str = include_str!("live_fx.css");
 
 /// Adds the live screen rules once; a second call on the same page is a no-op.
 pub(super) fn install(document: &Document) -> Result<(), JsValue> {
@@ -19,7 +20,7 @@ pub(super) fn install(document: &Document) -> Result<(), JsValue> {
     }
     let style = document.create_element("style")?;
     style.set_attribute("data-live-theme", "")?;
-    style.set_text_content(Some(&format!("{LEGACY}\n{PLAYER}\n{TV}")));
+    style.set_text_content(Some(&format!("{LEGACY}\n{PLAYER}\n{TV}\n{MOTION}")));
     let host = match document.query_selector("head")? {
         Some(head) => head,
         None => document

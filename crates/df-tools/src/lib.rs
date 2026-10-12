@@ -24,6 +24,12 @@ mod qualification_verdict;
 mod music_score;
 mod voice_line;
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod presentation;
+mod stage_art;
+#[cfg(any(target_arch = "wasm32", test))]
+mod stage_director;
+
 /// Source identity injected by the reproducible fixture build command.
 pub const BUILD_ID: &str = match option_env!("DF_FIXTURE_BUILD") {
     Some(value) => value,

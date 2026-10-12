@@ -66,7 +66,7 @@ js-sys = "=0.3.106"
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 gloo-timers = { version = "0.3", features = ["futures"] }
-web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "HtmlButtonElement", "Event", "Location", "Performance", "Navigator", "Request", "RequestInit", "Response", "Crypto", "HtmlSelectElement", "HtmlTextAreaElement", "AbortController", "AbortSignal", "RequestMode", "RequestCredentials", "RequestCache", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "Node", "Storage", "HtmlAudioElement", "HtmlMediaElement", "DomTokenList", "KeyboardEvent", "Blob", "BlobPropertyBag", "Url", "console"] }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "HtmlButtonElement", "Event", "Location", "Performance", "Navigator", "Request", "RequestInit", "Response", "Crypto", "HtmlSelectElement", "HtmlTextAreaElement", "AbortController", "AbortSignal", "RequestMode", "RequestCredentials", "RequestCache", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "Node", "Storage", "HtmlAudioElement", "HtmlMediaElement", "DomTokenList", "KeyboardEvent", "Blob", "BlobPropertyBag", "Url", "console", "AudioContext", "AudioBuffer", "AudioBufferSourceNode", "AudioDestinationNode", "AudioNode", "AudioScheduledSourceNode", "AudioParam", "GainNode", "BaseAudioContext"] }
 # Web Audio interfaces for the music director. Declared apart from the list above so work on
 # that list and on this one merge cleanly; Cargo unions the features of both entries.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

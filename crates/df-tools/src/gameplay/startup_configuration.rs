@@ -442,6 +442,24 @@ const GENERATED_STEMS: &[&str] = &[
     "portrait-bandit-full",
     "portrait-courier-full",
 ];
+/// Fixed names of the display's sound effects, looked up as
+/// `assets/ui/generated/sfx/<name>.mp3` and served at `/assets/ui/generated/sfx/<name>`.
+/// A missing file is not served, which the display treats as silence.
+const SFX_NAMES: &[&str] = &[
+    "dice-rattle",
+    "dice-land",
+    "hit",
+    "miss",
+    "critical",
+    "turn-chime",
+    "hero-ready",
+    "party-gathered",
+    "scene-transition",
+    "victory-fanfare",
+    "defeat-toll",
+    "bubble-pop",
+    "heal-chime",
+];
 const GENERATED_EXTENSIONS: [(&str, &str); 3] = [
     ("webp", "image/webp"),
     ("png", "image/png"),
@@ -464,11 +482,32 @@ pub(super) fn load_extra_assets(
     let mut loaded = Vec::new();
     let mut total = 0usize;
     let mut candidates = Vec::new();
-    for stem in GENERATED_STEMS.iter().copied().chain(
-        super::adventure::generated_stems()
-            .iter()
-            .map(String::as_str),
-    ) {
+    let named: Vec<&str> = GENERATED_STEMS
+        .iter()
+        .copied()
+        .chain(
+            super::adventure::generated_stems()
+                .iter()
+                .map(String::as_str),
+        )
+        .collect();
+    // Every portrait may have a transparent cut-out twin, named by the one shared rule.
+    let sprites: Vec<String> = named
+        .iter()
+        .filter_map(|stem| crate::stage_art::sprite_stem(stem))
+        .collect();
+    // The 2:3 portrait is the display's fallback when a cut-out is absent.
+    let fulls: Vec<String> = named
+        .iter()
+        .filter(|stem| stem.starts_with("portrait-") && !stem.ends_with("-full"))
+        .map(|stem| format!("{stem}-full"))
+        .collect();
+    let stems = named
+        .iter()
+        .copied()
+        .chain(sprites.iter().map(String::as_str))
+        .chain(fulls.iter().map(String::as_str));
+    for stem in stems {
         for (extension, mime) in GENERATED_EXTENSIONS {
             candidates.push((
                 asset_root
@@ -478,6 +517,13 @@ pub(super) fn load_extra_assets(
                 mime,
             ));
         }
+    }
+    for name in SFX_NAMES {
+        candidates.push((
+            asset_root.join("generated/sfx").join(format!("{name}.mp3")),
+            format!("/assets/ui/generated/sfx/{name}"),
+            "audio/mpeg",
+        ));
     }
     for file in CONCEPT_FILES {
         candidates.push((
@@ -674,6 +720,32 @@ pub(super) fn storyteller_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extra_assets_serve_listed_sound_effects_and_sprite_twins_only() {
+        let root = std::env::temp_dir().join(format!("df-extra-assets-{}", std::process::id()));
+        let generated = root.join("generated");
+        std::fs::create_dir_all(generated.join("sfx")).unwrap();
+        std::fs::write(generated.join("sfx/hit.mp3"), b"hit").unwrap();
+        std::fs::write(generated.join("sfx/unlisted.mp3"), b"no").unwrap();
+        std::fs::write(generated.join("sprite-hero-1.png"), b"sprite").unwrap();
+        std::fs::write(generated.join("sprite-unknown.png"), b"no").unwrap();
+        std::fs::write(generated.join("portrait-courier-full.png"), b"full").unwrap();
+        let loaded = load_extra_assets(&root).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        let served: Vec<(&str, &str)> = loaded
+            .iter()
+            .map(|asset| (asset.url.as_str(), asset.mime))
+            .collect();
+        assert_eq!(
+            served,
+            [
+                ("/assets/ui/generated/portrait-courier-full", "image/png"),
+                ("/assets/ui/generated/sprite-hero-1", "image/png"),
+                ("/assets/ui/generated/sfx/hit", "audio/mpeg"),
+            ]
+        );
+    }
 
     fn storyteller_inputs(values: [Option<&str>; 6]) -> StorytellerInputs {
         let [credential, mode, model, budget, cache, deadline] =
