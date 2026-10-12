@@ -1896,6 +1896,271 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-11T20:13:57+00:00",
       "updated_at": "2026-10-11T20:13:57+00:00"
+    },
+    {
+      "id": "PLAY-N01",
+      "feature_id": "F38",
+      "title": "Roll a backstory dossier for every NPC in a generated adventure",
+      "objective": "Each named NPC (quest-giver, antagonist, contact, campaign villain and lieutenant) gets a dossier rolled from tables on the adventure seed: origin and trade, a want, a fear, a bond and a flaw, a personal tie to this adventure's stake, villain or faction, what they know in three tiers (says freely, says once trusted, never says), a starting attitude, a speaking style, and how they take flattery, flirting, threats and lies. The dossier is part of the persisted adventure record.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "content/adventure-tables/npc-*.json",
+        "crates/df-tools/src/gameplay/adventure/dossier*.rs",
+        "crates/df-tools/src/gameplay/adventure/record.rs",
+        "planning/adventure-generator.md"
+      ],
+      "acceptance_json": [
+        "Every NPC in three generated seeds and one generated campaign has a complete dossier.",
+        "Every dossier names at least one concrete tie to that adventure's stake, villain, faction or another cast member; no dossier is interchangeable between adventures.",
+        "The same seed yields the same dossiers; the rolls are recorded with the DM's rolls.",
+        "Knowledge tiers never place the adventure's secret terms in the freely-said tier.",
+        "Dossier content is family-suitable and stays inside standard 2024 fifth-edition lore and tone.",
+        "An adventure record saved before this change still loads.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native unit tests for determinism, completeness, tie coherence and tier safety.",
+        "Read the dossiers printed for three seeds and judge them as a Dungeon Master would."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M4",
+        "milestone_goal": "Living cast: every NPC has a rolled backstory tied to the adventure and answers typed or spoken questions in depth, in character.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11: NPCs need a backstory system that guides how they respond, fleshed out but tied into the story. Today an NPC is a name, a role, a mannerism and one secret; typed replies have nothing deeper to draw on, so answers are shallow and generic.",
+        "objective": "Each named NPC (quest-giver, antagonist, contact, campaign villain and lieutenant) gets a dossier rolled from tables on the adventure seed: origin and trade, a want, a fear, a bond and a flaw, a personal tie to this adventure's stake, villain or faction, what they know in three tiers (says freely, says once trusted, never says), a starting attitude, a speaking style, and how they take flattery, flirting, threats and lies. The dossier is part of the persisted adventure record.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Roll a backstory dossier for every NPC in a generated adventure",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "B-F38-D01",
+          "B-F38-D02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/interaction-engine.md",
+            "sha256": "1bad7c28609ac5e5a51a3ea0b3c1fae17ebeb6380dbdb8fce582085a8ede354f",
+            "sections": [
+              "Persistent social and epistemic model",
+              "Grounded creative speech and listener-safe generation"
+            ]
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "b9e2c70f95e5465d8195342133f7acece54662bccb78363ed474a7e84c7c513f"
+          }
+        ],
+        "input_revision": "2d0690e83db44f40549727a9e55db5f01bcb40aa",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [
+          "Changing reply generation (PLAY-N02)",
+          "Relationships that persist across chapters"
+        ],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T00:07:35+00:00",
+      "updated_at": "2026-10-12T00:07:35+00:00"
+    },
+    {
+      "id": "PLAY-N02",
+      "feature_id": "F38",
+      "title": "Guide NPC replies by backstory, attitude and what they may reveal",
+      "objective": "When a player talks to an NPC, the server builds the reply from that NPC's dossier, the conversation so far and the NPC's current attitude toward that hero. Questions get in-depth, in-character answers; persuasion, deception, intimidation and flirting are recognised as social approaches and answered according to the dossier (warmed, amused, deflecting, offended), with trust-gated knowledge released only once earned. Attitude uses the standard Friendly, Indifferent, Hostile scale and is owned and saved by the server.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/npc_reply.rs",
+        "crates/df-tools/src/gameplay/dialogue.rs",
+        "crates/df-tools/src/gameplay/adventure/dossier*.rs",
+        "crates/df-protocol/proto/gameplay.proto"
+      ],
+      "acceptance_json": [
+        "Asking an NPC about their past, their tie to the stake and the villain yields answers consistent with the dossier across a ten-line conversation, with no contradiction.",
+        "Trust-gated knowledge is withheld at the starting attitude and given after the attitude improves.",
+        "Never-say knowledge and the adventure's secret terms never appear in any reply, including under direct demands, role-play framing and instructions hidden in the player's line.",
+        "Flirting gets an in-character, family-suitable reply that fits the dossier; it never becomes explicit and never grants a mechanical benefit on its own.",
+        "Attitude changes are decided by the server, shown to the table, and survive reload.",
+        "With the text provider off or failing, the NPC still answers from prepared dossier lines.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests with a faithful fake provider for tier gating, secret safety and fallback.",
+        "A bounded live-provider conversation script (spend-capped) read for depth and consistency.",
+        "Real browser observation of a typed conversation on the phone and its lines on the display."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M4",
+        "milestone_goal": "Living cast: every NPC has a rolled backstory tied to the adventure and answers typed or spoken questions in depth, in character.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11: NPCs must respond in depth to a player's spoken dialogue, questions or seductions. The current reply call sees only the scene facts and the last line.",
+        "objective": "When a player talks to an NPC, the server builds the reply from that NPC's dossier, the conversation so far and the NPC's current attitude toward that hero. Questions get in-depth, in-character answers; persuasion, deception, intimidation and flirting are recognised as social approaches and answered according to the dossier (warmed, amused, deflecting, offended), with trust-gated knowledge released only once earned. Attitude uses the standard Friendly, Indifferent, Hostile scale and is owned and saved by the server.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Guide NPC replies by backstory, attitude and what they may reveal",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "F38-DELIVER",
+          "B-F38-D02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/interaction-engine.md",
+            "sha256": "1bad7c28609ac5e5a51a3ea0b3c1fae17ebeb6380dbdb8fce582085a8ede354f",
+            "sections": [
+              "Persistent social and epistemic model",
+              "Grounded creative speech and listener-safe generation"
+            ]
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "b9e2c70f95e5465d8195342133f7acece54662bccb78363ed474a7e84c7c513f"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          }
+        ],
+        "input_revision": "2d0690e83db44f40549727a9e55db5f01bcb40aa",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A model critic's assurance is not secret safety: gate what enters the prompt.",
+          "Attitude must not become a hidden custom rule; a mechanical effect needs the standard Influence check or a disclosed custom-rule mark."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T00:07:35+00:00",
+      "updated_at": "2026-10-12T00:07:35+00:00"
+    },
+    {
+      "id": "PLAY-N03",
+      "feature_id": "F09",
+      "title": "Let players speak to NPCs: hold-to-talk on the phone",
+      "objective": "A hold-to-talk control on the player page records the player's voice, the server transcribes it under a spend cap, the player sees and can cancel or correct the transcript, and the confirmed line goes through the same dialogue path as a typed line. Typed input remains the fallback.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-tools/src/gameplay/",
+        "crates/df-protocol/proto/gameplay.proto",
+        "development/run-gameplay.sh"
+      ],
+      "acceptance_json": [
+        "Holding the control, speaking and releasing produces a transcript the player can send or cancel.",
+        "The confirmed line reaches the NPC exactly as a typed line would and is shown on the display.",
+        "Microphone refusal, an empty recording, provider failure and an exhausted budget each show a clear message and leave typing available.",
+        "No audio or transcript is logged; the key is read only from the process environment.",
+        "Works on the serving machine (localhost) and documents what a phone on the network needs.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests with a faithful fake transcriber for success, failure, oversize and budget.",
+        "Real browser observation with a real microphone or a supplied audio capture device."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M4",
+        "milestone_goal": "Living cast: every NPC has a rolled backstory tied to the adventure and answers typed or spoken questions in depth, in character.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11 refers to player speech-to-text dialogue; only typed dialogue exists.",
+        "objective": "A hold-to-talk control on the player page records the player's voice, the server transcribes it under a spend cap, the player sees and can cancel or correct the transcript, and the confirmed line goes through the same dialogue path as a typed line. Typed input remains the fallback.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Let players speak to NPCs: hold-to-talk on the phone",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "F38-DELIVER"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/interaction-engine.md",
+            "sha256": "1bad7c28609ac5e5a51a3ea0b3c1fae17ebeb6380dbdb8fce582085a8ede354f",
+            "sections": [
+              "Persistent social and epistemic model",
+              "Grounded creative speech and listener-safe generation"
+            ]
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          }
+        ],
+        "input_revision": "2d0690e83db44f40549727a9e55db5f01bcb40aa",
+        "required_capabilities": {
+          "audio": true,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "Browsers only grant the microphone on localhost or HTTPS."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 95,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T00:07:35+00:00",
+      "updated_at": "2026-10-12T00:07:35+00:00"
     }
   ],
   "dependencies": [
@@ -1982,6 +2247,14 @@
     {
       "task_id": "PLAY-D03",
       "prerequisite_task_id": "PLAY-A01"
+    },
+    {
+      "task_id": "PLAY-N02",
+      "prerequisite_task_id": "PLAY-N01"
+    },
+    {
+      "task_id": "PLAY-N03",
+      "prerequisite_task_id": "PLAY-N02"
     }
   ]
 }
