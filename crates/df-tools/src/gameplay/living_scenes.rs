@@ -21,6 +21,9 @@ use std::{
 use df_protocol::common as rpc;
 use tokio::{sync::watch, task::JoinSet, time::Instant};
 
+// PLAY-V09: scene plates (the whole scene as one composed picture), made just in time.
+mod plates;
+
 use super::{
     adventure::{dossier::Attitude, setting::SettingKind},
     imagery::{
@@ -451,6 +454,10 @@ struct State {
     failed_faces: BTreeSet<(String, Face)>,
     last_revision: Option<(u64, u64)>,
     budget_exhausted: bool,
+    /// PLAY-V09: the scene's plate is on screen and covers the cut-outs and the backdrop.
+    plate_covers: bool,
+    /// PLAY-V09: the face the mood last asked for on each character, for the plate director.
+    plate_wants: BTreeMap<String, Face>,
 }
 
 /// What the worker should start.
@@ -509,6 +516,8 @@ impl Drop for WorkerGuard {
 pub(super) struct LivingScenes {
     inner: Option<Arc<Inner>>,
     _worker: Option<Arc<WorkerGuard>>,
+    /// PLAY-V09: the plate director, when plates are on.
+    plates: Option<plates::Plates>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -533,6 +542,7 @@ impl LivingScenes {
         Self {
             inner: None,
             _worker: None,
+            plates: None,
         }
     }
 
@@ -543,6 +553,7 @@ impl LivingScenes {
         social: Arc<SocialLedger>,
         rating: ContentRating,
         timing: Timing,
+        plates_on: bool,
     ) -> Self {
         if !imagery.is_on() {
             return Self::disabled();
@@ -559,9 +570,11 @@ impl LivingScenes {
             origin,
         });
         let worker = tokio::spawn(Arc::clone(&inner).run());
+        let plates = plates_on.then(|| plates::Plates::start(Arc::clone(&inner)));
         Self {
             inner: Some(inner),
             _worker: Some(Arc::new(WorkerGuard(worker))),
+            plates,
         }
     }
 
@@ -580,6 +593,9 @@ impl LivingScenes {
             return;
         };
         inner.observe(stage);
+        if let Some(plates) = &self.plates {
+            plates.observe(message);
+        }
     }
 
     /// Adds the published art to a display view about to be sent. Presentation only: no other
@@ -588,6 +604,10 @@ impl LivingScenes {
         let Some(inner) = &self.inner else {
             return;
         };
+        // PLAY-V09: the scene plate goes to the display and to phones alike.
+        if let Some(plates) = &self.plates {
+            plates.apply_to_message(message);
+        }
         let Some(stage) = stage_of(message) else {
             return;
         };
@@ -620,6 +640,7 @@ impl Inner {
             state.sprites.clear();
             state.ready_backdrop = None;
             state.failed_faces.clear();
+            state.plate_wants.clear();
             state.last_revision = stage.revision;
         } else if stage.revision != state.last_revision {
             state.last_revision = stage.revision;
@@ -948,6 +969,11 @@ impl Inner {
         let mut jobs = Vec::new();
         if !in_combat {
             for (id, face) in &verdict.face_changes {
+                // PLAY-V09: the plate director edits the plate; a cut-out nobody sees is not drawn.
+                state.plate_wants.insert(id.clone(), *face);
+                if state.plate_covers && *face != Face::AUTHORED {
+                    continue;
+                }
                 if *face == Face::AUTHORED {
                     // The authored cut-out is the neutral, unhurt face: reverting costs nothing.
                     if state.sprites.remove(id).is_some() {
@@ -991,6 +1017,7 @@ impl Inner {
             && !state.refresh_in_flight
             && state.ready_backdrop.is_none()
             && !state.budget_exhausted
+            && !state.plate_covers
         {
             let worth = verdict.scene_worth_rendering;
             if let Some(reason) = state.pacer.refresh_due(now, in_combat, worth) {
@@ -1049,6 +1076,8 @@ impl State {
             failed_faces: BTreeSet::new(),
             last_revision: None,
             budget_exhausted: false,
+            plate_covers: false,
+            plate_wants: BTreeMap::new(),
         }
     }
 

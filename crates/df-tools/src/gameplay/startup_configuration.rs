@@ -1178,6 +1178,17 @@ pub(super) fn imagery_settings(
     }))
 }
 
+/// PLAY-V09: whether living scenes make a composed scene plate for every story scene. On unless
+/// `DF_GAMEPLAY_PLATES=off`; plates also need imagery on (a credential present). Invalid values
+/// are refused without echoing them; an empty value counts as unset.
+pub(super) fn plates_enabled(input: Result<String, VarError>) -> Result<bool, io::Error> {
+    match optional(input)?.as_deref() {
+        None | Some("" | "on") => Ok(true),
+        Some("off") => Ok(false),
+        Some(_) => Err(refused("DF_GAMEPLAY_PLATES")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

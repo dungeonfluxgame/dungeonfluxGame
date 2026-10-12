@@ -351,7 +351,7 @@ fn lighting_phrase(lighting: Lighting) -> &'static str {
     }
 }
 
-fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static str {
+pub(super) fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static str {
     let mature = rating == ContentRating::Mature;
     match expression {
         Expression::Neutral => "a calm, neutral expression",
@@ -382,7 +382,10 @@ fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static 
     }
 }
 
-fn appearance_phrase(appearance: Appearance, rating: ContentRating) -> Option<&'static str> {
+pub(super) fn appearance_phrase(
+    appearance: Appearance,
+    rating: ContentRating,
+) -> Option<&'static str> {
     let mature = rating == ContentRating::Mature;
     match appearance {
         Appearance::Unhurt => None,
