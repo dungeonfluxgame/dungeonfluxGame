@@ -206,3 +206,32 @@ minimum 20), `_DEADLINE_SECONDS` (default 45), `_CACHE`, plus the shared
 `DF_GAMEPLAY_CONTENT_RATING`. Expected cost of a 30-minute session at the defaults is at most
 40 calls, about 0.85 USD, and typically 15 to 25 calls (a repeated character and expression
 pair, and a repeated backdrop request, come from the cache for nothing), about 0.3 to 0.5 USD.
+
+## PLAY-H01: health-tier character art (2026-10-12)
+
+One tier definition (`df-tools/src/health_tier.rs`: Healthy over 75%, Hurt over 50%, Bloodied over
+25%, Critical above 0, Down at 0 or unconscious) feeds the server's art pipeline and both
+clients. The art pipeline makes one cut-out per character and tier below Healthy, from the
+character's full-body figure through the same image service, with closed-vocabulary phrases
+(`health_face_phrase`, `health_look_phrase`: mature adds blood, bruising and torn gear, restrained
+dirt, sweat and bruising). Health outranks mood at Bloodied or worse; above it the mood face wins.
+
+- Warm-up is background work in tier order Bloodied, Critical, Hurt, Down, one request at a time,
+  heroes, then the stage, then the adventure's fight cast, never during a fight, and never when
+  only the 10-call reserve is left; the tier a character is in right now is requested first. A
+  fight reads the cache only ("peek") and shows the nearest cached tier or the authored art.
+  A failed request is retried once after everything else.
+- Measured through the shipped adapter (16 variants for two heroes and two cast members): 13 to
+  15 s and 0.017 USD each, 339 KB average as WebP with alpha (a PNG of the same cut-out was 2.7
+  MB), so a two-hero, three-NPC adventure is 20 variants, about 0.34 USD and 5 minutes of
+  background time. Three of the first sixteen requests (all Critical) failed once and succeeded
+  when retried; the cause is not visible from outside the service (no failure is logged outside
+  telemetry), which is why one retry exists.
+- Portraits are crops of the full-body variant (head and shoulders by CSS background size and
+  position), not separate generations: one request per tier instead of two, identity cannot drift
+  between the portrait and the figure, and the crop read clearly at HUD size.
+- Cache keys include the hash of the reference art and the prompt, so replacing the base art
+  (for example a photographic re-shoot under the same file names) makes the old variants
+  unreachable and the warm-up makes new ones by itself. The prompts still say "Painterly cinematic
+  realism" (`HOUSE_STYLE`) and the backdrop prompts say "painting"; those two phrases need editing
+  for a live-action look, and editing them also changes the keys, so everything regenerates.
