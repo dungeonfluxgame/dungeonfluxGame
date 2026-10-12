@@ -8,6 +8,8 @@ use std::{collections::VecDeque, time::Duration};
 use super::{
     camera::{CameraPose, CameraRig, ShotName},
     director::{self, Anim, FALL_LANDS, FlashTone, PlanError, ReadyStyle, Step, Timeline},
+    feel::{self, FeelState, FeelView, ImpactClass, ImpactEffect},
+    framing::{self, Body},
     grid::{Cell, Grid},
     layout::{Cover, Layout},
     math::{Vec3, ease_in_out},
@@ -15,6 +17,7 @@ use super::{
         BadgeView, Beat, CameraCommand, CameraFocus, DieView, FLOAT_LIFETIME_S, FinishingBlow,
         FloatingText, Highlight, HitPoints, HudState, InitiativeShow, Side, Token, TokenId,
     },
+    particles::Particles,
     scene_file::BattleScene,
     sound::{SoundEvent, SoundKind, voice_for},
     status::{self, Status, StatusPose, StatusSet},
@@ -29,6 +32,8 @@ pub const MAX_PENDING_SOUNDS: usize = 64;
 const THUD_SECONDS: f32 = 0.32;
 /// Share of the fall at which the body reaches the ground (matches `FALL_LANDS`).
 const FALL_KNEEL: f32 = 0.55;
+/// The longest a roll card waits for the camera to settle on the fighters.
+const ROLL_CARD_MAX_WAIT_S: f32 = 1.6;
 /// An arrow that missed stays stuck in the ground this long before it is gone.
 const ARROW_STICK_SECONDS: f32 = 0.9;
 
@@ -173,9 +178,33 @@ pub struct FlashView {
     pub strength: f32,
 }
 
+/// A blow landing, as the HUD work can subscribe to it: who was hit and how heavily. Presentation
+/// only: the outcome is the server's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImpactEvent {
+    pub target: TokenId,
+    pub attacker: TokenId,
+    /// 0 (a graze) to 1 (a knockout): the same number that scales the camera shake.
+    pub intensity: f32,
+    pub class: ImpactClass,
+    pub critical: bool,
+    pub knockout: bool,
+    /// The target is a hero (the acting side's vignette pulses).
+    pub on_hero: bool,
+}
+
+/// Camera distance above which a shot counts as a wide shot (it gets the slow orbit drift).
+const WIDE_DISTANCE_M: f32 = 9.0;
+
 pub struct FrameView<'a> {
     pub camera: CameraPose,
     pub shake_px: (f32, f32),
+    /// Picture roll in degrees (shake and handheld sway).
+    pub roll_deg: f32,
+    /// Motion blur, radial punch, chromatic split, focus pull and vignette pulse for the post pass.
+    pub feel: FeelView,
+    /// Particle instances for the renderer (see `particles`).
+    pub particles: Vec<f32>,
     pub fade: f32,
     /// Far to near, so alpha blending is correct.
     pub figures: Vec<FigureView>,
@@ -219,6 +248,18 @@ pub struct Stage {
     dropped_beats: u32,
     next_float_id: u64,
     roll_card_left_s: f32,
+    /// A roll card waiting for the camera to arrive, and how long it has waited.
+    pending_roll_card: Option<(super::model::RollCard, f32)>,
+    feel: FeelState,
+    particles: Particles,
+    impacts: VecDeque<ImpactEvent>,
+    /// The tempo cue's intensity (0 calm to 1000 peak) that sets the handheld sway.
+    tempo_permille: u16,
+    /// Battle feel (shake, hit-stop, sway, blur, particles) on or off; off for measurements.
+    feel_enabled: bool,
+    last_angles: Option<(f32, f32)>,
+    /// Who the camera was last framed on, to pull focus when the subject changes.
+    last_framing: Option<(TokenId, Option<TokenId>)>,
 }
 
 fn flat_direction(from: Vec3, to: Vec3) -> Vec3 {
@@ -262,7 +303,35 @@ impl Stage {
             dropped_beats: 0,
             next_float_id: 0,
             roll_card_left_s: 0.0,
+            pending_roll_card: None,
+            feel: FeelState::new(),
+            particles: Particles::default(),
+            impacts: VecDeque::new(),
+            tempo_permille: 300,
+            feel_enabled: !reduced_motion,
+            last_angles: None,
+            last_framing: None,
         }
+    }
+
+    /// Sets the tempo cue's intensity (0 to 1000), which the handheld sway follows: calm is slow
+    /// and small, peak quicker and tighter. This is the value the display view already carries.
+    pub fn set_tempo_intensity(&mut self, permille: u16) {
+        self.tempo_permille = permille.min(1000);
+    }
+
+    /// Turns battle feel (shake, hit-stop, slow motion, sway, blur, particles) on or off.
+    pub fn set_feel_enabled(&mut self, enabled: bool) {
+        self.feel_enabled = enabled;
+        if !enabled {
+            self.feel = FeelState::new();
+        }
+    }
+
+    /// Takes the blows that landed since the last call, in order: the single impact event the
+    /// HUD work subscribes to (the page forwards it to its sink, as it does the sounds).
+    pub fn take_impacts(&mut self) -> Vec<ImpactEvent> {
+        self.impacts.drain(..).collect()
     }
 
     pub fn scene(&self) -> &BattleScene {
@@ -331,9 +400,17 @@ impl Stage {
         self.hud.round = round;
     }
 
+    /// Shows the roll card, but only once the camera has settled on the fighters: while it is
+    /// still moving to them the card would hang over the wrong picture. It waits at most
+    /// [`ROLL_CARD_MAX_WAIT_S`].
     pub fn show_roll_card(&mut self, card: super::model::RollCard) {
-        self.hud.roll_card = Some(card);
-        self.roll_card_left_s = ROLL_CARD_SECONDS;
+        if self.rig.is_panning() || self.camera_move_ahead() {
+            self.pending_roll_card = Some((card, 0.0));
+        } else {
+            self.pending_roll_card = None;
+            self.hud.roll_card = Some(card);
+            self.roll_card_left_s = ROLL_CARD_SECONDS;
+        }
     }
 
     pub fn set_initiative(&mut self, order: Vec<TokenId>) {
@@ -376,7 +453,7 @@ impl Stage {
             focus: focus.unwrap_or(CameraFocus::Scene),
             dolly: 1.0,
         };
-        if let Some(pose) = self.camera_pose_for(&command) {
+        if let Some((pose, _)) = self.camera_pose_for(&command) {
             self.rig.cut_to(pose);
         }
     }
@@ -401,7 +478,7 @@ impl Stage {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.playing.is_some() || !self.queue.is_empty()
+        self.playing.is_some() || !self.queue.is_empty() || self.feel.is_active()
     }
 
     pub fn tokens(&self) -> impl Iterator<Item = &Token> {
@@ -579,13 +656,27 @@ impl Stage {
 
     /// Advances every clock by `elapsed`.
     pub fn update(&mut self, elapsed: Duration) {
-        let dt = elapsed.as_secs_f32().min(0.25);
-        self.clock_s += dt;
+        // Real time drives the camera, the shake and the particles; the stage's own clock (the
+        // timeline, the figures' animations) runs slower or stops during hit-stop and slow motion.
+        let real_dt = elapsed.as_secs_f32().min(0.25);
+        self.clock_s += real_dt;
+        if self.feel_enabled {
+            self.feel.advance(real_dt);
+            self.particles.advance(real_dt);
+        }
+        let scale = if self.feel_enabled {
+            self.feel.time_scale()
+        } else {
+            1.0
+        };
+        let sim = elapsed.mul_f32(scale);
+        let dt = sim.as_secs_f32().min(0.25);
         self.rig.update(elapsed);
+        self.observe_camera_speed(real_dt);
         if self.playing.is_none() {
             self.start_next();
         }
-        self.advance_playback(elapsed);
+        self.advance_playback(sim);
         let mut footfalls = Vec::new();
         for runtime in &mut self.tokens {
             for _ in 0..advance_runtime(runtime, dt) {
@@ -619,6 +710,9 @@ impl Stage {
             {
                 active.landed = true;
                 runtime.thud_s = THUD_SECONDS;
+                if self.feel_enabled {
+                    self.particles.dust(runtime.position);
+                }
             }
         }
         for die in &mut self.hud.roll_for_initiative.dice {
@@ -643,6 +737,15 @@ impl Stage {
                 };
             projectile.age_s < life
         });
+        if let Some((card, waited)) = self.pending_roll_card.take() {
+            if (self.rig.is_panning() || self.camera_move_ahead()) && waited < ROLL_CARD_MAX_WAIT_S
+            {
+                self.pending_roll_card = Some((card, waited + real_dt));
+            } else {
+                self.hud.roll_card = Some(card);
+                self.roll_card_left_s = ROLL_CARD_SECONDS;
+            }
+        }
         if self.roll_card_left_s > 0.0 {
             self.roll_card_left_s -= dt;
             if self.roll_card_left_s <= 0.0 {
@@ -654,7 +757,7 @@ impl Stage {
         }
         self.floats.retain(|text| text.age_s < FLOAT_LIFETIME_S);
         if let Some(flash) = &mut self.flash {
-            flash.age_s += dt;
+            flash.age_s += real_dt;
             let life = if flash.tone == FlashTone::Heal {
                 0.8
             } else {
@@ -738,24 +841,200 @@ impl Stage {
             CameraFocus::Scene => None,
             CameraFocus::Token(id) => chest(id),
             CameraFocus::Between(a, b) => Some(chest(a)?.lerp(chest(b)?, 0.5)),
+            CameraFocus::Action { actor, target, .. } => match target {
+                Some(target) => Some(chest(actor)?.lerp(chest(target)?, 0.55)),
+                None => chest(actor),
+            },
         }
     }
 
-    fn camera_pose_for(&self, command: &CameraCommand) -> Option<CameraPose> {
+    /// Whether the camera is about to move: a beat is queued, or the one playing has a camera
+    /// step still to come within the next moments.
+    fn camera_move_ahead(&self) -> bool {
+        match &self.playing {
+            Some(playing) => playing.timeline.steps[playing.next..].iter().any(|timed| {
+                matches!(timed.step, Step::Camera { .. })
+                    && timed.at <= playing.elapsed + Duration::from_millis(1200)
+            }),
+            None => !self.queue.is_empty(),
+        }
+    }
+
+    fn body_of(&self, id: &TokenId) -> Option<Body> {
+        self.token_index(id).map(|index| {
+            let runtime = &self.tokens[index];
+            Body {
+                feet: runtime.position,
+                height_m: runtime.token.clamped_height(),
+            }
+        })
+    }
+
+    /// Feeds the camera's turning speed to the blur: how fast the heading and pitch are changing.
+    fn observe_camera_speed(&mut self, real_dt: f32) {
+        let pose = self.rig.pose();
+        if let Some((yaw, pitch)) = self.last_angles
+            && real_dt > 1e-4
+        {
+            self.feel.observe_camera_speed(
+                framing::wrap_deg(pose.yaw_deg - yaw) / real_dt,
+                (pose.pitch_deg - pitch) / real_dt,
+                real_dt,
+            );
+        }
+        self.last_angles = Some((pose.yaw_deg, pose.pitch_deg));
+    }
+
+    /// The pose for a camera command, and whether reaching it is a cut (a swing too big to pan).
+    fn camera_pose_for(&self, command: &CameraCommand) -> Option<(CameraPose, bool)> {
         let base = *self.scene.cameras.get(&command.shot)?;
+        if let CameraFocus::Action {
+            actor,
+            target,
+            stand,
+        } = &command.focus
+        {
+            let actor_body = self.body_of(actor)?;
+            let target_body = match target {
+                Some(id) => Some(self.body_of(id)?),
+                None => None,
+            };
+            // Everywhere either fighter stands during the beat, so one pose holds them all.
+            let mut also = Vec::new();
+            if let Some(cell) = stand {
+                also.push(Body {
+                    feet: self.grid.cell_centre(*cell),
+                    ..actor_body
+                });
+            }
+            if let Some(target_body) = &target_body {
+                let line = flat_direction(actor_body.feet, target_body.feet);
+                also.push(Body {
+                    feet: target_body.feet + line * 0.5,
+                    ..*target_body
+                });
+            }
+            let bystanders: Vec<Body> = self
+                .tokens
+                .iter()
+                .filter(|runtime| {
+                    &runtime.token.id != actor && Some(&runtime.token.id) != target.as_ref()
+                })
+                .map(|runtime| Body {
+                    feet: runtime.position,
+                    height_m: runtime.token.clamped_height(),
+                })
+                .collect();
+            let shot = framing::action_shot(
+                &base,
+                &self.rig.pose(),
+                &actor_body,
+                target_body.as_ref(),
+                &also,
+                &bystanders,
+                framing::FRAMED_ASPECT,
+            );
+            return Some((shot.pose.dollied(command.dolly), shot.cut));
+        }
         let aimed = match self.focus_point(&command.focus) {
             Some(point) => base.aimed_at(point),
             None => base,
         };
-        Some(aimed.dollied(command.dolly))
+        Some((aimed.dollied(command.dolly), false))
+    }
+
+    /// A blow landed: shake, hit-stop, flash, sparks and the impact event, scaled by its size.
+    fn land_impact(
+        &mut self,
+        attacker: &TokenId,
+        target: &TokenId,
+        class: ImpactClass,
+        share: f32,
+        ranged: bool,
+    ) {
+        let weight = feel::weight(class, share);
+        let (Some(from), Some(to)) = (self.token_index(attacker), self.token_index(target)) else {
+            return;
+        };
+        let on_hero = self.tokens[to].token.side == Side::Hero;
+        let chest = self.tokens[to].position
+            + Vec3::new(0.0, self.tokens[to].token.clamped_height() * 0.55, 0.0);
+        let away = flat_direction(self.tokens[from].position, self.tokens[to].position);
+        if self.feel_enabled {
+            self.feel.impact(ImpactEffect {
+                class,
+                weight,
+                on_hero,
+            });
+            self.particles
+                .sparks(chest, away, if ranged { weight * 0.4 } else { weight });
+        }
+        let strength = feel::flash_strength(class);
+        if strength > 0.0 {
+            self.flash = Some(Flash {
+                tone: if class >= ImpactClass::Critical {
+                    FlashTone::Critical
+                } else {
+                    FlashTone::Impact
+                },
+                strength,
+                age_s: 0.0,
+            });
+        }
+        self.impacts.push_back(ImpactEvent {
+            target: target.clone(),
+            attacker: attacker.clone(),
+            intensity: weight,
+            class,
+            critical: class == ImpactClass::Critical,
+            knockout: class == ImpactClass::Knockout,
+            on_hero,
+        });
+        // Nobody drains the events in a hidden tab: keep only the newest few.
+        while self.impacts.len() > 16 {
+            self.impacts.pop_front();
+        }
     }
 
     fn apply(&mut self, step: Step) {
         match step {
             Step::SetActive(active) => self.hud.active = active,
             Step::Camera { command, pan } => {
-                if let Some(pose) = self.camera_pose_for(&command) {
-                    self.rig.pan_to(pose, pan);
+                if let Some((pose, cut)) = self.camera_pose_for(&command) {
+                    let framing = match &command.focus {
+                        CameraFocus::Action { actor, target, .. } => {
+                            Some((actor.clone(), target.clone()))
+                        }
+                        _ => None,
+                    };
+                    // A new subject pulls focus, whether the camera pans or cuts to it.
+                    let new_subject = framing != self.last_framing;
+                    if self.feel_enabled && new_subject {
+                        self.feel.focus_pull();
+                    }
+                    self.last_framing = framing;
+                    if cut {
+                        self.rig.cut_to(pose);
+                    } else {
+                        self.rig.pan_to(pose, pan);
+                    }
+                }
+            }
+            Step::Impact {
+                attacker,
+                target,
+                class,
+                share,
+                ranged,
+            } => self.land_impact(&attacker, &target, class, share, ranged),
+            Step::Whoosh => {
+                if self.feel_enabled {
+                    self.feel.miss();
+                }
+            }
+            Step::SlowMotion => {
+                if self.feel_enabled {
+                    self.feel.slow_motion();
                 }
             }
             Step::Highlight(highlight) => self.highlight = highlight,
@@ -820,7 +1099,7 @@ impl Stage {
             Step::EndFinishingBlow => self.hud.finishing_blow = None,
             Step::Sound { kind, token } => self.emit(kind, &token),
             Step::Whip { command, travel } => {
-                if let Some(pose) = self.camera_pose_for(&command) {
+                if let Some((pose, _)) = self.camera_pose_for(&command) {
                     self.rig.whip_to(pose, travel);
                 }
             }
@@ -1046,9 +1325,37 @@ impl Stage {
             let distance = |figure: &FigureView| (figure.position - eye).length();
             distance(b).total_cmp(&distance(a))
         });
+        let view = if self.feel_enabled {
+            self.feel.view()
+        } else {
+            FeelView::default()
+        };
+        let mut camera = self.rig.pose();
+        let mut roll_deg = view.shake_roll_deg;
+        if self.feel_enabled {
+            // The living camera: a slow handheld sway whenever it is otherwise still (less while
+            // it moves), plus the slow orbit drift on a wide shot.
+            let sway = feel::sway(
+                self.clock_s,
+                self.tempo_permille,
+                camera.distance > WIDE_DISTANCE_M,
+            );
+            let calm = if self.rig.is_panning() { 0.4 } else { 1.0 };
+            camera.yaw_deg += sway.yaw_deg * calm;
+            camera.pitch_deg = (camera.pitch_deg + sway.pitch_deg * calm).clamp(2.0, 89.0);
+            roll_deg += sway.roll_deg * calm;
+        }
+        let rig_shake = self.rig.shake_offset_px();
         FrameView {
-            camera: self.rig.pose(),
-            shake_px: self.rig.shake_offset_px(),
+            camera,
+            roll_deg,
+            feel: view,
+            particles: if self.feel_enabled {
+                self.particles.instances()
+            } else {
+                Vec::new()
+            },
+            shake_px: (rig_shake.0 + view.shake_px.0, rig_shake.1 + view.shake_px.1),
             fade: self.rig.transition_fade(),
             figures,
             highlight: self.highlight.as_ref(),
@@ -2461,5 +2768,388 @@ mod tests {
             "target to the left: mirrored"
         );
         assert!(!figure(&stage, "ally").mirror, "only archers mirror");
+    }
+
+    /// A fixed step of one thirtieth of a second, as the presented frames at 30 fps advance it.
+    fn frame_step(stage: &mut Stage) {
+        stage.update(Duration::from_secs_f32(1.0 / 30.0));
+    }
+
+    fn body_of_figure(stage: &Stage, id: &str) -> framing::Body {
+        let figure = figure(stage, id);
+        framing::Body {
+            feet: figure.position,
+            height_m: figure.height_m,
+        }
+    }
+
+    fn projected_inside_safe(stage: &Stage, id: &str) -> bool {
+        framing::in_safe_area(
+            &stage.rig.pose(),
+            framing::FRAMED_ASPECT,
+            &body_of_figure(stage, id),
+        )
+    }
+
+    fn ordinary_hit(attacker: &str, target: &str, damage: u32) -> Beat {
+        Beat::Attack {
+            attacker: TokenId::new(attacker),
+            target: TokenId::new(target),
+            result: AttackResult::Hit {
+                damage,
+                critical: false,
+                downed: false,
+            },
+            target_hit_points_after: Some(3),
+        }
+    }
+
+    /// Plays an attack frame by frame: from the moment the camera has settled until the beat is
+    /// over both fighters are inside the safe area, and the lunge and contact play on a camera
+    /// that is not moving.
+    #[test]
+    fn both_fighters_stay_in_frame_through_a_whole_attack_and_the_camera_rests_at_contact() {
+        let mut stage = stage(false);
+        for _ in 0..30 {
+            frame_step(&mut stage);
+        }
+        stage.stage(ordinary_hit("hero", "enemy", 2)).unwrap();
+        let mut frames = 0;
+        let mut poses = Vec::new();
+        let mut frozen_at = Vec::new();
+        while stage.is_busy() && frames < 900 {
+            frame_step(&mut stage);
+            frames += 1;
+            poses.push(stage.rig.pose());
+            if stage.feel.is_frozen() {
+                frozen_at.push(frames - 1);
+            }
+            if stage.rig.is_panning() {
+                continue;
+            }
+            assert!(
+                projected_inside_safe(&stage, "hero"),
+                "frame {frames}: attacker out of frame"
+            );
+            assert!(
+                projected_inside_safe(&stage, "enemy"),
+                "frame {frames}: target out of frame"
+            );
+        }
+        assert!(frames < 900, "the beat ends");
+        // The hit-stop is at contact: for a few frames either side of it the camera is at rest.
+        let (first, last): (usize, usize) = (frozen_at[0], *frozen_at.last().unwrap());
+        let around = &poses[first.saturating_sub(6)..=(last + 6).min(poses.len() - 1)];
+        assert!(
+            around.windows(2).all(|pair| pair[0] == pair[1]),
+            "camera at rest at contact"
+        );
+    }
+
+    /// The live defect: Brakka attacks the goblin with Sylvie elsewhere on the field. The camera
+    /// is never blocked by the bystander.
+    #[test]
+    fn a_bystander_is_never_in_front_of_the_fighters() {
+        let scene = load_embedded("scan-village").unwrap().unwrap();
+        let mut stage = Stage::new(scene, false);
+        stage.set_tokens(vec![
+            token("brakka", Side::Hero, Cell::new(1, 2), 12),
+            token("mudge", Side::Enemy, Cell::new(2, 1), 5),
+            token("sylvie", Side::Hero, Cell::new(5, 4), 12),
+        ]);
+        for _ in 0..20 {
+            frame_step(&mut stage);
+        }
+        stage.stage(ordinary_hit("brakka", "mudge", 2)).unwrap();
+        let mut frames = 0;
+        while stage.is_busy() && frames < 900 {
+            frame_step(&mut stage);
+            frames += 1;
+            if stage.rig.is_panning() {
+                continue;
+            }
+            let pose = stage.rig.pose();
+            let involved = [
+                body_of_figure(&stage, "brakka"),
+                body_of_figure(&stage, "mudge"),
+            ];
+            let bystanders = [body_of_figure(&stage, "sylvie")];
+            let on_the_pair = involved
+                .iter()
+                .all(|body| framing::in_safe_area(&pose, framing::FRAMED_ASPECT, body));
+            if on_the_pair {
+                assert!(
+                    !framing::bystander_in_front(
+                        &pose,
+                        framing::FRAMED_ASPECT,
+                        &involved,
+                        &bystanders
+                    ),
+                    "frame {frames}: Sylvie stands in front of the fighters"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_blow_emits_one_impact_event_scaled_by_its_size_and_a_heavy_one_shakes_harder() {
+        let strength = |damage: u32| {
+            let mut stage = stage(false);
+            stage.stage(ordinary_hit("hero", "enemy", damage)).unwrap();
+            let mut peak = 0.0f32;
+            let mut events = Vec::new();
+            for _ in 0..600 {
+                frame_step(&mut stage);
+                let shake = stage.frame().shake_px;
+                peak = peak.max(shake.0.abs()).max(shake.1.abs());
+                events.extend(stage.take_impacts());
+            }
+            assert_eq!(events.len(), 1, "one impact event per blow");
+            (peak, events[0].intensity, events[0].class)
+        };
+        let (graze_peak, graze_weight, graze_class) = strength(1);
+        let (heavy_peak, heavy_weight, heavy_class) = strength(7);
+        assert_eq!(graze_class, ImpactClass::Graze);
+        assert_eq!(heavy_class, ImpactClass::Heavy);
+        assert!(heavy_weight > graze_weight * 3.0);
+        assert!(
+            heavy_peak > graze_peak * 2.0,
+            "{graze_peak} vs {heavy_peak}"
+        );
+    }
+
+    #[test]
+    fn a_miss_sways_the_camera_without_an_impact_event_or_hit_stop() {
+        let mut stage = stage(false);
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Miss,
+                target_hit_points_after: None,
+            })
+            .unwrap();
+        let mut froze = false;
+        for _ in 0..600 {
+            frame_step(&mut stage);
+            froze |= stage.feel.is_frozen();
+        }
+        assert!(!froze);
+        assert!(stage.take_impacts().is_empty());
+    }
+
+    #[test]
+    fn hit_stop_freezes_the_figures_for_a_few_frames_and_then_releases() {
+        let mut stage = stage(false);
+        stage.stage(ordinary_hit("hero", "enemy", 7)).unwrap();
+        let mut frozen_frames = 0;
+        let mut previous = None;
+        let mut held = true;
+        for _ in 0..600 {
+            frame_step(&mut stage);
+            let enemy = figure(&stage, "enemy");
+            let pose = (enemy.position, enemy.red_flash);
+            if stage.feel.is_frozen() {
+                frozen_frames += 1;
+                if let Some(before) = previous {
+                    held &= before == pose;
+                }
+                previous = Some(pose);
+            } else {
+                previous = None;
+            }
+        }
+        assert!(
+            (2..=4).contains(&frozen_frames),
+            "a few frames: {frozen_frames}"
+        );
+        assert!(held, "the figures do not move during hit-stop");
+    }
+
+    #[test]
+    fn the_finishing_blow_runs_in_slow_motion_and_is_busy_for_all_of_it() {
+        let mut stage = stage(false);
+        stage.stage(killing_blow()).unwrap();
+        let mut saw_slow = false;
+        for _ in 0..900 {
+            frame_step(&mut stage);
+            saw_slow |= stage.feel.time_scale() < 0.5;
+            assert!(
+                !stage.feel.is_active() || stage.is_busy(),
+                "is_busy covers the slow motion and the hit-stop"
+            );
+        }
+        assert!(saw_slow, "time slows into the finishing blow");
+        assert!(!stage.is_busy(), "and it all ends");
+    }
+
+    #[test]
+    fn the_camera_lives_while_it_waits_and_follows_the_tempo() {
+        let sampled = |tempo: u16| {
+            let mut stage = stage(false);
+            stage.set_tempo_intensity(tempo);
+            let mut yaws = Vec::new();
+            for _ in 0..(30 * 30) {
+                frame_step(&mut stage);
+                yaws.push(stage.frame().camera.yaw_deg);
+            }
+            yaws
+        };
+        let calm = sampled(0);
+        let peak = sampled(1000);
+        let spread = |values: &[f32]| {
+            values.iter().cloned().fold(f32::MIN, f32::max)
+                - values.iter().cloned().fold(f32::MAX, f32::min)
+        };
+        assert!(
+            spread(&calm) > 0.2,
+            "it drifts when calm: {}",
+            spread(&calm)
+        );
+        // Two frames a second apart differ: the idle camera is alive.
+        assert!((calm[60] - calm[90]).abs() > 1e-3);
+        assert!(peak != calm);
+        // With effects off the camera is dead still, as before.
+        let mut off = stage(false);
+        off.set_feel_enabled(false);
+        let first = off.frame().camera;
+        for _ in 0..120 {
+            frame_step(&mut off);
+        }
+        assert_eq!(off.frame().camera, first);
+    }
+
+    /// The riverbed defect: the enemy attacks a hero while a bystander stands elsewhere, and the
+    /// camera showed empty ground. At every frame of the enemy's turn, panning or not, the acting
+    /// figure's centre is on the screen, and once settled both fighters are inside the safe area.
+    #[test]
+    fn the_camera_never_shows_a_frame_without_the_acting_figure_on_an_enemy_turn() {
+        let scene = load_embedded("scan-riverbed").unwrap().unwrap();
+        let mut stage = Stage::new(scene, false);
+        stage.set_tokens(vec![
+            token("dagna", Side::Hero, Cell::new(2, 4), 12),
+            token("tomas", Side::Enemy, Cell::new(6, 1), 8),
+            token("hilde", Side::Hero, Cell::new(4, 4), 12),
+        ]);
+        for _ in 0..30 {
+            frame_step(&mut stage);
+        }
+        stage.stage(ordinary_hit("tomas", "dagna", 5)).unwrap();
+        let mut frames = 0;
+        while stage.is_busy() && frames < 900 {
+            frame_step(&mut stage);
+            frames += 1;
+            let pose = stage.rig.pose();
+            let attacker = body_of_figure(&stage, "tomas");
+            let centre = framing::project_body(&pose, framing::FRAMED_ASPECT, &attacker)
+                .map(|(l, t, r, b)| ((l + r) * 0.5, (t + b) * 0.5));
+            let Some((x, y)) = centre else {
+                panic!("frame {frames}: the attacker is behind the camera");
+            };
+            assert!(
+                (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y),
+                "frame {frames}: empty frame, the attacker is at {x:.2},{y:.2}"
+            );
+        }
+    }
+
+    /// A self action (Second Wind) frames the actor alone, clear of the bystander standing on the
+    /// camera line, like the entrance roll-call's one clear figure each.
+    #[test]
+    fn a_self_action_frames_the_actor_clear_of_a_bystander() {
+        let scene = load_embedded("scan-village").unwrap().unwrap();
+        let mut stage = Stage::new(scene, false);
+        stage.set_tokens(vec![
+            token("brakka", Side::Hero, Cell::new(1, 2), 6),
+            token("mudge", Side::Enemy, Cell::new(2, 1), 5),
+            token("sylvie", Side::Hero, Cell::new(5, 4), 12),
+        ]);
+        for _ in 0..20 {
+            frame_step(&mut stage);
+        }
+        stage
+            .stage(Beat::Heal {
+                source: TokenId::new("brakka"),
+                target: TokenId::new("brakka"),
+                amount: 5,
+                target_hit_points_after: Some(11),
+            })
+            .unwrap();
+        let mut settled = 0;
+        let mut frames = 0;
+        while stage.is_busy() && frames < 600 {
+            frame_step(&mut stage);
+            frames += 1;
+            if stage.rig.is_panning() {
+                continue;
+            }
+            let pose = stage.rig.pose();
+            let actor = body_of_figure(&stage, "brakka");
+            if !framing::in_safe_area(&pose, framing::FRAMED_ASPECT, &actor) {
+                continue;
+            }
+            settled += 1;
+            let others = [
+                body_of_figure(&stage, "mudge"),
+                body_of_figure(&stage, "sylvie"),
+            ];
+            assert!(
+                !framing::bystander_in_front(&pose, framing::FRAMED_ASPECT, &[actor], &others),
+                "frame {frames}: someone stands in front of the actor"
+            );
+        }
+        assert!(
+            settled > 10,
+            "the actor is framed for most of the beat: {settled}"
+        );
+    }
+
+    #[test]
+    fn a_roll_card_waits_for_the_camera_to_settle_on_the_fighters() {
+        let mut stage = stage(false);
+        // Start from the heading the framing will pick, so the move is a pan, not a cut.
+        let pick = |stage: &Stage| {
+            let attacker = body_of_figure(stage, "hero");
+            let target = body_of_figure(stage, "enemy");
+            let style = stage.scene().cameras[&ShotName::TurnFocus];
+            framing::action_shot(
+                &style,
+                &stage.rig.pose(),
+                &attacker,
+                Some(&target),
+                &[],
+                &[],
+                framing::FRAMED_ASPECT,
+            )
+        };
+        let first = pick(&stage);
+        let near = CameraPose {
+            yaw_deg: first.pose.yaw_deg + 30.0,
+            ..stage.rig.pose()
+        };
+        stage.rig.cut_to(near);
+        stage.stage(ordinary_hit("hero", "enemy", 2)).unwrap();
+        frame_step(&mut stage);
+        frame_step(&mut stage);
+        assert!(stage.rig.is_panning(), "the camera is moving to the pair");
+        stage.show_roll_card(super::super::model::RollCard {
+            value: "14".to_owned(),
+            label: "d20".to_owned(),
+            explanation: String::new(),
+            verdict: "HIT".to_owned(),
+            tone: "hit".to_owned(),
+        });
+        assert!(
+            stage.hud().roll_card.is_none(),
+            "not while the camera is still moving"
+        );
+        let mut shown_at = None;
+        for frame in 0..120 {
+            frame_step(&mut stage);
+            if shown_at.is_none() && stage.hud().roll_card.is_some() {
+                shown_at = Some(frame);
+            }
+        }
+        assert!(shown_at.is_some(), "and then it shows");
     }
 }

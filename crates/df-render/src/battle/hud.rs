@@ -37,6 +37,9 @@ struct PipRow {
 /// Most icons shown over a figure's head before the rest collapse into "+N".
 const MAX_PIPS: usize = 4;
 
+/// A floating number never rises above this share of the picture height (the round strip is above).
+const FLOAT_TOP_LIMIT: f32 = 0.27;
+
 pub struct Hud {
     document: Document,
     root: Element,
@@ -417,6 +420,9 @@ impl Hud {
             let Some((x, y)) = stage.project(anchor, aspect) else {
                 continue;
             };
+            // Kept under the round strip and clear of the side cards, however high the figure
+            // stands in the picture.
+            let (x, y) = (x.clamp(0.14, 0.86), y.clamp(FLOAT_TOP_LIMIT, 0.92));
             if !self.float_elements.contains_key(&text.id) {
                 let tone = match text.tone {
                     FloatTone::Damage => "damage",
