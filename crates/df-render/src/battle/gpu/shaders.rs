@@ -170,7 +170,7 @@ fn cell_code(col: i32, row: i32) -> f32 {
     if (col < 0 || row < 0 || col >= cols || row >= rows) {
         return 0.0;
     }
-    return grid[32 + row * cols + col];
+    return grid[36 + row * cols + col];
 }
 
 fn code_colour(code: f32) -> vec3<f32> {
@@ -240,7 +240,12 @@ fn shade(in: VOut) -> vec4<f32> {
     let underlay = max(halo.x * alive.x, halo.y * alive.y) * grid[12];
     var alpha = clamp(core_alpha + underlay * (1.0 - core_alpha), 0.0, 1.0);
     var rgb = core_rgb + glow_rgb * (1.0 - core_alpha);
-    var strength = centre_fade;
+    // And dimmer toward the border of the play area; reachable and target lines keep most of
+    // their strength so they stay clearly above the base grid.
+    let edge_cells = min(min(p.x, grid[3] - p.x), min(p.y, grid[4] - p.y));
+    let edge_fade = mix(grid[33], 1.0, smoothstep(0.0, grid[32], edge_cells));
+    let lit = step(3.5, max(code_x, code_z));
+    var strength = mix(centre_fade * edge_fade, mix(centre_fade * edge_fade, 1.0, 0.75), lit);
     if (in.behind > 0.5) {
         strength = strength * grid[13];
     }

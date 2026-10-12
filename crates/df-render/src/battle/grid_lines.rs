@@ -14,22 +14,22 @@ use super::{
 
 /// Width of the bright core, in metres. Never drawn thinner than [`CORE_MIN_PX`] on screen; a line
 /// thinner than that fades instead of shimmering.
-pub const LINE_WIDTH_M: f32 = 0.04;
+pub const LINE_WIDTH_M: f32 = 0.02;
 /// Narrowest the core is drawn, in pixels, so it stays anti-aliased at distance.
-pub const CORE_MIN_PX: f32 = 1.5;
+pub const CORE_MIN_PX: f32 = 1.0;
 /// Opacity of the core at full strength.
-pub const CORE_INTENSITY: f32 = 0.95;
+pub const CORE_INTENSITY: f32 = 0.9;
 /// How much of the line colour the core is whitened by: a bright core reads as a lit filament.
-pub const CORE_WHITENING: f32 = 0.55;
+pub const CORE_WHITENING: f32 = 0.45;
 /// Width of the soft halo around a line, in metres.
-pub const HALO_WIDTH_M: f32 = 0.2;
+pub const HALO_WIDTH_M: f32 = 0.09;
 /// Narrowest the halo is drawn, in pixels; below this world width it fades out with distance.
-pub const HALO_MIN_PX: f32 = 3.5;
+pub const HALO_MIN_PX: f32 = 2.5;
 /// Strength of the additive halo.
-pub const HALO_INTENSITY: f32 = 0.42;
+pub const HALO_INTENSITY: f32 = 0.3;
 /// Opacity of the dark underlay beside the line, which keeps the glow legible on bright ground
 /// (daylight grass) where an additive halo alone would wash out.
-pub const UNDERLAY_ALPHA: f32 = 0.34;
+pub const UNDERLAY_ALPHA: f32 = 0.2;
 /// Opacity of a line seen through scan geometry that is in front of it: the line dims, it does
 /// not break up.
 pub const SEEN_THROUGH_ALPHA: f32 = 0.32;
@@ -37,14 +37,18 @@ pub const SEEN_THROUGH_ALPHA: f32 = 0.32;
 /// along the line of sight: grass and rubble at the ground do not hide it, a hut or a wall does.
 pub const OCCLUSION_MARGIN_M: f32 = 2.0;
 /// Brightness multiplier for reachable and targeted cells: the same treatment, brighter.
-pub const HIGHLIGHT_BOOST: f32 = 1.7;
+pub const HIGHLIGHT_BOOST: f32 = 2.3;
 /// A cell narrower than this many pixels (the lines crowd together) fades the lines out.
 pub const CELL_MIN_PX: f32 = 8.0;
 /// Distance from the grid centre where the lines start to dim, and where they stop, in metres.
-pub const CENTRE_FADE_START_M: f32 = 4.0;
-pub const CENTRE_FADE_END_M: f32 = 11.0;
+pub const CENTRE_FADE_START_M: f32 = 3.5;
+pub const CENTRE_FADE_END_M: f32 = 10.0;
 /// Share of strength kept at and beyond [`CENTRE_FADE_END_M`].
-pub const CENTRE_FADE_FLOOR: f32 = 0.3;
+pub const CENTRE_FADE_FLOOR: f32 = 0.22;
+/// How far in from the edge of the play area the lines are dimmed, in cells, and the share of
+/// strength the outermost line keeps. Highlighted lines keep most of their strength regardless.
+pub const EDGE_FADE_CELLS: f32 = 1.8;
+pub const EDGE_FADE_FLOOR: f32 = 0.3;
 /// How far the drawn quad extends beyond the grid, so the halo of the outer lines is not cut.
 pub const QUAD_MARGIN_M: f32 = 0.6;
 /// How far above the play plane the lines sit, in metres: enough to clear the ground surface.
@@ -62,7 +66,7 @@ pub const HERO_BLUE: [f32; 3] = [0.5, 0.86, 1.0];
 pub const ENEMY_RED: [f32; 3] = [1.0, 0.34, 0.28];
 
 /// Words before the per-cell codes in the pass's data block.
-pub const HEADER_WORDS: usize = 32;
+pub const HEADER_WORDS: usize = 36;
 
 /// A blocked cell inside the grid: faint lines.
 const CODE_BLOCKED: f32 = 0.5;
@@ -107,6 +111,8 @@ pub fn grid_words(
     words[28..31].copy_from_slice(&ENEMY_RED);
     words[23] = CORE_WHITENING;
     words[31] = BLOCKED_STRENGTH;
+    words[32] = EDGE_FADE_CELLS;
+    words[33] = EDGE_FADE_FLOOR;
     for row in 0..grid.rows() as i32 {
         for col in 0..grid.cols() as i32 {
             let cell = Cell::new(col, row);
