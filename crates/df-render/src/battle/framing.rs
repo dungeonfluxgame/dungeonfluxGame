@@ -32,7 +32,7 @@ pub const MAX_SWING_DEG: f32 = 60.0;
 /// How far the camera's heading may stray from the scene's own tactical heading, in degrees: a
 /// scene is built to be seen from its front (a scan has a fence, a hut or a slope behind the
 /// arena), so the action shots stay on that side and never swing round to the back of the set.
-pub const MAX_HOME_DEVIATION_DEG: f32 = 100.0;
+pub const MAX_HOME_DEVIATION_DEG: f32 = 75.0;
 /// The closest and farthest the action shot may be, in metres.
 pub const MIN_DISTANCE_M: f32 = 3.6;
 pub const MAX_DISTANCE_M: f32 = 28.0;

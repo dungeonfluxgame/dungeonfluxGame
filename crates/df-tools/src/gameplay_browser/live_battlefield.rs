@@ -621,6 +621,28 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                     }
                 }
             }
+            if kind == "shoot" {
+                // A ranged attack across the field: the archer shoots the goblin.
+                with_preview(|stage| {
+                    let _ = stage.stage(Beat::Attack {
+                        attacker: TokenId::new("sylvie"),
+                        target: TokenId::new("goblin"),
+                        result: AttackResult::Hit {
+                            damage: 4,
+                            critical: false,
+                            downed: false,
+                        },
+                        target_hit_points_after: Some(8),
+                    });
+                });
+                mark(&host, "data-battlefield-demo", &kind);
+                loop {
+                    TimeoutFuture::new(1000).await;
+                    if PREVIEW.with(|slot| slot.borrow().is_none()) {
+                        return;
+                    }
+                }
+            }
             if kind == "enemyhit" {
                 // The enemy's turn: the goblin hits the hero.
                 with_preview(|stage| {
@@ -1359,6 +1381,8 @@ fn start_mount(
     // scan falls back to when it cannot be drawn. (The server stages a fight on a forced scan's
     // own grid, so the scan is the scene chosen above.)
     let story_scene = battle::load_embedded(story_location).and_then(Result::ok);
+    // Which story place the fight is told in (a diagnostic for the page).
+    let _ = host.set_attribute("data-battlefield-story", story_location);
     // The record of which scene was chosen, and why if it is not the fight's own location.
     let marker = choice
         .fallback_reason
