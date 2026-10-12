@@ -2585,8 +2585,8 @@
     {
       "id": "PLAY-F02",
       "feature_id": "F13",
-      "title": "Stage combat on a tilted battlefield with figures, camera and a finishing blow",
-      "objective": "On the TV a fight is shown as a battlefield: the location's ground tilted in perspective with a tile grid, full-body figures of the heroes and enemies standing on lit tiles, the acting figure highlighted, the camera easing to each turn's actor, attacks played as a lunge, impact and damage number, a round and initiative tracker, party and enemy health plates, and a letterboxed finishing-blow cinematic when an enemy falls.",
+      "title": "Render combat as a 3D battlefield with Gaussian splats, in Rust only",
+      "objective": "On the TV a fight is rendered by a Rust/WebAssembly WebGL2 renderer with no JavaScript: a 3D battlefield (a Gaussian splat scene where one exists, otherwise the location's painted ground and backdrop), a tile grid with glow, full-body figure billboards on tiles, named camera shots with eased moves and impact shake, colour grade, tilt-shift and vignette, health and initiative plates, and a finishing-blow cinematic. It ports the needed parts of the owner's earlier PlayCanvas battle stage.",
       "stage": "implementation",
       "edit_areas_json": [
         "crates/df-tools/src/gameplay_browser/",
@@ -2615,8 +2615,8 @@
         "record_role": "atomic",
         "scope_status": "frozen",
         "dispatch_ready": false,
-        "why": "Owner reference 2026-10-11 (video of the earlier hackathon demo, frames in artifacts/tmp/reference-video): \"most importantly look at the battle scene as there is where you need the most help\". Today combat on the TV is flat panels over a still painting.",
-        "objective": "On the TV a fight is shown as a battlefield: the location's ground tilted in perspective with a tile grid, full-body figures of the heroes and enemies standing on lit tiles, the acting figure highlighted, the camera easing to each turn's actor, attacks played as a lunge, impact and damage number, a round and initiative tracker, party and enemy health plates, and a letterboxed finishing-blow cinematic when an enemy falls.",
+        "why": "Owner reference 2026-10-11 (video of the earlier hackathon demo, frames in artifacts/tmp/reference-video): \"most importantly look at the battle scene as there is where you need the most help\". Today combat on the TV is flat panels over a still painting. Owner decision 2026-10-11: port the needed PlayCanvas parts to Rust, no JavaScript; reference code at github.com/monstercameron/DungeonFlux (web/splat).",
+        "objective": "On the TV a fight is rendered by a Rust/WebAssembly WebGL2 renderer with no JavaScript: a 3D battlefield (a Gaussian splat scene where one exists, otherwise the location's painted ground and backdrop), a tile grid with glow, full-body figure billboards on tiles, named camera shots with eased moves and impact shake, colour grade, tilt-shift and vignette, health and initiative plates, and a finishing-blow cinematic. It ports the needed parts of the owner's earlier PlayCanvas battle stage.",
         "owners": [
           "df-tools"
         ],
@@ -2659,7 +2659,8 @@
         ],
         "out_of_scope": [
           "Movement, range and position rules (engine roadmap)",
-          "A 3D or splat renderer"
+          "Any hand-written or vendored JavaScript",
+          "Animated video billboards (follow-up)"
         ],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
