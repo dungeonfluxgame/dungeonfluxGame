@@ -925,6 +925,7 @@ pub(super) fn project_journey(
         home: (phase == rpc::JourneyPhase::Room)
             .then(|| super::home_theme::lobby_view(&authored.asset, authored.setting.as_ref())),
         adventure_ended: super::beat_script_runtime::ended(state)?,
+        adventure_title: super::beat_script_runtime::adventure_title(state)?,
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
     let mut scene = if super::beat_script_runtime::native_inn(state)? {
