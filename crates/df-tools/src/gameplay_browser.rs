@@ -1,7 +1,7 @@
 //! Thin server-projected room, creation, dialogue and combat clients.
 mod dialogue_recovery;
-mod live_chrome;
 mod live_battlefield;
+mod live_chrome;
 mod live_combat;
 mod live_exploration;
 mod live_lobby;

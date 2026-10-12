@@ -83,7 +83,8 @@ fn bind_group_layout(device: &GpuDevice, entries: Vec<JsValue>) -> JsValue {
 }
 
 pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableReason> {
-    let navigator = property(&js_sys::global().into(), "navigator").ok_or(UnavailableReason::NoWebGpu)?;
+    let navigator =
+        property(&js_sys::global().into(), "navigator").ok_or(UnavailableReason::NoWebGpu)?;
     let gpu: Gpu = property(&navigator, "gpu")
         .ok_or(UnavailableReason::NoWebGpu)?
         .unchecked_into();
@@ -94,11 +95,7 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
         .ok_or(UnavailableReason::NoAdapter)?
         .unchecked_into::<GpuAdapter>();
     let info = adapter.info();
-    let adapter_description = format!(
-        "{}/{}",
-        text(&info, "vendor"),
-        text(&info, "architecture")
-    );
+    let adapter_description = format!("{}/{}", text(&info, "vendor"), text(&info, "architecture"));
     let device: GpuDevice = JsFuture::from(adapter.request_device(&Descriptor::new().build()))
         .await
         .map_err(|_| UnavailableReason::NoDevice)?
@@ -130,7 +127,11 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
             let reason = match JsFuture::from(promise).await {
                 Ok(info) => {
                     let reason = text(&info, "reason");
-                    if reason.is_empty() { "lost".to_owned() } else { reason }
+                    if reason.is_empty() {
+                        "lost".to_owned()
+                    } else {
+                        reason
+                    }
                 }
                 Err(_) => "lost".to_owned(),
             };
@@ -266,9 +267,8 @@ impl GpuCore {
 
     pub fn pipeline_layout(&self, groups: &[&JsValue]) -> JsValue {
         let layouts = array(groups.iter().map(|group| (*group).clone()));
-        self.device.create_pipeline_layout(
-            &Descriptor::new().with("bindGroupLayouts", layouts).build(),
-        )
+        self.device
+            .create_pipeline_layout(&Descriptor::new().with("bindGroupLayouts", layouts).build())
     }
 
     pub fn texture_bind_group(&self, texture: &GpuTexture, clamp: bool) -> GpuBindGroup {

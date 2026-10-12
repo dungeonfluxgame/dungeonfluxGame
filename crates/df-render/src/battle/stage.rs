@@ -19,7 +19,7 @@ use super::{
 
 /// Beats waiting behind the one playing. A further beat is refused, not dropped silently.
 pub const MAX_QUEUED_BEATS: usize = 8;
-const FALLEN_LEAN: f32 = 1.45;
+const FALLEN_LEAN: f32 = 1.3;
 const FALLEN_ALPHA: f32 = 0.42;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -430,12 +430,12 @@ impl Stage {
             Step::Float { token, text, tone } => {
                 self.next_float_id += 1;
                 self.floats.push(FloatingText {
-                id: self.next_float_id,
-                token,
-                text,
-                tone,
-                age_s: 0.0,
-            })
+                    id: self.next_float_id,
+                    token,
+                    text,
+                    tone,
+                    age_s: 0.0,
+                })
             }
             Step::ShowHitPoints { token, current } => {
                 if let Some(index) = self.token_index(&token) {

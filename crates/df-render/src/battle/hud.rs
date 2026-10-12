@@ -69,9 +69,9 @@ fn portrait_style(stem: Option<&str>) -> String {
     match stem {
         Some(stem)
             if !stem.is_empty()
-                && stem
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-') =>
+                && stem.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                }) =>
         {
             format!("background-image:url({GENERATED}/{stem})")
         }
@@ -95,7 +95,13 @@ impl Hud {
         element(document, &root, "div", "bf-bar bf-bar-bottom", "")?;
         let finish = element(document, &root, "section", "bf-finish", "")?;
         let finish_label = element(document, &finish, "p", "bf-finish-label", "Finishing blow")?;
-        let finish_title = element(document, &finish, "h2", "bf-finish-title", "Enemy vanquished")?;
+        let finish_title = element(
+            document,
+            &finish,
+            "h2",
+            "bf-finish-title",
+            "Enemy vanquished",
+        )?;
         let finish_names = element(document, &finish, "p", "bf-finish-names", "")?;
         Ok(Self {
             document: document.clone(),
@@ -145,10 +151,17 @@ impl Hud {
     }
 
     /// Brings the DOM in line with the stage for this frame.
-    pub fn update(&mut self, stage: &Stage, frame: &FrameView<'_>, aspect: f32) -> Result<(), JsValue> {
+    pub fn update(
+        &mut self,
+        stage: &Stage,
+        frame: &FrameView<'_>,
+        aspect: f32,
+    ) -> Result<(), JsValue> {
         self.title.set_text_content(Some(&stage.scene().title));
         let active = frame.figures.iter().find(|figure| figure.active);
-        let turn = active.map_or_else(String::new, |figure| format!("{}\u{2019}s turn", figure.name));
+        let turn = active.map_or_else(String::new, |figure| {
+            format!("{}\u{2019}s turn", figure.name)
+        });
         if self.turn.text_content().as_deref() != Some(turn.as_str()) {
             self.turn.set_text_content(Some(&turn));
         }
@@ -179,7 +192,14 @@ impl Hud {
             self.chips.set_text_content(None);
             for figure in &order {
                 let chip = element(&self.document, &self.chips, "span", "bf-chip", "")?;
-                chip.set_attribute("data-side", if figure.side == Side::Hero { "hero" } else { "enemy" })?;
+                chip.set_attribute(
+                    "data-side",
+                    if figure.side == Side::Hero {
+                        "hero"
+                    } else {
+                        "enemy"
+                    },
+                )?;
                 if figure.active {
                     chip.set_attribute("data-active", "")?;
                 }
@@ -187,12 +207,24 @@ impl Hud {
                     chip.set_attribute("data-down", "")?;
                 }
                 chip.set_attribute("style", &portrait_style(figure.portrait.as_deref()))?;
-                element(&self.document, &chip, "span", "bf-chip-initial", &initial(&figure.name))?;
+                if figure.portrait.is_none() {
+                    element(
+                        &self.document,
+                        &chip,
+                        "span",
+                        "bf-chip-initial",
+                        &initial(&figure.name),
+                    )?;
+                }
             }
             self.chip_signature = signature;
         }
 
-        let live: BTreeSet<TokenId> = frame.figures.iter().map(|figure| figure.id.clone()).collect();
+        let live: BTreeSet<TokenId> = frame
+            .figures
+            .iter()
+            .map(|figure| figure.id.clone())
+            .collect();
         self.plates.retain(|id, plate| {
             let keep = live.contains(id);
             if !keep {
@@ -211,7 +243,12 @@ impl Hud {
             plate
                 .portrait
                 .set_attribute("style", &portrait_style(figure.portrait.as_deref()))?;
-            plate.portrait.set_text_content(Some(&initial(&figure.name)));
+            let glyph = if figure.portrait.is_some() {
+                String::new()
+            } else {
+                initial(&figure.name)
+            };
+            plate.portrait.set_text_content(Some(&glyph));
             let (text, fraction) = match figure.hit_points {
                 Some(hp) => (format!("HP {}/{}", hp.current, hp.maximum), hp.fraction()),
                 None => (String::new(), 0.0),
@@ -225,9 +262,10 @@ impl Hud {
             plate
                 .root
                 .set_attribute("data-active", if figure.active { "true" } else { "false" })?;
-            plate
-                .root
-                .set_attribute("data-down", if figure.alpha < 0.6 { "true" } else { "false" })?;
+            plate.root.set_attribute(
+                "data-down",
+                if figure.alpha < 0.6 { "true" } else { "false" },
+            )?;
         }
 
         self.update_floats(stage, frame, aspect)?;
@@ -244,7 +282,12 @@ impl Hud {
         Ok(())
     }
 
-    fn update_floats(&mut self, stage: &Stage, frame: &FrameView<'_>, aspect: f32) -> Result<(), JsValue> {
+    fn update_floats(
+        &mut self,
+        stage: &Stage,
+        frame: &FrameView<'_>,
+        aspect: f32,
+    ) -> Result<(), JsValue> {
         let live: BTreeSet<u64> = frame.floats.iter().map(|text| text.id).collect();
         self.float_elements.retain(|id, node| {
             let keep = live.contains(id);
@@ -274,10 +317,15 @@ impl Hud {
                 self.float_elements.insert(text.id, node);
             }
             if let Some(node) = self.float_elements.get(&text.id) {
-                let fade = (1.0 - (text.age_s / super::model::FLOAT_LIFETIME_S - 0.55) / 0.45).clamp(0.0, 1.0);
+                let fade = (1.0 - (text.age_s / super::model::FLOAT_LIFETIME_S - 0.55) / 0.45)
+                    .clamp(0.0, 1.0);
                 node.set_attribute(
                     "style",
-                    &format!("left:{:.2}%;top:{:.2}%;opacity:{fade:.2}", x * 100.0, y * 100.0),
+                    &format!(
+                        "left:{:.2}%;top:{:.2}%;opacity:{fade:.2}",
+                        x * 100.0,
+                        y * 100.0
+                    ),
                 )?;
             }
         }

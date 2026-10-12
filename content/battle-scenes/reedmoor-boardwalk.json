@@ -59,7 +59,7 @@
         0.8,
         0
       ],
-      "distance": 17.0,
+      "distance": 15.0,
       "yaw_deg": 0,
       "pitch_deg": 30,
       "fov_deg": 40
@@ -70,7 +70,7 @@
         0.8,
         0
       ],
-      "distance": 11.5,
+      "distance": 10.5,
       "yaw_deg": 0,
       "pitch_deg": 21,
       "fov_deg": 40
@@ -81,9 +81,9 @@
         0.9,
         0
       ],
-      "distance": 7.5,
-      "yaw_deg": 14,
-      "pitch_deg": 16,
+      "distance": 8.5,
+      "yaw_deg": 32,
+      "pitch_deg": 18,
       "fov_deg": 38
     },
     "impact": {
@@ -92,9 +92,9 @@
         0.9,
         0
       ],
-      "distance": 6.2,
-      "yaw_deg": -12,
-      "pitch_deg": 13,
+      "distance": 7.2,
+      "yaw_deg": -48,
+      "pitch_deg": 15,
       "fov_deg": 36
     },
     "ko": {
@@ -104,7 +104,7 @@
         0
       ],
       "distance": 8.5,
-      "yaw_deg": 20,
+      "yaw_deg": 28,
       "pitch_deg": 26,
       "fov_deg": 40
     },
@@ -115,7 +115,7 @@
         0
       ],
       "distance": 6.5,
-      "yaw_deg": -16,
+      "yaw_deg": -30,
       "pitch_deg": 9,
       "fov_deg": 34
     }

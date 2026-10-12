@@ -77,7 +77,10 @@ pub fn prefers_reduced_motion() -> bool {
         return false;
     };
     function
-        .call1(&window, &JsValue::from_str("(prefers-reduced-motion: reduce)"))
+        .call1(
+            &window,
+            &JsValue::from_str("(prefers-reduced-motion: reduce)"),
+        )
         .ok()
         .and_then(|list| js_sys::Reflect::get(&list, &JsValue::from_str("matches")).ok())
         .and_then(|matches| matches.as_bool())
@@ -123,10 +126,11 @@ impl BattleStage {
             return Self::unavailable(host, scene, UnavailableReason::NotMounted);
         };
         container.set_class_name("battlefield");
-        let Ok(canvas) = document
-            .create_element("canvas")
-            .and_then(|element| element.dyn_into::<HtmlCanvasElement>().map_err(JsValue::from))
-        else {
+        let Ok(canvas) = document.create_element("canvas").and_then(|element| {
+            element
+                .dyn_into::<HtmlCanvasElement>()
+                .map_err(JsValue::from)
+        }) else {
             return Self::unavailable(host, scene, UnavailableReason::NotMounted);
         };
         canvas.set_class_name("bf-canvas");
@@ -253,12 +257,13 @@ fn schedule(inner: &Rc<RefCell<Inner>>, callback: &Rc<RefCell<Option<Closure<dyn
     if state.disposed || state.availability != Availability::Available {
         return;
     }
-    let (Some(window), Some(closure)) = (web_sys::window(), callback.borrow().as_ref().map(|c| c.as_ref().clone())) else {
+    let (Some(window), Some(closure)) = (
+        web_sys::window(),
+        callback.borrow().as_ref().map(|c| c.as_ref().clone()),
+    ) else {
         return;
     };
-    state.frame_handle = window
-        .request_animation_frame(closure.unchecked_ref())
-        .ok();
+    state.frame_handle = window.request_animation_frame(closure.unchecked_ref()).ok();
 }
 
 /// Moves to unavailable once: records the reason, tears everything down, stops the loop.
@@ -284,7 +289,9 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
         .last_timestamp
         .map_or(16.0, |last| (timestamp - last).clamp(0.0, 100.0));
     state.last_timestamp = Some(timestamp);
-    state.stage.update(Duration::from_secs_f64(delta_ms / 1000.0));
+    state
+        .stage
+        .update(Duration::from_secs_f64(delta_ms / 1000.0));
 
     let (Some(canvas), Some(renderer)) = (&state.canvas, &mut state.renderer) else {
         return;
@@ -332,10 +339,12 @@ fn spawn_splat_load(gpu: Rc<GpuCore>, layer: SplatLayer, pending: PendingSplats)
             }
             .load()
             .ok(),
-            SplatFormat::Splat => match textures::fetch_bytes(&layer.url, MAX_SPLAT_FILE_BYTES).await {
-                Ok(bytes) => SplatFileLoader { bytes: &bytes }.load().ok(),
-                Err(_) => None,
-            },
+            SplatFormat::Splat => {
+                match textures::fetch_bytes(&layer.url, MAX_SPLAT_FILE_BYTES).await {
+                    Ok(bytes) => SplatFileLoader { bytes: &bytes }.load().ok(),
+                    Err(_) => None,
+                }
+            }
             SplatFormat::Sog => load_sog(&gpu, &layer.url).await,
         };
         let Some(raw) = raw else {
@@ -359,11 +368,21 @@ async fn load_sog(gpu: &GpuCore, meta_url: &str) -> Option<Vec<super::splat::Raw
     let meta = SogMeta::parse(&meta_text).ok()?;
     let base = meta_url.rsplit_once('/').map_or("", |(base, _)| base);
     let plane = |name: &str| format!("{base}/{name}");
-    let means_l = textures::read_exact_rgba(gpu, &plane(&meta.means_files[0])).await.ok()?;
-    let means_u = textures::read_exact_rgba(gpu, &plane(&meta.means_files[1])).await.ok()?;
-    let quats = textures::read_exact_rgba(gpu, &plane(&meta.quats_file)).await.ok()?;
-    let scales = textures::read_exact_rgba(gpu, &plane(&meta.scales_file)).await.ok()?;
-    let sh0 = textures::read_exact_rgba(gpu, &plane(&meta.sh0_file)).await.ok()?;
+    let means_l = textures::read_exact_rgba(gpu, &plane(&meta.means_files[0]))
+        .await
+        .ok()?;
+    let means_u = textures::read_exact_rgba(gpu, &plane(&meta.means_files[1]))
+        .await
+        .ok()?;
+    let quats = textures::read_exact_rgba(gpu, &plane(&meta.quats_file))
+        .await
+        .ok()?;
+    let scales = textures::read_exact_rgba(gpu, &plane(&meta.scales_file))
+        .await
+        .ok()?;
+    let sh0 = textures::read_exact_rgba(gpu, &plane(&meta.sh0_file))
+        .await
+        .ok()?;
     SogLoader {
         meta: &meta,
         planes: SogPlanes {

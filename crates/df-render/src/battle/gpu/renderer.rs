@@ -373,7 +373,9 @@ impl Renderer {
         if self.cache.borrow().contains_key(stem) {
             return;
         }
-        self.cache.borrow_mut().insert(stem.to_owned(), Slot::Loading);
+        self.cache
+            .borrow_mut()
+            .insert(stem.to_owned(), Slot::Loading);
         let core = self.core.clone();
         let cache = self.cache.clone();
         let stem = stem.to_owned();
@@ -464,14 +466,21 @@ impl Renderer {
         }
         let bytes = cloud.len() * 48;
         let splat_buffer = buffer(&self.core, bytes, BUFFER_STORAGE | BUFFER_COPY_DST);
-        let order_buffer = buffer(&self.core, cloud.len() * 4, BUFFER_STORAGE | BUFFER_COPY_DST);
+        let order_buffer = buffer(
+            &self.core,
+            cloud.len() * 4,
+            BUFFER_STORAGE | BUFFER_COPY_DST,
+        );
         self.core
             .queue
             .write_buffer(&splat_buffer, 0.0, &float_array(&cloud.gpu_floats()));
         let group = bind_group(
             &self.core,
             &self.core.layout_splat,
-            vec![entry_buffer(0, &splat_buffer), entry_buffer(1, &order_buffer)],
+            vec![
+                entry_buffer(0, &splat_buffer),
+                entry_buffer(1, &order_buffer),
+            ],
         );
         self.stats.splats_loaded = cloud.len();
         self.sorter.invalidate();
@@ -485,7 +494,13 @@ impl Renderer {
         });
     }
 
-    fn write_frame(&self, frame: &FrameView<'_>, scene: &BattleScene, size: (u32, u32), forward: Vec3) {
+    fn write_frame(
+        &self,
+        frame: &FrameView<'_>,
+        scene: &BattleScene,
+        size: (u32, u32),
+        forward: Vec3,
+    ) {
         let pose = frame.camera;
         let aspect = size.0 as f32 / size.1 as f32;
         let view = pose.view();
@@ -545,7 +560,12 @@ impl Renderer {
             if grade.enabled { 1.0 } else { 0.0 },
         ]);
         data.extend_from_slice(&[grade.shadow[0], grade.shadow[1], grade.shadow[2], 0.0]);
-        data.extend_from_slice(&[grade.highlight[0], grade.highlight[1], grade.highlight[2], 0.0]);
+        data.extend_from_slice(&[
+            grade.highlight[0],
+            grade.highlight[1],
+            grade.highlight[2],
+            0.0,
+        ]);
         data.extend_from_slice(&[0.52, 0.5, 0.4, 3.2]);
         data.extend_from_slice(&[
             0.62,
@@ -586,7 +606,7 @@ impl Renderer {
             let at = grid.cell_centre(cell);
             let distance = ((at.x - centre.x).powi(2) + (at.z - centre.z).powi(2)).sqrt();
             let fade = 1.0 - 0.7 * ((distance - 3.0) / 6.0).clamp(0.0, 1.0);
-            let shape = [at.x, at.z, half * 0.98, half * 0.98];
+            let shape = [at.x, at.z, half, half];
             match highlighted(cell) {
                 Some(HighlightKind::Move) => {
                     push(shape, [0.45, 0.8, 1.0, 1.0], [1.0, 0.0, 0.0]);
@@ -654,8 +674,18 @@ impl Renderer {
                 figure.position.z,
                 figure.height_m,
             ]);
-            data.extend_from_slice(&[figure.lean, figure.alpha, figure.red_flash, figure.heal_glow]);
-            data.extend_from_slice(&[figure.tint[0], figure.tint[1], figure.tint[2], figure.breath]);
+            data.extend_from_slice(&[
+                figure.lean,
+                figure.alpha,
+                figure.red_flash,
+                figure.heal_glow,
+            ]);
+            data.extend_from_slice(&[
+                figure.tint[0],
+                figure.tint[1],
+                figure.tint[2],
+                figure.breath,
+            ]);
             data.extend_from_slice(&[
                 aspect,
                 kind,
@@ -675,9 +705,7 @@ impl Renderer {
         };
         if self.sorter.needs_sort(eye, forward) || splat.sorted_cap != cap {
             let active = cap.min(splat.cloud.len());
-            let order = self
-                .sorter
-                .sort(splat.cloud.splats(), active, eye, forward);
+            let order = self.sorter.sort(splat.cloud.splats(), active, eye, forward);
             splat.drawn = order.len() as u32;
             splat.sorted_cap = cap;
             if !order.is_empty() {

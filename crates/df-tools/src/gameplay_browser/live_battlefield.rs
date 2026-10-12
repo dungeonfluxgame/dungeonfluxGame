@@ -102,8 +102,20 @@ fn preview_tokens(scene: &BattleScene) -> Result<Vec<Token>, JsValue> {
     let formation = battle::derive_formation(&scene.grid, 2, 1)
         .map_err(|_| JsValue::from_str("battlefield formation has no room"))?;
     Ok(vec![
-        hero("tobin", "Tobin", formation.heroes[0], "figure-hero-1", "portrait-hero-1"),
-        hero("nimrael", "Nimrael", formation.heroes[1], "figure-hero-2", "portrait-hero-2"),
+        hero(
+            "tobin",
+            "Tobin",
+            formation.heroes[0],
+            "figure-hero-1",
+            "portrait-hero-1",
+        ),
+        hero(
+            "nimrael",
+            "Nimrael",
+            formation.heroes[1],
+            "figure-hero-2",
+            "portrait-hero-2",
+        ),
         Token {
             id: TokenId::new("goblin"),
             side: Side::Enemy,
@@ -137,10 +149,7 @@ fn preview_script() -> Vec<(u32, Beat)> {
     vec![
         (1, attack("tobin", "goblin", AttackResult::Miss, None)),
         (1, attack("goblin", "nimrael", hit(3, false), Some(9))),
-        (
-            2,
-            attack("nimrael", "goblin", hit(5, false), Some(7)),
-        ),
+        (2, attack("nimrael", "goblin", hit(5, false), Some(7))),
         (
             2,
             Beat::Heal {

@@ -729,6 +729,7 @@ dependencies = [
  "df-protocol",
  "df-provider-api",
  "df-providers",
+ "df-render",
  "df-rpc-bridge",
  "df-rules",
  "df-session",

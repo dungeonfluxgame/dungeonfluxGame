@@ -1,0 +1,325 @@
+//! Turns successive audience-safe combat views into stage input: tokens on the derived formation,
+//! and one staged beat per newly reported outcome. It is plain data in, stage calls out, so the
+//! browser adapter only has to copy the server's view into [`CombatSnapshot`].
+//!
+//! Everything here follows the server: a hit, a miss, damage and a downing are copied from the
+//! reported outcome; a hit-point rise with no outcome is staged as a heal; the first snapshot of a
+//! fight only sets the scene (history is never replayed). Cells come from the derived formation
+//! (staging only); server-supplied cells would replace [`CombatSnapshot::members`] positions.
+
+use std::collections::BTreeMap;
+
+use super::{
+    formation,
+    model::{AttackResult, Beat, HitPoints, Side, Token, TokenId},
+    stage::Stage,
+};
+
+const HERO_HEIGHT_M: f32 = 1.8;
+const ENEMY_HEIGHT_M: f32 = 1.6;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Member {
+    pub id: String,
+    pub name: String,
+    pub side: Side,
+    pub hit_points: u32,
+    pub maximum_hit_points: u32,
+    pub figure: Option<String>,
+    pub portrait: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Outcome {
+    pub actor: String,
+    pub target: String,
+    pub hit: bool,
+    pub critical: bool,
+    pub damage: u32,
+    pub target_hit_points_after: u32,
+    pub downed: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CombatSnapshot {
+    /// Party members in seat order, then enemies.
+    pub members: Vec<Member>,
+    pub active: Option<String>,
+    pub round: u32,
+    pub outcomes: Vec<Outcome>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FeedReport {
+    pub staged: u32,
+    /// Outcomes that named a participant the stage does not know, or arrived with a full queue.
+    pub dropped: u32,
+}
+
+#[derive(Debug, Default)]
+pub struct CombatFeed {
+    started: bool,
+    roster: Vec<String>,
+    seen_outcomes: usize,
+    last_active: Option<String>,
+    last_hit_points: BTreeMap<String, u32>,
+}
+
+fn token_for(member: &Member, cell: super::grid::Cell) -> Token {
+    Token {
+        id: TokenId::new(member.id.clone()),
+        side: member.side,
+        name: member.name.clone(),
+        cell,
+        height_m: match member.side {
+            Side::Hero => HERO_HEIGHT_M,
+            Side::Enemy => ENEMY_HEIGHT_M,
+        },
+        figure: member.figure.clone(),
+        portrait: member.portrait.clone(),
+        hit_points: (member.maximum_hit_points > 0).then_some(HitPoints {
+            current: member.hit_points,
+            maximum: member.maximum_hit_points,
+        }),
+        statuses: Vec::new(),
+    }
+}
+
+impl CombatFeed {
+    /// Brings `stage` in line with `snapshot`. Returns `None` when the formation has no room for
+    /// the roster, in which case the caller keeps the flat view.
+    pub fn apply(&mut self, stage: &mut Stage, snapshot: &CombatSnapshot) -> Option<FeedReport> {
+        let roster: Vec<String> = snapshot.members.iter().map(|m| m.id.clone()).collect();
+        let heroes = snapshot.members.iter().filter(|m| m.side == Side::Hero).count();
+        let enemies = snapshot.members.len() - heroes;
+        let layout = formation::derive(stage.grid(), heroes, enemies).ok()?;
+        let (mut hero_cells, mut enemy_cells) =
+            (layout.heroes.into_iter(), layout.enemies.into_iter());
+        let tokens: Vec<Token> = snapshot
+            .members
+            .iter()
+            .filter_map(|member| {
+                let cell = match member.side {
+                    Side::Hero => hero_cells.next(),
+                    Side::Enemy => enemy_cells.next(),
+                }?;
+                Some(token_for(member, cell))
+            })
+            .collect();
+        let roster_changed = roster != self.roster;
+        let mut report = FeedReport::default();
+
+        if !self.started || roster_changed {
+            // A new fight (or a changed roster): set the scene without replaying anything.
+            stage.set_tokens(tokens);
+            stage.establish();
+            self.started = true;
+            self.roster = roster;
+            self.seen_outcomes = snapshot.outcomes.len();
+            self.last_active = snapshot.active.clone();
+            self.last_hit_points = snapshot
+                .members
+                .iter()
+                .map(|member| (member.id.clone(), member.hit_points))
+                .collect();
+        } else {
+            stage.set_tokens(tokens);
+            for outcome in snapshot.outcomes.iter().skip(self.seen_outcomes) {
+                match stage.stage(beat_for(outcome)) {
+                    Ok(()) => report.staged += 1,
+                    Err(_) => report.dropped += 1,
+                }
+            }
+            self.seen_outcomes = snapshot.outcomes.len();
+            let outcome_targets: Vec<&str> = snapshot
+                .outcomes
+                .iter()
+                .skip(self.seen_outcomes.saturating_sub(report.staged as usize))
+                .map(|outcome| outcome.target.as_str())
+                .collect();
+            for member in &snapshot.members {
+                let before = self.last_hit_points.get(&member.id).copied();
+                let healed = before.is_some_and(|before| member.hit_points > before)
+                    && !outcome_targets.contains(&member.id.as_str());
+                if healed {
+                    let amount = member.hit_points - before.unwrap_or(0);
+                    let beat = Beat::Heal {
+                        source: TokenId::new(member.id.clone()),
+                        target: TokenId::new(member.id.clone()),
+                        amount,
+                        target_hit_points_after: Some(member.hit_points),
+                    };
+                    match stage.stage(beat) {
+                        Ok(()) => report.staged += 1,
+                        Err(_) => report.dropped += 1,
+                    }
+                }
+                self.last_hit_points
+                    .insert(member.id.clone(), member.hit_points);
+            }
+            if report.staged == 0
+                && snapshot.active != self.last_active
+                && let Some(active) = &snapshot.active
+            {
+                let beat = Beat::TurnStart {
+                    actor: TokenId::new(active.clone()),
+                };
+                if stage.stage(beat).is_err() {
+                    report.dropped += 1;
+                }
+            }
+            self.last_active = snapshot.active.clone();
+        }
+        stage.set_round(snapshot.round);
+        stage.set_active(snapshot.active.clone().map(TokenId::new));
+        stage.set_initiative(snapshot.members.iter().map(|m| TokenId::new(m.id.clone())).collect());
+        Some(report)
+    }
+}
+
+fn beat_for(outcome: &Outcome) -> Beat {
+    Beat::Attack {
+        attacker: TokenId::new(outcome.actor.clone()),
+        target: TokenId::new(outcome.target.clone()),
+        result: if outcome.hit || outcome.damage > 0 {
+            AttackResult::Hit {
+                damage: outcome.damage,
+                critical: outcome.critical,
+                downed: outcome.downed,
+            }
+        } else {
+            AttackResult::Miss
+        },
+        target_hit_points_after: Some(outcome.target_hit_points_after),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::battle::scene_file::load_embedded;
+    use std::time::Duration;
+
+    fn member(id: &str, side: Side, hp: u32) -> Member {
+        Member {
+            id: id.to_owned(),
+            name: id.to_uppercase(),
+            side,
+            hit_points: hp,
+            maximum_hit_points: 12,
+            figure: None,
+            portrait: None,
+        }
+    }
+
+    fn snapshot(outcomes: Vec<Outcome>, hp: [u32; 3]) -> CombatSnapshot {
+        CombatSnapshot {
+            members: vec![
+                member("a", Side::Hero, hp[0]),
+                member("b", Side::Hero, hp[1]),
+                member("e", Side::Enemy, hp[2]),
+            ],
+            active: Some("a".to_owned()),
+            round: 1,
+            outcomes,
+        }
+    }
+
+    fn stage() -> Stage {
+        Stage::new(load_embedded("salt-quay").unwrap().unwrap(), false)
+    }
+
+    fn strike(hit: bool, damage: u32, after: u32, downed: bool) -> Outcome {
+        Outcome {
+            actor: "a".to_owned(),
+            target: "e".to_owned(),
+            hit,
+            critical: false,
+            damage,
+            target_hit_points_after: after,
+            downed,
+        }
+    }
+
+    #[test]
+    fn the_first_snapshot_sets_the_scene_and_does_not_replay_history() {
+        let mut stage = stage();
+        let mut feed = CombatFeed::default();
+        let history = vec![strike(true, 4, 8, false), strike(false, 0, 8, false)];
+        let report = feed.apply(&mut stage, &snapshot(history, [12, 12, 8])).unwrap();
+        assert_eq!(report, FeedReport::default());
+        assert!(!stage.is_busy());
+        assert_eq!(stage.tokens().count(), 3);
+        assert_eq!(stage.hud().round, 1);
+    }
+
+    #[test]
+    fn a_new_outcome_is_staged_once_and_not_again_on_a_redraw() {
+        let mut stage = stage();
+        let mut feed = CombatFeed::default();
+        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 12])).unwrap();
+        let after = snapshot(vec![strike(true, 5, 7, false)], [12, 12, 7]);
+        assert_eq!(feed.apply(&mut stage, &after).unwrap().staged, 1);
+        assert!(stage.is_busy());
+        assert_eq!(feed.apply(&mut stage, &after).unwrap().staged, 0);
+    }
+
+    #[test]
+    fn a_downing_outcome_ends_with_the_enemy_fallen_and_the_finishing_card_shown_then_cleared() {
+        let mut stage = stage();
+        let mut feed = CombatFeed::default();
+        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 5])).unwrap();
+        feed.apply(&mut stage, &snapshot(vec![strike(true, 6, 0, true)], [12, 12, 0]))
+            .unwrap();
+        let mut saw_card = false;
+        for _ in 0..400 {
+            stage.update(Duration::from_millis(50));
+            saw_card |= stage.hud().finishing_blow.is_some();
+        }
+        assert!(saw_card && stage.hud().finishing_blow.is_none());
+        let frame = stage.frame();
+        let enemy = frame.figures.iter().find(|f| f.id.0 == "e").unwrap();
+        assert!(enemy.alpha < 0.5);
+    }
+
+    #[test]
+    fn a_hit_point_rise_without_an_outcome_is_staged_as_a_heal() {
+        let mut stage = stage();
+        let mut feed = CombatFeed::default();
+        feed.apply(&mut stage, &snapshot(vec![], [6, 12, 12])).unwrap();
+        let report = feed.apply(&mut stage, &snapshot(vec![], [10, 12, 12])).unwrap();
+        assert_eq!(report.staged, 1);
+        assert!(stage.is_busy());
+    }
+
+    #[test]
+    fn a_turn_change_alone_stages_a_turn_focus_and_an_unknown_participant_is_counted() {
+        let mut stage = stage();
+        let mut feed = CombatFeed::default();
+        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 12])).unwrap();
+        let mut next = snapshot(vec![], [12, 12, 12]);
+        next.active = Some("b".to_owned());
+        feed.apply(&mut stage, &next).unwrap();
+        assert!(stage.is_busy());
+
+        let mut ghost = strike(true, 1, 3, false);
+        ghost.actor = "ghost".to_owned();
+        let mut with_ghost = snapshot(vec![ghost], [12, 12, 11]);
+        with_ghost.active = Some("b".to_owned());
+        let report = feed.apply(&mut stage, &with_ghost).unwrap();
+        assert_eq!(report.dropped, 1);
+    }
+
+    #[test]
+    fn a_changed_roster_resets_without_replay() {
+        let mut stage = stage();
+        let mut feed = CombatFeed::default();
+        feed.apply(&mut stage, &snapshot(vec![strike(true, 1, 11, false)], [12, 12, 11]))
+            .unwrap();
+        let mut smaller = snapshot(vec![], [12, 12, 12]);
+        smaller.members.pop();
+        let report = feed.apply(&mut stage, &smaller).unwrap();
+        assert_eq!(report, FeedReport::default());
+        assert_eq!(stage.tokens().count(), 2);
+    }
+}
