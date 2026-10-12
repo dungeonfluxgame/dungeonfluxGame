@@ -1,0 +1,335 @@
+{
+  "entry": "room",
+  "terminal": [
+    "peaceful-destination"
+  ],
+  "labels": {
+    "continue-label": "Continue the conversation",
+    "look-crate-label": "Look at the crates",
+    "look-desk-label": "Look at the desk",
+    "leave-label": "Continue toward the destination"
+  },
+  "beats": [
+    {
+      "id": "room",
+      "kind": "gather",
+      "scene": "room",
+      "state": {
+        "durable": "room"
+      },
+      "offers": [
+        {
+          "id": "create-character",
+          "label_slot": "create-character",
+          "effect": "create-character"
+        },
+        {
+          "id": "begin-story",
+          "label_slot": "begin-story",
+          "effect": "begin-story"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "create-character"
+          },
+          "target": "room"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "begin-story"
+          },
+          "target": "opening"
+        }
+      ]
+    },
+    {
+      "id": "opening",
+      "kind": "investigate",
+      "scene": "opening",
+      "state": {
+        "durable": "opening",
+        "chosen_offer": "begin-story"
+      },
+      "offers": [
+        {
+          "id": "look-crates",
+          "effect": "observe",
+          "label_slot": "look-crate-label"
+        },
+        {
+          "id": "look-desk",
+          "effect": "observe",
+          "label_slot": "look-desk-label"
+        },
+        {
+          "id": "ask-courier",
+          "effect": "ask-courier",
+          "label_slot": "ask-courier"
+        },
+        {
+          "id": "leave-investigation",
+          "effect": "continue",
+          "label_slot": "leave-label"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "look-crates"
+          },
+          "target": "observed-crates"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "look-desk"
+          },
+          "target": "observed-desk"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "ask-courier"
+          },
+          "target": "courier-answer-seal"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "leave-investigation"
+          },
+          "target": "peaceful-travel"
+        }
+      ]
+    },
+    {
+      "id": "observed-crates",
+      "kind": "investigate",
+      "scene": "opening",
+      "state": {
+        "durable": "opening",
+        "chosen_offer": "look-crates"
+      },
+      "offers": [
+        {
+          "id": "look-crates",
+          "effect": "observe",
+          "label_slot": "look-crate-label"
+        },
+        {
+          "id": "look-desk",
+          "effect": "observe",
+          "label_slot": "look-desk-label"
+        },
+        {
+          "id": "ask-courier",
+          "effect": "ask-courier",
+          "label_slot": "ask-courier"
+        },
+        {
+          "id": "leave-investigation",
+          "effect": "continue",
+          "label_slot": "leave-label"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "look-crates"
+          },
+          "target": "observed-crates"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "look-desk"
+          },
+          "target": "observed-desk"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "ask-courier"
+          },
+          "target": "courier-answer-seal"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "leave-investigation"
+          },
+          "target": "peaceful-travel"
+        }
+      ],
+      "scene_variant": "crates"
+    },
+    {
+      "id": "observed-desk",
+      "kind": "investigate",
+      "scene": "opening",
+      "state": {
+        "durable": "opening",
+        "chosen_offer": "look-desk"
+      },
+      "offers": [
+        {
+          "id": "look-crates",
+          "effect": "observe",
+          "label_slot": "look-crate-label"
+        },
+        {
+          "id": "look-desk",
+          "effect": "observe",
+          "label_slot": "look-desk-label"
+        },
+        {
+          "id": "ask-courier",
+          "effect": "ask-courier",
+          "label_slot": "ask-courier"
+        },
+        {
+          "id": "leave-investigation",
+          "effect": "continue",
+          "label_slot": "leave-label"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "look-crates"
+          },
+          "target": "observed-crates"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "look-desk"
+          },
+          "target": "observed-desk"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "ask-courier"
+          },
+          "target": "courier-answer-seal"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "leave-investigation"
+          },
+          "target": "peaceful-travel"
+        }
+      ],
+      "scene_variant": "desk"
+    },
+    {
+      "id": "courier-answer-seal",
+      "kind": "narrate",
+      "scene": "dialogue-seal",
+      "state": {
+        "durable": "courier-answer-seal"
+      },
+      "offers": [
+        {
+          "id": "continue-conversation",
+          "effect": "continue",
+          "label_slot": "continue-label"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "continue-conversation"
+          },
+          "target": "peaceful-travel"
+        }
+      ]
+    },
+    {
+      "id": "peaceful-travel",
+      "kind": "travel",
+      "scene": "dialogue-escort",
+      "state": {
+        "durable": "peaceful-travel"
+      },
+      "offers": [
+        {
+          "id": "choose-harbor-scene",
+          "effect": "choose-harbor-scene",
+          "label_slot": "choose-harbor-scene"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "choose-harbor-scene"
+          },
+          "target": "peaceful-destination"
+        }
+      ]
+    },
+    {
+      "id": "peaceful-destination",
+      "kind": "conclude",
+      "scene": "inn",
+      "state": {
+        "durable": "peaceful-destination"
+      },
+      "offers": [],
+      "transitions": []
+    }
+  ],
+  "scenes": {
+    "crates": {
+      "key": "opening",
+      "title": "Look at the crates",
+      "narration": "Fresh rope binds the crates. A chalk arrow points toward the courier\u2019s destination.",
+      "speaker": "Courier",
+      "dialogue": "",
+      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "cast": [
+        {
+          "id": "courier",
+          "name": "Courier",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-courier",
+          "portrait": "assets/ui/generated/portrait-courier",
+          "voice": "hurried and anxious",
+          "gender": "he",
+          "age": "young"
+        }
+      ]
+    },
+    "desk": {
+      "key": "opening",
+      "title": "Look at the desk",
+      "narration": "On the desk, a public shipping list names the road ahead. The ink is still wet.",
+      "speaker": "Courier",
+      "dialogue": "",
+      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "cast": [
+        {
+          "id": "courier",
+          "name": "Courier",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-courier",
+          "portrait": "assets/ui/generated/portrait-courier",
+          "voice": "hurried and anxious",
+          "gender": "he",
+          "age": "young"
+        }
+      ]
+    }
+  }
+}

@@ -1014,3 +1014,76 @@ fn print_the_adventure_prompt_sizes() {
         }
     }
 }
+
+#[test]
+fn script_slot_registration_preserves_existing_semantic_privacy_lints_and_accepted_text_replay() {
+    let tables = tables();
+    for kind in ["mystery", "parley"] {
+        let forced =
+            ForcedEntries::from([(super::super::beat_tables::CHAPTER_TYPE.into(), kind.into())]);
+        let baseline =
+            super::super::generate(&tables, 7, GenerateOptions::default(), &forced).unwrap();
+        let planned = plan(&baseline).unwrap();
+        let extra = planned
+            .iter()
+            .filter(|slot| slot.name.starts_with("beat_"))
+            .collect::<Vec<_>>();
+        assert!(!extra.is_empty());
+        assert!(extra.iter().all(|slot| {
+            slot.sheet.beat == "scene-flow"
+                && slot
+                    .sheet
+                    .facts
+                    .keys()
+                    .all(|key| !key.starts_with("secret."))
+        }));
+        let known = BTreeSet::new();
+        let specific = BTreeSet::new();
+        for slot in &extra {
+            match slot.sheet.slot.as_str() {
+                "title" => assert_eq!(
+                    semantic_problem(slot.sheet, "Safe at Last", &known, &specific),
+                    Some("title")
+                ),
+                "narration" | "line" => assert_eq!(
+                    semantic_problem(slot.sheet, "\"Quoted business.\"", &known, &specific),
+                    Some("quotation_marks")
+                ),
+                "beat_label" => assert!(slot.sheet.slot.ends_with("_label")),
+                _ => panic!("unregistered semantic category"),
+            }
+        }
+        let public = group_facts(&baseline, &planned, false, None);
+        assert!(public.get("secret").is_none());
+        let mut texts = vec![None; baseline.fact_sheet.len()];
+        let label = extra
+            .iter()
+            .find(|slot| slot.sheet.slot == "beat_label")
+            .unwrap();
+        texts[label.sheet_index] = Some("Proceed together".into());
+        let accepted = AcceptedText {
+            texts,
+            position: Cell::new(0),
+            used: RefCell::new(BTreeSet::new()),
+        };
+        let rebuilt =
+            generate_with_prose(&tables, 7, GenerateOptions::default(), &forced, &accepted)
+                .unwrap();
+        assert!(
+            rebuilt
+                .pack
+                .beat_script
+                .as_ref()
+                .unwrap()
+                .labels
+                .values()
+                .any(|value| value == "Proceed together")
+        );
+        assert_eq!(rebuilt.rolls, baseline.rolls);
+        assert_eq!(rebuilt.tuning, baseline.tuning);
+        assert!(accepted.used.borrow().contains(&label.sheet_index));
+        let mut malformed = baseline.clone();
+        malformed.fact_sheet.last_mut().unwrap().slot = "unknown-slot".into();
+        assert!(matches!(plan(&malformed), Err(Declined::Layout)));
+    }
+}

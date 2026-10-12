@@ -1,4 +1,7 @@
 //! Pure, server-owned chapter generation; governing design: adventure-generator §§1–12.
+#[cfg(test)]
+mod beat_generation_tests;
+mod beat_tables;
 mod bounds;
 pub(crate) mod campaign;
 pub(crate) mod campaign_completion;

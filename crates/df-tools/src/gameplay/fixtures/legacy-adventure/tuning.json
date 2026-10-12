@@ -1,0 +1,117 @@
+{
+  "schema": "df-gameplay-tuning/1",
+  "pack": "adv-000000000000002a",
+  "hero": {
+    "armor_class": 17,
+    "proficiency_bonus": 2,
+    "base_hit_points": 11,
+    "ability_arrays": [
+      {
+        "id": "stalwart",
+        "scores": [
+          15,
+          13,
+          14,
+          10,
+          12,
+          8
+        ]
+      },
+      {
+        "id": "vanguard",
+        "scores": [
+          15,
+          14,
+          13,
+          8,
+          10,
+          12
+        ]
+      }
+    ],
+    "background_bonus": {
+      "strength": 2,
+      "constitution": 1
+    },
+    "second_wind": {
+      "uses_max": 2,
+      "die_sides": 10,
+      "flat_bonus": 1,
+      "recharge_per_short_rest": 1
+    },
+    "weapon": {
+      "item": "greatsword",
+      "damage_dice": 2,
+      "damage_sides": 6
+    }
+  },
+  "bandit": {
+    "hit_points": 7,
+    "armor_class": 13,
+    "abilities": {
+      "strength": 7,
+      "dexterity": 16,
+      "constitution": 11,
+      "intelligence": 2,
+      "wisdom": 10,
+      "charisma": 4
+    },
+    "attack_bonus": 5,
+    "damage_modifier": 3,
+    "weapon": {
+      "label": "bite",
+      "damage_dice": 1,
+      "damage_sides": 4
+    }
+  },
+  "combat": {
+    "round_ticks": 6,
+    "critical_threshold": 20,
+    "combat_log_entries": 6
+  },
+  "rest": {
+    "short_rest_seconds": 3600
+  },
+  "narrative": {
+    "intervention_budget": 8
+  },
+  "tempo": {
+    "base_intensity_permille": {
+      "room": 60,
+      "opening": 260,
+      "dialogue": 480,
+      "combat": 720,
+      "victory": 200,
+      "defeat": 300,
+      "rest": 80,
+      "arrival": 60
+    },
+    "impulses_permille": {
+      "story_begun": 180,
+      "scene_changed": 30,
+      "antagonist_revealed": 180,
+      "combat_begun": 220,
+      "miss": 20,
+      "hit": 65,
+      "critical": 150,
+      "graze": 40,
+      "hero_low": 180,
+      "combatant_dropped": 100,
+      "victory": -200,
+      "defeat": -80,
+      "short_rest": -140,
+      "arrival": -80
+    },
+    "inertia_half_life_millis": 2000,
+    "decay_half_life_millis": 6000,
+    "fatigue_half_life_millis": 20000,
+    "fatigue_charge_permille": 60,
+    "fatigue_attenuation_permille": 500,
+    "phase_thresholds_permille": [
+      200,
+      450,
+      650
+    ],
+    "hysteresis_permille": 20
+  }
+}
