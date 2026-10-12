@@ -41,12 +41,13 @@ pub use model::{
     Highlight, HighlightKind, HitPoints, HudState, RollCard, Side, Status, Token, TokenId,
 };
 pub use scene_file::{
-    BackdropLayer, BattleScene, DEFAULT_SCENE_ID, GroundLayer, SceneFileError, SplatFormat,
-    SplatLayer, embedded_ids, load_embedded, parse as parse_scene,
+    Attribution, BackdropLayer, BattleScene, DEFAULT_SCENE_ID, Distribution, GroundLayer,
+    SceneFileError, SplatFormat, SplatGrade, SplatLayer, embedded_ids, load_embedded, parse as parse_scene,
 };
 pub use splat::{
-    ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, Splat, SplatCloud, SplatError,
-    SplatFileLoader, SplatLoader, SplatSorter, SplatTransform, encode_splat_file,
+    ProceduralGround, RECORD_WORDS, RawSplat, SogLoader, SogMeta, SogPlanes, Splat, SplatCloud, SplatError,
+    SplatFileLoader, SplatLoader, SplatSorter, SplatTransform, encode_splat_file, orientation_from_euler_deg,
+    pack_record, pack_records,
 };
 pub use stage::{FigureView, FlashView, FrameView, Stage, StageError};
 pub use terrain::{

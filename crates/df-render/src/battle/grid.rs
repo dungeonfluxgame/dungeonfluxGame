@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use super::math::Vec3;
+use super::{math::Vec3, terrain::HeightField};
 
 pub const MAX_GRID_SIDE: u32 = 64;
 
@@ -44,6 +44,8 @@ pub struct Grid {
     cols: u32,
     rows: u32,
     walkable: Vec<bool>,
+    /// Ground height under the grid, for scenes whose floor is not flat (a scanned place).
+    terrain: Option<HeightField>,
 }
 
 impl Grid {
@@ -80,6 +82,7 @@ impl Grid {
             cols,
             rows,
             walkable,
+            terrain: None,
         })
     }
 
@@ -99,6 +102,23 @@ impl Grid {
             }
         }
         Ok(grid)
+    }
+
+    /// The same grid standing on uneven ground: cell centres take the field's height.
+    pub fn with_terrain(mut self, terrain: HeightField) -> Self {
+        self.terrain = Some(terrain);
+        self
+    }
+
+    pub fn terrain(&self) -> Option<&HeightField> {
+        self.terrain.as_ref()
+    }
+
+    /// Ground height at a world point (`0` on a flat grid).
+    pub fn ground_height(&self, x: f32, z: f32) -> f32 {
+        self.terrain
+            .as_ref()
+            .map_or(0.0, |terrain| terrain.height_at(x, z))
     }
 
     pub fn origin(&self) -> [f32; 2] {
@@ -141,13 +161,11 @@ impl Grid {
         })
     }
 
-    /// The centre of the cell on the ground plane (`y` = 0).
+    /// The centre of the cell on the ground (`y` = 0 unless the grid has terrain).
     pub fn cell_centre(&self, cell: Cell) -> Vec3 {
-        Vec3::new(
-            self.origin[0] + (cell.col as f32 + 0.5) * self.cell_m,
-            0.0,
-            self.origin[1] + (cell.row as f32 + 0.5) * self.cell_m,
-        )
+        let x = self.origin[0] + (cell.col as f32 + 0.5) * self.cell_m;
+        let z = self.origin[1] + (cell.row as f32 + 0.5) * self.cell_m;
+        Vec3::new(x, self.ground_height(x, z), z)
     }
 
     /// The cell under a ground-plane point, or `None` outside the grid.
@@ -161,13 +179,11 @@ impl Grid {
         self.in_bounds(cell).then_some(cell)
     }
 
-    /// The middle of the whole grid on the ground plane.
+    /// The middle of the whole grid on the ground.
     pub fn centre(&self) -> Vec3 {
-        Vec3::new(
-            self.origin[0] + self.cols as f32 * self.cell_m * 0.5,
-            0.0,
-            self.origin[1] + self.rows as f32 * self.cell_m * 0.5,
-        )
+        let x = self.origin[0] + self.cols as f32 * self.cell_m * 0.5;
+        let z = self.origin[1] + self.rows as f32 * self.cell_m * 0.5;
+        Vec3::new(x, self.ground_height(x, z), z)
     }
 
     /// Shortest eight-way path between two walkable cells, both ends included. Diagonal steps

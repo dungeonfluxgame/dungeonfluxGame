@@ -197,6 +197,21 @@ fn quantiser(
 }
 
 impl SogMeta {
+    /// The log-space range the 16-bit positions are spread over, per axis (`mins`, `maxs`).
+    pub fn means_range(&self) -> ([f32; 3], [f32; 3]) {
+        self.means
+    }
+
+    /// The 256-entry scale and colour codebooks of a version 2 file; `None` for version 1, whose
+    /// min/max quantisation the GPU decoder does not implement.
+    pub fn codebooks(&self) -> Option<([f32; 256], [f32; 256])> {
+        let table = |quantiser: &Quantiser| match quantiser {
+            Quantiser::Codebook(values) => <[f32; 256]>::try_from(values.as_slice()).ok(),
+            Quantiser::Range(..) => None,
+        };
+        Some((table(&self.scales)?, table(&self.colours)?))
+    }
+
     pub fn parse(json: &str) -> Result<Self, SplatError> {
         let meta: SogMetaFile =
             serde_json::from_str(json).map_err(|_| SplatError::MetaInvalid("json"))?;
@@ -435,13 +450,17 @@ impl SplatLoader for ProceduralGround {
     }
 }
 
-/// Placement of a splat scene on the battlefield floor (the earlier build's `transform`).
+/// Placement of a splat scene on the battlefield floor (the earlier build's `transform`), plus
+/// the orientation that turns a scan's own axes upright. A scan point goes through `orient`
+/// (a scan is often upside down or lying on its side), then the yaw about the vertical axis, then
+/// the uniform scale, then the offsets.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SplatTransform {
     pub scale: f32,
     pub offset_y: f32,
     pub rot_y_deg: f32,
     pub translate: Vec3,
+    pub orient: Quat,
 }
 
 impl SplatTransform {
@@ -450,7 +469,52 @@ impl SplatTransform {
         offset_y: 0.0,
         rot_y_deg: 0.0,
         translate: Vec3::ZERO,
+        orient: Quat::IDENTITY,
     };
+
+    /// The scan-to-world rotation (orientation then yaw).
+    pub fn rotation(&self) -> Quat {
+        Quat::from_axis_angle_y(self.rot_y_deg.to_radians())
+            .compose(self.orient)
+            .normalized()
+    }
+
+    fn offset(&self) -> Vec3 {
+        Vec3::new(0.0, self.offset_y, 0.0) + self.translate
+    }
+
+    pub fn to_world(&self, scan: Vec3) -> Vec3 {
+        self.rotation().rotate(scan * self.scale) + self.offset()
+    }
+
+    pub fn to_scan(&self, world: Vec3) -> Vec3 {
+        let q = self.rotation();
+        let inverse = Quat::new(-q.x, -q.y, -q.z, q.w);
+        inverse.rotate(world - self.offset()) * (1.0 / self.scale)
+    }
+
+    /// Row-major 3x3 (rotation times scale) and the translation: `world = m * scan + t`.
+    pub fn affine(&self) -> ([[f32; 3]; 3], Vec3) {
+        let mut m = self.rotation().to_matrix3();
+        for row in &mut m {
+            for value in row.iter_mut() {
+                *value *= self.scale;
+            }
+        }
+        (m, self.offset())
+    }
+}
+
+/// Rotation about X, then Y, then Z by the given degrees: the way a scene file states the
+/// orientation of a scan.
+pub fn orientation_from_euler_deg(degrees: [f32; 3]) -> Quat {
+    let about = |axis: Vec3, degrees: f32| {
+        let half = degrees.to_radians() * 0.5;
+        Quat::new(axis.x * half.sin(), axis.y * half.sin(), axis.z * half.sin(), half.cos())
+    };
+    about(Vec3::new(0.0, 0.0, 1.0), degrees[2])
+        .compose(about(Vec3::new(0.0, 1.0, 0.0), degrees[1]))
+        .compose(about(Vec3::new(1.0, 0.0, 0.0), degrees[0]))
 }
 
 /// A baked splat ready for the GPU: world position, straight RGBA, world covariance
@@ -481,7 +545,7 @@ impl SplatCloud {
     /// size), most important first. Splats with non-finite values are dropped, and the count
     /// is reported so a scan with bad data is visible rather than silently shorter.
     pub fn bake(raw: &[RawSplat], transform: SplatTransform) -> (Self, usize) {
-        let yaw = Quat::from_axis_angle_y(transform.rot_y_deg.to_radians());
+        let turn = transform.rotation();
         let mut dropped = 0;
         let mut ranked: Vec<(f32, Splat)> = Vec::with_capacity(raw.len());
         for splat in raw {
@@ -490,10 +554,8 @@ impl SplatCloud {
                 continue;
             }
             let scale = splat.scale * transform.scale;
-            let rotation = yaw.compose(splat.rotation).normalized();
-            let centre = yaw.rotate(splat.position * transform.scale)
-                + Vec3::new(0.0, transform.offset_y, 0.0)
-                + transform.translate;
+            let rotation = turn.compose(splat.rotation).normalized();
+            let centre = transform.to_world(splat.position);
             let size = (scale.x * scale.y * scale.z).abs().cbrt();
             ranked.push((
                 splat.colour[3] as f32 * size,
@@ -548,6 +610,72 @@ impl SplatCloud {
         }
         out
     }
+}
+
+/// Floats per GPU splat record: position (3), colour RGBA8 (1), rotation as two packed snorm16
+/// pairs (2) and scale as two packed f16 pairs (2): eight 32-bit words, 32 bytes.
+pub const RECORD_WORDS: usize = 8;
+
+/// IEEE half-precision bits of `value` (round to nearest, saturating at the largest finite half).
+pub fn f32_to_f16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let magnitude = value.abs();
+    if magnitude.is_nan() {
+        return sign | 0x7e00;
+    }
+    if magnitude >= 65504.0 {
+        return sign | 0x7bff;
+    }
+    if magnitude < 6.103_515_6e-5 {
+        // Subnormal halves are multiples of 2^-24.
+        return sign | (magnitude * 16_777_216.0).round() as u16;
+    }
+    let exponent = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+    let mantissa = (bits & 0x007f_ffff) as f32 / 8_388_608.0;
+    let half = ((exponent as u32) << 10) + (mantissa * 1024.0).round() as u32;
+    sign | half as u16
+}
+
+fn snorm16_bits(value: f32) -> u32 {
+    u32::from((value.clamp(-1.0, 1.0) * 32767.0).round() as i16 as u16)
+}
+
+/// Packs one splat, already placed in the world, into the eight words the splat shaders read.
+pub fn pack_record(centre: Vec3, scale: Vec3, rotation: Quat, colour: [u8; 4]) -> [u32; RECORD_WORDS] {
+    let q = rotation.normalized();
+    let half = |a: f32, b: f32| u32::from(f32_to_f16_bits(a)) | (u32::from(f32_to_f16_bits(b)) << 16);
+    [
+        centre.x.to_bits(),
+        centre.y.to_bits(),
+        centre.z.to_bits(),
+        u32::from_le_bytes(colour),
+        snorm16_bits(q.x) | (snorm16_bits(q.y) << 16),
+        snorm16_bits(q.z) | (snorm16_bits(q.w) << 16),
+        half(scale.x, scale.y),
+        half(scale.z, 0.0),
+    ]
+}
+
+/// Places `raw` splats with `transform` and packs them into GPU records. Splats with non-finite
+/// values are dropped and counted, as in [`SplatCloud::bake`].
+pub fn pack_records(raw: &[RawSplat], transform: SplatTransform) -> (Vec<u32>, usize) {
+    let turn = transform.rotation();
+    let mut words = Vec::with_capacity(raw.len() * RECORD_WORDS);
+    let mut dropped = 0;
+    for splat in raw {
+        if !splat.position.is_finite() || !splat.scale.is_finite() {
+            dropped += 1;
+            continue;
+        }
+        words.extend_from_slice(&pack_record(
+            transform.to_world(splat.position),
+            splat.scale * transform.scale,
+            turn.compose(splat.rotation),
+            splat.colour,
+        ));
+    }
+    (words, dropped)
 }
 
 const SORT_BUCKETS: usize = 1 << 16;
@@ -888,6 +1016,7 @@ mod tests {
                 offset_y: 1.0,
                 rot_y_deg: 90.0,
                 translate: Vec3::new(0.0, 0.0, 10.0),
+                orient: Quat::IDENTITY,
             },
         );
         assert_eq!(dropped, 0);
@@ -1013,5 +1142,90 @@ mod tests {
         assert!(sorter.needs_sort(eye, turned));
         sorter.invalidate();
         assert!(sorter.needs_sort(eye, forward));
+    }
+
+    fn half_to_f32(bits: u16) -> f32 {
+        let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+        let exponent = i32::from((bits >> 10) & 0x1f);
+        let mantissa = f32::from(bits & 0x3ff);
+        match exponent {
+            0 => sign * mantissa * 2f32.powi(-24),
+            31 => sign * f32::INFINITY,
+            _ => sign * (1.0 + mantissa / 1024.0) * 2f32.powi(exponent - 15),
+        }
+    }
+
+    #[test]
+    fn half_precision_packing_round_trips_scales_and_saturates() {
+        for value in [0.0f32, 1.0, 0.5, 0.0123, 3.7, 0.0001, -2.5, 1000.0] {
+            let back = half_to_f32(f32_to_f16_bits(value));
+            assert!((back - value).abs() <= value.abs() * 0.001 + 1e-7, "{value} -> {back}");
+        }
+        assert_eq!(half_to_f32(f32_to_f16_bits(1e9)), 65504.0);
+        assert_eq!(f32_to_f16_bits(f32::NAN) & 0x7c00, 0x7c00);
+    }
+
+    #[test]
+    fn packed_records_hold_position_colour_rotation_and_scale() {
+        let rotation = Quat::new(0.1, -0.5, 0.3, 0.8).normalized();
+        let words = pack_record(
+            Vec3::new(1.5, -2.0, 3.25),
+            Vec3::new(0.05, 0.2, 1.5),
+            rotation,
+            [10, 20, 30, 200],
+        );
+        assert_eq!(f32::from_bits(words[0]), 1.5);
+        assert_eq!(f32::from_bits(words[2]), 3.25);
+        assert_eq!(words[3].to_le_bytes(), [10, 20, 30, 200]);
+        let snorm = |bits: u32| f32::from(bits as u16 as i16) / 32767.0;
+        assert!((snorm(words[4]) - rotation.x).abs() < 1e-4);
+        assert!((snorm(words[4] >> 16) - rotation.y).abs() < 1e-4);
+        assert!((snorm(words[5] >> 16) - rotation.w).abs() < 1e-4);
+        assert!((half_to_f32(words[6] as u16) - 0.05).abs() < 1e-4);
+        assert!((half_to_f32((words[7] & 0xffff) as u16) - 1.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn packing_applies_the_transform_and_counts_dropped_splats() {
+        let bad = RawSplat {
+            scale: Vec3::new(f32::NAN, 1.0, 1.0),
+            ..raw(0.0, 0.0, 0.0)
+        };
+        let transform = SplatTransform {
+            scale: 2.0,
+            translate: Vec3::new(0.0, 0.0, 5.0),
+            ..SplatTransform::IDENTITY
+        };
+        let (words, dropped) = pack_records(&[raw(1.0, 1.0, 0.0), bad], transform);
+        assert_eq!((words.len(), dropped), (RECORD_WORDS, 1));
+        assert_eq!(f32::from_bits(words[0]), 2.0);
+        assert_eq!(f32::from_bits(words[2]), 5.0);
+        assert!((half_to_f32(words[6] as u16) - 0.2).abs() < 1e-3, "scale doubled");
+    }
+
+    #[test]
+    fn orientation_turns_a_y_down_scan_upright_and_the_transform_inverts() {
+        // A scan with its up axis along -Y: rotating 180 degrees about X makes -Y point up.
+        let orient = orientation_from_euler_deg([180.0, 0.0, 0.0]);
+        let transform = SplatTransform {
+            scale: 0.5,
+            offset_y: 1.0,
+            rot_y_deg: 30.0,
+            translate: Vec3::new(2.0, 0.0, -3.0),
+            orient,
+        };
+        let up = transform.rotation().rotate(Vec3::new(0.0, -1.0, 0.0));
+        assert!((up.y - 1.0).abs() < 1e-5 && up.x.abs() < 1e-5, "{up:?}");
+        let scan = Vec3::new(4.0, -6.0, 9.0);
+        let back = transform.to_scan(transform.to_world(scan));
+        assert!((back - scan).length() < 1e-4, "{back:?}");
+        let (matrix, translation) = transform.affine();
+        let world = transform.to_world(scan);
+        let by_matrix = Vec3::new(
+            matrix[0][0] * scan.x + matrix[0][1] * scan.y + matrix[0][2] * scan.z,
+            matrix[1][0] * scan.x + matrix[1][1] * scan.y + matrix[1][2] * scan.z,
+            matrix[2][0] * scan.x + matrix[2][1] * scan.y + matrix[2][2] * scan.z,
+        ) + translation;
+        assert!((by_matrix - world).length() < 1e-4);
     }
 }

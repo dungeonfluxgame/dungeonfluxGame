@@ -14,11 +14,15 @@ use serde::Deserialize;
 use super::{
     camera::{CameraPose, PoseError, ShotName},
     grid::{Cell, Grid, GridError},
-    math::Vec3,
+    math::{Quat, Vec3},
+    splat::orientation_from_euler_deg,
+    terrain::{HeightField, TerrainError},
     theme::Theme,
 };
 
-pub const SCHEMA_VERSION: u32 = 1;
+/// The current schema. Version 1 files (no layouts) still load.
+pub const SCHEMA_VERSION: u32 = 2;
+const OLDEST_SCHEMA_VERSION: u32 = 1;
 /// The only place a splat scene may be fetched from.
 pub const SPLAT_ROUTE_PREFIX: &str = "/assets/splat/";
 
@@ -34,6 +38,11 @@ pub enum SceneFileError {
     CameraUnknown(String),
     Layer(&'static str),
     Splat(&'static str),
+    Terrain(TerrainError),
+    Distribution(String),
+    Attribution(&'static str),
+    /// Layouts in a version 1 file.
+    NeedsSchemaTwo(&'static str),
 }
 
 #[derive(Deserialize)]
@@ -49,6 +58,57 @@ struct FileScene {
     cameras: BTreeMap<String, FilePose>,
     #[serde(default)]
     splat: Option<FileSplat>,
+    /// `public` (default) or `private-test-only`: a scan used for local testing under no licence.
+    #[serde(default)]
+    distribution: Option<String>,
+    #[serde(default)]
+    attribution: Option<FileAttribution>,
+    /// Reserved for the battlefield layouts owned by the layout schema; ignored here.
+    #[serde(default)]
+    layouts: Vec<serde_json::Value>,
+    #[serde(default)]
+    terrain: Option<FileTerrain>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileAttribution {
+    title: String,
+    author: String,
+    source_url: String,
+    licence: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileTerrain {
+    origin: [f32; 2],
+    step_m: f32,
+    cols: u32,
+    rows: u32,
+    /// Ground height at each lattice point, row by row, in whole centimetres.
+    heights_cm: Vec<i32>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileGrade {
+    #[serde(default)]
+    preset: Option<String>,
+    #[serde(default)]
+    exposure_ev: Option<f32>,
+    #[serde(default)]
+    saturation: Option<f32>,
+    #[serde(default)]
+    tint: Option<[f32; 3]>,
+    #[serde(default)]
+    sky: Option<[f32; 3]>,
+    /// Brightness of the splats away from the fight, 0..1 (the fight itself is lit fully).
+    #[serde(default)]
+    ambient: Option<f32>,
+    /// Radius of the lit pool around the grid, metres.
+    #[serde(default)]
+    pool_m: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +174,20 @@ struct FileSplat {
     translate: [f32; 3],
     #[serde(default)]
     max_splats: Option<u32>,
+    /// Rotation about X, Y, then Z in degrees that stands the scan upright.
+    #[serde(default)]
+    orient_deg: [f32; 3],
+    /// The finest and coarsest level present on disk (`lod` format only).
+    #[serde(default)]
+    levels: Option<[u32; 2]>,
+    /// Radius around the grid that gets the finest level; default derived from the grid.
+    #[serde(default)]
+    detail_radius_m: Option<f32>,
+    #[serde(default)]
+    grade: Option<FileGrade>,
+    /// How far behind the splat surface figures and grid tiles may sink before being hidden.
+    #[serde(default)]
+    depth_bias_m: Option<f32>,
 }
 
 fn one() -> f32 {
@@ -129,6 +203,8 @@ pub enum SplatFormat {
     Sog,
     /// The built-in procedural ground used to verify the pass without external data.
     Procedural,
+    /// A streamed level-of-detail scan: `lod-meta.json` plus `<level>_<chunk>/` SOG chunks.
+    Lod,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -148,6 +224,54 @@ pub struct BackdropLayer {
     pub height_m: f32,
 }
 
+/// How a scan is graded to sit with the figures: applied to every splat's colour, so a daylight
+/// scan can be brought to dusk. `ambient` and `pool_m` leave a warm lit pool around the fight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplatGrade {
+    pub exposure_ev: f32,
+    pub saturation: f32,
+    pub tint: [f32; 3],
+    pub sky: [f32; 3],
+    pub ambient: f32,
+    pub pool_m: f32,
+}
+
+impl SplatGrade {
+    pub const NEUTRAL: Self = Self {
+        exposure_ev: 0.0,
+        saturation: 1.0,
+        tint: [1.0, 1.0, 1.0],
+        sky: [0.43, 0.55, 0.72],
+        ambient: 1.0,
+        pool_m: 0.0,
+    };
+    pub const DUSK: Self = Self {
+        exposure_ev: -0.55,
+        saturation: 0.85,
+        tint: [1.06, 0.88, 0.76],
+        sky: [0.20, 0.17, 0.24],
+        ambient: 0.62,
+        pool_m: 11.0,
+    };
+    pub const NIGHT: Self = Self {
+        exposure_ev: -1.3,
+        saturation: 0.7,
+        tint: [0.62, 0.78, 1.1],
+        sky: [0.035, 0.05, 0.1],
+        ambient: 0.4,
+        pool_m: 9.0,
+    };
+
+    pub fn preset(name: &str) -> Option<Self> {
+        match name {
+            "neutral" => Some(Self::NEUTRAL),
+            "dusk" => Some(Self::DUSK),
+            "night" => Some(Self::NIGHT),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplatLayer {
     pub url: String,
@@ -157,6 +281,28 @@ pub struct SplatLayer {
     pub rot_y_deg: f32,
     pub translate: Vec3,
     pub max_splats: Option<u32>,
+    pub orient: Quat,
+    /// Finest and coarsest level on disk for a `lod` scan.
+    pub levels: Option<(u32, u32)>,
+    pub detail_radius_m: Option<f32>,
+    pub grade: SplatGrade,
+    pub depth_bias_m: f32,
+}
+
+/// Where a scene may be shown from: `PrivateTestOnly` scans have no licence and are used only
+/// for local testing, so they never take part in the default scene rotation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Distribution {
+    Public,
+    PrivateTestOnly,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Attribution {
+    pub title: String,
+    pub author: String,
+    pub source_url: String,
+    pub licence: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -170,6 +316,8 @@ pub struct BattleScene {
     pub grid: Grid,
     pub cameras: BTreeMap<ShotName, CameraPose>,
     pub splat: Option<SplatLayer>,
+    pub distribution: Distribution,
+    pub attribution: Option<Attribution>,
 }
 
 fn stem_ok(stem: &str) -> bool {
@@ -188,8 +336,11 @@ fn positive(value: f32, maximum: f32) -> bool {
 pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
     let file: FileScene =
         serde_json::from_str(json).map_err(|error| SceneFileError::Json(error.to_string()))?;
-    if file.schema != SCHEMA_VERSION {
+    if !(OLDEST_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&file.schema) {
         return Err(SceneFileError::Schema(file.schema));
+    }
+    if file.schema < 2 && !file.layouts.is_empty() {
+        return Err(SceneFileError::NeedsSchemaTwo("layouts"));
     }
     if !stem_ok(&file.location_id) {
         return Err(SceneFileError::Identifier("location_id"));
@@ -222,7 +373,7 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         .iter()
         .map(|[col, row]| Cell::new(*col, *row))
         .collect();
-    let grid = Grid::open_except(
+    let mut grid = Grid::open_except(
         file.grid.origin,
         file.grid.cell_m,
         file.grid.cols,
@@ -230,6 +381,24 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         &blocked,
     )
     .map_err(SceneFileError::Grid)?;
+    if let Some(terrain) = file.terrain {
+        let heights = terrain.heights_cm.iter().map(|cm| *cm as f32 * 0.01).collect();
+        let field =
+            HeightField::new(terrain.origin, terrain.step_m, terrain.cols, terrain.rows, heights)
+                .map_err(SceneFileError::Terrain)?;
+        grid = grid.with_terrain(field);
+    }
+    let distribution = match file.distribution.as_deref() {
+        None | Some("public") => Distribution::Public,
+        Some("private-test-only") => Distribution::PrivateTestOnly,
+        Some(other) => return Err(SceneFileError::Distribution(other.to_owned())),
+    };
+    let attribution = file.attribution.map(validate_attribution).transpose()?;
+    if distribution == Distribution::PrivateTestOnly && attribution.is_none() {
+        return Err(SceneFileError::Attribution(
+            "private-test-only scenes name their source",
+        ));
+    }
     let mut cameras = BTreeMap::new();
     for (key, pose) in file.cameras {
         let shot =
@@ -272,6 +441,26 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         grid,
         cameras,
         splat,
+        distribution,
+        attribution,
+    })
+}
+
+fn validate_attribution(file: FileAttribution) -> Result<Attribution, SceneFileError> {
+    let fields = [&file.title, &file.author, &file.source_url, &file.licence];
+    if fields
+        .iter()
+        .any(|text| text.trim().is_empty() || text.len() > 160)
+    {
+        return Err(SceneFileError::Attribution(
+            "fields are required and at most 160 bytes",
+        ));
+    }
+    Ok(Attribution {
+        title: file.title,
+        author: file.author,
+        source_url: file.source_url,
+        licence: file.licence,
     })
 }
 
@@ -297,6 +486,33 @@ fn validate_splat(splat: FileSplat) -> Result<SplatLayer, SceneFileError> {
     if splat.max_splats == Some(0) {
         return Err(SceneFileError::Splat("max_splats"));
     }
+    if splat.format == SplatFormat::Lod && !splat.url.ends_with("/lod-meta.json") {
+        return Err(SceneFileError::Splat("a lod scan names its lod-meta.json"));
+    }
+    if splat.orient_deg.iter().any(|value| !value.is_finite()) {
+        return Err(SceneFileError::Splat("orient_deg"));
+    }
+    let levels = match splat.levels {
+        Some([finest, coarsest]) if finest <= coarsest && coarsest < 32 => {
+            Some((finest, coarsest))
+        }
+        Some(_) => return Err(SceneFileError::Splat("levels")),
+        None => None,
+    };
+    if splat
+        .detail_radius_m
+        .is_some_and(|radius| !positive(radius, 500.0))
+        || splat
+            .depth_bias_m
+            .is_some_and(|bias| !(0.0..=2.0).contains(&bias))
+    {
+        return Err(SceneFileError::Splat("detail radius or depth bias"));
+    }
+    let grade = splat
+        .grade
+        .map(resolve_grade)
+        .transpose()?
+        .unwrap_or(SplatGrade::NEUTRAL);
     Ok(SplatLayer {
         url: splat.url,
         format: splat.format,
@@ -305,7 +521,39 @@ fn validate_splat(splat: FileSplat) -> Result<SplatLayer, SceneFileError> {
         rot_y_deg: splat.rot_y_deg,
         translate: Vec3::new(splat.translate[0], splat.translate[1], splat.translate[2]),
         max_splats: splat.max_splats,
+        orient: orientation_from_euler_deg(splat.orient_deg),
+        levels,
+        detail_radius_m: splat.detail_radius_m,
+        grade,
+        depth_bias_m: splat.depth_bias_m.unwrap_or(0.15),
     })
+}
+
+fn resolve_grade(file: FileGrade) -> Result<SplatGrade, SceneFileError> {
+    let mut grade = match file.preset.as_deref() {
+        None => SplatGrade::NEUTRAL,
+        Some(name) => SplatGrade::preset(name).ok_or(SceneFileError::Splat("grade preset"))?,
+    };
+    grade.exposure_ev = file.exposure_ev.unwrap_or(grade.exposure_ev);
+    grade.saturation = file.saturation.unwrap_or(grade.saturation);
+    grade.tint = file.tint.unwrap_or(grade.tint);
+    grade.sky = file.sky.unwrap_or(grade.sky);
+    grade.ambient = file.ambient.unwrap_or(grade.ambient);
+    grade.pool_m = file.pool_m.unwrap_or(grade.pool_m);
+    let finite = [grade.exposure_ev, grade.saturation, grade.ambient, grade.pool_m]
+        .into_iter()
+        .chain(grade.tint)
+        .chain(grade.sky)
+        .all(f32::is_finite);
+    if !finite
+        || !(-6.0..=6.0).contains(&grade.exposure_ev)
+        || !(0.0..=3.0).contains(&grade.saturation)
+        || !(0.0..=1.0).contains(&grade.ambient)
+        || !(0.0..=100.0).contains(&grade.pool_m)
+    {
+        return Err(SceneFileError::Splat("grade"));
+    }
+    Ok(grade)
 }
 
 macro_rules! embedded {
@@ -393,8 +641,8 @@ mod tests {
     #[test]
     fn unknown_schema_versions_and_fields_are_rejected() {
         assert_eq!(
-            rejects(|v| v["schema"] = 2.into()),
-            SceneFileError::Schema(2)
+            rejects(|v| v["schema"] = 3.into()),
+            SceneFileError::Schema(3)
         );
         assert!(matches!(
             rejects(|v| v["surprise"] = true.into()),

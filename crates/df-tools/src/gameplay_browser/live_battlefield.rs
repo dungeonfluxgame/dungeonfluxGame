@@ -201,6 +201,11 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             rot_y_deg: 0.0,
             translate: battle::Vec3::ZERO,
             max_splats: None,
+            orient: battle::Quat::IDENTITY,
+            levels: None,
+            detail_radius_m: None,
+            grade: battle::SplatGrade::NEUTRAL,
+            depth_bias_m: 0.15,
         });
     }
     let tokens = match preview_tokens(&scene) {

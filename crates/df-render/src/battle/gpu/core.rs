@@ -49,7 +49,6 @@ pub struct GpuCore {
     pub adapter_description: String,
     pub layout_frame: JsValue,
     pub layout_texture: JsValue,
-    pub layout_splat: JsValue,
     pub layout_post: JsValue,
     pub sampler_repeat: GpuSampler,
     pub sampler_clamp: GpuSampler,
@@ -182,23 +181,6 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
             ),
         ],
     );
-    let layout_splat = bind_group_layout(
-        &device,
-        vec![
-            layout_entry(
-                0,
-                SHADER_VERTEX,
-                "buffer",
-                Descriptor::new().with("type", "read-only-storage").build(),
-            ),
-            layout_entry(
-                1,
-                SHADER_VERTEX,
-                "buffer",
-                Descriptor::new().with("type", "read-only-storage").build(),
-            ),
-        ],
-    );
     let layout_post = bind_group_layout(
         &device,
         vec![
@@ -245,7 +227,6 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
         adapter_description,
         layout_frame,
         layout_texture,
-        layout_splat,
         layout_post,
         sampler_repeat,
         sampler_clamp,

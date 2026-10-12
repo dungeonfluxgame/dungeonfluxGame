@@ -261,76 +261,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-const SPLAT: &str = r#"
-struct Splat {
-    centre: vec3<f32>,
-    colour: u32,
-    cov_a: vec4<f32>,   // xx, xy, xz, yy
-    cov_b: vec2<f32>,   // yz, zz
-}
-@group(1) @binding(0) var<storage, read> splats: array<Splat>;
-@group(1) @binding(1) var<storage, read> order: array<u32>;
-
-struct VOut {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) p: vec2<f32>,
-    @location(1) colour: vec4<f32>,
-}
-
-@vertex
-fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
-    var corners = array<vec2<f32>, 4>(
-        vec2<f32>(-2.0, -2.0), vec2<f32>(2.0, -2.0), vec2<f32>(-2.0, 2.0), vec2<f32>(2.0, 2.0));
-    var out: VOut;
-    out.pos = vec4<f32>(0.0, 0.0, 2.0, 1.0);
-    let s = splats[order[ii]];
-    let view_pos = (frame.view * vec4<f32>(s.centre, 1.0)).xyz;
-    if (view_pos.z > -0.15) {
-        return out;
-    }
-    let clip = frame.view_proj * vec4<f32>(s.centre, 1.0);
-    let d = -view_pos.z;
-    let cov = mat3x3<f32>(
-        vec3<f32>(s.cov_a.x, s.cov_a.y, s.cov_a.z),
-        vec3<f32>(s.cov_a.y, s.cov_a.w, s.cov_b.x),
-        vec3<f32>(s.cov_a.z, s.cov_b.x, s.cov_b.y));
-    let rv = mat3x3<f32>(frame.view[0].xyz, frame.view[1].xyz, frame.view[2].xyz);
-    let cv = rv * cov * transpose(rv);
-    let f = frame.viewport.z;
-    let j0 = vec3<f32>(f / d, 0.0, f * view_pos.x / (d * d));
-    let j1 = vec3<f32>(0.0, f / d, f * view_pos.y / (d * d));
-    let cj0 = cv * j0;
-    let cj1 = cv * j1;
-    let a = dot(j0, cj0) + 0.3;
-    let b = dot(j0, cj1);
-    let c = dot(j1, cj1) + 0.3;
-    let mid = 0.5 * (a + c);
-    let radius = length(vec2<f32>(0.5 * (a - c), b));
-    let l1 = mid + radius;
-    let l2 = max(mid - radius, 0.1);
-    let diag = normalize(vec2<f32>(b, l1 - a));
-    let major = min(sqrt(2.0 * l1), 1024.0) * diag;
-    let minor = min(sqrt(2.0 * l2), 1024.0) * vec2<f32>(diag.y, -diag.x);
-    let corner = corners[vi];
-    let offset_px = corner.x * major + corner.y * minor;
-    let ndc = clip.xy / clip.w + offset_px * 2.0 / frame.viewport.xy;
-    out.pos = vec4<f32>(ndc * clip.w, clip.z, clip.w);
-    out.p = corner;
-    out.colour = unpack4x8unorm(s.colour);
-    return out;
-}
-
-@fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
-    let a = -dot(in.p, in.p);
-    if (a < -4.0) {
-        discard;
-    }
-    let weight = exp(a) * in.colour.a;
-    return vec4<f32>(in.colour.rgb * weight, weight);
-}
-"#;
-
 const POST: &str = r#"
 struct Post {
     grade: vec4<f32>,      // exposure, contrast, saturation, enabled
@@ -418,10 +348,6 @@ pub fn decal() -> String {
 
 pub fn figure() -> String {
     format!("{FRAME}{FIGURE}")
-}
-
-pub fn splat() -> String {
-    format!("{FRAME}{SPLAT}")
 }
 
 pub fn post() -> String {

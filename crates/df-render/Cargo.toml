@@ -14,7 +14,7 @@ serde_json = "=1.0.151"
 wasm-bindgen-futures.workspace = true
 js-sys = "=0.3.106"
 wasm-bindgen.workspace = true
-web-sys = { workspace = true, features = ["Document", "Element", "Node", "CanvasRenderingContext2d", "HtmlCanvasElement", "ImageData", "Window", "Blob", "BlobPropertyBag", "ImageBitmap", "ImageBitmapOptions", "ColorSpaceConversion", "PremultiplyAlpha", "HtmlElement"] }
+web-sys = { workspace = true, features = ["Document", "Element", "Node", "CanvasRenderingContext2d", "HtmlCanvasElement", "ImageData", "Window", "Blob", "BlobPropertyBag", "ImageBitmap", "ImageBitmapOptions", "ColorSpaceConversion", "PremultiplyAlpha", "HtmlElement", "Performance"] }
 
 [dev-dependencies]
 df-assets = { path = "../df-assets" }

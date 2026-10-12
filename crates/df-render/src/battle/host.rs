@@ -13,14 +13,16 @@ use web_sys::{Element, HtmlCanvasElement};
 use super::{
     gpu::{
         core::{self, GpuCore},
-        renderer::{PendingSplats, Renderer},
+        renderer::{DEFAULT_SPLAT_CAPACITY, Renderer, SplatSetup},
+        splat_engine::{LoadState, Shared, SharedSplats},
+        splat_stream::{self, StreamConfig, next_frame},
         textures,
     },
     hud::Hud,
-    scene_file::{BattleScene, SplatFormat, SplatLayer},
+    scene_file::{BattleScene, SplatFormat, SplatGrade, SplatLayer},
     splat::{
-        ProceduralGround, SogLoader, SogMeta, SogPlanes, SplatCloud, SplatFileLoader, SplatLoader,
-        SplatTransform,
+        ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, SplatFileLoader, SplatLoader,
+        SplatTransform, pack_records,
     },
     stage::Stage,
 };
@@ -151,8 +153,32 @@ impl BattleStage {
                 return Self::unavailable(host, scene, reason);
             }
         };
-        let pending: PendingSplats = Rc::new(RefCell::new(None));
-        let renderer = match Renderer::new(gpu.clone(), &scene, pending.clone()).await {
+        let splat_layer = if options.procedural_splats {
+            Some(SplatLayer {
+                url: String::new(),
+                format: SplatFormat::Procedural,
+                scale: 1.0,
+                offset_y: 0.0,
+                rot_y_deg: 0.0,
+                translate: super::math::Vec3::ZERO,
+                max_splats: None,
+                orient: super::math::Quat::IDENTITY,
+                levels: None,
+                detail_radius_m: None,
+                grade: SplatGrade::NEUTRAL,
+                depth_bias_m: 0.15,
+            })
+        } else {
+            scene.splat.clone()
+        };
+        let splat_setup = splat_layer.as_ref().map(|layer| SplatSetup {
+            shared: Rc::new(RefCell::new(Shared::new(
+                layer.max_splats.unwrap_or(DEFAULT_SPLAT_CAPACITY),
+            ))),
+            layer: layer.clone(),
+        });
+        let splat_shared = splat_setup.as_ref().map(|setup| setup.shared.clone());
+        let renderer = match Renderer::new(gpu.clone(), &scene, splat_setup).await {
             Ok(renderer) => renderer,
             Err((reason, message)) => {
                 container.remove();
@@ -168,21 +194,16 @@ impl BattleStage {
                 return Self::unavailable(host, scene, UnavailableReason::NotMounted);
             }
         };
-        let splat_layer = if options.procedural_splats {
-            Some(SplatLayer {
-                url: String::new(),
-                format: SplatFormat::Procedural,
-                scale: 1.0,
-                offset_y: 0.0,
-                rot_y_deg: 0.0,
-                translate: super::math::Vec3::ZERO,
-                max_splats: None,
-            })
-        } else {
-            scene.splat.clone()
-        };
-        if let Some(layer) = splat_layer {
-            spawn_splat_load(gpu.clone(), layer, pending);
+        if let (Some(layer), Some(shared)) = (splat_layer, splat_shared) {
+            spawn_splat_load(
+                gpu.clone(),
+                layer,
+                shared,
+                renderer.splat_chunk_layout(),
+                scene.grid.centre(),
+                scene.grid.cols() as f32 * scene.grid.cell_m(),
+                scene.grid.rows() as f32 * scene.grid.cell_m(),
+            );
         }
         mark(host, "active");
         let _ = host.set_attribute("data-battlefield-adapter", &gpu.adapter_description);
@@ -338,18 +359,91 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     if state.frames.is_multiple_of(state.stats_every) {
         let stats = renderer.stats();
         let summary = format!(
-            "ms={delta_ms:.1} splats={}/{} cap={} scale={:.2} frames={}",
-            stats.splats_drawn, stats.splats_loaded, stats.splat_cap, stats.scale, state.frames
+            "ms={delta_ms:.1} gpu_ms={:.1} sort_ms={:.1} visible={} planned={} budget={} min_contribution={:.2} scale={:.2} frames={}",
+            stats.gpu_ms,
+            stats.sort_ms,
+            stats.splats_visible,
+            stats.splats_planned,
+            stats.budget,
+            stats.min_contribution,
+            stats.scale,
+            state.frames
         );
         let _ = state.host.set_attribute("data-battlefield-stats", &summary);
+        if let Some(splat) = renderer.splat_shared() {
+            let shared = splat.borrow();
+            let label = match (stats.given_up, shared.state) {
+                (true, _) => "given-up",
+                (_, LoadState::Idle) => "idle",
+                (_, LoadState::Loading) => "loading",
+                (_, LoadState::Showing) => "showing",
+                (_, LoadState::Complete) => "complete",
+                (_, LoadState::Failed) => "failed",
+            };
+            let _ = state.host.set_attribute("data-battlefield-splat", label);
+            let load = &shared.stats;
+            let timing = |value: Option<f64>| value.map_or("-".to_owned(), |ms| format!("{ms:.0}"));
+            let _ = state.host.set_attribute(
+                "data-battlefield-load",
+                &format!(
+                    "first_ms={} full_ms={} chunks={}/{}",
+                    timing(load.first_draw_ms),
+                    timing(load.full_detail_ms),
+                    load.chunks_loaded,
+                    load.chunks_wanted
+                ),
+            );
+        }
         if let Some(message) = renderer.core().first_error() {
             let _ = state.host.set_attribute("data-battlefield-error", &message);
         }
     }
 }
 
-fn spawn_splat_load(gpu: Rc<GpuCore>, layer: SplatLayer, pending: PendingSplats) {
+/// Starts loading the scene's splats. A streamed scan hands everything to the streaming task; the
+/// small formats are decoded here and uploaded once as packed records, in slices so the page
+/// keeps drawing.
+fn spawn_splat_load(
+    gpu: Rc<GpuCore>,
+    layer: SplatLayer,
+    shared: SharedSplats,
+    chunk_layout: Option<JsValue>,
+    grid_centre: super::math::Vec3,
+    grid_width_m: f32,
+    grid_depth_m: f32,
+) {
     wasm_bindgen_futures::spawn_local(async move {
+        let transform = SplatTransform {
+            scale: layer.scale,
+            offset_y: layer.offset_y,
+            rot_y_deg: layer.rot_y_deg,
+            translate: layer.translate,
+            orient: layer.orient,
+        };
+        if layer.format == SplatFormat::Lod {
+            let Some(chunk_layout) = chunk_layout else {
+                shared.borrow_mut().state = LoadState::Failed;
+                return;
+            };
+            // Finest detail covers the grid and a margin; the scene file may widen it.
+            let derived = 0.5 * (grid_width_m * grid_width_m + grid_depth_m * grid_depth_m).sqrt() + 3.0;
+            let (finest, coarsest) = layer.levels.unwrap_or((0, 0));
+            splat_stream::stream(
+                gpu,
+                shared,
+                chunk_layout,
+                StreamConfig {
+                    index_url: layer.url.clone(),
+                    levels: (finest, coarsest),
+                    transform,
+                    focus_world: grid_centre,
+                    detail_radius_m: layer.detail_radius_m.unwrap_or(derived),
+                },
+            )
+            .await;
+            return;
+        }
+        shared.borrow_mut().state = LoadState::Loading;
         let raw = match layer.format {
             SplatFormat::Procedural => ProceduralGround {
                 seed: 1,
@@ -365,20 +459,31 @@ fn spawn_splat_load(gpu: Rc<GpuCore>, layer: SplatLayer, pending: PendingSplats)
                 }
             }
             SplatFormat::Sog => load_sog(&gpu, &layer.url).await,
+            SplatFormat::Lod => None,
         };
         let Some(raw) = raw else {
             // The splat scene is optional: without it the painted ground stays.
+            shared.borrow_mut().state = LoadState::Failed;
             return;
         };
-        let transform = SplatTransform {
-            scale: layer.scale,
-            offset_y: layer.offset_y,
-            rot_y_deg: layer.rot_y_deg,
-            translate: layer.translate,
-        };
-        let (cloud, _dropped) = SplatCloud::bake(&raw, transform);
-        *pending.borrow_mut() = Some(cloud);
+        let words = pack_in_slices(&raw, transform).await;
+        let mut state = shared.borrow_mut();
+        state.stats.splats_planned = (words.len() / super::splat::RECORD_WORDS) as u32;
+        state.records = Some(words);
+        state.state = LoadState::Complete;
     });
+}
+
+/// Packs `raw` into GPU records a slice at a time, yielding a frame between slices.
+async fn pack_in_slices(raw: &[RawSplat], transform: SplatTransform) -> Vec<u32> {
+    const SLICE: usize = 60_000;
+    let mut words = Vec::with_capacity(raw.len() * super::splat::RECORD_WORDS);
+    for slice in raw.chunks(SLICE) {
+        let (part, _dropped) = pack_records(slice, transform);
+        words.extend_from_slice(&part);
+        next_frame().await;
+    }
+    words
 }
 
 /// Fetches `<base>/meta.json` and its five planes, decodes each plane exactly, and loads them.

@@ -13,6 +13,8 @@ use serde::Deserialize;
 
 use super::math::Vec3;
 
+/// Table slots for contiguous ranges across all chunks in one decode plan.
+pub const MAX_RANGES: usize = 1 << 15;
 const MAX_LEAVES: usize = 200_000;
 const MAX_DEPTH: usize = 40;
 const MAX_FILES: usize = 4096;
@@ -235,6 +237,72 @@ impl Selection {
     }
 }
 
+/// One chunk's share of a [`DecodePlan`]: decode `total` splats described by
+/// `ranges[range_base..range_base + range_count]`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DecodeJob {
+    pub file: u32,
+    pub range_base: u32,
+    pub range_count: u32,
+    pub total: u32,
+}
+
+/// What the GPU decodes into the record buffer: contiguous source ranges of resident chunks laid
+/// out back to back. A range is `[first source splat, count, output offset, first thread of the
+/// job]`, the layout the decode shader binary-searches.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DecodePlan {
+    pub jobs: Vec<DecodeJob>,
+    pub ranges: Vec<[u32; 4]>,
+    pub total: u32,
+    /// Ranges beyond the table size were left out (never happens for a real index).
+    pub truncated: bool,
+}
+
+impl Selection {
+    /// Groups the picks by chunk, merges neighbouring ranges and assigns output offsets.
+    pub fn plan(&self, max_ranges: usize) -> DecodePlan {
+        let mut by_file: std::collections::BTreeMap<u32, Vec<(u32, u32)>> = Default::default();
+        for pick in &self.picks {
+            by_file
+                .entry(pick.range.file)
+                .or_default()
+                .push((pick.range.offset, pick.range.count));
+        }
+        let mut plan = DecodePlan::default();
+        for (file, mut spans) in by_file {
+            spans.sort_unstable();
+            let mut merged: Vec<(u32, u32)> = Vec::with_capacity(spans.len());
+            for (offset, count) in spans {
+                match merged.last_mut() {
+                    Some((start, length)) if *start + *length == offset => *length += count,
+                    _ => merged.push((offset, count)),
+                }
+            }
+            let range_base = plan.ranges.len() as u32;
+            let mut job_total = 0u32;
+            for (offset, count) in merged {
+                if plan.ranges.len() >= max_ranges {
+                    plan.truncated = true;
+                    break;
+                }
+                plan.ranges.push([offset, count, plan.total + job_total, job_total]);
+                job_total += count;
+            }
+            if job_total > 0 {
+                plan.jobs.push(DecodeJob {
+                    file,
+                    range_base,
+                    range_count: plan.ranges.len() as u32 - range_base,
+                    total: job_total,
+                });
+                plan.total += job_total;
+            }
+        }
+        plan
+    }
+}
+
 fn distance_to_box(point: Vec3, min: Vec3, max: Vec3) -> f32 {
     let dx = (min.x - point.x).max(point.x - max.x).max(0.0);
     let dy = (min.y - point.y).max(point.y - max.y).max(0.0);
@@ -439,5 +507,45 @@ mod tests {
                 assert!(selection.total <= budget, "budget {budget} total {}", selection.total);
             }
         }
+    }
+
+    #[test]
+    fn a_selection_becomes_a_decode_plan_with_merged_ranges_and_back_to_back_offsets() {
+        let index = LodIndex::parse(&synthetic()).unwrap();
+        let selection = index.select(focus_at(500.0, 600.0), limits(u32::MAX), None);
+        let plan = selection.plan(16);
+        assert_eq!(plan.total, selection.total);
+        assert_eq!(plan.jobs.len(), 3);
+        let job = plan.jobs[0];
+        assert_eq!((job.file, job.total), (0, 1000));
+        let first = plan.ranges[job.range_base as usize];
+        assert_eq!(first, [0, 1000, 0, 0]);
+        // Output offsets never overlap and fill the total exactly.
+        let mut spans: Vec<(u32, u32)> = plan.ranges.iter().map(|r| (r[2], r[1])).collect();
+        spans.sort_unstable();
+        let mut at = 0;
+        for (offset, count) in spans {
+            assert_eq!(offset, at);
+            at += count;
+        }
+        assert_eq!(at, plan.total);
+        assert!(!plan.truncated);
+        assert!(selection.plan(1).truncated);
+    }
+
+    #[test]
+    fn neighbouring_leaf_ranges_in_one_chunk_merge_into_one_decode_range() {
+        let index = LodIndex::parse(&synthetic()).unwrap();
+        // With level 1 as the finest, leaves 0 and 1 both use file 1 at offsets 0..500 and 500..1000.
+        let level_one = Limits {
+            finest: 1,
+            coarsest: 2,
+            budget: u32::MAX,
+        };
+        let selection = index.select(focus_at(500.0, 600.0), level_one, None);
+        let plan = selection.plan(16);
+        let job = plan.jobs.iter().find(|job| job.file == 1).unwrap();
+        assert_eq!(job.range_count, 1);
+        assert_eq!(plan.ranges[job.range_base as usize][..2], [0, 1000]);
     }
 }
