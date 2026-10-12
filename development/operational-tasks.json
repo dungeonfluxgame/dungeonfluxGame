@@ -4304,6 +4304,234 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T04:19:55+00:00",
       "updated_at": "2026-10-12T04:19:55+00:00"
+    },
+    {
+      "id": "PLAY-V03",
+      "feature_id": "F04",
+      "title": "Explore composed scene plates: one painting per moment",
+      "objective": "Experiments across six ideas for building a story scene as a composed film still instead of a backdrop with cut-outs: whole generated plates, scene-lit character layers, editing and taking apart a plate, motion from a still, identity and head location, and an automatic shot director with a live pipeline. Each idea ends in a verdict with evidence.",
+      "stage": "design",
+      "edit_areas_json": [
+        "artifacts/tmp/play-v03/"
+      ],
+      "acceptance_json": [
+        "Every idea has a verdict of works, partly or does not, with images the coordinator has viewed.",
+        "Measured time and cost per image, and a recommended combination with its open risks.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Coordinator review of every result image against the owner references."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M12",
+        "milestone_goal": "Composed scenes: story scenes and the home screen read as film stills, not layouts.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner supplied twelve reference mock-ups on 2026-10-12 and asked for a graph of ideas to be explored to see whether a flexible scene is achievable.",
+        "objective": "Experiments across six ideas for building a story scene as a composed film still instead of a backdrop with cut-outs: whole generated plates, scene-lit character layers, editing and taking apart a plate, motion from a still, identity and head location, and an automatic shot director with a live pipeline. Each idea ends in a verdict with evidence.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Explore composed scene plates: one painting per moment",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "9bdc95af889745782335e18c6da26a739fd0d688a47762ba2a074a9e5c8129f6"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          }
+        ],
+        "input_revision": "926f00aeb9c5a7b01704710f9e7f90b710085c51",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T05:20:43+00:00",
+      "updated_at": "2026-10-12T05:20:43+00:00"
+    },
+    {
+      "id": "PLAY-V04",
+      "feature_id": "F04",
+      "title": "Probe a looping home-screen video from the still",
+      "objective": "Find the cheapest fast image-to-video model reachable with the keys in hand, generate ambient motion from a home-screen still, make it loop without a seam, and prove a still-to-video fade in a browser, so the game can show the still first and fade the loop in when ready.",
+      "stage": "design",
+      "edit_areas_json": [
+        "artifacts/tmp/play-v04/"
+      ],
+      "acceptance_json": [
+        "A dated survey of candidate models with price, speed and image-input support.",
+        "A looping clip with a measured seam and a measured still-to-first-frame difference, or a precise statement of which key is needed.",
+        "Integration notes an implementer can follow.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Coordinator review of the clip and the browser fade frames."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M12",
+        "milestone_goal": "Composed scenes: story scenes and the home screen read as film stills, not layouts.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-12: spawn the home screen with the still image, video-generate a looping home screen and fade it in when ready, using a cheap and fast video model with image inputs.",
+        "objective": "Find the cheapest fast image-to-video model reachable with the keys in hand, generate ambient motion from a home-screen still, make it loop without a seam, and prove a still-to-video fade in a browser, so the game can show the still first and fade the loop in when ready.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Probe a looping home-screen video from the still",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "9bdc95af889745782335e18c6da26a739fd0d688a47762ba2a074a9e5c8129f6"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          }
+        ],
+        "input_revision": "926f00aeb9c5a7b01704710f9e7f90b710085c51",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 94,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T05:20:43+00:00",
+      "updated_at": "2026-10-12T05:20:43+00:00"
+    },
+    {
+      "id": "PLAY-V05",
+      "feature_id": "F04",
+      "title": "Make the home screen moody and theme-driven with placed panels",
+      "objective": "Each location gets a home-screen theme decided by the server: mood colours and grade, one or two atmosphere effects, and an arrangement of the title, room-code panel and party panel chosen from a small set by analysing where the painting has room. The display renders it; the phone lobby shows the same painting and mood.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/live_lobby.rs",
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-tools/src/gameplay/wire.rs",
+        "crates/df-protocol/proto/gameplay.proto",
+        "assets/ui/generated/"
+      ],
+      "acceptance_json": [
+        "Six locations show at least three different arrangements, each with its own mood and atmosphere.",
+        "No block overlaps another, leaves the screen or covers the painting's focal region at three sizes and with zero, two and six party members.",
+        "The room code stays the most readable thing on screen; measured contrast is reported.",
+        "The phone lobby shows this adventure's painting, name and mood before and after joining.",
+        "A painting without a theme falls back to the standard arrangement.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for theme validation, the arrangement scorer and layout bounds.",
+        "Browser screenshots with overlays of the focal region and block rectangles."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M12",
+        "milestone_goal": "Composed scenes: story scenes and the home screen read as film stills, not layouts.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-12: make the home screen more moody and semi custom based on the theme, so the boxes and titles can be dynamically placed.",
+        "objective": "Each location gets a home-screen theme decided by the server: mood colours and grade, one or two atmosphere effects, and an arrangement of the title, room-code panel and party panel chosen from a small set by analysing where the painting has room. The display renders it; the phone lobby shows the same painting and mood.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Make the home screen moody and theme-driven with placed panels",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "9bdc95af889745782335e18c6da26a739fd0d688a47762ba2a074a9e5c8129f6"
+          }
+        ],
+        "input_revision": "926f00aeb9c5a7b01704710f9e7f90b710085c51",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 95,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T05:20:43+00:00",
+      "updated_at": "2026-10-12T05:20:43+00:00"
     }
   ],
   "dependencies": [
