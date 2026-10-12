@@ -8,6 +8,25 @@ Written by the coordinator at the owner's request ("make sure all the agents lea
 - Tests on the merged tree: `cargo test -p df-tools --lib` has the nine long-standing failures (six `gameplay::startup_contract::*`, three `preview::tests::*`). In the coordinator's last runs, under a load average of 30 to 40, `gameplay::home_video_tests::*` also failed at the "flight never settled" wait (`home_video_tests.rs:174`), five to six tests, both in the full run and alone. Workers' own runs had them passing. Not resolved: re-run on an idle machine first; if they still fail, it is a regression from the home-screen or scene-entry merges.
 - The scan scenes `scan-riverbed`, `scan-summit` and `scan-valley-bridges` are tracked as scene descriptions only and say "none - private test only"; the scan data itself is untracked under `artifacts/tmp/splat-dl` and must stay unpublished. Only `scan-village` (CC BY 4.0, attribution in its file) may ship.
 
+## Final merges at wrap-up (after the notes below were written)
+The workers' notes and the tables below were written before these six merges; where they say "not merged", this list wins. Final commit on `main`: the merge `22ba05f` plus the bookkeeping commit after it.
+| Merge | Source | What is now on main |
+|---|---|---|
+| 5066fa7 | PLAY-V10 77caa61 | Home loop joins measured every frame; the video tests' flight wait raised to 120 s |
+| 236b057 | PLAY-E04 b42a844 | A fight's closing scenes draw as story scenes and reach the end card; a settled defeat offers its way out. This commit does not compile on its own (two hunks landed in the wrong place); `22ba05f` puts them right, so do not build or bisect at 236b057..cfa28f7 |
+| 881297e | PLAY-S03 6dbbbb0 | No cell grid on the TV by default (`DF_GAMEPLAY_BATTLE_GRID=on` brings it back), the chosen splat level drawn complete, a resting camera line clear of scan geometry |
+| c16d6c6 | PLAY-V12 44c29e9 | A plate shows as soon as its picture lands; the lower third sits higher |
+| cfa28f7 | PLAY-B03 4d8f2ed | Fight staging slice two: the director waits for the battlefield, no snap-back, the card waits for the walk |
+| 22ba05f | PLAY-R01 6456c3b (queue id PLAY-R02) | Dying heroes' saves shown and the post-fight advance works; independent rules auditor (`crates/df-combat/tests/rules_invariants.rs`); audit fields on `CombatOutcome` 20 to 32 and `CombatView` 16 to 18 |
+
+Checks on `22ba05f`: `cargo check` for df-rules, df-combat, df-render and df-tools (all targets) and the wasm library are clean; df-protocol tests pass; the focused run `cargo test -p df-tools --lib -- fight_ending restrained_generation tactical table_log presentation stage_director` is 91 passed, 0 failed; the full `cargo test -p df-tools --lib` is 1,083 passed with only the nine long-standing failures (the home-video tests passed on the quieter machine, so their earlier failures were load); df-rules, df-combat and df-render tests all pass. None of the six merges was played live by the coordinator or independently evaluated.
+
+Two tests were changed by the coordinator in `22ba05f` to match the merged behaviour, and deserve a second look: `submitted_enemy_lethality_reaches_defeat...` now asserts a settled defeat's view carries no fight (the fight-ending fix removes it; before it asserted a finished fight view), and the test `fight()` helper's initiative dice fall back to 1 when the three fixed dice run out (the strict-rules merge draws more dice with more enemies).
+
+Field numbers to renumber before picking up unmerged work: PLAY-V15's WIP took `CombatOutcome` 25 to 29 and PLAY-B08's WIP 30 to 38; both now clash with the merged 20 to 32.
+
+Still on branches only (see each note): PLAY-N07 story spine, PLAY-V15 dice video, PLAY-V14 layout check, PLAY-B08 callouts and narration, PLAY-V13 kill clip, PLAY-I01 examination scene, PLAY-E04 next step and chapter flow, PLAY-S03 actor-centred camera (not started), PLAY-V10 two-clip loop (blocked), PLAY-U02 M2, PLAY-P06 six players (brief only), phone tap-to-move map (no brief).
+
 ## Merged to main in this session (after the eight-branch batch)
 | Task | What | State |
 |---|---|---|

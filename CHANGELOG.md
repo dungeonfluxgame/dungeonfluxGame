@@ -18,6 +18,33 @@ Integration history through 2026-10-11T15:25:07.071270-04:00, reconstructed from
 
 Integration history from 2026-10-11T15:24:05-04:00 through 2026-10-12T04:33:02-04:00 on the integration branch `claude/playable-20261011`, generated from Git by revision range: six-hour blocks by first-parent commit time, each newly reachable commit listed once. The last block is open and shorter than six hours; the work session is still running.
 
+## 2026-10-12T10:33:51-04:00 to 2026-10-12T11:28:38-04:00
+
+Range: b161111268f5c9a600711ce5ca0d6522cb5a220e..22ba05f61230a46765695aee52b6b800d49718e7
+
+- 4a24a788a1015d93150c646f496653d572e65d73 — Record the integration block for the owner-review merges (fight endings, table settings, toggle to talk, home screen, establishing shots, fight staging, battle-scene slice)
+- d7c6ffd8b47745aca61086e1c998e41426a0321f — Hand-off notes for the playable-game session and merged tasks moved to review in the queue
+- 77caa61f4ed81eb7e8fd994ca3a37fa6e6f98aa3 — Measure the home loop's joins every frame, and give the flight wait a longer bound (PLAY-V10 pair prep)
+- 5066fa7381d55b614e8a7dc58cbedf84940068ce — Merge the home-loop join measurement and a longer wait bound for the video tests (PLAY-V10 follow-up)
+- b42a844064bec891fe3ea383ab6787fbfbb2b0a5 — Draw a fight's closing scenes as story scenes, and offer the way out of a settled defeat
+- 236b05778b9da62d3db01795553f1899ae1804d1 — Merge the fight-ending fix: a fight's closing scenes draw as story scenes and reach the end card; a settled defeat offers its way out (PLAY-E04)
+- 282942dd4e370f0ec4b372f4d5cce82522d9e7a0 — Level of detail: the chosen level is drawn complete out to as far as the splat budget allows, then steps coarser with distance (no thinner ring just past the play area); level 1 is the second best on disk
+- ebc5bdae2459faac409fd0e14a6bcf06aaf32d38 — Resting camera keeps a clear line from the lens to every figure and the field: scan occupancy in the scene file (authored by the splat_occupancy example), the solve raises or turns the camera rather than looking through trunks and foliage
+- 6dbbbb047559e6d97fa749161900740ebf9a60b0 — The TV draws no cell grid by default: no borders, reachable tint, blocked marks or side rings; a thin ring under the acting figure, the target ring and contact shadows stay; DF_GAMEPLAY_BATTLE_GRID=on|off and preview &grid=1 turn the hairline grid back on
+- 881297e8b82c0dc2bacd8a6406f0f016787d3379 — Merge the battle-scene follow-ups: no grid on the TV by default, the chosen splat level drawn complete, a camera line clear of scan geometry (PLAY-S03)
+- 6767bc9a010762d15b070dd4ba76b6167b23b8eb — Show a plate as soon as its picture lands with the predicted layout and measure the heads afterwards; raise the lower third clear of the choice chips (PLAY-V12)
+- 44c29e9e113a632506e67d2036ea6fb3aff65165 — Merge branch 'claude/playable-20261011' into worktree-agent-a0d8e630308b47719
+- c16d6c60b6b67f88109015746c6189b64c1080e7 — Merge the scene-plate follow-up: a plate shows as soon as its picture lands and the lower third sits higher (PLAY-V12)
+- 445ff0a87f029de5a2e3a5448ba37536804f54cf — Cue stream waits for the battlefield; unheld figures stand where the newest view puts them; card waits for the walk; browser checks (PLAY-B03)
+- 4d8f2edaf812c1c9206b580cbd3e0871ac70527a — Merge branch 'claude/playable-20261011' into worktree-agent-a68fb704e2220053d
+- cfa28f7655ebee3ac3afab0df8da2f2d54c923d3 — Merge fight staging slice two: the director waits for the battlefield, no snap-back, the card waits for the walk (PLAY-B03)
+- 6456c3bbe890b307beac47ee7382d187ce2d33f7 — Show the dying hero's saves and make the post-fight advance work; add the independent rules auditor, audit fields, Kobold sunlight and thrown dagger, creature feature table and coverage matrix (PLAY-R01)
+- 22ba05f61230a46765695aee52b6b800d49718e7 — Merge strict fight rules: audited movement, cover, roll modes and timed death saves on the table log (PLAY-R02)
+
+Next block baseline: `22ba05f61230a46765695aee52b6b800d49718e7`.
+
+This block closes the work session; it is shorter than six hours.
+
 ## 2026-10-12T08:11:26-04:00 to 2026-10-12T10:33:51-04:00
 
 Range: c5af1e5418d5e2ae8feb105da955d7ed381f1bd3..b161111268f5c9a600711ce5ca0d6522cb5a220e
