@@ -296,6 +296,14 @@ impl Capture {
         Some(Command::FinishRecording)
     }
 
+    /// The recorder failed while recording or while handing over its data.
+    pub(crate) fn recorder_failed(&mut self) -> Option<Command> {
+        match self.phase {
+            Phase::Recording { .. } | Phase::Listening => self.discard(Notice::MicrophoneFailed),
+            _ => None,
+        }
+    }
+
     /// The recording was decoded to `samples` mono samples at the clip sample rate and
     /// encoded to `encoded_bytes`. Returns whether it should be uploaded.
     pub(crate) fn decoded(&mut self, samples: usize, encoded_bytes: usize) -> bool {
@@ -584,7 +592,6 @@ mod tests {
             assert_eq!(capture.phase(), Phase::Idle);
             messages.push(capture.notice().unwrap().message());
         }
-        // Malformed and unauthenticated share their wording with their own kin only.
         messages.sort_unstable();
         messages.dedup();
         assert_eq!(messages.len(), failures.len());
@@ -626,6 +633,17 @@ mod tests {
         unreadable.unreadable();
         assert_eq!(unreadable.notice(), Some(Notice::Unreadable));
         assert_eq!(unreadable.phase(), Phase::Idle);
+    }
+
+    #[test]
+    fn a_recorder_that_fails_mid_recording_is_dropped_with_its_own_message() {
+        let mut capture = recording(0);
+
+        assert_eq!(capture.recorder_failed(), Some(Command::Discard));
+
+        assert_eq!(capture.phase(), Phase::Idle);
+        assert_eq!(capture.notice(), Some(Notice::MicrophoneFailed));
+        assert_eq!(capture.recorder_failed(), None);
     }
 
     #[test]

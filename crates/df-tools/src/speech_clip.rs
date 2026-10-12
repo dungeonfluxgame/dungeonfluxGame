@@ -19,13 +19,16 @@ pub(crate) const CLIP_CONTENT_TYPE: &str = "audio/wav";
 
 pub(crate) const SAMPLE_RATE: u32 = 16_000;
 const BYTES_PER_SAMPLE: usize = 2;
+#[cfg(any(target_arch = "wasm32", test))]
 const WAV_HEADER_BYTES: usize = 44;
 /// The hard stop of a recording on the phone.
+#[cfg(any(target_arch = "wasm32", test))]
 pub(crate) const MAXIMUM_RECORDING: Duration = Duration::from_secs(15);
 /// Shorter clips are discarded on the phone and refused by the server.
 pub(crate) const MINIMUM_CLIP: Duration = Duration::from_millis(400);
 /// The server accepts a little more than the phone sends, so a clip stopped exactly at the
 /// cap is never refused for rounding.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const MAXIMUM_ACCEPTED_CLIP: Duration = Duration::from_secs(16);
 /// Largest upload body.
 pub(crate) const MAXIMUM_CLIP_BYTES: usize = 1024 * 1024;

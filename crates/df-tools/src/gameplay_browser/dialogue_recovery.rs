@@ -16,6 +16,8 @@ pub(super) struct DialogueRecovery {
     restore_focus: bool,
     selection: Option<(u32, u32)>,
     exchange: Option<Exchange>,
+    /// Hold-to-talk speech input for this text box.
+    pub(super) talk: super::talk_control::Talk,
 }
 
 /// The player's last spoken line and the scene speaker's in-character answer to it. It is
@@ -59,6 +61,10 @@ fn current_speaker(client: &Client) -> String {
 }
 
 impl DialogueRecovery {
+    pub(super) fn editor(&self) -> Option<&HtmlTextAreaElement> {
+        self.editor.as_ref()
+    }
+
     pub(super) fn capture_focus(&mut self, document: &Document) -> Result<(), JsValue> {
         self.restore_focus = false;
         self.selection = None;
@@ -232,6 +238,7 @@ pub(super) fn mount(
         }
     }
     panel.append_child(&editor)?;
+    super::talk_control::mount(client, &panel)?;
     panel.append_child(&context)?;
     let previous = selector.value();
     selector.set_text_content(None);
@@ -359,7 +366,7 @@ pub(super) fn mount(
     Ok(())
 }
 
-fn submit(client: Rc<RefCell<Client>>) {
+pub(super) fn submit(client: Rc<RefCell<Client>>) {
     let prepared = (|| -> Result<_, String> {
         let state = client.borrow();
         if state.dialogue.confirmation.is_some()
