@@ -2670,6 +2670,321 @@
         "attempts": 1
       },
       "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-giant-weasel",
+      "path": "assets/ui/generated/sprite-ant-giant-weasel.webp",
+      "kind": "sprite",
+      "bytes": 221920,
+      "sha256": "a505ee403ed34c0ff967a3d5e2d243478fe2976f25374da131adbdbe0a132ac4",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-giant-weasel.png",
+      "source_sha256": "53a24604e1ca3de2ad2db953c81fdab16980de0241c7b139a1e5c64e713e1f51",
+      "art_key": "ant-giant-weasel",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-goblin-warrior",
+      "path": "assets/ui/generated/sprite-ant-goblin-warrior.webp",
+      "kind": "sprite",
+      "bytes": 289786,
+      "sha256": "1484d462335c46e57678acfe4e7278f4e8405a919b2562fab0b4034e441ee487",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-goblin-warrior.png",
+      "source_sha256": "46c6808857cbbdd07dfba475c3eb00f080b52c7162c578a907b440f6a23a86bd",
+      "art_key": "ant-goblin-warrior",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-scout",
+      "path": "assets/ui/generated/sprite-ant-scout.webp",
+      "kind": "sprite",
+      "bytes": 215966,
+      "sha256": "1882792f7d3f3721af0637559198c822f16ae96a5d9e828df4818280a792bf7c",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-scout.png",
+      "source_sha256": "08bcf001ce108bad2e3fab1f63ae7edbedccda86a621604395ce60ccd3fe993a",
+      "art_key": "ant-scout",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-skeleton",
+      "path": "assets/ui/generated/sprite-ant-skeleton.webp",
+      "kind": "sprite",
+      "bytes": 340008,
+      "sha256": "89738d94899eafd03de842f152e0337c70e76fdf019bce8b141d2566404c3c6d",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-skeleton.png",
+      "source_sha256": "0bac74d18559780932abcdc23c68b841375115346b15f5c2f207297801a6f8cf",
+      "art_key": "ant-skeleton",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-contact-old-mapmaker",
+      "path": "assets/ui/generated/sprite-contact-old-mapmaker.webp",
+      "kind": "sprite",
+      "bytes": 221752,
+      "sha256": "ba3356b9219408598b3384c0728253acf057ec4b0a20a31a9761da48ee336146",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-contact-old-mapmaker.png",
+      "source_sha256": "f75d62835641af6404245aae6dceebd323f535804a48768ab2786fea948aade6",
+      "art_key": "contact-old-mapmaker",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-contact-river-healer",
+      "path": "assets/ui/generated/sprite-contact-river-healer.webp",
+      "kind": "sprite",
+      "bytes": 208810,
+      "sha256": "e45a0d7096bc2abe9de1454e2d4b911d0b57aad3a3e76cf93ab17ee838670fb5",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-contact-river-healer.png",
+      "source_sha256": "878e838354fb6819261678dfd11f43e109198af1fc515707b51ffefec08003c9",
+      "art_key": "contact-river-healer",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-patron-acolyte",
+      "path": "assets/ui/generated/sprite-patron-acolyte.webp",
+      "kind": "sprite",
+      "bytes": 239486,
+      "sha256": "49e54df8d6efcd04855708ebbbc266593c645dfa165ee45faeaa358e17265601",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-patron-acolyte.png",
+      "source_sha256": "a24680e8b509888065411e1987b01bd74fa13918e9d5825fadbdd65d293c5185",
+      "art_key": "patron-acolyte",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-patron-archivist",
+      "path": "assets/ui/generated/sprite-patron-archivist.webp",
+      "kind": "sprite",
+      "bytes": 229128,
+      "sha256": "220adf4a1939bf8a627d6fa1e66d35bf4328527b2f1dc41542422732592a5076",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-patron-archivist.png",
+      "source_sha256": "80565725cc88ccc80528b93df30b28326edf68874f795e2e213a19f61068a5c5",
+      "art_key": "patron-archivist",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-patron-bell-ringer",
+      "path": "assets/ui/generated/sprite-patron-bell-ringer.webp",
+      "kind": "sprite",
+      "bytes": 252676,
+      "sha256": "5d52592683637e7f91afb820c1c2105cdb920b6a5da90ab3acc8903bf1a6ef4a",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-patron-bell-ringer.png",
+      "source_sha256": "6b1e22c3d82a0ee0bb07e601a29a0e4b870f23ccd039b56585fe129d5e9ccdeb",
+      "art_key": "patron-bell-ringer",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-patron-ferry-clerk",
+      "path": "assets/ui/generated/sprite-patron-ferry-clerk.webp",
+      "kind": "sprite",
+      "bytes": 195684,
+      "sha256": "087ccb7a9b24609345a4413ab182404835f31479e9fc3e288d4308266989e09a",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-patron-ferry-clerk.png",
+      "source_sha256": "cacdc816adaf2e563057b21f955e8792c3f4545d70a9ef8337d3aff5c4bf7051",
+      "art_key": "patron-ferry-clerk",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-patron-innkeeper",
+      "path": "assets/ui/generated/sprite-patron-innkeeper.webp",
+      "kind": "sprite",
+      "bytes": 268066,
+      "sha256": "06148721f7054572d4ac1a16083f1fa6f72dcd01c9844d9b518f8c6c91d96fe8",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-patron-innkeeper.png",
+      "source_sha256": "429dbf4003d51c8ec4ba33935cd161c93b35e7da24ce7d62e502690b3efa788f",
+      "art_key": "patron-innkeeper",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-patron-lamp-warden",
+      "path": "assets/ui/generated/sprite-patron-lamp-warden.webp",
+      "kind": "sprite",
+      "bytes": 268798,
+      "sha256": "e6af32f4f8625e69e261ba72df311a6c19b5975f1aa9ae769a56da545af9b6d2",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-patron-lamp-warden.png",
+      "source_sha256": "3343b442756a19765f7654d08cf1f0add9bcc8f13652c2647d944265867ea6d6",
+      "art_key": "patron-lamp-warden",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-patron-merchant",
+      "path": "assets/ui/generated/sprite-patron-merchant.webp",
+      "kind": "sprite",
+      "bytes": 300082,
+      "sha256": "77c458c4f87db6606dddeef25ebb00aac22b2404ca7a3ee58fdf8ce2cd78d79f",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-patron-merchant.png",
+      "source_sha256": "12dc5b2d0abbd0f38d2eb2898c714f2540a3bd8c41d504833940cf2bfc808ff7",
+      "art_key": "patron-merchant",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-patron-shepherd",
+      "path": "assets/ui/generated/sprite-patron-shepherd.webp",
+      "kind": "sprite",
+      "bytes": 281308,
+      "sha256": "6ae5f02e3d82fda379c3c4aed8afac3f2ad9005f5eb6c6c5cd8ecf1ae218dfe0",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-patron-shepherd.png",
+      "source_sha256": "0a5735eba4753960530ae6929f6af0605f429afb082d05c0485d608d35cebf10",
+      "art_key": "patron-shepherd",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-patron-veteran",
+      "path": "assets/ui/generated/sprite-patron-veteran.webp",
+      "kind": "sprite",
+      "bytes": 275032,
+      "sha256": "0b113716329d6f7cb7e344ce5a651fd0bd987a421924270128b41e9d088a6e07",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-patron-veteran.png",
+      "source_sha256": "b11c3eb9c8335f6e81684d034710482da7f6335c8bf1a6e36bc15e2a076ce853",
+      "art_key": "patron-veteran",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
     }
   ]
 }
