@@ -606,3 +606,288 @@ fn record_binding_and_compiled_mechanical_text_fail_closed() {
         .is_err()
     );
 }
+#[test]
+fn every_archetype_voice_agrees_with_its_gender_and_has_an_explicit_age() {
+    let tables = tables();
+    let female = ["woman", "women", "girl", "lady", "she", "her"];
+    let male = ["man", "men", "boy", "he", "his", "him"];
+    let archetypes = tables
+        .patrons
+        .entries
+        .iter()
+        .chain(&tables.contacts.entries)
+        .map(|npc| {
+            (
+                npc.id.as_str(),
+                npc.gender.as_str(),
+                npc.voice.as_str(),
+                npc.age.as_str(),
+            )
+        })
+        .chain(tables.antagonists.entries.iter().map(|ant| {
+            (
+                ant.id.as_str(),
+                ant.gender.as_str(),
+                ant.voice.as_str(),
+                ant.age.as_str(),
+            )
+        }));
+    for (id, gender, voice, age) in archetypes {
+        let voice_words: Vec<String> = voice
+            .to_lowercase()
+            .split(|c: char| !c.is_alphabetic())
+            .map(str::to_owned)
+            .collect();
+        let has = |list: &[&str]| voice_words.iter().any(|word| list.contains(&word.as_str()));
+        match gender {
+            "he" => assert!(!has(&female), "{id}: {voice:?} contradicts he"),
+            "she" => assert!(!has(&male), "{id}: {voice:?} contradicts she"),
+            "it" => assert!(
+                !has(&female) && !has(&male),
+                "{id}: {voice:?} contradicts it"
+            ),
+            other => assert_eq!(other, "they", "{id}"),
+        }
+        assert!(["young", "adult", "elder"].contains(&age), "{id}: {age}");
+        // The age agrees with the phrase's own age words.
+        if voice.contains("young") {
+            assert_eq!(age, "young", "{id}");
+        }
+        if ["old", "older", "elderly", "grizzled"]
+            .iter()
+            .any(|w| voice_words.contains(&(*w).to_owned()))
+        {
+            assert_eq!(age, "elder", "{id}");
+        }
+        if voice.contains("middle") {
+            assert_eq!(age, "adult", "{id}");
+        }
+    }
+}
+
+#[test]
+fn generated_prose_pronouns_match_each_characters_gender_and_the_pack_says_it_explicitly() {
+    use super::super::pack::{Age, Gender};
+    let tables = tables();
+    let opposite = |gender: &str| -> [&'static str; 3] {
+        match gender {
+            "he" => ["she", "her", "herself"],
+            "she" => ["he", "his", "himself"],
+            _ => ["he", "she", "his"],
+        }
+    };
+    for seed in 0..300_u64 {
+        let adventure = generate(
+            &tables,
+            seed,
+            GenerateOptions::default(),
+            &ForcedEntries::new(),
+        )
+        .unwrap();
+        for (prefix, entries) in [
+            ("patron", &tables.patrons.entries),
+            ("contact", &tables.contacts.entries),
+        ] {
+            let id = &adventure.facts[&format!("{prefix}.id")];
+            let archetype = entries.iter().find(|npc| &npc.id == id).unwrap();
+            let sub = &adventure.facts[&format!("{prefix}.sub")];
+            assert_eq!(sub, &archetype.gender, "{id}");
+            let mannerism = adventure.facts[&format!("{prefix}.mannerism")].to_lowercase();
+            for word in opposite(&archetype.gender) {
+                assert!(
+                    !mannerism
+                        .split(|c: char| !c.is_alphabetic())
+                        .any(|w| w == word),
+                    "{id} mannerism {mannerism:?}"
+                );
+            }
+        }
+        let by_name = |name: &str| {
+            adventure
+                .pack
+                .speakers
+                .iter()
+                .find(|speaker| speaker.name == name)
+                .unwrap()
+        };
+        let patron = by_name(&adventure.facts["patron.first"]);
+        assert_eq!(
+            patron.gender,
+            Gender::from_table(&adventure.facts["patron.gender"])
+        );
+        assert!(patron.gender.is_some() && patron.age.is_some());
+        let contact = by_name(&adventure.facts["contact.first"]);
+        assert_eq!(
+            contact.age,
+            Age::from_table(&adventure.facts["contact.age"])
+        );
+        for scene in &adventure.pack.scenes {
+            for actor in &scene.cast {
+                assert!(
+                    actor.gender.is_some() && actor.age.is_some(),
+                    "{}",
+                    actor.name
+                );
+            }
+        }
+    }
+    // A creature without a person's gender is `it`; a speaking person carries theirs.
+    let rat = generate(
+        &tables,
+        0xdaa66d325ccc5aac,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+    let combat = rat
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == super::super::pack::SceneKey::Combat)
+        .unwrap();
+    assert_eq!(combat.cast[0].gender, Some(Gender::It));
+}
+
+#[test]
+fn every_scene_has_its_cast_and_the_speaker_is_the_one_marked_speaking() {
+    use super::super::{pack::SceneKey, wire::scene_cast};
+    use df_protocol::common as rpc;
+    let tables = tables();
+    type SceneCast = Vec<(SceneKey, Vec<(String, i32, bool)>)>;
+    let cast_of = |seed: u64| -> SceneCast {
+        let adventure = generate(
+            &tables,
+            seed,
+            GenerateOptions::default(),
+            &ForcedEntries::new(),
+        )
+        .unwrap();
+        adventure
+            .pack
+            .scenes
+            .iter()
+            .map(|scene| {
+                for actor in &scene.cast {
+                    assert_eq!(
+                        actor.sprite,
+                        actor.portrait.replace("/portrait-", "/sprite-"),
+                        "sprite stem follows the portrait stem"
+                    );
+                    assert!(actor.portrait.contains("/portrait-"));
+                }
+                (
+                    scene.key,
+                    scene_cast(scene)
+                        .into_iter()
+                        .map(|actor| (actor.name, actor.role, actor.speaking))
+                        .collect(),
+                )
+            })
+            .collect()
+    };
+    let patron = rpc::SceneRole::Patron as i32;
+    let enemy = rpc::SceneRole::Antagonist as i32;
+    let contact = rpc::SceneRole::Contact as i32;
+    // A goblin speaks; a giant rat does not.
+    let goblin = cast_of(0x3c6ef378dd81de97);
+    let scene = |cast: &SceneCast, key| {
+        cast.iter()
+            .find(|(candidate, _)| *candidate == key)
+            .unwrap()
+            .1
+            .clone()
+    };
+    let ilsa = ("Ilsa".to_owned(), patron);
+    let snag = ("Snag the Goblin".to_owned(), enemy);
+    assert_eq!(
+        scene(&goblin, SceneKey::Opening),
+        [(ilsa.0.clone(), ilsa.1, true)]
+    );
+    assert_eq!(
+        scene(&goblin, SceneKey::DialogueSeal),
+        [
+            (ilsa.0.clone(), ilsa.1, true),
+            (snag.0.clone(), snag.1, false)
+        ]
+    );
+    assert_eq!(scene(&goblin, SceneKey::DialogueEscort).len(), 2);
+    assert_eq!(scene(&goblin, SceneKey::Combat), [(snag.0, snag.1, true)]);
+    assert_eq!(
+        scene(&goblin, SceneKey::Inn),
+        [("Lorcan".to_owned(), contact, true)]
+    );
+    assert_eq!(scene(&goblin, SceneKey::Victory), [(ilsa.0, ilsa.1, true)]);
+    assert!(scene(&goblin, SceneKey::Room).is_empty());
+    assert!(scene(&goblin, SceneKey::Defeat).is_empty());
+    let rat = cast_of(0xdaa66d325ccc5aac);
+    let combat = scene(&rat, SceneKey::Combat);
+    assert_eq!(combat.len(), 1);
+    assert_eq!(combat[0].1, enemy);
+    assert!(
+        !combat[0].2,
+        "a creature that does not speak is never speaking"
+    );
+    assert_eq!(scene(&rat, SceneKey::DialogueSeal).len(), 2);
+    let documents = generate(
+        &tables,
+        0x3c6ef378dd81de97,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap()
+    .documents(false)
+    .unwrap();
+    let record = String::from_utf8(documents.record).unwrap();
+    assert!(record.contains("\"scene_cast\""));
+    assert!(record.contains("\"role\": \"antagonist\""));
+}
+
+#[test]
+fn generated_packs_carry_secret_terms_and_a_profile_for_every_shown_speaker() {
+    let tables = tables();
+    let adventure = generate(
+        &tables,
+        0x3c6ef378dd81de97,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        adventure.pack.secret_terms,
+        [
+            "my fault",
+            "unguarded",
+            "Lantern-Maker's Shop",
+            "Lorcan",
+            "Nettleby"
+        ]
+    );
+    let speakers: Vec<(&str, &str)> = adventure
+        .pack
+        .speakers
+        .iter()
+        .map(|speaker| (speaker.name.as_str(), speaker.voice.as_str()))
+        .collect();
+    assert_eq!(speakers[0], ("Ilsa", "calm middle-aged woman"));
+    assert_eq!(speakers[1], ("Lorcan", "brisk, no-nonsense man"));
+    assert_eq!(speakers[2].0, "Snag the Goblin");
+    let enemy = &adventure.pack.speakers[2].role;
+    assert!(enemy.starts_with("a hostile ") && enemy.contains("fighting the heroes"));
+    for scene in &adventure.pack.scenes {
+        assert!(
+            scene.speaker.is_empty()
+                || adventure
+                    .pack
+                    .speakers
+                    .iter()
+                    .any(|speaker| speaker.name == scene.speaker),
+            "{} has no profile",
+            scene.speaker
+        );
+    }
+    let documents = adventure.documents(false).unwrap();
+    let record = String::from_utf8(documents.record).unwrap();
+    assert!(record.contains("\"secret_terms\""));
+    assert!(record.contains("\"speakers\""));
+}

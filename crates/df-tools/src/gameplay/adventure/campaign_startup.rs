@@ -270,12 +270,14 @@ pub(crate) fn select_campaign(
             record.frame.outline.len(),
             chapter.plan.chapter_type
         );
+        let prose = adventure_record.prose_summary();
         Ok(PreparedAdventure {
             directory,
             loaded,
             documents,
             record: adventure_record,
             fresh,
+            prose,
             campaign: Some(CampaignRun {
                 root: root.into(),
                 id,

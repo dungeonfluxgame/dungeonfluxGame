@@ -469,6 +469,29 @@ fn witnessed_courier_support(
     Ok(Some(member.name.clone()))
 }
 
+/// The characters on stage in a scene besides the heroes. `speaking` marks the one whose line
+/// is the scene's current speaker line.
+pub(super) fn scene_cast(scene: &super::pack::Scene) -> Vec<rpc::SceneActor> {
+    use super::pack::CastRole;
+    scene
+        .cast
+        .iter()
+        .map(|actor| rpc::SceneActor {
+            id: actor.id.clone(),
+            name: actor.name.clone(),
+            role: match actor.role {
+                CastRole::Patron => rpc::SceneRole::Patron,
+                CastRole::Antagonist => rpc::SceneRole::Antagonist,
+                CastRole::Contact => rpc::SceneRole::Contact,
+                CastRole::Bystander => rpc::SceneRole::Bystander,
+            } as i32,
+            sprite: actor.sprite.clone(),
+            portrait: actor.portrait.clone(),
+            speaking: !scene.dialogue.is_empty() && actor.name == scene.speaker,
+        })
+        .collect()
+}
+
 pub(super) fn journey_view(
     current: &Checkpoint,
     role: df_persistence::local_demo_scope::LocalDemoRole,
@@ -653,6 +676,14 @@ pub(super) fn journey_view(
     } else {
         &authored.narration
     };
+    // The story text and the rules wording are separate strings in the pack; this is the one
+    // place the server joins them for display.
+    let narration = if rested || authored.rules_note.is_empty() {
+        narration.to_owned()
+    } else {
+        format!("{narration} {}", authored.rules_note)
+    };
+    let narration = narration.as_str();
     let narration = match witnessed_courier_support(current, observer, perceived.facts(), &party)? {
         Some(name) => pack::with_content(|content| {
             format!(
@@ -692,19 +723,23 @@ pub(super) fn journey_view(
         creation,
         own_character: own,
         combat,
-        speaker: authored.speaker,
-        dialogue: authored.dialogue,
+        speaker: authored.speaker.clone(),
+        dialogue: authored.dialogue.clone(),
+        table_log: Vec::new(),
     };
-    let scene = if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] {
+    // The persisted decision outputs carry no cast; the view adds who is on stage.
+    let mut scene = if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] {
         journey::inn_scene()
     } else {
         rpc::GameplayScene {
             destination: rpc::HarborDestination::Unspecified as i32,
-            title: authored.title,
-            scene_asset: authored.asset,
-            speaker_portrait: authored.speaker_portrait,
+            title: authored.title.clone(),
+            scene_asset: authored.asset.clone(),
+            speaker_portrait: authored.speaker_portrait.clone(),
+            cast: Vec::new(),
         }
     };
+    scene.cast = scene_cast(&authored);
 
     let audience = match role {
         LocalDemoRole::Display => rpc::view_message::Audience::Display(rpc::DisplayGameplayView {

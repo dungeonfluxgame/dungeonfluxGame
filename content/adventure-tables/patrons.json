@@ -20,7 +20,8 @@
             "water",
             "town"
           ],
-          "art": "patron-ferry-clerk"
+          "art": "patron-ferry-clerk",
+          "age": "young"
         },
         {
           "faces": [
@@ -37,7 +38,8 @@
             "farm",
             "market"
           ],
-          "art": "patron-herbwife"
+          "art": "patron-herbwife",
+          "age": "elder"
         },
         {
           "faces": [
@@ -54,7 +56,8 @@
             "mountain",
             "grave"
           ],
-          "art": "patron-lamp-warden"
+          "art": "patron-lamp-warden",
+          "age": "adult"
         },
         {
           "faces": [
@@ -70,7 +73,8 @@
             "scholar",
             "town"
           ],
-          "art": "patron-archivist"
+          "art": "patron-archivist",
+          "age": "young"
         },
         {
           "faces": [
@@ -86,7 +90,8 @@
             "market",
             "town"
           ],
-          "art": "patron-merchant"
+          "art": "patron-merchant",
+          "age": "adult"
         },
         {
           "faces": [
@@ -103,7 +108,8 @@
             "mountain",
             "wild"
           ],
-          "art": "patron-shepherd"
+          "art": "patron-shepherd",
+          "age": "elder"
         },
         {
           "faces": [
@@ -119,7 +125,8 @@
             "sacred",
             "grave"
           ],
-          "art": "patron-acolyte"
+          "art": "patron-acolyte",
+          "age": "young"
         },
         {
           "faces": [
@@ -137,7 +144,8 @@
             "mountain",
             "market"
           ],
-          "art": "patron-innkeeper"
+          "art": "patron-innkeeper",
+          "age": "elder"
         },
         {
           "faces": [
@@ -156,7 +164,8 @@
             "grave",
             "wild"
           ],
-          "art": "patron-veteran"
+          "art": "patron-veteran",
+          "age": "elder"
         },
         {
           "faces": [
@@ -174,7 +183,8 @@
             "water",
             "scholar"
           ],
-          "art": "patron-bell-ringer"
+          "art": "patron-bell-ringer",
+          "age": "adult"
         }
       ]
     }

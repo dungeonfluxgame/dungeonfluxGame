@@ -484,6 +484,99 @@ pub(super) struct PackFile {
     /// Appended to scene narration after a space; contains the `{name}` placeholder once.
     pub(super) escort_support_suffix: String,
     pub(super) scenes: Vec<Scene>,
+    /// Phrases that give the private clue away. A listener who has not been told the clue
+    /// must never hear them, whoever is speaking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) secret_terms: Vec<String>,
+    /// Who each speaking character is, by the name a scene shows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) speakers: Vec<SpeakerProfile>,
+}
+
+/// One character on stage in a scene.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SceneCastMember {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) role: CastRole,
+    /// The cut-out figure's asset stem: the portrait's stem with `portrait-` replaced by
+    /// `sprite-`.
+    pub(super) sprite: String,
+    pub(super) portrait: String,
+    pub(super) voice: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) gender: Option<Gender>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) age: Option<Age>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CastRole {
+    Patron,
+    Antagonist,
+    Contact,
+    Bystander,
+}
+
+/// The pronoun set a character is cast and voiced with.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Gender {
+    He,
+    She,
+    They,
+    It,
+}
+
+/// How old a character sounds.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Age {
+    Young,
+    Adult,
+    Elder,
+}
+
+impl Gender {
+    pub(super) fn from_table(text: &str) -> Option<Self> {
+        match text {
+            "he" => Some(Self::He),
+            "she" => Some(Self::She),
+            "they" => Some(Self::They),
+            "it" => Some(Self::It),
+            _ => None,
+        }
+    }
+}
+
+impl Age {
+    pub(super) fn from_table(text: &str) -> Option<Self> {
+        match text {
+            "young" => Some(Self::Young),
+            "adult" => Some(Self::Adult),
+            "elder" => Some(Self::Elder),
+            _ => None,
+        }
+    }
+}
+
+/// What a language model needs to voice one speaking character in character, and what voice
+/// casting needs to pick a voice without reading the free-text `voice` phrase.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SpeakerProfile {
+    /// Equals the `speaker` of the scenes this character speaks in.
+    pub(super) name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) gender: Option<Gender>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) age: Option<Age>,
+    /// Who the character is to the party, in a short phrase.
+    pub(super) role: String,
+    /// How the character sounds, in a short phrase.
+    pub(super) voice: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -609,6 +702,14 @@ pub(super) struct Scene {
     pub(super) key: SceneKey,
     pub(super) title: String,
     pub(super) narration: String,
+    /// The rules wording of a scene (positions, outcomes, rest), kept apart from the story text
+    /// so a story writer never touches it. Display joins it after the narration.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(super) rules_note: String,
+    /// The characters on stage besides the heroes. Sprite and portrait are asset stems the
+    /// client may not have; it falls back, so unknown ones are not an error here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) cast: Vec<SceneCastMember>,
     /// Narration once the Short Rest has completed; present for victory and defeat only.
     #[serde(default)]
     pub(super) narration_rested: Option<String>,
@@ -1250,7 +1351,41 @@ fn validate_pack(pack: &PackFile) -> Result<(), PackError> {
             "text with exactly one {name} placeholder and no other braces",
         ));
     }
-    validate_scenes(&pack.scenes)
+    validate_scenes(&pack.scenes)?;
+    validate_speaking_notes(pack)
+}
+
+fn validate_speaking_notes(pack: &PackFile) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Pack;
+    range(FILE, "secret_terms", length(pack.secret_terms.len()), 0, 16)?;
+    for (index, term) in pack.secret_terms.iter().enumerate() {
+        text(FILE, &format!("secret_terms[{index}]"), term, 1, 64)?;
+    }
+    range(FILE, "speakers", length(pack.speakers.len()), 0, 8)?;
+    for (index, speaker) in pack.speakers.iter().enumerate() {
+        text(
+            FILE,
+            &format!("speakers[{index}].name"),
+            &speaker.name,
+            1,
+            48,
+        )?;
+        text(
+            FILE,
+            &format!("speakers[{index}].role"),
+            &speaker.role,
+            1,
+            96,
+        )?;
+        text(
+            FILE,
+            &format!("speakers[{index}].voice"),
+            &speaker.voice,
+            1,
+            96,
+        )?;
+    }
+    Ok(())
 }
 
 fn validate_creation(creation: &CreationPack) -> Result<(), PackError> {
@@ -1518,6 +1653,22 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
             0,
             TEXT_CHARACTERS_MAX,
         )?;
+        text(
+            FILE,
+            &format!("{at}.rules_note"),
+            &scene.rules_note,
+            0,
+            TEXT_CHARACTERS_MAX,
+        )?;
+        range(FILE, &format!("{at}.cast"), length(scene.cast.len()), 0, 6)?;
+        for (position, actor) in scene.cast.iter().enumerate() {
+            let member = format!("{at}.cast[{position}]");
+            text(FILE, &format!("{member}.id"), &actor.id, 1, 64)?;
+            text(FILE, &format!("{member}.name"), &actor.name, 1, 48)?;
+            text(FILE, &format!("{member}.sprite"), &actor.sprite, 0, 128)?;
+            text(FILE, &format!("{member}.portrait"), &actor.portrait, 0, 128)?;
+            text(FILE, &format!("{member}.voice"), &actor.voice, 0, 96)?;
+        }
         if let Some(rested) = &scene.narration_rested {
             text(
                 FILE,
@@ -1958,6 +2109,18 @@ pub(super) fn bandit() -> df_rules::local_journey::BanditRules {
             },
         }
     })
+}
+/// Every speaking character of the active pack, for voice casting: name, gender, age and the
+/// free-text voice phrase.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "voice casting at startup is the caller; it reads the pack's speakers here"
+    )
+)]
+pub(super) fn speakers() -> Vec<SpeakerProfile> {
+    with_content(|pack| pack.speakers.clone())
 }
 pub(super) fn narrative_budget() -> u64 {
     active().map_or(8, |loaded| {

@@ -11,7 +11,9 @@ pub(crate) mod campaign_tables;
 #[cfg(test)]
 mod campaign_tests;
 pub(crate) mod cli;
+mod expression;
 mod generate;
+mod listener;
 pub(crate) mod record;
 mod render;
 mod rng;

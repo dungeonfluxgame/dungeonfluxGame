@@ -539,6 +539,23 @@ impl Tables {
                     "unknown or empty hook kinds",
                 ));
             }
+            if secret.terms.is_empty()
+                || secret.terms.len() > 4
+                || secret
+                    .terms
+                    .iter()
+                    .any(|term| term.is_empty() || term.chars().count() > 40)
+                || !secret
+                    .fact
+                    .to_lowercase()
+                    .contains(&secret.terms[0].to_lowercase())
+            {
+                return Err(invalid(
+                    "secrets.json",
+                    "tables.secrets.entries.terms",
+                    "one to four short terms, the first occurring verbatim in the fact",
+                ));
+            }
         }
         for complication in &self.complications.entries {
             if complication.groups.is_empty()
@@ -658,6 +675,23 @@ impl Tables {
                     "gender/art",
                     "unknown gender or art",
                 ));
+            }
+        }
+        let ages = self
+            .patrons
+            .entries
+            .iter()
+            .chain(&self.contacts.entries)
+            .map(|npc| (&npc.age, "patrons.json"))
+            .chain(
+                self.antagonists
+                    .entries
+                    .iter()
+                    .map(|ant| (&ant.age, "antagonists.json")),
+            );
+        for (age, file) in ages {
+            if !["young", "adult", "elder"].contains(&age.as_str()) {
+                return Err(invalid(file, "age", "age must be young, adult or elder"));
             }
         }
         for key in ["surnames", "goblin", "kobold", "creature_adj", "undead_adj"] {

@@ -143,7 +143,9 @@ impl RunningActor {
             }
         };
         let (sender, inbox) = bounded_inbox::<actor::Call>();
+        let table_log = super::table_log::TableLog::new();
         let actor = actor::Actor {
+            table_log: table_log.clone(),
             dialogue: super::dialogue::DialogueState::default(),
             owner,
             bootstrap_credential: [0x81; 32],
@@ -214,6 +216,7 @@ impl RunningActor {
                 super::startup_configuration::VoiceOff::Qualification,
             ),
             npc_voice: Arc::new(super::npc_reply::NpcVoice::silent()),
+            table_log,
         };
         Ok(Self {
             service,

@@ -27,6 +27,7 @@ mod startup_configuration;
 #[cfg(test)]
 mod startup_contract;
 mod storyteller;
+mod table_log;
 #[cfg(test)]
 mod tempo_clock;
 mod voice;
@@ -63,6 +64,8 @@ struct Service {
     voice: voice::Voice,
     /// Speaks for the scene's NPC when the storyteller is on; silent otherwise.
     npc_voice: Arc<npc_reply::NpcVoice>,
+    /// The public feed of who said and did what; a new line publishes a fresh view.
+    table_log: Arc<table_log::TableLog>,
 }
 fn credential<T>(request: &Request<T>) -> Result<[u8; 32], Status> {
     let value = request
@@ -165,15 +168,30 @@ impl rpc::session_service_server::SessionService for Service {
             .map_err(|_| Status::resource_exhausted("gameplay watch limit"))?;
         let mut updates = self.updates.clone();
         updates.borrow_and_update();
+        let mut table_lines = self.table_log.subscribe();
+        table_lines.borrow_and_update();
         let (_, first) = self.view(credential, request.clone()).await?;
         let service = self.clone();
         let stream = futures::stream::unfold(
-            (Some(first), updates, service, request, credential, permit),
-            |(first, mut updates, service, request, credential, permit)| async move {
+            (
+                Some(first),
+                updates,
+                table_lines,
+                service,
+                request,
+                credential,
+                permit,
+            ),
+            |(first, mut updates, mut table_lines, service, request, credential, permit)| async move {
                 let next = if let Some(first) = first {
                     Ok(first)
                 } else {
-                    if updates.changed().await.is_err() {
+                    // A checkpoint change or a new table line each publish a fresh view.
+                    let ended = tokio::select! {
+                        changed = updates.changed() => changed.is_err(),
+                        changed = table_lines.changed() => changed.is_err(),
+                    };
+                    if ended {
                         return None;
                     }
                     service
@@ -192,6 +210,7 @@ impl rpc::session_service_server::SessionService for Service {
                         } else {
                             updates
                         },
+                        table_lines,
                         service,
                         request,
                         credential,
@@ -387,6 +406,24 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         startup_configuration::SessionSettings::qualification()
     };
+    let storyteller = std::sync::Arc::new(if interactive {
+        let mode = startup_configuration::storyteller_mode(
+            startup_configuration::StorytellerInputs::from_environment(),
+            &std::env::current_dir()?,
+        )?;
+        match &mode {
+            startup_configuration::StorytellerMode::On(settings) => println!(
+                "STORYTELLER on model={} budget={}",
+                settings.model, settings.token_budget
+            ),
+            startup_configuration::StorytellerMode::Off(reason) => {
+                println!("STORYTELLER off ({reason})");
+            }
+        }
+        storyteller::Storyteller::from_mode(mode)
+    } else {
+        storyteller::Storyteller::disabled()
+    });
     if interactive {
         let settings = adventure_settings
             .as_ref()
@@ -407,6 +444,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                     settings,
                     &database_config()?,
                     &std::env::current_dir()?,
+                    &storyteller,
                 )
                 .await?;
                 let opening = prepared
@@ -425,6 +463,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                     prepared.record.entry("antagonist")?,
                     prepared.record.rolls.len()
                 );
+                println!("ADVENTURE {}", prepared.prose);
                 let directory = prepared.directory.clone();
                 let loaded = prepared.loaded.clone();
                 generated_adventure = Some(prepared);
@@ -510,24 +549,6 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         startup_configuration::VoiceSettings::Off(startup_configuration::VoiceOff::Qualification)
     })?;
-    let storyteller = std::sync::Arc::new(if interactive {
-        let mode = startup_configuration::storyteller_mode(
-            startup_configuration::StorytellerInputs::from_environment(),
-            &std::env::current_dir()?,
-        )?;
-        match &mode {
-            startup_configuration::StorytellerMode::On(settings) => println!(
-                "STORYTELLER on model={} budget={}",
-                settings.model, settings.token_budget
-            ),
-            startup_configuration::StorytellerMode::Off(reason) => {
-                println!("STORYTELLER off ({reason})");
-            }
-        }
-        storyteller::Storyteller::from_mode(mode)
-    } else {
-        storyteller::Storyteller::disabled()
-    });
     let npc_phase = courier_npc_qualification::phase();
     let npc_budget = npc_phase
         .map(courier_npc_qualification::call_budget)
@@ -888,8 +909,14 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .or(restart_budget)
         .or(rest_budget)
         .or(settings.call_budget);
+    let table_log = if interactive {
+        table_log::TableLog::new()
+    } else {
+        table_log::TableLog::disabled()
+    };
     let actor = actor::Actor {
         owner,
+        table_log: table_log.clone(),
         dialogue: dialogue::DialogueState::default(),
         bootstrap_credential: player_credential,
         issuer,
@@ -1002,6 +1029,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         streams: Arc::new(Semaphore::new(settings.max_watch_streams)),
         voice: voice.clone(),
         npc_voice: Arc::new(npc_reply::NpcVoice::new(storyteller)),
+        table_log,
     };
     let (incoming_sender, incoming) =
         NativeIncoming::bounded(NonZeroUsize::new(4).ok_or("invalid native incoming bound")?)?;

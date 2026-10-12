@@ -659,6 +659,7 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
         title: pack::scene(pack::SceneKey::Inn).title,
         scene_asset: pack::scene(pack::SceneKey::Inn).asset,
         speaker_portrait: pack::scene(pack::SceneKey::Inn).speaker_portrait,
+        cast: Vec::new(),
     }
 }
 pub(super) fn accepted(
