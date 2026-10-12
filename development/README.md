@@ -162,6 +162,19 @@ and treat the room code as the only password.
 Speech input needs HTTPS or `localhost`: browsers grant the microphone only there. On a plain
 `http://` LAN address a phone can type its lines but cannot speak them (see Speech input below).
 
+### Table settings (choice chips on the TV)
+
+Any seated player can change the room's table settings from the Menu sheet on their phone, in the
+lobby or during play. The server owns them: the choice is stored with the game's database, so it
+survives a reconnect and a server restart, and every screen receives it in its view.
+
+- `DF_GAMEPLAY_CHOICE_HINTS=on|off`: the startup value of "Show choices on the TV". Default `on`.
+  Any other value refuses startup. A choice a player has already stored wins over this default;
+  the startup line reads `TABLE choice_hints=on` or `TABLE choice_hints=off`.
+
+With the chips off the shared display hides the numbered chip row and gives its space to the
+narrator box. The setting changes presentation only; no rule, roll or outcome depends on it.
+
 ### Content rating (mature by default)
 
 This is an adult game, so the written and spoken content is `mature` unless you switch it:
@@ -193,13 +206,16 @@ policy. A refusal or empty reply falls back to the prepared in-character line an
 retried with reworded instructions to get around it. The setting is read once at startup. A saved
 adventure keeps the text it was generated with.
 
-### Speech input (hold to talk)
+### Speech input (tap to talk)
 
-On the phone, a "Hold to talk" button sits under the dialogue text box. The player holds it
-(pointer, touch, or Space/Enter), speaks for up to 15 seconds and releases; the server
-transcribes the clip and the words appear in the same text box. The player edits them and
-presses Send (the same path as a typed line) or Clear. Typing works throughout, and a press is
-the only thing that ever asks the browser for the microphone.
+On the phone, a "Tap to talk" button sits under the dialogue text box. The player taps it
+(pointer, touch, or Space/Enter) to start; the button reads "Listening… tap to stop" while it
+listens, for up to 15 seconds. A second tap stops it, and the server transcribes the clip and the
+words appear in the same text box. Listening also ends without a tap when the page is hidden, the
+connection drops, the text box goes away, or the player starts typing. A press that is cancelled
+or dragged off the button does nothing, and Escape cancels. The player edits the words and presses
+Send (the same path as a typed line) or Clear. Typing works throughout, and a tap is the only thing
+that ever asks the browser for the microphone.
 
 Settings (process environment; invalid values refuse startup without echoing them):
 
@@ -283,6 +299,31 @@ downloaded) and point the server at it.
   tier never goes past the scene's coarsest one. Any other value
   refuses startup. The `#battle-preview` address takes `&lod=<0-3>`.
 
+### Test fights against 1 to n enemies
+
+A development setting, off by default (a normal game is unchanged): the adventure's first choice
+leads straight to a tactical fight against `n` enemies.
+
+- `DF_GAMEPLAY_TEST_FIGHT=<n>` (or `development/run-gameplay.sh --test-fight <n>`): `n` from 1 to
+  4. Any other value refuses startup. After the opening's first choice (ask or escort) the server
+  submits the courier defence for the same player at once, so the fight begins without the
+  dialogue step; every rule, check and revision is the ordinary one.
+- `DF_GAMEPLAY_TEST_FOE=<creature id>` (or `--test-foe <id>`): the creature, from the compiled
+  rules table (`bandit`, `cultist`, `guard`, `goblin-warrior`, `kobold-warrior`, `skeleton`,
+  `zombie`, `wolf`, `giant-rat`, `giant-weasel`, `mastiff`, `scout`). Default: the adventure's
+  own creature. Needs `DF_GAMEPLAY_TEST_FIGHT`; an unknown id refuses startup. A creature that is
+  not the adventure's own carries 20 arrows or bolts when it has a bow or crossbow.
+- The startup line `TEST FIGHT enemies=<n> foe=<id>` confirms it. It applies to databases created
+  while it is set; a stored game keeps the enemies it started with.
+- The limit of 4 is the number of enemy entities the server holds and of enemy spawn cells on
+  every layout of every battle scene (13 scenes, including the four scans); a native test starts
+  a fight against 1, 2, 3 and 4 on every scene. At six heroes against six enemies several things
+  break and none is changed here: the server numbers heroes 1 and 2 and enemies from 3, there are
+  four enemy entities, four spawn cells per side on every layout, the participant admission allows
+  six combatants (and 15 identity comparisons), the pack and adventure tables allow at most four
+  enemies, and the flat display fallback holds two heroes and three non-player figures. A larger
+  fight needs all of these raised together, and new spawn cells authored on all 36 layouts.
+
 Run a real fight on a scan (the scans listed in `artifacts/tmp/splat-dl/README.txt`):
 
 ```sh
@@ -290,13 +331,27 @@ DF_GAMEPLAY_SPLAT_DIR=artifacts/tmp/splat-dl DF_GAMEPLAY_BATTLE_SCENE=scan-villa
   development/run-gameplay.sh
 ```
 
-The grid on every scene (scans and painted grounds alike) is drawn as straight, glowing lines on one
-flat play plane: a bright core with a soft additive halo, warm gold when neutral, cool blue on hero
-cells and red on enemy cells, brighter on reachable and targeted cells. Where scan geometry stands
-well in front of a line the line dims instead of breaking. The look is tuned in one place,
+The grid on every scene (scans and painted grounds alike) is drawn as straight hairlines (about one pixel at
+1080p, low contrast, no glow) on one flat play plane: warm gold when neutral, cool blue on hero cells and red on
+enemy cells, fading with distance and toward the edge of the field. A hero's reachable region is one faint tint
+over its cells with a single thin outline around its outer edge (the lines inside it keep the base strength);
+legal targets and the acting figure's cell are thin rings, the only strong marks on the field. Where scan
+geometry stands well in front of a line the line dims instead of breaking. The look is tuned in one place,
 `crates/df-render/src/battle/grid_lines.rs`. A scan's plane sits at the median ground height under the
 open cells and figures stand on it; cells whose ground is more than 0.45 m from the plane are
 blocked at fitting time (`--deviation`), so nobody floats or sinks further than that.
+
+The camera rests on a solved wide shot (`crates/df-render/src/battle/rest_shot.rs`): from the combatants, the
+cells the server offers this turn and the scene's authored `tactical` shot as a hint for direction and lens, it
+finds a raised three-quarter view that holds every living figure and the reachable region between the HUD
+cards (the party and enemy columns, the round strip and the dice card are keep-out rectangles) with the place
+showing beyond the grid. A turn begins with a short lean toward its figure and back out within 1.5 s; strikes,
+projectiles, speakers and the finishing shot keep their own shots. `data-battlefield-camera` reports the shot
+held (`wide` or `action`) and its pose.
+
+Scan splats that are beside or behind a figure never hide it (`figure_clear.rs`, applied per splat in the
+projection pass): only a splat centred in front of the figure over its screen box hides it, and where scan
+geometry truly stands between the camera and a figure the figure is drawn faintly over it so it still reads.
 
 The scenes are `scan-riverbed`, `scan-valley-bridges` and `scan-summit` (private test only, no
 licence: do not publish, record or ship them) and `scan-village` (CC BY 4.0, attribution in
@@ -328,7 +383,8 @@ with `&` and may come in any order:
 | `shot=<name>` | Cut to a named camera: `tactical`, `combat_est`, `turn_focus`, `impact`, `ko`, `victory`. |
 | `cam=<x,y,z>,<distance>,<yaw>,<pitch>,<fov>` | A free camera. |
 | `place=<token>:<col>:<row>` | Stand a token on a cell (repeatable). |
-| `beat=<kind>` | Stage one thing after the camera has idled, then hold: `graze`, `heavy`, `critical`, `miss`, `finish` (one blow of that kind), `selfheal`, `enemyhit`, `shoot` (the archer across the field), `speak` (an enemy's line, then a hero's, each with its bubble and the camera easing in and back), `named`, `namedmiss`, `namedcrit` (a blow whose floating result names the attack), `chain` (every enemy strikes in a row: stacked results), `victory` (every foe brought down: the held victory beat), `defeat` (every hero brought down). |
+| `reach` | Show the first hero's full reach (every walkable cell within six, 30 ft) as reachable cells and every foe as a target, as on a hero's turn. |
+| `beat=<kind>` | Stage one thing after the camera has idled, then hold: `rest` (a hero's turn begins: the lean toward it, then the solved resting shot), `graze`, `heavy`, `critical`, `miss`, `finish` (one blow of that kind), `selfheal`, `enemyhit`, `shoot` (the archer across the field), `speak` (an enemy's line, then a hero's, each with its bubble and the camera easing in and back), `named`, `namedmiss`, `namedcrit` (a blow whose floating result names the attack), `chain` (every enemy strikes in a row: stacked results), `victory` (every foe brought down: the held victory beat), `defeat` (every hero brought down). |
 | `lod=<0-3>` | The scan tier drawn as the finest (default 1; 0 is the largest). |
 | `splat` | Replace the scene's scan with the built-in procedural ground. |
 | `sog=<name>`, `splatfile=<name>` | A splat scene served from `/assets/splat/`. |

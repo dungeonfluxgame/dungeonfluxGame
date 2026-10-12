@@ -219,6 +219,8 @@ pub struct HudState {
     /// The roll panel the table reads while a blow resolves; clears itself after a few seconds.
     pub roll_card: Option<RollCard>,
     pub active: Option<TokenId>,
+    /// A question the table is waiting on (a reaction), shown in place of the turn label.
+    pub prompt: Option<String>,
     pub round: u32,
     /// Turn order, first to act first. Empty means the order tokens were supplied in.
     pub initiative: Vec<TokenId>,
@@ -271,6 +273,11 @@ pub enum CameraFocus {
     /// The shot's own authored target.
     Scene,
     Token(TokenId),
+    /// The resting shot, solved from everyone on the field and the cells that matter this turn
+    /// (see `rest_shot`): wide, raised, holding both sides clear of the HUD cards.
+    Wide,
+    /// The resting shot leaned toward one figure (a short ease at the start of its turn).
+    Lean(TokenId),
     Between(TokenId, TokenId),
     /// The shot for an action: the actor alone (a self action) or the actor and its target, both
     /// kept fully in frame for the whole beat, from the side of the line the camera already holds,

@@ -43,7 +43,7 @@ ADVENTURE_SEED_REQUESTED=0
 LAN=0
 
 usage() {
-  echo 'usage: run-gameplay.sh [--no-build] [--lan] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor] [--campaign <id>] [--campaign-seed <n>] [--status]'
+  echo 'usage: run-gameplay.sh [--no-build] [--lan] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor] [--campaign <id>] [--campaign-seed <n>] [--status] [--test-fight <1-4>] [--test-foe <creature id>]'
 }
 
 while test "$#" -gt 0; do
@@ -55,6 +55,12 @@ while test "$#" -gt 0; do
       if test "$#" -lt 2; then usage >&2; exit 2; fi
       CAMPAIGN_SEED=$2; export DF_GAMEPLAY_CAMPAIGN_SEED=$2; shift 2 ;;
     --status) CAMPAIGN_STATUS=1; shift ;;
+    --test-fight)
+      if test "$#" -lt 2; then usage >&2; exit 2; fi
+      export DF_GAMEPLAY_TEST_FIGHT=$2; shift 2 ;;
+    --test-foe)
+      if test "$#" -lt 2; then usage >&2; exit 2; fi
+      export DF_GAMEPLAY_TEST_FOE=$2; shift 2 ;;
     --no-build) NO_BUILD=1; shift ;;
     --lan) LAN=1; shift ;;
     --harbor) HARBOR_REQUESTED=1; export DF_GAMEPLAY_ADVENTURE=harbor; shift ;;

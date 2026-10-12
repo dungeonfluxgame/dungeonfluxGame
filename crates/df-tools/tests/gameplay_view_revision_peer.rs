@@ -136,12 +136,14 @@ fn view(player: bool, frame: FixtureFrame) -> rpc::ViewMessage {
                             label: "Lantern".to_owned(),
                             description: "First synthetic offered choice for draft preservation."
                                 .to_owned(),
+                            ..Default::default()
                         },
                         rpc::JourneyOption {
                             option_id: "compass".to_owned(),
                             label: "Compass".to_owned(),
                             description: "Second synthetic offered choice for draft preservation."
                                 .to_owned(),
+                            ..Default::default()
                         },
                     ],
                 }],

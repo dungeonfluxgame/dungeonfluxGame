@@ -157,6 +157,7 @@ field dungeonflux.public.v1.CombatOutcome 15 actor_id type=12 label=1 presence=f
 field dungeonflux.public.v1.CombatOutcome 16 target_id type=12 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 17 weapon type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 18 attack_style type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 19 damage_type type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 2 target_name type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 3 attack_die type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 4 attack_modifier type=17 label=1 presence=false target=- oneof=-
@@ -243,6 +244,8 @@ field dungeonflux.public.v1.JourneyGroup 3 options type=11 label=3 presence=fals
 field dungeonflux.public.v1.JourneyOption 1 option_id type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyOption 2 label type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyOption 3 description type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyOption 4 requires_group type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyOption 5 requires_options type=9 label=3 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 1 phase type=14 label=1 presence=false target=.dungeonflux.public.v1.JourneyPhase oneof=-
 field dungeonflux.public.v1.JourneyView 10 table_log type=11 label=3 presence=false target=.dungeonflux.public.v1.TableLine oneof=-
 field dungeonflux.public.v1.JourneyView 11 tempo type=11 label=1 presence=false target=.dungeonflux.public.v1.TempoCue oneof=-
@@ -543,11 +546,6 @@ field dungeonflux.public.v1.JourneyView 14 live_faces type=11 label=3 presence=f
 field dungeonflux.public.v1.JourneyView 15 presentation_sequence type=4 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 16 reply_speaker type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 30 home type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeTheme oneof=-
-message dungeonflux.public.v1.HomeBox
-field dungeonflux.public.v1.HomeBox 1 left_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeBox 2 top_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeBox 3 width_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeBox 4 height_permille type=13 label=1 presence=false target=- oneof=-
 message dungeonflux.public.v1.HomeMood
 field dungeonflux.public.v1.HomeMood 1 accent type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.HomeMood 2 tint type=9 label=1 presence=false target=- oneof=-
@@ -557,13 +555,14 @@ field dungeonflux.public.v1.HomeMood 5 contrast_permille type=13 label=1 presenc
 field dungeonflux.public.v1.HomeMood 6 saturation_permille type=13 label=1 presence=false target=- oneof=-
 message dungeonflux.public.v1.HomeTheme
 field dungeonflux.public.v1.HomeTheme 1 location_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeTheme 2 arrangement type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeTheme 3 title type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeBox oneof=-
-field dungeonflux.public.v1.HomeTheme 4 code type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeBox oneof=-
-field dungeonflux.public.v1.HomeTheme 5 party type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeBox oneof=-
 field dungeonflux.public.v1.HomeTheme 6 mood type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeMood oneof=-
 field dungeonflux.public.v1.HomeTheme 7 atmosphere type=9 label=3 presence=false target=- oneof=-
 field dungeonflux.public.v1.HomeTheme 8 fallback type=8 label=1 presence=false target=- oneof=-
+reserved-range dungeonflux.public.v1.HomeTheme Some(2) Some(6)
+reserved-name dungeonflux.public.v1.HomeTheme arrangement
+reserved-name dungeonflux.public.v1.HomeTheme title
+reserved-name dungeonflux.public.v1.HomeTheme code
+reserved-name dungeonflux.public.v1.HomeTheme party
 # PLAY-V09: scene plate (GameplayScene 20 live_plate, 21 plate_layout, 22 plate_state)
 enum dungeonflux.public.v1.PlateSide
 enum dungeonflux.public.v1.PlateState
@@ -618,5 +617,12 @@ enum-value dungeonflux.public.v1.HomeVideoState 3 HOME_VIDEO_STATE_READY
 enum-value dungeonflux.public.v1.HomeVideoState 4 HOME_VIDEO_STATE_FAILED
 field dungeonflux.public.v1.JourneyView 31 home_video_state type=14 label=1 presence=false target=.dungeonflux.public.v1.HomeVideoState oneof=-
 field dungeonflux.public.v1.JourneyView 32 home_video_path type=9 label=1 presence=false target=- oneof=-
+# PLAY-U02: table settings (SET_TABLE_SETTING) and the choice-hint toggle on JourneyView
+enum-value dungeonflux.public.v1.GameplayActionKind 40 SET_TABLE_SETTING
+field dungeonflux.public.v1.SubmitActionRequest 12 table_setting type=11 label=1 presence=false target=.dungeonflux.public.v1.TableSettingChange oneof=-
+message dungeonflux.public.v1.TableSettingChange
+field dungeonflux.public.v1.TableSettingChange 1 choice_hints_hidden type=8 label=1 presence=false target=- oneof=value
+oneof dungeonflux.public.v1.TableSettingChange value
+field dungeonflux.public.v1.JourneyView 70 choice_hints_hidden type=8 label=1 presence=false target=- oneof=-
 # PLAY-V12: the adventure name on every story view (the establishing shot title card)
 field dungeonflux.public.v1.JourneyView 75 adventure_name type=9 label=1 presence=false target=- oneof=-

@@ -173,6 +173,7 @@ fn request(
         savage_attacker: false,
         graze: false,
         action_choices: Vec::new(),
+        table_setting: None,
     }
 }
 pub(super) fn act(current: &Checkpoint, member: MemberId, operation: u8, id: &str) -> Checkpoint {

@@ -14,30 +14,31 @@ use super::{
 
 /// Width of the bright core, in metres. Never drawn thinner than [`CORE_MIN_PX`] on screen; a line
 /// thinner than that fades instead of shimmering.
-pub const LINE_WIDTH_M: f32 = 0.02;
+pub const LINE_WIDTH_M: f32 = 0.012;
 /// Narrowest the core is drawn, in pixels, so it stays anti-aliased at distance.
 pub const CORE_MIN_PX: f32 = 1.0;
 /// Opacity of the core at full strength.
-pub const CORE_INTENSITY: f32 = 0.9;
+pub const CORE_INTENSITY: f32 = 0.55;
 /// How much of the line colour the core is whitened by: a bright core reads as a lit filament.
-pub const CORE_WHITENING: f32 = 0.45;
+pub const CORE_WHITENING: f32 = 0.2;
 /// Width of the soft halo around a line, in metres.
-pub const HALO_WIDTH_M: f32 = 0.09;
+pub const HALO_WIDTH_M: f32 = 0.05;
 /// Narrowest the halo is drawn, in pixels; below this world width it fades out with distance.
 pub const HALO_MIN_PX: f32 = 2.5;
 /// Strength of the additive halo.
-pub const HALO_INTENSITY: f32 = 0.3;
+pub const HALO_INTENSITY: f32 = 0.0;
 /// Opacity of the dark underlay beside the line, which keeps the glow legible on bright ground
 /// (daylight grass) where an additive halo alone would wash out.
-pub const UNDERLAY_ALPHA: f32 = 0.2;
+pub const UNDERLAY_ALPHA: f32 = 0.1;
 /// Opacity of a line seen through scan geometry that is in front of it: the line dims, it does
 /// not break up.
 pub const SEEN_THROUGH_ALPHA: f32 = 0.32;
 /// How far in front of a line the scan has to be before the line counts as hidden, in metres
 /// along the line of sight: grass and rubble at the ground do not hide it, a hut or a wall does.
 pub const OCCLUSION_MARGIN_M: f32 = 2.0;
-/// Brightness multiplier for reachable and targeted cells: the same treatment, brighter.
-pub const HIGHLIGHT_BOOST: f32 = 2.3;
+/// Brightness multiplier for the outline of a reachable or targeted region (the lines inside it
+/// keep the base strength, tinted): a little brighter than the grid, still a thin line.
+pub const HIGHLIGHT_BOOST: f32 = 1.6;
 /// A cell narrower than this many pixels (the lines crowd together) fades the lines out.
 pub const CELL_MIN_PX: f32 = 8.0;
 /// Distance from the grid centre where the lines start to dim, and where they stop, in metres.

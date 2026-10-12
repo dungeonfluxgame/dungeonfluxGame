@@ -65,6 +65,9 @@ struct Client {
     watch_abort: Option<AbortHandle>,
     callbacks: Vec<Callback>,
     creation: Option<CharacterPhaseSurface>,
+    /// The creation offer of the view the form is drawn in: a confirm always sends this one,
+    /// never the offer the form was first built with.
+    creation_offer: Option<rpc::GameplayActionOffer>,
     live: live_screens::LiveScreens,
     chrome: live_chrome::Chrome,
     scene_delivery: Option<Rc<PublicSceneDelivery>>,
@@ -948,6 +951,36 @@ fn prepare(
         savage_attacker: savage,
         graze,
         action_choices: Vec::new(),
+        table_setting: None,
+    })
+}
+/// A seated player's request to show or hide the choice chips on the shared display. It names no
+/// offer; the server checks the seat and the value.
+fn table_setting(
+    client: &Rc<RefCell<Client>>,
+    choice_hints_hidden: bool,
+) -> Result<rpc::SubmitActionRequest, String> {
+    let state = client.borrow();
+    if state.busy || (!state.last_confirmed && state.last_request.is_some()) {
+        return Err("Confirm the current operation before making a new choice.".to_owned());
+    }
+    Ok(rpc::SubmitActionRequest {
+        session_id: state.session.clone(),
+        run_id: state.run.clone(),
+        observed_revision: state.revision,
+        operation_id: Some(operation()?),
+        offer_id: String::new(),
+        action_kind: rpc::GameplayActionKind::SetTableSetting as i32,
+        destination: rpc::HarborDestination::Unspecified as i32,
+        character: None,
+        savage_attacker: false,
+        graze: false,
+        action_choices: Vec::new(),
+        table_setting: Some(rpc::TableSettingChange {
+            value: Some(rpc::table_setting_change::Value::ChoiceHintsHidden(
+                choice_hints_hidden,
+            )),
+        }),
     })
 }
 fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: bool) {
@@ -1041,7 +1074,8 @@ fn complete_action_response(
                     match receipt.outcome {
                                 Some(rpc::decision_receipt::Outcome::Accepted(_))=>{
                                     if body.action_kind==rpc::GameplayActionKind::GreatswordAttack as i32 && state.first_attack.is_none() {state.first_attack=Some(body.clone());}
-                                    if receipt.replayed {"Original saved outcome confirmed. No rolls or damage were repeated."} else {"Your choice is saved to the shared adventure."}.to_owned()
+                                    if body.action_kind==rpc::GameplayActionKind::SetTableSetting as i32 {"Table setting saved.".to_owned()}
+                                    else if receipt.replayed {"Original saved outcome confirmed. No rolls or damage were repeated.".to_owned()} else {"Your choice is saved to the shared adventure.".to_owned()}
                                 }
                                 Some(rpc::decision_receipt::Outcome::Rejected(rejection))=>match rpc::RejectionCode::try_from(rejection.code) {
                                     Ok(rpc::RejectionCode::InvalidSelection)=>"The server rejected that character or action selection. Review the offered choices.",
@@ -1149,14 +1183,15 @@ fn creation(
             label:"Confirm your hero".to_owned(),enabled:editable}],
     };
     drop(state);
+    client.borrow_mut().creation_offer = Some(action.clone());
     if let Some(existing) = client.borrow().creation.as_ref() {
         existing
             .update(&view)
             .map_err(|error| character_render_error(client, &error))?;
+        apply_option_requirements(client, existing, offer)?;
         return Ok(());
     }
     let weak = Rc::downgrade(client);
-    let offered = action.clone();
     let created = CharacterPhaseSurface::create(
         &client.borrow().document,
         "journey-character",
@@ -1170,6 +1205,9 @@ fn creation(
         },
         move |submission| {
             let Some(client) = weak.upgrade() else {
+                return;
+            };
+            let Some(offered) = client.borrow().creation_offer.clone() else {
                 return;
             };
             let selection = rpc::CharacterSelection {
@@ -1199,8 +1237,34 @@ fn creation(
     .map_err(|error| character_render_error(client, &error))?;
     // Flavor is not an admitted field in this bounded character contract.
     created.flavor_input().root().set_attribute("hidden", "")?;
+    apply_option_requirements(client, &created, offer)?;
     surface.append_child(created.root())?;
     client.borrow_mut().creation = Some(created);
+    Ok(())
+}
+/// Lists an option only with the choices the server says it goes with (an appearance only with
+/// the packages that grant the weapon it shows); the server refuses the others in any case.
+fn apply_option_requirements(
+    client: &Rc<RefCell<Client>>,
+    surface: &CharacterPhaseSurface,
+    offer: &rpc::CharacterCreationOffer,
+) -> Result<(), JsValue> {
+    for group in &offer.groups {
+        for option in group
+            .options
+            .iter()
+            .filter(|option| !option.requires_group.is_empty())
+        {
+            surface
+                .require_option(
+                    &group.group_id,
+                    &option.option_id,
+                    &option.requires_group,
+                    &option.requires_options,
+                )
+                .map_err(|error| character_render_error(client, &error))?;
+        }
+    }
     Ok(())
 }
 fn action_button(
@@ -1744,6 +1808,7 @@ fn new_client(
         watch_abort: None,
         callbacks: Vec::new(),
         creation: None,
+        creation_offer: None,
         live: live_screens::LiveScreens::default(),
         chrome: live_chrome::Chrome::default(),
         scene_delivery: None,

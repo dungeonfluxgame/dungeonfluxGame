@@ -1,5 +1,5 @@
 //! The floating result at a target: what it says, how long it stays and where it sits. It names
-//! the attack and its result ("Greatsword - 9", "Longbow - miss", "Bite - 7, critical"), rises to
+//! the attack and its result ("Greatsword · 9 slashing", "Longbow · miss", "Bite · 7 piercing, critical"), rises to
 //! rest above the target, holds there long enough to read across a room, then fades. Several
 //! results close together (enemies acting in a row) are stacked so none covers another. Pure
 //! presentation: the numbers and the attack's name come from the server's outcome, and nothing
@@ -47,17 +47,26 @@ pub fn opacity(age_s: f32, hold_s: f32) -> f32 {
 }
 
 /// The words of a result. `base` is the plain result ("Miss" or the damage number); with an
-/// attack's name it reads "Name - result", the result lower-cased for a miss, with ", critical"
-/// and ", down" after a damaging blow that was one. Without a name it is just `base`.
-pub fn compose(attack: Option<&str>, base: &str, tone: FloatTone, downed: bool) -> String {
-    let Some(attack) = attack.map(str::trim).filter(|name| !name.is_empty()) else {
+/// attack's name it reads "Name · result", the result lower-cased for a miss, the damage type
+/// after the number ("Greatsword · 9 slashing"), with ", critical" and ", down" after a damaging
+/// blow that was one. Without a name it is just `base`. `attack` is the name and the damage type
+/// (empty when the server sent none).
+pub fn compose(attack: Option<(&str, &str)>, base: &str, tone: FloatTone, downed: bool) -> String {
+    let Some((attack, damage_type)) = attack
+        .map(|(name, kind)| (name.trim(), kind.trim()))
+        .filter(|(name, _)| !name.is_empty())
+    else {
         return base.to_owned();
     };
     match tone {
-        FloatTone::Miss => format!("{attack} - {}", base.to_lowercase()),
+        FloatTone::Miss => format!("{attack} \u{b7} {}", base.to_lowercase()),
         FloatTone::Heal => base.to_owned(),
         FloatTone::Damage | FloatTone::Critical => {
-            let mut text = format!("{attack} - {base}");
+            let mut text = format!("{attack} \u{b7} {base}");
+            if !damage_type.is_empty() {
+                text.push(' ');
+                text.push_str(damage_type);
+            }
             if tone == FloatTone::Critical {
                 text.push_str(", critical");
             }
@@ -144,33 +153,36 @@ mod tests {
     }
 
     #[test]
-    fn a_result_names_the_attack_and_its_result() {
+    fn a_result_names_the_attack_its_damage_type_and_its_result() {
         use FloatTone::*;
         assert_eq!(
-            compose(Some("Greatsword"), "9", Damage, false),
-            "Greatsword - 9"
+            compose(Some(("Greatsword", "slashing")), "9", Damage, false),
+            "Greatsword \u{b7} 9 slashing"
         );
         assert_eq!(
-            compose(Some("Longbow"), "Miss", Miss, false),
-            "Longbow - miss"
+            compose(Some(("Longbow", "piercing")), "Miss", Miss, false),
+            "Longbow \u{b7} miss"
         );
         assert_eq!(
-            compose(Some("Bite"), "7", Critical, false),
-            "Bite - 7, critical"
-        );
-        assert_eq!(compose(Some("Graze"), "3", Damage, false), "Graze - 3");
-        assert_eq!(
-            compose(Some("Greatsword"), "9", Critical, true),
-            "Greatsword - 9, critical, down"
+            compose(Some(("Bite", "piercing")), "7", Critical, false),
+            "Bite \u{b7} 7 piercing, critical"
         );
         assert_eq!(
-            compose(Some("Dagger"), "4", Damage, true),
-            "Dagger - 4, down"
+            compose(Some(("Graze", "slashing")), "3", Damage, false),
+            "Graze \u{b7} 3 slashing"
+        );
+        assert_eq!(
+            compose(Some(("Greatsword", "slashing")), "9", Critical, true),
+            "Greatsword \u{b7} 9 slashing, critical, down"
+        );
+        assert_eq!(
+            compose(Some(("Dagger", "")), "4", Damage, true),
+            "Dagger \u{b7} 4, down"
         );
         // No name: exactly what the stage showed before.
         assert_eq!(compose(None, "Miss", Miss, false), "Miss");
-        assert_eq!(compose(Some("  "), "5", Damage, false), "5");
-        assert_eq!(compose(Some("Healing word"), "5", Heal, false), "5");
+        assert_eq!(compose(Some(("  ", "")), "5", Damage, false), "5");
+        assert_eq!(compose(Some(("Healing word", "")), "5", Heal, false), "5");
     }
 
     #[test]

@@ -18,6 +18,35 @@ Integration history through 2026-10-11T15:25:07.071270-04:00, reconstructed from
 
 Integration history from 2026-10-11T15:24:05-04:00 through 2026-10-12T04:33:02-04:00 on the integration branch `claude/playable-20261011`, generated from Git by revision range: six-hour blocks by first-parent commit time, each newly reachable commit listed once. The last block is open and shorter than six hours; the work session is still running.
 
+## 2026-10-12T08:11:26-04:00 to 2026-10-12T10:33:51-04:00
+
+Range: c5af1e5418d5e2ae8feb105da955d7ed381f1bd3..b161111268f5c9a600711ce5ca0d6522cb5a220e
+
+- a6b508487b84182b5b237ace40d71ca83ae22d8e — End every fight chapter with a resolution, an epilogue and an end card
+- ec4eed30d2ec6b6735fd4b4d8f021518dac8310f — Record the eight-branch integration block and queue the tasks from the owner's live review
+- e8eb3c9697a28380a8edf396f56c7816b223c5ed — Queue the twelve tasks dispatched from the owner's live review
+- b17a889e62ed1eefe846ef7fa9b111f4f92c58b5 — Merge branch 'claude/playable-20261011' into worktree-agent-abe2121761b0d618f
+- e31279ff334e5d92d68d2b3a2511ce56e2e2212f — Merge fight endings: every fight chapter reaches a resolution, an epilogue and an end card per outcome (PLAY-E04, first milestone)
+- 5358e24585fc67a045722a166922e9d00e681030 — PLAY-U02 M1: table setting for the choice chips, changed from a phone
+- 81ed9dce06f20fb6e90263089e0aa02c9d5435a9 — Merge the table setting that hides or shows the choice chips on the TV, changed from any phone (PLAY-U02, first milestone)
+- 10d8afc432c41ea9a4bcb27e25f68fd609fc58e4 — Toggle to talk: one tap starts, the next tap stops
+- f3ee2f6d663c64b290f46feef7ad9f44f3872533 — Merge toggle to talk: tap once to start listening and again to stop, with listening ended by typing, a hidden page or a lost connection (PLAY-U03)
+- 6f2283623ad15ddb97f831c48fd35a98a142612b — Compose the TV home screen as one fixed layout and drop the per-picture box placement (PLAY-V11)
+- a3032774b828dcd4d0569e42221530750024bcde — Merge claude/playable-20261011 into PLAY-V11
+- 28b814a42149a21c9a1211738373193cbd8c1a1d — Merge the composed TV home screen: one fixed, aligned title-screen layout for every place (PLAY-V11)
+- 56b5fd1278e1588bf0a142bc2c98578d714ce2c7 — Open every story scene on an establishing shot, never draw the cut-out row while a plate is on its way, and ask for the opening plate in the lobby (PLAY-V12)
+- 2f89e2d366483b5e053e9cd812f7adf753a8a65f — Merge branch 'claude/playable-20261011' into worktree-agent-a0d8e630308b47719
+- df6be861b8c527f20a9f8b48acd8ec46a6214155 — Merge scenes that open on an establishing shot: no cut-out row while a plate is pending, the opening plate requested in the lobby, plates made ahead across a fight, a journey and the ending (PLAY-V12, first slice)
+- e1a2d26d6d99dac6580bfa748565703cc1c998ab — Stage enemy turns in the server's order; speech, one sting, damage type, test fights, appearance list, current creation offer (PLAY-B03)
+- eabb0ed8121f286291dd44b70cfd61db42d08a31 — Merge branch 'claude/playable-20261011' into worktree-agent-a68fb704e2220053d
+- 0b8dafa5cf4157abc16a5da8d2d938f98e534524 — Merge fight staging in server order: walk before the hit, labels that follow the beats, the Opportunity Attack prompt, named damage with its type, speech over the speaking figure, one sting, test fights against one to four enemies, the stale creation offer fixed (PLAY-B03, first slice)
+- 7dfafa9d5c830dba5e181c73db7f6c2b4d6654ec — Grid: hairline cell borders without glow, the reachable region as a faint tint with one thin outline, targets and the acting figure as thin rings; preview &reach and &beat=rest
+- 1f321e8ec4afdf74cbaf777e07aab9b6ff687993 — Figures are never hidden by scan splats beside or behind them (faint ghost where geometry truly stands in front); the camera rests on a solved wide three-quarter shot with a short lean at the start of a turn; the tilt-shift blur only during focus pulls
+- 2c57fbceb99ed173213b3b2a8254867ea0ef831c — Merge branch 'claude/playable-20261011' into worktree-agent-a8ccec3abe79264ce
+- b161111268f5c9a600711ce5ca0d6522cb5a220e — Merge the battle-scene slice: hairline grid with the reachable region as one faint outlined tint, figures never hidden by scan splats beside or behind them, a solved wide resting camera (PLAY-S03, first slice)
+
+Next block baseline: `b161111268f5c9a600711ce5ca0d6522cb5a220e`.
+
 ## 2026-10-12T04:33:02-04:00 to 2026-10-12T08:11:26-04:00
 
 Range: 5310dcf601c50b60ecf17c3d297d524a3bf65029..c5af1e5418d5e2ae8feb105da955d7ed381f1bd3

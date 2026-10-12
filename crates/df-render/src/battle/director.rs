@@ -22,6 +22,11 @@ use super::{
 /// The camera settles on a turn's shot over this long, then holds a beat before anything moves.
 const FOCUS_PAN: Duration = Duration::from_millis(800);
 const FOCUS_HOLD: Duration = Duration::from_millis(150);
+/// A turn begins with the wide shot leaning toward its figure and out again: in, a beat, out.
+const LEAN_IN: Duration = Duration::from_millis(550);
+const LEAN_HOLD: Duration = Duration::from_millis(150);
+const LEAN_OUT: Duration = Duration::from_millis(800);
+const LEAN_TOTAL: Duration = Duration::from_millis(1500);
 /// The slow push-in on the wind-up, which ends before the attack starts: the camera is at rest at
 /// contact.
 const WINDUP_PUSH: Duration = Duration::from_millis(380);
@@ -365,7 +370,7 @@ fn plan_initiative(tokens: &[Token], rolls: &[InitiativeRoll]) -> Result<Timelin
     builder.at(
         Duration::ZERO,
         Step::Camera {
-            command: camera(ShotName::CombatEst, CameraFocus::Scene, 1.0),
+            command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
             pan: Duration::from_millis(900),
         },
     );
@@ -527,7 +532,7 @@ fn plan_initiative(tokens: &[Token], rolls: &[InitiativeRoll]) -> Result<Timelin
     builder.at(
         over,
         Step::Whip {
-            command: camera(ShotName::Tactical, CameraFocus::Scene, 1.0),
+            command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
             travel: Duration::from_millis(350),
         },
     );
@@ -538,17 +543,7 @@ fn plan_initiative(tokens: &[Token], rolls: &[InitiativeRoll]) -> Result<Timelin
     builder.at(turn, Step::Banner(None));
     builder.at(turn, Step::SetActive(Some(first.token.clone())));
     let first_token = find(tokens, &first.token)?;
-    builder.at(
-        turn,
-        Step::Camera {
-            command: camera(
-                ShotName::TurnFocus,
-                CameraFocus::Token(first.token.clone()),
-                1.0,
-            ),
-            pan: FOCUS_PAN,
-        },
-    );
+    lean_in_and_out(&mut builder, turn, &first.token);
     builder.at(
         turn,
         Step::Highlight(Some(Highlight {
@@ -556,20 +551,34 @@ fn plan_initiative(tokens: &[Token], rolls: &[InitiativeRoll]) -> Result<Timelin
             cells: vec![first_token.cell],
         })),
     );
-    Ok(builder.finish(turn + FOCUS_PAN))
+    Ok(builder.finish(turn + LEAN_TOTAL))
+}
+
+/// The start of a turn: the wide shot eases toward the figure whose turn it is, then back out to
+/// the wide shot, where the camera rests while the player thinks. Returns when it is back.
+fn lean_in_and_out(builder: &mut Builder, at: Duration, actor: &TokenId) -> Duration {
+    builder.at(
+        at,
+        Step::Camera {
+            command: camera(ShotName::TurnFocus, CameraFocus::Lean(actor.clone()), 1.0),
+            pan: LEAN_IN,
+        },
+    );
+    builder.at(
+        at + LEAN_IN + LEAN_HOLD,
+        Step::Camera {
+            command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
+            pan: LEAN_OUT,
+        },
+    );
+    at + LEAN_TOTAL
 }
 
 fn plan_turn(tokens: &[Token], actor: &TokenId) -> Result<Timeline, PlanError> {
     let token = find(tokens, actor)?;
     let mut builder = Builder { steps: Vec::new() };
     builder.at(Duration::ZERO, Step::SetActive(Some(actor.clone())));
-    builder.at(
-        Duration::ZERO,
-        Step::Camera {
-            command: camera(ShotName::TurnFocus, action_focus(actor, None, None), 1.0),
-            pan: FOCUS_PAN,
-        },
-    );
+    lean_in_and_out(&mut builder, Duration::ZERO, actor);
     builder.at(
         Duration::ZERO,
         Step::Highlight(Some(Highlight {
@@ -577,7 +586,7 @@ fn plan_turn(tokens: &[Token], actor: &TokenId) -> Result<Timeline, PlanError> {
             cells: vec![token.cell],
         })),
     );
-    Ok(builder.finish(FOCUS_PAN))
+    Ok(builder.finish(LEAN_TOTAL))
 }
 
 /// Turn-focus shot on the attacker and its target, then a slow push-in on the wind-up. Nobody
@@ -622,11 +631,7 @@ fn plan_move(
     builder.at(
         Duration::ZERO,
         Step::Camera {
-            command: camera(
-                ShotName::TurnFocus,
-                action_focus(actor, None, Some(to)),
-                1.0,
-            ),
+            command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
             pan: FOCUS_PAN,
         },
     );
@@ -647,7 +652,7 @@ fn plan_move(
     builder.at(
         arrived + Duration::from_millis(400),
         Step::Camera {
-            command: camera(ShotName::CombatEst, CameraFocus::Scene, 1.0),
+            command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
             pan: SETTLE_PAN,
         },
     );
@@ -905,7 +910,7 @@ fn strike(
     builder.at(
         end + Duration::from_millis(200),
         Step::Camera {
-            command: camera(ShotName::CombatEst, CameraFocus::Scene, 1.0),
+            command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
             pan: SETTLE_PAN,
         },
     );
@@ -983,7 +988,7 @@ fn plan_heal(
     builder.at(
         end,
         Step::Camera {
-            command: camera(ShotName::CombatEst, CameraFocus::Scene, 1.0),
+            command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
             pan: SETTLE_PAN,
         },
     );
@@ -1181,7 +1186,7 @@ mod tests {
     }
 
     #[test]
-    fn a_server_move_plans_the_path_with_the_camera_on_both_ends_then_settles() {
+    fn a_server_move_plans_the_path_with_the_camera_staying_on_the_wide_shot() {
         let (grid, tokens) = field();
         let timeline = plan(
             &grid,
@@ -1194,13 +1199,8 @@ mod tests {
         )
         .unwrap();
         let names = names(&timeline);
-        assert_eq!(
-            names,
-            vec!["active", "focus", "highlight", "walk", "settle-shot"]
-                .into_iter()
-                .filter(|name| names.contains(name))
-                .collect::<Vec<_>>()
-        );
+        // Nobody is lost to a close shot: the camera holds the wide shot before and after the walk.
+        assert_eq!(names, vec!["active", "settle-shot", "walk", "settle-shot"]);
         let moves = moves(&timeline);
         assert_eq!(moves.len(), 1);
         assert_eq!(moves[0].0, Cell::new(6, 2));
@@ -1620,10 +1620,14 @@ mod tests {
             positions.windows(2).all(|pair| pair[0] < pair[1]),
             "{labels:?}"
         );
-        assert_eq!(labels.last(), Some(&"highlight"));
+        assert_eq!(
+            labels.last(),
+            Some(&"settle-shot"),
+            "ends back on the wide shot"
+        );
         assert!(
-            labels[labels.len() - 3..].contains(&"focus"),
-            "ends on the first turn-focus shot"
+            labels[labels.len() - 4..].contains(&"focus"),
+            "the first turn leans toward its figure first"
         );
         // Every die lands before the first stop; the last one is the pull-back whip.
         let last_land = *times_of(&timeline, "die-land").last().unwrap();

@@ -521,7 +521,9 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     }
     let frame = state.stage.frame();
     // Where the figures stand, written with the periodic stats (for harnesses and diagnostics).
-    let figures: Vec<String> = if (state.frames + 1).is_multiple_of(state.stats_every) {
+    // A harness that sets `data-trace-figures` on the host gets them every frame.
+    let trace = state.host.has_attribute("data-trace-figures");
+    let figures: Vec<String> = if trace || (state.frames + 1).is_multiple_of(state.stats_every) {
         frame
             .figures
             .iter()
@@ -635,6 +637,15 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
             .host
             .set_attribute("data-battlefield-fallback", "painted");
     }
+    if trace {
+        let _ = state
+            .host
+            .set_attribute("data-battlefield-figures", &figures.join(";"));
+        let _ = state.host.set_attribute(
+            "data-battlefield-cell-m",
+            &format!("{:.3}", state.stage.grid().cell_m()),
+        );
+    }
     if state.frames.is_multiple_of(state.stats_every) {
         let _ = state
             .host
@@ -660,6 +671,20 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
             state.frames
         );
         let _ = state.host.set_attribute("data-battlefield-stats", &summary);
+        let pose = state.stage.camera_pose();
+        let _ = state.host.set_attribute(
+            "data-battlefield-camera",
+            &format!(
+                "{} distance={:.1} pitch={:.0} yaw={:.0} target={:.1},{:.1},{:.1}",
+                state.stage.camera_label(),
+                pose.distance,
+                pose.pitch_deg,
+                pose.yaw_deg,
+                pose.target.x,
+                pose.target.y,
+                pose.target.z
+            ),
+        );
         if let Some(splat) = renderer.splat_shared() {
             let shared = splat.borrow();
             let label = match (stats.given_up, shared.state) {

@@ -67,6 +67,7 @@ mod startup_configuration;
 mod startup_contract;
 mod storyteller;
 mod table_log;
+mod table_settings;
 #[cfg(test)]
 mod tempo_clock;
 mod timing;
@@ -569,8 +570,25 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let battle_scene =
         startup_configuration::battle_scene(std::env::var("DF_GAMEPLAY_BATTLE_SCENE"))?;
     journey::tactical::force_scene(battle_scene.as_deref()).map_err(std::io::Error::other)?;
+    let test_fight = startup_configuration::test_fight(
+        std::env::var("DF_GAMEPLAY_TEST_FIGHT"),
+        std::env::var("DF_GAMEPLAY_TEST_FOE"),
+    )?;
+    if interactive && let Some(test) = &test_fight {
+        println!(
+            "TEST FIGHT enemies={} foe={} (development setting: the first choice starts the fight)",
+            test.enemies,
+            test.foe.as_deref().unwrap_or("the adventure's own")
+        );
+    }
+    journey::tactical::force_test_fight(test_fight).map_err(std::io::Error::other)?;
     let battle_fps = startup_configuration::battle_fps(std::env::var("DF_GAMEPLAY_BATTLE_FPS"))?;
     let splat_lod = startup_configuration::splat_lod(std::env::var("DF_GAMEPLAY_SPLAT_LOD"))?;
+    let choice_hints_hidden = if interactive {
+        startup_configuration::choice_hints_hidden(std::env::var("DF_GAMEPLAY_CHOICE_HINTS"))?
+    } else {
+        false
+    };
     if interactive {
         timing::install(timing::Timing::from_environment()?);
         let timing = timing::active();
@@ -1094,6 +1112,32 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         grants.map_err(|_| io::Error::other("issuer setup grant close failed"))?;
         return Err(io::Error::other("issuer recovery configuration refused").into());
     }
+    // The table's settings: a choice a player stored earlier wins over the startup default.
+    let table_settings = if interactive {
+        match issuer.stored_table_settings().await {
+            Ok(stored) => table_settings::TableSettings::startup(stored, choice_hints_hidden),
+            Err(_) => {
+                let closed = repository.close_owned().await;
+                let released = issuer.release_owner_owned().await;
+                let grants = issuer.close_owned().await;
+                closed.map_err(|_| io::Error::other("table settings repository close failed"))?;
+                released
+                    .map_err(|_| io::Error::other("table settings exact-fence release failed"))?;
+                grants.map_err(|_| io::Error::other("table settings grant close failed"))?;
+                return Err(io::Error::other("table settings unavailable").into());
+            }
+        }
+    } else {
+        table_settings::TableSettings::startup(None, choice_hints_hidden)
+    };
+    if interactive {
+        let shown = if table_settings.choice_hints_hidden {
+            "off"
+        } else {
+            "on"
+        };
+        println!("TABLE choice_hints={shown}");
+    }
 
     let (updates, receiver) = watch::channel(initial.clone());
     let (campaign_observer, campaign_worker) = if let Some(run) = generated_adventure
@@ -1219,6 +1263,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         owner,
         table_log: table_log.clone(),
         social,
+        table_settings,
         dialogue: dialogue::DialogueState::default(),
         bootstrap_credential: player_credential,
         issuer,
