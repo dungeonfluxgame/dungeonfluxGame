@@ -278,7 +278,7 @@ impl CameraRig {
             }
         }
         if self.cut_fade > 0.0 {
-            self.cut_fade = (self.cut_fade - dt / CUT_FADE.as_secs_f32()).max(0.0);
+            self.cut_fade = (self.cut_fade - CUT_FADE_PEAK * dt / CUT_FADE.as_secs_f32()).max(0.0);
         }
     }
 }
