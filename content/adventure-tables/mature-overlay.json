@@ -1,0 +1,1120 @@
+{
+  "schema": "df-adventure-overlay/1",
+  "file": "mature-overlay",
+  "description": "The mature content rating (adventure-generator section 21): replacement tables for the fight, victory and defeat prose, the speaking antagonists' arrival and warning lines and the NPC flirting, threat and curt reactions. The shipped tables are the restrained text and are never changed; this file is applied over them only for the mature rating, goes through the same validation as the table it replaces, and is not listed in tables.json so that restrained adventures keep their recorded bytes. Mechanics sentences are never replaced; every fight here is still the nonlethal fight the rules produce. Original prose.",
+  "replaces": {
+    "prose-patterns.json": {
+      "combat_title": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "Blood at {loc.short}"
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "The Knives Come Out"
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "No Quarter Asked"
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A Fight to Bleed For"
+          }
+        ]
+      },
+      "combat_open_speaker": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "{place_detail} {arrival} This is not a bluff."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "{place_detail} {arrival} Talk is over. Blood is next."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "{place_detail} {arrival} Someone is about to get hurt."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "{place_detail} {arrival} A weapon rises, hungry."
+          }
+        ]
+      },
+      "combat_open_beast": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "{place_detail} {arrival} It lunges, all teeth."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "{place_detail} {arrival} It goes for your throat."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "{place_detail} {arrival} It comes at you, snarling."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "{place_detail} {arrival} It circles, hungry for blood."
+          }
+        ]
+      },
+      "combat_open_undead": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "{place_detail} {arrival} It advances, feeling no pain."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "{place_detail} {arrival} It keeps coming, patient and cold."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "{place_detail} {arrival} It closes in, nothing behind its eyes."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "{place_detail} {arrival} It will not stop, and it will not bleed."
+          }
+        ]
+      },
+      "victory_title": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "The Quiet After Blood"
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "Bruised and Standing"
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "What the Fight Cost"
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "Still Standing"
+          }
+        ]
+      },
+      "victory_lead": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "You reach {place}, bloodied. The truth comes out."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "At {place}, wiping blood from your hands, the pieces fit together."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "You reach {place} with aching ribs and piece it together."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "At {place}, you work out what drove the fight and what it cost."
+          }
+        ]
+      },
+      "victory_dialogue": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "We made it to {dest.short}. You bled for me, and I will not forget it."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "Thank you. Gods, that was close. We can catch our breath here."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "I saw what you did out there. {contact.first} will be waiting here."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "We are safe here, and damn glad of it. Thank you for seeing me through."
+          }
+        ]
+      },
+      "defeat_title": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "Beaten Bloody"
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "A Bitter, Bloody Night"
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "Left in the Dirt"
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "The Night Takes Its Due"
+          }
+        ]
+      },
+      "defeat_deliver": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              2
+            ],
+            "text": "{stake.short|cap} is torn from your grip as you go down, and {patron.first}'s errand fails tonight."
+          },
+          {
+            "faces": [
+              3,
+              4
+            ],
+            "text": "{stake.short|cap} is taken while you lie bleeding, and {patron.first}'s errand stalls tonight."
+          }
+        ]
+      },
+      "defeat_escort": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              2
+            ],
+            "text": "{patron.first} is dragged away, shouting your names, and the way to {dest.short} stays closed tonight."
+          },
+          {
+            "faces": [
+              3,
+              4
+            ],
+            "text": "{patron.first} flees into the night sobbing, and the way to {dest.short} stays barred."
+          }
+        ]
+      },
+      "defeat_warn": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              2
+            ],
+            "text": "You choke on blood as the warning goes undelivered, and {contact.first} will hear the news too late."
+          },
+          {
+            "faces": [
+              3,
+              4
+            ],
+            "text": "No word reaches {contact.first} tonight, and the danger grows while you lie broken in the dirt."
+          }
+        ]
+      },
+      "defeat_retrieve": {
+        "die": 4,
+        "variants": [
+          {
+            "faces": [
+              1,
+              2
+            ],
+            "text": "{contact.first} keeps {stake.short} for now, and {patron.first} must try again, with fewer friends."
+          },
+          {
+            "faces": [
+              3,
+              4
+            ],
+            "text": "{stake.short|cap} stays out of reach, and {patron.first} leaves empty-handed, cursing your luck."
+          }
+        ]
+      }
+    },
+    "antagonists.json": {
+      "bandit": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short}, a wiry road thief with a split lip, steps into the light, scimitar dark with old blood."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "A scimitar glints as {ant.short} slides out of the shadows, grinning through a missing tooth."
+            }
+          ]
+        },
+        "warnings": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                1
+              ],
+              "text": "Hand over {stake.short} or I open you up and take it off the floor."
+            },
+            {
+              "faces": [
+                2,
+                2
+              ],
+              "text": "You're a long way from help. Give me {stake.short} and I might let you crawl away."
+            },
+            {
+              "faces": [
+                3,
+                3
+              ],
+              "text": "I don't want a fight, but I like cutting people well enough. Give me {stake.short}."
+            },
+            {
+              "faces": [
+                4,
+                4
+              ],
+              "text": "Step aside. {stake.short|cap} was never yours, and neither is your next breath."
+            }
+          ]
+        }
+      },
+      "cultist": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short}, a hooded zealot, glides into the light, sickle in hand and dark stains on the cuffs."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "A pale sickle gleams as {ant.short} steps forward, murmuring in an old tongue and smiling at nothing."
+            }
+          ]
+        },
+        "warnings": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                1
+              ],
+              "text": "The old rites have named {stake.short} ours, and the altar is thirsty. Stand aside."
+            },
+            {
+              "faces": [
+                2,
+                2
+              ],
+              "text": "You cannot hold what the stars have claimed. Kneel, or be opened for them."
+            },
+            {
+              "faces": [
+                3,
+                3
+              ],
+              "text": "Give {stake.short} to me and your end will be quick. Refuse, and it becomes a gift to the old ones."
+            },
+            {
+              "faces": [
+                4,
+                4
+              ],
+              "text": "Whatever {patron.first} told you was half the truth. The other half is written in blood."
+            }
+          ]
+        }
+      },
+      "guard": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short}, a stern guard in a dented chain shirt, lowers a spear across your path, knuckles white."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "Boots ring. {ant.short} strides in, spear leveled, wearing the look of a man who enjoys this."
+            }
+          ]
+        },
+        "warnings": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                1
+              ],
+              "text": "By order of the watch, {stake.short} stays here. Stand down, or I will put you down."
+            },
+            {
+              "faces": [
+                2,
+                2
+              ],
+              "text": "Nobody passes tonight. Hand over {stake.short} and come quietly, or I drag you in bleeding."
+            },
+            {
+              "faces": [
+                3,
+                3
+              ],
+              "text": "I have my orders, and I do not care what it costs you. Surrender {stake.short}."
+            },
+            {
+              "faces": [
+                4,
+                4
+              ],
+              "text": "This way is closed, and so are your questions. Give it here before I break something."
+            }
+          ]
+        }
+      },
+      "goblin-warrior": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short} scrambles into view, small and quick, a rusty scimitar waving, a rat skull on {ant.pos} belt."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "A grinning shadow leaps out: {ant.short}, scimitar flashing, shield clanking, drool on {ant.pos} chin."
+            }
+          ]
+        },
+        "warnings": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                1
+              ],
+              "text": "Big folk too slow! Drop {stake.short} or I carve you up!"
+            },
+            {
+              "faces": [
+                2,
+                2
+              ],
+              "text": "{stake.short|cap} is mine now! Mine, mine, mine! I will wear your teeth for it!"
+            },
+            {
+              "faces": [
+                3,
+                3
+              ],
+              "text": "We watched you walk. Now we take {stake.short}, and then we take what is left of you."
+            },
+            {
+              "faces": [
+                4,
+                4
+              ],
+              "text": "Give, give, or I stick you like a pig!"
+            }
+          ]
+        }
+      },
+      "kobold-warrior": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short} skitters out of a crack in the dark, a dagger in both claws, slick to the wrist."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "Scales glint as {ant.short} rears up, dagger raised, tail lashing, teeth bared in a hungry grin."
+            }
+          ]
+        },
+        "warnings": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                1
+              ],
+              "text": "This tunnel is ours! Leave {stake.short} and go, or I leave you to the clutch!"
+            },
+            {
+              "faces": [
+                2,
+                2
+              ],
+              "text": "My clutch watches from the dark. Drop it and run, or we gnaw you to the bone!"
+            },
+            {
+              "faces": [
+                3,
+                3
+              ],
+              "text": "You are big. I am clever. Give me {stake.short}, or I cut where it hurts!"
+            },
+            {
+              "faces": [
+                4,
+                4
+              ],
+              "text": "You trespass! {stake.short|cap} belongs to the deep ones now, and so do you!"
+            }
+          ]
+        }
+      },
+      "scout": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short}, a lean tracker, steps from the trees, shortsword drawn, hilt dark with old blood."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "Without a sound, {ant.short} appears ahead, shortsword loose in a grip, measuring where to cut."
+            }
+          ]
+        },
+        "warnings": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                1
+              ],
+              "text": "You walk loud for travelers. Put {stake.short} down, or I put you down."
+            },
+            {
+              "faces": [
+                2,
+                2
+              ],
+              "text": "I've tracked {patron.first} for two days. It ends here, and I leave no witnesses."
+            },
+            {
+              "faces": [
+                3,
+                3
+              ],
+              "text": "Easy now. Hand over {stake.short} and I might let you leave. I have not decided yet."
+            },
+            {
+              "faces": [
+                4,
+                4
+              ],
+              "text": "Whoever sent you picked the wrong road. I will enjoy telling them how it ended."
+            }
+          ]
+        }
+      },
+      "skeleton": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short|cap} rises on dry, clicking joints, a rusted shortsword in its grip, old flesh on the ribs."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "With a clatter, {ant.short} steps into the light, shortsword lifted, empty sockets on your throat."
+            }
+          ]
+        }
+      },
+      "zombie": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short|cap} shambles into the light, rotten flesh sloughing off its arms, the stench like a fist."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "Slow, dragging steps announce {ant.short}, which lurches closer, jaw hanging, a wet moan in its chest."
+            }
+          ]
+        }
+      },
+      "wolf": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short|cap} pads into the lantern light, ribs showing, hackles raised, blood on its muzzle."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "A low growl rolls out as {ant.short} circles closer, lips curled back from yellow fangs."
+            }
+          ]
+        }
+      },
+      "giant-rat": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short|cap} scurries into view, filthy and scabbed, teeth bared and yellow with rot."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "A scrabble of claws, and {ant.short} bolts out of the dark, big as a hound and slick with filth."
+            }
+          ]
+        }
+      },
+      "giant-weasel": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short|cap} pours out of the dark like a sleek brown ribbon, jaws slick, chattering with fury."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "A flash of fur, and {ant.short} lands in front of you, back arched, lips drawn from needle teeth."
+            }
+          ]
+        }
+      },
+      "mastiff": {
+        "arrivals": {
+          "die": 4,
+          "variants": [
+            {
+              "faces": [
+                1,
+                2
+              ],
+              "text": "{ant.short|cap} bounds out of the dark, chain dragging, spit flying from its jaws as it barks."
+            },
+            {
+              "faces": [
+                3,
+                4
+              ],
+              "text": "A heavy shape lunges into the light: {ant.short}, scarred muzzle, jaws wide, eyes full of patience."
+            }
+          ]
+        }
+      }
+    },
+    "npc-social.json": {
+      "flirting": {
+        "die": 8,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "id": "devout-declines",
+            "effect": "steady",
+            "text": "devout, spoken for or simply not interested; declines plainly and without scorn",
+            "speak": "I am flattered, and I mean it. But I have given my word to something larger than my own wants, and I keep it. Ask me about something else."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "id": "flat-no-interest",
+            "tags": [
+              "cold"
+            ],
+            "effect": "cool",
+            "text": "not interested and not interested in pretending otherwise",
+            "speak": "No. It is not you, I just do not want it. Ask me something I can actually answer."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "id": "amused-plays-along",
+            "tags": [
+              "playful"
+            ],
+            "effect": "warm",
+            "text": "amused; plays along and promises nothing",
+            "speak": "Is that how you open? Bold. Keep going, I have all night, but you will have to earn the rest."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "id": "interested-reciprocates",
+            "effect": "warm",
+            "text": "interested and says so; the heat is real and not hidden",
+            "speak": "I have been thinking about your hands since you walked in. Finish what you came for, then find me. I will be waiting, and I will not be shy."
+          },
+          {
+            "faces": [
+              5,
+              5
+            ],
+            "id": "blunt-and-bawdy",
+            "tags": [
+              "gruff"
+            ],
+            "effect": "warm",
+            "text": "blunt and bawdy; answers heat with heat",
+            "speak": "Gods, you do not waste time. I like that. Ask me again when you have washed the road off, and I might say yes."
+          },
+          {
+            "faces": [
+              6,
+              6
+            ],
+            "id": "wary-and-tempted",
+            "tags": [
+              "calm"
+            ],
+            "effect": "steady",
+            "text": "tempted but guarded; wants to know what the charm costs",
+            "speak": "Your charm is working, and I do not like how well. What do you want from me besides the obvious?"
+          },
+          {
+            "faces": [
+              7,
+              7
+            ],
+            "id": "flustered-then-bold",
+            "tags": [
+              "nervous"
+            ],
+            "effect": "warm",
+            "text": "flustered at first, then bold; the blush has teeth",
+            "speak": "Oh, well. I was not expecting, no, do not take it back. Say it again, slower."
+          },
+          {
+            "faces": [
+              8,
+              8
+            ],
+            "id": "cruel-amusement",
+            "tags": [
+              "cold"
+            ],
+            "roles": [
+              "antagonist",
+              "villain",
+              "lieutenant"
+            ],
+            "effect": "cool",
+            "text": "toys with the advance like a cat; contempt and a little appetite",
+            "speak": "Oh, you are brave. I have broken braver, and I enjoyed it. Keep smiling at me and see what it earns you."
+          }
+        ]
+      },
+      "threats": {
+        "die": 8,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "id": "stands-firm-scarred",
+            "tags": [
+              "calm"
+            ],
+            "effect": "cool",
+            "text": "stands firm, voice level; has seen real violence",
+            "speak": "Do it, then, or stop wasting my time. I have been cut by better, and I am still standing here."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "id": "answers-with-worse",
+            "tags": [
+              "gruff"
+            ],
+            "roles": [
+              "antagonist",
+              "villain",
+              "lieutenant"
+            ],
+            "effect": "cool",
+            "text": "answers a threat with a worse one",
+            "speak": "Try it. I will leave you bleeding in the gutter and sleep fine afterward."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "id": "terror-talks-fast",
+            "tags": [
+              "nervous",
+              "hurried"
+            ],
+            "effect": "cool",
+            "text": "terror shows; talks fast, hands shaking",
+            "speak": "Please, no, put it down. I will tell you what I can. I swear it, just do not hurt me."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "id": "soft-patient-menace",
+            "tags": [
+              "cold",
+              "formal"
+            ],
+            "roles": [
+              "antagonist",
+              "villain",
+              "lieutenant"
+            ],
+            "effect": "cool",
+            "text": "answers with soft, patient menace",
+            "speak": "I would think carefully. People who threaten me have a way of going missing, quietly, and in pieces."
+          },
+          {
+            "faces": [
+              5,
+              5
+            ],
+            "id": "laughs-in-your-face",
+            "tags": [
+              "playful"
+            ],
+            "effect": "steady",
+            "text": "laughs in your face; the fear is real but buried",
+            "speak": "Ha! You have the look, I will give you that. But you are not the first, and you will not be the last."
+          },
+          {
+            "faces": [
+              6,
+              6
+            ],
+            "id": "lowered-voice-warning",
+            "effect": "steady",
+            "text": "lowers the voice; dangerous people are listening",
+            "speak": "Keep your voice down. Hurt me here and you will not leave this place whole, and neither will anyone you love."
+          },
+          {
+            "faces": [
+              7,
+              7
+            ],
+            "id": "breaks-and-bargains",
+            "effect": "steady",
+            "text": "breaks and gives up something small, but nothing important",
+            "speak": "Fine, take it. One thing, and it is all I have. Now back off before I start screaming."
+          },
+          {
+            "faces": [
+              8,
+              8
+            ],
+            "id": "spits-defiance",
+            "tags": [
+              "slow"
+            ],
+            "effect": "cool",
+            "text": "refuses, spits and braces for the blow",
+            "speak": "Go on and hit me. I have swallowed worse than your fists, and you will not get a word."
+          }
+        ]
+      },
+      "curt": {
+        "die": 8,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "id": "piss-off",
+            "text": "tells the hero where to go",
+            "speak": "Piss off. I have nothing to say to you."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "id": "someone-else",
+            "text": "sends the hero away",
+            "speak": "Go and bother somebody else."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "id": "not-today",
+            "text": "shuts the conversation down",
+            "speak": "Not to you. Not today. Not ever, if I have my way."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "id": "cold-courtesy",
+            "tags": [
+              "cold",
+              "formal"
+            ],
+            "text": "icy and exact",
+            "speak": "I do not believe we have anything to discuss, and I would hate for this to turn unpleasant."
+          },
+          {
+            "faces": [
+              5,
+              5
+            ],
+            "id": "make-it-quick",
+            "tags": [
+              "brisk"
+            ],
+            "text": "clipped and impatient",
+            "speak": "Make it quick, or make it elsewhere, damn you."
+          },
+          {
+            "faces": [
+              6,
+              6
+            ],
+            "id": "mocking-charm",
+            "tags": [
+              "playful"
+            ],
+            "text": "mocks the effort",
+            "speak": "Oh, how charming. Go and ask somebody who gives a damn."
+          },
+          {
+            "faces": [
+              7,
+              7
+            ],
+            "id": "shaky-no",
+            "tags": [
+              "nervous"
+            ],
+            "text": "refuses with a shaky voice",
+            "speak": "No. Please. Leave me alone, I am begging you."
+          },
+          {
+            "faces": [
+              8,
+              8
+            ],
+            "id": "one-word",
+            "tags": [
+              "slow",
+              "gruff"
+            ],
+            "text": "answers with a single heavy word",
+            "speak": "Bugger off."
+          }
+        ]
+      }
+    }
+  }
+}

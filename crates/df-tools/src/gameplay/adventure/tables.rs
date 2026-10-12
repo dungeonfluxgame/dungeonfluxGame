@@ -1,4 +1,6 @@
-use super::{GenerateError, schema::*};
+use super::{
+    super::startup_configuration::ContentRating, GenerateError, mature_overlay::Overlay, schema::*,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
@@ -152,6 +154,9 @@ pub(crate) struct Tables {
     pub(super) places: super::setting::Places,
     /// NPC dossier tables; not part of `revision` (see `dossier_tables`).
     pub(super) dossiers: super::dossier_tables::DossierTables,
+    /// The same tables with the mature overlay applied (`mature_overlay`); `None` inside that
+    /// variant itself.
+    mature: Option<Box<Tables>>,
 }
 fn document<T: DeserializeOwned + Serialize>(
     bytes: &BTreeMap<String, Vec<u8>>,
@@ -177,7 +182,21 @@ fn take<T>(mut tables: BTreeMap<String, T>, file: &str, key: &str) -> Result<T, 
         .ok_or_else(|| invalid(file, "tables", format!("missing {key}")))
 }
 impl Tables {
+    /// Loads the restrained tables and, beside them, the mature variant: the overlay is required.
     pub(crate) fn load(directory: &Path) -> Result<Self, TablesError> {
+        let overlay = Overlay::read(directory)?;
+        let mut restrained = Self::load_variant(directory, None)?;
+        restrained.mature = Some(Box::new(Self::load_variant(directory, Some(&overlay))?));
+        Ok(restrained)
+    }
+    /// The tables a generation of `rating` rolls on. Asked of the loaded tables only.
+    pub(super) fn for_rating(&self, rating: ContentRating) -> &Tables {
+        match rating {
+            ContentRating::Restrained => self,
+            ContentRating::Mature => self.mature.as_deref().unwrap_or(self),
+        }
+    }
+    fn load_variant(directory: &Path, overlay: Option<&Overlay>) -> Result<Self, TablesError> {
         let index: Index = parse("tables.json", &read(directory, "tables.json")?)?;
         if index.schema != "df-adventure-tables/1"
             || index.schema_version != 1
@@ -232,7 +251,14 @@ impl Tables {
             }
             let content = read(directory, file)?;
             digest.update(&content);
+            let content = match overlay {
+                Some(overlay) => overlay.merged(file, &content)?,
+                None => content,
+            };
             bytes.insert(file.clone(), content);
+        }
+        if let Some(overlay) = overlay {
+            digest.update(overlay.bytes());
         }
         for file in [
             "locations.json",
@@ -351,7 +377,8 @@ impl Tables {
                     .get("places.json")
                     .ok_or_else(|| invalid("places.json", ".", "not indexed"))?,
             )?,
-            dossiers: super::dossier_tables::DossierTables::load(directory)?,
+            dossiers: super::dossier_tables::DossierTables::load_variant(directory, overlay)?,
+            mature: None,
         };
         lint_tree(
             "places.json",

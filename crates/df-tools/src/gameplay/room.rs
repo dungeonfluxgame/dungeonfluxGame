@@ -321,7 +321,7 @@ impl rpc::room_service_server::RoomService for Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("room actor queue full"))?;
-        let response = tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+        let response = tokio::time::timeout(std::time::Duration::from_secs(20), wait)
             .await
             .map_err(|_| Status::deadline_exceeded("retain your original room join proof"))?
             .map_err(|_| Status::unavailable("room owner stopped"))??;

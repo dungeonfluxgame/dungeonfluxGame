@@ -20,6 +20,7 @@ mod dossier_tests;
 mod expression;
 mod generate;
 mod listener;
+mod mature_overlay;
 pub(crate) mod record;
 mod render;
 mod rng;
@@ -30,7 +31,10 @@ mod tables;
 #[cfg(test)]
 mod tests;
 
-use super::pack::{PackFile, TuningFile};
+use super::{
+    pack::{PackFile, TuningFile},
+    startup_configuration::ContentRating,
+};
 pub(crate) use generate::{generate, generate_with_prose};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
@@ -46,6 +50,8 @@ pub(crate) enum RulesMode {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct GenerateOptions {
     pub(crate) rules_mode: RulesMode,
+    /// Which content-rating variant of the tables rolls the story text and the NPC backstories.
+    pub(crate) rating: ContentRating,
 }
 /// Keys are recorded table names; values are entry IDs, name text or "variant N".
 /// Original variant text is also accepted, for authoring tools that already hold the table.
@@ -105,6 +111,7 @@ pub(crate) struct GeneratedAdventure {
     pub(crate) seed: u64,
     pub(crate) tables_revision: String,
     pub(crate) rules_mode: RulesMode,
+    pub(crate) rating: ContentRating,
     pub(crate) facts: BTreeMap<String, String>,
     pub(crate) fact_sheet: Vec<FactSheet>,
     pub(crate) rolls: Vec<Roll>,

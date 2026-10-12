@@ -11,11 +11,15 @@
 //! they live in each scene's `rules_note`.
 use super::super::{
     pack::SceneKey,
-    storyteller::{Slot, Storyteller, StorytellerError},
+    startup_configuration::ContentRating,
+    storyteller::{
+        RESTRAINED_GORE, RESTRAINED_PROFANITY, Slot, Storyteller, StorytellerError, age_group,
+        mature_themes, sexual_content_allowed,
+    },
 };
 use super::{
     FactSheet, ForcedEntries, GenerateError, GenerateOptions, GeneratedAdventure, ProseSource,
-    Tables, generate_with_prose, record::ModelExpression,
+    Tables, generate::tone_of, generate_with_prose, record::ModelExpression,
 };
 use serde_json::{Value, json};
 use std::{
@@ -39,11 +43,10 @@ const MAXIMUM_SENTENCE_WORDS: usize = 28;
 const ROOM_INVITATION: &str =
     "Share the room with your companions, then bring your heroes into the story.";
 
-/// Words a slot may not use. They are sent as `facts.forbidden`, so the storyteller refuses
-/// them and retries with a complaint: rules and outcome words (section 7, validators 3), the
-/// rules wording that belongs in `rules_note`, gore and real-world or modern words
-/// (validators 4).
-const FORBIDDEN_WORDS: &[&str] = &[
+/// Rules and outcome words a slot may not use in either rating (section 7, validators 3), and
+/// the rules wording that belongs in `rules_note`. They are sent as `facts.forbidden`, so the
+/// storyteller refuses them and retries with a complaint.
+const FORBIDDEN_RULES_WORDS: &[&str] = &[
     "hp",
     "hit point",
     "hit points",
@@ -72,20 +75,26 @@ const FORBIDDEN_WORDS: &[&str] = &[
     "succeeds",
     "fails",
     "suddenly",
-    "gore",
-    "gory",
-    "entrails",
-    "viscera",
-    "dismember",
-    "decapitate",
-    "mutilate",
-    "okay",
-    "guys",
-    "awesome",
-    "smartphone",
-    "internet",
-    "email",
 ];
+
+/// Real-world and modern words, refused in either rating.
+const FORBIDDEN_MODERN_WORDS: &[&str] =
+    &["okay", "guys", "awesome", "smartphone", "internet", "email"];
+
+/// Every word a slot may not use for `rating`. A restrained table also refuses gore and strong
+/// language (section 7, validators 4); a mature one allows both.
+fn forbidden_words(rating: ContentRating) -> Vec<&'static str> {
+    let restrained = rating == ContentRating::Restrained;
+    let mut words = FORBIDDEN_RULES_WORDS.to_vec();
+    if restrained {
+        words.extend(RESTRAINED_GORE);
+    }
+    words.extend(FORBIDDEN_MODERN_WORDS);
+    if restrained {
+        words.extend(RESTRAINED_PROFANITY);
+    }
+    words
+}
 
 /// Stock phrases that repeat from game to game; any slot using one is asked again.
 const STOCK_PHRASES: &[&str] = &[
@@ -122,8 +131,10 @@ const STOCK_TITLES: &[&str] = &[
     "steel in the shadows",
 ];
 
-/// Craft notes for the storyteller; they never relax its fixed rules.
-const GUIDANCE: &str = "CRAFT\n\
+/// The craft notes before the rating sentence; shared by both ratings.
+macro_rules! craft_before_rating {
+    () => {
+        "CRAFT\n\
 You rewrite the plain DRAFT of each requested slot (facts.drafts, same slot name) as an experienced Dungeon Master would say it at the table. The draft only states facts; it is not wording to keep. Write fresh sentences with your own imagery and rhythm, keeping every fact.\n\
 STORY, NOT RULES: narration is pure story. No game words (hit points, rests, prone, feet, damage, rolls), no instruction to the players, no filler such as \"something is about to happen\".\n\
 VOICE: narration is second person and present tense in plain strong verbs. A narrator reads it aloud, so write two short sentences rather than one long one (twenty words at most), with no semicolons, parentheses, lists, rhetorical questions or the word \"suddenly\", no purple prose and no modern idiom. Narration never quotes or repeats a spoken line and never describes a speaker's voice with the words in facts.cast.\n\
@@ -133,10 +144,41 @@ PLACE: use two or three concrete sensory details from facts.location (sound, sme
 CHARACTERS: each appearance gets one consistent physical beat that fits the character's archetype, mannerism and mood together. Never contradictory, such as a brisk sergeant rubbing tired eyes or a cheerful tinker breathing hard.\n\
 STAKES: the patron's opening line has a clear ask, what is at stake if the heroes refuse or fail, and one human detail, in the patron's own voice. The enemy's line is a threat that reveals a motive, in a voice that fits its kind. A creature that does not speak (facts.cast.enemy.speaks is false) gets a narrated menace beat instead of a line.\n\
 PAYOFF: the contact's closing line acknowledges what the heroes did, lets the table hear that the patron's secret mattered without repeating its private wording, and gives a concrete reward or tempting lead from facts.story.thanks.\n\
-CONTINUITY: keep every name, place, object and creature exactly as in FACTS and write every must_mention term verbatim. Each scene moves the story on rather than restating the last. The victory scene tells how the fight ended only in general terms. Add no new objects, people, events or injuries. Heroic fantasy for a living-room table: tense, never gory.\n\
+CONTINUITY: keep every name, place, object and creature exactly as in FACTS and write every must_mention term verbatim. Each scene moves the story on rather than restating the last. The victory scene tells how the fight ended only in general terms. Add no new objects, people, events or injuries. "
+    };
+}
+
+/// The craft notes after the rating sentence; shared by both ratings.
+macro_rules! craft_after_rating {
+    () => {
+        "\n\
 SECRET: never write a slot's forbidden terms or hint at them.\n\
 LOBBY: room_narration is one or two evocative sentences of place and mood that end on a pull into the story.\n\
-REWRITES: when facts.rewrite_notes is present, write only those slots and fix exactly what each note says. facts.already_written holds the other slots: do not repeat their sentences or openings.\n";
+REWRITES: when facts.rewrite_notes is present, write only those slots and fix exactly what each note says. facts.already_written holds the other slots: do not repeat their sentences or openings.\n"
+    };
+}
+
+/// Craft notes for the storyteller; they never relax its fixed rules. A restrained table keeps
+/// the family-table sentence; a mature one is told mature themes are allowed. Every other
+/// sentence, and the always-on limits of the storyteller's own rules, are identical.
+const GUIDANCE_RESTRAINED: &str = concat!(
+    craft_before_rating!(),
+    "Heroic fantasy for a living-room table: tense, never gory.",
+    craft_after_rating!()
+);
+const GUIDANCE_MATURE: &str = concat!(
+    craft_before_rating!(),
+    mature_themes!(),
+    " Describe the violence the facts state vividly and without flinching, but never invent a wound, a death or an outcome they do not state.",
+    craft_after_rating!()
+);
+
+fn guidance(rating: ContentRating) -> &'static str {
+    match rating {
+        ContentRating::Restrained => GUIDANCE_RESTRAINED,
+        ContentRating::Mature => GUIDANCE_MATURE,
+    }
+}
 
 /// What each scene is, so the model can keep the story in order; the two middle scenes are
 /// alternatives, one for each way the party can answer the patron.
@@ -327,6 +369,7 @@ fn group_facts(
 ) -> Value {
     let fact = |key: &str| baseline.facts.get(key).cloned().unwrap_or_default();
     let person = |prefix: &str| {
+        let age = fact(&format!("{prefix}.age"));
         json!({
             "name": fact(&format!("{prefix}.first")),
             "full_name": fact(&format!("{prefix}.full")),
@@ -335,6 +378,9 @@ fn group_facts(
             "delivery": fact(&format!("{prefix}.delivery")),
             "mannerism": fact(&format!("{prefix}.mannerism")),
             "pronoun": fact(&format!("{prefix}.sub")),
+            "age_group": age_group(&age),
+            "based_on_real_person": false,
+            "sexual_content_allowed": sexual_content_allowed(&age, false),
         })
     };
     let speaks = planned
@@ -359,7 +405,7 @@ fn group_facts(
         })
         .collect();
     let mut facts = json!({
-        "tone": "heroic fantasy for a living-room table",
+        "tone": tone_of(baseline.rating),
         "location": {
             "name": fact("loc.name"),
             "details": [fact("loc.atmos_a"), fact("loc.atmos_b"), fact("loc.atmos_c")],
@@ -380,9 +426,12 @@ fn group_facts(
                 "speaks": speaks,
                 "voice": fact("ant.voice"),
                 "delivery": fact("ant.delivery"),
+                "age_group": age_group(&fact("ant.age")),
+                "based_on_real_person": false,
+                "sexual_content_allowed": sexual_content_allowed(&fact("ant.age"), false),
             },
         },
-        "forbidden": FORBIDDEN_WORDS,
+        "forbidden": forbidden_words(baseline.rating),
         "drafts": drafts,
     });
     if with_secret {
@@ -775,7 +824,7 @@ async fn ask(
     let with_secret = asked.iter().any(|slot| slot.group == Group::Voices);
     let facts = group_facts(baseline, planned, with_secret, rewrites);
     let answer = storyteller
-        .express_adventure_partial(&facts, &slots, GUIDANCE, deadline)
+        .express_adventure_partial(&facts, &slots, guidance(baseline.rating), deadline)
         .await?;
     Ok(Answer {
         accepted: answer.accepted,

@@ -11,6 +11,7 @@
 use super::{
     TablesError,
     dossier::{Attitude, Binding, Effect, Group, Length, NpcRole, Topic, sentence_count},
+    mature_overlay::Overlay,
     schema::Table,
 };
 use serde::{Deserialize, de::DeserializeOwned};
@@ -589,16 +590,30 @@ fn requires_campaign(slots: &[&str]) -> bool {
 }
 
 impl DossierTables {
-    /// Read and validate the five dossier files from a directory.
+    /// Read and validate the five restrained dossier files from a directory.
     pub(crate) fn load(directory: &Path) -> Result<Self, TablesError> {
+        Self::load_variant(directory, None)
+    }
+    /// [`Self::load`], with the mature overlay's replacements applied when one is given. The
+    /// mature revision is the restrained one plus the overlay's bytes.
+    pub(super) fn load_variant(
+        directory: &Path,
+        overlay: Option<&Overlay>,
+    ) -> Result<Self, TablesError> {
         let mut files = BTreeMap::new();
         for file in FILES {
             files.insert(file.to_owned(), read(directory, file)?);
         }
-        Self::from_files(&files)
+        Self::build(&files, overlay)
     }
     /// Validate dossier files already in memory, keyed by file name.
     pub(crate) fn from_files(files: &BTreeMap<String, Vec<u8>>) -> Result<Self, TablesError> {
+        Self::build(files, None)
+    }
+    fn build(
+        files: &BTreeMap<String, Vec<u8>>,
+        overlay: Option<&Overlay>,
+    ) -> Result<Self, TablesError> {
         let mut digest = Sha256::new();
         for file in FILES {
             digest.update(
@@ -607,6 +622,15 @@ impl DossierTables {
                     .ok_or_else(|| invalid(file, ".", "file missing"))?,
             );
         }
+        let mut files = files.clone();
+        if let Some(overlay) = overlay {
+            digest.update(overlay.bytes());
+            for file in FILES {
+                let merged = overlay.merged(file, &files[file])?;
+                files.insert(file.to_owned(), merged);
+            }
+        }
+        let files = &files;
         let tables = Self {
             revision: format!("{:x}", digest.finalize()),
             background: document(files, FILES[0])?,
