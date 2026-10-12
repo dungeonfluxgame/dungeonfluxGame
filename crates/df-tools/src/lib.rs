@@ -29,6 +29,10 @@ mod sound_switch;
 mod speech_clip;
 mod voice_line;
 
+// PLAY-H01: the browser's view admission is pure, so its test runs natively too.
+#[cfg(test)]
+#[path = "gameplay_browser/view_delivery.rs"]
+mod view_delivery_contract;
 // PLAY-L01: when a same-revision display view may replace the shown one (generated art only).
 #[cfg(any(target_arch = "wasm32", test))]
 mod live_art;
@@ -36,6 +40,11 @@ mod live_art;
 mod presentation;
 #[cfg(any(target_arch = "wasm32", test))]
 mod speech_capture;
+// PLAY-H01: the one definition of the health tiers, shared by the server and both clients.
+pub(crate) mod health_tier;
+// PLAY-H01: shake sizes and timings (pure), used by the browser's health cues.
+#[cfg(any(target_arch = "wasm32", test))]
+mod health_cues;
 mod stage_art;
 #[cfg(any(target_arch = "wasm32", test))]
 mod stage_conductor;

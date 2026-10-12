@@ -5,8 +5,8 @@
 use super::{
     GenerateError, GeneratedAdventure, RollStatus, Tables,
     dossier::{
-        AntagonistFact, CastMember, Dossier, DossierFacts, Gender, Group, NpcRole, StakeFact,
-        roll_dossiers,
+        AntagonistFact, AuthoredLine, CastMember, Dossier, DossierFacts, Gender, Group, NpcRole,
+        StakeFact, roll_dossiers,
     },
 };
 use std::collections::BTreeMap;
@@ -42,6 +42,51 @@ fn group_of(class: &str) -> Group {
         "undead" => Group::Undead,
         _ => Group::Beast,
     }
+}
+
+/// The statements each named speaker makes in the authored scenes, in scene order. A question is
+/// a request the scene already made, not something the speaker knows, so it is left out.
+pub(super) fn authored_lines(scenes: &[super::super::pack::Scene]) -> Vec<AuthoredLine> {
+    scenes
+        .iter()
+        .filter(|scene| !scene.speaker.trim().is_empty())
+        .flat_map(|scene| {
+            statements(&scene.dialogue)
+                .into_iter()
+                .map(move |text| AuthoredLine {
+                    speaker: scene.speaker.clone(),
+                    text,
+                })
+        })
+        .collect()
+}
+
+/// Sentences of `text` that end in `.` or `!`, each trimmed. A sentence ends at a terminal mark
+/// followed by a space or the end of the text.
+fn statements(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut start = 0;
+    let mut characters = text.char_indices().peekable();
+    while let Some((index, character)) = characters.next() {
+        let ends_here = matches!(character, '.' | '!' | '?')
+            && characters
+                .peek()
+                .is_none_or(|(_, next)| next.is_whitespace());
+        if !ends_here {
+            continue;
+        }
+        let end = index + character.len_utf8();
+        let sentence = text[start..end].trim();
+        if !sentence.is_empty() && !sentence.ends_with('?') {
+            found.push(sentence.to_owned());
+        }
+        start = end;
+    }
+    let rest = text[start..].trim();
+    if !rest.is_empty() && !rest.ends_with('?') {
+        found.push(rest.to_owned());
+    }
+    found
 }
 
 /// The speaking cast and shared facts of an adventure: the patron and contact, plus the
@@ -110,6 +155,7 @@ fn dossier_facts(
         .cloned()
         .collect();
     Ok(DossierFacts {
+        authored: authored_lines(&adventure.pack.scenes),
         cast,
         stake: StakeFact {
             short: fact(facts, "stake.short")?.clone(),

@@ -397,6 +397,10 @@ field dungeonflux.public.v1.InitiativeRoll 3 die type=13 label=1 presence=false 
 field dungeonflux.public.v1.InitiativeRoll 4 modifier type=17 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.InitiativeRoll 5 total type=17 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.InitiativeRoll 6 order type=13 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.LiveFace
+field dungeonflux.public.v1.LiveFace 1 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LiveFace 2 sprite type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 14 live_faces type=11 label=3 presence=false target=.dungeonflux.public.v1.LiveFace oneof=-
 field dungeonflux.public.v1.JourneyView 15 presentation_sequence type=4 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 16 reply_speaker type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 30 home type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeTheme oneof=-
@@ -421,3 +425,4 @@ field dungeonflux.public.v1.HomeTheme 5 party type=11 label=1 presence=false tar
 field dungeonflux.public.v1.HomeTheme 6 mood type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeMood oneof=-
 field dungeonflux.public.v1.HomeTheme 7 atmosphere type=9 label=3 presence=false target=- oneof=-
 field dungeonflux.public.v1.HomeTheme 8 fallback type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 45 join_url type=9 label=1 presence=false target=- oneof=-

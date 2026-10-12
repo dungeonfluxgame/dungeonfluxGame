@@ -23,13 +23,9 @@
 .tv-stage[data-home][data-tv-mode=lobby] .tv-lobby-row{display:contents}
 .tv-stage[data-home][data-tv-mode=lobby] .tv-join{position:absolute;left:var(--home-code-x);top:var(--home-code-y);width:var(--home-code-w);height:var(--home-code-h);z-index:2;padding:calc(var(--u)*.5) calc(var(--u)*.8);gap:calc(var(--u)*.3)}
 .tv-stage[data-home][data-tv-mode=lobby] .tv-roster{position:absolute;left:var(--home-party-x);top:var(--home-party-y);width:var(--home-party-w);height:var(--home-party-h);z-index:2}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-hint{display:none}
-.tv-stage[data-home] .tv-join-row{display:none}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-join-row{display:flex;align-items:stretch;gap:calc(var(--u)*1.2);min-height:0;flex:1}
-.tv-stage[data-home] .tv-qr-slot{display:none}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-qr-slot{display:block;flex:none;align-self:center;width:calc(var(--u)*12.4);height:calc(var(--u)*12.4);border-radius:calc(var(--u)*.4);background:#f4efe2;border:calc(var(--u)*.3) solid #e8cb94}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-join .tv-code-box{flex:1;min-width:0;margin:0;display:flex;flex-direction:column;justify-content:center}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-join .tv-code{font-size:min(var(--fs-code),calc(var(--u)*4.6))}
+/* The join row (QR beside the room code) and its sizes come from live_join.css; the home layer
+   only gives the join block its box, so the row takes the space the block leaves for it. */
+.tv-stage[data-home][data-tv-mode=lobby] .tv-join-row{flex:1 1 auto;min-height:0}
 .tv-stage[data-home] .tv-panel{border-color:color-mix(in srgb,var(--home-accent) 55%,transparent);background:linear-gradient(160deg,color-mix(in srgb,var(--home-tint) 96%,#03060e),color-mix(in srgb,var(--home-tint) 88%,#03060e))}
 .tv-stage[data-home] .tv-roster[data-count="6"] .tv-party{grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u)*.7)}
 .tv-stage[data-home] .tv-roster[data-count="6"] .tv-card{gap:calc(var(--u)*.6);padding:calc(var(--u)*.3) calc(var(--u)*.6)}

@@ -17,7 +17,7 @@ use super::{
     super::{
         npc_dossier_tests::adventure,
         pack,
-        scene_mood::{Appearance, Expression, Lighting, Look, Mood, Shot},
+        scene_mood::{Expression, HealthTier, Lighting, Look, Mood, Shot},
         startup_configuration::{ImageryCredential, ImageryOff},
     },
     artifact::artifact_close_up,
@@ -203,6 +203,7 @@ fn payload_for(reply: Reply, fields: &Fields) -> (&'static str, String) {
         .unwrap();
     let transparent = fields["background"] == "transparent";
     let png = fields["output_format"] == "png";
+    let webp = fields["output_format"] == "webp";
     let image = |bytes: Vec<u8>| {
         format!(
             r#"{{"created":1,"data":[{{"b64_json":"{}"}}],"usage":{{"input_tokens":1000,"input_tokens_details":{{"text_tokens":100,"image_tokens":900}},"output_tokens":300}}}}"#,
@@ -211,9 +212,15 @@ fn payload_for(reply: Reply, fields: &Fields) -> (&'static str, String) {
     };
     match reply {
         Reply::Image if png => ("200 OK", image(fake_png(width, height, transparent))),
+        Reply::Image if webp => ("200 OK", image(fake_webp(width, height, transparent))),
         Reply::Image => ("200 OK", image(fake_jpeg(width, height, 0))),
         Reply::WrongSize if png => ("200 OK", image(fake_png(width + 16, height, transparent))),
+        Reply::WrongSize if webp => (
+            "200 OK",
+            image(fake_webp(width + 16, height, transparent)),
+        ),
         Reply::WrongSize => ("200 OK", image(fake_jpeg(width + 16, height, 0))),
+        Reply::OpaqueForTransparent if webp => ("200 OK", image(fake_webp(width, height, false))),
         Reply::OpaqueForTransparent => ("200 OK", image(fake_png(width, height, false))),
         Reply::Oversize => ("200 OK", image(fake_jpeg(width, height, 7 * 1024 * 1024))),
         Reply::Garbage => ("200 OK", image(b"this is not an image".to_vec())),
@@ -268,6 +275,22 @@ fn chunk(kind: &[u8], payload: &[u8]) -> Vec<u8> {
     data.extend(kind);
     data.extend(payload);
     data.extend(crc32(&data[4..]).to_be_bytes());
+    data
+}
+
+/// A complete lossless WebP header and filler of the given size, with or without alpha: all the
+/// provider adapter reads of a WebP is its container, dimensions and alpha flag.
+fn fake_webp(width: u32, height: u32, alpha: bool) -> Vec<u8> {
+    let packed = (width - 1) | ((height - 1) << 14) | (u32::from(alpha) << 28);
+    let mut chunk_data = vec![0x2f];
+    chunk_data.extend(packed.to_le_bytes());
+    chunk_data.extend([0u8; 11]);
+    let mut data = b"RIFF".to_vec();
+    data.extend((4 + 8 + chunk_data.len() as u32).to_le_bytes());
+    data.extend(b"WEBP");
+    data.extend(b"VP8L");
+    data.extend((chunk_data.len() as u32).to_le_bytes());
+    data.extend(chunk_data);
     data
 }
 
@@ -406,7 +429,7 @@ fn expression(face: Expression) -> ImageRequest {
                 life_stage: LifeStage::Adult,
             },
             face,
-            Appearance::Unhurt,
+            HealthTier::Healthy,
             false,
         )
         .unwrap(),
@@ -477,6 +500,32 @@ async fn a_cache_hit_costs_nothing_and_survives_a_restart() {
 }
 
 #[tokio::test]
+async fn a_peek_finds_cached_images_and_never_calls_the_provider_or_spends() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, dir) = imagery(&fake, "peek", 5);
+    assert_eq!(service.peek(&expression(Expression::Angry)).await, None);
+    assert_eq!(fake.calls(), 0);
+    assert_eq!(service.budget_remaining(), 5);
+    let key = service.render(expression(Expression::Angry)).await.unwrap();
+    assert_eq!(
+        service.peek(&expression(Expression::Angry)).await,
+        Some(key.clone())
+    );
+    assert_eq!(
+        service.peek(&expression(Expression::Smiling)).await,
+        None,
+        "another request is not cached"
+    );
+    assert_eq!(fake.calls(), 1);
+    assert_eq!(service.budget_remaining(), 4);
+    // A cut-out cached by an earlier build as a PNG is still found by its WebP request.
+    let png = dir.join("cache").join(format!("{}.webp", key.as_str()));
+    let legacy = png.with_extension("png");
+    std::fs::rename(&png, &legacy).unwrap();
+    assert!(service.peek(&expression(Expression::Angry)).await.is_some());
+}
+
+#[tokio::test]
 async fn the_provider_receives_the_references_the_prompt_and_the_content_rating() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
     let (service, _dir) = imagery(&fake, "fields", 5);
@@ -487,7 +536,7 @@ async fn the_provider_receives_the_references_the_prompt_and_the_content_rating(
     assert_eq!(fields["size"], "1024x640");
     assert_eq!(fields["quality"], "medium");
     assert_eq!(fields["background"], "transparent");
-    assert_eq!(fields["output_format"], "png");
+    assert_eq!(fields["output_format"], "webp");
     assert_eq!(
         fields["moderation"], "low",
         "mature asks for the less restrictive filter"
@@ -814,9 +863,9 @@ async fn an_unregistered_key_is_404_a_pending_one_503_and_a_ready_one_served_wit
 }
 
 #[tokio::test]
-async fn a_transparent_result_is_served_as_a_png_with_alpha() {
+async fn a_transparent_result_is_served_as_a_webp_with_alpha() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "png", 5);
+    let (service, _dir) = imagery(&fake, "webp", 5);
     let key = service
         .render(expression(Expression::Smiling))
         .await
@@ -824,9 +873,10 @@ async fn a_transparent_result_is_served_as_a_png_with_alpha() {
     let Lookup::Image { bytes, format } = service.image(key.as_str()).await else {
         panic!("the image is cached");
     };
-    assert_eq!(format, ImageFormat::Png);
-    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
-    assert_eq!(bytes[25], 4, "grey with alpha");
+    assert_eq!(format, ImageFormat::Webp);
+    assert_eq!(&bytes[..4], b"RIFF");
+    assert_eq!(&bytes[8..12], b"WEBP");
+    assert_eq!(bytes[20], 0x2f);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1067,12 +1117,12 @@ fn prompts_hold_only_closed_vocabulary_and_vetted_facts_for_200_adventures_and_e
         for role in CharacterRole::ALL {
             for life_stage in LifeStage::ALL {
                 for face in Expression::ALL {
-                    for appearance in Appearance::ALL {
+                    for tier in HealthTier::ALL {
                         let prompt = cast_expression(
                             rating,
                             CharacterFacts { role, life_stage },
                             face,
-                            appearance,
+                            tier,
                             false,
                         )
                         .unwrap();
@@ -1124,36 +1174,47 @@ fn the_two_ratings_use_different_phrase_sets_for_the_same_inputs() {
         role: CharacterRole::Antagonist,
         life_stage: LifeStage::Adult,
     };
-    let face = |rating, expression, appearance| {
-        cast_expression(rating, patron, expression, appearance, false).unwrap()
+    let face = |rating, expression, tier| {
+        cast_expression(rating, patron, expression, tier, false).unwrap()
     };
     let mature = face(
         ContentRating::Mature,
         Expression::Seductive,
-        Appearance::Bloodied,
+        HealthTier::Healthy,
     );
     let restrained = face(
         ContentRating::Restrained,
         Expression::Seductive,
-        Appearance::Bloodied,
+        HealthTier::Healthy,
     );
     assert!(mature.as_str().contains("seductive, sultry"));
-    assert!(mature.as_str().contains("badly bloodied"));
     assert!(!restrained.as_str().contains("sultry"));
-    assert!(!restrained.as_str().contains("bloodied"));
     assert!(restrained.as_str().contains("flirtatious look"));
-    assert!(restrained.as_str().contains("battered and exhausted"));
-    let wounded = face(
+    // A bloodied character shows the health face and look, never the mood: the rating decides
+    // how graphic the wounds are.
+    let wounded = |rating| face(rating, Expression::Seductive, HealthTier::Bloodied);
+    assert!(wounded(ContentRating::Mature).as_str().contains("blood"));
+    assert!(
+        !wounded(ContentRating::Restrained)
+            .as_str()
+            .contains("blood")
+    );
+    assert!(
+        wounded(ContentRating::Restrained)
+            .as_str()
+            .contains("battered")
+    );
+    assert!(!wounded(ContentRating::Mature).as_str().contains("sultry"));
+    let hurt = face(ContentRating::Mature, Expression::Angry, HealthTier::Hurt);
+    assert!(hurt.as_str().contains("tense and guarded"));
+    assert!(!hurt.as_str().contains("furious"), "the health face wins");
+    let healthy = face(
         ContentRating::Mature,
         Expression::Angry,
-        Appearance::Wounded,
+        HealthTier::Healthy,
     );
-    assert!(wounded.as_str().contains("visibly wounded"));
-    assert!(
-        !face(ContentRating::Mature, Expression::Angry, Appearance::Unhurt)
-            .as_str()
-            .contains("appears")
-    );
+    assert!(healthy.as_str().contains("furious"));
+    assert!(!healthy.as_str().contains("guarded"));
 }
 
 #[test]
@@ -1167,7 +1228,7 @@ fn both_ratings_keep_every_person_an_adult_and_name_no_real_person() {
                     life_stage,
                 },
                 Expression::Flirtatious,
-                Appearance::Unhurt,
+                HealthTier::Healthy,
                 false,
             )
             .unwrap();
@@ -1221,7 +1282,7 @@ fn a_real_persons_likeness_never_gets_a_seductive_variant_under_either_rating() 
                 rating,
                 facts,
                 Expression::Seductive,
-                Appearance::Unhurt,
+                HealthTier::Healthy,
                 true
             ),
             Err(PromptRefusal::RealLikenessIntimate)
@@ -1232,7 +1293,7 @@ fn a_real_persons_likeness_never_gets_a_seductive_variant_under_either_rating() 
             Expression::Smiling,
             Expression::Flirtatious,
         ] {
-            assert!(cast_expression(rating, facts, other, Appearance::Unhurt, true).is_ok());
+            assert!(cast_expression(rating, facts, other, HealthTier::Healthy, true).is_ok());
         }
     }
 }

@@ -12,12 +12,16 @@ use super::*;
 const LEGACY: &str = include_str!("live_legacy.css");
 const PLAYER: &str = include_str!("live_player.css");
 const TV: &str = include_str!("live_tv.css");
+// PLAY-Q01: the join panel's QR code, after the shared display rules it sits in.
+const JOIN: &str = include_str!("live_join.css");
 const MOTION: &str = include_str!("live_fx.css");
 const STAGE: &str = include_str!("live_stage.css");
 // PLAY-L01: the previous cut-out fading out above a character's new expression.
 const IMAGERY: &str = include_str!("live_imagery.css");
 // PLAY-V05: the home screen's themed lobby, placed and moodied from the server's view.
 const HOME: &str = include_str!("live_home.css");
+// PLAY-H01: tier colours, bar notches and labels, the chip, the phone vignette.
+const HEALTH: &str = include_str!("live_health.css");
 
 /// Adds the live screen rules once; a second call on the same page is a no-op.
 pub(super) fn install(document: &Document) -> Result<(), JsValue> {
@@ -27,7 +31,7 @@ pub(super) fn install(document: &Document) -> Result<(), JsValue> {
     let style = document.create_element("style")?;
     style.set_attribute("data-live-theme", "")?;
     style.set_text_content(Some(&format!(
-        "{LEGACY}\n{PLAYER}\n{TV}\n{MOTION}\n{STAGE}\n{IMAGERY}\n{HOME}"
+        "{LEGACY}\n{PLAYER}\n{TV}\n{JOIN}\n{MOTION}\n{STAGE}\n{IMAGERY}\n{HEALTH}\n{HOME}"
     )));
     let host = match document.query_selector("head")? {
         Some(head) => head,

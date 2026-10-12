@@ -30,6 +30,23 @@ struct FOut {
     @location(0) colour: vec4<f32>,
     @builtin(frag_depth) depth: f32,
 }
+
+// The depth a figure standing on the play plane is tested with. The scan's own ground (turf,
+// stones, tufts) may rise up to `plane.y` metres above the plane, so the figure counts as being as
+// near as the point where its line of sight crosses that height: ground at or below it never hides
+// the feet, while anything standing higher in front of the figure (a trunk, a wall, a palisade)
+// is still nearer than that point and still hides it. Above that height the figure's own depth
+// stands, since the ground cannot reach it. With no margin (painted grounds) nothing changes.
+fn standing_depth(world: vec3<f32>) -> f32 {
+    let to_world = world - frame.eye.xyz;
+    let direction = normalize(to_world);
+    var along = length(to_world);
+    if (direction.y < -0.0001) {
+        along = min(along, (frame.eye.y - (frame.plane.x + frame.plane.y)) / -direction.y);
+    }
+    let clip = frame.view_proj * vec4<f32>(frame.eye.xyz + direction * along, 1.0);
+    return clamp(clip.z / clip.w, 0.0, 1.0);
+}
 "#;
 
 const BACKDROP: &str = r#"

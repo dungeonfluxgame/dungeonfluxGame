@@ -12,7 +12,7 @@ use super::{
     super::{
         npc_dossier_tests::adventure,
         pack::{CastRole, SceneKey},
-        scene_mood::{Appearance, Expression, Lighting, Look, Mood, Shot},
+        scene_mood::{Expression, HealthTier, Lighting, Look, Mood, Shot},
         startup_configuration::{ImageryCredential, ImagerySettings},
     },
     *,
@@ -31,7 +31,7 @@ struct Job {
     #[serde(default)]
     expression: Option<String>,
     #[serde(default)]
-    appearance: Option<String>,
+    tier: Option<String>,
     #[serde(default)]
     mood: Option<String>,
     #[serde(default)]
@@ -143,9 +143,9 @@ async fn live_plan() {
                             job.expression.as_deref().unwrap_or("neutral"),
                         ),
                         pick(
-                            &Appearance::ALL,
-                            Appearance::label,
-                            job.appearance.as_deref().unwrap_or("unhurt"),
+                            &HealthTier::ALL,
+                            HealthTier::label,
+                            job.tier.as_deref().unwrap_or("unhurt"),
                         ),
                         false,
                     )

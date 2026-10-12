@@ -1,0 +1,14 @@
+/* PLAY-Q01: the join code beside the room code on the shared display's home screen. The QR code is
+   sized from the stage unit, the same unit that sizes the join panel, so it scales with the panel;
+   12.5 units is 240px at 1080p, 22% of the screen height. The room code is fitted to the width left
+   beside the QR code, so it never runs out of its box. The tile is white like the SVG's own quiet
+   zone, so the modules are never tinted or overlaid. */
+.tv-join{container-type:inline-size}
+.tv-join-row{--tv-qr:min(calc(var(--u)*12.5),42vh);--tv-qr-slot:calc(var(--tv-qr) + var(--u)*1.4 + var(--u));display:flex;align-items:center;justify-content:center;gap:calc(var(--u)*1.4);min-width:0}
+.tv-qr{margin:0;flex:none;padding:calc(var(--u)*.5);background:#ffffff;line-height:0}
+.tv-qr-image{display:block;width:var(--tv-qr);height:var(--tv-qr)}
+.tv-join-row .tv-code-box{flex:0 0 auto;margin:calc(var(--u)*.4) 0}
+.tv-join-row .tv-code{font-size:min(var(--fs-code),calc((100cqi - var(--tv-qr-slot)) / 5))}
+/* The address and the hint are smaller, so the address fits one line and the panel stays on screen. */
+.tv-join .tv-hint{font-size:calc(var(--fs-label)*.8);line-height:1.3}
+.tv-join .tv-url{font-size:calc(var(--fs-label)*.7);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
