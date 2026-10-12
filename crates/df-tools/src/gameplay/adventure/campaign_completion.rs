@@ -65,8 +65,15 @@ pub(crate) fn terminal_outcome(
         .narrative
         .completed_beats
         .contains(&model::content("short-rest-complete")?);
-    let destination = state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?];
-    if (victory && !destination) || (!victory && !rested) {
+    // The chapter's ending steps follow the inn (after a victory) and the defeat scene.
+    let ended = state
+        .narrative
+        .active_beats
+        .iter()
+        .any(|beat| matches!(beat.entry.as_str(), "epilogue" | "the-end"));
+    let destination =
+        ended || state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?];
+    if (victory && !destination) || (!victory && !rested && !ended) {
         return Ok(None);
     }
     let private = state

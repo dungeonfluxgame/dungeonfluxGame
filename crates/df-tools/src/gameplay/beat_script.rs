@@ -9,6 +9,8 @@ use std::{
     fmt,
 };
 
+/// The label of an ending step in a script that authors none (the compiled demo pack).
+const DEFAULT_RESOLVE_LABEL: &str = "Settle the errand";
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BeatScript {
@@ -173,12 +175,28 @@ impl BeatScript {
     pub(super) fn uses_encounter(&self) -> bool {
         self.beats.iter().any(|b| b.kind == BeatKind::Fight)
     }
+    /// The compiled sequencing graph. Labels and scene variants are presentation: a generated
+    /// chapter dresses the graph in its own text without changing how it sequences.
     pub(super) fn is_canonical(&self) -> bool {
-        self == canonical()
+        let canonical = canonical();
+        self.entry == canonical.entry
+            && self.terminal == canonical.terminal
+            && self.beats.len() == canonical.beats.len()
+            && self.beats.iter().zip(&canonical.beats).all(|(a, b)| {
+                a.id == b.id
+                    && a.kind == b.kind
+                    && a.scene == b.scene
+                    && a.state == b.state
+                    && a.transitions == b.transitions
+                    && a.offers == b.offers
+            })
     }
     pub(super) fn label(&self, offer: &BeatOffer) -> Result<String, RepositoryError> {
         if let Some(label) = self.labels.get(&offer.label_slot) {
             return Ok(label.clone());
+        }
+        if offer.effect == BeatEffect::Resolve {
+            return Ok(DEFAULT_RESOLVE_LABEL.into());
         }
         let kind = super::wire::action_kind(&offer.label_slot)
             .filter(|kind| *kind != rpc::GameplayActionKind::ExamineHarborSeal)
@@ -279,7 +297,15 @@ impl BeatScript {
             if !uses_encounter && beat.kind == BeatKind::Rest {
                 return Err(refuse(&beat.id, E::RestWiring));
             }
-            if beat.kind == BeatKind::Conclude && !self.terminal.contains(&beat.id) {
+            // A fight chapter's concluding scenes lead on to its ending steps.
+            if beat.kind == BeatKind::Conclude
+                && !self.terminal.contains(&beat.id)
+                && !(uses_encounter
+                    && beat
+                        .offers
+                        .iter()
+                        .any(|offer| offer.effect == BeatEffect::Resolve))
+            {
                 return Err(refuse(&beat.id, E::TerminalWiring));
             }
             if !identifier(&beat.id)
@@ -322,6 +348,25 @@ impl BeatScript {
                     .is_none_or(|scene| scene.key != beat.scene)
             {
                 return Err(refuse(&beat.id, E::UnknownScene));
+            }
+            // A fight's closing scenes tell how it ended: the beat names the victory variant and
+            // the other outcomes' variants sit beside it, chosen when the scene is shown.
+            if uses_encounter
+                && beat.kind == BeatKind::Ending
+                && let Some(variant) = &beat.scene_variant
+            {
+                let stem = variant
+                    .strip_suffix(journey::tactical::FightOutcome::Won.slug())
+                    .ok_or_else(|| refuse(&beat.id, E::UnknownScene))?;
+                for outcome in journey::tactical::FightOutcome::ALL {
+                    if self
+                        .scenes
+                        .get(&format!("{stem}{}", outcome.slug()))
+                        .is_none_or(|scene| scene.key != beat.scene)
+                    {
+                        return Err(refuse(&beat.id, E::UnknownScene));
+                    }
+                }
             }
             if !uses_encounter && (beat.state.victory.is_some() || beat.state.rested.is_some()) {
                 return Err(refuse(&beat.id, E::HandlerWiring));
@@ -402,6 +447,7 @@ impl BeatScript {
                     return Err(refuse(&beat.id, E::DuplicateOffer));
                 }
                 if !self.labels.contains_key(&offer.label_slot)
+                    && offer.effect != BeatEffect::Resolve
                     && super::wire::action_kind(&offer.label_slot)
                         .is_none_or(|kind| kind == rpc::GameplayActionKind::ExamineHarborSeal)
                 {
@@ -438,11 +484,16 @@ impl BeatScript {
                         offer.effect,
                         BeatEffect::GreatswordAttack | BeatEffect::SecondWind | BeatEffect::EndTurn
                     ),
-                    BeatKind::Rest | BeatKind::Travel => matches!(
-                        offer.effect,
-                        BeatEffect::ShortRest | BeatEffect::ChooseHarborScene
-                    ),
-                    BeatKind::Conclude => offer.effect == BeatEffect::ShortRest,
+                    BeatKind::Rest | BeatKind::Travel => {
+                        matches!(
+                            offer.effect,
+                            BeatEffect::ShortRest | BeatEffect::ChooseHarborScene
+                        ) || (offer.effect == BeatEffect::Resolve
+                            && beat.state.victory == Some(false))
+                    }
+                    BeatKind::Conclude => {
+                        matches!(offer.effect, BeatEffect::ShortRest | BeatEffect::Resolve)
+                    }
                     BeatKind::Investigate => false,
                 };
                 if !allowed {
@@ -519,6 +570,9 @@ impl BeatScript {
                                 target.state.durable.as_str()
                             }
                             BeatEffect::ChooseHarborScene => "harbor-inn",
+                            BeatEffect::Resolve if target.kind == BeatKind::Ending => {
+                                target.state.durable.as_str()
+                            }
                             BeatEffect::Observe | BeatEffect::Continue | BeatEffect::Resolve => {
                                 return Err(refuse(&beat.id, E::HandlerWiring));
                             }
