@@ -603,7 +603,9 @@ mod tests {
             assert_eq!(form, expected, "label {label:?}");
             let words: Vec<&str> = third.split(' ').collect();
             assert!(
-                !words.iter().any(|word| matches!(*word, "your" | "you" | "yourself")),
+                !words
+                    .iter()
+                    .any(|word| matches!(*word, "your" | "you" | "yourself")),
                 "second person left in {third:?}"
             );
         }
