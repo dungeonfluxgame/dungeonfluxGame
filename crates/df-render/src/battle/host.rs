@@ -296,7 +296,14 @@ impl BattleStage {
                 return Self::unavailable(host, scene, UnavailableReason::NotMounted);
             }
         };
-        if let (Some(layer), Some(shared)) = (splat_layer, splat_shared) {
+        if let (Some(mut layer), Some(shared)) = (splat_layer, splat_shared) {
+            // The scene authors the largest tier worth drawing; the chosen level steps down from it.
+            layer.levels = layer.levels.map(|(finest, coarsest)| {
+                (
+                    finest.saturating_add(options.splat_lod).min(coarsest),
+                    coarsest,
+                )
+            });
             spawn_splat_load(
                 gpu.clone(),
                 layer,
@@ -305,7 +312,6 @@ impl BattleStage {
                 scene.grid.centre(),
                 scene.grid.cols() as f32 * scene.grid.cell_m(),
                 scene.grid.rows() as f32 * scene.grid.cell_m(),
-                options.splat_lod,
             );
         }
         mark(host, "active");
@@ -695,7 +701,6 @@ fn spawn_splat_load(
     grid_centre: super::math::Vec3,
     grid_width_m: f32,
     grid_depth_m: f32,
-    splat_lod: u32,
 ) {
     wasm_bindgen_futures::spawn_local(async move {
         let transform = SplatTransform {
@@ -713,8 +718,7 @@ fn spawn_splat_load(
             // Finest detail covers the grid and a margin; the scene file may widen it.
             let derived =
                 0.5 * (grid_width_m * grid_width_m + grid_depth_m * grid_depth_m).sqrt() + 3.0;
-            let (authored_finest, coarsest) = layer.levels.unwrap_or((0, 0));
-            let finest = authored_finest.saturating_add(splat_lod).min(coarsest);
+            let (finest, coarsest) = layer.levels.unwrap_or((0, 0));
             splat_stream::stream(
                 gpu,
                 shared,

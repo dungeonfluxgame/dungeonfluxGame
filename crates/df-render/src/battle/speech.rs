@@ -431,10 +431,8 @@ mod tests {
     #[test]
     fn the_timing_constants_are_a_readable_ease_and_a_bounded_line() {
         assert!((0.4..=1.2).contains(&CAMERA_EASE_S));
-        assert!(
-            CAMERA_DOLLY < 1.0 && CAMERA_DOLLY > 0.5,
-            "closer, not inside the figure"
-        );
-        assert!(MAX_LINE_S >= 10.0);
+        // Closer, not inside the figure.
+        const { assert!(CAMERA_DOLLY < 1.0 && CAMERA_DOLLY > 0.5) };
+        const { assert!(MAX_LINE_S >= 10.0) };
     }
 }

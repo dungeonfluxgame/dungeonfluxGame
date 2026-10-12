@@ -125,11 +125,8 @@ mod tests {
 
     #[test]
     fn a_result_stays_readable_for_at_least_two_and_a_half_seconds_at_rest() {
-        assert!(HOLD_S >= 2.5, "{HOLD_S}");
-        assert!(
-            HOLD_EMPHASIS_S > HOLD_S,
-            "a critical or knockout stays longer"
-        );
+        const { assert!(HOLD_S >= 2.5) };
+        const { assert!(HOLD_EMPHASIS_S > HOLD_S) };
         for tone in [FloatTone::Damage, FloatTone::Miss, FloatTone::Heal] {
             assert_eq!(hold_for(tone, false), HOLD_S);
             assert_eq!(hold_for(tone, true), HOLD_EMPHASIS_S);
