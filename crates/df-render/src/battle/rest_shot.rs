@@ -17,6 +17,7 @@ use super::{
     camera::CameraPose,
     framing::{Body, hidden_pairs, project_body, project_point, wrap_deg},
     math::Vec3,
+    occupancy::Occupancy,
 };
 
 /// A rectangle of the picture as `(left, top, right, bottom)` shares (y down).
@@ -43,6 +44,18 @@ pub const REST_AREA: Rect = (0.235, 0.31, 0.765, 0.79);
 /// view of the ground, and never above the upper limit, so figures keep their height.
 const MIN_PITCH_DEG: f32 = 33.0;
 const MAX_PITCH_DEG: f32 = 42.0;
+/// How much higher than usual the camera may be raised to clear scan geometry near the lens
+/// (a trunk, a branch, foliage), as extra pitch in degrees, tried in this order, and the highest
+/// pitch that results.
+const RAISE_CANDIDATES_DEG: [f32; 4] = [0.0, 7.0, 14.0, 21.0];
+pub const MAX_RAISED_PITCH_DEG: f32 = 58.0;
+/// A line from the lens to a figure is blocked by solid scan geometry above this height, except in
+/// the last [`CLEAR_END_M`] metres of it (the figure's own surroundings).
+const CLEAR_MIN_HEIGHT_M: f32 = 1.0;
+const CLEAR_END_M: f32 = 1.3;
+/// Only the part of a line nearer the lens counts: the last share of it lies in the field itself
+/// (stones, shrubs and branches there are the scenery, not a mass between lens and field).
+const CLEAR_FIELD_SHARE: f32 = 0.4;
 /// The closest the resting shot comes, as a share of the scene's own wide shot: the place around
 /// the grid is always shown.
 const MIN_DISTANCE_SHARE: f32 = 0.9;
@@ -50,7 +63,7 @@ const MAX_DISTANCE_M: f32 = 48.0;
 /// Room kept around each figure when fitting: extra height and width in metres.
 const FIT_SLACK_M: f32 = 0.3;
 /// Headings tried either side of the scene's own, in degrees.
-const YAW_CANDIDATES_DEG: [f32; 5] = [0.0, 9.0, -9.0, 18.0, -18.0];
+const YAW_CANDIDATES_DEG: [f32; 9] = [0.0, 9.0, -9.0, 18.0, -18.0, 30.0, -30.0, 45.0, -45.0];
 /// A pair of figures hiding more than this share of the smaller counts as overlapping.
 const OVERLAP_SHARE: f32 = 0.45;
 
@@ -95,6 +108,9 @@ pub struct RestInput<'a> {
     pub hint: &'a CameraPose,
     /// The heading the camera has now, to stay near it.
     pub previous_yaw: Option<f32>,
+    /// Solid scan geometry around the arena, when the scene has it: the shot keeps a clear line to
+    /// every figure and to the field, raising or turning the camera rather than looking through it.
+    pub occupancy: Option<&'a Occupancy>,
     pub aspect: f32,
 }
 
@@ -134,8 +150,9 @@ fn inside(rect: Rect, area: Rect) -> bool {
 
 /// The pose with heading `yaw_deg` that holds everything in `input` inside [`REST_AREA`] from as
 /// near as the scene's wide shot allows.
-fn fit(input: &RestInput<'_>, yaw_deg: f32) -> CameraPose {
-    let pitch_deg = input.hint.pitch_deg.clamp(MIN_PITCH_DEG, MAX_PITCH_DEG);
+fn fit(input: &RestInput<'_>, yaw_deg: f32, raise_deg: f32) -> CameraPose {
+    let pitch_deg = (input.hint.pitch_deg.clamp(MIN_PITCH_DEG, MAX_PITCH_DEG) + raise_deg)
+        .min(MAX_RAISED_PITCH_DEG);
     let yaw = yaw_deg.to_radians();
     let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
     let forward = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
@@ -213,21 +230,67 @@ fn fit(input: &RestInput<'_>, yaw_deg: f32) -> CameraPose {
     pose
 }
 
+/// How many of the lines from `pose`'s lens to the figures and to the field pass through solid scan
+/// geometry: `(figures, field points)`. Zero when the scene carries no occupancy.
+pub fn blocked_lines(pose: &CameraPose, input: &RestInput<'_>) -> (usize, usize) {
+    let Some(occupancy) = input.occupancy else {
+        return (0, 0);
+    };
+    let eye = pose.eye();
+    let figures = input
+        .bodies
+        .iter()
+        .filter(|body| {
+            let chest = body.feet + Vec3::new(0.0, body.height_m * 0.7, 0.0);
+            let end = ((chest - eye).length() * CLEAR_FIELD_SHARE).max(CLEAR_END_M);
+            !occupancy.segment_clear(eye, chest, end, CLEAR_MIN_HEIGHT_M)
+        })
+        .count();
+    // Up to about sixty field points, spread evenly.
+    let stride = (input.ground.len() / 60).max(1);
+    let field = input
+        .ground
+        .iter()
+        .step_by(stride)
+        .filter(|point| {
+            let above = **point + Vec3::new(0.0, 0.9, 0.0);
+            let end = ((above - eye).length() * CLEAR_FIELD_SHARE).max(CLEAR_END_M);
+            !occupancy.segment_clear(eye, above, end, CLEAR_MIN_HEIGHT_M)
+        })
+        .count();
+    (figures, field)
+}
+
 /// The resting shot: the best of a few headings near the scene's own, each fitted to hold
-/// everything. The heading is the one where the fewest figures hide one another, preferring the
-/// scene's own and then the one the camera already has.
+/// everything, raised when needed to see over scan geometry near the lens. The choice is the one
+/// with the fewest blocked lines to figures and the field, then the fewest figures hiding one
+/// another, preferring the scene's own heading and low camera, then the heading the camera
+/// already has.
 pub fn rest_pose(input: &RestInput<'_>) -> CameraPose {
     let mut best: Option<(f32, CameraPose)> = None;
-    for offset in YAW_CANDIDATES_DEG {
-        let yaw = input.hint.yaw_deg + offset;
-        let pose = fit(input, yaw);
-        let hidden = hidden_pairs(&pose, input.aspect, input.bodies, OVERLAP_SHARE) as f32;
-        let drift = input
-            .previous_yaw
-            .map_or(0.0, |previous| wrap_deg(yaw - previous).abs() * 0.02);
-        let cost = hidden * 10.0 + offset.abs() * 0.05 + drift;
-        if best.is_none_or(|(least, _)| cost < least) {
-            best = Some((cost, pose));
+    for raise in RAISE_CANDIDATES_DEG {
+        for offset in YAW_CANDIDATES_DEG {
+            let yaw = input.hint.yaw_deg + offset;
+            let pose = fit(input, yaw, raise);
+            let hidden = hidden_pairs(&pose, input.aspect, input.bodies, OVERLAP_SHARE) as f32;
+            let drift = input
+                .previous_yaw
+                .map_or(0.0, |previous| wrap_deg(yaw - previous).abs() * 0.02);
+            let (blocked_figures, blocked_field) = blocked_lines(&pose, input);
+            let cost = hidden * 10.0
+                + offset.abs() * 0.05
+                + raise * 0.3
+                + drift
+                + blocked_figures as f32 * 40.0
+                + blocked_field as f32 * 2.0;
+            if best.is_none_or(|(least, _)| cost < least) {
+                best = Some((cost, pose));
+            }
+        }
+        // A heading that sees everything at this height is taken; only a blocked view raises the
+        // camera further.
+        if best.is_some_and(|(_, pose)| blocked_lines(&pose, input) == (0, 0)) {
+            break;
         }
     }
     best.map_or(*input.hint, |(_, pose)| pose)
@@ -303,6 +366,7 @@ mod tests {
             ground: &fight.ground,
             hint,
             previous_yaw: None,
+            occupancy: None,
             aspect: FRAMED_ASPECT,
         }
     }
@@ -362,7 +426,7 @@ mod tests {
                     pose.distance
                 );
                 assert!(
-                    (MIN_PITCH_DEG..=MAX_PITCH_DEG).contains(&pose.pitch_deg),
+                    (MIN_PITCH_DEG..=MAX_RAISED_PITCH_DEG).contains(&pose.pitch_deg),
                     "{id}: pitch {}",
                     pose.pitch_deg
                 );
@@ -374,6 +438,59 @@ mod tests {
             }
         }
         assert!(checked >= 20, "only {checked} cases ran");
+    }
+
+    #[test]
+    fn a_scene_with_scan_occupancy_keeps_a_clear_line_to_every_figure_and_the_field() {
+        let mut checked = 0;
+        for id in embedded_ids() {
+            let scene = load_embedded(id).unwrap().unwrap();
+            let Some(occupancy) = scene.occupancy.as_ref() else {
+                continue;
+            };
+            let hint = scene.cameras[&crate::battle::ShotName::Tactical];
+            for (heroes, enemies) in [(1, 1), (4, 3), (6, 6)] {
+                let Some(fight) = fight(&scene.grid, heroes, enemies) else {
+                    continue;
+                };
+                let plain = input(&fight, &hint);
+                let aware = RestInput {
+                    occupancy: Some(occupancy),
+                    ..input(&fight, &hint)
+                };
+                // The same solve without the occupancy, judged against it: what the camera did before.
+                let before = blocked_lines(&rest_pose(&plain), &aware);
+                let pose = rest_pose(&aware);
+                let (figures, field) = blocked_lines(&pose, &aware);
+                let sampled = fight
+                    .ground
+                    .len()
+                    .div_ceil((fight.ground.len() / 60).max(1));
+                eprintln!(
+                    "{id} {heroes}v{enemies}: blocked lines before {before:?}, now ({figures}, {field}) of {} figures and {sampled} field points; pitch {:.0}, yaw {:.0}",
+                    fight.bodies.len(),
+                    pose.pitch_deg,
+                    pose.yaw_deg
+                );
+                assert_eq!(
+                    figures, 0,
+                    "{id} {heroes}v{enemies}: a figure is seen through scan geometry"
+                );
+                assert!(
+                    field * 20 <= sampled,
+                    "{id} {heroes}v{enemies}: {field} of {sampled} field points are seen through scan geometry"
+                );
+                assert!(
+                    figures + field <= before.0 + before.1,
+                    "{id}: no better than before"
+                );
+                // Raising the camera never costs the HUD clearance.
+                let held = extent(&pose, &aware).unwrap();
+                assert!(inside(held, REST_AREA), "{id} {heroes}v{enemies}: {held:?}");
+                checked += 1;
+            }
+        }
+        assert!(checked >= 3, "only {checked} cases ran");
     }
 
     #[test]
@@ -402,7 +519,7 @@ mod tests {
                 continue;
             };
             let pose = rest_pose(&input(&fight, &hint));
-            assert!(wrap_deg(pose.yaw_deg - hint.yaw_deg).abs() <= 18.01, "{id}");
+            assert!(wrap_deg(pose.yaw_deg - hint.yaw_deg).abs() <= 45.01, "{id}");
         }
     }
 }

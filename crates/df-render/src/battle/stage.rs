@@ -1184,6 +1184,7 @@ impl Stage {
             ground: &ground,
             hint: &hint,
             previous_yaw: Some(self.rig.pose().yaw_deg),
+            occupancy: self.scene.occupancy.as_ref(),
             aspect: framing::FRAMED_ASPECT,
         }))
     }

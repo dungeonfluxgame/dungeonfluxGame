@@ -16,6 +16,7 @@ use super::{
     grid::{Cell, Grid, GridError},
     layout::{Cover, Layout, LayoutError, Obstacle},
     math::{Quat, Vec3},
+    occupancy::{Occupancy, OccupancyError},
     sound::Surface,
     splat::orientation_from_euler_deg,
     terrain::{HeightField, TerrainError},
@@ -51,6 +52,7 @@ pub enum SceneFileError {
     /// Layouts or a surface in a version 1 file.
     NeedsSchemaTwo(&'static str),
     Layout(LayoutError),
+    Occupancy(OccupancyError),
 }
 
 #[derive(Deserialize)]
@@ -78,6 +80,19 @@ struct FileScene {
     surface: Option<String>,
     #[serde(default)]
     layouts: Vec<FileLayout>,
+    /// Which cubes of space around the arena hold solid scan geometry (see `occupancy`).
+    #[serde(default)]
+    camera_occupancy: Option<FileOccupancy>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileOccupancy {
+    origin: [f32; 3],
+    cell_m: f32,
+    dims: [u32; 3],
+    /// The bit set as hexadecimal text, voxel 0 in the lowest bit of the first byte.
+    hex: String,
 }
 
 #[derive(Deserialize)]
@@ -377,6 +392,9 @@ pub struct BattleScene {
     pub surface: Surface,
     /// Empty for a version 1 file, in which case figures stand on the derived formation.
     pub layouts: Vec<Layout>,
+    /// Solid scan geometry around the arena, when the scene carries it: the resting camera keeps a
+    /// clear line to every figure and to the field with it.
+    pub occupancy: Option<Occupancy>,
 }
 
 fn stem_ok(stem: &str) -> bool {
@@ -498,6 +516,22 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         }
     };
     let layouts = convert_layouts(file.layouts, &grid)?;
+    let occupancy = file
+        .camera_occupancy
+        .map(|occupancy| {
+            Occupancy::from_hex(
+                Vec3::new(
+                    occupancy.origin[0],
+                    occupancy.origin[1],
+                    occupancy.origin[2],
+                ),
+                occupancy.cell_m,
+                occupancy.dims,
+                &occupancy.hex,
+            )
+        })
+        .transpose()
+        .map_err(SceneFileError::Occupancy)?;
     frame_for_grid(&mut cameras, &grid);
     Ok(BattleScene {
         location_id: file.location_id,
@@ -524,6 +558,7 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         attribution,
         surface,
         layouts,
+        occupancy,
     })
 }
 

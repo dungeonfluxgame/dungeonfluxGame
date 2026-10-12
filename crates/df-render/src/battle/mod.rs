@@ -31,6 +31,7 @@ mod layout;
 mod lod;
 mod math;
 mod model;
+pub mod occupancy;
 mod pacing;
 pub mod particles;
 pub mod rest_shot;
@@ -63,6 +64,7 @@ pub use model::{
     FloatTone, FloatingText, Highlight, HighlightKind, HitPoints, HudState, InitiativeRoll,
     InitiativeShow, RollCard, Side, Token, TokenId, initiative_line, ordinal,
 };
+pub use occupancy::{Occupancy, OccupancyError};
 pub use pacing::{BattleFps, FramePacer, Pace};
 pub use scene_file::{
     Attribution, BackdropLayer, BattleScene, DEFAULT_SCENE_ID, Distribution, GroundLayer,
