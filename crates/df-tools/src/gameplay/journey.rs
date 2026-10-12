@@ -705,6 +705,7 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
         rules_note: String::new(),
         place: String::new(),
         location_id: String::new(),
+        live_backdrop: String::new(),
     }
 }
 pub(super) fn accepted(

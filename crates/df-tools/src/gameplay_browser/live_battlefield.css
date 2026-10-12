@@ -94,7 +94,3 @@
 .bf-badge-name{font-size:calc(var(--u)*1.9);color:var(--ivory)}
 @keyframes bf-slam{from{transform:translate(calc(var(--u)*2.6),-50%) scale(2.2);opacity:0}to{transform:translate(calc(var(--u)*2.6),-50%) scale(1);opacity:1}}
 
-@media (prefers-reduced-motion:reduce){
-  .bf-chip,.bf-top,.bf-party,.bf-enemies,.bf-hp-fill,.bf-bar,.bf-finish,.bf-plate,.bf-banner,.bf-target-tag{transition:none}
-  .bf-chip[data-pop],.bf-badge,.bf-die[data-landed=true]{animation:none}
-}

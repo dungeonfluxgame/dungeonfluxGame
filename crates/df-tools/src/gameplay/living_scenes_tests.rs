@@ -1,0 +1,642 @@
+use std::path::PathBuf;
+
+use super::{
+    super::{
+        adventure::dossier::{Attitude, Dossier, Effect},
+        imagery::{ImageKey, Imagery},
+        npc_dossier_tests::{adventure, member as hero},
+        scene_mood::{Expression, Mood},
+        social::Approach,
+        startup_configuration::ImageryOff,
+    },
+    *,
+};
+
+fn seconds(count: u64) -> Duration {
+    Duration::from_secs(count)
+}
+
+fn timing() -> Timing {
+    Timing::from_interval(seconds(30))
+}
+
+fn key(byte: char) -> ImageKey {
+    ImageKey::parse(&byte.to_string().repeat(64)).unwrap()
+}
+
+const SCENE: &str = "The Heron Shrine|assets/ui/generated/scene-place-temple-sanctuary.webp";
+
+fn stage(revision: u64) -> Stage {
+    Stage {
+        scene_key: SCENE.to_owned(),
+        scene_asset: "assets/ui/generated/scene-place-temple-sanctuary.webp".to_owned(),
+        revision: Some((1, revision)),
+        in_combat: false,
+        tempo: None,
+        speaking_ids: BTreeSet::from(["merchant".to_owned()]),
+        recent_kinds: Vec::new(),
+        title: "The Heron Shrine".to_owned(),
+        cast: vec![StageCast {
+            id: "merchant".to_owned(),
+            sprite: "sprite-patron-merchant".to_owned(),
+        }],
+        hurt: Vec::new(),
+    }
+}
+
+fn dossier() -> Dossier {
+    let mut dossier = adventure(7).dossiers[0].clone();
+    dossier.starting_attitude = Attitude::Indifferent;
+    // The generator's temperaments move between releases; the tests pin the one they need.
+    dossier.temperament.flirting.effect = Effect::Warm;
+    dossier
+}
+
+fn facts(dossier: &Dossier) -> SceneFacts {
+    SceneFacts {
+        place: PlaceFacts::new("The Heron Shrine", "a shrine beside the marsh"),
+        tone: SceneTone::Neutral,
+        beat: Beat::Conversation,
+        members: vec![Member {
+            id: "merchant".to_owned(),
+            role: CharacterRole::Patron,
+            life_stage: LifeStage::Adult,
+            name: "Brakka".to_owned(),
+            sprite: "sprite-patron-merchant".to_owned(),
+            dossier_id: Some(dossier.npc_id.clone()),
+            opposes: dossier.role.opposes_party(),
+            starting_attitude: Some(dossier.starting_attitude),
+        }],
+    }
+}
+
+/// A director with a ledger that knows `dossier`, observing `stage(1)` at time zero.
+fn director(dossier: &Dossier) -> (Arc<Inner>, Arc<SocialLedger>) {
+    let ledger = SocialLedger::open(vec![dossier.clone()], "0x07", None).unwrap();
+    let inner = Arc::new(Inner {
+        imagery: Imagery::disabled(ImageryOff::Qualification),
+        references: ReferenceStore::new(PathBuf::new()),
+        social: ledger.clone(),
+        rating: ContentRating::Mature,
+        timing: timing(),
+        state: Mutex::new(State::new(timing())),
+        wake: watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    inner.observe_at(stage(1), Duration::ZERO);
+    locked(&inner.state).facts = Some(facts(dossier));
+    (inner, ledger)
+}
+
+fn insult(ledger: &SocialLedger, dossier: &Dossier) {
+    ledger.record_exchange(
+        hero(1),
+        dossier,
+        "scene",
+        Approach::Insult,
+        "a hero line",
+        "an npc line",
+    );
+}
+
+fn flirt(ledger: &SocialLedger, dossier: &Dossier) {
+    ledger.record_exchange(
+        hero(1),
+        dossier,
+        "scene",
+        Approach::Flirting,
+        "a hero line",
+        "an npc line",
+    );
+}
+
+fn refresh_jobs(jobs: &[Job]) -> Vec<(Look, RefreshReason)> {
+    jobs.iter()
+        .filter_map(|job| match job {
+            Job::Refresh { look, reason, .. } => Some((*look, *reason)),
+            Job::Expression { .. } => None,
+        })
+        .collect()
+}
+
+fn face_jobs(jobs: &[Job]) -> Vec<Face> {
+    jobs.iter()
+        .filter_map(|job| match job {
+            Job::Expression { face, .. } => Some(*face),
+            Job::Refresh { .. } => None,
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pacing, which is pure.
+
+#[test]
+fn a_refresh_never_starts_inside_the_interval_the_first_seconds_or_a_roll() {
+    let mut pacer = Pacer::new(timing(), Duration::ZERO);
+    assert_eq!(
+        pacer.refresh_due(seconds(5), false, true),
+        None,
+        "the first seconds of a scene"
+    );
+    assert_eq!(
+        pacer.refresh_due(seconds(8), false, true),
+        Some(RefreshReason::Change)
+    );
+    pacer.refresh_started(seconds(8), RefreshReason::Change);
+    assert_eq!(pacer.refresh_due(seconds(20), false, true), None);
+    assert_eq!(pacer.refresh_due(seconds(37), false, true), None);
+    assert_eq!(
+        pacer.refresh_due(seconds(38), false, true),
+        Some(RefreshReason::Change)
+    );
+    // A roll (an accepted action) silences the next six seconds.
+    pacer.note_action(seconds(100));
+    assert_eq!(pacer.refresh_due(seconds(105), false, true), None);
+    assert_eq!(
+        pacer.refresh_due(seconds(106), false, true),
+        Some(RefreshReason::Change)
+    );
+    // Nothing worth rendering and nothing idle: no refresh.
+    assert_eq!(pacer.refresh_due(seconds(106), false, false), None);
+}
+
+#[test]
+fn nothing_is_requested_or_published_in_combat() {
+    let mut pacer = Pacer::new(timing(), Duration::ZERO);
+    for now in [10, 100, 1000] {
+        assert_eq!(pacer.refresh_due(seconds(now), true, true), None);
+        assert!(!pacer.may_publish(seconds(now), true));
+        assert!(pacer.may_publish(seconds(now), false));
+    }
+    pacer.note_action(seconds(2000));
+    assert!(
+        !pacer.may_publish(seconds(2003), false),
+        "a finished image waits out a roll"
+    );
+    assert!(pacer.may_publish(seconds(2006), false));
+}
+
+#[test]
+fn a_gentle_alternate_angle_comes_only_after_a_long_idle_and_then_sparingly() {
+    let mut pacer = Pacer::new(timing(), Duration::ZERO);
+    assert_eq!(pacer.refresh_due(seconds(119), false, false), None);
+    assert_eq!(
+        pacer.refresh_due(seconds(120), false, false),
+        Some(RefreshReason::AlternateAngle)
+    );
+    pacer.refresh_started(seconds(120), RefreshReason::AlternateAngle);
+    assert_eq!(pacer.alternates(), 1);
+    assert_eq!(
+        pacer.refresh_due(seconds(209), false, false),
+        None,
+        "every third interval at most"
+    );
+    assert_eq!(
+        pacer.refresh_due(seconds(210), false, false),
+        Some(RefreshReason::AlternateAngle)
+    );
+    // A story event ends the idleness.
+    pacer.note_story_event(seconds(215));
+    assert_eq!(pacer.refresh_due(seconds(300), false, false), None);
+}
+
+#[test]
+fn alternate_angles_cycle_through_gentle_shots_keeping_the_mood_and_light() {
+    let target = Look::of(Mood::Warm);
+    let shots: Vec<_> = (0..4).map(|n| alternate_look(target, n).shot).collect();
+    assert_eq!(shots.len(), 4);
+    assert!(shots.iter().collect::<BTreeSet<_>>().len() == 4);
+    for index in 0..8 {
+        let look = alternate_look(target, index);
+        assert_eq!(look.mood, Mood::Warm);
+        assert_eq!(look.lighting, target.lighting);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The director.
+
+#[test]
+fn an_exchange_asks_for_the_face_at_once_and_the_backdrop_only_when_the_interval_allows() {
+    let dossier = dossier();
+    let (inner, ledger) = director(&dossier);
+    assert!(
+        inner.evaluate_at(seconds(10)).is_empty(),
+        "no exchange, nothing to repaint"
+    );
+
+    insult(&ledger, &dossier);
+    let jobs = inner.evaluate_at(seconds(10));
+    assert_eq!(
+        face_jobs(&jobs),
+        vec![Face {
+            expression: Expression::Angry,
+            appearance: Appearance::Unhurt
+        }]
+    );
+    let refreshes = refresh_jobs(&jobs);
+    assert_eq!(refreshes.len(), 1);
+    assert_eq!(refreshes[0].1, RefreshReason::Change);
+    assert_ne!(refreshes[0].0, Look::AUTHORED);
+
+    // Neither is asked for again while in flight.
+    assert!(inner.evaluate_at(seconds(11)).is_empty());
+
+    // The face lands; the backdrop does too after its quiet window.
+    inner.finish(Done::Expression {
+        npc_id: "merchant".to_owned(),
+        face: Face {
+            expression: Expression::Angry,
+            appearance: Appearance::Unhurt,
+        },
+        source_sprite: "sprite-patron-merchant".to_owned(),
+        result: Ok(key('a')),
+    });
+    inner.finish(Done::Refresh {
+        look: refreshes[0].0,
+        reason: RefreshReason::Change,
+        scene_key: SCENE.to_owned(),
+        result: Ok(key('b')),
+    });
+    assert!(inner.evaluate_at(seconds(12)).is_empty());
+    assert_eq!(
+        locked(&inner.state).backdrop.as_ref().unwrap().key,
+        key('b')
+    );
+
+    // A second exchange 10 seconds after the first repaint starts: the face may follow at once
+    // but the backdrop waits for the interval.
+    flirt(&ledger, &dossier);
+    let early = inner.evaluate_at(seconds(20));
+    assert!(refresh_jobs(&early).is_empty(), "never under the interval");
+    let later = inner.evaluate_at(seconds(41));
+    assert_eq!(refresh_jobs(&later).len(), 1);
+}
+
+#[test]
+fn a_finished_backdrop_waits_for_a_quiet_moment_and_then_wakes_the_watchers() {
+    let dossier = dossier();
+    let (inner, ledger) = director(&dossier);
+    insult(&ledger, &dossier);
+    let jobs = inner.evaluate_at(seconds(10));
+    let look = refresh_jobs(&jobs)[0].0;
+    let mut wakes = inner.wake.subscribe();
+    wakes.borrow_and_update();
+
+    // An action (a roll) at second 11 holds the finished image until second 17.
+    let mut changed = stage(2);
+    changed.revision = Some((1, 2));
+    inner.observe_at(changed, seconds(11));
+    inner.finish(Done::Refresh {
+        look,
+        reason: RefreshReason::Change,
+        scene_key: SCENE.to_owned(),
+        result: Ok(key('c')),
+    });
+    inner.evaluate_at(seconds(12));
+    assert!(locked(&inner.state).backdrop.is_none());
+    assert!(!wakes.has_changed().unwrap());
+    inner.evaluate_at(seconds(17));
+    assert_eq!(
+        locked(&inner.state).backdrop.as_ref().unwrap().key,
+        key('c')
+    );
+    assert!(
+        wakes.has_changed().unwrap(),
+        "watchers are woken to rebuild their view"
+    );
+    assert_eq!(locked(&inner.state).tracker.shown_look(), look);
+}
+
+#[test]
+fn a_combat_view_neither_triggers_nor_shows_generated_art() {
+    let dossier = dossier();
+    let (inner, ledger) = director(&dossier);
+    insult(&ledger, &dossier);
+    let mut fighting = stage(2);
+    fighting.in_combat = true;
+    inner.observe_at(fighting, seconds(20));
+    assert!(inner.evaluate_at(seconds(60)).is_empty());
+    locked(&inner.state).backdrop = Some(BackdropOverlay { key: key('d') });
+    let mut message = display_message(true);
+    inner.apply(&stage_of(&message).unwrap(), &mut message);
+    let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
+        panic!("display view");
+    };
+    assert_eq!(display.scene.as_ref().unwrap().live_backdrop, "");
+}
+
+#[test]
+fn a_neutral_face_reverts_to_the_authored_cutout_for_free() {
+    let dossier = dossier();
+    let (inner, ledger) = director(&dossier);
+    insult(&ledger, &dossier);
+    inner.evaluate_at(seconds(10));
+    inner.finish(Done::Expression {
+        npc_id: "merchant".to_owned(),
+        face: Face {
+            expression: Expression::Angry,
+            appearance: Appearance::Unhurt,
+        },
+        source_sprite: "sprite-patron-merchant".to_owned(),
+        result: Ok(key('e')),
+    });
+    assert!(locked(&inner.state).sprites.contains_key("merchant"));
+    // After the hold the expression relaxes: the overlay is dropped and nothing is requested.
+    let jobs = inner.evaluate_at(seconds(100));
+    assert!(face_jobs(&jobs).is_empty());
+    assert!(!locked(&inner.state).sprites.contains_key("merchant"));
+}
+
+#[test]
+fn a_failed_face_is_not_asked_for_again_and_a_spent_budget_ends_requests() {
+    let dossier = dossier();
+    let (inner, ledger) = director(&dossier);
+    insult(&ledger, &dossier);
+    let jobs = inner.evaluate_at(seconds(10));
+    assert_eq!(face_jobs(&jobs).len(), 1);
+    inner.finish(Done::Expression {
+        npc_id: "merchant".to_owned(),
+        face: face_jobs(&jobs)[0],
+        source_sprite: "sprite-patron-merchant".to_owned(),
+        result: Err(ImageFailure::Refused),
+    });
+    assert!(face_jobs(&inner.evaluate_at(seconds(12))).is_empty());
+    inner.finish(Done::Refresh {
+        look: refresh_jobs(&jobs)[0].0,
+        reason: RefreshReason::Change,
+        scene_key: SCENE.to_owned(),
+        result: Err(ImageFailure::BudgetExhausted),
+    });
+    flirt(&ledger, &dossier);
+    assert!(
+        inner.evaluate_at(seconds(100)).is_empty(),
+        "no further requests once the budget is spent"
+    );
+}
+
+#[test]
+fn a_new_scene_drops_the_art_of_the_old_one_and_wakes_the_watchers() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    {
+        let mut state = locked(&inner.state);
+        state.backdrop = Some(BackdropOverlay { key: key('f') });
+        state.sprites.insert(
+            "merchant".to_owned(),
+            SpriteOverlay {
+                source_sprite: "sprite-patron-merchant".to_owned(),
+                key: key('1'),
+            },
+        );
+    }
+    let mut wakes = inner.wake.subscribe();
+    wakes.borrow_and_update();
+    let mut next = stage(2);
+    next.scene_key = "Another place|assets/ui/generated/scene-other.webp".to_owned();
+    inner.observe_at(next, seconds(50));
+    let state = locked(&inner.state);
+    assert!(state.backdrop.is_none() && state.sprites.is_empty());
+    drop(state);
+    assert!(wakes.has_changed().unwrap());
+}
+
+// ---------------------------------------------------------------------------------------------
+// The view.
+
+fn display_message(in_combat: bool) -> rpc::ViewMessage {
+    rpc::ViewMessage {
+        revision: Some(rpc::SessionRevision {
+            epoch: Some(rpc::RecoveryEpoch { value: Some(1) }),
+            sequence: Some(1),
+        }),
+        audience: Some(rpc::view_message::Audience::Display(
+            rpc::DisplayGameplayView {
+                narration: "The shrine is quiet.".to_owned(),
+                scene_asset: "assets/ui/generated/scene-place-temple-sanctuary.webp".to_owned(),
+                scene: Some(rpc::GameplayScene {
+                    destination: 0,
+                    title: "The Heron Shrine".to_owned(),
+                    scene_asset: "assets/ui/generated/scene-place-temple-sanctuary.webp".to_owned(),
+                    speaker_portrait: "/assets/ui/generated/portrait-patron-merchant".to_owned(),
+                    cast: vec![rpc::SceneActor {
+                        id: "merchant".to_owned(),
+                        name: "Brakka".to_owned(),
+                        role: rpc::SceneRole::Patron as i32,
+                        sprite: "sprite-patron-merchant".to_owned(),
+                        portrait: "portrait-patron-merchant".to_owned(),
+                        speaking: true,
+                        live_sprite: String::new(),
+                    }],
+                    rules_note: String::new(),
+                    place: String::new(),
+                    location_id: String::new(),
+                    live_backdrop: String::new(),
+                }),
+                journey: Some(rpc::JourneyView {
+                    phase: if in_combat {
+                        rpc::JourneyPhase::Combat as i32
+                    } else {
+                        rpc::JourneyPhase::Dialogue as i32
+                    },
+                    speaker: "Brakka".to_owned(),
+                    dialogue: "Welcome.".to_owned(),
+                    tempo: Some(rpc::TempoCue {
+                        intensity_permille: 640,
+                        phase: rpc::TempoPhase::Build as i32,
+                        sequence: 3,
+                        hold_millis: 1000,
+                    }),
+                    table_log: vec![
+                        rpc::TableLine {
+                            sequence: 1,
+                            speaker: "Hero".to_owned(),
+                            role: rpc::TableRole::Hero as i32,
+                            hero_index: 0,
+                            kind: rpc::TableKind::Speech as i32,
+                            text: "private words never read".to_owned(),
+                        },
+                        rpc::TableLine {
+                            sequence: 2,
+                            speaker: "Brakka".to_owned(),
+                            role: rpc::TableRole::Npc as i32,
+                            hero_index: 0,
+                            kind: rpc::TableKind::Action as i32,
+                            text: "grows wary".to_owned(),
+                        },
+                    ],
+                    ..Default::default()
+                }),
+            },
+        )),
+    }
+}
+
+#[test]
+fn a_display_view_gives_the_stage_its_scene_cast_tempo_and_table_kinds() {
+    let message = display_message(false);
+    let stage = stage_of(&message).unwrap();
+    assert_eq!(stage.scene_key, SCENE);
+    assert_eq!(stage.revision, Some((1, 1)));
+    assert!(!stage.in_combat);
+    assert_eq!(
+        stage.tempo,
+        Some(Tempo {
+            phase: TempoLevel::Build,
+            intensity_permille: 640
+        })
+    );
+    assert_eq!(stage.cast.len(), 1);
+    assert_eq!(stage.cast[0].id, "merchant");
+    assert!(stage.speaking_ids.contains("merchant"));
+    assert_eq!(
+        stage.recent_kinds,
+        vec![TableKind::Speech, TableKind::Action]
+    );
+    assert!(stage_of(&display_message(true)).unwrap().in_combat);
+}
+
+#[test]
+fn a_player_view_is_never_observed_or_changed() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    let player = rpc::ViewMessage {
+        revision: None,
+        audience: Some(rpc::view_message::Audience::Player(
+            rpc::PlayerGameplayView {
+                scene: Some(rpc::GameplayScene {
+                    title: "The Heron Shrine".to_owned(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )),
+    };
+    assert!(stage_of(&player).is_none());
+    locked(&inner.state).backdrop = Some(BackdropOverlay { key: key('9') });
+    let living = LivingScenes {
+        inner: Some(inner),
+        _worker: None,
+    };
+    let mut after = player.clone();
+    living.apply(&mut after);
+    assert_eq!(after, player);
+}
+
+#[test]
+fn published_art_changes_only_the_art_fields_of_the_display_view() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    {
+        let mut state = locked(&inner.state);
+        state.backdrop = Some(BackdropOverlay { key: key('2') });
+        state.sprites.insert(
+            "merchant".to_owned(),
+            SpriteOverlay {
+                source_sprite: "sprite-patron-merchant".to_owned(),
+                key: key('3'),
+            },
+        );
+    }
+    let living = LivingScenes {
+        inner: Some(inner),
+        _worker: None,
+    };
+    let before = display_message(false);
+    let mut after = before.clone();
+    living.apply(&mut after);
+    assert_ne!(after, before);
+
+    let Some(rpc::view_message::Audience::Display(display)) = &mut after.audience else {
+        panic!("display view");
+    };
+    let scene = display.scene.as_mut().unwrap();
+    assert_eq!(
+        scene.live_backdrop,
+        format!("/gameplay/imagery/{}", "2".repeat(64))
+    );
+    assert_eq!(
+        scene.cast[0].live_sprite,
+        format!("/gameplay/imagery/{}", "3".repeat(64))
+    );
+    // Put the two art fields back: every other field, the revision included, is untouched.
+    scene.live_backdrop.clear();
+    scene.cast[0].live_sprite.clear();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn a_sprite_overlay_applies_only_to_the_cutout_it_was_made_from() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    locked(&inner.state).sprites.insert(
+        "merchant".to_owned(),
+        SpriteOverlay {
+            source_sprite: "sprite-someone-else".to_owned(),
+            key: key('4'),
+        },
+    );
+    let living = LivingScenes {
+        inner: Some(inner),
+        _worker: None,
+    };
+    let before = display_message(false);
+    let mut after = before.clone();
+    living.apply(&mut after);
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn an_expression_is_made_from_the_art_the_stage_shows_for_that_character() {
+    let directory = std::env::temp_dir().join(format!("df-living-art-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    for name in [
+        "sprite-ant-bandit.webp",
+        "figure-ant-bandit.webp",
+        "sprite-patron-innkeeper.webp",
+    ] {
+        std::fs::write(directory.join(name), name.as_bytes()).unwrap();
+    }
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    let inner = Arc::new(Inner {
+        references: ReferenceStore::new(directory),
+        imagery: Imagery::disabled(ImageryOff::Qualification),
+        social: inner.social.clone(),
+        rating: ContentRating::Mature,
+        timing: timing(),
+        state: Mutex::new(State::new(timing())),
+        wake: watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    // An antagonist has a full-body twin and the stage shows it wherever feet are on screen.
+    let figure = inner
+        .load_figure("assets/ui/generated/sprite-ant-bandit")
+        .await
+        .unwrap();
+    assert_eq!(&figure.bytes[..], b"figure-ant-bandit.webp");
+    // A patron has only the knees-up cut-out.
+    let cutout = inner
+        .load_figure("assets/ui/generated/sprite-patron-innkeeper")
+        .await
+        .unwrap();
+    assert_eq!(&cutout.bytes[..], b"sprite-patron-innkeeper.webp");
+    assert!(
+        inner
+            .load_figure("assets/ui/generated/sprite-patron-missing")
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+fn disabled_living_scenes_observe_and_change_nothing() {
+    let living = LivingScenes::disabled();
+    let before = display_message(false);
+    let mut after = before.clone();
+    living.observe(&after);
+    living.apply(&mut after);
+    assert_eq!(after, before);
+    assert!(living.subscribe().is_none());
+}

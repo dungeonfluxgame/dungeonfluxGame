@@ -84,8 +84,8 @@ impl LayoutRoot {
         Ok(())
     }
 
-    /// Applies the caller's presentation preference in place. Reduction is additive:
-    /// false removes this explicit reduction, while the OS preference still applies.
+    /// Applies the caller's presentation preference in place: false removes this explicit
+    /// reduction. The device's own reduce-motion setting is never consulted.
     /// This changes no child nodes, native control behavior, focus, drafts or game state.
     pub fn set_reduced_motion(&self, reduce: bool) -> Result<(), UiError> {
         if reduce {

@@ -8,7 +8,7 @@
 //! copied from the server's `CombatOutcome`. When the server later supplies cells, build the
 //! tokens with those cells instead of `derive_formation`; the renderer does not change.
 //!
-//! `#battle-preview[=<location-id>[:<layout-id>]][&splat][&reduced][&restrained][&statuses][&sheet[=n]]`
+//! `#battle-preview[=<location-id>[:<layout-id>]][&splat][&restrained][&statuses][&sheet[=n]]`
 //! mounts the battlefield alone and loops a scripted fight (it opens with the initiative roll and
 //! roll-call) with no server calls, for looking at the renderer without playing a game.
 //! `&statuses` puts every status on a figure in turn; `&sheet=n` shows six figures at once.
@@ -96,7 +96,7 @@ fn preview_request() -> Option<PreviewRequest> {
         scene_id: battle::DEFAULT_SCENE_ID.to_owned(),
         layout_id: None,
         procedural_splats: false,
-        reduced_motion: battle::prefers_reduced_motion(),
+        reduced_motion: false,
         restrained: false,
         places: Vec::new(),
         close: false,
@@ -107,7 +107,6 @@ fn preview_request() -> Option<PreviewRequest> {
         match part.strip_prefix('=').unwrap_or(part) {
             "" => {}
             "splat" => request.procedural_splats = true,
-            "reduced" => request.reduced_motion = true,
             "restrained" => request.restrained = true,
             "statuses" => request.mode = PreviewMode::Statuses,
             "still" => request.mode = PreviewMode::Still,
@@ -1016,7 +1015,7 @@ fn start_mount(
             &host,
             scene,
             StageOptions {
-                reduced_motion: battle::prefers_reduced_motion(),
+                reduced_motion: false,
                 procedural_splats: false,
             },
         )

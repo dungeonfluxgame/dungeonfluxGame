@@ -18,9 +18,11 @@ message OperationObservation { RejectionCode code = 1; }
 message SubmitActionResponse { oneof outcome { DecisionReceipt committed_decision = 1; OperationObservation operation_observation = 2; } }
 
 enum HarborDestination { HARBOR_DESTINATION_UNSPECIFIED = 0; LOADING_PIER = 1; LANTERN_WHARF = 2; HARBOR_INN = 3; }
-message GameplayScene { HarborDestination destination = 1; string title = 2; string scene_asset = 3; string speaker_portrait = 4; repeated SceneActor cast = 5; string rules_note = 6; string place = 7; string location_id = 8; }
+// live_backdrop (display only): a server-generated re-render of this scene's painting, `/gameplay/imagery/<key>`; empty when none. Presentation only.
+message GameplayScene { HarborDestination destination = 1; string title = 2; string scene_asset = 3; string speaker_portrait = 4; repeated SceneActor cast = 5; string rules_note = 6; string place = 7; string location_id = 8; string live_backdrop = 9; }
 enum SceneRole { SCENE_ROLE_UNSPECIFIED = 0; PATRON = 1; ANTAGONIST = 2; CONTACT = 3; BYSTANDER = 4; }
-message SceneActor { string id = 1; string name = 2; SceneRole role = 3; string sprite = 4; string portrait = 5; bool speaking = 6; }
+// live_sprite (display only): a server-generated expression variant of this character's cut-out, `/gameplay/imagery/<key>`; empty when none. Presentation only.
+message SceneActor { string id = 1; string name = 2; SceneRole role = 3; string sprite = 4; string portrait = 5; bool speaking = 6; string live_sprite = 7; }
 message HarborSceneOption { HarborDestination destination = 1; string label = 2; }
 message GameplayActionOffer { string offer_id = 1; GameplayActionKind action_kind = 2; string label = 3; repeated HarborSceneOption destinations = 4; repeated JourneyGroup input_groups = 5; }
 

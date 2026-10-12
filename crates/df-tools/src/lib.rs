@@ -29,6 +29,9 @@ mod sound_switch;
 mod speech_clip;
 mod voice_line;
 
+// PLAY-L01: when a same-revision display view may replace the shown one (generated art only).
+#[cfg(any(target_arch = "wasm32", test))]
+mod live_art;
 #[cfg(any(target_arch = "wasm32", test))]
 mod presentation;
 #[cfg(any(target_arch = "wasm32", test))]

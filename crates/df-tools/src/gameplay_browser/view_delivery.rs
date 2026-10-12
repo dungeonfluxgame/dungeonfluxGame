@@ -162,6 +162,38 @@ impl GameplayViews {
         }
     }
 
+    // PLAY-L01: the generated art of a display view of the revision already shown is copied into
+    // the view on screen by `merge_art` (`live_art::merge_art`); nothing else may change at an
+    // equal revision. Returns whether the art changed.
+    pub(super) fn accept_art_update(
+        &mut self,
+        generation: &ConnectionGeneration,
+        scope: ViewScope,
+        view: &rpc::ViewMessage,
+        merge_art: impl FnOnce(&mut rpc::ViewMessage, &rpc::ViewMessage) -> bool,
+    ) -> bool {
+        let Some(revision) = view
+            .revision
+            .as_ref()
+            .and_then(|wire| Some((wire.epoch.as_ref()?.value?, wire.sequence?)))
+            .and_then(|(epoch, sequence)| {
+                Some(SessionRevision::new(
+                    RecoveryEpoch::new(epoch).ok()?,
+                    sequence,
+                ))
+            })
+        else {
+            return false;
+        };
+        scope == self.scope
+            && self.scope.role == ViewRole::Display
+            && self
+                .views
+                .amend_presentation(generation, scope.binding, revision, |shown| {
+                    merge_art(shown, view)
+                })
+    }
+
     pub(super) fn current_revision(&self) -> Option<SessionRevision> {
         self.views.current().map(|(revision, _)| revision)
     }

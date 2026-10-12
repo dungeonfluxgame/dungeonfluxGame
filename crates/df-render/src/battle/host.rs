@@ -74,28 +74,6 @@ pub struct BattleStage {
     frame_callback: FrameCallback,
 }
 
-/// Whether the user asked the system for reduced motion.
-pub fn prefers_reduced_motion() -> bool {
-    let Some(window) = web_sys::window() else {
-        return false;
-    };
-    let Ok(query) = js_sys::Reflect::get(&window, &JsValue::from_str("matchMedia")) else {
-        return false;
-    };
-    let Ok(function) = query.dyn_into::<js_sys::Function>() else {
-        return false;
-    };
-    function
-        .call1(
-            &window,
-            &JsValue::from_str("(prefers-reduced-motion: reduce)"),
-        )
-        .ok()
-        .and_then(|list| js_sys::Reflect::get(&list, &JsValue::from_str("matches")).ok())
-        .and_then(|matches| matches.as_bool())
-        .unwrap_or(false)
-}
-
 fn mark(host: &Element, value: &str) {
     // Setting an attribute on a connected element only fails for an invalid name; this one is fixed.
     let _ = host.set_attribute("data-battlefield", value);

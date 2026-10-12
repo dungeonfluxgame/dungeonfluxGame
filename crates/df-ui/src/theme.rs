@@ -67,12 +67,6 @@ grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start;
 .df-ui-root[data-df-reduced-motion="true"] *::after {{
 animation: none !important; transition: none !important; scroll-behavior: auto !important;
 }}
-@media (prefers-reduced-motion: reduce) {{
-.df-ui-root, .df-ui-root::before, .df-ui-root::after,
-.df-ui-root *, .df-ui-root *::before, .df-ui-root *::after {{
-animation: none !important; transition: none !important; scroll-behavior: auto !important;
-}}
-}}
 "#,
         ThemeToken::Background.css_value(),
         ThemeToken::Surface.css_value(),

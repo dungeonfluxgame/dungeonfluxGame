@@ -173,23 +173,4 @@
 .table-line[data-kind=action] .table-text{font-style:italic}
 
 /* ---------- reduced motion: fades and colour only ---------- */
-@media (prefers-reduced-motion:reduce){
-.tv-art,.tv-fig-sprite,.tv-panel::after,.tv-card[data-state=empty],.tv-card[data-state=creating]::after,.tv-card[data-state=creating] .tv-portrait-img,.tv-card[data-state=creating] .tv-portrait::before,.tv-card[data-state=creating] .tv-member-name::after,.tv-splash-mark::after,.tv-wave b,.tv-bubble.speaking::before,.tv-dm:has(.tv-narration.speaking),.live-screen[data-role] .combat-actor[data-active=true]{animation:none!important}
-.tv-card[data-state=creating] .tv-member-name::after{clip-path:none}
-.tv-stage[data-art-swap] .tv-art,.tv-stage[data-art-swap] .tv-art-previous{animation-name:df-fade-only!important;transform:none!important}
-.tv-stage .tv-dm,.tv-stage .tv-stagebox .tv-divider,.tv-stage .tv-fig[data-present=true]{animation:df-fade-only .5s ease backwards!important}
-.tv-fig-body,.tv-fig[data-speaking] .tv-fig-body{transform:none!important}
-.tv-fig[data-fx] .tv-fig-body{animation:none!important}
-.tv-fig[data-fx=hit] .tv-fig-sprite{animation:df-flash-only .6s ease var(--fx-delay,0ms) backwards!important}
-.tv-fig[data-fx=heal] .tv-fig-body::before{animation:df-fade-only 1s ease both!important;transform:none!important}
-.tv-fig[data-down] .tv-fig-body{opacity:.45;filter:grayscale(1)}
-.live-screen[data-roll-tick] .combat-roll:first-child .combat-roll-value,.tv-final-die,.live-screen[data-roll-tick] .combat-roll:first-child .combat-roll-verdict,.tv-final-ribbon{animation:df-fade-only .6s ease backwards!important}
-.tv-float{animation:df-fade-only 1.2s ease both!important}
-.tv-bubble,.tv-bubble[data-kind=action]{animation-name:df-fade-only,df-bubble-out!important}
-.tv-stage[data-stage=aftermath] .live-screen[data-screen=aftermath] .aftermath-chapter{animation:df-fade-only .6s ease backwards!important}
-.client.player .view[data-swap]{animation:df-fade-only .25s ease!important}
-.tv-splash-mark::after{display:none}
-@keyframes df-fade-only{from{opacity:0}to{opacity:1}}
-@keyframes df-flash-only{0%{filter:var(--grade)}15%{filter:var(--grade) brightness(1.8) sepia(1) hue-rotate(-40deg) saturate(5)}100%{filter:var(--grade)}}
-}
 

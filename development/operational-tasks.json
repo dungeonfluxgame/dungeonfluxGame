@@ -3893,6 +3893,415 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T04:04:08+00:00",
       "updated_at": "2026-10-12T04:04:08+00:00"
+    },
+    {
+      "id": "PLAY-N04",
+      "feature_id": "F09",
+      "title": "Show hero speech on the table: intent bubble and cleaned-up line",
+      "objective": "While a player types or holds to talk, the display shows a loader bubble on that player's hero (typing and speaking variants). When the line is submitted, a cleaned-up version (casing, punctuation, typos, filler removed, meaning unchanged) appears in the hero's bubble on the display and in every phone's conversation log, followed by the NPC thinking indicator and reply.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-tools/src/gameplay/",
+        "crates/df-protocol/proto/gameplay.proto"
+      ],
+      "acceptance_json": [
+        "Typing or holding to talk shows the matching loader bubble on that hero within about a second; it clears on submit, cancel or expiry and never sticks after a closed tab.",
+        "Only an ephemeral signal leaves the phone before submit; no draft text or audio reaches the display, and the signal never commits, bumps a revision or affects the session lease.",
+        "A messy typed or transcribed line appears as a clean sentence with the same meaning; clean-up never adds content, and a slow, refused or disabled model falls back within the deadline.",
+        "Mature rating leaves language as written; restrained masks profanity.",
+        "Meta and plan-only input shows no character bubble.",
+        "Hero line, NPC thinking indicator and NPC reply play in order through the display sequencer.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for the normaliser, model-output validation, presence expiry and non-durability.",
+        "Browser checks with frames: typing, speaking, two players at once, closed tab, messy line."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M4",
+        "milestone_goal": "Living cast: every NPC has a rolled backstory tied to the adventure and answers typed or spoken questions in depth, in character.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-12: a cleaned-up version of what a player types or speaks should show in a speech bubble for the character so others can follow the conversation, and while the player is typing or speaking the display should show a bubble with a spinner to show speech intent.",
+        "objective": "While a player types or holds to talk, the display shows a loader bubble on that player's hero (typing and speaking variants). When the line is submitted, a cleaned-up version (casing, punctuation, typos, filler removed, meaning unchanged) appears in the hero's bubble on the display and in every phone's conversation log, followed by the NPC thinking indicator and reply.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Show hero speech on the table: intent bubble and cleaned-up line",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "F38-DELIVER"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/interaction-engine.md",
+            "sha256": "1bad7c28609ac5e5a51a3ea0b3c1fae17ebeb6380dbdb8fce582085a8ede354f"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          }
+        ],
+        "input_revision": "5117177abffb39ce15a9c848639a10cf50f24a35",
+        "required_capabilities": {
+          "audio": true,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "The player's line is untrusted text: never instructions to the model."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 98,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T04:06:22+00:00",
+      "updated_at": "2026-10-12T04:06:22+00:00"
+    },
+    {
+      "id": "PLAY-C08",
+      "feature_id": "F04",
+      "title": "Author the hero life-path tables and original custom backgrounds",
+      "objective": "Write the data the backstory picker runs on: the eight life-path stages with their options, each option's story text, tags and the build choices it proposes, and a first set of original DungeonFlux backgrounds and callings as disclosed custom content on the 2024 background template, every entry tagged with its source.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "content/hero-tables/",
+        "planning/character-backstory-creation.md"
+      ],
+      "acceptance_json": [
+        "Every stage has at least six options and every option maps only to named SRD 5.2.1 options or to a custom background defined in the same data.",
+        "Each custom background follows the 2024 template exactly and uses only SRD feats, skills, tools and equipment; none copies or paraphrases Player's Handbook background text.",
+        "Every entry carries a source tag; nothing grants an item, gold, score or feature outside the template.",
+        "Story text is original, fits the mature default with restrained variants where it differs, and contains no real people.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "A consistency check over the data: references resolve, templates hold, sources are tagged.",
+        "Coordinator read-through as a Dungeon Master."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M11",
+        "milestone_goal": "Heroes with a past: a backstory the player picks or writes builds the character.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner decisions 2026-10-12 on the backstory design: wider variety is wanted; until a Player's Handbook licence exists it comes from the full SRD and from original disclosed custom content.",
+        "objective": "Write the data the backstory picker runs on: the eight life-path stages with their options, each option's story text, tags and the build choices it proposes, and a first set of original DungeonFlux backgrounds and callings as disclosed custom content on the 2024 background template, every entry tagged with its source.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Author the hero life-path tables and original custom backgrounds",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/character-backstory-creation.md",
+            "sha256": "544c5dce3265e749c0626c78b79f9f9398542726129cbce2b69cb5a51ec21382"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/generated-content.md",
+            "sha256": "0b252a24a8911108660f3276d8359d9df825a3398c7c7a4033c62e2279007ac0"
+          }
+        ],
+        "input_revision": "bec356d0db258f8c66c106c56501105a31011e95",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 92,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T04:10:04+00:00",
+      "updated_at": "2026-10-12T04:10:04+00:00"
+    },
+    {
+      "id": "PLAY-C09",
+      "feature_id": "F04",
+      "title": "Build backstory creation: record, picker, fast path and saved heroes",
+      "objective": "Design step C07-1 with the owner decisions: the backstory record with public, private and sealed tiers, the phone picker, the one-minute fast path and \"Surprise me\", the \"finish quickly\" offer, blurred secrets with press-and-hold peek, and a hero roster that persists across campaigns for the saved player.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/",
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-protocol/proto/gameplay.proto",
+        "content/hero-tables/"
+      ],
+      "acceptance_json": [
+        "A player completes the fast path in about a minute and the full picker in about three, and the resulting build passes the same server validation as a hand-picked build.",
+        "Public backstory shows on the display; private and sealed text reach only the owner's phone, blurred until held, re-blurred on release, page hide or after 10 seconds.",
+        "A saved hero can be chosen again in a new campaign with build, backstory and progression intact.",
+        "With the text provider off the picker alone builds a complete legal hero.",
+        "The backstory is available to the narrator and NPC replies only through its public tier unless the player has consented to more.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for validation, tiers, persistence and provider-off creation.",
+        "Real browser run on a phone viewport with timings for both paths."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M11",
+        "milestone_goal": "Heroes with a past: a backstory the player picks or writes builds the character.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11 and decisions 2026-10-12 recorded in section 11 of the design.",
+        "objective": "Design step C07-1 with the owner decisions: the backstory record with public, private and sealed tiers, the phone picker, the one-minute fast path and \"Surprise me\", the \"finish quickly\" offer, blurred secrets with press-and-hold peek, and a hero roster that persists across campaigns for the saved player.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Build backstory creation: record, picker, fast path and saved heroes",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/character-backstory-creation.md",
+            "sha256": "544c5dce3265e749c0626c78b79f9f9398542726129cbce2b69cb5a51ec21382"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          }
+        ],
+        "input_revision": "bec356d0db258f8c66c106c56501105a31011e95",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 92,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T04:10:04+00:00",
+      "updated_at": "2026-10-12T04:10:04+00:00"
+    },
+    {
+      "id": "PLAY-C10",
+      "feature_id": "F04",
+      "title": "Replace the fixed hero build with a catalog-driven validator",
+      "objective": "Design step C07-5: creation groups and validation come from a source-tagged catalog (SRD 5.2.1, custom versions, later licensed packs) instead of the fixed Dwarf Fighter Soldier groups, so species, classes, backgrounds and kits widen by adding data.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/pack.rs",
+        "crates/df-rules/src/",
+        "content/hero-tables/"
+      ],
+      "acceptance_json": [
+        "The existing builds validate unchanged through the catalog; an unknown or mixed-source combination is refused with a typed error naming the group.",
+        "Adding a species or background is a data change with tests, not a code change.",
+        "The table can see which sources its heroes use.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for every catalog entry and for refusal cases."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M11",
+        "milestone_goal": "Heroes with a past: a backstory the player picks or writes builds the character.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "The design's main constraint: only one build validates today; owner approved wider content.",
+        "objective": "Design step C07-5: creation groups and validation come from a source-tagged catalog (SRD 5.2.1, custom versions, later licensed packs) instead of the fixed Dwarf Fighter Soldier groups, so species, classes, backgrounds and kits widen by adding data.",
+        "owners": [
+          "df-tools",
+          "df-rules"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Replace the fixed hero build with a catalog-driven validator",
+            "owner": "df-tools"
+          },
+          {
+            "hook": "Replace the fixed hero build with a catalog-driven validator",
+            "owner": "df-rules"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/character-backstory-creation.md",
+            "sha256": "544c5dce3265e749c0626c78b79f9f9398542726129cbce2b69cb5a51ec21382"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/rules-coverage.md",
+            "sha256": "87a61156b1594c93c235a5815e209fbfb6ba5679e9d625bbacfb500d48d684d5"
+          }
+        ],
+        "input_revision": "bec356d0db258f8c66c106c56501105a31011e95",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 91,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T04:10:04+00:00",
+      "updated_at": "2026-10-12T04:10:04+00:00"
+    },
+    {
+      "id": "PLAY-H01",
+      "feature_id": "F04",
+      "title": "Show health at a glance: faces, bar colour and shake by hit points",
+      "objective": "Every character with hit points gets a health tier (Healthy, Hurt, Bloodied, Critical, Down) derived from the server view. Portraits and figures show a matching face from cached generated variants, the health bar changes colour with a damage chip that drains, and HUD cards and figures shake in proportion to the hit, with a heartbeat tremor at Critical. The player's own phone card shakes and vignettes on their damage.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-tools/src/gameplay/",
+        "crates/df-render/src/battle/"
+      ],
+      "acceptance_json": [
+        "The tier is one tested function with thresholds at 75, 50 and 25 percent and Down at zero.",
+        "At each tier the display and the player's phone show the tier colour, a second non-colour cue and the matching face; identity of the character holds across variants.",
+        "Combat never waits on image generation: only cached variants are swapped in.",
+        "Shake amplitude and duration scale with the share of maximum hit points lost, stay inside named bounds, and play for every player regardless of the device's reduce-motion setting.",
+        "Mature shows wounds; restrained shows battered without blood.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for tiers, intensity bounds, pre-warm order and budget.",
+        "Browser frames through every tier on display and phone, including mid-shake."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M8",
+        "milestone_goal": "A battle worth watching: a staged battlefield, readable turns and felt impacts.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-12: character health based facial expressions and health bar color and small shaking patterns for player visibility and intensity.",
+        "objective": "Every character with hit points gets a health tier (Healthy, Hurt, Bloodied, Critical, Down) derived from the server view. Portraits and figures show a matching face from cached generated variants, the health bar changes colour with a damage chip that drains, and HUD cards and figures shake in proportion to the hit, with a heartbeat tremor at Critical. The player's own phone card shakes and vignettes on their damage.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Show health at a glance: faces, bar colour and shake by hit points",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "9bdc95af889745782335e18c6da26a739fd0d688a47762ba2a074a9e5c8129f6"
+          }
+        ],
+        "input_revision": "5197d388f257e8355fe68129c19c441d8705b611",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "Colour alone is not enough: pair it with a notch, label or pattern."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T04:19:55+00:00",
+      "updated_at": "2026-10-12T04:19:55+00:00"
     }
   ],
   "dependencies": [
@@ -4031,6 +4440,34 @@
     {
       "task_id": "PLAY-I01",
       "prerequisite_task_id": "PLAY-L01"
+    },
+    {
+      "task_id": "PLAY-N04",
+      "prerequisite_task_id": "PLAY-F06"
+    },
+    {
+      "task_id": "PLAY-C08",
+      "prerequisite_task_id": "PLAY-C07"
+    },
+    {
+      "task_id": "PLAY-C09",
+      "prerequisite_task_id": "PLAY-C08"
+    },
+    {
+      "task_id": "PLAY-C09",
+      "prerequisite_task_id": "PLAY-T02"
+    },
+    {
+      "task_id": "PLAY-C09",
+      "prerequisite_task_id": "PLAY-F06"
+    },
+    {
+      "task_id": "PLAY-C10",
+      "prerequisite_task_id": "PLAY-T02"
+    },
+    {
+      "task_id": "PLAY-C10",
+      "prerequisite_task_id": "PLAY-C08"
     }
   ]
 }

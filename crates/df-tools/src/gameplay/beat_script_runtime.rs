@@ -190,6 +190,7 @@ pub(super) fn destination_scene(beat: &Beat) -> Result<rpc::GameplayScene, Repos
         rules_note: String::new(),
         place: String::new(),
         location_id: String::new(),
+        live_backdrop: String::new(),
     })
 }
 pub(super) fn pure_target(

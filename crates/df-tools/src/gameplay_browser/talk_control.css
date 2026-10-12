@@ -14,4 +14,3 @@
 .talk-actions button[data-talk=send]{background:linear-gradient(135deg,#355447,#20392e);border-color:#8cb498;color:#f5eedf}
 @keyframes talk-pulse{0%{box-shadow:0 0 0 0 #ff8a70cc}100%{box-shadow:0 0 0 14px #ff8a7000}}
 @keyframes talk-wait{0%,100%{opacity:.4}50%{opacity:1}}
-@media (prefers-reduced-motion:reduce){.talk-dot{animation:none!important}.talk-row[data-state=recording] .talk-dot{box-shadow:0 0 0 5px #ff8a7066}}

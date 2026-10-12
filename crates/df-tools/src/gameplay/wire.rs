@@ -496,6 +496,7 @@ pub(super) fn scene_cast(scene: &super::pack::Scene) -> Vec<rpc::SceneActor> {
             sprite: actor.sprite.clone(),
             portrait: actor.portrait.clone(),
             speaking: !scene.dialogue.is_empty() && actor.name == scene.speaker,
+            live_sprite: String::new(),
         })
         .collect()
 }
@@ -803,6 +804,7 @@ pub(super) fn project_journey(
             rules_note: String::new(),
             place: String::new(),
             location_id: String::new(),
+            live_backdrop: String::new(),
         }
     };
     scene.cast = scene_cast(&authored);
