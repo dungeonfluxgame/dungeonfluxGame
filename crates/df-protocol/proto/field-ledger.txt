@@ -134,6 +134,7 @@ field dungeonflux.public.v1.GameplayScene 2 title type=9 label=1 presence=false 
 field dungeonflux.public.v1.GameplayScene 3 scene_asset type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 4 speaker_portrait type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 5 cast type=11 label=3 presence=false target=.dungeonflux.public.v1.SceneActor oneof=-
+field dungeonflux.public.v1.GameplayScene 8 live_backdrop type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.HarborSceneOption 1 destination type=14 label=1 presence=false target=.dungeonflux.public.v1.HarborDestination oneof=-
 field dungeonflux.public.v1.HarborSceneOption 2 label type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JoinRefusal 1 code type=14 label=1 presence=false target=.dungeonflux.public.v1.RejectionCode oneof=-
@@ -192,6 +193,7 @@ field dungeonflux.public.v1.SceneActor 3 role type=14 label=1 presence=false tar
 field dungeonflux.public.v1.SceneActor 4 sprite type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SceneActor 5 portrait type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SceneActor 6 speaking type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneActor 7 live_sprite type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SessionId 1 value type=12 label=1 presence=true target=- oneof=_value
 field dungeonflux.public.v1.SessionRevision 1 epoch type=11 label=1 presence=false target=.dungeonflux.public.v1.RecoveryEpoch oneof=-
 field dungeonflux.public.v1.SessionRevision 2 sequence type=4 label=1 presence=true target=- oneof=_sequence
