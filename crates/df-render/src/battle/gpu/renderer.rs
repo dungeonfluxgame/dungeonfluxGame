@@ -8,7 +8,7 @@ use wasm_bindgen::JsValue;
 
 use super::{
     core::{COLOUR_TARGET_USAGE, GpuCore, UnavailableReason},
-    shaders,
+    shaders, shaders_figure,
     sys::{
         BUFFER_COPY_DST, BUFFER_STORAGE, BUFFER_UNIFORM, BUFFER_VERTEX, Descriptor, GpuBindGroup,
         GpuBuffer, GpuRenderPass, GpuRenderPipeline, GpuTexture, array, float_array,
@@ -18,20 +18,27 @@ use super::{
 use crate::battle::{
     director::FlashTone,
     grid::Grid,
+    layout::Cover,
     math::Vec3,
     model::{HighlightKind, Side},
     scene_file::BattleScene,
     splat::{SplatCloud, SplatSorter},
     stage::FrameView,
+    status::{Status, resolve},
 };
 
 const GENERATED: &str = "/assets/ui/generated";
 const DEPTH_FORMAT: &str = "depth32float";
 const COLOUR_FORMAT: &str = "rgba8unorm";
 const DECAL_STRIDE: usize = 12;
-const FIGURE_STRIDE: usize = 20;
+/// Eight vec4 attributes per billboard: place, pose, tint, kind, bounds and three effect vectors.
+const FIGURE_STRIDE: usize = 32;
+const FIGURE_ATTRIBUTES: usize = 8;
 const MAX_DECALS: usize = 768;
-const MAX_FIGURES: usize = 16;
+/// Figures, their afterimages and every obstacle prop cell in one frame.
+const MAX_BILLBOARDS: usize = 112;
+const BOLT_STRIDE: usize = 12;
+const MAX_BOLTS: usize = 8;
 const NEAR: f32 = 0.1;
 const FAR: f32 = 150.0;
 pub const DEFAULT_SPLAT_CAP: usize = 600_000;
@@ -52,6 +59,8 @@ struct Pipelines {
     ground: GpuRenderPipeline,
     decal: GpuRenderPipeline,
     figure: GpuRenderPipeline,
+    effects: GpuRenderPipeline,
+    bolt: GpuRenderPipeline,
     splat: GpuRenderPipeline,
     post: GpuRenderPipeline,
 }
@@ -97,6 +106,7 @@ pub struct Renderer {
     post_buffer: GpuBuffer,
     decal_buffer: GpuBuffer,
     figure_buffer: GpuBuffer,
+    bolt_buffer: GpuBuffer,
     targets: Option<Targets>,
     cache: Cache,
     backdrop_stem: String,
@@ -112,6 +122,35 @@ pub struct Renderer {
     last_clock_s: f32,
     frames_seen: u32,
     stats: RenderStats,
+}
+
+/// One standing sprite of the frame: its instance data, texture and distance along the view.
+struct Billboard {
+    data: [f32; FIGURE_STRIDE],
+    texture: Rc<ImageTexture>,
+    depth: f32,
+    effects: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn instance(
+    place: [f32; 4],
+    pose: [f32; 4],
+    tint: [f32; 4],
+    kind: [f32; 4],
+    bounds: [f32; 4],
+    fx1: [f32; 4],
+    fx2: [f32; 4],
+    fx3: [f32; 4],
+) -> [f32; FIGURE_STRIDE] {
+    let mut data = [0.0; FIGURE_STRIDE];
+    for (slot, vector) in [place, pose, tint, kind, bounds, fx1, fx2, fx3]
+        .into_iter()
+        .enumerate()
+    {
+        data[slot * 4..slot * 4 + 4].copy_from_slice(&vector);
+    }
+    data
 }
 
 struct PipelineSpec<'a> {
@@ -290,11 +329,35 @@ impl Renderer {
             figure: pipeline(
                 &core,
                 PipelineSpec {
-                    wgsl: &shaders::figure(),
+                    wgsl: &shaders_figure::figure(),
                     layout: &texture_layout,
-                    buffers: vec![instance_layout(FIGURE_STRIDE, 5)],
+                    buffers: vec![instance_layout(FIGURE_STRIDE, FIGURE_ATTRIBUTES)],
                     topology: "triangle-list",
                     depth: Some((false, "less-equal")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
+            ),
+            effects: pipeline(
+                &core,
+                PipelineSpec {
+                    wgsl: &shaders_figure::effects(),
+                    layout: &frame_layout,
+                    buffers: vec![instance_layout(FIGURE_STRIDE, FIGURE_ATTRIBUTES)],
+                    topology: "triangle-list",
+                    depth: Some((false, "less-equal")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
+            ),
+            bolt: pipeline(
+                &core,
+                PipelineSpec {
+                    wgsl: &shaders_figure::bolt(),
+                    layout: &frame_layout,
+                    buffers: vec![instance_layout(BOLT_STRIDE, 3)],
+                    topology: "triangle-list",
+                    depth: Some((false, "always")),
                     target_format: COLOUR_FORMAT,
                     blend: true,
                 },
@@ -333,7 +396,12 @@ impl Renderer {
         );
         let figure_buffer = buffer(
             &core,
-            MAX_FIGURES * FIGURE_STRIDE * 4,
+            MAX_BILLBOARDS * FIGURE_STRIDE * 4,
+            BUFFER_VERTEX | BUFFER_COPY_DST,
+        );
+        let bolt_buffer = buffer(
+            &core,
+            MAX_BOLTS * BOLT_STRIDE * 4,
             BUFFER_VERTEX | BUFFER_COPY_DST,
         );
         let frame_group = bind_group(
@@ -361,6 +429,7 @@ impl Renderer {
             post_buffer,
             decal_buffer,
             figure_buffer,
+            bolt_buffer,
             targets: None,
             cache: Rc::new(RefCell::new(HashMap::new())),
             backdrop_stem: scene.backdrop.stem.clone(),
@@ -579,7 +648,12 @@ impl Renderer {
         data.extend_from_slice(&[eye.x, eye.y, eye.z, frame.clock_s]);
         data.extend_from_slice(&[flat.x, flat.y, flat.z, aspect]);
         data.extend_from_slice(&[size.0 as f32, size.1 as f32, focal, 0.0]);
-        data.extend_from_slice(&[centre.x, centre.z, 8.5, 0.0]);
+        data.extend_from_slice(&[
+            centre.x,
+            centre.z,
+            8.5,
+            if frame.restrained { 1.0 } else { 0.0 },
+        ]);
         data.extend_from_slice(&[
             scene.ground.centre[0],
             scene.ground.centre[1],
@@ -648,6 +722,7 @@ impl Renderer {
         let mut out = Vec::new();
         let half = grid.cell_m() * 0.5;
         let centre = grid.centre();
+        let reduced = if frame.reduced_motion { 1.0 } else { 0.0 };
         let mut push = |shape: [f32; 4], colour: [f32; 4], params: [f32; 3]| {
             if out.len() / DECAL_STRIDE < MAX_DECALS {
                 out.extend_from_slice(&shape);
@@ -661,6 +736,25 @@ impl Renderer {
                 .filter(|highlight| highlight.cells.contains(&cell))
                 .map(|highlight| highlight.kind)
         };
+        // Obstacles that are gaps draw as a dark void; props get a soft contact shadow.
+        if let Some(layout) = frame.layout {
+            for obstacle in &layout.obstacles {
+                for cell in &obstacle.cells {
+                    let at = grid.cell_centre(*cell);
+                    if obstacle.sprite == "none" {
+                        push([at.x, at.z, half, half], [0.0, 0.02, 0.05, 1.0], [6.0, 0.0, 0.0]);
+                    } else {
+                        let width = half * 0.95;
+                        push(
+                            [at.x, at.z + 0.05, width, width * 0.55],
+                            [0.0, 0.0, 0.0, 0.6],
+                            [3.0, 0.0, 0.0],
+                        );
+                    }
+                }
+            }
+        }
+        // Blocked tiles are never in `walkable_cells`, so they carry no grid line glow.
         for cell in grid.walkable_cells() {
             let at = grid.cell_centre(cell);
             let distance = ((at.x - centre.x).powi(2) + (at.z - centre.z).powi(2)).sqrt();
@@ -675,10 +769,13 @@ impl Renderer {
                 }
                 None => push(shape, [0.96, 0.78, 0.42, 0.62 * fade], [0.0, 0.0, 0.0]),
             }
+            if grid.is_difficult(cell) {
+                push(shape, [0.82, 0.62, 0.34, 0.5], [5.0, 0.0, 0.0]);
+            }
         }
         for figure in &frame.figures {
-            let size = 0.5 + figure.height_m * 0.12;
-            let alpha = (0.62 * figure.alpha - 0.2 * figure.lift).max(0.0);
+            let size = (0.5 + figure.height_m * 0.12) * (1.0 + 0.35 * figure.slump);
+            let alpha = (0.62 * figure.alpha.max(0.4) - 0.2 * figure.lift).max(0.0);
             push(
                 [
                     figure.position.x,
@@ -689,6 +786,60 @@ impl Renderer {
                 [0.0, 0.0, 0.0, alpha],
                 [3.0, 0.0, 0.0],
             );
+            if figure.downed {
+                let (tone, cross) = if frame.restrained {
+                    ([0.12, 0.12, 0.14, 0.6], 1.0)
+                } else {
+                    ([0.36, 0.02, 0.03, 0.78], 1.0)
+                };
+                push(
+                    [figure.position.x, figure.position.z + 0.04, 0.8, 0.62],
+                    tone,
+                    [11.0, cross, 0.0],
+                );
+            }
+            if figure.targeted {
+                push(
+                    [figure.position.x, figure.position.z, 0.85, 0.85],
+                    [1.0, 0.35, 0.28, 1.0],
+                    [8.0, 0.0, 0.0],
+                );
+            }
+            if figure.statuses.contains(Status::Marked) {
+                push(
+                    [figure.position.x, figure.position.z, half * 1.05, half * 1.05],
+                    [1.0, 0.55, 0.25, 1.0],
+                    [9.0, reduced, 0.0],
+                );
+            }
+            if figure.statuses.contains(Status::Concentrating) {
+                push(
+                    [figure.position.x, figure.position.z, 0.8, 0.8],
+                    [0.65, 0.85, 1.0, 1.0],
+                    [10.0, reduced, 0.0],
+                );
+            }
+            if let Some(pip) = figure.cover
+                && let Some(cell) = grid.cell_at(figure.position)
+            {
+                let at = grid.cell_centre(cell);
+                let level = match pip.level {
+                    Cover::None => 0.0,
+                    Cover::Half => 1.0,
+                    Cover::ThreeQuarters => 2.0,
+                    Cover::Total => 3.0,
+                };
+                push(
+                    [
+                        at.x + pip.toward[0] * half * 0.72,
+                        at.z + pip.toward[1] * half * 0.72,
+                        0.13,
+                        0.13,
+                    ],
+                    [1.0, 1.0, 1.0, 1.0],
+                    [7.0, level, 0.0],
+                );
+            }
         }
         for figure in &frame.figures {
             let colour = match figure.side {
@@ -705,10 +856,81 @@ impl Renderer {
         out
     }
 
-    fn figures(&mut self, frame: &FrameView<'_>) -> (Vec<f32>, Vec<Rc<ImageTexture>>) {
-        let mut data = Vec::new();
-        let mut bound = Vec::new();
-        for figure in frame.figures.iter().take(MAX_FIGURES) {
+    /// Every standing billboard of the frame, far to near so a figure behind a crate is partly
+    /// hidden by it and one in front of it is not: figures, their afterimages and the obstacle
+    /// props in one list sorted by distance along the view.
+    fn billboards(&mut self, frame: &FrameView<'_>, forward: Vec3) -> Vec<Billboard> {
+        let eye = frame.camera.eye();
+        let right = forward.cross(Vec3::UP);
+        let flat = Vec3::new(right.x, 0.0, right.z).normalized();
+        let reduced = if frame.reduced_motion { 1.0 } else { 0.0 };
+        let mut list: Vec<Billboard> = Vec::new();
+        if let Some(layout) = frame.layout {
+            let cell_m = frame.grid.cell_m();
+            for obstacle in &layout.obstacles {
+                if obstacle.sprite == "none" {
+                    continue;
+                }
+                for cell in &obstacle.cells {
+                    let at = frame.grid.cell_centre(*cell);
+                    let seed = (cell.col.wrapping_mul(73_856_093) ^ cell.row.wrapping_mul(19_349_663))
+                        as u32;
+                    let jitter = ((seed >> 4) % 100) as f32 / 100.0;
+                    let flip = (seed >> 11) % 2 == 1;
+                    let height = obstacle.height_m * (0.96 + 0.08 * jitter);
+                    self.request(&obstacle.sprite, true, false);
+                    let side = if flip { 2.0 } else { 0.0 };
+                    let depth = (at - eye).dot(forward);
+                    let slot = self.cache.borrow().get(&obstacle.sprite).map(|slot| match slot {
+                        Slot::Ready(texture) => Some(Some(texture.clone())),
+                        Slot::Failed => Some(None),
+                        Slot::Loading => None,
+                    });
+                    match slot.flatten() {
+                        Some(Some(texture)) => {
+                            let aspect = texture.width as f32 / texture.height as f32;
+                            list.push(Billboard {
+                                data: instance(
+                                    [at.x, 0.0, at.z, height],
+                                    [0.0, 1.0, 0.0, 0.0],
+                                    [1.0, 1.0, 1.0, 1.0],
+                                    [aspect, 0.0, 1.0, side],
+                                    [
+                                        texture.bounds.top,
+                                        texture.bounds.bottom,
+                                        texture.bounds.centre(),
+                                        0.0,
+                                    ],
+                                    [0.0; 4],
+                                    [0.0; 4],
+                                    [reduced, 0.0, 0.0, 0.0],
+                                ),
+                                texture,
+                                depth,
+                                effects: false,
+                            });
+                        }
+                        Some(None) => list.push(Billboard {
+                            data: instance(
+                                [at.x, 0.0, at.z, height],
+                                [0.0, 1.0, 0.0, 0.0],
+                                [1.0, 1.0, 1.0, 1.0],
+                                [cell_m * 0.42, 2.0, 0.0, 0.0],
+                                [0.0; 4],
+                                [0.0; 4],
+                                [0.0; 4],
+                                [reduced, 0.0, 0.0, 0.0],
+                            ),
+                            texture: self.clear_pixel.clone(),
+                            depth,
+                            effects: false,
+                        }),
+                        None => {}
+                    }
+                }
+            }
+        }
+        for figure in &frame.figures {
             let cutout = figure.figure.as_deref().and_then(|stem| {
                 self.request(stem, true, false);
                 self.ready(stem)
@@ -727,39 +949,78 @@ impl Renderer {
                 (None, None) => (self.clear_pixel.clone(), 1.0, 0.0),
             };
             let aspect = texture.width as f32 / texture.height as f32;
-            data.extend_from_slice(&[
-                figure.position.x,
-                figure.position.y,
-                figure.position.z,
-                figure.height_m,
-            ]);
-            data.extend_from_slice(&[
-                figure.lean,
-                figure.alpha,
-                figure.red_flash,
-                figure.heal_glow,
-            ]);
-            data.extend_from_slice(&[
-                figure.tint[0],
-                figure.tint[1],
-                figure.tint[2],
-                figure.breath,
-            ]);
-            data.extend_from_slice(&[
-                aspect,
-                kind,
-                has_texture,
-                if figure.side == Side::Enemy { 1.0 } else { 0.0 },
-            ]);
-            data.extend_from_slice(&[
+            let resolved = resolve(figure.statuses);
+            let [body_lo, body_hi] = resolved.body.shader_words();
+            let [edge_lo, edge_hi] = resolved.edge.shader_words();
+            let [over_lo, over_hi] = resolved.overlay.shader_words();
+            let side = (if figure.side == Side::Enemy { 1.0 } else { 0.0 })
+                + if figure.mirror { 2.0 } else { 0.0 };
+            let depth = (figure.position - eye).dot(forward);
+            let bounds = [
                 texture.bounds.top,
                 texture.bounds.bottom,
                 texture.bounds.centre(),
                 0.0,
-            ]);
-            bound.push(texture);
+            ];
+            if figure.afterimage > 0.02 {
+                // The dodging afterimage: a faint copy slipping sideways and fading.
+                let slip = flat * (0.35 * figure.afterimage);
+                list.push(Billboard {
+                    data: instance(
+                        [
+                            figure.position.x + slip.x,
+                            figure.position.y,
+                            figure.position.z + slip.z,
+                            figure.height_m,
+                        ],
+                        [figure.lean, 0.32 * figure.afterimage, 0.0, 0.0],
+                        [1.0, 1.0, 1.0, figure.breath],
+                        [aspect, kind, has_texture, side],
+                        bounds,
+                        [0.0; 4],
+                        [0.0; 4],
+                        [reduced, 0.0, 0.0, figure.phase],
+                    ),
+                    texture: texture.clone(),
+                    depth: depth + 0.01,
+                    effects: false,
+                });
+            }
+            list.push(Billboard {
+                data: instance(
+                    [
+                        figure.position.x,
+                        figure.position.y,
+                        figure.position.z,
+                        figure.height_m,
+                    ],
+                    [figure.lean, figure.alpha, figure.red_flash, figure.heal_glow],
+                    [1.0, 1.0, 1.0, figure.breath],
+                    [aspect, kind, has_texture, side],
+                    bounds,
+                    [body_lo, body_hi, edge_lo, edge_hi],
+                    [over_lo, over_hi, figure.slump, figure.thud],
+                    [reduced, figure.dim, figure.heartbeat, figure.phase],
+                ),
+                texture,
+                depth,
+                effects: !resolved.overlay.is_empty(),
+            });
         }
-        (data, bound)
+        list.truncate(MAX_BILLBOARDS * 2);
+        list.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+        list.truncate(MAX_BILLBOARDS);
+        list
+    }
+
+    fn bolts(frame: &FrameView<'_>) -> Vec<f32> {
+        let mut out = Vec::new();
+        for arrow in frame.projectiles.iter().take(MAX_BOLTS) {
+            out.extend_from_slice(&[arrow.head.x, arrow.head.y, arrow.head.z, arrow.alpha]);
+            out.extend_from_slice(&[arrow.tail.x, arrow.tail.y, arrow.tail.z, 3.2]);
+            out.extend_from_slice(&[arrow.trail.x, arrow.trail.y, arrow.trail.z, 0.0]);
+        }
+        out
     }
 
     fn draw_splats(&mut self, pass: &GpuRenderPass, frame: &FrameView<'_>, forward: Vec3) {
@@ -818,18 +1079,29 @@ impl Renderer {
         }
         self.write_frame(self.spot, frame, scene, size, forward);
         self.write_post(frame, scene, size);
-        let decals = self.decals(frame, &scene.grid);
+        let decals = self.decals(frame, frame.grid);
         let decal_count = decals.len() / DECAL_STRIDE;
         if decal_count > 0 {
             self.core
                 .queue
                 .write_buffer(&self.decal_buffer, 0.0, &float_array(&decals));
         }
-        let (figure_data, figure_textures) = self.figures(frame);
+        let billboards = self.billboards(frame, forward);
+        let figure_data: Vec<f32> = billboards
+            .iter()
+            .flat_map(|billboard| billboard.data)
+            .collect();
         if !figure_data.is_empty() {
             self.core
                 .queue
                 .write_buffer(&self.figure_buffer, 0.0, &float_array(&figure_data));
+        }
+        let bolt_data = Self::bolts(frame);
+        let bolt_count = bolt_data.len() / BOLT_STRIDE;
+        if bolt_count > 0 {
+            self.core
+                .queue
+                .write_buffer(&self.bolt_buffer, 0.0, &float_array(&bolt_data));
         }
         let backdrop = self
             .ready(&self.backdrop_stem)
@@ -899,13 +1171,24 @@ impl Renderer {
             pass.set_vertex_buffer(0, &self.decal_buffer, 0.0, (decals.len() * 4) as f64);
             pass.draw(6, decal_count as u32, 0, 0);
         }
-        pass.set_pipeline(&self.pipelines.figure);
+        let stride = (FIGURE_STRIDE * 4) as f64;
         pass.set_bind_group(0, &self.frame_group);
-        for (index, texture) in figure_textures.iter().enumerate() {
-            pass.set_bind_group(1, &texture.bind_group);
-            let stride = (FIGURE_STRIDE * 4) as f64;
+        for (index, billboard) in billboards.iter().enumerate() {
+            pass.set_pipeline(&self.pipelines.figure);
+            pass.set_bind_group(1, &billboard.texture.bind_group);
             pass.set_vertex_buffer(0, &self.figure_buffer, index as f64 * stride, stride);
             pass.draw(6, 1, 0, 0);
+            if billboard.effects {
+                pass.set_pipeline(&self.pipelines.effects);
+                pass.set_vertex_buffer(0, &self.figure_buffer, index as f64 * stride, stride);
+                pass.draw(6, 1, 0, 0);
+            }
+        }
+        if bolt_count > 0 {
+            pass.set_pipeline(&self.pipelines.bolt);
+            pass.set_bind_group(0, &self.frame_group);
+            pass.set_vertex_buffer(0, &self.bolt_buffer, 0.0, (bolt_data.len() * 4) as f64);
+            pass.draw(12, bolt_count as u32, 0, 0);
         }
         pass.end();
 

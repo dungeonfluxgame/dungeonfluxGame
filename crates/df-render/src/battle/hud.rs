@@ -10,8 +10,9 @@ use web_sys::{Document, Element};
 
 use super::{
     math::Vec3,
-    model::{FloatTone, Side, TokenId},
+    model::{FloatTone, Side, TokenId, ordinal},
     stage::{FigureView, FrameView, Stage},
+    status::{Status, icon_statuses},
 };
 
 const GENERATED: &str = "/assets/ui/generated";
@@ -22,7 +23,19 @@ struct Plate {
     portrait: Element,
     hp_text: Element,
     hp_fill: Element,
+    status: Element,
+    status_signature: String,
 }
+
+/// A group of status icons: the signature says which are shown, so the DOM is only rebuilt when
+/// the set changes.
+struct PipRow {
+    root: Element,
+    signature: String,
+}
+
+/// Most icons shown over a figure's head before the rest collapse into "+N".
+const MAX_PIPS: usize = 4;
 
 pub struct Hud {
     document: Document,
@@ -44,7 +57,14 @@ pub struct Hud {
     finish_names: Element,
     plates: BTreeMap<TokenId, Plate>,
     chip_signature: String,
+    chip_known: BTreeSet<TokenId>,
     float_elements: BTreeMap<u64, Element>,
+    banner: Element,
+    overlays: Element,
+    target_tag: Element,
+    pip_rows: BTreeMap<TokenId, PipRow>,
+    dice: BTreeMap<TokenId, Element>,
+    badges: BTreeMap<TokenId, Element>,
 }
 
 fn element(
@@ -67,6 +87,21 @@ fn initial(name: &str) -> String {
     name.chars()
         .next()
         .map_or_else(|| "?".to_owned(), |first| first.to_uppercase().collect())
+}
+
+/// One status icon: the art, and while it is missing a labelled chip (the first letters) in its
+/// own colour, so a status is never shown as nothing.
+fn pip(document: &Document, parent: &Element, status: Status) -> Result<(), JsValue> {
+    let node = element(document, parent, "span", "bf-pip", "")?;
+    node.set_attribute("data-status", status.id())?;
+    node.set_attribute("title", status.label())?;
+    node.set_attribute("style", &format!("--chip:{}", status.chip_colour()))?;
+    let image = document.create_element("img")?;
+    image.set_attribute("src", &format!("{GENERATED}/{}", status.icon_stem()))?;
+    image.set_attribute("alt", status.initials())?;
+    image.set_attribute("draggable", "false")?;
+    node.append_child(&image)?;
+    Ok(())
 }
 
 /// Asset stems are lowercase words and dashes; anything else is not turned into a CSS url.
@@ -96,6 +131,9 @@ impl Hud {
         let party = element(document, &root, "aside", "bf-party", "")?;
         let enemies = element(document, &root, "aside", "bf-enemies", "")?;
         let floats = element(document, &root, "div", "bf-floats", "")?;
+        let overlays = element(document, &root, "div", "bf-overlays", "")?;
+        let target_tag = element(document, &overlays, "div", "bf-target-tag", "")?;
+        let banner = element(document, &root, "div", "bf-banner", "")?;
         let roll = element(document, &root, "section", "bf-roll", "")?;
         let roll_value = element(document, &roll, "div", "bf-roll-die", "")?;
         let roll_words = element(document, &roll, "div", "bf-roll-words", "")?;
@@ -134,7 +172,14 @@ impl Hud {
             finish_names,
             plates: BTreeMap::new(),
             chip_signature: String::new(),
+            chip_known: BTreeSet::new(),
             float_elements: BTreeMap::new(),
+            banner,
+            overlays,
+            target_tag,
+            pip_rows: BTreeMap::new(),
+            dice: BTreeMap::new(),
+            badges: BTreeMap::new(),
         })
     }
 
@@ -153,6 +198,8 @@ impl Hud {
         let hp_text = element(&self.document, &words, "div", "bf-plate-hp", "")?;
         let bar = element(&self.document, &words, "div", "bf-hp", "")?;
         let hp_fill = element(&self.document, &bar, "div", "bf-hp-fill", "")?;
+        element(&self.document, &bar, "div", "bf-hp-tick", "")?;
+        let status = element(&self.document, &words, "div", "bf-plate-status", "")?;
         self.plates.insert(
             figure.id.clone(),
             Plate {
@@ -161,6 +208,8 @@ impl Hud {
                 portrait,
                 hp_text,
                 hp_fill,
+                status,
+                status_signature: String::new(),
             },
         );
         Ok(())
@@ -200,14 +249,27 @@ impl Hud {
                 .unwrap_or(usize::MAX);
             (position, figure.side == Side::Enemy, figure.id.clone())
         });
-        let signature: String = order
+        // While the roll-call runs the tracker holds only those it has visited, in order.
+        let chip_order: Vec<&FigureView> = match &frame.hud.roll_for_initiative.tracker {
+            Some(tracker) => tracker
+                .iter()
+                .filter_map(|id| frame.figures.iter().find(|figure| figure.id == *id))
+                .collect(),
+            None => order.clone(),
+        };
+        let signature: String = chip_order
             .iter()
-            .map(|figure| format!("{}:{}:{}|", figure.id.0, figure.active, figure.alpha < 0.6))
+            .map(|figure| format!("{}:{}:{}|", figure.id.0, figure.active, figure.downed))
             .collect();
         if signature != self.chip_signature {
             self.chips.set_text_content(None);
-            for figure in &order {
+            let known = std::mem::take(&mut self.chip_known);
+            for figure in &chip_order {
+                self.chip_known.insert(figure.id.clone());
                 let chip = element(&self.document, &self.chips, "span", "bf-chip", "")?;
+                if !known.contains(&figure.id) && !known.is_empty() {
+                    chip.set_attribute("data-pop", "")?;
+                }
                 chip.set_attribute(
                     "data-side",
                     if figure.side == Side::Hero {
@@ -219,7 +281,7 @@ impl Hud {
                 if figure.active {
                     chip.set_attribute("data-active", "")?;
                 }
-                if figure.alpha < 0.6 {
+                if figure.downed {
                     chip.set_attribute("data-down", "")?;
                 }
                 chip.set_attribute("style", &portrait_style(figure.portrait.as_deref()))?;
@@ -280,8 +342,27 @@ impl Hud {
                 .set_attribute("data-active", if figure.active { "true" } else { "false" })?;
             plate.root.set_attribute(
                 "data-down",
-                if figure.alpha < 0.6 { "true" } else { "false" },
+                if figure.downed { "true" } else { "false" },
             )?;
+            plate.root.set_attribute(
+                "data-bloodied",
+                if figure.statuses.contains(Status::Bloodied) {
+                    "true"
+                } else {
+                    "false"
+                },
+            )?;
+            let icons = icon_statuses(figure.statuses);
+            let signature: String = icons.iter().map(|status| status.id()).collect::<Vec<_>>().join(",");
+            if signature != plate.status_signature {
+                plate.status.set_text_content(None);
+                for status in &icons {
+                    pip(&self.document, &plate.status, *status)?;
+                }
+            }
+            if let Some(plate) = self.plates.get_mut(&figure.id) {
+                plate.status_signature = signature;
+            }
         }
 
         match &frame.hud.roll_card {
@@ -296,6 +377,7 @@ impl Hud {
             None => self.roll.remove_attribute("data-open")?,
         }
         self.update_floats(stage, frame, aspect)?;
+        self.update_overlays(stage, frame, aspect)?;
         match &frame.hud.finishing_blow {
             Some(blow) => {
                 self.root.set_attribute("data-finish", "")?;
@@ -354,6 +436,208 @@ impl Hud {
                         y * 100.0
                     ),
                 )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Everything anchored to a figure: its status icons, the target tag, and the initiative
+    /// dice, order badges and banner.
+    fn update_overlays(
+        &mut self,
+        stage: &Stage,
+        frame: &FrameView<'_>,
+        aspect: f32,
+    ) -> Result<(), JsValue> {
+        let anchor = |figure: &FigureView, lift: f32| {
+            let head = figure.height_m * (1.0 - 0.45 * figure.slump) + lift;
+            stage.project(figure.position + Vec3::new(0.0, head, 0.0), aspect)
+        };
+        // Status icons over the heads of affected figures.
+        let live: BTreeSet<TokenId> = frame
+            .figures
+            .iter()
+            .filter(|figure| !icon_statuses(figure.statuses).is_empty())
+            .map(|figure| figure.id.clone())
+            .collect();
+        self.pip_rows.retain(|id, row| {
+            let keep = live.contains(id);
+            if !keep {
+                row.root.remove();
+            }
+            keep
+        });
+        for figure in &frame.figures {
+            let icons = icon_statuses(figure.statuses);
+            if icons.is_empty() {
+                continue;
+            }
+            let signature: String = icons.iter().map(|status| status.id()).collect::<Vec<_>>().join(",");
+            if !self.pip_rows.contains_key(&figure.id) {
+                let root = element(&self.document, &self.overlays, "div", "bf-pips", "")?;
+                self.pip_rows.insert(
+                    figure.id.clone(),
+                    PipRow {
+                        root,
+                        signature: String::new(),
+                    },
+                );
+            }
+            let Some(row) = self.pip_rows.get_mut(&figure.id) else {
+                continue;
+            };
+            if row.signature != signature {
+                row.root.set_text_content(None);
+                for status in icons.iter().take(MAX_PIPS) {
+                    pip(&self.document, &row.root, *status)?;
+                }
+                if icons.len() > MAX_PIPS {
+                    element(
+                        &self.document,
+                        &row.root,
+                        "span",
+                        "bf-pip-more",
+                        &format!("+{}", icons.len() - MAX_PIPS),
+                    )?;
+                }
+                row.signature = signature;
+            }
+            match anchor(figure, 0.12) {
+                Some((x, y)) => row.root.set_attribute(
+                    "style",
+                    &format!("left:{:.2}%;top:{:.2}%", x * 100.0, y * 100.0),
+                )?,
+                None => row.root.set_attribute("style", "display:none")?,
+            }
+        }
+        // The name tag on the figure being aimed at.
+        match frame.figures.iter().find(|figure| figure.targeted) {
+            Some(figure) => {
+                let text = format!("Target \u{00b7} {}", figure.name);
+                if self.target_tag.text_content().as_deref() != Some(text.as_str()) {
+                    self.target_tag.set_text_content(Some(&text));
+                }
+                let lift = if icon_statuses(figure.statuses).is_empty() { 0.3 } else { 0.7 };
+                match anchor(figure, lift) {
+                    Some((x, y)) => self.target_tag.set_attribute(
+                        "style",
+                        &format!("left:{:.2}%;top:{:.2}%;opacity:1", x * 100.0, y * 100.0),
+                    )?,
+                    None => self.target_tag.set_attribute("style", "opacity:0")?,
+                }
+            }
+            None => self.target_tag.set_attribute("style", "opacity:0")?,
+        }
+        // The initiative moment.
+        let show = &frame.hud.roll_for_initiative;
+        match &show.banner {
+            Some(text) => {
+                if self.banner.text_content().as_deref() != Some(text.as_str()) {
+                    self.banner.set_text_content(Some(text));
+                    self.banner.remove_attribute("data-open")?;
+                }
+                self.banner.set_attribute("data-open", "")?;
+            }
+            None => self.banner.remove_attribute("data-open")?,
+        }
+        let live_dice: BTreeSet<&TokenId> = show.dice.iter().map(|die| &die.token).collect();
+        self.dice.retain(|id, node| {
+            let keep = live_dice.contains(id);
+            if !keep {
+                node.remove();
+            }
+            keep
+        });
+        for die in &show.dice {
+            let Some(figure) = frame.figures.iter().find(|figure| figure.id == die.token) else {
+                continue;
+            };
+            if !self.dice.contains_key(&die.token) {
+                let node = element(&self.document, &self.overlays, "div", "bf-die", "")?;
+                self.dice.insert(die.token.clone(), node);
+            }
+            let Some(node) = self.dice.get(&die.token) else {
+                continue;
+            };
+            let text = if die.landed {
+                let sign = if die.modifier >= 0 { "+" } else { "\u{2212}" };
+                format!(
+                    "{}{}{}{}{}",
+                    die.face,
+                    sign,
+                    die.modifier.unsigned_abs(),
+                    " = ",
+                    die.total
+                )
+            } else {
+                // The faces flicker by while it tumbles.
+                (((die.age_s * 38.0) as u32 * 7 + die.face * 3) % 20 + 1).to_string()
+            };
+            if node.text_content().as_deref() != Some(text.as_str()) {
+                node.set_text_content(Some(&text));
+            }
+            node.set_attribute("data-landed", if die.landed { "true" } else { "false" })?;
+            node.set_attribute(
+                "data-side",
+                if figure.side == Side::Hero { "hero" } else { "enemy" },
+            )?;
+            let tumble = if die.landed {
+                0.0
+            } else {
+                (die.age_s / die.tumble_s.max(0.01)).clamp(0.0, 1.0)
+            };
+            match anchor(figure, 0.55 + 0.35 * (1.0 - tumble) * (1.0 - tumble)) {
+                Some((x, y)) => node.set_attribute(
+                    "style",
+                    &format!(
+                        "left:{:.2}%;top:{:.2}%;--spin:{:.0}deg",
+                        x * 100.0,
+                        y * 100.0,
+                        tumble * 720.0
+                    ),
+                )?,
+                None => node.set_attribute("style", "display:none")?,
+            }
+        }
+        let live_badges: BTreeSet<&TokenId> = show.badges.iter().map(|badge| &badge.token).collect();
+        self.badges.retain(|id, node| {
+            let keep = live_badges.contains(id);
+            if !keep {
+                node.remove();
+            }
+            keep
+        });
+        for badge in &show.badges {
+            let Some(figure) = frame.figures.iter().find(|figure| figure.id == badge.token) else {
+                continue;
+            };
+            if !self.badges.contains_key(&badge.token) {
+                let node = element(&self.document, &self.overlays, "div", "bf-badge", "")?;
+                element(&self.document, &node, "span", "bf-badge-order", &ordinal(badge.order))?;
+                element(
+                    &self.document,
+                    &node,
+                    "span",
+                    "bf-badge-name",
+                    &format!("{} \u{2014} {}", badge.name, badge.total),
+                )?;
+                node.set_attribute(
+                    "data-side",
+                    if figure.side == Side::Hero { "hero" } else { "enemy" },
+                )?;
+                self.badges.insert(badge.token.clone(), node);
+            }
+            if let Some(node) = self.badges.get(&badge.token) {
+                match stage.project(
+                    figure.position + Vec3::new(0.0, figure.height_m * 0.62, 0.0),
+                    aspect,
+                ) {
+                    Some((x, y)) => node.set_attribute(
+                        "style",
+                        &format!("left:{:.2}%;top:{:.2}%", x * 100.0, y * 100.0),
+                    )?,
+                    None => node.set_attribute("style", "display:none")?,
+                }
             }
         }
         Ok(())

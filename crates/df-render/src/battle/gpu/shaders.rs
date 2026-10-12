@@ -2,14 +2,14 @@
 //! `rgba8unorm`, never sRGB-converted), so the post pass grades what the scene pass drew.
 
 /// Shared by every scene shader: the per-frame uniform block.
-const FRAME: &str = r#"
+pub(super) const FRAME: &str = r#"
 struct Frame {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
     eye: vec4<f32>,       // xyz eye, w seconds
     right: vec4<f32>,     // xyz camera right flattened to the ground, w aspect
     viewport: vec4<f32>,  // width px, height px, focal px, unused
-    light: vec4<f32>,     // x, z of the lit centre, light radius, unused
+    light: vec4<f32>,     // x, z of the lit centre, light radius, restrained content rating
     ground: vec4<f32>,    // centre x, centre z, half size, fall-off
     backdrop: vec4<f32>,  // wall z, half width, base y, height
     spot: vec4<f32>,      // warm pool under the acting figure: x, z, radius, strength
@@ -54,6 +54,22 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 "#;
 
 const GROUND: &str = r#"
+fn hash21(p: vec2<f32>) -> f32 {
+    var q = fract(p * vec2<f32>(123.34, 456.21));
+    q = q + dot(q, q + vec2<f32>(45.32, 45.32));
+    return fract(q.x * q.y);
+}
+
+fn vnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (vec2<f32>(3.0, 3.0) - 2.0 * f);
+    return mix(
+        mix(hash21(i), hash21(i + vec2<f32>(1.0, 0.0)), u.x),
+        mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u.x),
+        u.y);
+}
+
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
 
@@ -79,7 +95,14 @@ fn vs(@builtin(vertex_index) i: u32) -> VOut {
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     // The painting covers the whole ground once; it is not tileable, so it is never repeated.
     let uv = (in.world_xz - frame.ground.xy) / (2.0 * frame.ground.z) + vec2<f32>(0.5);
-    let colour = textureSample(tex, samp, uv).rgb;
+    // Sharper close up: an unsharp mask against a blurrier mip, plus a fine mottling that fades
+    // with distance, so the planks and stones keep detail when the camera is low and near.
+    let base = textureSample(tex, samp, uv).rgb;
+    let soft = textureSampleLevel(tex, samp, uv, 2.2).rgb;
+    var colour = max(base + (base - soft) * 0.9, vec3<f32>(0.0));
+    let near = 1.0 - smoothstep(4.0, 15.0, distance(in.world_xz, frame.eye.xz));
+    let fine = vnoise(in.world_xz * 7.0) * 0.55 + vnoise(in.world_xz * 19.0) * 0.45;
+    colour = colour * (1.0 + (fine - 0.5) * 0.3 * near);
     let offset = abs(in.world_xz - frame.ground.xy);
     let edge = frame.ground.z - max(offset.x, offset.y);
     let sides = smoothstep(0.0, max(frame.ground.w, 0.01), edge);
@@ -156,6 +179,77 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let a = (1.0 - smoothstep(0.15, 1.0, d)) * in.col.a;
         return vec4<f32>(in.col.rgb * a, a);
     }
+    if (kind == 5) {
+        // Difficult ground: a faint diagonal hatch inside the tile.
+        let stripe = fract((in.c.x + in.c.y) * 2.6);
+        let line = smoothstep(0.38, 0.46, stripe) - smoothstep(0.54, 0.62, stripe);
+        let inside = smoothstep(0.0, 0.1, edge);
+        let a = line * inside * in.col.a;
+        return vec4<f32>(in.col.rgb * a, a);
+    }
+    if (kind == 6) {
+        // A gap (water, a pit): a dark void with a soft lip.
+        let lip = smoothstep(0.0, 0.18, edge);
+        let a = (0.5 + 0.2 * lip) * in.col.a;
+        return vec4<f32>(in.col.rgb * a, a);
+    }
+    if (kind == 7) {
+        // A cover pip: a small shield on the tile edge facing the cover.
+        let q = in.c;
+        let half_w = 0.75 * (1.0 - 0.9 * clamp(q.y / 0.95, 0.0, 1.0));
+        let dx = abs(q.x) - half_w;
+        let dy = max(-0.8 - q.y, q.y - 0.95);
+        let d = max(dx, dy);
+        let fill = 1.0 - smoothstep(-0.02, 0.06, d);
+        let rim = (1.0 - smoothstep(-0.28, -0.14, d)) * fill;
+        let level = in.params.y;
+        var tone = vec3<f32>(0.62, 0.75, 0.92);
+        if (level > 1.5) { tone = vec3<f32>(0.95, 0.78, 0.38); }
+        if (level > 2.5) { tone = vec3<f32>(0.96, 0.96, 0.98); }
+        let body = mix(tone, vec3<f32>(0.06, 0.08, 0.12), rim);
+        let a = fill * 0.95;
+        return vec4<f32>(body * a, a);
+    }
+    if (kind == 8) {
+        // The ring on the figure being aimed at.
+        let d = length(in.c);
+        let ring = 1.0 - smoothstep(0.0, 0.1, abs(d - 0.8));
+        let glow = exp(-pow(d - 0.8, 2.0) * 40.0) * 0.4;
+        let a = max(ring, glow) * in.col.a * (0.75 + 0.25 * pulse);
+        return vec4<f32>(in.col.rgb * a, a);
+    }
+    if (kind == 9) {
+        // A rotating reticle: a ring with four ticks.
+        let c = in.c;
+        let ang = frame.eye.w * 0.9 * (1.0 - in.params.y);
+        let r = vec2<f32>(c.x * cos(ang) - c.y * sin(ang), c.x * sin(ang) + c.y * cos(ang));
+        let d = length(c);
+        let ring = 1.0 - smoothstep(0.0, 0.07, abs(d - 0.62));
+        let tick_x = (1.0 - smoothstep(0.04, 0.08, abs(r.x))) * step(0.5, abs(r.y)) * step(abs(r.y), 0.95);
+        let tick_y = (1.0 - smoothstep(0.04, 0.08, abs(r.y))) * step(0.5, abs(r.x)) * step(abs(r.x), 0.95);
+        let a = max(ring, max(tick_x, tick_y)) * in.col.a;
+        return vec4<f32>(in.col.rgb * a, a);
+    }
+    if (kind == 10) {
+        // A thin rotating dashed focus ring.
+        let d = length(in.c);
+        let ang = atan2(in.c.y, in.c.x) + frame.eye.w * 0.8 * (1.0 - in.params.y);
+        let dash = step(0.5, fract(ang * 1.9099));
+        let ring = 1.0 - smoothstep(0.0, 0.06, abs(d - 0.74));
+        let a = ring * (0.35 + 0.65 * dash) * in.col.a;
+        return vec4<f32>(in.col.rgb * a, a);
+    }
+    if (kind == 11) {
+        // Where a figure went down: a dark pool and a dim cross on its tile.
+        let wobble = 0.12 * sin(atan2(in.c.y, in.c.x) * 3.0 + 1.0);
+        let d = length(in.c * vec2<f32>(1.0, 1.15)) + wobble;
+        let pool = (1.0 - smoothstep(0.35, 0.9, d)) * in.col.a;
+        let bar_a = 1.0 - smoothstep(0.03, 0.07, abs(in.c.x - in.c.y));
+        let bar_b = 1.0 - smoothstep(0.03, 0.07, abs(in.c.x + in.c.y));
+        let cross_m = max(bar_a, bar_b) * step(max(abs(in.c.x), abs(in.c.y)), 0.55) * 0.55;
+        let a = max(pool, cross_m * in.params.y);
+        return vec4<f32>(in.col.rgb * a, a);
+    }
     // Markers under figures: a warm glow disc, an inner outlined tile and, when acting, a pulse.
     let d = length(in.c);
     let glow = exp(-d * d * 2.6) * (0.42 + 0.5 * in.params.z * (0.7 + 0.3 * pulse));
@@ -165,99 +259,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let rgb = warm * glow * 0.6 + in.col.rgb * outline * (0.75 + 0.5 * in.params.z);
     let a = outline * in.col.a * 0.9;
     return vec4<f32>(rgb, a);
-}
-"#;
-
-const FIGURE: &str = r#"
-@group(1) @binding(0) var tex: texture_2d<f32>;
-@group(1) @binding(1) var samp: sampler;
-
-struct VOut {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) look: vec4<f32>,   // red flash, heal glow, alpha, kind
-    @location(2) tint: vec4<f32>,   // tint rgb, has texture
-    @location(3) side: f32,
-}
-
-@vertex
-fn vs(
-    @builtin(vertex_index) i: u32,
-    @location(0) place: vec4<f32>,   // x, y, z of the feet, visible height
-    @location(1) pose: vec4<f32>,    // lean, alpha, red flash, heal glow
-    @location(2) tint: vec4<f32>,    // rgb tint, breath
-    @location(3) kind: vec4<f32>,    // aspect, kind (0 cut-out, 1 token), has texture, side
-    @location(4) bounds: vec4<f32>,  // visible top, bottom, centre x (picture fractions)
-) -> VOut {
-    var corners = array<vec2<f32>, 6>(
-        vec2<f32>(-1.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
-        vec2<f32>(-1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0));
-    let c = corners[i];
-    var bottom = 0.0;
-    var span = 1.0;
-    var half_width = 0.0;
-    var shift = 0.0;
-    if (kind.y < 0.5) {
-        // The visible figure (not the canvas) is `place.w` metres tall, its feet on the ground and
-        // centred under the point it stands on.
-        let full = place.w / max(bounds.y - bounds.x, 0.05);
-        span = full * tint.w;
-        bottom = -(1.0 - bounds.y) * span;
-        half_width = full * kind.x * 0.5;
-        shift = (bounds.z - 0.5) * full * kind.x;
-    } else {
-        // A round token about 0.9 m across standing on the tile.
-        span = 0.95;
-        bottom = 0.18;
-        half_width = 0.475;
-    }
-    let local = vec2<f32>(c.x * half_width - shift, bottom + c.y * span);
-    let s = sin(pose.x);
-    let k = cos(pose.x);
-    var rotated = vec2<f32>(local.x * k + local.y * s, -local.x * s + local.y * k);
-    let world = vec3<f32>(place.xyz) + frame.right.xyz * rotated.x + vec3<f32>(0.0, rotated.y, 0.0);
-    var out: VOut;
-    out.pos = frame.view_proj * vec4<f32>(world, 1.0);
-    out.uv = vec2<f32>(c.x * 0.5 + 0.5, 1.0 - c.y);
-    out.look = vec4<f32>(pose.z, pose.w, pose.y, kind.y);
-    out.tint = vec4<f32>(tint.rgb, kind.z);
-    out.side = kind.w;
-    return out;
-}
-
-@fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
-    let sample = textureSampleLevel(tex, samp, in.uv, 0.0);
-    let aa = max(fwidth(length(in.uv * 2.0 - vec2<f32>(1.0))), 0.01);
-    var rgb = sample.rgb;
-    var a = sample.a;
-    if (in.look.w > 0.5) {
-        // Token: a round disc with a gold or blood rim; flat colour when the portrait is absent.
-        let p = in.uv * 2.0 - vec2<f32>(1.0);
-        let d = length(p);
-        let disc = 1.0 - smoothstep(1.0 - aa, 1.0, d);
-        let rim = smoothstep(0.82, 0.86, d);
-        let rim_colour = select(vec3<f32>(0.93, 0.76, 0.42), vec3<f32>(0.78, 0.2, 0.18), in.side > 0.5);
-        var body = rgb;
-        if (in.tint.w < 0.5) {
-            body = mix(vec3<f32>(0.12, 0.16, 0.22), vec3<f32>(0.3, 0.34, 0.42), 1.0 - d);
-            if (in.side > 0.5) {
-                body = mix(vec3<f32>(0.2, 0.07, 0.07), vec3<f32>(0.42, 0.14, 0.12), 1.0 - d);
-            }
-        }
-        rgb = mix(body, rim_colour, rim) * disc;
-        a = disc;
-    }
-    rgb = rgb * in.tint.rgb;
-    let red = in.look.x;
-    rgb = mix(rgb, vec3<f32>(0.95, 0.12, 0.08) * a, red * 0.6);
-    let glow = in.look.y;
-    rgb = rgb + vec3<f32>(0.45, 0.95, 0.55) * a * glow * 0.4;
-    let alpha = in.look.z;
-    if (a < 0.004) {
-        discard;
-    }
-    return vec4<f32>(rgb * alpha, a * alpha);
 }
 "#;
 
@@ -414,10 +415,6 @@ pub fn ground() -> String {
 
 pub fn decal() -> String {
     format!("{FRAME}{DECAL}")
-}
-
-pub fn figure() -> String {
-    format!("{FRAME}{FIGURE}")
 }
 
 pub fn splat() -> String {

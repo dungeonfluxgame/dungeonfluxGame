@@ -82,6 +82,8 @@ struct Runtime {
     pending_status: Option<StatusSet>,
     /// Seconds left of the landing squash after a fall.
     thud_s: f32,
+    /// An archer aimed to her left last: her art (drawn aiming right) is mirrored.
+    facing_left: bool,
     /// Stable per figure, so idle sway differs between figures and survives a roster refresh.
     phase: f32,
 }
@@ -140,6 +142,8 @@ pub struct FigureView {
     /// Heartbeat pulse of a dying figure, 0..1.
     pub heartbeat: f32,
     pub phase: f32,
+    /// Draw the cut-out mirrored (an archer aiming to her left).
+    pub mirror: bool,
     pub figure: Option<String>,
     pub portrait: Option<String>,
     pub hit_points: Option<HitPoints>,
@@ -460,6 +464,7 @@ impl Stage {
                         server_status: StatusSet::of(&incoming.statuses),
                         pending_status: None,
                         thud_s: 0.0,
+                        facing_left: false,
                         phase,
                         token: incoming,
                     });
@@ -936,6 +941,9 @@ impl Stage {
             (Anim::Recoil { .. } | Anim::Dodge { .. }, Some(other)) => flat_direction(other, here),
             _ => Vec3::new(0.0, 0.0, -1.0),
         };
+        if matches!(anim, Anim::Draw { .. }) && direction.x.abs() > 0.05 {
+            self.tokens[index].facing_left = direction.x < 0.0;
+        }
         self.tokens[index].anim = Some(ActiveAnim {
             anim,
             elapsed_s: 0.0,
@@ -1165,6 +1173,7 @@ impl Stage {
             afterimage,
             heartbeat,
             phase,
+            mirror: runtime.facing_left,
             figure: runtime.token.figure.clone(),
             portrait: runtime.token.portrait.clone(),
             hit_points: runtime.shown_hp,
