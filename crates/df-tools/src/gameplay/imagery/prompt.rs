@@ -1,7 +1,7 @@
 //! Image prompts, assembled only from a closed vocabulary the server owns and vetted facts.
 //!
 //! Nothing a player typed or said, and nothing a model wrote, ever reaches a prompt: mood,
-//! shot, lighting, expression and appearance are enums that render to fixed phrases, and the
+//! shot, lighting, expression and tier are enums that render to fixed phrases, and the
 //! only free text is a [`VettedFact`] from the adventure record (a place name) or an
 //! [`ArtifactSubject`] that came from the scene's own facts or passed the strict filter below.
 //! This is about injection and consistency, not censorship: the phrases themselves depend on
@@ -13,7 +13,7 @@
 
 use super::super::{
     pack,
-    scene_mood::{Appearance, Expression, Lighting, Look, Mood, Shot},
+    scene_mood::{Expression, HealthTier, Lighting, Look, Mood, Shot},
     startup_configuration::ContentRating,
 };
 
@@ -382,20 +382,45 @@ fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static 
     }
 }
 
-fn appearance_phrase(appearance: Appearance, rating: ContentRating) -> Option<&'static str> {
-    let mature = rating == ContentRating::Mature;
-    match appearance {
-        Appearance::Unhurt => None,
-        Appearance::Wounded if mature => {
-            Some("visibly wounded: torn clothing, bruises, cuts and bleeding wounds")
-        }
-        Appearance::Wounded => Some("weary and dishevelled, with rumpled and torn clothing"),
-        Appearance::Bloodied if mature => Some(
-            "badly bloodied: blood running down the face and soaking the clothing, deep wounds \
-             shown plainly",
+/// What a hurt character's face shows. Closed vocabulary, the same under both ratings: pain and
+/// fear are shown as they are.
+fn health_face_phrase(tier: HealthTier) -> Option<&'static str> {
+    match tier {
+        HealthTier::Healthy => None,
+        HealthTier::Hurt => Some(
+            "strain: a tight jaw, narrowed watchful eyes and a faint sheen of sweat, guarded",
         ),
-        Appearance::Bloodied => {
-            Some("battered and exhausted, with smudges of dirt and torn clothing")
+        HealthTier::Bloodied => Some("pain: a wince, clenched teeth and eyes narrowed against it"),
+        HealthTier::Critical => Some(
+            "desperation: ashen skin, wide unfocused eyes and a slack, trembling mouth",
+        ),
+        HealthTier::Down => Some("unconscious: closed eyes, a slack face and the head slumped"),
+    }
+}
+
+/// How a hurt character's body and gear look; this is where the two ratings part.
+fn health_look_phrase(tier: HealthTier, rating: ContentRating) -> Option<&'static str> {
+    let mature = rating == ContentRating::Mature;
+    match tier {
+        HealthTier::Healthy => None,
+        HealthTier::Hurt => Some("tense and guarded, the clothing a little rumpled and dirtied"),
+        HealthTier::Bloodied if mature => Some(
+            "visibly wounded: blood from cuts, bruising, and torn clothing and gear",
+        ),
+        HealthTier::Bloodied => Some(
+            "battered: smudges of dirt and sweat, bruised and rumpled clothing",
+        ),
+        HealthTier::Critical if mature => Some(
+            "barely standing and soaked in blood: deep wounds and ragged, torn gear",
+        ),
+        HealthTier::Critical => {
+            Some("barely standing, ashen and exhausted, in filthy, ragged clothing")
+        }
+        HealthTier::Down if mature => Some(
+            "collapsed and bloodied, limp, the gear torn and the body slumped in the same frame",
+        ),
+        HealthTier::Down => {
+            Some("collapsed and limp, battered and dirty, slumped in the same frame")
         }
     }
 }
@@ -451,14 +476,14 @@ pub(in crate::gameplay) fn scene_refresh(
     AssembledPrompt::from_parts(parts)
 }
 
-/// The prompt that changes one character's face (and, when hurt, their appearance) and nothing
+/// The prompt that changes one character's face (and, when hurt, their tier) and nothing
 /// else. `real_likeness` marks art that derives from a real person's likeness: such a character
 /// never gets a seductive variant.
 pub(in crate::gameplay) fn cast_expression(
     rating: ContentRating,
     character: CharacterFacts,
     expression: Expression,
-    appearance: Appearance,
+    tier: HealthTier,
     real_likeness: bool,
 ) -> Result<AssembledPrompt, PromptRefusal> {
     if real_likeness && expression == Expression::Seductive {
@@ -472,11 +497,18 @@ pub(in crate::gameplay) fn cast_expression(
         Part::Fixed(character.role.phrase()),
         Part::Fixed(CHANGE_ONLY),
         Part::Fixed(SHOW_EXPRESSION),
-        Part::Fixed(expression_phrase(expression, rating)),
     ];
-    if let Some(phrase) = appearance_phrase(appearance, rating) {
-        parts.push(Part::Fixed(SHOW_APPEARANCE));
-        parts.push(Part::Fixed(phrase));
+    // Priority, not multiplication: a hurt character shows the health face and look, a healthy
+    // one the conversation's mood face.
+    match health_face_phrase(tier) {
+        Some(face) => {
+            parts.push(Part::Fixed(face));
+            if let Some(look) = health_look_phrase(tier, rating) {
+                parts.push(Part::Fixed(SHOW_APPEARANCE));
+                parts.push(Part::Fixed(look));
+            }
+        }
+        None => parts.push(Part::Fixed(expression_phrase(expression, rating))),
     }
     parts.extend(rating_parts(rating));
     Ok(AssembledPrompt::from_parts(parts))
@@ -513,11 +545,10 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
     phrases.extend(Shot::ALL.map(shot_phrase));
     phrases.extend(Lighting::ALL.map(lighting_phrase));
     phrases.extend(Expression::ALL.map(|expression| expression_phrase(expression, rating)));
-    phrases.extend(
-        Appearance::ALL
-            .into_iter()
-            .filter_map(|appearance| appearance_phrase(appearance, rating)),
-    );
+    for tier in HealthTier::ALL {
+        phrases.extend(health_face_phrase(tier));
+        phrases.extend(health_look_phrase(tier, rating));
+    }
     phrases.extend(CharacterRole::ALL.map(CharacterRole::phrase));
     phrases.extend(LifeStage::ALL.map(LifeStage::phrase));
     phrases

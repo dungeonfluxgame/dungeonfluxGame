@@ -232,7 +232,7 @@ fn an_exchange_asks_for_the_face_at_once_and_the_backdrop_only_when_the_interval
         face_jobs(&jobs),
         vec![Face {
             expression: Expression::Angry,
-            appearance: Appearance::Unhurt
+            tier: HealthTier::Healthy
         }]
     );
     let refreshes = refresh_jobs(&jobs);
@@ -248,7 +248,7 @@ fn an_exchange_asks_for_the_face_at_once_and_the_backdrop_only_when_the_interval
         npc_id: "merchant".to_owned(),
         face: Face {
             expression: Expression::Angry,
-            appearance: Appearance::Unhurt,
+            tier: HealthTier::Healthy,
         },
         source_sprite: "sprite-patron-merchant".to_owned(),
         result: Ok(key('a')),
@@ -337,7 +337,7 @@ fn a_neutral_face_reverts_to_the_authored_cutout_for_free() {
         npc_id: "merchant".to_owned(),
         face: Face {
             expression: Expression::Angry,
-            appearance: Appearance::Unhurt,
+            tier: HealthTier::Healthy,
         },
         source_sprite: "sprite-patron-merchant".to_owned(),
         result: Ok(key('e')),

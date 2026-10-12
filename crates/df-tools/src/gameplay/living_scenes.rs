@@ -30,7 +30,7 @@ use super::{
     },
     pack::{self, SceneKey},
     scene_mood::{
-        Appearance, Beat, CastState, ExchangeSignal, Face, Hysteresis, Look, MoodInputs,
+        HealthTier, Beat, CastState, ExchangeSignal, Face, Hysteresis, Look, MoodInputs,
         MoodTracker, SceneTone, TableKind, Tempo, TempoLevel,
     },
     social::SocialLedger,
@@ -755,7 +755,7 @@ impl Inner {
                 life_stage: member.life_stage,
             },
             face.expression,
-            face.appearance,
+            face.tier,
             // No character's art derives from a real person's likeness today.
             false,
         )
@@ -908,12 +908,12 @@ impl Inner {
                 attitude: member.starting_attitude,
                 opposes: member.opposes,
                 speaking: stage.speaking_ids.contains(&member.id),
-                appearance: stage
+                tier: stage
                     .hurt
                     .iter()
                     .find(|(name, _, _)| *name == member.name)
-                    .map_or(Appearance::Unhurt, |(_, current, maximum)| {
-                        Appearance::from_hit_points(*current, *maximum)
+                    .map_or(HealthTier::Healthy, |(_, current, maximum)| {
+                        HealthTier::from_hit_points(*current, *maximum)
                     }),
             })
             .collect();
@@ -970,7 +970,7 @@ impl Inner {
                     "gameplay.living_scene.face_requested",
                     &[
                         ("scene.expression", face.expression.label().to_owned()),
-                        ("scene.appearance", face.appearance.label().to_owned()),
+                        ("scene.tier", face.tier.label().to_owned()),
                     ],
                 );
                 jobs.push(Job::Expression {

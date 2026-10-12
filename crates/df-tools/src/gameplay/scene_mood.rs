@@ -194,57 +194,43 @@ impl Expression {
     }
 }
 
-/// How hurt a character looks, from the story's hit points.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(super) enum Appearance {
-    Unhurt,
-    Wounded,
-    Bloodied,
-}
+pub(super) use crate::health_tier::HealthTier;
 
-impl Appearance {
-    #[cfg(test)]
-    pub(super) const ALL: [Self; 3] = [Self::Unhurt, Self::Wounded, Self::Bloodied];
-
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::Unhurt => "unhurt",
-            Self::Wounded => "wounded",
-            Self::Bloodied => "bloodied",
-        }
-    }
-
-    /// At or below half the hit points a character looks wounded, at or below a quarter
-    /// bloodied. A character with no hit points tracked looks unhurt.
-    pub(super) fn from_hit_points(current: u32, maximum: u32) -> Self {
-        if maximum == 0 {
-            return Self::Unhurt;
-        }
-        let scaled = u64::from(current.min(maximum)) * 100;
-        let maximum = u64::from(maximum);
-        if scaled <= 25 * maximum {
-            Self::Bloodied
-        } else if scaled <= 50 * maximum {
-            Self::Wounded
-        } else {
-            Self::Unhurt
-        }
-    }
-}
-
-/// What a character shows: the face and how hurt they look. [`Self::AUTHORED`] is the authored
-/// cut-out itself, which costs nothing to show.
+/// What a character shows: a mood face or a health face, never both. [`Self::AUTHORED`] is the
+/// authored cut-out itself, which costs nothing to show.
+///
+/// Priority, not multiplication: at Bloodied or worse the health face wins and the expression is
+/// neutral; above that the conversation's mood face wins and the tier is healthy; a hurt
+/// character with no mood shows the hurt face.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct Face {
     pub(super) expression: Expression,
-    pub(super) appearance: Appearance,
+    pub(super) tier: HealthTier,
 }
 
 impl Face {
     pub(super) const AUTHORED: Self = Self {
         expression: Expression::Neutral,
-        appearance: Appearance::Unhurt,
+        tier: HealthTier::Healthy,
     };
+
+    /// The face of a character whose conversation shows `mood` and whose health is `tier`.
+    pub(super) fn resolve(mood: Expression, tier: HealthTier) -> Self {
+        match tier {
+            HealthTier::Bloodied | HealthTier::Critical | HealthTier::Down => Self {
+                expression: Expression::Neutral,
+                tier,
+            },
+            HealthTier::Hurt if mood == Expression::Neutral => Self {
+                expression: Expression::Neutral,
+                tier,
+            },
+            HealthTier::Hurt | HealthTier::Healthy => Self {
+                expression: mood,
+                tier: HealthTier::Healthy,
+            },
+        }
+    }
 }
 
 /// The scene as the camera frames it: the part of the answer that re-renders the backdrop.
@@ -334,7 +320,7 @@ pub(super) struct CastState {
     /// An antagonist-side character: it can resist a threat and never warms to talk alone.
     pub(super) opposes: bool,
     pub(super) speaking: bool,
-    pub(super) appearance: Appearance,
+    pub(super) tier: HealthTier,
 }
 
 /// How the last typed line landed, as the story's social layer recorded it. Carries no words.
@@ -511,15 +497,6 @@ pub(super) fn exchange_reading(signal: &ExchangeSignal, recent: &[Approach]) -> 
     }
 }
 
-/// What a hurt character's face shows when no exchange says otherwise.
-fn hurt_expression(appearance: Appearance) -> Expression {
-    match appearance {
-        Appearance::Unhurt => Expression::Neutral,
-        Appearance::Wounded => Expression::Determined,
-        Appearance::Bloodied => Expression::Pained,
-    }
-}
-
 /// What the speaking character's face shows at the story's end beats with no exchange to say
 /// otherwise: the patron's relief or grief, the enemy's pain or scorn.
 fn beat_expression(beat: Beat, member: &CastState) -> Expression {
@@ -647,17 +624,12 @@ impl MoodTracker {
                     .held
                     .get(&member.id)
                     .map_or(Expression::Neutral, |held| held.expression);
-                let expression = if held != Expression::Neutral {
+                let mood = if held != Expression::Neutral {
                     held
-                } else if member.appearance != Appearance::Unhurt {
-                    hurt_expression(member.appearance)
                 } else {
                     beat_expression(inputs.beat, member)
                 };
-                let wanted = Face {
-                    expression,
-                    appearance: member.appearance,
-                };
+                let wanted = Face::resolve(mood, member.tier);
                 let shown = self
                     .shown_faces
                     .get(&member.id)

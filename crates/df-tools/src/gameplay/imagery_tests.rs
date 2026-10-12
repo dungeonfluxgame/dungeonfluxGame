@@ -17,7 +17,7 @@ use super::{
     super::{
         npc_dossier_tests::adventure,
         pack,
-        scene_mood::{Appearance, Expression, Lighting, Look, Mood, Shot},
+        scene_mood::{HealthTier, Expression, Lighting, Look, Mood, Shot},
         startup_configuration::{ImageryCredential, ImageryOff},
     },
     artifact::artifact_close_up,
@@ -406,7 +406,7 @@ fn expression(face: Expression) -> ImageRequest {
                 life_stage: LifeStage::Adult,
             },
             face,
-            Appearance::Unhurt,
+            HealthTier::Healthy,
             false,
         )
         .unwrap(),
@@ -1067,12 +1067,12 @@ fn prompts_hold_only_closed_vocabulary_and_vetted_facts_for_200_adventures_and_e
         for role in CharacterRole::ALL {
             for life_stage in LifeStage::ALL {
                 for face in Expression::ALL {
-                    for appearance in Appearance::ALL {
+                    for tier in HealthTier::ALL {
                         let prompt = cast_expression(
                             rating,
                             CharacterFacts { role, life_stage },
                             face,
-                            appearance,
+                            tier,
                             false,
                         )
                         .unwrap();
@@ -1124,18 +1124,18 @@ fn the_two_ratings_use_different_phrase_sets_for_the_same_inputs() {
         role: CharacterRole::Antagonist,
         life_stage: LifeStage::Adult,
     };
-    let face = |rating, expression, appearance| {
-        cast_expression(rating, patron, expression, appearance, false).unwrap()
+    let face = |rating, expression, tier| {
+        cast_expression(rating, patron, expression, tier, false).unwrap()
     };
     let mature = face(
         ContentRating::Mature,
         Expression::Seductive,
-        Appearance::Bloodied,
+        HealthTier::Bloodied,
     );
     let restrained = face(
         ContentRating::Restrained,
         Expression::Seductive,
-        Appearance::Bloodied,
+        HealthTier::Bloodied,
     );
     assert!(mature.as_str().contains("seductive, sultry"));
     assert!(mature.as_str().contains("badly bloodied"));
@@ -1146,11 +1146,11 @@ fn the_two_ratings_use_different_phrase_sets_for_the_same_inputs() {
     let wounded = face(
         ContentRating::Mature,
         Expression::Angry,
-        Appearance::Wounded,
+        HealthTier::Hurt,
     );
     assert!(wounded.as_str().contains("visibly wounded"));
     assert!(
-        !face(ContentRating::Mature, Expression::Angry, Appearance::Unhurt)
+        !face(ContentRating::Mature, Expression::Angry, HealthTier::Healthy)
             .as_str()
             .contains("appears")
     );
@@ -1167,7 +1167,7 @@ fn both_ratings_keep_every_person_an_adult_and_name_no_real_person() {
                     life_stage,
                 },
                 Expression::Flirtatious,
-                Appearance::Unhurt,
+                HealthTier::Healthy,
                 false,
             )
             .unwrap();
@@ -1221,7 +1221,7 @@ fn a_real_persons_likeness_never_gets_a_seductive_variant_under_either_rating() 
                 rating,
                 facts,
                 Expression::Seductive,
-                Appearance::Unhurt,
+                HealthTier::Healthy,
                 true
             ),
             Err(PromptRefusal::RealLikenessIntimate)
@@ -1232,7 +1232,7 @@ fn a_real_persons_likeness_never_gets_a_seductive_variant_under_either_rating() 
             Expression::Smiling,
             Expression::Flirtatious,
         ] {
-            assert!(cast_expression(rating, facts, other, Appearance::Unhurt, true).is_ok());
+            assert!(cast_expression(rating, facts, other, HealthTier::Healthy, true).is_ok());
         }
     }
 }
