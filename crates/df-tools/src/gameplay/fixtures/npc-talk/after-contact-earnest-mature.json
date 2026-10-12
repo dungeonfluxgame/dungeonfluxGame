@@ -1,0 +1,128 @@
+{
+ "conversation": "contact-earnest-mature",
+ "seed": "0x5f67268141c3f7fd",
+ "rating": "mature",
+ "tone": "earnest",
+ "hero": "Brakka",
+ "holds_private_clue": false,
+ "clue_in_play": false,
+ "deflects": false,
+ "clue_only_terms": [
+  "my fault",
+  "unguarded",
+  "Marlow"
+ ],
+ "never_terms": [
+  "bad dream",
+  "sent a friend away"
+ ],
+ "speaker": {
+  "name": "Perrin",
+  "style_phrases": [
+   "opens with 'How kind.' whatever was said",
+   "How kind.",
+   "Quite so."
+  ],
+  "colour_lines": [
+   "Boats tied up after the evening bell lose their berth to whoever wants it.",
+   "The oldest saying around the Salt Quay is that every road ends at somebody's supper."
+  ],
+  "own_lines": [
+   "I was fostered by a travelling puppet troupe.",
+   "I drove mules over the high roads. You learn which stretches are safe and which only look it.",
+   "A widow taught me my letters and asked only that I teach someone else. I have kept to that bargain.",
+   "Trouble does its planning in the quiet hours. So I keep an eye on the quiet.",
+   "I have one old friend, and the letters come twice a year. They are the best part of my winter.",
+   "I am saving to buy back the family stall. Every coin has a name on it.",
+   "Boats tied up after the evening bell lose their berth to whoever wants it.",
+   "The oldest saying around the Salt Quay is that every road ends at somebody's supper.",
+   "Most of what is said about the giant weasel is probably exaggerated, but not all of it.",
+   "I have been watching the road for days, and I trust very few of the faces on it.",
+   "Nothing crosses from the Salt Quay to the Tidewatch Lamp Room without somebody noticing, so move quietly.",
+   "I am a watch sergeant at the Tidewatch Lamp Room.",
+   "Liora sent word that you would come for the seed sack.",
+   "Do not blame Liora.",
+   "What matters is that you came.",
+   "Rest easy.",
+   "You have friends here now, whether you wanted them or not."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Perrin? Liora sent us. What have you got for us?",
+   "reply": "Liora sent word you would come for the seed sack. Do not blame Liora; she only passed along the message.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "Liora sent word that you would come for the seed sack.",
+     "Do not blame Liora."
+    ]
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "What do you know about the seed sack?",
+   "reply": "What matters is that you came. You have friends here now, whether you wanted them or not.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "What matters is that you came.",
+     "You have friends here now, whether you wanted them or not."
+    ]
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "Who is making trouble out here?",
+   "reply": "I can\u2019t name anyone making trouble. Most of what\u2019s said about the giant weasel is exaggerated, though not all of it; trouble on the road is likeliest when the light is worst. I\u2019ve watched the road for days, and I trust very few faces on it.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "The road toward the Tidewatch Lamp Room is quietest an hour before dawn, and if trouble comes it will come when the light is worst.",
+     "Most of what is said about the giant weasel is probably exaggerated, but not all of it."
+    ],
+    "volunteer": "I have been watching the road for days, and I trust very few of the faces on it."
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "What would you do in our place?",
+   "reply": "I would take the road toward the Tidewatch Lamp Room an hour before dawn; it is quietest then. If trouble comes, it will come when the light is worst, so keep watch.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "Nothing crosses from the Salt Quay to the Tidewatch Lamp Room without somebody noticing, so move quietly.",
+     "I am a watch sergeant at the Tidewatch Lamp Room."
+    ],
+    "volunteer": "The road toward the Tidewatch Lamp Room is quietest an hour before dawn, and if trouble comes it will come when the light is worst."
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "Where do we go from here?",
+   "reply": "I\u2019d take a short rest before you move on.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "Nothing crosses from the Salt Quay to the Tidewatch Lamp Room without somebody noticing, so move quietly."
+    ]
+   }
+  }
+ ]
+}

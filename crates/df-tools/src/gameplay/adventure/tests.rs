@@ -1140,8 +1140,9 @@ fn sha256(bytes: &[u8]) -> String {
 /// PLAY-T02 intentionally changes fight/rest text and activates source encounters.
 /// The record pins were taken again when PLAY-T02 met PLAY-N05 (the record embeds the NPC
 /// dossiers, which now carry each speaker's errand knowledge); pack and tuning matched PLAY-T02's
-/// pins unchanged. Dossier text changes re-pin only the record hash, after review; the pack and
-/// tuning hashes never move with it.
+/// pins unchanged. PLAY-N06 added actionable rumours and the errand lines to the NPC knowledge
+/// table, so the record pins moved once more; pack and tuning stayed. Dossier text changes
+/// re-pin only the record hash, after review; the pack and tuning hashes never move with it.
 const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,

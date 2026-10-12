@@ -1,0 +1,160 @@
+{
+ "conversation": "contact-earnest-restrained",
+ "seed": "0x5f67268141c3f7fd",
+ "rating": "restrained",
+ "tone": "earnest",
+ "hero": "Brakka",
+ "holds_private_clue": false,
+ "clue_in_play": false,
+ "deflects": false,
+ "clue_only_terms": [
+  "my fault",
+  "unguarded",
+  "Marlow"
+ ],
+ "never_terms": [
+  "bad dream",
+  "sent a friend away"
+ ],
+ "speaker": {
+  "name": "Perrin",
+  "style_phrases": [
+   "opens with 'How kind.' whatever was said",
+   "How kind.",
+   "Quite so."
+  ],
+  "colour_lines": [
+   "Boats tied up after the evening bell lose their berth to whoever wants it.",
+   "The walk to the Tidewatch Lamp Room is shorter than it looks and longer than it feels.",
+   "Folk around the Salt Quay have started locking their doors early since the giant weasel turned up."
+  ],
+  "own_lines": [
+   "I was fostered by a travelling puppet troupe.",
+   "I drove mules over the high roads. You learn which stretches are safe and which only look it.",
+   "A widow taught me my letters and asked only that I teach someone else. I have kept to that bargain.",
+   "Trouble does its planning in the quiet hours. So I keep an eye on the quiet.",
+   "I have one old friend, and the letters come twice a year. They are the best part of my winter.",
+   "I am saving to buy back the family stall. Every coin has a name on it.",
+   "Boats tied up after the evening bell lose their berth to whoever wants it.",
+   "The walk to the Tidewatch Lamp Room is shorter than it looks and longer than it feels.",
+   "Folk around the Salt Quay have started locking their doors early since the giant weasel turned up.",
+   "I am a watch sergeant at the Tidewatch Lamp Room.",
+   "Liora sent word that you would come for the seed sack.",
+   "Do not blame Liora.",
+   "What matters is that you came.",
+   "Rest easy.",
+   "You have friends here now, whether you wanted them or not."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Perrin? Liora sent us. What have you got for us?",
+   "reply": "How kind. Trouble does its planning in the quiet hours, so I keep an eye on the quiet. Will you hear what\u2019s troubling me?",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "new_material": [
+     {
+      "line": "Trouble does its planning in the quiet hours. So I keep an eye on the quiet.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "I have one old friend, and the letters come twice a year. They are the best part of my winter.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "What do you know about the seed sack?",
+   "reply": "How kind. I don't know anything about the seed sack, Brakka.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I am saving to buy back the family stall. Every coin has a name on it.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "Do not blame Liora.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "Trouble does its planning in the quiet hours. So I keep an eye on the quiet.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "Who is making trouble out here?",
+   "reply": "How kind. Boats tied up after the evening bell lose their berth to whoever wants it. Ask me about this place, if you want to know it.",
+   "from_model": false,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "new_material": [
+     {
+      "line": "Boats tied up after the evening bell lose their berth to whoever wants it.",
+      "topic": "the place"
+     },
+     {
+      "line": "The walk to the Tidewatch Lamp Room is shorter than it looks and longer than it feels.",
+      "topic": "the place"
+     }
+    ]
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "What would you do in our place?",
+   "reply": "How kind. I\u2019d take the road I knew was safe, not the one that merely looked it. What route are you weighing?",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I was fostered by a travelling puppet troupe.",
+      "topic": "who are you"
+     },
+     {
+      "line": "I drove mules over the high roads. You learn which stretches are safe and which only look it.",
+      "topic": "who are you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "Where do we go from here?",
+   "reply": "How kind. Folk around the Salt Quay have started locking their doors early since the giant weasel turned up. Best be on your way now, Brakka; I would not linger.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "new_material": [
+     {
+      "line": "A widow taught me my letters and asked only that I teach someone else. I have kept to that bargain.",
+      "topic": "your past"
+     },
+     {
+      "line": "Folk around the Salt Quay have started locking their doors early since the giant weasel turned up.",
+      "topic": "the antagonist"
+     }
+    ]
+   }
+  }
+ ]
+}

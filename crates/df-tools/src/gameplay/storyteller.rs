@@ -55,7 +55,10 @@ use df_types::{
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use super::startup_configuration::{ContentRating, StorytellerMode, StorytellerSettings};
+use super::{
+    speech_text::SpokenRule,
+    startup_configuration::{ContentRating, StorytellerMode, StorytellerSettings},
+};
 
 /// Changing the fixed instruction or the schema shape invalidates every cached result.
 const PROMPT_VERSION: &str = "storyteller-2";
@@ -172,6 +175,8 @@ pub(super) struct Slot {
     /// Terms the text must not use that are never shown to the model: they are checked after
     /// generation only, so they cannot be echoed back by a prompt that never contained them.
     pub(super) withheld: Vec<String>,
+    /// Rules about how the line is spoken, checked after generation.
+    pub(super) spoken: Vec<SpokenRule>,
 }
 
 impl Slot {
@@ -182,6 +187,7 @@ impl Slot {
             must_mention: Vec::new(),
             forbidden: Vec::new(),
             withheld: Vec::new(),
+            spoken: Vec::new(),
         }
     }
 
@@ -192,6 +198,13 @@ impl Slot {
 
     pub(super) fn forbidding(mut self, terms: Vec<String>) -> Self {
         self.forbidden = terms;
+        self
+    }
+
+    /// Adds rules about how the line is spoken; a line that breaks one is refused like any other
+    /// invalid text, with the rule named in the retry's complaint.
+    pub(super) fn speaking(mut self, rules: Vec<SpokenRule>) -> Self {
+        self.spoken = rules;
         self
     }
 
@@ -274,6 +287,11 @@ pub(super) enum ValidationFailure {
     ControlCharacter {
         slot: String,
     },
+    /// The line broke a [`SpokenRule`]; the reason is a fixed phrase, never the text.
+    SpokenRule {
+        slot: String,
+        reason: &'static str,
+    },
     NotTheRequestedShape,
 }
 
@@ -289,6 +307,7 @@ impl ValidationFailure {
             Self::MechanicsLeak { .. } => "game_numbers",
             Self::ForbiddenTerm { .. } => "forbidden_term",
             Self::ControlCharacter { .. } => "control_character",
+            Self::SpokenRule { .. } => "spoken_rule",
             Self::NotTheRequestedShape => "shape",
         }
     }
@@ -321,6 +340,7 @@ impl ValidationFailure {
             Self::ControlCharacter { slot } => {
                 format!("slot \"{slot}\" contained a control character or line break")
             }
+            Self::SpokenRule { slot, reason } => format!("slot \"{slot}\": {reason}"),
             Self::NotTheRequestedShape => {
                 "the answer was not the requested JSON object of string fields".to_owned()
             }
@@ -367,6 +387,9 @@ struct Online {
     deadline: Duration,
     /// Tokens not yet spent or reserved by calls in flight.
     remaining_tokens: Mutex<u64>,
+    /// Supplier-reported counters of every answered attempt, for live transcript costing.
+    #[cfg(test)]
+    usage_log: Mutex<Vec<df_providers::TextTokenUsage>>,
     #[cfg(test)]
     loopback: Option<SocketAddr>,
 }
@@ -415,6 +438,8 @@ impl Storyteller {
                 deadline: settings.deadline,
                 remaining_tokens: Mutex::new(settings.token_budget),
                 #[cfg(test)]
+                usage_log: Mutex::new(Vec::new()),
+                #[cfg(test)]
                 loopback: None,
             }),
         }
@@ -444,6 +469,18 @@ impl Storyteller {
                 .remaining_tokens
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
+        })
+    }
+
+    /// The supplier-reported token counters of every answered attempt so far.
+    #[cfg(test)]
+    pub(super) fn usage_log(&self) -> Vec<df_providers::TextTokenUsage> {
+        self.online.as_ref().map_or_else(Vec::new, |online| {
+            online
+                .usage_log
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
         })
     }
 
@@ -843,6 +880,11 @@ impl Online {
             Ok(Ok(response)) => response,
         };
         let tokens = response.supplier_usage().total_tokens;
+        #[cfg(test)]
+        self.usage_log
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(response.supplier_usage());
         self.reconcile(reserved, tokens);
         let events = response
             .complete(owner())
@@ -1333,6 +1375,12 @@ fn validate_slot(
     {
         return Err(ValidationFailure::ForbiddenTerm {
             slot: slot.name.clone(),
+        });
+    }
+    if let Some(reason) = slot.spoken.iter().find_map(|rule| rule.violation(text)) {
+        return Err(ValidationFailure::SpokenRule {
+            slot: slot.name.clone(),
+            reason,
         });
     }
     Ok(())

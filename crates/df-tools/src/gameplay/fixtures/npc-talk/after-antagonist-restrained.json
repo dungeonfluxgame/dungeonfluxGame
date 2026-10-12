@@ -1,0 +1,117 @@
+{
+ "conversation": "antagonist-restrained",
+ "seed": "0xbc0b22191fc2b96d",
+ "rating": "restrained",
+ "tone": "earnest",
+ "hero": "Brakka",
+ "holds_private_clue": false,
+ "clue_in_play": false,
+ "deflects": false,
+ "clue_only_terms": [
+  "my fault",
+  "unguarded",
+  "Whitlock"
+ ],
+ "never_terms": [
+  "accused rightly",
+  "flinched at questions"
+ ],
+ "speaker": {
+  "name": "Kelbin Cobb",
+  "style_phrases": [
+   "ends a point with a flat 'That's the lot.'",
+   "Right.",
+   "That's the lot."
+  ],
+  "colour_lines": [
+   "The great orrery is wound each dawn by the youngest scribe, as a rite of passage.",
+   "Strangers are welcome around the Orrery Library, so long as they say good evening."
+  ],
+  "own_lines": [
+   "I was left at a shrine gate as an infant and raised by its keepers.",
+   "I spent four years pouring bronze for bells. I can still hear a flat note across a street.",
+   "I watched two old friends part over a trivial thing after forty years. I decided never to let a small quarrel grow.",
+   "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+   "I promised someone dear that I would see a particular thing done. I mean to keep my word.",
+   "I want to go home. I cannot until this is done.",
+   "I want to go home. I cannot until this is finished.",
+   "The great orrery is wound each dawn by the youngest scribe, as a rite of passage.",
+   "Strangers are welcome around the Orrery Library, so long as they say good evening.",
+   "Hand over the steady lantern and this ends here.",
+   "I am a guard at the Orrery Library, and I stand in your way.",
+   "By order of the watch, the steady lantern stays here.",
+   "Stand down!",
+   "Corwin and I were friends once, before things went wrong."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Kelbin Cobb, who are you, and why do you block the road?",
+   "reply": "I guard the Orrery Library, and I stand in your way. I was left at a shrine gate as an infant and raised by its keepers.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "answer_from": [
+     "I am a guard at the Orrery Library, and I stand in your way.",
+     "I was left at a shrine gate as an infant and raised by its keepers."
+    ]
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "Kelbin Cobb, What do you want from us?",
+   "reply": "I want to go home. I cannot until this is finished. My word is the one coin I carry that cannot be forged, and I spend it carefully.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "answer_from": [
+     "I want to go home. I cannot until this is finished.",
+     "My word is the one coin I carry that cannot be forged. I spend it carefully."
+    ]
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "Kelbin Cobb, What will you do if we refuse?",
+   "reply": "Hand over the steady lantern, and this ends here. That is all I\u2019m asking.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "answer_from": [
+     "Hand over the steady lantern and this ends here."
+    ]
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "Kelbin Cobb, Is there any way to end this without a fight?",
+   "reply": "I don't know another way. I cannot go home until this is finished.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "answer_from": []
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "Kelbin Cobb, Who sent you?",
+   "reply": "The steady lantern is the matter between us. I won't waste words on anything else.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "answer_from": []
+   }
+  }
+ ]
+}

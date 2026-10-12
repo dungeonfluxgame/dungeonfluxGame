@@ -1,0 +1,165 @@
+{
+ "conversation": "antagonist-mature",
+ "seed": "0xbc0b22191fc2b96d",
+ "rating": "mature",
+ "tone": "earnest",
+ "hero": "Brakka",
+ "holds_private_clue": false,
+ "clue_in_play": false,
+ "deflects": false,
+ "clue_only_terms": [
+  "my fault",
+  "unguarded",
+  "Whitlock"
+ ],
+ "never_terms": [
+  "accused rightly",
+  "flinched at questions"
+ ],
+ "speaker": {
+  "name": "Kelbin Cobb",
+  "style_phrases": [
+   "ends a point with a flat 'That's the lot.'",
+   "Right.",
+   "That's the lot."
+  ],
+  "colour_lines": [
+   "The great orrery is wound each dawn by the youngest scribe, as a rite of passage.",
+   "Strangers are welcome around the Orrery Library, so long as they say good evening."
+  ],
+  "own_lines": [
+   "I was left at a shrine gate as an infant and raised by its keepers.",
+   "I spent four years pouring bronze for bells. I can still hear a flat note across a street.",
+   "I watched two old friends part over a trivial thing after forty years. I decided never to let a small quarrel grow.",
+   "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+   "I promised someone dear that I would see a particular thing done. I mean to keep my word.",
+   "I want to go home. I cannot until this is done.",
+   "I want to go home. I cannot until this is finished.",
+   "The great orrery is wound each dawn by the youngest scribe, as a rite of passage.",
+   "Strangers are welcome around the Orrery Library, so long as they say good evening.",
+   "I am a guard at the Orrery Library, and I stand in your way.",
+   "By order of the watch, the steady lantern stays here.",
+   "Stand down, or I will put you down.",
+   "Corwin and I were friends once, before things went wrong."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Kelbin Cobb, who are you, and why do you block the road?",
+   "reply": "Right. I'm Kelbin Cobb. I was left at a shrine gate as a baby, then raised by its keepers; I poured bronze for bells for four years. Why I'm blocking the road, I don't know.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I was left at a shrine gate as an infant and raised by its keepers.",
+      "topic": "who are you"
+     },
+     {
+      "line": "I spent four years pouring bronze for bells. I can still hear a flat note across a street.",
+      "topic": "who are you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "Kelbin Cobb, What do you want from us?",
+   "reply": "I want to get home. But I promised someone dear I\u2019d see a particular thing done, and my word is the one coin I carry that can\u2019t be forged. Will you hear me out?",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "I promised someone dear that I would see a particular thing done. I mean to keep my word.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "Kelbin Cobb, What will you do if we refuse?",
+   "reply": "If you refuse, I still can't go home until this is done. My word doesn't change because you turn away.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I want to go home. I cannot until this is done.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "I want to go home. I cannot until this is finished.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "Kelbin Cobb, Is there any way to end this without a fight?",
+   "reply": "Right. Corwin and I were friends once, before things went wrong. Let me tell you what happened, and we can see whether this ends without a fight.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "Corwin and I were friends once, before things went wrong.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "I watched two old friends part over a trivial thing after forty years. I decided never to let a small quarrel grow.",
+      "topic": "your past"
+     },
+     {
+      "line": "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "Kelbin Cobb, Who sent you?",
+   "reply": "Right. Strangers are welcome around the Orrery Library, so long as they say good evening. The youngest scribe winds the great orrery each dawn; come on, then. Will you hear me out?",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "The great orrery is wound each dawn by the youngest scribe, as a rite of passage.",
+      "topic": "the place"
+     },
+     {
+      "line": "Strangers are welcome around the Orrery Library, so long as they say good evening.",
+      "topic": "the place"
+     },
+     {
+      "line": "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  }
+ ]
+}

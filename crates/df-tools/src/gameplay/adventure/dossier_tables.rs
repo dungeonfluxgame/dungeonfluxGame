@@ -37,6 +37,8 @@ const MAX_FILE: usize = 1024 * 1024;
 pub(crate) const MAX_TEMPLATE: usize = 240;
 const MAX_SHORT: usize = 40;
 /// Slots a trait, tie or knowledge template may use.
+/// Errand lines a friendly speaker (patron or contact) says it knows.
+pub(super) const ERRAND_LINES: usize = 2;
 const BASE_SLOTS: [&str; 16] = [
     "name",
     "role",
@@ -273,6 +275,9 @@ pub(super) struct KnowledgeTables {
     pub(super) rumours: Table<Profile>,
     pub(super) hints: Table<Profile>,
     pub(super) world: Table<Profile>,
+    /// What each role says it knows of the errand: the patron's need, the contact's wait, the
+    /// enemy's demand. Entries name the roles that may say them.
+    pub(super) errand: Table<Profile>,
     /// Key phrases for each secret id in `secrets.json`, on top of the rendered secret text.
     pub(super) secret_keywords: BTreeMap<String, Vec<String>>,
 }
@@ -741,6 +746,52 @@ impl DossierTables {
         check_profiles(knowledge, "rumours", &k.rumours, plain, &tags)?;
         check_profiles(knowledge, "hints", &k.hints, plain, &tags)?;
         check_profiles(knowledge, "world", &k.world, plain, &tags)?;
+        check_profiles(knowledge, "errand", &k.errand, plain, &tags)?;
+        for role in [
+            NpcRole::Patron,
+            NpcRole::Contact,
+            NpcRole::Antagonist,
+            NpcRole::Villain,
+            NpcRole::Lieutenant,
+        ] {
+            let wanted = if role.opposes_party() {
+                1
+            } else {
+                ERRAND_LINES
+            };
+            let fitting = k
+                .errand
+                .entries
+                .iter()
+                .filter(|entry| entry.roles.contains(&role))
+                .count();
+            if fitting < wanted {
+                return Err(invalid(
+                    knowledge,
+                    "tables.errand",
+                    format!("{} needs {wanted} lines", role.label()),
+                ));
+            }
+            // A campaign can make the destination, the place or the stake a secret term, so each
+            // role keeps lines that name none of them.
+            let plain_lines = k
+                .errand
+                .entries
+                .iter()
+                .filter(|entry| entry.roles.contains(&role))
+                .filter(|entry| slots_of(&entry.text).is_ok_and(|slots| slots.is_empty()))
+                .count();
+            if plain_lines < wanted {
+                return Err(invalid(
+                    knowledge,
+                    "tables.errand",
+                    format!(
+                        "{} needs {wanted} lines that name nothing of the adventure",
+                        role.label()
+                    ),
+                ));
+            }
+        }
         if k.secret_keywords.is_empty() {
             return Err(invalid(knowledge, "tables.secret_keywords", "empty"));
         }

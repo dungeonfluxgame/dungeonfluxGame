@@ -23,10 +23,11 @@ use df_types::MemberId;
 use serde_json::{Value, json};
 
 use super::{
-    adventure::dossier::{Dossier, mentions_term},
-    npc_dossier::{self, Inputs, Turn, Withheld},
-    pack::{Age, PackFile, SpeakerProfile},
+    adventure::dossier::{Dossier, NpcRole, mentions_term},
+    npc_dossier::{self, Clue, Inputs, Turn, Withheld, released_terms},
+    pack::{Age, PackFile, SceneKey, SpeakerProfile},
     social::{Approach, Shift, SocialLedger, classify_keywords, shift_line},
+    speech_text::{coverage, sentences},
     startup_configuration::content_rating,
     storyteller::{
         CallProfile, Expression, Slot, Storyteller, age_group, contains_whole_word,
@@ -41,6 +42,8 @@ pub(super) const REPLY_CHARACTERS: usize = 220;
 const MAXIMUM_PLAYER_CHARACTERS: usize = 500;
 const REPLIES_PER_WINDOW: usize = 6;
 const WINDOW: Duration = Duration::from_secs(60);
+/// How much of an offered line the reply must say for the line to count as said.
+const USED_COVERAGE: f64 = 0.45;
 
 const STYLE: &str = "A spoken line in character, in the first person, with no quotation marks, \
 shaped by facts.npc (role, voice). It deflects only what facts.forbidden or the scene hides; when \
@@ -56,6 +59,8 @@ pub(super) struct StoryFacts {
     /// Names the authored scenes already speak to the whole table; never withheld.
     public_names: Vec<String>,
     speakers: Vec<SpeakerProfile>,
+    /// Each scene's spoken line, with the scene's place in the story and its name.
+    scene_lines: Vec<(usize, String, String)>,
 }
 
 impl StoryFacts {
@@ -65,7 +70,35 @@ impl StoryFacts {
             secret_terms: pack.secret_terms.clone(),
             public_names: spoken_names(pack),
             speakers: pack.speakers.clone(),
+            scene_lines: pack
+                .scenes
+                .iter()
+                .filter_map(|scene| {
+                    let order = SceneKey::ALL.iter().position(|key| *key == scene.key)?;
+                    Some((order, format!("{:?}", scene.key), scene.dialogue.clone()))
+                })
+                .collect(),
         }
+    }
+
+    /// The statements the story has speakers make only in scenes after `scene`: the speaker
+    /// cannot know them yet, so a reply must not offer them.
+    fn later_lines(&self, scene: &str) -> Vec<String> {
+        let Some((now, _, _)) = self.scene_lines.iter().find(|(_, name, _)| name == scene) else {
+            return Vec::new();
+        };
+        let statements = |keep: &dyn Fn(usize) -> bool| -> Vec<String> {
+            self.scene_lines
+                .iter()
+                .filter(|(order, _, _)| keep(*order))
+                .flat_map(|(_, _, dialogue)| sentences(dialogue))
+                .collect()
+        };
+        let known = statements(&|order| order <= *now);
+        statements(&|order| order > *now)
+            .into_iter()
+            .filter(|line| !known.contains(line))
+            .collect()
     }
 }
 
@@ -121,6 +154,8 @@ pub(super) struct Exchange {
     /// False when the dossier's prepared answer replied instead of the text model.
     pub(super) from_model: bool,
     pub(super) shift: Option<Shift>,
+    /// The reply spoke of what was whispered to this hero alone, so only this hero was shown it.
+    pub(super) private: bool,
 }
 
 /// Who a typed line is for: the one on-stage NPC the words name, otherwise whoever is
@@ -209,9 +244,40 @@ impl NpcReplyContext {
             choices.join(" "),
             on_stage.join(" "),
         );
+        // Only the speaker who whispered the clue speaks of it, and only to the hero who was
+        // told it: that hero is given the clue's secret terms, no other hero is.
+        let gave_clue = dossier.role == NpcRole::Patron
+            && !story.clue.is_empty()
+            && mentions_term(&story.clue, &dossier.name);
+        let told = gave_clue && !player.private_clue.is_empty();
+        let released = if told {
+            // Names the scenes say aloud are not the clue's to give: the table already hears them.
+            let clue_terms: Vec<String> = story
+                .secret_terms
+                .iter()
+                .filter(|term| {
+                    !story
+                        .public_names
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case(term))
+                })
+                .cloned()
+                .collect();
+            released_terms(dossier, &clue_terms, &player.private_clue)
+        } else {
+            Vec::new()
+        };
+        let clue = if told {
+            Clue::Told(player.private_clue.as_str())
+        } else if gave_clue {
+            Clue::Kept
+        } else {
+            Clue::Absent
+        };
         let withheld = Withheld::new(
             dossier,
             unheard_secret_terms(story, &public),
+            released,
             content_rating(),
         );
         let standing = social.standing(member, dossier);
@@ -222,6 +288,7 @@ impl NpcReplyContext {
             ""
         };
         let conversation = social.conversation(member, dossier, scene_key);
+        let later_lines = story.later_lines(scene_key);
         let (mut facts, offered) = npc_dossier::facts(&Inputs {
             dossier,
             name: &actor.name,
@@ -234,11 +301,28 @@ impl NpcReplyContext {
             words: &words,
             withheld: &withheld,
             conversation: &conversation,
+            later_lines: &later_lines,
+            clue,
         });
+        let answer_offered = ["answer_from", "you_told_this_hero_in_private"]
+            .iter()
+            .any(|key| match &facts[*key] {
+                Value::Array(lines) => !lines.is_empty(),
+                Value::String(line) => !line.is_empty(),
+                _ => false,
+            });
+        // Everything the speaker has already said to this hero: what a new reply must not repeat.
         let said: Vec<String> = recent
             .iter()
             .filter(|(from_hero, _)| !from_hero)
             .map(|(_, text)| text.clone())
+            .chain(
+                facts["already_said"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|line| line.as_str().map(str::to_owned)),
+            )
             .collect();
         add_character_limits(
             &mut facts,
@@ -270,6 +354,7 @@ impl NpcReplyContext {
                 offered,
                 said,
                 conversation,
+                answer_offered,
             })),
         })
     }
@@ -364,14 +449,19 @@ impl NpcReplyContext {
     }
 
     /// Publishes the hero's line as public table talk, before any answer. `shown` is the display
-    /// version (see `line_cleanup`); the raw words stay what the reply reasons about.
+    /// version (see `line_cleanup`); the raw words stay what the reply reasons about. A hero who
+    /// was told a clue in private may type its terms, but the table does not read them.
     pub(super) fn publish_typed_line(&self, log: &TableLog, shown: &str) {
+        let spoken = match &self.turn {
+            Some(turn) => turn.withheld.hide_released(shown),
+            None => shown.to_owned(),
+        };
         log.push(
             &self.hero_name,
             rpc::TableRole::Hero,
             self.hero_index,
             rpc::TableKind::Speech,
-            shown,
+            &spoken,
         );
     }
 }
@@ -642,6 +732,7 @@ impl NpcVoice {
                     .to_owned(),
                 ),
                 ("social.shift", format!("{:?}", exchange.shift)),
+                ("social.private", exchange.private.to_string()),
             ],
         );
         span.finish_unmeasured("replied");
@@ -671,20 +762,40 @@ impl NpcVoice {
                         &context.typed_words,
                         approach,
                         &turn.withheld,
-                        &turn.conversation,
-                        &turn.said,
+                        &npc_dossier::Memory {
+                            conversation: &turn.conversation,
+                            said: &turn.said,
+                            offered: &turn.offered,
+                        },
                     ),
                     approach,
                 )
             }
         };
-        log.push(
-            &context.speaker,
-            rpc::TableRole::Npc,
-            0,
-            rpc::TableKind::Speech,
-            &text,
-        );
+        // What was whispered to this hero alone is answered to this hero alone: the table sees
+        // that the speaker murmured, not the words.
+        let private = turn
+            .withheld
+            .released()
+            .iter()
+            .any(|term| mentions_term(&text, term));
+        if private {
+            log.push(
+                &context.speaker,
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Action,
+                &format!("murmurs to {}", context.hero_name),
+            );
+        } else {
+            log.push(
+                &context.speaker,
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                &text,
+            );
+        }
         let recorded = turn.ledger.record_exchange(
             context.member,
             &turn.dossier,
@@ -693,8 +804,15 @@ impl NpcVoice {
             &context.typed_words,
             &text,
         );
+        // Only the lines the reply actually used count as said; one it passed over is offered again.
+        let used: Vec<String> = turn
+            .offered
+            .iter()
+            .filter(|line| coverage(&line.text, &text) >= USED_COVERAGE)
+            .map(|line| line.key.clone())
+            .collect();
         turn.ledger
-            .remember_offered(context.member, &turn.dossier, &turn.offered);
+            .remember_offered(context.member, &turn.dossier, &used);
         if let Some(shift) = recorded.shift {
             log.push(
                 &context.speaker,
@@ -723,6 +841,7 @@ impl NpcVoice {
             approach,
             from_model,
             shift: recorded.shift,
+            private,
         })
     }
 
@@ -752,11 +871,7 @@ impl NpcVoice {
             return None;
         }
         let _admission = self.limiter.admit(context.member, Instant::now())?;
-        let slots = [
-            Slot::new("reply", npc_dossier::REPLY_CHARACTERS)
-                .withholding(turn.withheld.all().to_vec()),
-            Slot::new("approach", npc_dossier::APPROACH_CHARACTERS),
-        ];
+        let slots = reply_slots(turn);
         let values = self
             .storyteller
             .express(&Expression {
@@ -801,6 +916,19 @@ impl NpcVoice {
     }
 }
 
+/// The two slots of an NPC reply: the line spoken, which must pass the speaking rules and avoid
+/// every withheld term and the speaker's stock phrases, and the reading of the hero's approach.
+pub(super) fn reply_slots(turn: &Turn) -> [Slot; 2] {
+    let mut refused = turn.withheld.all().to_vec();
+    refused.extend(npc_dossier::style_phrases(&turn.dossier));
+    [
+        Slot::new("reply", npc_dossier::REPLY_CHARACTERS)
+            .withholding(refused)
+            .speaking(npc_dossier::spoken_rules(turn.answer_offered, &turn.said)),
+        Slot::new("approach", npc_dossier::APPROACH_CHARACTERS),
+    ]
+}
+
 /// Models like to wrap a spoken line in quotation marks; the bubble shows the words only.
 fn strip_outer_quotes(text: &str) -> String {
     let text = text.trim();
@@ -838,6 +966,7 @@ mod tests {
             ],
             public_names: vec!["Jorun".to_owned(), "Net Loft".to_owned()],
             speakers: Vec::new(),
+            scene_lines: Vec::new(),
         };
         assert_eq!(
             unheard_secret_terms(&story, "A quiet room."),
@@ -851,6 +980,7 @@ mod tests {
             secret_terms: Vec::new(),
             public_names: Vec::new(),
             speakers: Vec::new(),
+            scene_lines: Vec::new(),
         }
     }
 
@@ -876,6 +1006,7 @@ mod tests {
                     voice: "sneering and rough".to_owned(),
                 },
             ],
+            scene_lines: Vec::new(),
         }
     }
 

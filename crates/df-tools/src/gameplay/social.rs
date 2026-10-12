@@ -43,7 +43,7 @@ use super::{
 const TRUST_STEP: i8 = 2;
 /// Lines kept, and shown to the model, of one hero's conversation with one NPC.
 pub(super) const RECENT_LINES: usize = 6;
-const RECENT_LINE_CHARACTERS: usize = 160;
+const RECENT_LINE_CHARACTERS: usize = 300;
 const SCHEMA: &str = "df-npc-social/1";
 const MAXIMUM_FILE_BYTES: u64 = 256 * 1024;
 const FILE_NAME: &str = "social.json";

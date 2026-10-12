@@ -1,0 +1,124 @@
+{
+ "conversation": "contact-kind-restrained",
+ "seed": "0xbc0b22191fc2b96d",
+ "rating": "restrained",
+ "tone": "kind",
+ "hero": "Sunniva",
+ "holds_private_clue": false,
+ "clue_in_play": false,
+ "deflects": false,
+ "clue_only_terms": [
+  "my fault",
+  "unguarded",
+  "Whitlock"
+ ],
+ "never_terms": [
+  "accused rightly",
+  "flinched at questions"
+ ],
+ "speaker": {
+  "name": "Corwin",
+  "style_phrases": [
+   "meets a question with 'Now why do you ask?'",
+   "Now why do you ask?",
+   "Mind you."
+  ],
+  "colour_lines": [
+   "The great orrery is wound each dawn by the youngest scribe, as a rite of passage.",
+   "Ask anyone around the Orrery Library about the Reading Gallery and they will tell you to go early and bring something for the host."
+  ],
+  "own_lines": [
+   "I was born in a lighthouse keeper's cottage on a windy headland.",
+   "I mucked out a coaching inn for years. Every traveller leaves a story with the horse.",
+   "I once cooked a feast for a hundred people from nearly nothing. I have been proud of it for twenty years.",
+   "Every question deserves an honest attempt at an answer, even a foolish one. Especially a foolish one.",
+   "There is a child I look after who is not mine by blood. I would walk through fire for that little one.",
+   "I want the council to take me seriously, just once. Just to see their faces.",
+   "The great orrery is wound each dawn by the youngest scribe, as a rite of passage.",
+   "Ask anyone around the Orrery Library about the Reading Gallery and they will tell you to go early and bring something for the host.",
+   "Two riders came through the Orrery Library before dawn, looking over their shoulders, and neither stopped to eat.",
+   "I have been watching the road for days, and I trust very few of the faces on it.",
+   "I have kept everything ready on my side, and I will not be caught unprepared.",
+   "I am a watch sergeant at the Reading Gallery.",
+   "Garrick sent word that you would come for the steady lantern.",
+   "Do not blame Garrick.",
+   "What matters is that you came.",
+   "Rest easy.",
+   "I will vouch for you to anyone who matters in this region."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Thank you for seeing us, Corwin. Garrick spoke well of you.",
+   "reply": "Garrick sent word that you\u2019d come for the steady lantern; don\u2019t blame him for that. And speaking well of me is no more than my due, though I\u2019d rather you tell me what you need.",
+   "from_model": true,
+   "approach": "flattery",
+   "attitude_before": "hostile",
+   "attitude_after": "hostile",
+   "facts": {
+    "answer_from": [
+     "Do not blame Garrick.",
+     "Garrick sent word that you would come for the steady lantern."
+    ]
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "That sounds hard. What do you need from us most?",
+   "reply": "What I need most? Someone who came, and someone who\u2019ll stand by their word. I\u2019ll vouch for you to anyone who matters in this region.",
+   "from_model": true,
+   "approach": "kindness",
+   "attitude_before": "hostile",
+   "attitude_after": "hostile",
+   "facts": {
+    "answer_from": [
+     "What matters is that you came.",
+     "I will vouch for you to anyone who matters in this region."
+    ]
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "I am sorry you carry this. Who is behind the trouble?",
+   "reply": "I have watched the road for days, and I trust very few faces on it. I\u2019ve kept everything ready on my side; I\u2019m a watch sergeant at the Reading Gallery.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "hostile",
+   "attitude_after": "hostile",
+   "facts": {
+    "answer_from": [
+     "I have been watching the road for days, and I trust very few of the faces on it.",
+     "I have kept everything ready on my side, and I will not be caught unprepared."
+    ],
+    "volunteer": "I am a watch sergeant at the Reading Gallery."
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "We will do our best. What should we look out for?",
+   "reply": "Two riders came through the Orrery Library before dawn, looking over their shoulders, and neither stopped to eat. What would make riders in such a hurry, do you think?",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "hostile",
+   "attitude_after": "hostile",
+   "facts": {
+    "answer_from": [
+     "Two riders came through the Orrery Library before dawn, looking over their shoulders, and neither stopped to eat."
+    ]
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "Thank you. What is our next step?",
+   "reply": "A short rest is your next step. Will that steady you?",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "hostile",
+   "attitude_after": "hostile",
+   "facts": {
+    "answer_from": []
+   }
+  }
+ ]
+}

@@ -1,0 +1,133 @@
+{
+ "conversation": "patron-rude-restrained",
+ "seed": "0x5f67268141c3f7fd",
+ "rating": "restrained",
+ "tone": "rude",
+ "hero": "Vex",
+ "holds_private_clue": false,
+ "clue_in_play": false,
+ "deflects": false,
+ "clue_only_terms": [
+  "my fault",
+  "unguarded",
+  "Marlow"
+ ],
+ "never_terms": [
+  "wrong ear",
+  "said too much"
+ ],
+ "speaker": {
+  "name": "Liora",
+  "style_phrases": [
+   "ends with 'And that's how it was.'",
+   "Listen.",
+   "And that's how it was."
+  ],
+  "colour_lines": [
+   "The harbor-master's lamp burns until the last boat is in, and goes out the moment it is.",
+   "The Tidewatch Lamp Room keeps odd hours, so knock twice, wait, and do not take it personally."
+  ],
+  "own_lines": [
+   "I was grown up in a trade caravan, never sleeping twice in the same bed.",
+   "I copied ledgers for a counting house. Numbers lie less than people do, though not by much.",
+   "I was caught at the edge of a border skirmish once and walked away without a scratch. I do not take that for granted.",
+   "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+   "My old dog is waiting at home. He has opinions about how late I am getting back.",
+   "I want a small garden and a quiet chair. I have wanted them for years.",
+   "The harbor-master's lamp burns until the last boat is in, and goes out the moment it is.",
+   "The Tidewatch Lamp Room keeps odd hours, so knock twice, wait, and do not take it personally.",
+   "Somebody has been asking after the seed sack at every inn between the Salt Quay and the Tidewatch Lamp Room.",
+   "I would not ask this of you if there were anyone else I could trust with it.",
+   "Once the seed sack is inside the Tidewatch Lamp Room, I will sleep again; until then I do not.",
+   "Perrin is a watch sergeant at the Tidewatch Lamp Room.",
+   "An old friend, Perrin, holds a sack of precious seed-grain for me.",
+   "Collecting it alone has become dangerous.",
+   "Someone else wants it as badly as I do, and they have been watching my door.",
+   "Perrin waits at the Tidewatch Lamp Room.",
+   "Walk me there, and I'll make sure you're repaid.",
+   "We are safe here.",
+   "Thank you for seeing me through."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Quit stalling. What do you want from us?",
+   "reply": "I want my word to remain worth more than any coin, and I want to get home to my old dog before he decides I\u2019ve abandoned him; that\u2019s the plain truth of it.",
+   "from_model": true,
+   "approach": "other",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "answer_from": [
+     "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+     "My old dog is waiting at home. He has opinions about how late I am getting back."
+    ],
+    "private_matter": "You confided something to another hero in private. This hero was not told, so you will not say what it was, what it was about, or that it holds any detail."
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "That tells me nothing. Who is Perrin Marlow, and why should I care?",
+   "reply": "Perrin\u2019s an old friend of mine, a watch sergeant at the Tidewatch Lamp Room, and he\u2019s holding a sack of precious seed-grain for me; without it, my little garden\u2019s only a tale with a hungry ending.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "answer_from": [
+     "An old friend, Perrin, holds a sack of precious seed-grain for me.",
+     "Perrin is a watch sergeant at the Tidewatch Lamp Room."
+    ],
+    "private_matter": "You confided something to another hero in private. This hero was not told, so you will not say what it was, what it was about, or that it holds any detail."
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "You are wasting my time. What is out on the road?",
+   "reply": "The harbor-master\u2019s lamp burns until the last boat is in, then goes dark; the Tidewatch Lamp Room keeps odd hours, so knock twice and wait. I would not ask this of you if I had anyone else I could trust.",
+   "from_model": true,
+   "approach": "insult",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "answer_from": [
+     "The harbor-master's lamp burns until the last boat is in, and goes out the moment it is.",
+     "The Tidewatch Lamp Room keeps odd hours, so knock twice, wait, and do not take it personally."
+    ],
+    "volunteer": "I would not ask this of you if there were anyone else I could trust with it.",
+    "private_matter": "You confided something to another hero in private. This hero was not told, so you will not say what it was, what it was about, or that it holds any detail."
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "Pathetic. Is that really all you know?",
+   "reply": "No; collecting it alone has grown dangerous, and I won\u2019t sleep easy until the sack is inside the Tidewatch Lamp Room. Somebody\u2019s been asking after it at every inn between the Salt Quay and the Lamp Room.",
+   "from_model": true,
+   "approach": "insult",
+   "attitude_before": "indifferent",
+   "attitude_after": "hostile",
+   "facts": {
+    "answer_from": [
+     "Collecting it alone has become dangerous.",
+     "Once the seed sack is inside the Tidewatch Lamp Room, I will sleep again; until then I do not."
+    ],
+    "volunteer": "Somebody has been asking after the seed sack at every inn between the Salt Quay and the Tidewatch Lamp Room.",
+    "private_matter": "You confided something to another hero in private. This hero was not told, so you will not say what it was, what it was about, or that it holds any detail."
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "Fine. Where do we go?",
+   "reply": "The Tidewatch Lamp Room; follow me there, and ask Perrin what he knows. I can\u2019t tell you what waits on the road, but I\u2019ll not go alone.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "hostile",
+   "attitude_after": "hostile",
+   "facts": {
+    "answer_from": [],
+    "private_matter": "You confided something to another hero in private. This hero was not told, so you will not say what it was, what it was about, or that it holds any detail."
+   }
+  }
+ ]
+}
