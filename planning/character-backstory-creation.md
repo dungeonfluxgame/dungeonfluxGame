@@ -1248,6 +1248,39 @@ subclasses.
 - **O10 Lines and veils.** Add optional table-level "never include / hint only" chips at
   room creation that feed the writer's forbidden themes?
 
+**Owner decisions, 2026-10-12.** The owner answered O1-O4 with "yes to all, use best logic";
+the concrete readings below are the coordinator's and are the working contract until the
+owner changes them. O5-O10 remain open and keep their stated defaults.
+
+- **O1 Licensing: approved in principle, gated on the licence itself.** The owner wants the
+  wider Player's Handbook content. No Player's Handbook text enters the repository until a
+  written licence exists and is recorded as a reviewed RightsGrant; obtaining it is an owner
+  action. Until then variety comes from two sources that need no licence: (a) everything in
+  SRD 5.2.1 (all 12 classes, 9 species, 4 backgrounds, its feats), delivered through the
+  catalog-driven validator (C07-5 onward); (b) original backgrounds and callings written for
+  DungeonFlux, shipped as disclosed, versioned custom content under
+  `planning/generated-content.md`, each built on the 2024 background template (three ability
+  scores, one SRD origin feat, two skills, one tool, 50 GP of equipment) so they stay
+  standard-compatible. Every catalog entry carries its source tag (srd-5.2.1, custom-vN, or a
+  licensed pack id) and a table can see which sources its heroes use. A licensed pack later
+  slots into the same catalog without code changes.
+- **O2 Creation time: approved.** Fast path about one minute, full picker about three. Both
+  are allowed before the first chapter. The TV shows each hero's progress. When every other
+  player is ready, a player still in the full picker is offered "finish quickly" after 60
+  seconds (never forced), and any unfinished history can be completed between chapters.
+- **O3 Persistence: heroes carry across campaigns.** A hero (build, backstory record,
+  progression, portrait) belongs to the player, not to the campaign; a campaign holds a
+  reference plus campaign-only state (ties used, secrets revealed, standing with NPCs). A
+  player may retire or swap heroes between chapters, not mid-scene. Campaigns generate for
+  the party's actual levels rather than resetting a carried hero. In the local preview the
+  roster is stored with the saved player identity; hosted play stores it with the account.
+- **O4 Secrets on a shared-room phone: blur, press and hold to peek.** Sealed and private
+  backstory text is blurred by default on the owner's phone, shown only while held, and
+  re-blurs on release, when the page is hidden, or after 10 seconds. It is never sent to
+  the TV or to another phone. No PIN: it adds friction for little gain at a living-room
+  table; the remaining over-the-shoulder risk is accepted. A PIN can be added later as an
+  option without changing the record.
+
 ---
 
 ## 12. Worked examples
@@ -1478,5 +1511,6 @@ the bribe and desertion, with `known_by: ["Vesk"]`.
 
 ## 14. Changelog of this document
 
+2026-10-12 owner decisions on O1-O4 recorded in section 11.
 2026-10-11 first version (PLAY-C07). Appendix material for later tasks: new hero table
 file (stage tables 4.2), schemas (5.2, 6.1), validation list V1-V14 (5.4).
