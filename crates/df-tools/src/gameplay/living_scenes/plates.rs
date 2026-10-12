@@ -438,9 +438,25 @@ enum Job {
         base: ImageKey,
         face: Face,
     },
+    /// Finds the heads in a plate that is already shown with its predicted layout.
+    Locate { id: String, work: Box<Locate> },
+}
+
+/// What finding the heads in a finished plate needs.
+struct Locate {
+    key: ImageKey,
+    spec: ShotSpec,
+    speaker: shot::SpeakerShot,
+    face: Option<ReferenceImage>,
 }
 
 enum Done {
+    Located {
+        id: String,
+        key: ImageKey,
+        elapsed: Duration,
+        placement: PlatePlacement,
+    },
     Fresh {
         id: String,
         elapsed: Duration,
@@ -836,10 +852,40 @@ impl Shared {
                     }
                     let started = tokio::time::Instant::now();
                     let result = shared.render_fresh(&scene, &spec, &heroes, &faces).await;
+                    let result = result.map(|(key, placement, locate)| {
+                        // The plate is shown with its predicted layout as soon as it lands; the
+                        // measured one follows. A full queue keeps the prediction.
+                        if let Some(work) = locate {
+                            let _kept_prediction = shared.jobs.try_send(Job::Locate {
+                                id: id.clone(),
+                                work,
+                            });
+                        }
+                        (key, placement)
+                    });
                     Done::Fresh {
                         id,
                         elapsed: started.elapsed(),
                         result,
+                    }
+                });
+            }
+            Job::Locate { id, work } => {
+                tasks.spawn(async move {
+                    let started = tokio::time::Instant::now();
+                    let placement = shared
+                        .measured_or_predicted(
+                            &work.key,
+                            &work.spec,
+                            &work.speaker,
+                            work.face.as_ref(),
+                        )
+                        .await;
+                    Done::Located {
+                        id,
+                        key: work.key,
+                        elapsed: started.elapsed(),
+                        placement,
                     }
                 });
             }
@@ -892,7 +938,7 @@ impl Shared {
         spec: &ShotSpec,
         heroes: &[u8],
         faces: &[(u8, ImageKey)],
-    ) -> Result<(ImageKey, Option<PlatePlacement>), ImageFailure> {
+    ) -> Result<(ImageKey, Option<PlatePlacement>, Option<Box<Locate>>), ImageFailure> {
         let mut references = Vec::new();
         let mut sorted = heroes.to_vec();
         sorted.sort_unstable();
@@ -958,14 +1004,31 @@ impl Shared {
                 output: OutputSpec::PLATE,
             })
             .await?;
-        let placement = match &spec.speaker {
-            Some(speaker) => Some(
-                self.measured_or_predicted(&key, spec, speaker, locator_face.as_ref())
-                    .await,
-            ),
-            None => None,
+        let Some(speaker) = &spec.speaker else {
+            return Ok((key, None, None));
         };
-        Ok((key, placement))
+        if let Some(stored) = self.stored_placement(&key).await {
+            return Ok((key, Some(stored), None));
+        }
+        let predicted = PlatePlacement {
+            speaker: speaker.layout,
+            heroes: Vec::new(),
+        };
+        let work = Locate {
+            key: key.clone(),
+            spec: spec.clone(),
+            speaker: speaker.clone(),
+            face: locator_face,
+        };
+        Ok((key, Some(predicted), Some(Box::new(work))))
+    }
+
+    /// The placement kept beside a cached plate by an earlier measurement, when it is intact.
+    async fn stored_placement(&self, key: &ImageKey) -> Option<PlatePlacement> {
+        let note = self.inner.imagery.read_note(key).await?;
+        serde_json::from_slice::<StoredPlacement>(&note)
+            .ok()?
+            .placement()
     }
 
     /// Where the heads are in the finished plate, as the vision model finds them: the speaker's
@@ -980,11 +1043,8 @@ impl Shared {
         speaker: &shot::SpeakerShot,
         face: Option<&ReferenceImage>,
     ) -> PlatePlacement {
-        if let Some(note) = self.inner.imagery.read_note(key).await
-            && let Ok(stored) = serde_json::from_slice::<StoredPlacement>(&note)
-            && let Some(placement) = stored.placement()
-        {
-            return placement;
+        if let Some(stored) = self.stored_placement(key).await {
+            return stored;
         }
         let speaker_description = format!("{}, {}", speaker.look, speaker.task);
         let hero_ids: Vec<String> = spec
@@ -1097,6 +1157,7 @@ impl Shared {
             Done::Edit {
                 elapsed, result, ..
             } => ("plate_edit", *elapsed, result.as_ref().map(|_| ())),
+            Done::Located { elapsed, .. } => ("plate_heads", *elapsed, Ok(())),
         };
         record(
             "gameplay.living_scene.render_finished",
@@ -1113,6 +1174,19 @@ impl Shared {
         );
         let mut book = locked(&self.book);
         match done {
+            Done::Located {
+                id, key, placement, ..
+            } => {
+                // The measured heads replace the prediction of the same plate, if it is still there.
+                if let Some(Entry::Ready {
+                    key: shown,
+                    placement: kept,
+                }) = book.entries.get_mut(&id)
+                    && *shown == key
+                {
+                    *kept = Some(placement);
+                }
+            }
             Done::Fresh { id, result, .. } => {
                 let entry = match result {
                     Ok((key, placement)) => Entry::Ready { key, placement },

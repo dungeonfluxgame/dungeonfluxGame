@@ -75,7 +75,7 @@
 .tv-stage[data-shot=plate] .tv-plate-bubbles{animation:df-shot-in .7s ease .5s backwards}
 @keyframes df-shot-in{from{opacity:0}to{opacity:1}}
 /* the lower third: who is talking, with their portrait, over a plate that is not here yet */
-.tv-lower{position:absolute;z-index:7;left:50%;bottom:calc(4.5vh + var(--u)*5.5);width:calc(var(--u)*58);display:flex;align-items:center;gap:calc(var(--u)*1.4);padding:calc(var(--u)*.8) calc(var(--u)*1.6) calc(var(--u)*.9) calc(var(--u)*1);background:linear-gradient(180deg,#2b2214f0,#17110ae8);border-top:calc(var(--u)*.12) solid #d9b77a;border-bottom:calc(var(--u)*.12) solid #d9b77a;box-shadow:0 calc(var(--u)*.6) calc(var(--u)*2) #000a;opacity:0;visibility:hidden;transform:translate(-50%,calc(var(--u)*1));pointer-events:none;transition:opacity .45s ease,transform .45s ease,visibility 0s .45s}
+.tv-lower{position:absolute;z-index:7;left:50%;bottom:calc(4.5vh + var(--u)*7.4);width:calc(var(--u)*58);display:flex;align-items:center;gap:calc(var(--u)*1.4);padding:calc(var(--u)*.8) calc(var(--u)*1.6) calc(var(--u)*.9) calc(var(--u)*1);background:linear-gradient(180deg,#2b2214f0,#17110ae8);border-top:calc(var(--u)*.12) solid #d9b77a;border-bottom:calc(var(--u)*.12) solid #d9b77a;box-shadow:0 calc(var(--u)*.6) calc(var(--u)*2) #000a;opacity:0;visibility:hidden;transform:translate(-50%,calc(var(--u)*1));pointer-events:none;transition:opacity .45s ease,transform .45s ease,visibility 0s .45s}
 .tv-stage:is([data-chips="0"],[data-chips=off]) .tv-lower{bottom:4.5vh}
 .tv-lower .tv-portrait{width:calc(var(--u)*8);flex:none}
 .tv-lower-words{min-width:0}
