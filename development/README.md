@@ -226,6 +226,26 @@ telemetry span (which records sizes, durations and an outcome label). Only the w
 used: nothing is derived from the voice, and nothing is kept. Microphone tracks are stopped
 as soon as the recording ends.
 
+### Home video (the lobby's loop)
+
+The shared display's home screen starts with its still and, once a loop is ready, fades in a
+five-second ambient loop made from that still by fal (`fal-ai/kling-video/o1/image-to-video`).
+Settings, read by `DF_GAMEPLAY_*` and `FAL_KEY`:
+
+- `FAL_KEY`: the fal credential. `run-gameplay.sh` exports it from the ignored `.env` the way it
+  exports the other keys, and never prints it. Without it the feature is off.
+- `DF_GAMEPLAY_HOME_VIDEO=on|off`: default on when a key is present.
+- `DF_GAMEPLAY_HOME_VIDEO_MODEL`: the endpoint. Default `fal-ai/kling-video/o1/image-to-video`;
+  any other value is refused at startup, since the adapter has no request shape for it.
+- `DF_GAMEPLAY_VIDEO_BUDGET`: clips the run may request, default 4, at most 1000. Each clip is
+  charged before its submit and never refunded; a cached loop costs nothing.
+- `DF_GAMEPLAY_HOME_VIDEO_CACHE`: where loops are cached, by content hash. Default
+  `artifacts/tmp/play/home-video-cache`.
+
+The startup line says what was decided, for example `HOME VIDEO on model=... budget=4` or
+`HOME VIDEO off (no FAL_KEY)`. Each paid call is logged with its time, model and price. Nothing
+waits on the video: a pending, failed, or refused loop leaves the still on screen.
+
 ## Real Gaussian-splat scans as battle scenes
 
 Real photogrammetry scans (streamed level-of-detail SOG scenes from superspl.at: `lod-meta.json`

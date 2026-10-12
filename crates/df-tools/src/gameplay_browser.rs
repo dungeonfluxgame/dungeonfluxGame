@@ -6,6 +6,7 @@ mod live_combat;
 mod live_exploration;
 mod live_health;
 mod live_home;
+mod live_home_video;
 mod live_lobby;
 mod live_motion;
 mod live_music;
