@@ -126,11 +126,14 @@ impl Book {
             return None;
         }
         PREWARM_ORDER.into_iter().find_map(|tier| {
-            characters.iter().enumerate().find_map(|(index, character)| {
-                let key = (character.id.clone(), tier);
-                (!self.known.contains_key(&key) && !self.failed.contains(&key))
-                    .then_some((index, tier))
-            })
+            characters
+                .iter()
+                .enumerate()
+                .find_map(|(index, character)| {
+                    let key = (character.id.clone(), tier);
+                    (!self.known.contains_key(&key) && !self.failed.contains(&key))
+                        .then_some((index, tier))
+                })
         })
     }
 }
@@ -192,11 +195,23 @@ mod tests {
     fn warming_never_happens_in_a_fight_or_while_one_is_in_flight_or_inside_the_reserve() {
         let characters = cast();
         let mut book = Book::default();
-        assert!(book.next_warm(&characters, 40, true).is_none(), "combat never requests");
-        assert!(book.next_warm(&characters, PREWARM_RESERVE, false).is_none());
-        assert!(book.next_warm(&characters, PREWARM_RESERVE + 1, false).is_some());
+        assert!(
+            book.next_warm(&characters, 40, true).is_none(),
+            "combat never requests"
+        );
+        assert!(
+            book.next_warm(&characters, PREWARM_RESERVE, false)
+                .is_none()
+        );
+        assert!(
+            book.next_warm(&characters, PREWARM_RESERVE + 1, false)
+                .is_some()
+        );
         book.start_warming("hero-1", HealthTier::Bloodied);
-        assert!(book.next_warm(&characters, 40, false).is_none(), "one at a time");
+        assert!(
+            book.next_warm(&characters, 40, false).is_none(),
+            "one at a time"
+        );
         book.learn("hero-1", HealthTier::Bloodied, key('b'));
         assert!(book.next_warm(&characters, 40, false).is_some());
     }
@@ -220,7 +235,11 @@ mod tests {
     #[test]
     fn the_nearest_cached_tier_stands_in_for_an_uncached_one_ties_to_the_less_severe() {
         let mut book = Book::default();
-        assert_eq!(book.nearest("hero-1", HealthTier::Critical), None, "nothing cached: authored");
+        assert_eq!(
+            book.nearest("hero-1", HealthTier::Critical),
+            None,
+            "nothing cached: authored"
+        );
         book.learn("hero-1", HealthTier::Bloodied, key('a'));
         book.learn("hero-1", HealthTier::Down, key('d'));
         let shown = |tier| book.nearest("hero-1", tier).map(|(tier, _)| tier);
@@ -244,7 +263,8 @@ mod tests {
         assert_eq!(book.nearest("hero-1", HealthTier::Bloodied), None);
         // Critical is 3 from Healthy and 1 from Down.
         assert_eq!(
-            book.nearest("hero-1", HealthTier::Critical).map(|(tier, _)| tier),
+            book.nearest("hero-1", HealthTier::Critical)
+                .map(|(tier, _)| tier),
             Some(HealthTier::Down)
         );
     }

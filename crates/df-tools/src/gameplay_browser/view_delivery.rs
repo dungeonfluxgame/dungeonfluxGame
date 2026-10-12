@@ -132,7 +132,7 @@ impl GameplayViews {
         Ok(self.views.accept(generation, scope.binding, revision, view))
     }
 
-    // PLAY-L01: the generated art of a display view of the revision already shown is copied into
+    // PLAY-L01: the generated art of a view of the revision already shown is copied into
     // the view on screen by `merge_art` (`live_art::merge_art`); nothing else may change at an
     // equal revision. Returns whether the art changed.
     pub(super) fn accept_art_update(
@@ -156,7 +156,6 @@ impl GameplayViews {
             return false;
         };
         scope == self.scope
-            && self.scope.role == ViewRole::Display
             && self
                 .views
                 .amend_presentation(generation, scope.binding, revision, |shown| {

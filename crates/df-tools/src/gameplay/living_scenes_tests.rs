@@ -68,6 +68,7 @@ fn facts(dossier: &Dossier) -> SceneFacts {
             opposes: dossier.role.opposes_party(),
             starting_attitude: Some(dossier.starting_attitude),
         }],
+        fights: Vec::new(),
     }
 }
 
@@ -473,6 +474,32 @@ fn bloodied_or_worse_outranks_a_mood_face_and_hurt_only_fills_in_where_there_is_
     let state = locked(&inner.state);
     assert_eq!(state.health_sprites["merchant"].key, key('b'));
     assert!(state.sprites.is_empty());
+}
+
+#[test]
+fn the_foes_of_the_adventures_fights_are_warmed_too_after_the_party_and_the_stage() {
+    let dossier = dossier();
+    let mut scene_facts = facts(&dossier);
+    let foe = |sprite: &str| Member {
+        id: sprite.to_owned(),
+        sprite: sprite.to_owned(),
+        name: "Foe".to_owned(),
+        ..scene_facts.members[0].clone()
+    };
+    scene_facts.fights = vec![
+        foe("sprite-ant-bandit"),
+        // Already on this stage: listed once, with the stage.
+        foe("sprite-patron-merchant"),
+    ];
+    let characters = characters_of(&hurt_stage(2, false, 13, 13), &scene_facts);
+    let arts: Vec<&str> = characters
+        .iter()
+        .map(|character| character.art.as_str())
+        .collect();
+    assert_eq!(
+        arts,
+        [HERO_ONE_ART, "sprite-patron-merchant", "sprite-ant-bandit"]
+    );
 }
 
 #[test]

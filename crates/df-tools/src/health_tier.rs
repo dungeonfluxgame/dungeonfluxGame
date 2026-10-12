@@ -31,6 +31,8 @@ pub(crate) enum HealthTier {
 }
 
 impl HealthTier {
+    // The server's art pipeline orders and compares tiers; the browser only labels them.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const ALL: [Self; 5] = [
         Self::Healthy,
         Self::Hurt,
@@ -56,6 +58,7 @@ impl HealthTier {
     }
 
     /// Position from healthy (0) to down (4).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn severity(self) -> u8 {
         match self {
             Self::Healthy => 0,
@@ -67,11 +70,13 @@ impl HealthTier {
     }
 
     /// How many tiers apart two tiers are.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn distance(self, other: Self) -> u8 {
         self.severity().abs_diff(other.severity())
     }
 
     /// Bloodied or worse: the health face outranks the conversation's mood face.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn is_bloodied_or_worse(self) -> bool {
         self.severity() >= Self::Bloodied.severity()
     }

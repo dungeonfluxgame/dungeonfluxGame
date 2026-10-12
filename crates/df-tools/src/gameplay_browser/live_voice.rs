@@ -568,6 +568,12 @@ async fn fetch_clip(key: &str) -> Result<String, JsValue> {
     Url::create_object_url_with_blob(&blob)
 }
 
+/// PLAY-H01: whether the phone may vibrate: the same remembered mute choice as sound (a phone
+/// has no voice director of its own, so the stored choice is the preference).
+pub(super) fn haptics_allowed() -> bool {
+    !stored_mute()
+}
+
 /// The remembered mute choice of this tab. Unavailable storage means "not muted".
 fn stored_mute() -> bool {
     web_sys::window()

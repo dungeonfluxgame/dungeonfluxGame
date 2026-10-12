@@ -334,11 +334,13 @@ fn validate(edit: &ImageEdit<'_>) -> Result<(), ImageEditError> {
         });
     let output_ok = matches!(
         (edit.background, edit.output),
-        (ImageBackground::Transparent, ImageFormat::Png | ImageFormat::Webp)
-            | (
-                ImageBackground::Opaque,
-                ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Webp
-            )
+        (
+            ImageBackground::Transparent,
+            ImageFormat::Png | ImageFormat::Webp
+        ) | (
+            ImageBackground::Opaque,
+            ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Webp
+        )
     );
     if edit.prompt.trim().is_empty()
         || edit.prompt.chars().count() > MAXIMUM_PROMPT_CHARACTERS
@@ -500,7 +502,9 @@ fn decode(value: &Value, edit: &ImageEdit<'_>) -> Result<GeneratedImage, ImageEd
 /// (`VP8X`) image header.
 fn webp_facts(bytes: &[u8]) -> Option<(u32, u32, bool)> {
     let u32_le = |at: usize| -> Option<u32> {
-        Some(u32::from_le_bytes(bytes.get(at..at.checked_add(4)?)?.try_into().ok()?))
+        Some(u32::from_le_bytes(
+            bytes.get(at..at.checked_add(4)?)?.try_into().ok()?,
+        ))
     };
     let u24_le = |at: usize| -> Option<u32> {
         let part = bytes.get(at..at.checked_add(3)?)?;

@@ -17,7 +17,7 @@ use super::{
     super::{
         npc_dossier_tests::adventure,
         pack,
-        scene_mood::{HealthTier, Expression, Lighting, Look, Mood, Shot},
+        scene_mood::{Expression, HealthTier, Lighting, Look, Mood, Shot},
         startup_configuration::{ImageryCredential, ImageryOff},
     },
     artifact::artifact_close_up,
@@ -876,7 +876,7 @@ async fn a_transparent_result_is_served_as_a_webp_with_alpha() {
     assert_eq!(format, ImageFormat::Webp);
     assert_eq!(&bytes[..4], b"RIFF");
     assert_eq!(&bytes[8..12], b"WEBP");
-    assert_eq!(bytes[20] >> 0, 0x2f);
+    assert_eq!(bytes[20], 0x2f);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1194,13 +1194,25 @@ fn the_two_ratings_use_different_phrase_sets_for_the_same_inputs() {
     // how graphic the wounds are.
     let wounded = |rating| face(rating, Expression::Seductive, HealthTier::Bloodied);
     assert!(wounded(ContentRating::Mature).as_str().contains("blood"));
-    assert!(!wounded(ContentRating::Restrained).as_str().contains("blood"));
-    assert!(wounded(ContentRating::Restrained).as_str().contains("battered"));
+    assert!(
+        !wounded(ContentRating::Restrained)
+            .as_str()
+            .contains("blood")
+    );
+    assert!(
+        wounded(ContentRating::Restrained)
+            .as_str()
+            .contains("battered")
+    );
     assert!(!wounded(ContentRating::Mature).as_str().contains("sultry"));
     let hurt = face(ContentRating::Mature, Expression::Angry, HealthTier::Hurt);
     assert!(hurt.as_str().contains("tense and guarded"));
     assert!(!hurt.as_str().contains("furious"), "the health face wins");
-    let healthy = face(ContentRating::Mature, Expression::Angry, HealthTier::Healthy);
+    let healthy = face(
+        ContentRating::Mature,
+        Expression::Angry,
+        HealthTier::Healthy,
+    );
     assert!(healthy.as_str().contains("furious"));
     assert!(!healthy.as_str().contains("guarded"));
 }

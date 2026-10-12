@@ -12,7 +12,7 @@ use super::{
     super::{
         npc_dossier_tests::adventure,
         pack::{CastRole, SceneKey},
-        scene_mood::{HealthTier, Expression, Lighting, Look, Mood, Shot},
+        scene_mood::{Expression, HealthTier, Lighting, Look, Mood, Shot},
         startup_configuration::{ImageryCredential, ImagerySettings},
     },
     *,

@@ -206,6 +206,9 @@ struct SceneFacts {
     tone: SceneTone,
     beat: Beat,
     members: Vec<Member>,
+    /// Named cast of the adventure's fights that is not on this stage, so a fight's foes have
+    /// their health variants ready before the fight starts.
+    fights: Vec<Member>,
 }
 
 /// What one display view says about the stage.
@@ -406,31 +409,45 @@ fn facts_of(stage: &Stage, social: &SocialLedger) -> SceneFacts {
                 tone: SceneTone::Neutral,
                 beat: Beat::Conversation,
                 members: Vec::new(),
+                fights: Vec::new(),
             };
         };
-        let members = scene
-            .cast
+        let member_of = |member: &pack::SceneCastMember| {
+            let role = match member.role {
+                pack::CastRole::Patron => rpc::SceneRole::Patron,
+                pack::CastRole::Antagonist => rpc::SceneRole::Antagonist,
+                pack::CastRole::Contact => rpc::SceneRole::Contact,
+                pack::CastRole::Bystander => rpc::SceneRole::Bystander,
+            };
+            let dossier = social.dossier_of(role, &member.id);
+            Member {
+                id: member.id.clone(),
+                role: role_of(member.role),
+                life_stage: LifeStage::from_age(member.age),
+                name: member.name.clone(),
+                sprite: member.sprite.clone(),
+                dossier_id: dossier.map(|dossier| dossier.npc_id.clone()),
+                opposes: dossier.is_some_and(|dossier| dossier.role.opposes_party()),
+                starting_attitude: dossier.map(|dossier| dossier.starting_attitude),
+            }
+        };
+        let members: Vec<Member> = scene.cast.iter().map(member_of).collect();
+        let mut fights: Vec<Member> = Vec::new();
+        for fight in content
+            .scenes
             .iter()
-            .map(|member| {
-                let role = match member.role {
-                    pack::CastRole::Patron => rpc::SceneRole::Patron,
-                    pack::CastRole::Antagonist => rpc::SceneRole::Antagonist,
-                    pack::CastRole::Contact => rpc::SceneRole::Contact,
-                    pack::CastRole::Bystander => rpc::SceneRole::Bystander,
-                };
-                let dossier = social.dossier_of(role, &member.id);
-                Member {
-                    id: member.id.clone(),
-                    role: role_of(member.role),
-                    life_stage: LifeStage::from_age(member.age),
-                    name: member.name.clone(),
-                    sprite: member.sprite.clone(),
-                    dossier_id: dossier.map(|dossier| dossier.npc_id.clone()),
-                    opposes: dossier.is_some_and(|dossier| dossier.role.opposes_party()),
-                    starting_attitude: dossier.map(|dossier| dossier.starting_attitude),
+            .filter(|other| other.key == SceneKey::Combat)
+        {
+            for member in fight.cast.iter().map(member_of) {
+                let known = members
+                    .iter()
+                    .chain(&fights)
+                    .any(|other| other.sprite == member.sprite);
+                if !known {
+                    fights.push(member);
                 }
-            })
-            .collect();
+            }
+        }
         SceneFacts {
             place: scene
                 .setting
@@ -440,6 +457,7 @@ fn facts_of(stage: &Stage, social: &SocialLedger) -> SceneFacts {
                 .setting
                 .as_ref()
                 .map_or(SceneTone::Neutral, |setting| tone_of(setting.kind)),
+            fights,
             beat: match scene.key {
                 SceneKey::Victory => Beat::Victory,
                 SceneKey::Defeat => Beat::Defeat,
@@ -516,7 +534,9 @@ enum Job {
         tier: HealthTier,
     },
     /// Looks through the cache (never the provider) for a character's health variants.
-    Peek { character: Character },
+    Peek {
+        character: Character,
+    },
 }
 
 enum Done {
@@ -612,7 +632,24 @@ fn characters_of(stage: &Stage, facts: &SceneFacts) -> Vec<Character> {
                 life_stage: member.life_stage,
             },
         });
-    heroes.chain(cast).collect()
+    let fights = facts
+        .fights
+        .iter()
+        .filter(|member| {
+            !facts
+                .members
+                .iter()
+                .any(|other| other.sprite == member.sprite)
+        })
+        .map(|member| Character {
+            id: member.sprite.clone(),
+            art: member.sprite.clone(),
+            facts: CharacterFacts {
+                role: member.role,
+                life_stage: member.life_stage,
+            },
+        });
+    heroes.chain(cast).chain(fights).collect()
 }
 
 /// How hurt the named combatant of this stage is; healthy when the view carries no hit points.
@@ -888,11 +925,7 @@ impl Inner {
             Job::Warm { character, tier } => {
                 tasks.spawn(async move {
                     let result = match inner.load_figure(&character.art).await {
-                        Ok(sprite) => {
-                            inner
-                                .render_health(sprite, character.facts, tier)
-                                .await
-                        }
+                        Ok(sprite) => inner.render_health(sprite, character.facts, tier).await,
                         Err(failure) => Err(failure),
                     };
                     Done::Warm {
@@ -1075,10 +1108,7 @@ impl Inner {
         };
         record(
             "gameplay.living_scene.render_finished",
-            &[
-                ("scene.kind", kind.to_owned()),
-                ("scene.outcome", outcome),
-            ],
+            &[("scene.kind", kind.to_owned()), ("scene.outcome", outcome)],
         );
         let mut state = locked(&self.state);
         match done {

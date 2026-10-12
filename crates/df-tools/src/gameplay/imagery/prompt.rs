@@ -390,13 +390,13 @@ fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static 
 fn health_face_phrase(tier: HealthTier) -> Option<&'static str> {
     match tier {
         HealthTier::Healthy => None,
-        HealthTier::Hurt => Some(
-            "strain: a tight jaw, narrowed watchful eyes and a faint sheen of sweat, guarded",
-        ),
+        HealthTier::Hurt => {
+            Some("strain: a tight jaw, narrowed watchful eyes and a faint sheen of sweat, guarded")
+        }
         HealthTier::Bloodied => Some("pain: a wince, clenched teeth and eyes narrowed against it"),
-        HealthTier::Critical => Some(
-            "desperation: ashen skin, wide unfocused eyes and a slack, trembling mouth",
-        ),
+        HealthTier::Critical => {
+            Some("desperation: ashen skin, wide unfocused eyes and a slack, trembling mouth")
+        }
         HealthTier::Down => Some("unconscious: closed eyes, a slack face and the head slumped"),
     }
 }
@@ -407,15 +407,15 @@ fn health_look_phrase(tier: HealthTier, rating: ContentRating) -> Option<&'stati
     match tier {
         HealthTier::Healthy => None,
         HealthTier::Hurt => Some("tense and guarded, the clothing a little rumpled and dirtied"),
-        HealthTier::Bloodied if mature => Some(
-            "visibly wounded: blood from cuts, bruising, and torn clothing and gear",
-        ),
-        HealthTier::Bloodied => Some(
-            "battered: smudges of dirt and sweat, bruised and rumpled clothing",
-        ),
-        HealthTier::Critical if mature => Some(
-            "barely standing and soaked in blood: deep wounds and ragged, torn gear",
-        ),
+        HealthTier::Bloodied if mature => {
+            Some("visibly wounded: blood from cuts, bruising, and torn clothing and gear")
+        }
+        HealthTier::Bloodied => {
+            Some("battered: smudges of dirt and sweat, bruised and rumpled clothing")
+        }
+        HealthTier::Critical if mature => {
+            Some("barely standing and soaked in blood: deep wounds and ragged, torn gear")
+        }
         HealthTier::Critical => {
             Some("barely standing, ashen and exhausted, in filthy, ragged clothing")
         }
