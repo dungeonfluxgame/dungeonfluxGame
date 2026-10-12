@@ -139,3 +139,70 @@ pub(crate) fn select(
         campaign: None,
     })
 }
+
+/// Presentation substitution only: stored pack/record bytes and intended settings stay pinned.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ArtSubstitution {
+    pub(crate) art_key: String,
+    pub(crate) fallback: String,
+}
+fn painting_present(asset_root: &Path, asset: &str) -> bool {
+    let Some(stem) = asset.strip_prefix("assets/ui/generated/") else {
+        return false;
+    };
+    ["webp", "png", "jpg"].iter().any(|extension| {
+        asset_root
+            .join("generated")
+            .join(format!("{stem}.{extension}"))
+            .is_file()
+    })
+}
+/// Called at native composition with the actual served UI art directory, on fresh and resumed runs.
+/// The required harbor painting is the final fallback when even the location painting is absent.
+pub(crate) fn substitute_missing_art(
+    loaded: &mut LoadedPack,
+    record: &AdventureRecord,
+    asset_root: &Path,
+) -> Vec<ArtSubstitution> {
+    let general = match &record.settings {
+        Some(settings) => Some((
+            settings.confrontation.art_key.clone(),
+            format!(
+                "assets/ui/generated/scene-{}",
+                settings.confrontation.art_key.trim_start_matches("loc-")
+            ),
+        )),
+        None => loaded
+            .pack
+            .scenes
+            .iter()
+            .find(|s| s.key == super::super::pack::SceneKey::Room)
+            .map(|s| (s.asset.clone(), s.asset.clone())),
+    };
+    let (fallback_key, fallback_asset) = match general {
+        Some((key, asset)) if painting_present(asset_root, &asset) => (key, asset),
+        _ => (
+            "harbor-general".into(),
+            "assets/ui/scenes/mara-harbor-v4.png".into(),
+        ),
+    };
+    let mut substitutions = Vec::new();
+    for scene in &mut loaded.pack.scenes {
+        if scene.asset.starts_with("assets/ui/generated/")
+            && !painting_present(asset_root, &scene.asset)
+        {
+            let art_key = scene
+                .setting
+                .as_ref()
+                .map(|s| s.art_key.clone())
+                .unwrap_or_else(|| scene.asset.clone());
+            scene.asset = fallback_asset.clone();
+            println!("ADVENTURE art missing {art_key} -> {fallback_key}");
+            substitutions.push(ArtSubstitution {
+                art_key,
+                fallback: fallback_key.clone(),
+            });
+        }
+    }
+    substitutions
+}

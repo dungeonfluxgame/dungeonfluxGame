@@ -69,6 +69,8 @@ pub(crate) struct Art {
     pub(crate) aspect: String,
     pub(crate) used_by: String,
     pub(crate) prompt: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) depicts: Vec<super::setting::SettingKind>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -146,6 +148,8 @@ pub(crate) struct Tables {
     pub(super) traits: BTreeMap<String, Table<TextEntry>>,
     pub(super) prose: BTreeMap<String, PatternTable>,
     pub(super) art: BTreeMap<String, String>,
+    pub(super) depicts: BTreeMap<String, Vec<super::setting::SettingKind>>,
+    pub(super) places: super::setting::Places,
 }
 fn document<T: DeserializeOwned + Serialize>(
     bytes: &BTreeMap<String, Vec<u8>>,
@@ -243,6 +247,7 @@ impl Tables {
             "npc-traits.json",
             "prose-patterns.json",
             "art-manifest.json",
+            "places.json",
         ] {
             if !files.contains(&file.to_owned()) {
                 return Err(invalid("tables.json", "files", format!("missing {file}")));
@@ -255,8 +260,17 @@ impl Tables {
                 .ok_or_else(|| invalid("tables.json", "files", "missing art manifest"))?,
         )?;
         let mut art = BTreeMap::new();
+        let mut depicts = BTreeMap::new();
         let mut stems = BTreeSet::new();
         for entry in art_entries {
+            if entry.kind == "scene" && entry.depicts.is_empty() {
+                return Err(invalid(
+                    "art-manifest.json",
+                    "depicts",
+                    "scene depiction required",
+                ));
+            }
+            depicts.insert(entry.art_key.clone(), entry.depicts.clone());
             if !entry
                 .file_stem
                 .bytes()
@@ -328,7 +342,21 @@ impl Tables {
             traits: document(&bytes, "npc-traits.json")?.tables,
             prose: document(&bytes, "prose-patterns.json")?.tables,
             art,
+            depicts,
+            places: parse(
+                "places.json",
+                bytes
+                    .get("places.json")
+                    .ok_or_else(|| invalid("places.json", ".", "not indexed"))?,
+            )?,
         };
+        lint_tree(
+            "places.json",
+            ".",
+            &serde_json::to_value(&result.places)
+                .map_err(|_| invalid("places.json", ".", "serialization"))?,
+        )?;
+        result.places.validate(&result)?;
         result.compatibility(&index.compat_tags)?;
         super::bounds::validate(&result)?;
         Ok(result)
@@ -770,6 +798,9 @@ fn lint_tree(file: &str, path: &str, value: &serde_json::Value) -> Result<(), Ta
         }
         Value::String(text) => {
             let known = [
+                "place",
+                "place_short",
+                "place_detail",
                 "loc.name",
                 "loc.title",
                 "loc.short",

@@ -107,7 +107,7 @@
             "message",
             "heirloom"
           ],
-          "title": "A Dangerous Road",
+          "title": "A Dangerous Journey",
           "entrance": "hurries toward your lantern, pale and out of breath",
           "pitch": "I must reach {contact.first} before morning, and the way behind me isn't safe. Will you walk with me?",
           "answer": "I'm carrying {stake.short} for {contact.first}, and whoever is behind me knows it.",
@@ -134,7 +134,7 @@
           ],
           "title": "What {patron.first} Saw",
           "entrance": "pushes through the dark toward you, eyes wide and glancing back",
-          "pitch": "I saw something I shouldn't have, and I need a safe road to {contact.first}. Please, will you help me?",
+          "pitch": "I saw something I shouldn't have, and I need a safe way to {contact.first}. Please, will you help me?",
           "answer": "I can't say it aloud, not here. But it concerns {stake.short}, and it can't wait.",
           "accept": "{contact.first} is waiting at {dest.name}. Once I'm there, I can finally tell it all."
         },
@@ -160,7 +160,7 @@
           "entrance": "limps up to you on a staff, holding {stake.full}",
           "pitch": "I vowed to bring {stake.short} to {contact.first} by dawn, and my legs won't carry me there alone.",
           "answer": "It is an old vow, and I'm too proud to break it. Too tired to keep it, though, without help.",
-          "accept": "To {dest.name}, then. {contact.first} will be waiting. Thank you; the road has been long and lonely."
+          "accept": "To {dest.name}, then. {contact.first} will be waiting. Thank you; the journey has been long and lonely."
         },
         {
           "faces": [

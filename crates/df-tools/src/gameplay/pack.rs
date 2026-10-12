@@ -616,6 +616,8 @@ pub(super) struct Scene {
     pub(super) dialogue: String,
     /// Served asset path without a leading slash.
     pub(super) asset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) setting: Option<super::adventure::setting::SceneSetting>,
     #[serde(default)]
     pub(super) speaker_portrait: String,
 }
@@ -1534,6 +1536,35 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
                 CrossRefReason::RestedNarrationMismatch,
             ));
         }
+        if let Some(setting) = &scene.setting {
+            identifier(FILE, &format!("{at}.setting.place_id"), &setting.place_id)?;
+            identifier(FILE, &format!("{at}.setting.art_key"), &setting.art_key)?;
+            text(
+                FILE,
+                &format!("{at}.setting.name"),
+                &setting.name,
+                1,
+                LABEL_CHARACTERS_MAX,
+            )?;
+            text(
+                FILE,
+                &format!("{at}.setting.short"),
+                &setting.short,
+                1,
+                LABEL_CHARACTERS_MAX,
+            )?;
+        }
+        if scene
+            .setting
+            .as_ref()
+            .is_some_and(|setting| !super::adventure::setting::validates(setting, &scene.asset))
+        {
+            return Err(PackError::Malformed {
+                file: FILE,
+                path: format!("{at}.setting"),
+                expected: "setting with art depicting its kind",
+            });
+        }
         if !served_asset(&scene.asset)
             || (!scene.speaker_portrait.is_empty() && !served_asset(&scene.speaker_portrait))
         {
@@ -1543,6 +1574,13 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
                 CrossRefReason::AssetNotServed,
             ));
         }
+    }
+    if scenes.iter().any(|s| s.setting.is_some()) && scenes.iter().any(|s| s.setting.is_none()) {
+        return Err(PackError::Malformed {
+            file: FILE,
+            path: "scenes.setting".into(),
+            expected: "all scene settings, or legacy with no settings",
+        });
     }
     for key in SceneKey::ALL {
         let mut matches = scenes

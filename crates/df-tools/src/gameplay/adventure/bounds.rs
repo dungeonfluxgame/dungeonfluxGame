@@ -27,6 +27,45 @@ fn bound(file: &str, path: &str, text: &str, maximum: usize) -> Result<(), Table
 }
 pub(super) fn validate(tables: &Tables) -> Result<(), TablesError> {
     let mut c = BTreeMap::new();
+    c.insert(
+        "place".into(),
+        longest(
+            tables
+                .places
+                .meeting_places
+                .values()
+                .map(|p| p.name.replace("{loc.name}", "the Reedmoor Boardwalk")),
+        ),
+    );
+    c.insert(
+        "place_short".into(),
+        longest(
+            tables
+                .places
+                .meeting_places
+                .values()
+                .map(|p| p.short.clone()),
+        ),
+    );
+    c.insert(
+        "place_detail".into(),
+        longest(
+            tables
+                .places
+                .meeting_places
+                .values()
+                .flat_map(|p| &p.details.entries)
+                .chain(
+                    tables
+                        .places
+                        .confrontation
+                        .values()
+                        .flat_map(|p| &p.bridges.entries),
+                )
+                .map(|e| e.text.clone()),
+        ),
+    );
+
     for (k, values) in [
         (
             "loc.name",
@@ -234,11 +273,23 @@ pub(super) fn validate(tables: &Tables) -> Result<(), TablesError> {
         } else {
             220
         };
+        let mut slot_context = c.clone();
+        if key == "victory_lead" {
+            slot_context.insert(
+                "place".into(),
+                longest(
+                    tables
+                        .destinations
+                        .values()
+                        .flat_map(|t| t.entries.iter().map(|e| e.name.clone())),
+                ),
+            );
+        }
         for (index, e) in table.variants.iter().enumerate() {
             bound(
                 "prose-patterns.json",
                 &format!("tables.{key}.variants[{index}].text"),
-                &rendered(&e.text, &c)?,
+                &rendered(&e.text, &slot_context)?,
                 maximum,
             )?;
         }
@@ -293,13 +344,23 @@ pub(super) fn validate(tables: &Tables) -> Result<(), TablesError> {
         &format!("{dest_arrival} {intro}"),
         220,
     )?;
+    let mut aftermath_context = c.clone();
+    aftermath_context.insert(
+        "place".into(),
+        longest(
+            tables
+                .destinations
+                .values()
+                .flat_map(|t| t.entries.iter().map(|e| e.name.clone())),
+        ),
+    );
     let lead = longest(
         tables
             .prose
             .get("victory_lead")
             .into_iter()
             .flat_map(|t| &t.variants)
-            .map(|e| rendered(&e.text, &c))
+            .map(|e| rendered(&e.text, &aftermath_context))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter(),
     );

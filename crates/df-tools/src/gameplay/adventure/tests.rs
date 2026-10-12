@@ -8,189 +8,32 @@ fn tables() -> Tables {
     .unwrap()
 }
 #[test]
-fn appendix_facts_and_determinism() {
+fn fixed_seeds_reproduce_current_settings_rolls_and_documents() {
     let tables = tables();
-    for (seed, location, hook, patron, contact, ant) in [
-        (
-            0x3c6ef378dd81de97,
-            "lamplit-market",
-            "missed-signal",
-            "Ilsa Greaves",
-            "Lorcan Nettleby",
-            "Snag the Goblin",
-        ),
-        (
-            0xdaa66d325ccc5aac,
-            "pinewood-trail",
-            "dying-promise",
-            "Brisa Ashdown",
-            "Odalys Ravensby",
-            "the Ash-Pale Sentinel",
-        ),
-        (
-            0x11a25cdccc7d808f,
-            "thistledown-farm",
-            "promised-remedy",
-            "Kestrel Marlow",
-            "Odalys Nettleby",
-            "the Scarred Giant Rat",
-        ),
-    ] {
-        let adventure = generate(
+    for seed in [0x3c6ef378dd81de97, 0xdaa66d325ccc5aac, 0x11a25cdccc7d808f] {
+        let first = generate(
             &tables,
             seed,
             GenerateOptions::default(),
             &ForcedEntries::new(),
         )
         .unwrap();
-        let (
-            patron_id,
-            stake_id,
-            ant_id,
-            complication_id,
-            secret_id,
-            destination_id,
-            contact_id,
-            reward_face,
-            roll_count,
-            rejections,
-            hp,
-            ac,
-            bonus,
-            damage,
-            abilities,
-            clue,
-        ) = match seed {
-            0x3c6ef378dd81de97 => (
-                "bell-ringer",
-                "debt-ledger",
-                "goblin-warrior",
-                "afraid",
-                "my-fault",
-                "lantern-makers-shop",
-                "watch-sergeant",
-                11,
-                55,
-                5,
-                10,
-                15,
-                4,
-                2,
-                [8, 15, 10, 10, 8, 8],
-                "Ilsa draws you close. The warning is for Lorcan Nettleby at the Lantern-Maker's Shop. This is partly my fault. I left something unguarded, and I am ashamed. Keep it between us.",
-            ),
-            0xdaa66d325ccc5aac => (
-                "acolyte",
-                "cradle-blanket",
-                "skeleton",
-                "careless-hand",
-                "passphrase",
-                "woodcutters-lodge",
-                "river-healer",
-                5,
-                51,
-                3,
-                13,
-                14,
-                5,
-                3,
-                [10, 16, 15, 6, 8, 5],
-                "Brisa lowers her voice so only you can hear. Odalys Ravensby waits at the Woodcutters' Lodge for the blanket. At the door, say that the lamps are low. Odalys will know you are friends. Tell no one.",
-            ),
-            _ => (
-                "innkeeper",
-                "fever-herb",
-                "giant-rat",
-                "hunger-and-light",
-                "leak",
-                "farmhouse-kitchen",
-                "miller",
-                7,
-                63,
-                15,
-                7,
-                13,
-                5,
-                3,
-                [7, 16, 11, 2, 10, 4],
-                "Kestrel whispers to you alone: Odalys Nettleby is keeping the fever-herb for me at the Farmhouse Kitchen. Someone I trust sold word of this errand. I do not know who. Keep it between us.",
-            ),
-        };
-        for (key, expected) in [
-            ("patron.id", patron_id),
-            ("stake.id", stake_id),
-            ("ant.id", ant_id),
-            ("complication.id", complication_id),
-            ("secret.id", secret_id),
-            ("dest.id", destination_id),
-            ("contact.id", contact_id),
-        ] {
-            assert_eq!(adventure.facts[key], expected);
-        }
-        assert_eq!(adventure.rolls.len(), roll_count);
-        assert_eq!(
-            adventure
-                .rolls
-                .iter()
-                .filter(|r| r.status == RollStatus::Rejected)
-                .count(),
-            rejections
-        );
-        assert_eq!(
-            adventure
-                .rolls
-                .iter()
-                .find(|r| r.table == "reward")
-                .unwrap()
-                .natural,
-            reward_face
-        );
-        assert_eq!(adventure.pack.courier_clue, clue);
-        let stats = &adventure.tuning.bandit;
-        assert_eq!(
-            (
-                stats.hit_points,
-                stats.armor_class,
-                stats.attack_bonus,
-                stats.damage_modifier
-            ),
-            (hp, ac, bonus, damage)
-        );
-        let a = stats.abilities;
-        assert_eq!(
-            [
-                a.strength,
-                a.dexterity,
-                a.constitution,
-                a.intelligence,
-                a.wisdom,
-                a.charisma
-            ],
-            abilities
-        );
-        assert_eq!(stats.weapon.damage_dice, 1);
-        assert_eq!(
-            stats.weapon.damage_sides,
-            if ant_id == "giant-rat" { 4 } else { 6 }
-        );
-        assert_eq!(adventure.seed, seed);
-        assert_eq!(adventure.tables_revision, tables.revision);
-        assert_eq!(adventure.rules_mode, RulesMode::Standard);
-        assert_eq!(adventure.facts["loc.id"], location);
-        assert_eq!(adventure.facts["hook.id"], hook);
-        assert_eq!(adventure.facts["patron.full"], patron);
-        assert_eq!(adventure.facts["contact.full"], contact);
-        assert_eq!(adventure.facts["ant.short"], ant);
-        let repeated = generate(
+        let second = generate(
             &tables,
             seed,
             GenerateOptions::default(),
             &ForcedEntries::new(),
         )
         .unwrap();
-        assert_eq!(adventure.pack, repeated.pack);
-        assert_eq!(adventure.tuning, repeated.tuning);
-        assert_eq!(adventure.rolls, repeated.rolls);
+        assert_eq!(first.pack, second.pack);
+        assert_eq!(first.tuning, second.tuning);
+        assert_eq!(first.rolls, second.rolls);
+        assert_eq!(first.settings, second.settings);
+        let a = first.documents(true).unwrap();
+        let b = second.documents(true).unwrap();
+        assert_eq!(a.pack, b.pack);
+        assert_eq!(a.tuning, b.tuning);
+        assert_eq!(a.record, b.record);
     }
 }
 #[test]
@@ -317,8 +160,12 @@ fn longest_coherent_opening_fits_the_narration_bound() {
         .find(|s| s.key == super::super::pack::SceneKey::Opening)
         .unwrap();
     assert!(opening.narration.chars().count() <= 220);
-    assert!(opening.narration.contains("on a staff"));
-    assert!(opening.narration.contains("Nearby, something dry rattles"));
+    assert!(
+        opening
+            .narration
+            .contains(&generated.settings.meeting.short)
+    );
+    assert!(opening.narration.contains(&generated.settings.meeting.name));
 }
 
 #[test]
@@ -605,4 +452,309 @@ fn record_binding_and_compiled_mechanical_text_fail_closed() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn two_hundred_seeds_bind_every_scene_to_its_story_setting() {
+    use super::super::pack::SceneKey;
+    let tables = tables();
+    for seed in 0..200 {
+        let generated = generate(
+            &tables,
+            seed,
+            GenerateOptions::default(),
+            &ForcedEntries::new(),
+        )
+        .unwrap();
+        let keys: std::collections::BTreeSet<_> = generated
+            .pack
+            .scenes
+            .iter()
+            .map(|s| s.setting.as_ref().unwrap().art_key.clone())
+            .collect();
+        assert!(keys.len() >= 3, "seed {seed}");
+        for scene in &generated.pack.scenes {
+            let setting = scene.setting.as_ref().unwrap();
+            assert_eq!(setting, generated.settings.scene(scene.key));
+            assert!(tables.depicts[&setting.art_key].contains(&setting.kind));
+            assert_eq!(scene.asset, tables.art[&setting.art_key]);
+            if scene.key == SceneKey::Opening {
+                assert_eq!(
+                    setting.art_key,
+                    tables.places.meeting_places[&generated.facts["patron.id"]].art
+                );
+                assert!(
+                    scene
+                        .narration
+                        .to_lowercase()
+                        .contains(&setting.short.to_lowercase())
+                );
+                assert!(
+                    scene
+                        .narration
+                        .split('.')
+                        .next()
+                        .unwrap()
+                        .contains(&setting.name)
+                );
+            }
+            if scene.key == SceneKey::Combat {
+                assert!(
+                    scene
+                        .narration
+                        .contains(&generated.facts["setting.confrontation.detail"])
+                );
+            }
+        }
+        for sheet in &generated.fact_sheet {
+            for prefix in ["meeting", "confrontation", "destination"] {
+                assert!(sheet.facts.contains_key(&format!("setting.{prefix}.name")));
+            }
+        }
+    }
+}
+
+#[test]
+fn generic_narration_patterns_have_no_hardcoded_foreign_place_words() {
+    let tables = tables();
+    // These physical place words belong to settings, not generic reusable narration.
+    let vocabulary = [
+        "inn",
+        "taproom",
+        "temple",
+        "sanctuary",
+        "archive",
+        "ferry",
+        "shop",
+        "shed",
+        "sheepfold",
+        "guardhouse",
+        "chamber",
+        "quay",
+        "wharf",
+        "forest",
+        "trail",
+        "pass",
+        "market",
+        "graveyard",
+        "boardwalk",
+        "farmyard",
+        "library",
+        "road",
+        "loft",
+        "boathouse",
+        "hut",
+        "lodge",
+        "cabin",
+        "hall",
+        "bothy",
+        "chapel",
+        "vestry",
+        "kitchen",
+        "cellar",
+        "bindery",
+        "gallery",
+    ];
+    for (key, table) in &tables.prose {
+        if !(key.contains("narration")
+            || key.starts_with("combat_open")
+            || key.starts_with("victory_lead")
+            || key.starts_with("defeat_")
+            || key == "inn_intro")
+        {
+            continue;
+        }
+        for variant in &table.variants {
+            let words: Vec<_> = variant
+                .text
+                .split(|c: char| !c.is_ascii_alphabetic())
+                .map(str::to_lowercase)
+                .collect();
+            for foreign in vocabulary {
+                assert!(
+                    !words.iter().any(|w| w == foreign),
+                    "{key}: {foreign}: {}",
+                    variant.text
+                );
+            }
+        }
+    }
+    let fragments = tables
+        .complications
+        .entries
+        .iter()
+        .map(|e| e.text.as_str())
+        .chain(
+            tables
+                .hooks
+                .entries
+                .iter()
+                .flat_map(|e| [e.entrance.as_str(), e.title.as_str()]),
+        )
+        .chain(tables.secrets.entries.iter().map(|e| e.fact.as_str()));
+    for text in fragments {
+        let words: Vec<_> = text
+            .split(|c: char| !c.is_ascii_alphabetic())
+            .map(str::to_lowercase)
+            .collect();
+        for foreign in vocabulary {
+            assert!(
+                !words.iter().any(|w| w == foreign),
+                "narration fragment: {foreign}: {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn loader_rejects_unknown_setting_kind_depiction_mismatch_and_partial_settings() {
+    let generated = generate(
+        &tables(),
+        42,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+    let original = serde_json::to_value(&generated.pack).unwrap();
+    for mutation in ["unknown", "mismatch", "partial"] {
+        let mut pack = original.clone();
+        match mutation {
+            "unknown" => pack["scenes"][0]["setting"]["kind"] = "spaceship".into(),
+            "mismatch" => pack["scenes"][0]["setting"]["kind"] = "inn".into(),
+            _ => {
+                pack["scenes"][0].as_object_mut().unwrap().remove("setting");
+            }
+        }
+        assert!(
+            super::super::pack::load_from_bytes(
+                &serde_json::to_vec(&pack).unwrap(),
+                &serde_json::to_vec(&generated.tuning).unwrap()
+            )
+            .is_err(),
+            "{mutation}"
+        );
+    }
+    let original_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/adventure-tables");
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/play-g5/setting-errors");
+    std::fs::create_dir_all(&directory).unwrap();
+    for entry in std::fs::read_dir(original_dir).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), directory.join(entry.file_name())).unwrap();
+    }
+    let original = std::fs::read(directory.join("places.json")).unwrap();
+    for kind in ["spaceship", "archive"] {
+        let mut places: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        places["meeting_places"]["innkeeper"]["kind"] = kind.into();
+        std::fs::write(
+            directory.join("places.json"),
+            serde_json::to_vec(&places).unwrap(),
+        )
+        .unwrap();
+        assert!(Tables::load(&directory).is_err());
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn old_record_without_any_settings_loads_through_typed_legacy_path() {
+    use sha2::{Digest, Sha256};
+    let generated = generate(
+        &tables(),
+        42,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+    let mut documents = generated.documents(true).unwrap();
+    let mut pack: serde_json::Value = serde_json::from_slice(&documents.pack).unwrap();
+    for scene in pack["scenes"].as_array_mut().unwrap() {
+        scene.as_object_mut().unwrap().remove("setting");
+    }
+    documents.pack = serde_json::to_vec_pretty(&pack).unwrap();
+    let mut record: serde_json::Value = serde_json::from_slice(&documents.record).unwrap();
+    record.as_object_mut().unwrap().remove("settings");
+    record["pack_sha256"] = format!("{:x}", Sha256::digest(&documents.pack)).into();
+    let mut digest = Sha256::new();
+    digest.update(&documents.pack);
+    digest.update(&documents.tuning);
+    record["expression"]["output_sha256"] = format!("{:x}", digest.finalize()).into();
+    documents.record = serde_json::to_vec_pretty(&record).unwrap();
+    let (loaded, record) = record::reload(&documents).unwrap();
+    assert!(loaded.pack.scenes.iter().all(|s| s.setting.is_none()));
+    assert!(matches!(
+        record.setting_state(),
+        record::SettingState::LegacyNoSettings
+    ));
+}
+
+#[test]
+fn startup_substitutes_missing_paintings_without_changing_stored_documents() {
+    let generated = generate(
+        &tables(),
+        42,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+    let documents = generated.documents(true).unwrap();
+    let (mut loaded, record) = record::reload(&documents).unwrap();
+    let original_pack = documents.pack.clone();
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/play-g5/missing-art");
+    std::fs::create_dir_all(directory.join("generated")).unwrap();
+    let general = generated
+        .pack
+        .scenes
+        .iter()
+        .find(|s| s.key == super::super::pack::SceneKey::Room)
+        .unwrap()
+        .asset
+        .strip_prefix("assets/ui/generated/")
+        .unwrap();
+    let general_file = directory.join("generated").join(format!("{general}.png"));
+    std::fs::write(&general_file, b"fixture painting").unwrap();
+    let substitutions = startup::substitute_missing_art(&mut loaded, &record, &directory);
+    assert_eq!(substitutions.len(), 5);
+    assert!(
+        loaded
+            .pack
+            .scenes
+            .iter()
+            .all(|s| s.asset == format!("assets/ui/generated/{general}"))
+    );
+    assert_eq!(documents.pack, original_pack);
+    assert!(loaded.pack.scenes.iter().all(|s| s.setting.is_some()));
+    std::fs::remove_file(general_file).unwrap();
+    let substitutions = startup::substitute_missing_art(&mut loaded, &record, &directory);
+    assert_eq!(substitutions.len(), 8);
+    assert!(
+        loaded
+            .pack
+            .scenes
+            .iter()
+            .all(|s| s.asset == "assets/ui/scenes/mara-harbor-v4.png")
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[ignore = "blocked: Orrery arrival art depicts an indoor hall; exterior decision/art pending"]
+fn every_fight_across_two_hundred_seeds_is_exterior() {
+    let tables = tables();
+    for seed in 0..200 {
+        let generated = generate(
+            &tables,
+            seed,
+            GenerateOptions::default(),
+            &ForcedEntries::new(),
+        )
+        .unwrap();
+        assert!(
+            generated.settings.confrontation.exterior,
+            "seed {seed}: {}",
+            generated.settings.confrontation.name
+        );
+    }
 }

@@ -16,6 +16,7 @@ pub(crate) mod record;
 mod render;
 mod rng;
 mod schema;
+pub(crate) mod setting;
 pub(crate) mod startup;
 mod tables;
 #[cfg(test)]
@@ -101,6 +102,7 @@ pub(crate) struct GeneratedAdventure {
     pub(crate) rolls: Vec<Roll>,
     pub(crate) pack: PackFile,
     pub(crate) tuning: TuningFile,
+    pub(crate) settings: setting::ChapterSettings,
 }
 #[derive(Clone, Debug)]
 pub(crate) enum GenerateError {
