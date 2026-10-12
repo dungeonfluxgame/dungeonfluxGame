@@ -75,15 +75,27 @@ fn a_moon_in_the_upper_right_is_the_focal_region_and_the_chosen_layout_leaves_it
     );
     let arrangement = choose_arrangement(&measures).expect("some layout leaves the moon clear");
     let fit = analysis::fit(arrangement.boxes(), &measures);
-    assert!(fit.is_clear(), "{} covers the moon: {fit:?}", arrangement.name);
+    assert!(
+        fit.is_clear(),
+        "{} covers the moon: {fit:?}",
+        arrangement.name
+    );
 }
 
 #[test]
 fn a_moon_low_on_the_left_is_found_where_it_is_painted() {
     let measures = measure(&moon_at(0.2, 0.75));
     let [left, top, right, bottom] = measures.focal;
-    assert!(left <= 0.2 && 0.2 <= right, "focal {:?} misses x 0.2", measures.focal);
-    assert!(top <= 0.75 && 0.75 <= bottom, "focal {:?} misses y 0.75", measures.focal);
+    assert!(
+        left <= 0.2 && 0.2 <= right,
+        "focal {:?} misses x 0.2",
+        measures.focal
+    );
+    assert!(
+        top <= 0.75 && 0.75 <= bottom,
+        "focal {:?} misses y 0.75",
+        measures.focal
+    );
 }
 
 #[test]
@@ -95,8 +107,15 @@ fn a_layout_that_covers_the_focal_region_is_not_clear_and_scores_it() {
         .find(|arrangement| arrangement.name == "title-top-left-panels-bottom")
         .expect("the fallback arrangement is defined");
     let fit = analysis::fit(title_top_left.boxes(), &measures);
-    assert!(!fit.is_clear(), "the title block covers the top-left focal region");
-    assert!(fit.focal_covered_permille.iter().all(|covered| *covered > 0));
+    assert!(
+        !fit.is_clear(),
+        "the title block covers the top-left focal region"
+    );
+    assert!(
+        fit.focal_covered_permille
+            .iter()
+            .all(|covered| *covered > 0)
+    );
 }
 
 #[test]
@@ -118,8 +137,16 @@ fn ground_that_is_bright_and_busy_costs_more_than_ground_that_is_dark_and_calm()
         }
     });
     let measures = measure(&image);
-    let calm = [[45, 45, 240, 200], [30, 690, 260, 290], [650, 690, 330, 290]];
-    let busy = [[45, 45, 240, 200], [600, 690, 260, 290], [650, 690, 330, 290]];
+    let calm = [
+        [45, 45, 240, 200],
+        [30, 690, 260, 290],
+        [650, 690, 330, 290],
+    ];
+    let busy = [
+        [45, 45, 240, 200],
+        [600, 690, 260, 290],
+        [650, 690, 330, 290],
+    ];
     let calm_fit = analysis::fit(calm, &measures);
     let busy_fit = analysis::fit(busy, &measures);
     assert!(
@@ -198,7 +225,10 @@ fn every_location_arrival_painting_gets_a_theme_from_its_pixels() {
         assert!(theme.mood.accent.starts_with('#') && theme.mood.accent.len() == 7);
         themed += 1;
     }
-    assert!(themed >= 8, "the eight arrival paintings are all themed, found {themed}");
+    assert!(
+        themed >= 8,
+        "the eight arrival paintings are all themed, found {themed}"
+    );
 }
 
 #[test]
@@ -224,7 +254,10 @@ fn an_unknown_path_is_refused_with_a_typed_error_that_names_it() {
     let painting = "assets/ui/generated/scene-missing-test-painting.webp";
     let error = theme_for(&asset_root(), painting, None).expect_err("a missing file is refused");
     let text = error.to_string();
-    assert!(text.contains(painting), "the refusal must name the painting: {text}");
+    assert!(
+        text.contains(painting),
+        "the refusal must name the painting: {text}"
+    );
     assert!(matches!(error, HomeThemeError::Read { .. }), "{error:?}");
 }
 
@@ -232,7 +265,10 @@ fn an_unknown_path_is_refused_with_a_typed_error_that_names_it() {
 fn a_painting_outside_the_asset_root_is_refused_before_any_file_is_read() {
     let error = theme_for(&asset_root(), "assets/ui/../../Cargo.toml", None)
         .expect_err("a path that escapes the asset root is refused");
-    assert!(matches!(error, HomeThemeError::Painting { .. }), "{error:?}");
+    assert!(
+        matches!(error, HomeThemeError::Painting { .. }),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -240,12 +276,18 @@ fn a_file_that_is_not_an_image_is_refused_by_name_as_undecodable() {
     let root = std::env::temp_dir().join(format!("df-home-theme-{}", std::process::id()));
     let generated = root.join("generated");
     std::fs::create_dir_all(&generated).expect("a scratch asset root");
-    std::fs::write(generated.join("not-a-picture.webp"), b"this is not an image")
-        .expect("a scratch file");
+    std::fs::write(
+        generated.join("not-a-picture.webp"),
+        b"this is not an image",
+    )
+    .expect("a scratch file");
     let painting = "assets/ui/generated/not-a-picture.webp";
     let error = theme_for(&root, painting, None).expect_err("bytes that are not an image");
     let text = error.to_string();
-    assert!(text.contains(painting), "the refusal must name the painting: {text}");
+    assert!(
+        text.contains(painting),
+        "the refusal must name the painting: {text}"
+    );
     assert!(matches!(error, HomeThemeError::Decode { .. }), "{error:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -290,7 +332,8 @@ fn the_lobby_theme_survives_the_generated_protocol_encoding() {
 
 fn arrival_paintings() -> Vec<String> {
     let text = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/adventure-tables/art-manifest.json"),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/adventure-tables/art-manifest.json"),
     )
     .expect("the art manifest is readable");
     let entries: Vec<serde_json::Value> =
@@ -310,4 +353,47 @@ fn arrival_paintings() -> Vec<String> {
     paintings.sort();
     paintings.dedup();
     paintings
+}
+
+/// Development report, not a gate: writes each location painting's focal box and how every
+/// arrangement covers it, to the file named by `DF_HOME_THEME_REPORT`. Run with `--ignored`.
+#[test]
+#[ignore = "development report; set DF_HOME_THEME_REPORT to a file path"]
+fn report_home_theme_focal_and_coverage_for_each_location_painting() {
+    let Some(path) = std::env::var_os("DF_HOME_THEME_REPORT") else {
+        return;
+    };
+    let mut report = Vec::new();
+    for painting in arrival_paintings() {
+        let file = super::home_theme::painting_file(&asset_root(), &painting)
+            .expect("the painting file resolves");
+        let image = image::open(&file)
+            .expect("the painting decodes")
+            .into_rgb8();
+        let measures = measure(&image);
+        let fits: Vec<serde_json::Value> = ARRANGEMENTS
+            .iter()
+            .map(|arrangement| {
+                let fit = analysis::fit(arrangement.boxes(), &measures);
+                serde_json::json!({
+                    "arrangement": arrangement.name,
+                    "covered_permille": fit.focal_covered_permille,
+                    "penalty": fit.penalty,
+                })
+            })
+            .collect();
+        report.push(serde_json::json!({
+            "painting": painting,
+            "size": measures.size,
+            "focal": measures.focal,
+            "mean_luminance": measures.mean_luminance,
+            "warm_balance": measures.warm_balance,
+            "fits": fits,
+        }));
+    }
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(&report).expect("the report serialises"),
+    )
+    .expect("the report file is writable");
 }

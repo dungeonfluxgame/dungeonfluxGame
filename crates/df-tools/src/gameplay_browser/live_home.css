@@ -1,19 +1,35 @@
-/* PLAY-V05 home screen. The server's theme places the title, room-code panel and party panel
+/* PLAY-V05 home screen. The server's theme places the title, the join block and the party panel
    (custom properties in percent of the viewport), sets the location's mood and draws its
    atmosphere. Without a theme the default lobby rules above apply unchanged. */
 .tv-title-block{display:contents}
-.tv-atmosphere{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.tv-atmosphere{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1}
 .tv-stage[data-home]{--home-accent:#e8cb94;--home-tint:#0b1623;--home-vignette:.55;--home-brightness:1;--home-contrast:1;--home-saturation:1}
 .tv-stage[data-home] .tv-art,.tv-stage[data-home] .tv-art-previous{filter:brightness(var(--home-brightness)) contrast(var(--home-contrast)) saturate(var(--home-saturation))}
 .tv-stage[data-home][data-tv-mode=lobby] .tv-scrim{background:radial-gradient(ellipse at 50% 46%,rgb(2 4 10/0) 46%,rgb(2 4 10/var(--home-vignette)) 100%),linear-gradient(0deg,#03060ef2 0%,#03060e99 34%,#03060e00 66%)}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-title-block{display:block;position:absolute;left:var(--home-title-x);top:var(--home-title-y);width:var(--home-title-w);height:var(--home-title-h);z-index:2}
+.tv-stage[data-home] .tv-safe{inset:0}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-title-block{display:block;position:absolute;left:var(--home-title-x);top:var(--home-title-y);width:var(--home-title-w);z-index:2}
+/* A soft scrim under the title keeps the gold and the place name legible over lit windows. */
+.tv-stage[data-home][data-tv-mode=lobby] .tv-title-block::before{content:"";position:absolute;inset:calc(var(--u)*-1.2);z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 40% 50%,rgb(3 6 14/.72) 0%,rgb(3 6 14/.5) 58%,rgb(3 6 14/0) 100%)}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-wordmark{height:calc(var(--u)*6.5)}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-wordmark-text{font-size:calc(var(--u)*4.5)}
 .tv-stage[data-home] .tv-headline{max-width:100%;margin-top:calc(var(--u)*.6)}
+.tv-stage[data-home] .tv-lede{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-tagline{display:none}
+/* Smaller panes (the desktop app's) need smaller names and labels than the TV's floors allow. */
+.tv-stage[data-home]{--fs-name:max(16px,calc(var(--u)*1.7));--fs-label:max(14px,calc(var(--u)*1.3))}
 .tv-stage[data-home][data-tv-mode=lobby] .tv-place{display:block;margin-top:calc(var(--u)*.5);color:var(--home-accent)}
 .tv-stage[data-home] .tv-title{color:#f3d59d}
 .tv-stage[data-home] .tv-label{color:var(--home-accent)}
 .tv-stage[data-home][data-tv-mode=lobby] .tv-lobby-row{display:contents}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-join{position:absolute;left:var(--home-code-x);top:var(--home-code-y);width:var(--home-code-w);height:var(--home-code-h);z-index:2}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-join{position:absolute;left:var(--home-code-x);top:var(--home-code-y);width:var(--home-code-w);height:var(--home-code-h);z-index:2;padding:calc(var(--u)*.5) calc(var(--u)*.8);gap:calc(var(--u)*.3)}
 .tv-stage[data-home][data-tv-mode=lobby] .tv-roster{position:absolute;left:var(--home-party-x);top:var(--home-party-y);width:var(--home-party-w);height:var(--home-party-h);z-index:2}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-hint{display:none}
+.tv-stage[data-home] .tv-join-row{display:none}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-join-row{display:flex;align-items:stretch;gap:calc(var(--u)*1.2);min-height:0;flex:1}
+.tv-stage[data-home] .tv-qr-slot{display:none}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-qr-slot{display:block;flex:none;align-self:center;width:calc(var(--u)*12.4);height:calc(var(--u)*12.4);border-radius:calc(var(--u)*.4);background:#f4efe2;border:calc(var(--u)*.3) solid #e8cb94}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-join .tv-code-box{flex:1;min-width:0;margin:0;display:flex;flex-direction:column;justify-content:center}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-join .tv-code{font-size:min(var(--fs-code),calc(var(--u)*4.6))}
 .tv-stage[data-home] .tv-panel{border-color:color-mix(in srgb,var(--home-accent) 55%,transparent);background:linear-gradient(160deg,color-mix(in srgb,var(--home-tint) 92%,transparent),color-mix(in srgb,var(--home-tint) 74%,#03060e))}
 .tv-stage[data-home] .tv-roster[data-count="6"] .tv-party{grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u)*.7)}
 .tv-stage[data-home] .tv-roster[data-count="6"] .tv-card{gap:calc(var(--u)*.6);padding:calc(var(--u)*.3) calc(var(--u)*.6)}

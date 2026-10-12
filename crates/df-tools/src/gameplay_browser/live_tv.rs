@@ -111,7 +111,6 @@ pub(super) struct TvStage {
     title: Element,
     place: Element,
     lede: Element,
-    title_block: Element,
     atmosphere: Element,
     lobby_row: Element,
     stagebox: Element,
@@ -232,7 +231,11 @@ impl TvStage {
         let lobby_row = node(document, &safe, "section", "tv-lobby-row", "")?;
         let join = node(document, &lobby_row, "aside", "tv-panel tv-join", "")?;
         node(document, &join, "div", "tv-label", "Players join here")?;
-        let code_box = node(document, &join, "div", "tv-code-box", "")?;
+        let join_row = node(document, &join, "div", "tv-join-row", "")?;
+        // PLAY-V05 placeholder: the join QR tile (PLAY-Q01) goes in this square slot. Shown only in
+        // the themed lobby until that change lands.
+        node(document, &join_row, "div", "tv-qr-slot", "")?;
+        let code_box = node(document, &join_row, "div", "tv-code-box", "")?;
         node(
             document,
             &code_box,
@@ -324,7 +327,6 @@ impl TvStage {
             title,
             place,
             lede,
-            title_block,
             atmosphere,
             lobby_row,
             stagebox,
@@ -534,7 +536,8 @@ impl TvStage {
         } else {
             PARTY_SLOTS
         };
-        self.roster.set_attribute("data-count", &shown.to_string())?;
+        self.roster
+            .set_attribute("data-count", &shown.to_string())?;
         let mut newly_ready = false;
         for (index, card) in self.cards.iter().enumerate() {
             set_hidden(&card.root, index >= shown)?;

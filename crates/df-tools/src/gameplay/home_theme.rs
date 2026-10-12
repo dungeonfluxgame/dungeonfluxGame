@@ -12,7 +12,7 @@ pub(crate) mod analysis;
 
 use super::adventure::setting::{SceneSetting, SettingKind};
 use super::rpc;
-use analysis::{AnalysisError, MoodMeasures, Measures};
+use analysis::{AnalysisError, Measures, MoodMeasures};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -23,6 +23,8 @@ use std::{
 
 /// The asset URL prefix every painting path starts with; the rest is relative to the asset root.
 pub(crate) const PAINTING_PREFIX: &str = "assets/ui/";
+/// The served painting formats, in the order the scene resolution looks for them.
+const PAINTING_FORMATS: [&str; 3] = ["webp", "png", "jpg"];
 /// Bounds on the painting input: the file, its decoded size and its decoder allocation.
 const MAX_PAINTING_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_PAINTING_SIDE: u32 = 4096;
@@ -116,36 +118,48 @@ impl Arrangement {
 }
 
 /// The named arrangements a home screen may use: a handful of composed layouts, never free-form.
-pub(crate) const ARRANGEMENTS: [Arrangement; 5] = [
+pub(crate) const ARRANGEMENTS: [Arrangement; 7] = [
     Arrangement {
         name: FALLBACK_ARRANGEMENT,
-        title: Boxed::new(45, 50, 560, 240),
-        code: Boxed::new(40, 600, 430, 340),
-        party: Boxed::new(490, 590, 480, 350),
+        title: Boxed::new(45, 50, 520, 420),
+        code: Boxed::new(40, 600, 430, 360),
+        party: Boxed::new(490, 590, 480, 370),
     },
     Arrangement {
         name: "title-top-right-panels-stacked-left",
-        title: Boxed::new(490, 50, 470, 240),
-        code: Boxed::new(40, 330, 430, 280),
-        party: Boxed::new(40, 630, 500, 330),
+        title: Boxed::new(490, 50, 470, 420),
+        code: Boxed::new(40, 300, 430, 340),
+        party: Boxed::new(40, 650, 500, 320),
     },
     Arrangement {
-        name: "title-centre-low-panels-bottom-corners",
-        title: Boxed::new(230, 400, 540, 220),
-        code: Boxed::new(30, 650, 420, 300),
-        party: Boxed::new(500, 650, 480, 300),
+        name: "title-centre-panels-bottom-corners",
+        title: Boxed::new(230, 190, 540, 420),
+        code: Boxed::new(30, 625, 420, 340),
+        party: Boxed::new(500, 625, 480, 340),
     },
     Arrangement {
-        name: "title-bottom-left-panels-stacked-right",
-        title: Boxed::new(40, 640, 520, 300),
-        code: Boxed::new(580, 50, 400, 290),
-        party: Boxed::new(500, 360, 480, 280),
+        name: "title-top-right-panels-bottom-band",
+        title: Boxed::new(490, 50, 470, 420),
+        code: Boxed::new(40, 560, 430, 360),
+        party: Boxed::new(490, 560, 480, 400),
+    },
+    Arrangement {
+        name: "title-top-left-narrow-panels-bottom",
+        title: Boxed::new(45, 50, 410, 500),
+        code: Boxed::new(40, 580, 430, 380),
+        party: Boxed::new(490, 580, 480, 380),
+    },
+    Arrangement {
+        name: "title-top-right-narrow-panels-bottom",
+        title: Boxed::new(550, 50, 410, 500),
+        code: Boxed::new(40, 580, 430, 380),
+        party: Boxed::new(490, 580, 480, 380),
     },
     Arrangement {
         name: "single-bottom-band",
-        title: Boxed::new(45, 50, 600, 300),
-        code: Boxed::new(30, 690, 400, 290),
-        party: Boxed::new(460, 690, 500, 290),
+        title: Boxed::new(45, 50, 520, 420),
+        code: Boxed::new(30, 600, 400, 360),
+        party: Boxed::new(460, 600, 500, 360),
     },
 ];
 
@@ -161,13 +175,29 @@ pub(crate) struct Theme {
 pub(crate) enum HomeThemeError {
     NotInstalled,
     AlreadyInstalled,
-    AssetRootMissing { path: PathBuf },
+    AssetRootMissing {
+        path: PathBuf,
+    },
     CacheUnavailable,
-    Painting { painting: String, reason: &'static str },
-    Read { painting: String, source: io::Error },
-    Decode { painting: String, message: String },
-    Analysis { painting: String, reason: AnalysisError },
-    NoUncoveredArrangement { painting: String },
+    Painting {
+        painting: String,
+        reason: &'static str,
+    },
+    Read {
+        painting: String,
+        source: io::Error,
+    },
+    Decode {
+        painting: String,
+        message: String,
+    },
+    Analysis {
+        painting: String,
+        reason: AnalysisError,
+    },
+    NoUncoveredArrangement {
+        painting: String,
+    },
 }
 
 impl fmt::Display for HomeThemeError {
@@ -176,7 +206,11 @@ impl fmt::Display for HomeThemeError {
             Self::NotInstalled => formatter.write_str("home themes are not installed"),
             Self::AlreadyInstalled => formatter.write_str("home themes are already installed"),
             Self::AssetRootMissing { path } => {
-                write!(formatter, "home theme asset root {} is not a directory", path.display())
+                write!(
+                    formatter,
+                    "home theme asset root {} is not a directory",
+                    path.display()
+                )
             }
             Self::CacheUnavailable => formatter.write_str("home theme cache is unavailable"),
             Self::Painting { painting, reason } => {
@@ -186,10 +220,16 @@ impl fmt::Display for HomeThemeError {
                 write!(formatter, "home theme {painting} unreadable: {source}")
             }
             Self::Decode { painting, message } => {
-                write!(formatter, "home theme {painting} does not decode: {message}")
+                write!(
+                    formatter,
+                    "home theme {painting} does not decode: {message}"
+                )
             }
             Self::Analysis { painting, reason } => {
-                write!(formatter, "home theme {painting} cannot be measured: {reason:?}")
+                write!(
+                    formatter,
+                    "home theme {painting} cannot be measured: {reason:?}"
+                )
             }
             Self::NoUncoveredArrangement { painting } => write!(
                 formatter,
@@ -289,8 +329,8 @@ fn measures_for(root: &Path, painting: &str) -> Result<Measures, HomeThemeError>
     if let Some(measures) = known {
         return Ok(measures);
     }
-    let relative = relative_painting(painting)?;
-    let bytes = read_painting(painting, &root.join(relative))?;
+    let path = painting_file(root, painting)?;
+    let bytes = read_painting(painting, &path)?;
     let hash: [u8; 32] = Sha256::digest(&bytes).into();
     let cached = with_cache(|cache| cache.measures.get(&hash).cloned())?;
     let measures = match cached {
@@ -310,14 +350,14 @@ fn measures_for(root: &Path, painting: &str) -> Result<Measures, HomeThemeError>
 }
 
 fn with_cache<R>(use_cache: impl FnOnce(&mut Cache) -> R) -> Result<R, HomeThemeError> {
-    let mut guard = CACHE
-        .lock()
-        .map_err(|_| HomeThemeError::CacheUnavailable)?;
+    let mut guard = CACHE.lock().map_err(|_| HomeThemeError::CacheUnavailable)?;
     Ok(use_cache(&mut guard))
 }
 
-fn relative_painting(painting: &str) -> Result<&str, HomeThemeError> {
-    painting
+/// The file a painting path names. A scene's path is a stem without an extension, so the file is
+/// the first of the served formats that exists, as the scene resolution itself looks for it.
+pub(crate) fn painting_file(root: &Path, painting: &str) -> Result<PathBuf, HomeThemeError> {
+    let relative = painting
         .strip_prefix(PAINTING_PREFIX)
         .filter(|relative| {
             relative
@@ -327,6 +367,18 @@ fn relative_painting(painting: &str) -> Result<&str, HomeThemeError> {
         .ok_or_else(|| HomeThemeError::Painting {
             painting: painting.to_owned(),
             reason: "painting path is outside the asset root",
+        })?;
+    let named = root.join(relative);
+    if named.extension().is_some() {
+        return Ok(named);
+    }
+    PAINTING_FORMATS
+        .iter()
+        .map(|format| named.with_extension(format))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| HomeThemeError::Painting {
+            painting: painting.to_owned(),
+            reason: "no painting file with a served format exists",
         })
 }
 
@@ -380,9 +432,7 @@ pub(crate) fn atmosphere_for(kind: Option<SettingKind>, measures: &Measures) -> 
         Some(SettingKind::MarketStreet) => &[LanternGlow, Embers],
         Some(SettingKind::GraveyardGate) => &[Mist, LanternGlow],
         Some(SettingKind::Farmyard) => &[FallingLeaves, Fireflies],
-        Some(SettingKind::LibraryHall | SettingKind::LibraryForecourt) => {
-            &[DustMotes, LanternGlow]
-        }
+        Some(SettingKind::LibraryHall | SettingKind::LibraryForecourt) => &[DustMotes, LanternGlow],
         _ if measures.mean_luminance < DIM => &[Rain, Mist],
         _ if measures.warm_balance > 0.0 => &[LanternGlow, Embers],
         _ => &[Mist, CloudShadow],

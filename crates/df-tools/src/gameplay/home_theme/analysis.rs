@@ -126,9 +126,7 @@ impl Pixels {
         let small = image::imageops::thumbnail(image, SAMPLE_WIDTH, SAMPLE_HEIGHT);
         let rgb = small
             .pixels()
-            .map(|pixel| {
-                [pixel[0], pixel[1], pixel[2]].map(|channel| f64::from(channel) / 255.0)
-            })
+            .map(|pixel| [pixel[0], pixel[1], pixel[2]].map(|channel| f64::from(channel) / 255.0))
             .collect();
         Self {
             width: small.width(),
@@ -193,7 +191,10 @@ pub(crate) fn measure(image: &RgbImage) -> Result<Measures, AnalysisError> {
         }
     }
     let focal = focal_cluster(&focal_score);
-    let mean_luminance = pixels.coordinates().map(|(x, y)| pixels.luminance(x, y)).sum::<f64>()
+    let mean_luminance = pixels
+        .coordinates()
+        .map(|(x, y)| pixels.luminance(x, y))
+        .sum::<f64>()
         / pixels.rgb.len() as f64;
     let warm_balance = pixels
         .rgb
@@ -296,7 +297,11 @@ fn mood(pixels: &Pixels) -> MoodMeasures {
         .iter()
         .enumerate()
         .fold((0, f64::MIN), |best, (bin, weight)| {
-            if *weight > best.1 { (bin, *weight) } else { best }
+            if *weight > best.1 {
+                (bin, *weight)
+            } else {
+                best
+            }
         })
         .0;
     let mut peak_saturations: Vec<f64> = lit_pixels
@@ -325,11 +330,7 @@ fn mood(pixels: &Pixels) -> MoodMeasures {
     }
     let dark_mean = dark_total.map(|channel| channel / dark_count.max(1.0));
     let (tint_hue, tint_saturation, _) = rgb_to_hsv(dark_mean);
-    let tint = hsv_to_rgb(
-        tint_hue,
-        (tint_saturation * 1.2).clamp(0.15, 0.4),
-        0.12,
-    );
+    let tint = hsv_to_rgb(tint_hue, (tint_saturation * 1.2).clamp(0.15, 0.4), 0.12);
 
     let mut border_total = 0.0;
     let mut border_count = 0.0f64;
@@ -344,8 +345,8 @@ fn mood(pixels: &Pixels) -> MoodMeasures {
             centre_count += 1.0;
         }
     }
-    let edge_ratio = (border_total / border_count.max(1.0))
-        / (centre_total / centre_count.max(1.0)).max(1e-3);
+    let edge_ratio =
+        (border_total / border_count.max(1.0)) / (centre_total / centre_count.max(1.0)).max(1e-3);
     let vignette = (0.4 + 0.3 * (edge_ratio - 0.5)).clamp(0.35, 0.75);
 
     let mean = luminances.iter().sum::<f64>() / luminances.len().max(1) as f64;
@@ -366,7 +367,12 @@ fn mood(pixels: &Pixels) -> MoodMeasures {
 }
 
 /// The samples at or above `threshold` in luminance; when `saturated`, only those with colour.
-fn lit_indices(luminances: &[f64], hsv: &[(f64, f64, f64)], threshold: f64, saturated: bool) -> Vec<usize> {
+fn lit_indices(
+    luminances: &[f64],
+    hsv: &[(f64, f64, f64)],
+    threshold: f64,
+    saturated: bool,
+) -> Vec<usize> {
     luminances
         .iter()
         .enumerate()
@@ -487,7 +493,9 @@ pub(crate) struct Fit {
 
 impl Fit {
     pub(crate) fn is_clear(&self) -> bool {
-        self.focal_covered_permille.iter().all(|covered| *covered == 0)
+        self.focal_covered_permille
+            .iter()
+            .all(|covered| *covered == 0)
     }
 }
 
