@@ -239,6 +239,167 @@ fn old_generated_adventure_and_actual_opening_resume_without_current_table_reint
         (frozen.pack, frozen.tuning, frozen.record)
     );
 }
+/// The shared display's choice labels are the phones' authored labels, at every step.
+fn assert_labels_agree(current: &df_model::checkpoint::Checkpoint, kind: &str, step: &str) {
+    let view = super::super::wire::journey_view(
+        current,
+        df_persistence::local_demo_scope::LocalDemoRole::Display,
+        journey::bootstrap_member().unwrap(),
+    )
+    .unwrap();
+    let Some(rpc::view_message::Audience::Display(view)) = view.audience else {
+        panic!("display")
+    };
+    let display = view.journey.unwrap().table_choices;
+    let phone: Vec<String> =
+        super::super::beat_script_runtime::view_offers(current, native::first())
+            .unwrap()
+            .into_iter()
+            .map(|(_, label, _)| label)
+            .collect();
+    assert_eq!(display, phone, "{kind} {step}");
+}
+/// A peaceful chapter ends through submitted actions only: one resolution, one epilogue, then an
+/// end card that accepts nothing. The TV's choice labels are the phones' authored labels.
+#[test]
+fn peaceful_ending_resolves_once_closes_on_the_end_card_and_shows_the_same_labels_on_tv() {
+    let tables = tables();
+    for kind in ["mystery", "parley"] {
+        let generated = generated(&tables.chapter, 7, kind);
+        pack::with_test_pack(loaded(&generated), || {
+            let mut current = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            assert_labels_agree(&current, kind, "opening");
+            if kind == "mystery" {
+                current = native::act(&current, native::first(), 6, "look-crates");
+                current = native::act(
+                    &native::persisted(&current),
+                    native::first(),
+                    7,
+                    "look-desk",
+                );
+                current = native::act(
+                    &native::persisted(&current),
+                    native::first(),
+                    8,
+                    "leave-investigation",
+                );
+            } else {
+                current = native::act(&current, native::first(), 6, "escort-courier");
+                current = native::act(
+                    &native::persisted(&current),
+                    native::first(),
+                    7,
+                    "continue-conversation",
+                );
+            }
+            assert_labels_agree(&current, kind, "after the story's first step");
+            current = native::act(
+                &native::persisted(&current),
+                native::first(),
+                9,
+                "choose-harbor-scene",
+            );
+            assert_labels_agree(&current, kind, "travel");
+            let offered = |current: &df_model::checkpoint::Checkpoint| {
+                super::super::beat_script_runtime::view_offers(current, native::first())
+                    .unwrap()
+                    .into_iter()
+                    .map(|(_, _, id)| id)
+                    .collect::<Vec<_>>()
+            };
+            let resolve = offered(&current);
+            assert_eq!(resolve.len(), 1, "{kind} resolution is the only choice");
+            // The server's own admission of a submitted offer accepts what the phone lists.
+            assert!(
+                super::super::wire::action_offer_rejection(
+                    &current,
+                    native::first(),
+                    rpc::GameplayActionKind::ResolveErrand,
+                    &resolve[0],
+                    &[]
+                )
+                .unwrap()
+                .is_none(),
+                "{kind} resolution must not be refused as stale"
+            );
+            current = native::act(&current, native::first(), 10, "resolve-errand");
+            // The resolution is offered once: the epilogue offers only its close.
+            let closing = offered(&current);
+            assert_eq!(closing.len(), 1);
+            assert!(!closing.contains(&resolve[0]));
+            assert_eq!(
+                super::super::beat_script::with_script(|script| script
+                    .current(current.state())
+                    .unwrap()
+                    .id
+                    .clone()),
+                "epilogue"
+            );
+            // The closing scene has the contact and the patron on stage, each with art, and the
+            // speaker of its line is among them.
+            let stage = super::super::beat_script_runtime::scene(current.state()).unwrap();
+            assert!(
+                stage
+                    .cast
+                    .iter()
+                    .any(|actor| actor.role == super::super::pack::CastRole::Contact)
+            );
+            assert!(
+                stage
+                    .cast
+                    .iter()
+                    .any(|actor| actor.role == super::super::pack::CastRole::Patron)
+            );
+            assert!(
+                stage
+                    .cast
+                    .iter()
+                    .all(|actor| !actor.sprite.is_empty() && !actor.portrait.is_empty()),
+                "{kind} cast needs art"
+            );
+            assert!(
+                stage.cast.iter().any(|actor| actor.name == stage.speaker),
+                "{kind} speaker on stage"
+            );
+            // The consumed resolution id no longer matches any offer: a repeat is refused.
+            assert!(
+                !super::super::beat_script_runtime::matches_id(
+                    &current,
+                    rpc::GameplayActionKind::ResolveErrand,
+                    &resolve[0]
+                )
+                .unwrap()
+            );
+            current = native::act(
+                &native::persisted(&current),
+                native::first(),
+                11,
+                "close-epilogue",
+            );
+            let persisted = native::persisted(&current);
+            assert_eq!(
+                journey::phase(&persisted).unwrap(),
+                rpc::JourneyPhase::Complete
+            );
+            assert!(
+                offered(&persisted).is_empty(),
+                "{kind} end card offers nothing yet"
+            );
+            assert_eq!(
+                super::super::beat_script::with_script(|script| script
+                    .current(persisted.state())
+                    .unwrap()
+                    .id
+                    .clone()),
+                "the-end"
+            );
+            let outcome = super::campaign_completion::terminal_outcome(&persisted)
+                .unwrap()
+                .unwrap();
+            assert_eq!(outcome.result, super::campaign::ChapterResult::Completed);
+        });
+    }
+}
 #[test]
 fn generated_canonical_investigation_and_parley_use_registered_native_actions_and_honest_outcomes()
 {
@@ -278,6 +439,8 @@ fn generated_canonical_investigation_and_parley_use_registered_native_actions_an
                     "continue-conversation",
                 );
                 current = native::act(&current, native::first(), 10, "choose-harbor-scene");
+                current = native::act(&current, native::first(), 11, "resolve-errand");
+                current = native::act(&current, native::first(), 12, "close-epilogue");
                 let current = native::persisted(&current);
                 let outcome = super::campaign_completion::terminal_outcome(&current)
                     .unwrap()
@@ -438,6 +601,10 @@ fn actual_generated_peaceful_campaign_paths_project_delivered_leads_and_commit_h
                     10,
                     "choose-harbor-scene",
                 );
+                public.push_str(&public_view(&current));
+                current = native::act(&current, native::first(), 11, "resolve-errand");
+                public.push_str(&public_view(&current));
+                current = native::act(&current, native::first(), 12, "close-epilogue");
                 public.push_str(&public_view(&current));
                 let outcome = super::campaign_completion::terminal_outcome(&current)
                     .unwrap()

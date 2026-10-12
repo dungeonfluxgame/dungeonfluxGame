@@ -1362,13 +1362,15 @@
       "script": {
         "entry": "room",
         "terminal": [
-          "peaceful-destination"
+          "the-end"
         ],
         "labels": {
           "look-crates-label": "Look at the ground",
           "look-desk-label": "Read the markings",
           "leave-label": "Follow the trail",
-          "continue-label": "Carry the clue onward"
+          "continue-label": "Carry the clue onward",
+          "resolve-label": "Hand the clue to {contact.first}",
+          "close-label": "Close the case"
         },
         "beats": [
           {
@@ -1645,14 +1647,64 @@
           },
           {
             "id": "peaceful-destination",
-            "kind": "conclude",
+            "kind": "ending",
             "scene": "inn",
             "state": {
               "durable": "peaceful-destination"
             },
-            "offers": [],
-            "transitions": [],
+            "offers": [
+              {
+                "id": "resolve-errand",
+                "effect": "resolve",
+                "label_slot": "resolve-label"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
+              }
+            ],
             "scene_variant": "peaceful-destination"
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "scene_variant": "epilogue",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "effect": "continue",
+                "label_slot": "close-label"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ]
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "scene_variant": "the-end",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": []
           }
         ]
       },
@@ -1692,6 +1744,18 @@
           "title": "A Journey Settled",
           "narration": "At {dest.name}, {contact.first} receives your news. This part of the journey ends with the agreement kept.",
           "line": "You brought the answer we needed."
+        },
+        "epilogue": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "{contact.first} reads the clue twice, then locks it in the ferry office strongbox. Word of the ferry lanes goes out from there by morning.",
+          "line": "Whoever left those marks will not find an easy way back."
+        },
+        "the-end": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The clue is safe, the road is quiet again, and {patron.first} can sleep tonight.",
+          "line": "Your word is kept, and the clue is safe."
         }
       }
     },
@@ -3055,10 +3119,12 @@
       "script": {
         "entry": "room",
         "terminal": [
-          "peaceful-destination"
+          "the-end"
         ],
         "labels": {
-          "continue-label": "Continue our agreement"
+          "continue-label": "Continue our agreement",
+          "resolve-label": "Seal it with {contact.first}",
+          "close-label": "Close the talks"
         },
         "beats": [
           {
@@ -3211,14 +3277,64 @@
           },
           {
             "id": "peaceful-destination",
-            "kind": "conclude",
+            "kind": "ending",
             "scene": "inn",
             "state": {
               "durable": "peaceful-destination"
             },
-            "offers": [],
-            "transitions": [],
+            "offers": [
+              {
+                "id": "resolve-errand",
+                "effect": "resolve",
+                "label_slot": "resolve-label"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
+              }
+            ],
             "scene_variant": "peaceful-destination"
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "scene_variant": "epilogue",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "effect": "continue",
+                "label_slot": "close-label"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ]
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "scene_variant": "the-end",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": []
           }
         ]
       },
@@ -3252,6 +3368,18 @@
           "title": "A Journey Settled",
           "narration": "At {dest.name}, {contact.first} receives your news. This part of the journey ends with the agreement kept.",
           "line": "You brought the answer we needed."
+        },
+        "epilogue": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "{patron.first} and {contact.first} shake hands over the table. Both sides ride home with terms they can live with, and the peace holds for now.",
+          "line": "Keep your word, and they will keep theirs."
+        },
+        "the-end": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The talks are over and the valley is quiet. {patron.first} sends word that the peace will hold until spring.",
+          "line": "Keep the peace, and it will keep you."
         }
       }
     },
