@@ -2809,6 +2809,7 @@ mod tests {
                 42,
                 GenerateOptions {
                     rules_mode: RulesMode::CustomAllowed,
+                    ..GenerateOptions::default()
                 },
                 &ForcedEntries::from([
                     ("location".into(), location.into()),

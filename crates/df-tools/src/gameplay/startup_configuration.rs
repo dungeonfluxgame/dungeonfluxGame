@@ -11,6 +11,92 @@ use std::{
 const QUALIFICATION_PORT: u16 = 63309;
 const MAXIMUM_SESSION_SECONDS: u64 = 365 * 24 * 60 * 60;
 
+/// How freely the game's written and spoken content treats violence, horror, strong language
+/// and adult themes. `Mature` is the default because this is an adult game; `Restrained`
+/// switches the censorship back on. The limits that hold in both modes (no sexual content
+/// involving minors or real people, untrusted player words) are not part of this setting.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ContentRating {
+    #[default]
+    Mature,
+    Restrained,
+}
+
+impl ContentRating {
+    /// The value `DF_GAMEPLAY_CONTENT_RATING` spells for this rating.
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Mature => "mature",
+            Self::Restrained => "restrained",
+        }
+    }
+
+    /// The startup status line, `CONTENT rating=<label>`.
+    pub(super) fn startup_line(self) -> String {
+        format!("CONTENT rating={}", self.label())
+    }
+}
+
+/// Unset means `mature`; exactly `mature` or `restrained` selects a rating; anything else
+/// refuses startup without echoing it.
+pub(super) fn content_rating_setting(
+    input: Result<String, VarError>,
+) -> Result<ContentRating, io::Error> {
+    match optional(input)?.as_deref() {
+        None | Some("mature") => Ok(ContentRating::Mature),
+        Some("restrained") => Ok(ContentRating::Restrained),
+        Some(_) => Err(refused("DF_GAMEPLAY_CONTENT_RATING")),
+    }
+}
+
+static CONTENT_RATING: std::sync::OnceLock<ContentRating> = std::sync::OnceLock::new();
+
+/// Fixes the rating for the whole process, once, before any content is generated.
+pub(super) fn install_content_rating(rating: ContentRating) -> Result<(), io::Error> {
+    CONTENT_RATING
+        .set(rating)
+        .map_err(|_| io::Error::other("content rating already installed"))
+}
+
+/// The process-wide rating: the installed one, or `Mature` before startup installs it.
+pub(super) fn content_rating() -> ContentRating {
+    #[cfg(test)]
+    if let Some(rating) = TEST_RATING.with(|slot| slot.get()) {
+        return rating;
+    }
+    CONTENT_RATING.get().copied().unwrap_or_default()
+}
+
+#[cfg(test)]
+thread_local! { static TEST_RATING: std::cell::Cell<Option<ContentRating>> = const { std::cell::Cell::new(None) }; }
+
+/// While alive, [`content_rating`] answers `rating` on this thread only, so tests of the two
+/// modes never leak into each other. It restores the previous answer when dropped, also across
+/// the `await`s of a single-threaded test runtime.
+#[cfg(test)]
+pub(super) struct TestRating(Option<ContentRating>);
+
+#[cfg(test)]
+impl TestRating {
+    pub(super) fn set(rating: ContentRating) -> Self {
+        Self(TEST_RATING.with(|slot| slot.replace(Some(rating))))
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestRating {
+    fn drop(&mut self) {
+        TEST_RATING.with(|slot| slot.set(self.0));
+    }
+}
+
+/// Runs `run` with [`content_rating`] answering `rating`.
+#[cfg(test)]
+pub(super) fn with_test_rating<T>(rating: ContentRating, run: impl FnOnce() -> T) -> T {
+    let _rating = TestRating::set(rating);
+    run()
+}
+
 /// Raw `DF_GAMEPLAY_*` inputs in the order of [`SessionSettings`] fields.
 pub(super) struct SessionInputs {
     pub(super) listen: Result<String, VarError>,
@@ -875,6 +961,60 @@ mod tests {
                 assert!(!error.to_string().contains(value));
             }
         }
+    }
+
+    #[test]
+    fn an_unset_content_rating_is_mature_and_exactly_two_values_are_accepted() {
+        assert_eq!(
+            content_rating_setting(Err(VarError::NotPresent)).unwrap(),
+            ContentRating::Mature
+        );
+        assert_eq!(
+            content_rating_setting(Ok("mature".to_owned())).unwrap(),
+            ContentRating::Mature
+        );
+        assert_eq!(
+            content_rating_setting(Ok("restrained".to_owned())).unwrap(),
+            ContentRating::Restrained
+        );
+        assert_eq!(ContentRating::default(), ContentRating::Mature);
+    }
+
+    #[test]
+    fn any_other_content_rating_refuses_startup_without_echoing_it() {
+        for value in ["", "Mature", "RESTRAINED", " mature", "family", "off", "mature "] {
+            let error = content_rating_setting(Ok(value.to_owned())).unwrap_err();
+            assert_eq!(error.to_string(), "DF_GAMEPLAY_CONTENT_RATING invalid");
+            assert!(value.is_empty() || !error.to_string().contains(value));
+        }
+        assert!(content_rating_setting(Err(VarError::NotUnicode("x".into()))).is_err());
+    }
+
+    #[test]
+    fn the_startup_line_names_the_rating() {
+        assert_eq!(
+            ContentRating::Mature.startup_line(),
+            "CONTENT rating=mature"
+        );
+        assert_eq!(
+            ContentRating::Restrained.startup_line(),
+            "CONTENT rating=restrained"
+        );
+    }
+
+    #[test]
+    fn a_test_rating_is_per_thread_nests_and_never_leaks() {
+        assert_eq!(content_rating(), ContentRating::Mature);
+        with_test_rating(ContentRating::Restrained, || {
+            assert_eq!(content_rating(), ContentRating::Restrained);
+            with_test_rating(ContentRating::Mature, || {
+                assert_eq!(content_rating(), ContentRating::Mature);
+            });
+            assert_eq!(content_rating(), ContentRating::Restrained);
+            let other = std::thread::spawn(content_rating).join().unwrap();
+            assert_eq!(other, ContentRating::Mature, "another thread is unaffected");
+        });
+        assert_eq!(content_rating(), ContentRating::Mature);
     }
 
     fn inputs(values: [Option<&str>; 6]) -> SessionInputs {

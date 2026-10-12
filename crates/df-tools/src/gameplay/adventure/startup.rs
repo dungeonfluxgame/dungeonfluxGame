@@ -1,6 +1,9 @@
 //! Local-demo startup adapter; all random selection remains in the pure generator.
 use super::super::{
-    model, pack::LoadedPack, startup_configuration::AdventureSettings, storyteller::Storyteller,
+    model,
+    pack::LoadedPack,
+    startup_configuration::{AdventureSettings, content_rating},
+    storyteller::Storyteller,
 };
 use super::{
     ForcedEntries, GenerateError, GenerateOptions, GeneratedAdventure, Tables, TablesError,
@@ -112,6 +115,7 @@ async fn fresh_adventure(
     let (tables, seed, baseline) = pattern_adventure(settings)?;
     let options = GenerateOptions {
         rules_mode: settings.rules_mode,
+        rating: content_rating(),
     };
     let outcome = expression::express(
         &tables,
@@ -148,6 +152,7 @@ fn pattern_adventure(
         seed,
         GenerateOptions {
             rules_mode: settings.rules_mode,
+            rating: content_rating(),
         },
         &ForcedEntries::new(),
     )

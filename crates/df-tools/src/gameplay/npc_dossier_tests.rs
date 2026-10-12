@@ -17,6 +17,7 @@ use super::{
     npc_reply::{NpcReplyContext, NpcVoice, StoryFacts},
     pack::SceneKey,
     social::{Approach, SocialLedger, Standing, classify_keywords},
+    startup_configuration::content_rating,
     storyteller::{
         Expression, Slot, build_prompt,
         tests::{FakeEndpoint, Reply, cache_directory, teller},
@@ -36,11 +37,15 @@ pub(super) fn tables() -> &'static Tables {
     })
 }
 
+/// The adventure of `seed` rolled for the rating the test runs under.
 pub(super) fn adventure(seed: u64) -> GeneratedAdventure {
     generate(
         tables(),
         seed,
-        GenerateOptions::default(),
+        GenerateOptions {
+            rating: content_rating(),
+            ..GenerateOptions::default()
+        },
         &ForcedEntries::new(),
     )
     .unwrap()
@@ -80,7 +85,7 @@ fn unheard(adventure: &GeneratedAdventure, dossier: &Dossier) -> Vec<String> {
 }
 
 fn withheld_of(adventure: &GeneratedAdventure, dossier: &Dossier) -> Withheld {
-    Withheld::new(dossier, unheard(adventure, dossier))
+    Withheld::new(dossier, unheard(adventure, dossier), content_rating())
 }
 
 /// Exactly the phrases that must never reach the model, nothing about leaving character.
@@ -495,7 +500,7 @@ async fn an_instruction_in_the_players_line_never_changes_the_prompt_and_obeying
                 facts: &ask.facts,
                 slots: &slots,
                 style: npc_dossier::STYLE,
-                profile: npc_dossier::PROFILE,
+                profile: npc_dossier::profile(content_rating()),
             },
             None,
         )

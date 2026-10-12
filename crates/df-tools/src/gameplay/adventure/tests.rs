@@ -306,6 +306,7 @@ fn every_compiled_creature_has_table_parity_and_loader_disclosure() {
             42,
             GenerateOptions {
                 rules_mode: RulesMode::CustomAllowed,
+                ..GenerateOptions::default()
             },
             &forced,
         )

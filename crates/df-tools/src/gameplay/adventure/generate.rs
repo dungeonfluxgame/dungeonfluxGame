@@ -1,4 +1,7 @@
-use super::super::pack::{self, SceneKey};
+use super::super::{
+    pack::{self, SceneKey},
+    startup_configuration::ContentRating,
+};
 use super::{
     FactSheet, ForcedEntries, GenerateError, GenerateOptions, GeneratedAdventure, PatternProse,
     ProseSource, Roll, RollStatus, RulesMode, Tables, render,
@@ -199,6 +202,13 @@ fn npc(
     );
     Ok(())
 }
+/// The tone sentence of the fact sheets and the model's facts for `rating`.
+pub(super) fn tone_of(rating: ContentRating) -> &'static str {
+    match rating {
+        ContentRating::Restrained => "heroic fantasy for a living-room table",
+        ContentRating::Mature => "heroic fantasy for an adult table, dark where the story calls for it",
+    }
+}
 /// Generate a complete adventure using the shipped pattern expression source.
 /// Pure function of validated tables, seed, options and forced entries; no I/O or global state.
 pub(crate) fn generate(
@@ -218,6 +228,7 @@ pub(crate) fn generate_with_prose(
     forced: &ForcedEntries,
     source: &dyn ProseSource,
 ) -> Result<GeneratedAdventure, GenerateError> {
+    let tables = tables.for_rating(options.rating);
     let mut roller = Roller {
         dice: Dice::new(seed),
         rolls: Vec::new(),
@@ -614,7 +625,7 @@ pub(crate) fn generate_with_prose(
             forbidden,
             bounds: bound,
             baseline,
-            tone: "heroic fantasy for a living-room table".into(),
+            tone: tone_of(options.rating).into(),
         };
         let text = source.express(&sheet)?;
         check(slot, &text, bound)?;
@@ -884,6 +895,7 @@ pub(crate) fn generate_with_prose(
         seed,
         tables_revision: tables.revision.clone(),
         rules_mode: options.rules_mode,
+        rating: options.rating,
         facts: context,
         fact_sheet: sheets,
         rolls: roller.rolls,

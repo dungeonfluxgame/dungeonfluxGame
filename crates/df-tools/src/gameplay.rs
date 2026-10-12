@@ -440,6 +440,13 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         startup_configuration::SessionSettings::qualification()
     };
+    if interactive {
+        let rating = startup_configuration::content_rating_setting(std::env::var(
+            "DF_GAMEPLAY_CONTENT_RATING",
+        ))?;
+        startup_configuration::install_content_rating(rating)?;
+        println!("{}", rating.startup_line());
+    }
     let storyteller = std::sync::Arc::new(if interactive {
         let mode = startup_configuration::storyteller_mode(
             startup_configuration::StorytellerInputs::from_environment(),

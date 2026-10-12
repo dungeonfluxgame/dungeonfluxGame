@@ -137,5 +137,10 @@ pub(super) fn roll_for(
     story: &PublicStory,
 ) -> Result<Vec<Dossier>, GenerateError> {
     let facts = dossier_facts(tables, adventure, story)?;
-    roll_dossiers(&tables.dossiers, &facts, adventure.seed).map_err(GenerateError::Dossier)
+    roll_dossiers(
+        &tables.for_rating(adventure.rating).dossiers,
+        &facts,
+        adventure.seed,
+    )
+    .map_err(GenerateError::Dossier)
 }

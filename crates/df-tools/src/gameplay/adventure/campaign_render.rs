@@ -1,5 +1,8 @@
 //! Pattern campaign overlays and audience-safe continuity projections.
-use super::super::pack::{self, SceneKey};
+use super::super::{
+    pack::{self, SceneKey},
+    startup_configuration::content_rating,
+};
 use super::campaign::{
     Audience, CampaignError, CampaignFrame, CampaignRecord, ChapterPlan, ChapterResult, StorySoFar,
 };
@@ -233,6 +236,7 @@ pub(crate) fn generate_chapter(
         plan.seed,
         GenerateOptions {
             rules_mode: frame.rules_mode,
+            rating: content_rating(),
         },
         &plan.forced,
     )?;
