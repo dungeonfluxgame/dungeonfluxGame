@@ -82,7 +82,7 @@
       {"faces": [12, 12], "id": "worsening-song", "text": "A song has started up about {antagonist_the}, and the verses get worse every time it is sung."}
     ]},
     "hints": {"die": 12, "entries": [
-      {"faces": [1, 1], "id": "back-lanes", "text": "If you lose sight of {antagonist_the}, look behind {location}, where the lanes are narrow and the lamps are few."},
+      {"faces": [1, 1], "id": "back-lanes", "text": "If you lose sight of {antagonist_the}, check the narrow places around {location}, because that is where this sort of trouble goes to ground."},
       {"faces": [2, 2], "id": "more-frightened", "foes": ["person", "goblinoid"], "text": "{antagonist} is more frightened than angry, so speak calmly and you will see it in the eyes before anything else."},
       {"faces": [3, 3], "id": "dawn-hour", "text": "The road toward {destination} is quietest an hour before dawn, and if trouble comes it will come when the light is worst."},
       {"faces": [4, 4], "id": "name-the-destination", "text": "Whoever you meet on the way, ask after {destination} by name first, because doors there open for a friendly mention."},
@@ -102,7 +102,7 @@
       {"faces": [4, 4], "id": "faction-recruiting", "text": "{faction|cap} has been recruiting lately, and the old hands do not like the new faces."},
       {"faces": [5, 5], "id": "villain-whisper", "text": "Folk say a figure called {villain} is behind a good deal of this, though nobody can say how they know."},
       {"faces": [6, 6], "id": "villain-letters", "text": "Letters mentioning {villain} have been turning up where they should not, and nobody admits to writing them."},
-      {"faces": [7, 7], "id": "villain-lanterns", "text": "Whenever {villain} is mentioned in the market, someone near the lantern stalls changes the subject."},
+      {"faces": [7, 7], "id": "villain-lanterns", "text": "Whenever {villain} is mentioned, someone at the back of the room changes the subject."},
       {"faces": [8, 8], "id": "villain-careful", "text": "Older folk will tell you to be careful what you say about {villain}, and will not tell you why."}
     ]},
     "secret_keywords": {

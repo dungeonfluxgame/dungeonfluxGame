@@ -7,7 +7,7 @@
       "die": 20,
       "entries": [
         {"faces": [1, 1], "id": "charity", "text": "Charity: help anyone who cannot repay you", "speak": "If someone needs a hand and I have one to give, I give it. Repayment is not the point."},
-        {"faces": [2, 2], "id": "community", "text": "Community: a town is only as strong as its quietest neighbour", "speak": "A place is only as strong as the quietest person in it, so I make a point of knowing them."},
+        {"faces": [2, 2], "id": "community", "speakers": ["person"], "text": "Community: a town is only as strong as its quietest neighbour", "speak": "A place is only as strong as the quietest person in it, so I make a point of knowing them."},
         {"faces": [3, 3], "id": "duty", "text": "Duty: a job accepted is a job finished", "speak": "I said I would do it, so I will do it. That is the whole of my reasoning."},
         {"faces": [4, 4], "id": "fairness", "text": "Fairness: everyone gets the same measure", "speak": "I keep one set of scales for everyone, the poor and the powerful alike."},
         {"faces": [5, 5], "id": "freedom", "text": "Freedom: no one should be bound to a thing they never chose", "speak": "Nobody should be tied to a thing they never chose. I have seen what that does to a person."},

@@ -470,6 +470,9 @@ fn public_tiers_never_carry_secret_or_shame_text() {
                     }
                 }
                 for item in &dossier.knowledge.says_when_trusted {
+                    for answer in dossier.prepared_answers.values() {
+                        assert!(!answer.contains(&item.text), "{answer}");
+                    }
                     for term in shame {
                         assert!(!mentions_term(&item.text, term), "{}", item.text);
                     }
@@ -715,5 +718,11 @@ fn print_review_sheets() {
         for dossier in roll_dossiers(&tables, &facts, seed).unwrap() {
             println!("{}", render_dossier(&dossier));
         }
+    }
+    let generated = adventure(&chapter, seed(21));
+    let facts = campaign_facts(&chapter, &generated);
+    println!("######## campaign layer, seed index 21");
+    for dossier in roll_dossiers(&tables, &facts, generated.seed).unwrap() {
+        println!("{}", render_dossier(&dossier));
     }
 }

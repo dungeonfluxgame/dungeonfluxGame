@@ -97,7 +97,7 @@
     "styles": {"die": 20, "entries": [
       {"faces": [1, 1], "id": "plain-short", "length": "short", "vocabulary": "plain, small words; says only what is meant", "tic": "ends a point with a flat 'That's the lot.'", "opener": "Right.", "closer": "That's the lot."},
       {"faces": [2, 2], "id": "rolling-warm", "length": "long", "vocabulary": "homely and affectionate; calls people 'friend'", "tic": "circles back to the start of a thought", "opener": "Now then, friend.", "closer": "There you are.", "tags": ["warm", "slow"]},
-      {"faces": [3, 3], "id": "clipped-formal", "length": "medium", "vocabulary": "exact and formal; never contracts a word", "tic": "begins corrections with 'To be exact.'", "opener": "To be exact.", "closer": "That is all.", "tags": ["formal"]},
+      {"faces": [3, 3], "id": "clipped-formal", "length": "medium", "vocabulary": "exact and formal; complete sentences, no slang", "tic": "begins corrections with 'To be exact.'", "opener": "To be exact.", "closer": "That is all.", "tags": ["formal"]},
       {"faces": [4, 4], "id": "dry-wit", "length": "medium", "vocabulary": "understatement and dry asides", "tic": "adds a one-word verdict such as 'Naturally.'", "opener": "Well.", "closer": "Naturally.", "tags": ["playful"]},
       {"faces": [5, 5], "id": "hurried-run", "length": "short", "vocabulary": "words in a rush; half-finished sentences", "tic": "apologises mid-sentence", "opener": "Quickly now.", "closer": "Sorry, sorry.", "tags": ["hurried", "nervous"]},
       {"faces": [6, 6], "id": "gravel-gruff", "length": "short", "vocabulary": "blunt and low; swallows the ends of words", "tic": "grunts before answering", "opener": "Hmph.", "closer": "There it is.", "tags": ["gruff"]},
@@ -182,10 +182,10 @@
     ]},
     "frames": {
       "who_are_you": {"die": 4, "entries": [
-        {"faces": [1, 1], "id": "name-role-origin", "text": "I'm {name}, {role_a}. {origin_line}"},
-        {"faces": [2, 2], "id": "name-role-only", "text": "Call me {name}. I'm {role_a}, and that is most of the story."},
-        {"faces": [3, 3], "id": "name-trade", "text": "I'm {name}. {trade_line}"},
-        {"faces": [4, 4], "id": "name-ideal", "text": "I'm {name}. {ideal_line}"}
+        {"faces": [1, 1], "id": "name-role-origin", "text": "I am {name}, {role_a}. {origin_line}"},
+        {"faces": [2, 2], "id": "name-role-only", "text": "Call me {name}. I am {role_a}, and that is most of the story."},
+        {"faces": [3, 3], "id": "name-trade", "text": "I am {name}. {trade_line}"},
+        {"faces": [4, 4], "id": "name-ideal", "text": "I am {name}. {ideal_line}"}
       ]},
       "your_past": {"die": 4, "entries": [
         {"faces": [1, 1], "id": "event-only", "text": "{event_line}"},
