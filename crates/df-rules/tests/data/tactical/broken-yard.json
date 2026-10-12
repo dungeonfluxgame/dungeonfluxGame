@@ -1,0 +1,111 @@
+{
+  "schema": 2,
+  "title": "Rendering ignored explicitly",
+  "grid": {
+    "cols": 16,
+    "rows": 9,
+    "blocked": [],
+    "cell_m": 1.5
+  },
+  "layouts": [
+    {
+      "id": "broken-yard",
+      "obstacles": [
+        {
+          "id": "crate",
+          "kind": "crate",
+          "cells": [
+            [
+              7,
+              3
+            ],
+            [
+              7,
+              4
+            ]
+          ],
+          "blocks_movement": true,
+          "cover": "half",
+          "height_m": 1.0
+        },
+        {
+          "id": "wall",
+          "kind": "wall",
+          "cells": [
+            [
+              9,
+              5
+            ],
+            [
+              9,
+              6
+            ]
+          ],
+          "blocks_movement": true,
+          "cover": "total",
+          "height_m": 3.0
+        },
+        {
+          "id": "column",
+          "kind": "column",
+          "cells": [
+            [
+              8,
+              1
+            ]
+          ],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "height_m": 2.0
+        }
+      ],
+      "difficult": [
+        [
+          6,
+          3
+        ],
+        [
+          6,
+          4
+        ],
+        [
+          6,
+          5
+        ]
+      ],
+      "spawns": {
+        "heroes": [
+          [
+            1,
+            2
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            1,
+            6
+          ]
+        ],
+        "enemies": [
+          [
+            14,
+            2
+          ],
+          [
+            14,
+            4
+          ],
+          [
+            14,
+            6
+          ]
+        ]
+      },
+      "rendering_only": {
+        "a": 1
+      }
+    }
+  ]
+}

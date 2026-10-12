@@ -1,0 +1,184 @@
+{
+  "schema": "df-tactical-creation/1",
+  "creation": {
+    "description": "Standard level1 Dwarf Fighter / Soldier archer. Fighter B and Soldier B:20 arrows and61GP. Female presentation preference has no mechanical effect.",
+    "groups": [
+      {
+        "id": "species",
+        "label": "Ancestry",
+        "options": [
+          {
+            "id": "dwarf",
+            "label": "Dwarf",
+            "description": "Dwarven Toughness, Darkvision, Dwarven Resilience and Stonecunning retained."
+          }
+        ]
+      },
+      {
+        "id": "class",
+        "label": "Class",
+        "options": [
+          {
+            "id": "fighter-1",
+            "label": "Fighter \u00b7 level 1",
+            "description": "Weapon training, Fighting Style, Second Wind, three masteries."
+          }
+        ]
+      },
+      {
+        "id": "background",
+        "label": "Background",
+        "options": [
+          {
+            "id": "soldier",
+            "label": "Soldier",
+            "description": "Athletics, Intimidation, gaming set and Savage Attacker."
+          }
+        ]
+      },
+      {
+        "id": "array",
+        "label": "Ability training",
+        "description_template": "STR{0} DEX{1} CON{2} INT{3} WIS{4} CHA{5} \u00b7 Soldier +{bonus_dex}DEX/+{bonus_con}CON",
+        "options": [
+          {
+            "id": "dexterous",
+            "label": "Dexterous"
+          }
+        ]
+      },
+      {
+        "id": "equipment",
+        "label": "Starting equipment",
+        "options": [
+          {
+            "id": "fighter-b-soldier-b",
+            "label": "Fighter B + Soldier B",
+            "description": "Studded Leather Armor, Scimitar, Shortsword, Longbow,20 Arrows,Quiver,Dungeoneer\u2019s Pack;61GP. Soldier equipment B adds50GP."
+          }
+        ]
+      },
+      {
+        "id": "style-masteries",
+        "label": "Fighting Style and masteries",
+        "options": [
+          {
+            "id": "archery-longbow-scimitar-shortsword",
+            "label": "Archery \u00b7 Longbow / Scimitar / Shortsword",
+            "description": "Archery +2 ranged weapon attacks. Slow / Nick / Vex."
+          }
+        ]
+      },
+      {
+        "id": "allied-ties",
+        "label": "Initiative tie agreement",
+        "options": [
+          {
+            "id": "join-order",
+            "label": "Party agrees: earlier join acts first",
+            "description": "Party ties use join order; the GM chooses allies before the Bandit when tied."
+          }
+        ]
+      }
+    ],
+    "pick_lists": {
+      "alignment": [
+        "lawful-good",
+        "neutral-good",
+        "chaotic-good",
+        "lawful-neutral",
+        "neutral",
+        "chaotic-neutral"
+      ],
+      "language": [
+        "common-sign",
+        "draconic",
+        "dwarvish",
+        "elvish",
+        "giant",
+        "gnomish",
+        "goblin",
+        "halfling",
+        "orc"
+      ],
+      "skill": [
+        "acrobatics",
+        "animal-handling",
+        "history",
+        "insight",
+        "persuasion",
+        "perception",
+        "survival"
+      ],
+      "gaming-set": [
+        "dice",
+        "dragonchess",
+        "playing-cards",
+        "three-dragon-ante"
+      ]
+    }
+  },
+  "hero": {
+    "ability_arrays": [
+      {
+        "id": "dexterous",
+        "scores": [
+          13,
+          15,
+          14,
+          10,
+          12,
+          8
+        ]
+      }
+    ],
+    "background_bonus": {
+      "dexterity": 2,
+      "constitution": 1
+    },
+    "armor_class": 15,
+    "proficiency_bonus": 2,
+    "base_hit_points": 11,
+    "second_wind": {
+      "uses_max": 2,
+      "die_sides": 10,
+      "flat_bonus": 1,
+      "recharge_per_short_rest": 1
+    }
+  },
+  "equipment": [
+    {
+      "item": "studded-leather-armor",
+      "quantity": 1
+    },
+    {
+      "item": "scimitar",
+      "quantity": 1
+    },
+    {
+      "item": "shortsword",
+      "quantity": 1
+    },
+    {
+      "item": "longbow",
+      "quantity": 1
+    },
+    {
+      "item": "arrow",
+      "quantity": 20
+    },
+    {
+      "item": "quiver",
+      "quantity": 1
+    },
+    {
+      "item": "dungeoneer-pack",
+      "quantity": 1
+    },
+    {
+      "item": "gold-piece",
+      "quantity": 61
+    }
+  ],
+  "departures": []
+}
