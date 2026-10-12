@@ -1,0 +1,1269 @@
+{
+ "schema": "df-shot-vocabulary/1",
+ "families": {
+  "tavern": {
+   "table_kinds": [
+    "inn",
+    "waystation-hall",
+    "refuge-hall",
+    "tea-house",
+    "theater"
+   ],
+   "fixed_description": "a low timber taproom with a stone hearth, long plank tables, dried herbs hanging from the beams and tankards on a shelf behind the counter",
+   "lights": [
+    "hearth-fire",
+    "lantern-warm",
+    "candle-cluster"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "wiping the counter with a rag",
+     "tags": [
+      "keeper",
+      "cook",
+      "any"
+     ]
+    },
+    {
+     "text": "drawing ale from a cask at the bar",
+     "tags": [
+      "keeper",
+      "any"
+     ]
+    },
+    {
+     "text": "counting coins into a leather pouch",
+     "tags": [
+      "merchant",
+      "keeper"
+     ]
+    },
+    {
+     "text": "cutting bread on a board by the hearth",
+     "tags": [
+      "cook",
+      "keeper"
+     ]
+    },
+    {
+     "text": "turning a joint on a spit over the fire",
+     "tags": [
+      "cook"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "warming hands at the hearth",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "setting a tankard down on the table",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "leaning on the bar with one boot up",
+     "tags": [
+      "fighter",
+      "any"
+     ]
+    },
+    {
+     "text": "checking a blade edge on a bench",
+     "tags": [
+      "fighter"
+     ]
+    },
+    {
+     "text": "stringing a short bow beside the door",
+     "tags": [
+      "ranger"
+     ]
+    },
+    {
+     "text": "unrolling a map across a table",
+     "tags": [
+      "ranger",
+      "scholar"
+     ]
+    },
+    {
+     "text": "reading a folded letter by candlelight",
+     "tags": [
+      "scholar",
+      "any"
+     ]
+    }
+   ],
+   "extras": [
+    "two drinkers in hooded cloaks by the hearth",
+    "a pair of carters arguing softly over dice",
+    "an old man asleep on a bench",
+    "a serving woman carrying a tray of mugs",
+    "a traveller counting coins at a back table"
+   ],
+   "dressing": [
+    "a dented pewter tankard",
+    "a half-eaten loaf on a wooden trencher",
+    "a coiled rope on the floor",
+    "a stack of empty barrels",
+    "a dripping candle stub"
+   ]
+  },
+  "shrine": {
+   "table_kinds": [
+    "temple",
+    "shrine",
+    "chapel",
+    "vestry",
+    "pilgrims-hall",
+    "graveyard-gate"
+   ],
+   "fixed_description": "a stone sanctuary with tall narrow windows, pale linen hangings, rows of wooden pews and a small altar lit by votive candles",
+   "lights": [
+    "candle-cluster",
+    "window-cool-daylight",
+    "lamp-glow"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "arranging dried herbs on a linen cloth at the altar",
+     "tags": [
+      "healer",
+      "any"
+     ]
+    },
+    {
+     "text": "trimming the wicks of the altar candles",
+     "tags": [
+      "keeper",
+      "any"
+     ]
+    },
+    {
+     "text": "bandaging a traveller's hand",
+     "tags": [
+      "healer"
+     ]
+    },
+    {
+     "text": "reading from a worn prayer book",
+     "tags": [
+      "scholar",
+      "keeper",
+      "healer"
+     ]
+    },
+    {
+     "text": "sweeping ash from the steps",
+     "tags": [
+      "keeper"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "kneeling at a pew with bowed head",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "resting a hand on a carved shrine stone",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "binding a wound on the forearm",
+     "tags": [
+      "healer"
+     ]
+    },
+    {
+     "text": "laying dried lavender in a basket",
+     "tags": [
+      "healer",
+      "any"
+     ]
+    },
+    {
+     "text": "lighting a votive candle at the rail",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "standing watch by the doorway with arms folded",
+     "tags": [
+      "fighter",
+      "ranger"
+     ]
+    },
+    {
+     "text": "checking a sealed letter by candlelight",
+     "tags": [
+      "scholar"
+     ]
+    }
+   ],
+   "extras": [
+    "an adult acolyte carrying a water jug",
+    "a pilgrim asleep in a pew",
+    "an elderly woman praying at the rail",
+    "two acolytes folding linen",
+    "a cloaked traveller kneeling in the aisle"
+   ],
+   "dressing": [
+    "a brass censer on a chain",
+    "a scatter of dried petals",
+    "a stack of folded bandages",
+    "a wax-spattered candelabrum",
+    "a hymn book left open on a pew"
+   ]
+  },
+  "archive": {
+   "table_kinds": [
+    "archive",
+    "archivists-study",
+    "reading-gallery",
+    "library-forecourt",
+    "undercroft-study",
+    "map-room"
+   ],
+   "fixed_description": "a tall library hall of shelves climbing toward a stained window, reading desks with brass lamps, rolled maps and open ledgers",
+   "lights": [
+    "window-cool-daylight",
+    "candle-cluster",
+    "lamp-glow"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "unrolling a map across a reading desk",
+     "tags": [
+      "scholar",
+      "ranger",
+      "any"
+     ]
+    },
+    {
+     "text": "stamping a ledger page with a brass seal",
+     "tags": [
+      "clerk",
+      "keeper"
+     ]
+    },
+    {
+     "text": "copying a page with a quill",
+     "tags": [
+      "scholar",
+      "clerk"
+     ]
+    },
+    {
+     "text": "carrying a stack of folios to a shelf",
+     "tags": [
+      "keeper",
+      "any"
+     ]
+    },
+    {
+     "text": "sorting index cards into a wooden drawer",
+     "tags": [
+      "clerk",
+      "any"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "leaning over an open atlas with both hands",
+     "tags": [
+      "scholar",
+      "any"
+     ]
+    },
+    {
+     "text": "tracing a route on a map with a fingertip",
+     "tags": [
+      "ranger",
+      "scholar"
+     ]
+    },
+    {
+     "text": "holding a loose page up to the window",
+     "tags": [
+      "scholar",
+      "any"
+     ]
+    },
+    {
+     "text": "resting a boot on a stack of ledgers",
+     "tags": [
+      "fighter"
+     ]
+    },
+    {
+     "text": "examining a sealed box under a loupe",
+     "tags": [
+      "rogue",
+      "scholar"
+     ]
+    },
+    {
+     "text": "resting a shield against a desk",
+     "tags": [
+      "fighter"
+     ]
+    },
+    {
+     "text": "turning a page with gloved fingers",
+     "tags": [
+      "any"
+     ]
+    }
+   ],
+   "extras": [
+    "a scholar copying from a folio at a far table",
+    "a clerk on a rolling ladder",
+    "a robed archivist carrying books",
+    "a scholar murmuring over a book",
+    "a hired hand sweeping dust from a bookcase"
+   ],
+   "dressing": [
+    "a stack of leather-bound ledgers",
+    "a brass astrolabe on a velvet cloth",
+    "a half-unrolled scroll",
+    "a guttering candle in a horn lantern",
+    "an inkwell with a fallen quill"
+   ]
+  },
+  "apothecary": {
+   "table_kinds": [
+    "herb-shed",
+    "apothecary"
+   ],
+   "fixed_description": "a cluttered apothecary with bundles of drying herbs hanging from beams, rows of glass jars, copper stills and a counter of brass scales",
+   "lights": [
+    "lantern-warm",
+    "window-cool-daylight",
+    "candle-cluster"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "pouring a clear liquid through a funnel",
+     "tags": [
+      "healer",
+      "scholar"
+     ]
+    },
+    {
+     "text": "grinding seeds in a stone mortar",
+     "tags": [
+      "healer",
+      "any"
+     ]
+    },
+    {
+     "text": "weighing powder on brass scales",
+     "tags": [
+      "merchant",
+      "healer"
+     ]
+    },
+    {
+     "text": "labelling a stoppered vial",
+     "tags": [
+      "clerk",
+      "healer"
+     ]
+    },
+    {
+     "text": "stirring a steaming pot over a brazier",
+     "tags": [
+      "healer",
+      "cook"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "crushing dried leaves in a mortar",
+     "tags": [
+      "healer",
+      "any"
+     ]
+    },
+    {
+     "text": "sniffing a stoppered jar with care",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "holding a vial up to the lamplight",
+     "tags": [
+      "scholar",
+      "rogue"
+     ]
+    },
+    {
+     "text": "pulling a bandage tight around a forearm",
+     "tags": [
+      "healer"
+     ]
+    },
+    {
+     "text": "sorting bundles of herbs onto a tray",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "leaning over the counter with a hand on a sword hilt",
+     "tags": [
+      "fighter"
+     ]
+    },
+    {
+     "text": "unstoppering a flask and watching the smoke",
+     "tags": [
+      "scholar",
+      "any"
+     ]
+    }
+   ],
+   "extras": [
+    "a woman sorting herbs into baskets",
+    "a patient wrapped in a blanket on a bench",
+    "a man carrying a jar of oil",
+    "a customer counting coins at the counter",
+    "a bent old woman grinding bark"
+   ],
+   "dressing": [
+    "a bundle of drying lavender",
+    "a clay pot of salve with a wooden lid",
+    "a coil of linen bandage",
+    "a brass funnel",
+    "a sack marked with dried herbs"
+   ]
+  },
+  "mill": {
+   "table_kinds": [
+    "mill-house"
+   ],
+   "fixed_description": "a timber mill hall with a great wooden wheel and stone grindstones, flour dust hanging in lamplight and grain sacks stacked against the walls",
+   "lights": [
+    "lantern-warm",
+    "window-cool-daylight",
+    "torch-smoke"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "wiping a worktable with a cloth",
+     "tags": [
+      "keeper",
+      "any"
+     ]
+    },
+    {
+     "text": "scooping flour from a sack into a bin",
+     "tags": [
+      "tradesman",
+      "any"
+     ]
+    },
+    {
+     "text": "adjusting a millstone gap with a lever",
+     "tags": [
+      "tradesman"
+     ]
+    },
+    {
+     "text": "weighing grain on a hanging scale",
+     "tags": [
+      "merchant",
+      "keeper"
+     ]
+    },
+    {
+     "text": "counting sacks by their chalk marks",
+     "tags": [
+      "clerk",
+      "keeper"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "leaning on a sack with arms folded",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "brushing flour from a sleeve",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "turning a wooden crank by the wall",
+     "tags": [
+      "fighter",
+      "tradesman"
+     ]
+    },
+    {
+     "text": "inspecting the gears with a lantern",
+     "tags": [
+      "scholar",
+      "tradesman"
+     ]
+    },
+    {
+     "text": "setting a cup on a grain bin",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "holding a torch up toward the wheel",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "resting a hand on a sword hilt at the hip",
+     "tags": [
+      "fighter"
+     ]
+    }
+   ],
+   "extras": [
+    "a miller's hand hauling a sack on his back",
+    "two millers hauling a sluice gate",
+    "a woman weighing bread by the hearth",
+    "a dog asleep by the grain bins",
+    "a carter waiting by the door"
+   ],
+   "dressing": [
+    "a split grain sack spilling wheat",
+    "a wooden bucket of water",
+    "a coil of hemp rope",
+    "a broken wheel spoke",
+    "a pitcher of cider on a crate"
+   ]
+  },
+  "market": {
+   "table_kinds": [
+    "market-street",
+    "shop"
+   ],
+   "fixed_description": "an open market lane under striped awnings, crates of produce, hanging lanterns and a stone town gate in the distance",
+   "lights": [
+    "pale-overcast-sky",
+    "lamp-glow",
+    "lantern-warm"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "unrolling a bolt of cloth across the counter",
+     "tags": [
+      "merchant",
+      "any"
+     ]
+    },
+    {
+     "text": "weighing coins on a small brass scale",
+     "tags": [
+      "merchant"
+     ]
+    },
+    {
+     "text": "wrapping a parcel in brown paper",
+     "tags": [
+      "merchant",
+      "clerk"
+     ]
+    },
+    {
+     "text": "tapping a barrel to test its level",
+     "tags": [
+      "tradesman",
+      "merchant"
+     ]
+    },
+    {
+     "text": "pinning a notice to a wooden post",
+     "tags": [
+      "clerk",
+      "any"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "running a thumb over a folded cloth",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "unrolling a map across a crate",
+     "tags": [
+      "ranger",
+      "scholar"
+     ]
+    },
+    {
+     "text": "counting coins into a palm",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "lifting a sack onto a shoulder",
+     "tags": [
+      "fighter",
+      "any"
+     ]
+    },
+    {
+     "text": "leaning on a handcart",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "glancing back over a shoulder at the crowd",
+     "tags": [
+      "rogue",
+      "ranger"
+     ]
+    },
+    {
+     "text": "turning a small brass lamp in the hands",
+     "tags": [
+      "scholar",
+      "any"
+     ]
+    }
+   ],
+   "extras": [
+    "a barker calling out prices",
+    "a woman with a basket of apples",
+    "a guard in a blue tabard walking the lane",
+    "two drovers chasing a dog",
+    "a cart driver shouting at a mule"
+   ],
+   "dressing": [
+    "a tray of brass lamps",
+    "a rolled carpet",
+    "an open crate of apples",
+    "a wooden sign with a horse painted on it",
+    "a basket of wilted greens"
+   ]
+  },
+  "waterfront": {
+   "table_kinds": [
+    "marsh-boardwalk",
+    "quay",
+    "boathouse",
+    "ferry-office",
+    "ferrymans-hut",
+    "stilt-house",
+    "eel-catchers-hall",
+    "net-loft"
+   ],
+   "fixed_description": "a timber boardwalk and quay above still water, moored rowing boats, coiled rope, drying nets and reeds at the edges under drifting mist",
+   "lights": [
+    "lantern-warm",
+    "lamp-glow",
+    "pale-overcast-sky",
+    "window-cool-moonlight"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "mending a net with a wooden shuttle",
+     "tags": [
+      "tradesman",
+      "fisher",
+      "any"
+     ]
+    },
+    {
+     "text": "coiling rope on a bollard",
+     "tags": [
+      "tradesman",
+      "keeper",
+      "any"
+     ]
+    },
+    {
+     "text": "marking a ledger at a tally board",
+     "tags": [
+      "clerk",
+      "keeper"
+     ]
+    },
+    {
+     "text": "tying a boat to a post",
+     "tags": [
+      "tradesman",
+      "any"
+     ]
+    },
+    {
+     "text": "tending a lantern on a pole",
+     "tags": [
+      "keeper",
+      "guard"
+     ]
+    },
+    {
+     "text": "hanging eel traps to dry",
+     "tags": [
+      "fisher"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "crouching to check a mooring rope",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "shading the eyes while looking out over the water",
+     "tags": [
+      "ranger",
+      "any"
+     ]
+    },
+    {
+     "text": "hauling a crate along a plank",
+     "tags": [
+      "fighter",
+      "any"
+     ]
+    },
+    {
+     "text": "lifting a boat hook from the rail",
+     "tags": [
+      "fighter"
+     ]
+    },
+    {
+     "text": "scanning the reeds with a lantern",
+     "tags": [
+      "ranger",
+      "rogue"
+     ]
+    },
+    {
+     "text": "leaning on the rail with a folded map",
+     "tags": [
+      "scholar",
+      "ranger"
+     ]
+    },
+    {
+     "text": "resting a hand on a sword hilt",
+     "tags": [
+      "fighter"
+     ]
+    }
+   ],
+   "extras": [
+    "a boatman poling a skiff through the reeds",
+    "fishermen gutting eels on a bench",
+    "a lean man in his thirties perched on a pile of crates",
+    "a ferryman calling across the water",
+    "a dockworker rolling a barrel"
+   ],
+   "dressing": [
+    "a wooden crate stencilled with a fish",
+    "a coil of tarred rope",
+    "a bucket of silver eels",
+    "a lantern on a hook",
+    "reed bundles tied with twine"
+   ]
+  },
+  "farm": {
+   "table_kinds": [
+    "farmyard",
+    "farm-kitchen",
+    "hayloft",
+    "sheepfold",
+    "bothy",
+    "cider-cellar"
+   ],
+   "fixed_description": "a farmyard of weathered boards, a hay-strewn barn, a split-rail fence and a low stone farmhouse with a lit doorway",
+   "lights": [
+    "lantern-warm",
+    "pale-overcast-sky",
+    "hearth-fire"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "brushing down a horse",
+     "tags": [
+      "keeper",
+      "tradesman",
+      "any"
+     ]
+    },
+    {
+     "text": "forking straw into a pen",
+     "tags": [
+      "keeper",
+      "any"
+     ]
+    },
+    {
+     "text": "stirring a pot over the hearth",
+     "tags": [
+      "cook",
+      "keeper"
+     ]
+    },
+    {
+     "text": "mending a harness on a bench",
+     "tags": [
+      "tradesman"
+     ]
+    },
+    {
+     "text": "herding a lamb through a gate",
+     "tags": [
+      "shepherd",
+      "keeper"
+     ]
+    },
+    {
+     "text": "pressing cheese in a cloth",
+     "tags": [
+      "cook",
+      "any"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "hauling a bucket of water",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "leaning on a gate post",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "saddling a pony",
+     "tags": [
+      "ranger",
+      "fighter"
+     ]
+    },
+    {
+     "text": "checking a horse's hoof",
+     "tags": [
+      "ranger",
+      "any"
+     ]
+    },
+    {
+     "text": "oiling a bridle",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "resting a boot on a fence rail",
+     "tags": [
+      "fighter"
+     ]
+    },
+    {
+     "text": "scraping mud from a boot with a stick",
+     "tags": [
+      "any"
+     ]
+    }
+   ],
+   "extras": [
+    "a stable hand carrying a sack",
+    "a dog barking at the fence",
+    "two farmhands pitching hay",
+    "a goat tied to a post",
+    "a grey-haired woman feeding chickens"
+   ],
+   "dressing": [
+    "a pitchfork leaning on a fence",
+    "a wooden trough full of rainwater",
+    "scattered straw",
+    "a sack of oats",
+    "a coil of leather tack"
+   ]
+  },
+  "woodland": {
+   "table_kinds": [
+    "forest-trail",
+    "woodland-lodge",
+    "hermits-cabin",
+    "charcoal-hut",
+    "caretakers-lodge",
+    "mountain-pass"
+   ],
+   "fixed_description": "a pine-forest clearing with mossy roots and mist between dark trunks, a timber cabin or camp with a fire pit, bedrolls and wooden crates",
+   "lights": [
+    "hearth-fire",
+    "lantern-warm",
+    "candle-cluster",
+    "window-cool-moonlight"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "turning a skewer over a campfire",
+     "tags": [
+      "cook",
+      "ranger",
+      "any"
+     ]
+    },
+    {
+     "text": "tying a bundle of kindling",
+     "tags": [
+      "keeper",
+      "any"
+     ]
+    },
+    {
+     "text": "stacking firewood against the wall",
+     "tags": [
+      "tradesman",
+      "any"
+     ]
+    },
+    {
+     "text": "packing a pouch of dried meat",
+     "tags": [
+      "ranger",
+      "keeper"
+     ]
+    },
+    {
+     "text": "counting arrows in a quiver",
+     "tags": [
+      "ranger",
+      "fighter"
+     ]
+    },
+    {
+     "text": "scratching a route into a bark board",
+     "tags": [
+      "ranger",
+      "scholar"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "kneeling to read tracks in the mud",
+     "tags": [
+      "ranger",
+      "any"
+     ]
+    },
+    {
+     "text": "stringing a bow",
+     "tags": [
+      "ranger"
+     ]
+    },
+    {
+     "text": "cleaning a blade with a cloth",
+     "tags": [
+      "fighter"
+     ]
+    },
+    {
+     "text": "feeding wood into the fire",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "fixing a boot strap",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "warming hands at the fire",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "sharpening an arrowhead on a stone",
+     "tags": [
+      "ranger"
+     ]
+    }
+   ],
+   "extras": [
+    "a hunter skinning a hare",
+    "two woodcutters carrying logs",
+    "a hound sleeping near a bedroll",
+    "a traveller boiling water in a pot",
+    "an old woman gathering kindling"
+   ],
+   "dressing": [
+    "a split log on a stump",
+    "a spread of pine needles",
+    "a cracked clay mug",
+    "an open chest of supplies",
+    "a lantern hung from a branch"
+   ]
+  },
+  "watch": {
+   "table_kinds": [
+    "guardhouse",
+    "lamp-room",
+    "bell-chamber"
+   ],
+   "fixed_description": "a lamp-lit watch room with a brass lamp on an iron stand, a bench, a wall rack of spears, a logbook on a table and a small high window",
+   "lights": [
+    "lamp-glow",
+    "lantern-warm",
+    "candle-cluster",
+    "window-cool-moonlight"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "trimming the wick of a brass lamp",
+     "tags": [
+      "keeper",
+      "any"
+     ]
+    },
+    {
+     "text": "writing in a logbook by lamplight",
+     "tags": [
+      "clerk",
+      "keeper"
+     ]
+    },
+    {
+     "text": "polishing a lens with a cloth",
+     "tags": [
+      "keeper"
+     ]
+    },
+    {
+     "text": "buckling on a belt by the weapon rack",
+     "tags": [
+      "guard",
+      "any"
+     ]
+    },
+    {
+     "text": "pinning a map to the wall",
+     "tags": [
+      "guard",
+      "scholar"
+     ]
+    },
+    {
+     "text": "stacking spears against the wall",
+     "tags": [
+      "guard"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "leaning on a spear shaft",
+     "tags": [
+      "fighter",
+      "guard"
+     ]
+    },
+    {
+     "text": "checking a sword edge against the light",
+     "tags": [
+      "fighter"
+     ]
+    },
+    {
+     "text": "holding a lamp up to a map",
+     "tags": [
+      "scholar",
+      "ranger"
+     ]
+    },
+    {
+     "text": "peering out of the high window",
+     "tags": [
+      "ranger",
+      "any"
+     ]
+    },
+    {
+     "text": "resting a hand on the table edge",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "adjusting a bracer strap",
+     "tags": [
+      "fighter"
+     ]
+    },
+    {
+     "text": "nocking an arrow at the doorway",
+     "tags": [
+      "ranger"
+     ]
+    }
+   ],
+   "extras": [
+    "a guard in a blue tabard at the door",
+    "a clerk stacking papers",
+    "a runner in leather boots",
+    "a sentry on the steps outside",
+    "a sleepy watchman by the fire"
+   ],
+   "dressing": [
+    "a stack of old crates",
+    "a rack of spears",
+    "a coiled chain",
+    "an hourglass on a shelf",
+    "a tin cup of cold tea"
+   ]
+  },
+  "workshop": {
+   "table_kinds": [
+    "bindery",
+    "lantern-shop",
+    "chandlers-room"
+   ],
+   "fixed_description": "a workshop of bench tools, hanging lanterns, shelves of wax and tallow, and a stone hearth where a pot of wax melts",
+   "lights": [
+    "lantern-warm",
+    "forge-glow",
+    "candle-cluster",
+    "window-cool-daylight"
+   ],
+   "speaker_tasks": [
+    {
+     "text": "stitching a binding with waxed thread",
+     "tags": [
+      "tradesman",
+      "scholar",
+      "any"
+     ]
+    },
+    {
+     "text": "dipping wicks into a pot of wax",
+     "tags": [
+      "tradesman",
+      "merchant",
+      "any"
+     ]
+    },
+    {
+     "text": "soldering a lantern seam",
+     "tags": [
+      "tradesman",
+      "guard"
+     ]
+    },
+    {
+     "text": "sanding a wooden board",
+     "tags": [
+      "tradesman"
+     ]
+    },
+    {
+     "text": "measuring a tallow candle with a rule",
+     "tags": [
+      "merchant",
+      "clerk"
+     ]
+    }
+   ],
+   "activities": [
+    {
+     "text": "turning a lantern in the hands to check its seam",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "holding a leather cover flat under a clamp",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "sharpening a knife on a stone",
+     "tags": [
+      "fighter",
+      "tradesman"
+     ]
+    },
+    {
+     "text": "cutting a strip of leather",
+     "tags": [
+      "any"
+     ]
+    },
+    {
+     "text": "pressing a stamp into warm wax",
+     "tags": [
+      "scholar",
+      "clerk"
+     ]
+    },
+    {
+     "text": "wrapping a sword hilt with cord",
+     "tags": [
+      "fighter"
+     ]
+    },
+    {
+     "text": "brushing shavings off a bench",
+     "tags": [
+      "any"
+     ]
+    }
+   ],
+   "extras": [
+    "a journeyman sweeping shavings",
+    "a woman carrying a tray of candles",
+    "a customer examining a lantern",
+    "a man turning a spindle",
+    "a clerk recording a delivery"
+   ],
+   "dressing": [
+    "a tray of brass nails",
+    "a coil of waxed thread",
+    "a wooden clamp on the bench",
+    "a jar of tallow",
+    "a bundle of cut leather strips"
+   ]
+  }
+ }
+}

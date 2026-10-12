@@ -29,7 +29,8 @@ use super::live_sfx::{self, Cue};
 use super::*;
 use crate::health_cues::Blow;
 use crate::{
-    presentation::{ActorSlot, MAX_NPCS, SceneFamily, StageActor},
+    plate_layout::{self, PlateFrame, Rect, Side},
+    presentation::{ActorSlot, MAX_NPCS, PlateGeometry, SceneFamily, StageActor},
     stage_art, stage_depth,
     stage_machines::{ActorState, LineState},
 };
@@ -233,6 +234,10 @@ pub(super) struct LineBubble<'a> {
 
 pub(super) struct Figures {
     root: Element,
+    /// PLAY-V09: where the bubbles stand while a scene plate covers the cut-outs.
+    plate_bubbles: Element,
+    /// PLAY-V09: the plate's layout while it is on screen.
+    plate: Cell<Option<PlateGeometry>>,
     figures: Vec<Figure>,
     hud: Vec<HudCard>,
     animation_end: Closure<dyn FnMut(Event)>,
@@ -348,6 +353,7 @@ impl Figures {
         }
         // Thin air in front of the far and mid figures, behind the near ones.
         node(document, &root, "div", "tv-mist", "")?;
+        let plate_bubbles = node(document, &root, "div", "tv-plate-bubbles", "")?;
         let hud_root = node(document, &root, "div", "tv-hud", "")?;
         let mut hud = Vec::with_capacity(HUD_CARDS);
         for position in 0..HUD_CARDS {
@@ -401,6 +407,8 @@ impl Figures {
         )?;
         Ok(Self {
             root,
+            plate_bubbles,
+            plate: Cell::new(None),
             figures,
             hud,
             animation_end,
@@ -910,6 +918,11 @@ impl Figures {
     /// centre of the screen first), then narrower, until the bubble overlaps no other figure's
     /// head, the roll panel or the screen edge. When none fits, the narrowest stays.
     fn place_bubble(&self, speaker: &Figure) {
+        // PLAY-V09: over a scene plate the bubble stands beside the speaker's head in the picture.
+        if let Some(geometry) = self.plate.get() {
+            self.place_bubble_on_plate(speaker, geometry);
+            return;
+        }
         let Some(window) = web_sys::window() else {
             return;
         };
@@ -961,6 +974,140 @@ impl Figures {
                 }
             }
         }
+    }
+
+    /// PLAY-V09: tells the stage that a scene plate with this layout covers the cut-outs (or, with
+    /// `None`, that none does). The bubbles then stand in the plate's own layer and are placed
+    /// from the layout; without a plate they return to their figures.
+    pub(super) fn set_plate(&self, geometry: Option<PlateGeometry>) -> Result<(), JsValue> {
+        let before = self.plate.replace(geometry);
+        if before == geometry {
+            return Ok(());
+        }
+        for figure in &self.figures {
+            let host_is_plate = figure
+                .bubbles
+                .parent_element()
+                .is_some_and(|parent| parent.is_same_node(Some(self.plate_bubbles.as_ref())));
+            if geometry.is_some() && !host_is_plate {
+                // Moving a bubble in the page restarts its entrance animation: the line being
+                // spoken must not pop in again as the plate takes over, so its bubbles skip it.
+                let mut bubble = figure.bubbles.first_element_child();
+                while let Some(open) = bubble {
+                    open.set_attribute("data-instant", "")?;
+                    bubble = open.next_element_sibling();
+                }
+                self.plate_bubbles.append_child(&figure.bubbles)?;
+            } else if geometry.is_none() && host_is_plate {
+                figure
+                    .root
+                    .insert_before(&figure.bubbles, figure.root.first_child().as_ref())?;
+                figure.bubbles.remove_attribute("style")?;
+            }
+            if figure.bubbles.has_child_nodes() {
+                self.place_bubble(figure);
+            }
+        }
+        Ok(())
+    }
+
+    /// PLAY-V09: stands the bubble beside a head in the plate, on the side the server kept calm,
+    /// with its tail toward the head; never over the head, off the screen or under the party
+    /// strip, the title or the choice chips. A hero's bubble stands beside the hero's edge of the
+    /// frame (the plate's own staging of the heroes is not sent), and keeps off the speaker's head.
+    fn place_bubble_on_plate(&self, bubble_owner: &Figure, geometry: PlateGeometry) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let dimension = |value: Result<JsValue, JsValue>, fallback: f64| {
+            value
+                .ok()
+                .and_then(|value| value.as_f64())
+                .unwrap_or(fallback)
+        };
+        let (width, height) = (
+            dimension(window.inner_width(), 1920.0),
+            dimension(window.inner_height(), 1080.0),
+        );
+        let screen = Rect::new(0.0, 0.0, width, height);
+        let frame = PlateFrame { screen };
+        let speaker_head = frame.head_box(
+            geometry.head_x,
+            geometry.head_y,
+            geometry.head_width,
+            geometry.head_height,
+        );
+        let slot = bubble_owner
+            .root
+            .get_attribute("data-slot")
+            .unwrap_or_default();
+        let (head, side, mut avoid) = match slot.as_str() {
+            "hero-1" => (
+                frame.head_box(150, 560, 100, 150),
+                Side::Right,
+                vec![speaker_head],
+            ),
+            "hero-2" => (
+                frame.head_box(850, 560, 100, 150),
+                Side::Left,
+                vec![speaker_head],
+            ),
+            _ => (speaker_head, geometry.bubble_side, Vec::new()),
+        };
+        let mut interface = Vec::new();
+        let mut keep_clear = |element: &Element| {
+            let (left, top, right, bottom) = rectangle(element);
+            if right > left && bottom > top {
+                interface.push(Rect::new(left, top, right, bottom));
+            }
+        };
+        for card in &self.hud {
+            if card.root.get_attribute("data-present").as_deref() == Some("true") {
+                keep_clear(&card.root);
+            }
+        }
+        for selector in [".tv-headline", ".tv-choices", ".combat-roll-panel"] {
+            if let Ok(Some(element)) = self.document.query_selector(selector) {
+                keep_clear(&element);
+            }
+        }
+        avoid.extend(interface);
+        let unit = (width / 100.0).min(height * 1.7778 / 100.0);
+        // The tail starts 1.6 units below the bubble's top and is 1.8 units tall.
+        let tail_offset = unit * 2.5;
+        let container = &bubble_owner.bubbles;
+        let mut placement = None;
+        for narrow in [false, true] {
+            flag(container, "data-narrow", narrow).ok();
+            let size = (
+                f64::from(container.client_width()),
+                f64::from(container.client_height()),
+            );
+            placement = plate_layout::place_bubble(screen, head, side, size, tail_offset, &avoid)
+                .or_else(|| plate_layout::place_bubble_stacked(screen, head, size, &avoid));
+            if placement.is_some() {
+                break;
+            }
+        }
+        if placement.is_none() {
+            // No clear place at all (a huge bubble): keep off the head and the screen edge only.
+            let size = (
+                f64::from(container.client_width()),
+                f64::from(container.client_height()),
+            );
+            placement = plate_layout::place_bubble(screen, head, side, size, tail_offset, &[]);
+        }
+        let Some(placed) = placement else {
+            return;
+        };
+        let _set = container.set_attribute("data-side", placed.side.name());
+        let _set = container.set_attribute(
+            "style",
+            &format!(
+                "left:{:.1}px;top:{:.1}px;right:auto",
+                placed.rect.left, placed.rect.top
+            ),
+        );
     }
 
     /// Puts a bubble with the speaker's name at the figure standing in `slot`.

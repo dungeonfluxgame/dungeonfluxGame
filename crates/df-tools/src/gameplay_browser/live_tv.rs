@@ -14,7 +14,7 @@ use super::live_sfx::{self, Cue};
 use super::live_stage::{Figures, StageMode};
 use super::*;
 use crate::{
-    presentation::{Card, CardKind, HERO_ROLE, SceneFamily, StageActor},
+    presentation::{Card, CardKind, HERO_ROLE, PlateState, PlateView, SceneFamily, StageActor},
     stage_machines::LineState,
 };
 use std::{cell::Cell, time::Duration};
@@ -75,6 +75,8 @@ pub(super) struct TvModel {
     pub(super) scene_key: String,
     /// The lobby's home screen from the server; absent outside the lobby and for a fallback.
     pub(super) home: Option<rpc::HomeTheme>,
+    /// PLAY-V09: the scene's composed plate, which replaces the painting and the cut-outs.
+    pub(super) plate: PlateView,
 }
 
 struct WordmarkSlot {
@@ -101,10 +103,27 @@ struct BigCard {
     heroes: Element,
 }
 
+/// PLAY-V09: the layer that shows the scene plate: two pictures (the shown one and the one that is
+/// loading or leaving), a slow push-in, drifting dust and a breathing vignette. The stylesheet
+/// (`live_plate.css`) draws every state from the attributes set here.
+type PictureListeners = (Closure<dyn FnMut(Event)>, Closure<dyn FnMut(Event)>);
+
+struct PlateLayer {
+    root: Element,
+    images: Vec<Element>,
+    /// Each picture's `load` and `error` listeners, kept so they can be removed.
+    listeners: Vec<PictureListeners>,
+    /// The scene whose plate is shown, to tell an edit of it from the plate of a new scene.
+    scene: RefCell<String>,
+    /// Which of the two pictures is the next to be filled.
+    next: Cell<usize>,
+}
+
 pub(super) struct TvStage {
     root: Element,
     art: Element,
     art_previous: Element,
+    plate: PlateLayer,
     figures: Figures,
     roster: Element,
     gathered: Element,
@@ -196,6 +215,75 @@ fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue>
     })
 }
 
+/// PLAY-V09: builds the plate layer between the painting and the scrim.
+fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsValue> {
+    let root = node(document, stage, "div", "tv-plate", "")?;
+    root.set_attribute("aria-hidden", "true")?;
+    let zoom = node(document, &root, "div", "tv-plate-zoom", "")?;
+    let mut images = Vec::with_capacity(2);
+    let mut listeners = Vec::with_capacity(2);
+    for index in 0..2 {
+        let image = node(document, &zoom, "img", "tv-plate-img", "")?;
+        image.set_attribute("alt", "")?;
+        image.set_attribute("decoding", "async")?;
+        image.set_attribute("data-i", &index.to_string())?;
+        let load = {
+            let (stage, root, image) = (stage.clone(), root.clone(), image.clone());
+            Closure::wrap(Box::new(move |_: Event| {
+                // A picture that is no longer the one wanted (a newer plate replaced it while it
+                // loaded) changes nothing.
+                if root.get_attribute("data-want") != image.get_attribute("data-src") {
+                    return;
+                }
+                let tick = if root.get_attribute("data-push").as_deref() == Some("a") {
+                    "b"
+                } else {
+                    "a"
+                };
+                // The slow push-in restarts only for a new scene's plate, not for an edit of it.
+                if root.get_attribute("data-pull").as_deref() != Some("focus") {
+                    let _set = root.set_attribute("data-push", tick);
+                }
+                let _set = root.set_attribute(
+                    "data-active",
+                    &image.get_attribute("data-i").unwrap_or_default(),
+                );
+                let _set = stage.set_attribute("data-plate-loaded", "");
+                let _removed = stage.remove_attribute("data-plate-hold");
+            }) as Box<dyn FnMut(Event)>)
+        };
+        let error = {
+            let (stage, root, image) = (stage.clone(), root.clone(), image.clone());
+            Closure::wrap(Box::new(move |_: Event| {
+                if root.get_attribute("data-want") != image.get_attribute("data-src") {
+                    return;
+                }
+                // The plate never loaded: the scene keeps its cut-outs.
+                let _set = root.set_attribute(
+                    "data-failed",
+                    &image.get_attribute("data-src").unwrap_or_default(),
+                );
+                let _set = stage.set_attribute("data-plate-state", "failed");
+                let _removed = stage.remove_attribute("data-plate-loaded");
+                let _removed = stage.remove_attribute("data-plate-hold");
+            }) as Box<dyn FnMut(Event)>)
+        };
+        image.add_event_listener_with_callback("load", load.as_ref().unchecked_ref())?;
+        image.add_event_listener_with_callback("error", error.as_ref().unchecked_ref())?;
+        images.push(image);
+        listeners.push((load, error));
+    }
+    node(document, &root, "div", "tv-plate-dust", "")?;
+    node(document, &root, "div", "tv-plate-vignette", "")?;
+    Ok(PlateLayer {
+        root,
+        images,
+        listeners,
+        scene: RefCell::new(String::new()),
+        next: Cell::new(0),
+    })
+}
+
 impl TvStage {
     pub(super) fn mount(document: &Document, parent: &Element) -> Result<Self, JsValue> {
         let root = node(document, parent, "div", "tv-stage", "")?;
@@ -205,6 +293,7 @@ impl TvStage {
         let art_previous = node(document, &root, "div", "tv-art tv-art-previous", "")?;
         let art = node(document, &root, "div", "tv-art", "")?;
         let atmosphere = node(document, &root, "div", "tv-atmosphere", "")?;
+        let plate = mount_plate(document, &root)?;
         node(document, &root, "div", "tv-scrim", "")?;
         let figures = Figures::mount(document, &root)?;
         let safe = node(document, &root, "div", "tv-safe", "")?;
@@ -321,6 +410,7 @@ impl TvStage {
             root,
             art,
             art_previous,
+            plate,
             figures,
             roster,
             gathered,
@@ -618,6 +708,7 @@ impl TvStage {
         if announce && gathered && !was_gathered {
             live_sfx::play(Cue::PartyGathered, GATHERED_SOUND_DELAY);
         }
+        self.set_plate(&model.plate, &model.scene_key)?;
         if lobby {
             self.figures.update(
                 &[],
@@ -666,7 +757,81 @@ impl TvStage {
         Ok(())
     }
 
+    /// PLAY-V09: shows the scene plate the server made, or leaves the scene as it was.
+    ///
+    /// `data-plate-state` is the server's word (none, pending, ready, failed; failed also when the
+    /// picture does not load) and `data-plate-key` names the plate. The cut-outs go once the
+    /// picture has loaded (`data-plate-loaded`), or at once when a new scene arrives with its
+    /// plate already ready (`data-plate-hold`), so a pre-made plate never shows the cut-out stage.
+    /// A new picture for the scene already on screen (a mood edit) comes in as a focus pull.
+    fn set_plate(&self, plate: &PlateView, scene_key: &str) -> Result<(), JsValue> {
+        let layer = &self.plate;
+        let failed = layer.root.get_attribute("data-failed");
+        let usable = match (&plate.state, &plate.url) {
+            (PlateState::Ready, Some(url)) if failed.as_deref() != Some(url.as_str()) => Some(url),
+            _ => None,
+        };
+        let state = match (plate.state, usable) {
+            (PlateState::Ready, None) => PlateState::Failed,
+            (state, _) => state,
+        };
+        self.root.set_attribute("data-plate-state", state.name())?;
+        let Some(url) = usable else {
+            self.root.remove_attribute("data-plate-key")?;
+            self.root.remove_attribute("data-plate-loaded")?;
+            self.root.remove_attribute("data-plate-hold")?;
+            layer.root.remove_attribute("data-want")?;
+            layer.root.remove_attribute("data-push")?;
+            layer.root.remove_attribute("data-pull")?;
+            layer.scene.borrow_mut().clear();
+            self.figures.set_plate(None)?;
+            return Ok(());
+        };
+        self.figures.set_plate(plate.layout)?;
+        if let Some(layout) = plate.layout {
+            layer.root.set_attribute(
+                "style",
+                &format!(
+                    "--head-x:{}%;--head-y:{}%",
+                    layout.head_x / 10,
+                    layout.head_y / 10
+                ),
+            )?;
+        }
+        if layer.root.get_attribute("data-want").as_deref() == Some(url.as_str()) {
+            return Ok(());
+        }
+        let same_scene =
+            layer.scene.borrow().as_str() == scene_key && layer.root.has_attribute("data-want");
+        let next = layer.next.get();
+        let Some(image) = layer.images.get(next) else {
+            return Ok(());
+        };
+        layer.next.set(1 - next);
+        let key = url.rsplit('/').next().unwrap_or_default();
+        self.root.set_attribute("data-plate-key", key)?;
+        layer.root.set_attribute("data-want", url)?;
+        if same_scene {
+            // An edit of the plate on screen: the old one stays until the new one has loaded.
+            layer.root.set_attribute("data-pull", "focus")?;
+        } else {
+            layer.root.remove_attribute("data-pull")?;
+            self.root.remove_attribute("data-plate-loaded")?;
+            self.root.set_attribute("data-plate-hold", "")?;
+            *layer.scene.borrow_mut() = scene_key.to_owned();
+        }
+        image.set_attribute("data-src", url)?;
+        image.set_attribute("src", url)
+    }
+
     pub(super) fn dispose(self) -> Result<(), JsValue> {
+        for (image, (load, error)) in self.plate.images.iter().zip(&self.plate.listeners) {
+            // Listeners die with their elements; removing them is hygiene.
+            let _removed =
+                image.remove_event_listener_with_callback("load", load.as_ref().unchecked_ref());
+            let _removed =
+                image.remove_event_listener_with_callback("error", error.as_ref().unchecked_ref());
+        }
         self.figures.dispose();
         let removed = self.wordmark.image.remove_event_listener_with_callback(
             "load",

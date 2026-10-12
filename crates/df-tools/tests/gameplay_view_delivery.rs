@@ -6,6 +6,10 @@ mod view_delivery;
 #[allow(dead_code)]
 #[path = "../src/live_art.rs"]
 mod live_art;
+// PLAY-V09: the presentation module's scene plate layout uses the bubble placement types.
+#[allow(dead_code)]
+#[path = "../src/plate_layout.rs"]
+mod plate_layout;
 #[allow(dead_code)]
 #[path = "../src/presentation.rs"]
 mod presentation;

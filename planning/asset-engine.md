@@ -207,6 +207,37 @@ minimum 20), `_DEADLINE_SECONDS` (default 45), `_CACHE`, plus the shared
 40 calls, about 0.85 USD, and typically 15 to 25 calls (a repeated character and expression
 pair, and a repeated backdrop request, come from the cache for nothing), about 0.3 to 0.5 USD.
 
+### Scene plates (PLAY-V09)
+
+A scene plate is the whole story scene as ONE composed photographic film still (the camera
+stands with the party; heroes small and seen from behind, the speaker the lit focal point,
+extras, foreground objects, one light) in place of the painted backdrop with separate cut-outs.
+It is generated just in time and cached like every runtime image (`ImageKind::ScenePlate`,
+2560x1440 JPEG, medium quality, about 14 to 24 s and 0.06 USD each; a repeated plate is a cache
+hit). Combat and the lobby never get one.
+
+- Staging is the rule-based shot director `gameplay/shot.rs`: a closed, validated `ShotSpec`
+  (camera, speaker slot and task, hero slots and activities, extras, foreground dressing, light)
+  seeded by the scene, from the closed vocabulary `gameplay/shot/place_families.json` (every
+  person in it is an adult). No model stages a scene; no player text and no model output reaches
+  a plate prompt (`imagery/plate_prompt.rs`, the photographic recipe of `look-v2.md`; 3,978
+  characters at most, the adapter's limit is 4,000).
+- References: the heroes' standing figures composed into one party sheet
+  (`imagery/party_sheet.rs`), the speaker's full-length portrait, the place painting.
+- Timing (`gameplay/living_scenes/plates.rs`): the plate of the scene that becomes current and
+  the plates of the scenes the beat script can lead to next are requested at once, once each;
+  nothing waits for one. A lasting face the mood tracker asks for on the speaker is an EDIT of
+  the plate on screen (the first plate is the base), not a fresh render.
+- Wire: `GameplayScene.live_plate` (20), `plate_layout` (21: the speaker's head box and the calm
+  side for the bubble, in permille of the plate, the measured 9% head-raise bias corrected) and
+  `plate_state` (22: unspecified, pending, ready, failed). Display and phones both get them.
+- Display: a ready plate is the scene picture; the cut-outs of the heroes and the cast are not
+  drawn and their speech bubbles stand beside the speaker's head (`plate_layout.rs`); until it
+  is ready, and if it fails, the scene looks as it always did. The plate has a slow push-in,
+  dust and a breathing vignette; an edit swaps in with a focus pull.
+- Setting: `DF_GAMEPLAY_PLATES` `on` (default) or `off`; plates also need imagery on (the
+  `OPENAI_API_KEY` present). The shared `DF_GAMEPLAY_IMAGERY_BUDGET` still bounds calls per run
+  (default 40: a run that wants every plate sets it higher).
 ## PLAY-H01: health-tier character art (2026-10-12)
 
 One tier definition (`df-tools/src/health_tier.rs`: Healthy over 75%, Hurt over 50%, Bloodied over

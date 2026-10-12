@@ -19,7 +19,12 @@ message SubmitActionResponse { oneof outcome { DecisionReceipt committed_decisio
 
 enum HarborDestination { HARBOR_DESTINATION_UNSPECIFIED = 0; LOADING_PIER = 1; LANTERN_WHARF = 2; HARBOR_INN = 3; }
 // live_backdrop (display only): a server-generated re-render of this scene's painting, `/gameplay/imagery/<key>`; empty when none. Presentation only.
-message GameplayScene { HarborDestination destination = 1; string title = 2; string scene_asset = 3; string speaker_portrait = 4; repeated SceneActor cast = 5; string rules_note = 6; string place = 7; string location_id = 8; string live_backdrop = 9; }
+message GameplayScene { HarborDestination destination = 1; string title = 2; string scene_asset = 3; string speaker_portrait = 4; repeated SceneActor cast = 5; string rules_note = 6; string place = 7; string location_id = 8; string live_backdrop = 9; string live_plate = 20; PlateLayout plate_layout = 21; PlateState plate_state = 22; }
+// PLAY-V09 scene plate (display and phones): one composed film still of the scene, `/gameplay/imagery/<key>`. `live_plate` is empty unless `plate_state` is READY; UNSPECIFIED means the scene has no plate (none planned, or imagery off), PENDING means one is being made, FAILED means none will come. The layout says where the speaker's head is in the plate and which side of it is kept calm for the speech bubble. Presentation only; a failed plate never changes the game.
+enum PlateState { PLATE_STATE_UNSPECIFIED = 0; PLATE_STATE_PENDING = 1; PLATE_STATE_READY = 2; PLATE_STATE_FAILED = 3; }
+enum PlateSide { PLATE_SIDE_UNSPECIFIED = 0; PLATE_SIDE_LEFT = 1; PLATE_SIDE_RIGHT = 2; }
+// Positions are permille of the plate (0 to 1000 across and down); the head box is centred on the head position.
+message PlateLayout { PlateSide bubble_side = 1; uint32 head_x_permille = 2; uint32 head_y_permille = 3; uint32 head_width_permille = 4; uint32 head_height_permille = 5; }
 enum SceneRole { SCENE_ROLE_UNSPECIFIED = 0; PATRON = 1; ANTAGONIST = 2; CONTACT = 3; BYSTANDER = 4; }
 // live_sprite (display only): a server-generated expression variant of this character's cut-out, `/gameplay/imagery/<key>`; empty when none. Presentation only.
 message SceneActor { string id = 1; string name = 2; SceneRole role = 3; string sprite = 4; string portrait = 5; bool speaking = 6; string live_sprite = 7; }

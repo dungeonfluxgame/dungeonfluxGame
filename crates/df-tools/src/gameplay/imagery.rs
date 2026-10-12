@@ -16,6 +16,8 @@
 //! model. Generated images are never written under `assets/` and never committed; each is
 //! recorded in a run-local manifest (`imagery.jsonl`) with its provenance.
 mod artifact;
+mod party_sheet;
+mod plate_prompt;
 mod prompt;
 mod references;
 
@@ -62,6 +64,9 @@ pub(super) use prompt::{
     reason = "the investigation task (a follow-up) is the first caller"
 )]
 pub(super) use prompt::{PromptRefusal, VettedFact};
+// PLAY-V09: the scene plate's party sheet and prompts.
+pub(super) use party_sheet::party_sheet;
+pub(super) use plate_prompt::{PlateReferences, plate_moment, scene_plate};
 pub(super) use references::{ReferenceImage, ReferenceStore};
 
 use super::startup_configuration::{
@@ -87,6 +92,10 @@ pub(super) enum ImageKind {
     CastExpression,
     /// A close-up illustration of one object in this place.
     ArtifactCloseUp,
+    /// PLAY-V09: one composed film still of a story scene, heroes and speaker in the place.
+    ScenePlate,
+    /// PLAY-V09: an existing plate edited for a lasting change of the speaker's face.
+    ScenePlateEdit,
 }
 
 impl ImageKind {
@@ -95,6 +104,8 @@ impl ImageKind {
             Self::SceneRefresh => "scene_refresh",
             Self::CastExpression => "cast_expression",
             Self::ArtifactCloseUp => "artifact_close_up",
+            Self::ScenePlate => "scene_plate",
+            Self::ScenePlateEdit => "scene_plate_edit",
         }
     }
 }
@@ -119,6 +130,12 @@ impl OutputSpec {
         width: 1024,
         height: 1536,
         transparent: true,
+    };
+    /// PLAY-V09: a 16:9 composed scene plate (heroes are small in it, so it is drawn large).
+    pub(super) const PLATE: Self = Self {
+        width: 2560,
+        height: 1440,
+        transparent: false,
     };
     /// A 4:3 close-up illustration.
     pub(super) const CLOSE_UP: Self = Self {
@@ -329,6 +346,9 @@ struct ManifestLine {
     height: u32,
     transparent: bool,
     micro_dollars: u64,
+    /// PLAY-V09: how long the provider call took, in milliseconds; absent in older manifests.
+    #[serde(default)]
+    elapsed_ms: u64,
 }
 
 impl Imagery {
@@ -635,11 +655,13 @@ impl Engine {
             .await
             .map_err(|_| ImageFailure::Interrupted)?;
         self.charge()?;
+        let started = std::time::Instant::now();
         let generated = self
             .provider
             .edit(&edit, self.deadline)
             .await
             .map_err(failure_of)?;
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if generated.bytes.is_empty() || generated.bytes.len() as u64 > MAXIMUM_IMAGE_BYTES {
             return Err(ImageFailure::BadOutput);
         }
@@ -649,7 +671,7 @@ impl Engine {
         let bytes = Bytes::from(generated.bytes);
         let stored = self.store(key, format, bytes.clone()).await.is_ok();
         if stored {
-            self.record(key, &request, bytes.len() as u64, micro_dollars)
+            self.record(key, &request, bytes.len() as u64, micro_dollars, elapsed_ms)
                 .await;
         }
         // A result that could not be cached is still served from memory for this key's first
@@ -729,7 +751,14 @@ impl Engine {
 
     /// Appends the provenance of one image to the run-local manifest. A failed append is
     /// reported to diagnostics and never fails the render.
-    async fn record(&self, key: &ImageKey, request: &ImageRequest, bytes: u64, micro_dollars: u64) {
+    async fn record(
+        &self,
+        key: &ImageKey,
+        request: &ImageRequest,
+        bytes: u64,
+        micro_dollars: u64,
+        elapsed_ms: u64,
+    ) {
         let Some(path) = self.manifest.clone() else {
             return;
         };
@@ -751,6 +780,7 @@ impl Engine {
             height: request.output.height,
             transparent: request.output.transparent,
             micro_dollars,
+            elapsed_ms,
         };
         let appended = tokio::task::spawn_blocking(move || append_manifest(&path, &line)).await;
         if !matches!(appended, Ok(Ok(()))) {

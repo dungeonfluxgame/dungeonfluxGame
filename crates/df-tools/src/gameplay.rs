@@ -48,6 +48,7 @@ mod room;
 mod room_code;
 mod scene_mood;
 mod session_recovery;
+mod shot;
 mod social;
 mod speech_input;
 mod splat_assets;
@@ -1138,6 +1139,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         social.clone(),
         rating,
         living_scenes::Timing::from_interval(living_interval),
+        startup_configuration::plates_enabled(std::env::var("DF_GAMEPLAY_PLATES"))?,
     );
     let tempo = if std::env::args().nth(4).is_some() {
         None

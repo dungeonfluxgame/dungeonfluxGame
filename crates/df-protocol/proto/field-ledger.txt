@@ -562,4 +562,23 @@ field dungeonflux.public.v1.HomeTheme 5 party type=11 label=1 presence=false tar
 field dungeonflux.public.v1.HomeTheme 6 mood type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeMood oneof=-
 field dungeonflux.public.v1.HomeTheme 7 atmosphere type=9 label=3 presence=false target=- oneof=-
 field dungeonflux.public.v1.HomeTheme 8 fallback type=8 label=1 presence=false target=- oneof=-
+# PLAY-V09: scene plate (GameplayScene 20 live_plate, 21 plate_layout, 22 plate_state)
+enum dungeonflux.public.v1.PlateSide
+enum dungeonflux.public.v1.PlateState
+enum-value dungeonflux.public.v1.PlateSide 0 PLATE_SIDE_UNSPECIFIED
+enum-value dungeonflux.public.v1.PlateSide 1 PLATE_SIDE_LEFT
+enum-value dungeonflux.public.v1.PlateSide 2 PLATE_SIDE_RIGHT
+enum-value dungeonflux.public.v1.PlateState 0 PLATE_STATE_UNSPECIFIED
+enum-value dungeonflux.public.v1.PlateState 1 PLATE_STATE_PENDING
+enum-value dungeonflux.public.v1.PlateState 2 PLATE_STATE_READY
+enum-value dungeonflux.public.v1.PlateState 3 PLATE_STATE_FAILED
+field dungeonflux.public.v1.GameplayScene 20 live_plate type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 21 plate_layout type=11 label=1 presence=false target=.dungeonflux.public.v1.PlateLayout oneof=-
+field dungeonflux.public.v1.GameplayScene 22 plate_state type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateState oneof=-
+message dungeonflux.public.v1.PlateLayout
+field dungeonflux.public.v1.PlateLayout 1 bubble_side type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateSide oneof=-
+field dungeonflux.public.v1.PlateLayout 2 head_x_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateLayout 3 head_y_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateLayout 4 head_width_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateLayout 5 head_height_permille type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 45 join_url type=9 label=1 presence=false target=- oneof=-

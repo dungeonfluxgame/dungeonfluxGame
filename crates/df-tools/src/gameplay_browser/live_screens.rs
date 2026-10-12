@@ -251,6 +251,8 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         family: crate::presentation::scene_family(&input.scene.scene_asset),
         scene_key: input.scene.title.clone(),
         home: input.journey.home.clone(),
+        // PLAY-V09: the scene as one composed picture, when the server has made it.
+        plate: crate::presentation::plate_of(input.scene),
     })
 }
 
