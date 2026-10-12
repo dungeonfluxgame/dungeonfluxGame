@@ -2425,6 +2425,162 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T00:10:22+00:00",
       "updated_at": "2026-10-12T00:10:22+00:00"
+    },
+    {
+      "id": "PLAY-G05",
+      "feature_id": "F06",
+      "title": "Give every scene a defined setting and a background that depicts it",
+      "objective": "The generator states where each scene happens (the inn's taproom, the shrine, the quay outside, the mill house) and chooses the background from art declared to depict that kind of place. A quest-giver is met where they work, the confrontation moves to a named place, and the narration says where the party is.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "content/adventure-tables/places.json",
+        "content/adventure-tables/art-manifest.json",
+        "crates/df-tools/src/gameplay/adventure/",
+        "assets/ui/generated/",
+        "planning/adventure-generator.md"
+      ],
+      "acceptance_json": [
+        "Across 200 seeds every scene has a setting, and its background is declared to depict that setting's kind; no quest-giver is met in a place that contradicts their trade.",
+        "A chapter shows at least three distinct, fitting backgrounds: the meeting place, the place of the confrontation and the destination.",
+        "The opening narration names the place; narration never describes a different place from the background on screen.",
+        "A background missing on disk is replaced at startup by the location's general art and reported; the game never shows a blank scene.",
+        "Existing saved adventures still load.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests over 200 seeds for setting presence, depiction match and trade/place coherence.",
+        "Real browser frames of three seeds' opening, confrontation and destination scenes."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M7",
+        "milestone_goal": "Coherent staging: where a scene happens, who is in it and how they sound all agree.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11: the narrative engine must define the setting so backgrounds match the story; meeting a bar keeper should happen in a bar. In the second demo an innkeeper was met in a library because one background per location is reused for every scene of a chapter.",
+        "objective": "The generator states where each scene happens (the inn's taproom, the shrine, the quay outside, the mill house) and chooses the background from art declared to depict that kind of place. A quest-giver is met where they work, the confrontation moves to a named place, and the narration says where the party is.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Give every scene a defined setting and a background that depicts it",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-B02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "b9e2c70f95e5465d8195342133f7acece54662bccb78363ed474a7e84c7c513f"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "89b3d692353ee82210cbe9f501f62b6d12bde89ec35b17ba57a0df3711ab8342"
+          }
+        ],
+        "input_revision": "4fd834a5567f0974a33071a9615f5c86b572e78a",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T00:16:47+00:00",
+      "updated_at": "2026-10-12T00:16:47+00:00"
+    },
+    {
+      "id": "PLAY-V02",
+      "feature_id": "F16",
+      "title": "Cast each speaking character with a voice that matches their gender and age",
+      "objective": "A verified voice roster and a casting rule replace the single NPC voice: gender is a hard match, then age and tone; characters in one adventure sound different; cached audio is tied to the voice.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/voice.rs",
+        "content/voice-casting.json",
+        "crates/df-tools/src/gameplay/startup_configuration.rs",
+        "development/run-gameplay.sh"
+      ],
+      "acceptance_json": [
+        "Every speaking character in three generated seeds is voiced by a roster voice whose provider metadata matches the character's gender.",
+        "Two characters in one adventure never share a voice when the roster allows.",
+        "A recast never replays audio cached under the old voice.",
+        "A speaker the casting does not know gets the declared neutral voice, never a guessed gender.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests with the fake provider for gender, age, distinctness, fallback and cache identity.",
+        "Listening check of one line per cast character on a real playback device."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M7",
+        "milestone_goal": "Coherent staging: where a scene happens, who is in it and how they sound all agree.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner feedback 2026-10-11: take care when selecting a voice based on the gender. Every NPC, including a female innkeeper, spoke with one male voice.",
+        "objective": "A verified voice roster and a casting rule replace the single NPC voice: gender is a hard match, then age and tone; characters in one adventure sound different; cached audio is tied to the voice.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Cast each speaking character with a voice that matches their gender and age",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/interaction-engine.md",
+            "sha256": "1bad7c28609ac5e5a51a3ea0b3c1fae17ebeb6380dbdb8fce582085a8ede354f"
+          }
+        ],
+        "input_revision": "4fd834a5567f0974a33071a9615f5c86b572e78a",
+        "required_capabilities": {
+          "audio": true,
+          "computer_use": true,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T00:16:47+00:00",
+      "updated_at": "2026-10-12T00:16:47+00:00"
     }
   ],
   "dependencies": [
