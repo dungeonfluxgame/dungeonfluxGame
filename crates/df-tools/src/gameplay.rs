@@ -23,6 +23,7 @@ mod recovery_qualification;
 mod rest_qualification;
 mod restart_qualification;
 mod room;
+mod splat_assets;
 mod startup_configuration;
 #[cfg(test)]
 mod startup_contract;
@@ -1145,6 +1146,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .merge(music_assets::router(
             &std::path::Path::new(&asset_root).join("../music"),
+        )?)
+        .merge(splat_assets::router(
+            &std::path::Path::new(&asset_root).join("../splat"),
         )?)
         .merge(voice::router(voice.clone()));
     let npc = npc_phase.map(|phase| {
