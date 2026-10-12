@@ -152,6 +152,8 @@ impl Service {
         viewed.map(|(role, mut message)| {
             self.living.observe(&message);
             self.living.apply(&mut message);
+            // PLAY-V10: the home loop's state, read on every view so a loop that lands wakes it.
+            home_video::apply(&mut message);
             (role, message)
         })
     }
@@ -211,7 +213,12 @@ impl rpc::session_service_server::SessionService for Service {
         let mut table_lines = self.table_log.subscribe();
         table_lines.borrow_and_update();
         // A published scene image wakes a watcher the way a new table line does.
-        let mut art = self.living.subscribe();
+        // PLAY-V10: a stream without living art still wakes when a home loop lands.
+        let mut art = Some(
+            self.living
+                .subscribe()
+                .unwrap_or_else(home_video::wake_subscribe),
+        );
         if let Some(art) = art.as_mut() {
             art.borrow_and_update();
         }

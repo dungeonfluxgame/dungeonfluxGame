@@ -894,11 +894,6 @@ pub(super) fn project_journey(
     } else {
         Vec::new()
     };
-    let home_video = if role == LocalDemoRole::Display && phase == rpc::JourneyPhase::Room {
-        super::home_video::observe(&authored.asset)
-    } else {
-        super::home_video::LoopView::None
-    };
     let journey = rpc::JourneyView {
         phase: if creation.is_some() {
             rpc::JourneyPhase::CharacterCreation as i32
@@ -923,9 +918,9 @@ pub(super) fn project_journey(
         reply_speaker: String::new(),
         home: (phase == rpc::JourneyPhase::Room)
             .then(|| super::home_theme::lobby_view(&authored.asset, authored.setting.as_ref())),
-        // PLAY-V10: the home loop goes to the display only; the still is always the picture below.
-        home_video_state: home_video.proto_state() as i32,
-        home_video_path: home_video.path(),
+        // PLAY-V10: set per view for the display's lobby by `home_video::apply`; none here.
+        home_video_state: rpc::HomeVideoState::None as i32,
+        home_video_path: String::new(),
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
     let mut scene = if super::beat_script_runtime::native_inn(state)? {

@@ -5,13 +5,14 @@
 use super::home_video::{
     self, Endpoints, LoopView, Span, clip_key, clip_key_with, respond, span_for, test_engine,
 };
+use super::rpc;
 use axum::{
     body::to_bytes,
     http::{HeaderMap, HeaderValue, StatusCode, header},
 };
 use std::{
     io::{Read, Write},
-    net::{SocketAddr, TcpListener},
+    net::{SocketAddr, TcpListener, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
@@ -122,7 +123,7 @@ fn answer(
     } else if request_line.starts_with("POST ") {
         (
             "application/json",
-            br#"{"request_id":"req-home-video-1","status_url":"https://queue.fal.run/fal-ai/kling-video/o1/image-to-video/requests/req-home-video-1/status","response_url":"https://queue.fal.run/fal-ai/kling-video/o1/image-to-video/requests/req-home-video-1/response","cancel_url":"https://queue.fal.run/fal-ai/kling-video/o1/image-to-video/requests/req-home-video-1/cancel"}"#
+            br#"{"request_id":"req-home-video-1","status_url":"https://queue.fal.run/fal-ai/kling-video/o1/image-to-video/requests/req-home-video-1/status","response_url":"https://queue.fal.run/fal-ai/kling-video/o1/image-to-video/requests/req-home-video-1","cancel_url":"https://queue.fal.run/fal-ai/kling-video/o1/image-to-video/requests/req-home-video-1/cancel"}"#
                 .to_vec(),
         )
     } else if path.ends_with("/status") {
@@ -130,13 +131,14 @@ fn answer(
         // carries an error type, which is how the adapter's contract reads a failed job.
         let status = match scenario {
             Scenario::Refused => {
-                r#"{"request_id":"req-home-video-1","status":"COMPLETED","error_type":"RunnerError","error":"content refused"}"#
+                r#"{"status":"COMPLETED","error_type":"RunnerError","error":"content refused"}"#
             }
-            Scenario::NeverFinishes => r#"{"request_id":"req-home-video-1","status":"IN_QUEUE"}"#,
-            Scenario::MalformedClip => r#"{"request_id":"req-home-video-1","status":"COMPLETED"}"#,
+            Scenario::NeverFinishes => r#"{"status":"IN_QUEUE","queue_position":0}"#,
+            Scenario::MalformedClip => r#"{"status":"COMPLETED"}"#,
         };
         ("application/json", status.as_bytes().to_vec())
-    } else if path.ends_with("/response") {
+    } else if path.ends_with("/req-home-video-1") {
+        // The result is the request itself, as fal's queue schema names it.
         (
             "application/json",
             br#"{"video":{"url":"https://v3b.fal.media/out/clip.mp4","content_type":"video/mp4","file_name":"clip.mp4","file_size":34}}"#
@@ -481,6 +483,173 @@ async fn a_timeout_leaves_the_still_and_the_spend_is_kept() {
         "a timed-out clip stays charged, never refunded"
     );
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[tokio::test]
+async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it() {
+    // Arrange: a cached loop for the farm's still and the engine the view reads.
+    let fake = fake(Scenario::MalformedClip);
+    let directory = scratch("display-view");
+    let root = asset_root();
+    let still = home_video::prepare_still_for_test(&root, PAINTING)
+        .await
+        .expect("the still");
+    let key = clip_key(&still);
+    std::fs::write(directory.join(format!("{key}.mp4")), vec![0u8; 64]).expect("a cached clip");
+    let engine = test_engine(
+        root,
+        directory.clone(),
+        4,
+        endpoints(&fake),
+        Duration::from_secs(30),
+    );
+    home_video::install_for_test(Arc::clone(&engine)).expect("the test engine is installed once");
+    let lobby = || rpc::ViewMessage {
+        audience: Some(rpc::view_message::Audience::Display(
+            rpc::DisplayGameplayView {
+                narration: String::new(),
+                scene_asset: PAINTING.to_owned(),
+                scene: None,
+                journey: Some(rpc::JourneyView {
+                    phase: rpc::JourneyPhase::Room as i32,
+                    ..Default::default()
+                }),
+            },
+        )),
+        ..Default::default()
+    };
+    // Act: the first view starts the flight; a later view, after the flight landed, reads it.
+    let mut first = lobby();
+    home_video::apply(&mut first);
+    assert_eq!(settle(&engine, PAINTING).await, format!("ready:{key}"));
+    let mut later = lobby();
+    home_video::apply(&mut later);
+    // Assert: the display's lobby carries the ready state and the served path.
+    let journey = match later.audience {
+        Some(rpc::view_message::Audience::Display(display)) => display.journey.expect("a journey"),
+        _ => panic!("a display view"),
+    };
+    assert_eq!(journey.home_video_state, rpc::HomeVideoState::Ready as i32);
+    assert_eq!(
+        journey.home_video_path,
+        format!("/gameplay/home-video/{key}")
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Development check: one real generation of a painting's loop through the engine, reporting the
+/// outcome and the time. It spends one clip, and runs only when `DF_HOME_VIDEO_LIVE_GENERATE` names
+/// the painting; the key comes from `FAL_KEY` in the environment of that one command.
+#[tokio::test]
+#[ignore = "live paid check; set DF_HOME_VIDEO_LIVE_GENERATE to a painting and FAL_KEY in one command"]
+async fn live_generation_of_one_painting() {
+    let Ok(painting) = std::env::var("DF_HOME_VIDEO_LIVE_GENERATE") else {
+        return;
+    };
+    let credential = std::env::var("FAL_KEY").expect("FAL_KEY is set for this check");
+    // The same two CDN hosts the server pins.
+    let pins: Vec<df_providers::FalCdnPin> = ["v3.fal.media", "v3b.fal.media"]
+        .into_iter()
+        .filter_map(|host| {
+            let addresses: Vec<std::net::IpAddr> = (host, 443)
+                .to_socket_addrs()
+                .ok()?
+                .map(|address| address.ip())
+                .collect();
+            df_providers::FalCdnPin::new(host, &addresses).ok()
+        })
+        .collect();
+    let directory = PathBuf::from(
+        std::env::var("DF_HOME_VIDEO_LIVE_CACHE").expect("the live cache directory is named"),
+    );
+    let engine = home_video::live_test_engine(
+        asset_root(),
+        directory,
+        1,
+        credential,
+        pins,
+        Duration::from_secs(20 * 60),
+    );
+    let started = Instant::now();
+    engine.observe_for_test(&painting);
+    let stage = settle_long(&engine, &painting).await;
+    println!(
+        "LIVE GENERATION {painting}: {stage} after {:.0}s",
+        started.elapsed().as_secs_f64()
+    );
+    assert!(
+        stage.starts_with("ready:"),
+        "the generation did not produce a loop: {stage}"
+    );
+}
+
+/// Waits for an outcome for as long as a real generation can take.
+async fn settle_long(engine: &Arc<home_video::Engine>, painting: &str) -> String {
+    let started = Instant::now();
+    loop {
+        let stage = engine.stage_of(painting).unwrap_or_default();
+        if !stage.is_empty() && stage != "pending" {
+            return stage;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(21 * 60),
+            "the generation never settled"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Development check, not a gate: the live price of the endpoint through the adapter, with no
+/// submit and no charge. Runs only when `DF_HOME_VIDEO_LIVE_PRICE` is set, with the key in the
+/// environment of that one command.
+#[tokio::test]
+#[ignore = "live provider check; set DF_HOME_VIDEO_LIVE_PRICE and FAL_KEY in one command"]
+async fn live_price_check_without_a_submit() {
+    if std::env::var_os("DF_HOME_VIDEO_LIVE_PRICE").is_none() {
+        return;
+    }
+    let credential = std::env::var("FAL_KEY").expect("FAL_KEY is set for this check");
+    let addresses: Vec<std::net::IpAddr> = ("v3b.fal.media", 443)
+        .to_socket_addrs()
+        .expect("the CDN host resolves")
+        .map(|address| address.ip())
+        .collect();
+    let pin = df_providers::FalCdnPin::new("v3b.fal.media", &addresses).expect("the pin is public");
+    let config = df_providers::FalMediaConfig::live(df_providers::FalMediaFamily::Video, vec![pin])
+        .with_video_model(home_video::MODEL)
+        .expect("the model is accepted");
+    let limits = df_providers::NativeHttpLimits {
+        connect_timeout: Duration::from_secs(10),
+        read_timeout: Duration::from_secs(60),
+        total_timeout: Duration::from_secs(170),
+        maximum_request_bytes: 8 * 1024 * 1024,
+        maximum_response_bytes: 16 * 1024 * 1024,
+        maximum_header_bytes: 16 * 1024,
+        maximum_chunks: 65_536,
+    };
+    let provider = df_providers::registered_fal_media_provider(config, &credential, limits)
+        .expect("the provider is constructed");
+    let price = provider
+        .video_price_per_second(Duration::from_secs(20), std::future::pending())
+        .await;
+    println!("LIVE PRICE CHECK: {price:?}");
+    price.expect("the live price is read");
+}
+
+/// Development helper, not a gate: writes the cache key of a painting's still to the file named by
+/// `DF_HOME_VIDEO_KEY_FILE`, so a browser check can seed the cache without a paid request.
+/// Run with `--ignored`.
+#[tokio::test]
+#[ignore = "development helper; set DF_HOME_VIDEO_KEY_FILE and DF_HOME_VIDEO_PAINTING"]
+async fn print_the_cache_key_of_a_painting_for_seeding() {
+    let Some(path) = std::env::var_os("DF_HOME_VIDEO_KEY_FILE") else {
+        return;
+    };
+    let painting = std::env::var("DF_HOME_VIDEO_PAINTING").unwrap_or_else(|_| PAINTING.to_owned());
+    let still = home_video::prepare_still_for_test(&asset_root(), &painting)
+        .await
+        .expect("the still is prepared");
+    std::fs::write(path, clip_key(&still)).expect("the key file is writable");
 }
 
 fn inputs(

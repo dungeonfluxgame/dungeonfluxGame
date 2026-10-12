@@ -459,14 +459,12 @@ impl NativeFalMediaProvider {
         if !matches!(response.status, 200 | 202) {
             return Err(error(FalMediaReason::Status, Some(&id)));
         }
-        let prefix = format!(
-            "https://queue.fal.run/{}/requests/{}",
-            self.config.model(),
-            id.as_str()
-        );
-        let status = confined_url(&value, "status_url", &prefix, "status", &id)?;
-        let result = confined_url(&value, "response_url", &prefix, "response", &id)?;
-        let cancel = confined_url(&value, "cancel_url", &prefix, "cancel", &id)?;
+        // fal names a request under its endpoint's path, or under the owner and app that hold it
+        // (`fal-ai/kling-video/requests/{id}` for `fal-ai/kling-video/o1/image-to-video`). Either is
+        // this request on the queue host, so either is accepted; anything else is refused.
+        let status = confined_url(&value, "status_url", "status", &id)?;
+        let result = confined_result_url(&value, "response_url", &id)?;
+        let cancel = confined_url(&value, "cancel_url", "cancel", &id)?;
         Ok(FalMediaJob {
             provider: self,
             request,
@@ -635,10 +633,16 @@ impl<Semantic: Eq> FalMediaJob<'_, Semantic> {
                 return Err(error(FalMediaReason::Json, Some(&self.id)));
             }
         }
+        // A status body may omit the request id; the status URL is already confined to this
+        // request, so an absent id is this request. A different id is still refused.
+        let observed_id = value
+            .get("request_id")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| self.id.as_str());
         let observation = classify_fal_status_response(
             response.status,
             &self.id,
-            value.get("request_id").and_then(Value::as_str),
+            Some(observed_id),
             value.get("status").and_then(Value::as_str),
             value.get("error_type").and_then(Value::as_str),
             value.get("error").and_then(Value::as_str),
@@ -1095,10 +1099,48 @@ fn valid_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
 }
+/// Whether `url` is this request on fal's queue host: `https://queue.fal.run/<owner>/<app>[/…]/
+/// requests/<id>`, then nothing or the expected `suffix`. Any query, fragment or traversal, any other
+/// host, and any other request id is refused. `suffix` of `None` is the result, which fal names as
+/// the request itself or as `…/response`.
+fn queue_url_confined(url: &str, id: &ProviderRequestId, suffix: Option<&str>) -> bool {
+    let Some(tail) = url.strip_prefix("https://queue.fal.run/") else {
+        return false;
+    };
+    if tail.contains(['?', '#']) || tail.contains("..") {
+        return false;
+    }
+    let needle = format!("/requests/{}", id.as_str());
+    let Some(position) = tail.rfind(&needle) else {
+        return false;
+    };
+    let (app, rest) = (&tail[..position], &tail[position + needle.len()..]);
+    let is_app = app.split('/').count() >= 2 && app.split('/').all(|part| !part.is_empty());
+    let rest_ok = match suffix {
+        Some(expected) => rest == format!("/{expected}"),
+        None => rest.is_empty() || rest == "/response",
+    };
+    is_app && rest_ok
+}
+
+fn confined_result_url(
+    value: &Value,
+    field: &str,
+    id: &ProviderRequestId,
+) -> Result<String, FalMediaError> {
+    let url = value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| error(FalMediaReason::QueueUrls, Some(id)))?;
+    if !queue_url_confined(url, id, None) {
+        return Err(error(FalMediaReason::QueueUrls, Some(id)));
+    }
+    Ok(url.to_owned())
+}
+
 fn confined_url(
     value: &Value,
     field: &str,
-    prefix: &str,
     suffix: &str,
     id: &ProviderRequestId,
 ) -> Result<String, FalMediaError> {
@@ -1106,7 +1148,7 @@ fn confined_url(
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| error(FalMediaReason::QueueUrls, Some(id)))?;
-    if url != format!("{prefix}/{suffix}") {
+    if !queue_url_confined(url, id, Some(suffix)) {
         return Err(error(FalMediaReason::QueueUrls, Some(id)));
     }
     Ok(url.to_owned())

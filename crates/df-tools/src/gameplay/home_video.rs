@@ -21,6 +21,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use tokio::sync::watch;
 
 use axum::{
     Router,
@@ -322,6 +323,15 @@ impl std::fmt::Debug for Engine {
 
 static ENGINE: OnceLock<Arc<Engine>> = OnceLock::new();
 
+/// Counts the loops that have landed. A display stream subscribes to it when the living scenes
+/// have no wake of their own, so a landed loop reaches the display whatever else is running.
+static WAKE: OnceLock<watch::Sender<u64>> = OnceLock::new();
+
+/// A subscription to the loops' wake, for a display stream.
+pub(crate) fn wake_subscribe() -> watch::Receiver<u64> {
+    WAKE.get_or_init(|| watch::channel(0).0).subscribe()
+}
+
 /// Starts the feature for this process: resolves the fal media hosts it is pinned to, and records
 /// the engine that the view and the route use. A host that does not resolve is left out; if none
 /// resolves the feature is off, with the reason in the startup line.
@@ -385,6 +395,28 @@ pub(crate) fn observe(painting: &str) -> LoopView {
     }
 }
 
+/// Sets the home loop on a view: the state and the served path, for the display's lobby only. It
+/// runs on every view the service hands out, so a loop that lands is seen by the next view, and
+/// the journey projection cached by revision does not hold a stale state.
+pub(crate) fn apply(message: &mut rpc::ViewMessage) {
+    let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
+        return;
+    };
+    // The lobby's painting is the audience's own `scene_asset`, the one the stage draws.
+    let painting = display.scene_asset.clone();
+    let Some(journey) = display.journey.as_mut() else {
+        return;
+    };
+    let lobby = journey.phase == rpc::JourneyPhase::Room as i32;
+    let loop_view = if lobby && !painting.is_empty() {
+        observe(&painting)
+    } else {
+        LoopView::None
+    };
+    journey.home_video_state = loop_view.proto_state() as i32;
+    journey.home_video_path = loop_view.path();
+}
+
 /// Serves the cached loops as `GET /gameplay/home-video/<key>`.
 pub(crate) fn router() -> Router {
     Router::new().route("/gameplay/home-video/{key}", get(serve_clip))
@@ -428,6 +460,9 @@ impl Engine {
         if let Ok(mut stages) = self.stages.lock() {
             stages.insert(painting, stage);
         }
+        // The display streams watch the home wake, and the living scenes' wake when it has one.
+        WAKE.get_or_init(|| watch::channel(0).0)
+            .send_modify(|count| *count += 1);
         if let Some(living) = &self.living {
             living.signal_art();
         }
@@ -579,8 +614,13 @@ impl Engine {
     }
 }
 
+/// The adapter's reason, with the queue request it concerned: the diagnostic that names a job
+/// the provider may still be running.
 fn provider_failure(error: FalMediaError) -> Failure {
-    Failure::Provider(format!("{:?}", error.reason))
+    match error.request_id {
+        Some(id) => Failure::Provider(format!("{:?} request={}", error.reason, id.as_str())),
+        None => Failure::Provider(format!("{:?}", error.reason)),
+    }
 }
 
 fn limits() -> NativeHttpLimits {
@@ -1010,6 +1050,35 @@ pub(crate) fn test_engine(
         cache_dir,
         credential: "fixture-private-key".to_owned(),
         endpoints,
+        deadline,
+        budget: AtomicU32::new(budget),
+        stages: Mutex::new(BTreeMap::new()),
+        price: tokio::sync::Mutex::new(None),
+        living: None,
+    })
+}
+
+/// Test helper: installs the engine the view and the route use. Only one test installs one.
+#[cfg(test)]
+pub(crate) fn install_for_test(engine: Arc<Engine>) -> Result<(), Arc<Engine>> {
+    ENGINE.set(engine)
+}
+
+/// Test helper for the live check: the same engine with the live endpoints and a given credential.
+#[cfg(test)]
+pub(crate) fn live_test_engine(
+    root: PathBuf,
+    cache_dir: PathBuf,
+    budget: u32,
+    credential: String,
+    pins: Vec<FalCdnPin>,
+    deadline: Duration,
+) -> Arc<Engine> {
+    Arc::new(Engine {
+        root,
+        cache_dir,
+        credential,
+        endpoints: Endpoints::Live { pins },
         deadline,
         budget: AtomicU32::new(budget),
         stages: Mutex::new(BTreeMap::new()),

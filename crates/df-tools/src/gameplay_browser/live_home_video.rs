@@ -156,6 +156,8 @@ fn on_ready(state: &Rc<RefCell<Playback>>, index: usize) {
         release(state);
         return;
     }
+    let layer = state.borrow().layer.clone();
+    let _state = layer.set_attribute("data-state", "playing");
     start(state, &video);
 }
 
