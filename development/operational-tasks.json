@@ -2671,6 +2671,319 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T00:25:46+00:00",
       "updated_at": "2026-10-12T00:25:46+00:00"
+    },
+    {
+      "id": "PLAY-X02",
+      "feature_id": "G12",
+      "title": "Decide what the game may observe to adapt the story",
+      "objective": "Owner rulings on the open questions in planning/engagement-model.md: whether game facts (rounds, health margins, defeats) and per-offer take-up counts may steer the story, whether challenge tuning is on by default, whether toughening needs the table's say-so, the target difficulty, disclosure, and family-mode rules; then amend the consented-observation policy to match.",
+      "stage": "resolution",
+      "edit_areas_json": [
+        "planning/engagement-model.md",
+        "planning/g12-d01-consented-observation-policy.md"
+      ],
+      "acceptance_json": [
+        "Each open question in the document has a recorded owner decision.",
+        "The consent policy states plainly which signal classes are allowed by default.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Owner review of the amended policy text."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M9",
+        "milestone_goal": "The story adapts to the table: measured fit and stated preferences steer challenge and content.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11 for a statistical way to gauge enjoyment and feed the narration engine. The research found the existing consent policy forbids latency, message length and sentiment as engagement proxies, so the design rests on game facts and explicit feedback and needs rulings.",
+        "objective": "Owner rulings on the open questions in planning/engagement-model.md: whether game facts (rounds, health margins, defeats) and per-offer take-up counts may steer the story, whether challenge tuning is on by default, whether toughening needs the table's say-so, the target difficulty, disclosure, and family-mode rules; then amend the consented-observation policy to match.",
+        "owners": [
+          "coordinator"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Decide what the game may observe to adapt the story",
+            "owner": "coordinator"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-B01"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/engagement-model.md",
+            "sha256": "272a348d331c3d5f36940445c03c11c08fbfcd6fa6f16492f7a81c429c86470d"
+          },
+          {
+            "path": "planning/g12-d01-consented-observation-policy.md",
+            "sha256": "ce82e9b4115fa73625aff25145a21e504868fde75c52ee52a8cc110e08142679"
+          }
+        ],
+        "input_revision": "4a042f6d9d45ca829a911bf5af438a7078f82922",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 90,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T01:10:31+00:00",
+      "updated_at": "2026-10-12T01:10:31+00:00"
+    },
+    {
+      "id": "PLAY-X03",
+      "feature_id": "G12",
+      "title": "Record per-chapter table signals and show them in host-only DM's notes",
+      "objective": "Record table-level, per-chapter facts with no steering (fight length, lowest health, knockouts, healing used, defeats, optional offers made and taken) and show them, with what the model would recommend and how uncertain it is, in a host-only notes view.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-experience/",
+        "crates/df-tools/src/gameplay/",
+        "crates/df-tools/src/gameplay_browser/"
+      ],
+      "acceptance_json": [
+        "A played chapter produces one signals record that replays identically from recorded inputs.",
+        "No raw text, latency or per-person data is stored; the record is table-level.",
+        "The host can see the notes and switch recording off; players cannot see them.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for the record and replay equality.",
+        "Real browser check of the host view."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M9",
+        "milestone_goal": "The story adapts to the table: measured fit and stated preferences steer challenge and content.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "First step of the engagement model: see the signals at real tables before anything steers.",
+        "objective": "Record table-level, per-chapter facts with no steering (fight length, lowest health, knockouts, healing used, defeats, optional offers made and taken) and show them, with what the model would recommend and how uncertain it is, in a host-only notes view.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Record per-chapter table signals and show them in host-only DM's notes",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-B03"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/engagement-model.md",
+            "sha256": "272a348d331c3d5f36940445c03c11c08fbfcd6fa6f16492f7a81c429c86470d"
+          },
+          {
+            "path": "planning/g12-d01-consented-observation-policy.md",
+            "sha256": "ce82e9b4115fa73625aff25145a21e504868fde75c52ee52a8cc110e08142679"
+          },
+          {
+            "path": "planning/observability.md",
+            "sha256": "30860fcd071abe3664487a796e424748f40622fafbaf15d56dd18dd0328cbbf2"
+          }
+        ],
+        "input_revision": "4a042f6d9d45ca829a911bf5af438a7078f82922",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 88,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T01:10:31+00:00",
+      "updated_at": "2026-10-12T01:10:31+00:00"
+    },
+    {
+      "id": "PLAY-X04",
+      "feature_id": "G12",
+      "title": "Ask the table: one-tap chapter feedback and \"more of / less of\"",
+      "objective": "After each chapter every phone offers a one-tap card (too easy / just right / too tough, and more or less of fights, talking, exploring), plus a favourite-character tap; answers are stored at table level and outrank anything inferred.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-protocol/proto/gameplay.proto",
+        "crates/df-tools/src/gameplay/",
+        "crates/df-tools/src/gameplay_browser/"
+      ],
+      "acceptance_json": [
+        "The card takes at most two taps and can be skipped without consequence.",
+        "Answers appear in DM's notes and are saved with the campaign.",
+        "Nothing about one player's answer is shown to the others.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for storage and privacy of answers.",
+        "Real browser check on a phone-sized view."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M9",
+        "milestone_goal": "The story adapts to the table: measured fit and stated preferences steer challenge and content.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Explicit feedback is the only direct measure of enjoyment the consent policy allows.",
+        "objective": "After each chapter every phone offers a one-tap card (too easy / just right / too tough, and more or less of fights, talking, exploring), plus a favourite-character tap; answers are stored at table level and outrank anything inferred.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Ask the table: one-tap chapter feedback and \"more of / less of\"",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/engagement-model.md",
+            "sha256": "272a348d331c3d5f36940445c03c11c08fbfcd6fa6f16492f7a81c429c86470d"
+          },
+          {
+            "path": "planning/g12-d01-consented-observation-policy.md",
+            "sha256": "ce82e9b4115fa73625aff25145a21e504868fde75c52ee52a8cc110e08142679"
+          }
+        ],
+        "input_revision": "4a042f6d9d45ca829a911bf5af438a7078f82922",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 88,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T01:10:31+00:00",
+      "updated_at": "2026-10-12T01:10:31+00:00"
+    },
+    {
+      "id": "PLAY-X05",
+      "feature_id": "G12",
+      "title": "Steer challenge and chapter choice from measured fit and stated taste",
+      "objective": "Estimate challenge fit from fights against a simulated reference and adjust the next encounter by one standard step at chapter boundaries; weight the next chapter type and the number of optional NPC scenes by the table's stated and observed appetite. Bounded, explainable, replayable, and switchable off by the host; rolls and rewards are never touched.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-experience/",
+        "crates/df-tools/src/gameplay/adventure/"
+      ],
+      "acceptance_json": [
+        "One brutal fight changes nothing; sustained evidence moves the next encounter one step.",
+        "No chapter type's weight moves by more than the documented bound.",
+        "Every adjustment is a recorded decision visible in DM's notes and reproducible in replay.",
+        "A campaign simulation with synthetic player types shows no harm against a no-adaptation baseline.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Archetype simulation and replay-equality tests.",
+        "Shadow-mode comparison on recorded sessions."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M9",
+        "milestone_goal": "The story adapts to the table: measured fit and stated preferences steer challenge and content.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "The outcome the owner asked for: too easy becomes more challenging and the reverse; tables that like talking to NPCs get more chances to.",
+        "objective": "Estimate challenge fit from fights against a simulated reference and adjust the next encounter by one standard step at chapter boundaries; weight the next chapter type and the number of optional NPC scenes by the table's stated and observed appetite. Bounded, explainable, replayable, and switchable off by the host; rolls and rewards are never touched.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Steer challenge and chapter choice from measured fit and stated taste",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-B03"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/engagement-model.md",
+            "sha256": "272a348d331c3d5f36940445c03c11c08fbfcd6fa6f16492f7a81c429c86470d"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "15e328a191f6670c829f46963a5224d1608334d99cb905a670f162f4bc19f008"
+          }
+        ],
+        "input_revision": "4a042f6d9d45ca829a911bf5af438a7078f82922",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 85,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T01:10:31+00:00",
+      "updated_at": "2026-10-12T01:10:31+00:00"
     }
   ],
   "dependencies": [
@@ -2768,6 +3081,26 @@
     },
     {
       "task_id": "PLAY-X01",
+      "prerequisite_task_id": "PLAY-E01"
+    },
+    {
+      "task_id": "PLAY-X03",
+      "prerequisite_task_id": "PLAY-X02"
+    },
+    {
+      "task_id": "PLAY-X04",
+      "prerequisite_task_id": "PLAY-X02"
+    },
+    {
+      "task_id": "PLAY-X05",
+      "prerequisite_task_id": "PLAY-X03"
+    },
+    {
+      "task_id": "PLAY-X05",
+      "prerequisite_task_id": "PLAY-X04"
+    },
+    {
+      "task_id": "PLAY-X05",
       "prerequisite_task_id": "PLAY-E01"
     }
   ]
