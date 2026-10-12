@@ -2989,7 +2989,7 @@
       "id": "PLAY-F04",
       "feature_id": "F13",
       "title": "Vary battlefield layouts with obstacles and add combat sound",
-      "objective": "Each location gets several battlefield layouts with obstacle props that hide and block; figures path around them; a ranged attacker draws and looses an arrow; footsteps, weapon sounds and short effort and pain vocals play in step with the action; downed figures settle on the ground.",
+      "objective": "Each location gets several battlefield layouts with obstacle props that hide and block; figures path around them; a ranged attacker draws and looses an arrow; footsteps, weapon sounds and short effort and pain vocals play in step with the action; downed figures settle on the ground. Also: a status effect system — icons and shader treatments for the fifteen standard conditions and common states.",
       "stage": "implementation",
       "edit_areas_json": [
         "crates/df-render/src/battle/",
@@ -3233,6 +3233,180 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T02:01:58+00:00",
       "updated_at": "2026-10-12T02:01:58+00:00"
+    },
+    {
+      "id": "PLAY-L01",
+      "feature_id": "F15",
+      "title": "Living scenes: re-render the scene and faces to follow the conversation",
+      "objective": "A server image service with budgets, cache and safety, and on top of it: characters' faces re-rendered to match the mood of the exchange, and the backdrop re-framed at most every thirty seconds when the mood or shot changes, cross-faded on the TV.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/",
+        "crates/df-tools/src/gameplay_browser/",
+        "planning/asset-engine.md"
+      ],
+      "acceptance_json": [
+        "An insult, a compliment and a flirt each visibly change the addressed character's expression.",
+        "The backdrop changes framing or light no more often than the interval and never mid-roll or in combat.",
+        "Prompts contain only server vocabulary and vetted facts; raw player text never reaches an image model.",
+        "With the service off, over budget or failing, the game looks exactly as it does today.",
+        "A 30-minute session stays inside the configured image budget.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests with a fake image provider.",
+        "A bounded live run judged by eye.",
+        "Real browser frames before and after each swap."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M6",
+        "milestone_goal": "Personal and immersive visuals: the players' own faces, and rooms they can look around.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11: re-render the scene every 30 seconds with camera, setting and characters slightly changed based on the conversation and themes so players are not bored.",
+        "objective": "A server image service with budgets, cache and safety, and on top of it: characters' faces re-rendered to match the mood of the exchange, and the backdrop re-framed at most every thirty seconds when the mood or shot changes, cross-faded on the TV.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Living scenes: re-render the scene and faces to follow the conversation",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "89b3d692353ee82210cbe9f501f62b6d12bde89ec35b17ba57a0df3711ab8342"
+          },
+          {
+            "path": "planning/generated-content.md",
+            "sha256": "0b252a24a8911108660f3276d8359d9df825a3398c7c7a4033c62e2279007ac0"
+          },
+          {
+            "path": "planning/g12-d01-consented-observation-policy.md",
+            "sha256": "ce82e9b4115fa73625aff25145a21e504868fde75c52ee52a8cc110e08142679"
+          },
+          {
+            "path": "planning/pricing-and-costs.md",
+            "sha256": "28b68d5ec0757887f5b5f8dad708520950692d014c50b2faebb39cf3d5b16a7b"
+          }
+        ],
+        "input_revision": "1df12ab11cb69762aca534680967c9028f626219",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:06:04+00:00",
+      "updated_at": "2026-10-12T02:06:04+00:00"
+    },
+    {
+      "id": "PLAY-I01",
+      "feature_id": "R14",
+      "title": "Investigate a scene: examine anything, roll to understand it, see it rendered",
+      "objective": "Before meeting the quest-giver the party looks around the location. A player can pick or name anything in the scene; the server resolves a standard ability check against a DC from the standard ladder, the storyteller describes what is learned from the adventure's facts, and a close-up of that object is generated on demand and shown on the TV. Nothing is pre-generated.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/",
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-rules/",
+        "content/adventure-tables/",
+        "crates/df-protocol/proto/gameplay.proto"
+      ],
+      "acceptance_json": [
+        "A generated chapter opens with an investigation beat before the first conversation.",
+        "Examining something shows the d20 roll, modifier, DC and result on the TV and the phone.",
+        "The check uses the standard skill and DC ladder; the dice are never fudged.",
+        "A named object the scene could not contain is refused in character; nothing unsafe is rendered.",
+        "The close-up appears within the image deadline or the scene continues without it.",
+        "A success can reveal a clue that later conversation recognises.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for the check, the vetting of subjects and the clue flow.",
+        "Real browser play of the investigation beat with the image service on."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M6",
+        "milestone_goal": "Personal and immersive visuals: the players' own faces, and rooms they can look around.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11: add a scene where you investigate the environment before talking to someone so we can see you attempting to roll to understand something; do not pre-generate the artifacts, since anything in a scene can be one.",
+        "objective": "Before meeting the quest-giver the party looks around the location. A player can pick or name anything in the scene; the server resolves a standard ability check against a DC from the standard ladder, the storyteller describes what is learned from the adventure's facts, and a close-up of that object is generated on demand and shown on the TV. Nothing is pre-generated.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Investigate a scene: examine anything, roll to understand it, see it rendered",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "1e51af33f9af8a6847a3eb21fd299bc6e53185c4c1af148377c4f8b6d182a463"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "89b3d692353ee82210cbe9f501f62b6d12bde89ec35b17ba57a0df3711ab8342"
+          }
+        ],
+        "input_revision": "1df12ab11cb69762aca534680967c9028f626219",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:06:04+00:00",
+      "updated_at": "2026-10-12T02:06:04+00:00"
     }
   ],
   "dependencies": [
@@ -3363,6 +3537,14 @@
     {
       "task_id": "PLAY-T02",
       "prerequisite_task_id": "PLAY-E01"
+    },
+    {
+      "task_id": "PLAY-I01",
+      "prerequisite_task_id": "PLAY-E01"
+    },
+    {
+      "task_id": "PLAY-I01",
+      "prerequisite_task_id": "PLAY-L01"
     }
   ]
 }
