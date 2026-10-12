@@ -303,6 +303,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         };
         let diff = ViewDiff {
             scene_changed,
+            enters_combat: transitions.entered_combat,
             roll: roll.clone().map(|roll| Detail::Roll(Box::new(roll))),
             impact: roll.clone().map(|roll| Detail::Roll(Box::new(roll))),
             defeat: roll
