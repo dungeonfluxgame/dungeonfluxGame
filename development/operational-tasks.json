@@ -3426,7 +3426,9 @@
         "The page stays responsive while a scan loads and holds 60 frames per second on the real GPU.",
         "No scan data is committed; unlicensed scans are selectable only by an explicit private-test setting.",
         "A missing or failing scan falls back to the painted scene without a blank frame.",
-        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit.",
+        "The battlefield presents at a fixed 30 frames per second by default, 24 selectable, never higher; animation speed is unchanged and skipped ticks do no GPU work (owner request 2026-10-12).",
+        "Grid lines are geometrically straight on a flat play plane with a bright core and soft glow, continuous and dimmed rather than broken where scenery is in front (owner request 2026-10-12)."
       ],
       "verification_json": [
         "Native loader and selection tests.",
