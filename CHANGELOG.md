@@ -18,6 +18,23 @@ Integration history through 2026-10-11T15:25:07.071270-04:00, reconstructed from
 
 Integration history from 2026-10-11T15:24:05-04:00 through 2026-10-12T04:33:02-04:00 on the integration branch `claude/playable-20261011`, generated from Git by revision range: six-hour blocks by first-parent commit time, each newly reachable commit listed once. The last block is open and shorter than six hours; the work session is still running.
 
+## 2026-10-12T11:28:38-04:00 to 2026-10-12T12:08:54-04:00
+
+Range: 22ba05f61230a46765695aee52b6b800d49718e7..2994d1bff06b11de6863b77cd1e5851e91cffbcd
+
+- aecb8f5101374fe3a0221e9a8de4b16b5bf09bd8 — Record the closing integration block and the final merges in the hand-off notes
+- 4e1c771cbed5c34da13b2a8dc22452bf23f86c37 — WIP (not green): TV layout check (PLAY-V14 M1), overlap, covered, clipped, ellipsis and TV-safe checks over scripted TV screens; scenarios lobby, story, fight partly verified
+- 5afc44a34465c3a0d5e721f8611b5c7e4f427026 — Merge branch 'claude/playable-20261011' into worktree-agent-a9531e4e2a6599b86
+- fd7c7714ba298d27f272c910f6cdbba92a8a2dfc — Merge the TV layout check tooling (PLAY-V14 M1, work in progress): overlap, covered, clipped and ellipsis checks for the display
+- 0afbaea272a7a0f2b4e4e263f297cd0652bb5d06 — WIP (not green): native real-scan figure visibility test (CPU copy of the splat blend over every cell, level and shot); written and compiling, never run to completion, thresholds unvalidated
+- 24bc0fe3858dbdeed056bb11afd3dc2aab1ba6f2 — Merge branch 'claude/playable-20261011' into worktree-agent-a8ccec3abe79264ce
+- e1c4bab33c5cd944c396574af40fc5131418b42d — Merge the real-scan figure visibility test (PLAY-S03, work in progress)
+- 2994d1bff06b11de6863b77cd1e5851e91cffbcd — Bug notes for main from the last live playthrough; ignore the unvalidated scan visibility test
+
+Next block baseline: `2994d1bff06b11de6863b77cd1e5851e91cffbcd`.
+
+This block closes the day's work on `main`; it is shorter than six hours.
+
 ## 2026-10-12T10:33:51-04:00 to 2026-10-12T11:28:38-04:00
 
 Range: b161111268f5c9a600711ce5ca0d6522cb5a220e..22ba05f61230a46765695aee52b6b800d49718e7
