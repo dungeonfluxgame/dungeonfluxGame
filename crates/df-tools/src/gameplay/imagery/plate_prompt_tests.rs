@@ -66,6 +66,7 @@ fn references_for(spec: &ShotSpec) -> PlateReferences {
     PlateReferences {
         party_sheet: !spec.heroes.is_empty(),
         speaker: spec.speaker.is_some(),
+        speaker_face: spec.speaker.is_some(),
         place: true,
     }
 }
@@ -191,13 +192,14 @@ fn the_references_are_numbered_in_the_order_they_are_sent() {
         PlateReferences {
             party_sheet: true,
             speaker: true,
+            speaker_face: false,
             place: true,
         },
     )
     .unwrap();
     let text = all.as_str();
     assert!(text.contains("Image 1 is the party sheet"));
-    assert!(text.contains("Image 2 is this person"));
+    assert!(text.contains("Image 2 shows this person"));
     assert!(text.contains("Image 3 is a painting of this place"));
     let without_place = scene_plate(
         ContentRating::Mature,
@@ -206,6 +208,7 @@ fn the_references_are_numbered_in_the_order_they_are_sent() {
         PlateReferences {
             party_sheet: true,
             speaker: false,
+            speaker_face: false,
             place: true,
         },
     )
@@ -215,7 +218,7 @@ fn the_references_are_numbered_in_the_order_they_are_sent() {
             .as_str()
             .contains("Image 2 is a painting of this place")
     );
-    assert!(!without_place.as_str().contains("is this person"));
+    assert!(!without_place.as_str().contains("shows this person"));
 }
 
 #[test]
@@ -229,6 +232,7 @@ fn a_party_without_a_party_sheet_or_too_many_references_is_refused() {
             PlateReferences {
                 party_sheet: false,
                 speaker: true,
+                speaker_face: false,
                 place: true,
             }
         )
@@ -276,5 +280,32 @@ fn a_mood_edit_names_the_previous_plate_the_change_and_what_stays_in_both_rating
                 assert!(text.chars().count() < 1500);
             }
         }
+    }
+}
+
+#[test]
+fn the_speakers_figure_and_face_both_lead_the_references_and_the_place_moves_up() {
+    let spec = spec_for("inn", SceneKey::Opening, SPEAKERS[2], &[1, 2], "T").unwrap();
+    let text = scene_plate(
+        ContentRating::Mature,
+        &spec,
+        None,
+        PlateReferences {
+            party_sheet: true,
+            speaker: true,
+            speaker_face: true,
+            place: true,
+        },
+    )
+    .unwrap()
+    .as_str()
+    .to_owned();
+    for needle in [
+        "Image 1 is the party sheet",
+        "Image 2 shows this person",
+        "Image 3 is a close portrait of their face",
+        "Image 4 is a painting of this place",
+    ] {
+        assert!(text.contains(needle), "{needle}");
     }
 }

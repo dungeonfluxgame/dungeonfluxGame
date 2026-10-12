@@ -582,3 +582,12 @@ field dungeonflux.public.v1.PlateLayout 3 head_y_permille type=13 label=1 presen
 field dungeonflux.public.v1.PlateLayout 4 head_width_permille type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PlateLayout 5 head_height_permille type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 45 join_url type=9 label=1 presence=false target=- oneof=-
+# PLAY-V09 follow-up: heroes' heads in the plate layout (PlateLayout 6 heroes)
+message dungeonflux.public.v1.PlateHead
+field dungeonflux.public.v1.PlateLayout 6 heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.PlateHead oneof=-
+field dungeonflux.public.v1.PlateHead 1 hero_index type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateHead 2 bubble_side type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateSide oneof=-
+field dungeonflux.public.v1.PlateHead 3 head_x_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateHead 4 head_y_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateHead 5 head_width_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateHead 6 head_height_permille type=13 label=1 presence=false target=- oneof=-

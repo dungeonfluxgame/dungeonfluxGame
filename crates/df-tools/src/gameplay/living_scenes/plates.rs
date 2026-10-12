@@ -30,11 +30,15 @@ use super::{
         beat_script::BeatKind,
         imagery::{
             ImageFailure, ImageKey, ImageKind, ImageRequest, Lookup, OutputSpec, PlaceFacts,
-            PlateReferences, ReferenceImage, party_sheet, plate_moment, scene_plate,
+            PlateReferences, ReferenceImage, hero_locator_phrase, party_sheet, plate_moment,
+            scene_plate,
         },
         pack::{self, Age, Gender, SceneKey},
         scene_mood::Face,
-        shot::{self, PlateLayout, ShotError, ShotInput, ShotSpec, SpeakerInput},
+        shot::{
+            self, HeroHead, PlateLayout, PlatePlacement, ShotError, ShotInput, ShotSpec,
+            SpeakerInput,
+        },
     },
     Inner, WorkerGuard, locked, record,
 };
@@ -295,7 +299,7 @@ enum Entry {
     Pending,
     Ready {
         key: ImageKey,
-        layout: Option<PlateLayout>,
+        placement: Option<PlatePlacement>,
     },
     Failed,
     /// The scene cannot be staged (a creature speaks, nobody is present): no plate, no failure.
@@ -362,13 +366,13 @@ impl Book {
 
     /// The plate the display should show now, with its layout: the edited plate while an edit of
     /// the wanted face is ready, otherwise the first one.
-    fn shown(&self) -> Option<(ImageKey, Option<PlateLayout>)> {
-        let Some(Entry::Ready { key, layout }) = self.current_entry() else {
+    fn shown(&self) -> Option<(ImageKey, Option<PlatePlacement>)> {
+        let Some(Entry::Ready { key, placement }) = self.current_entry() else {
             return None;
         };
         match &self.edit {
-            Edit::Ready { key: edited, .. } => Some((edited.clone(), *layout)),
-            _ => Some((key.clone(), *layout)),
+            Edit::Ready { key: edited, .. } => Some((edited.clone(), placement.clone())),
+            _ => Some((key.clone(), placement.clone())),
         }
     }
 
@@ -404,7 +408,7 @@ enum Done {
     Fresh {
         id: String,
         elapsed: Duration,
-        result: Result<(ImageKey, Option<PlateLayout>), ImageFailure>,
+        result: Result<(ImageKey, Option<PlatePlacement>), ImageFailure>,
     },
     Edit {
         scene_key: String,
@@ -471,16 +475,114 @@ impl Plates {
     }
 }
 
-fn wire_layout(layout: &PlateLayout) -> rpc::PlateLayout {
+fn wire_side(side: shot::Side) -> i32 {
+    (match side {
+        shot::Side::Left => rpc::PlateSide::Left,
+        shot::Side::Right => rpc::PlateSide::Right,
+    }) as i32
+}
+
+fn wire_layout(placement: &PlatePlacement) -> rpc::PlateLayout {
+    let speaker = &placement.speaker;
     rpc::PlateLayout {
-        bubble_side: match layout.bubble_side {
-            shot::Side::Left => rpc::PlateSide::Left,
-            shot::Side::Right => rpc::PlateSide::Right,
-        } as i32,
-        head_x_permille: u32::from(layout.head_x_permille),
-        head_y_permille: u32::from(layout.head_y_permille),
-        head_width_permille: u32::from(layout.head_width_permille),
-        head_height_permille: u32::from(layout.head_height_permille),
+        bubble_side: wire_side(speaker.bubble_side),
+        head_x_permille: u32::from(speaker.head_x_permille),
+        head_y_permille: u32::from(speaker.head_y_permille),
+        head_width_permille: u32::from(speaker.head_width_permille),
+        head_height_permille: u32::from(speaker.head_height_permille),
+        heroes: placement
+            .heroes
+            .iter()
+            .map(|hero| rpc::PlateHead {
+                hero_index: u32::from(hero.art.saturating_sub(1)),
+                bubble_side: wire_side(hero.layout.bubble_side),
+                head_x_permille: u32::from(hero.layout.head_x_permille),
+                head_y_permille: u32::from(hero.layout.head_y_permille),
+                head_width_permille: u32::from(hero.layout.head_width_permille),
+                head_height_permille: u32::from(hero.layout.head_height_permille),
+            })
+            .collect(),
+    }
+}
+
+/// One head as it is kept beside the cached plate (art 0 is the speaker).
+#[derive(serde::Deserialize, serde::Serialize)]
+struct StoredHead {
+    art: u8,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    bubble_left: bool,
+}
+
+/// The measured placement as it is kept beside the cached plate, so a later server run does not
+/// ask the vision model again.
+#[derive(serde::Deserialize, serde::Serialize)]
+struct StoredPlacement {
+    speaker: StoredHead,
+    heroes: Vec<StoredHead>,
+}
+
+impl StoredHead {
+    fn of(art: u8, layout: &PlateLayout) -> Self {
+        Self {
+            art,
+            x: layout.head_x_permille,
+            y: layout.head_y_permille,
+            width: layout.head_width_permille,
+            height: layout.head_height_permille,
+            bubble_left: layout.bubble_side == shot::Side::Left,
+        }
+    }
+
+    /// `None` for numbers outside the plate: a note that has been edited or damaged is not trusted.
+    fn layout(&self) -> Option<PlateLayout> {
+        (self.x <= 1000
+            && self.y <= 1000
+            && (1..=400).contains(&self.width)
+            && (1..=500).contains(&self.height))
+        .then_some(PlateLayout {
+            bubble_side: if self.bubble_left {
+                shot::Side::Left
+            } else {
+                shot::Side::Right
+            },
+            head_x_permille: self.x,
+            head_y_permille: self.y,
+            head_width_permille: self.width,
+            head_height_permille: self.height,
+        })
+    }
+}
+
+impl StoredPlacement {
+    fn of(placement: &PlatePlacement) -> Self {
+        Self {
+            speaker: StoredHead::of(0, &placement.speaker),
+            heroes: placement
+                .heroes
+                .iter()
+                .map(|hero| StoredHead::of(hero.art, &hero.layout))
+                .collect(),
+        }
+    }
+
+    fn placement(&self) -> Option<PlatePlacement> {
+        let heroes = self
+            .heroes
+            .iter()
+            .filter_map(|head| {
+                Some(HeroHead {
+                    art: head.art,
+                    layout: head.layout()?,
+                })
+            })
+            .collect();
+        Some(PlatePlacement {
+            speaker: self.speaker.layout()?,
+            heroes,
+        })
     }
 }
 
@@ -619,9 +721,9 @@ impl Shared {
                 scene.plate_state = rpc::PlateState::Pending as i32;
             }
             Some(Entry::Ready { .. }) => {
-                if let Some((key, layout)) = book.shown() {
+                if let Some((key, placement)) = book.shown() {
                     scene.live_plate = key.path();
-                    scene.plate_layout = layout.as_ref().map(wire_layout);
+                    scene.plate_layout = placement.as_ref().map(wire_layout);
                     scene.plate_state = rpc::PlateState::Ready as i32;
                 }
             }
@@ -697,21 +799,26 @@ impl Shared {
         }
     }
 
-    /// The art that shows a speaker in a plate: the full-length portrait where there is one.
-    async fn speaker_art(&self, sprite: &str) -> Option<ReferenceImage> {
+    /// The art that shows a speaker in a plate: the full-length portrait (or figure) and the close
+    /// portrait of the face, each when it exists.
+    async fn speaker_art(&self, sprite: &str) -> (Option<ReferenceImage>, Option<ReferenceImage>) {
         let stem = sprite.rsplit('/').next().unwrap_or(sprite);
-        let name = stem.strip_prefix("sprite-")?;
+        let Some(name) = stem.strip_prefix("sprite-") else {
+            return (None, None);
+        };
+        let mut figure = None;
         for candidate in [
             format!("portrait-{name}-full"),
             format!("figure-{name}"),
-            format!("portrait-{name}"),
             stem.to_owned(),
         ] {
             if let Ok(art) = self.inner.load(candidate).await {
-                return Some(art);
+                figure = Some(art);
+                break;
             }
         }
-        None
+        let face = self.inner.load(format!("portrait-{name}")).await.ok();
+        (figure, face)
     }
 
     async fn render_fresh(
@@ -720,7 +827,7 @@ impl Shared {
         spec: &ShotSpec,
         heroes: &[u8],
         faces: &[(u8, ImageKey)],
-    ) -> Result<(ImageKey, Option<PlateLayout>), ImageFailure> {
+    ) -> Result<(ImageKey, Option<PlatePlacement>), ImageFailure> {
         let mut references = Vec::new();
         let mut sorted = heroes.to_vec();
         sorted.sort_unstable();
@@ -747,12 +854,20 @@ impl Shared {
                 .map_err(|_| ImageFailure::InvalidRequest)?;
             references.push(sheet);
         }
-        let speaker = match &scene.speaker {
+        // The cast's art leads: the full-length figure and a close portrait of the face. Both
+        // go into every plate that shows the speaker, because a figure alone let the same person
+        // drift between two scenes' plates.
+        let (figure, face) = match &scene.speaker {
             Some(speaker) => self.speaker_art(&speaker.sprite).await,
-            None => None,
+            None => (None, None),
         };
-        let has_speaker_art = speaker.is_some();
-        references.extend(speaker);
+        let has_speaker_art = figure.is_some();
+        let has_speaker_face = has_speaker_art && face.is_some();
+        let locator_face = face.clone().or_else(|| figure.clone());
+        references.extend(figure);
+        if has_speaker_face {
+            references.extend(face);
+        }
         let place = self.inner.load(scene.asset.clone()).await.ok();
         let has_place = place.is_some();
         references.extend(place);
@@ -763,6 +878,7 @@ impl Shared {
             PlateReferences {
                 party_sheet: !sorted.is_empty(),
                 speaker: has_speaker_art,
+                speaker_face: has_speaker_face,
                 place: has_place,
             },
         )
@@ -777,24 +893,46 @@ impl Shared {
                 output: OutputSpec::PLATE,
             })
             .await?;
-        let layout = match &spec.speaker {
-            Some(speaker) => Some(self.measured_or_predicted(&key, speaker).await),
+        let placement = match &spec.speaker {
+            Some(speaker) => Some(
+                self.measured_or_predicted(&key, spec, speaker, locator_face.as_ref())
+                    .await,
+            ),
             None => None,
         };
-        Ok((key, layout))
+        Ok((key, placement))
     }
 
-    /// The layout of the speaker's head found in the finished plate by the vision model; when it
-    /// cannot be found (no provider, a failure, an implausible answer) the layout the director
-    /// predicted stands. The image model does not place the speaker where it is asked.
+    /// Where the heads are in the finished plate, as the vision model finds them: the speaker's
+    /// and those of the heroes it asked for. A placement found before is kept beside the cached
+    /// plate and read back, so a later server run does not ask again. When the speaker cannot be
+    /// found (no provider, a failure, an implausible answer) the layout the director predicted
+    /// stands, with no hero positions. The image model does not place anyone where it is asked.
     async fn measured_or_predicted(
         &self,
         key: &ImageKey,
+        spec: &ShotSpec,
         speaker: &shot::SpeakerShot,
-    ) -> PlateLayout {
-        let description = format!("{}, {}", speaker.look, speaker.task);
+        face: Option<&ReferenceImage>,
+    ) -> PlatePlacement {
+        if let Some(note) = self.inner.imagery.read_note(key).await
+            && let Ok(stored) = serde_json::from_slice::<StoredPlacement>(&note)
+            && let Some(placement) = stored.placement()
+        {
+            return placement;
+        }
+        let speaker_description = format!("{}, {}", speaker.look, speaker.task);
+        let hero_ids: Vec<String> = spec
+            .heroes
+            .iter()
+            .map(|hero| format!("hero-{}", hero.art))
+            .collect();
+        let mut targets: Vec<(&str, &str)> = vec![("speaker", speaker_description.as_str())];
+        for (hero, id) in spec.heroes.iter().zip(&hero_ids) {
+            targets.push((id.as_str(), hero_locator_phrase(hero.art)));
+        }
         let started = tokio::time::Instant::now();
-        let found = self.inner.imagery.locate_head(key, &description).await;
+        let found = self.inner.imagery.locate_heads(key, face, &targets).await;
         record(
             "gameplay.living_scene.head_located",
             &[
@@ -811,10 +949,43 @@ impl Shared {
                 ),
             ],
         );
-        match found {
-            Ok(head) => shot::measured_layout(head.left, head.top, head.right, head.bottom),
-            Err(_) => speaker.layout,
+        let located = found.unwrap_or_default();
+        let Some(head) = located.iter().find(|head| head.id == "speaker") else {
+            return PlatePlacement {
+                speaker: speaker.layout,
+                heroes: Vec::new(),
+            };
+        };
+        let heroes = spec
+            .heroes
+            .iter()
+            .filter_map(|hero| {
+                let id = format!("hero-{}", hero.art);
+                let found = located.iter().find(|head| head.id == id)?;
+                Some(HeroHead {
+                    art: hero.art,
+                    layout: shot::measured_layout(
+                        found.head.left,
+                        found.head.top,
+                        found.head.right,
+                        found.head.bottom,
+                    ),
+                })
+            })
+            .collect();
+        let placement = PlatePlacement {
+            speaker: shot::measured_layout(
+                head.head.left,
+                head.head.top,
+                head.head.right,
+                head.head.bottom,
+            ),
+            heroes,
+        };
+        if let Ok(note) = serde_json::to_vec(&StoredPlacement::of(&placement)) {
+            self.inner.imagery.write_note(key, note).await;
         }
+        placement
     }
 
     async fn render_edit(
@@ -827,12 +998,12 @@ impl Shared {
             return Err(ImageFailure::InvalidRequest);
         };
         let mut references = vec![ReferenceImage::new(format, bytes)];
-        let speaker = match &scene.speaker {
+        let (figure, _) = match &scene.speaker {
             Some(speaker) => self.speaker_art(&speaker.sprite).await,
-            None => None,
+            None => (None, None),
         };
-        let has_speaker_art = speaker.is_some();
-        references.extend(speaker);
+        let has_speaker_art = figure.is_some();
+        references.extend(figure);
         let prompt = plate_moment(
             self.inner.rating,
             face.expression,
@@ -879,7 +1050,7 @@ impl Shared {
         match done {
             Done::Fresh { id, result, .. } => {
                 let entry = match result {
-                    Ok((key, layout)) => Entry::Ready { key, layout },
+                    Ok((key, placement)) => Entry::Ready { key, placement },
                     Err(_) => Entry::Failed,
                 };
                 // A plate for a scene the book has already forgotten is not remembered.

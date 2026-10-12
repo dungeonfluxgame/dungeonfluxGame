@@ -484,7 +484,9 @@ impl Stream {
 }
 
 /// What a speaker's cut-out stem says about their kind of person: the tags that pick their task
-/// and the fixed phrase that describes their look.
+/// and the fixed phrase that names what they are. The phrase says no clothes or colours: the
+/// reference images carry those, and a description that disagrees with them (a plain tunic where
+/// the art has a kerchief) made the same person drift between two scenes' plates.
 struct Person {
     tags: &'static [&'static str],
     look: &'static str,
@@ -513,133 +515,133 @@ const PEOPLE: &[(&str, Person)] = &[
         "herbwife",
         Person {
             tags: &["healer"],
-            look: "a herbwife in a hooded patchwork scarf with a herb satchel",
+            look: "a herbwife",
         },
     ),
     (
         "innkeeper",
         Person {
             tags: &["keeper", "cook"],
-            look: "an innkeeper in a work apron with rolled sleeves",
+            look: "an innkeeper",
         },
     ),
     (
         "merchant",
         Person {
             tags: &["merchant"],
-            look: "a merchant in a waxed apron and a heavy coat",
+            look: "a merchant",
         },
     ),
     (
         "shepherd",
         Person {
             tags: &["shepherd"],
-            look: "a shepherd in a sheepskin cloak",
+            look: "a shepherd",
         },
     ),
     (
         "veteran",
         Person {
             tags: &["fighter", "guard"],
-            look: "a veteran soldier in a faded surcoat",
+            look: "a veteran soldier",
         },
     ),
     (
         "acolyte",
         Person {
             tags: &["healer"],
-            look: "a robed acolyte with a linen wrap",
+            look: "an acolyte",
         },
     ),
     (
         "archivist",
         Person {
             tags: &["scholar", "clerk"],
-            look: "an archivist in a long ink-stained coat",
+            look: "an archivist",
         },
     ),
     (
         "bell-ringer",
         Person {
             tags: &["keeper"],
-            look: "a bell ringer in a plain wool tunic with rope-burned hands",
+            look: "a bell ringer",
         },
     ),
     (
         "lamp-warden",
         Person {
             tags: &["keeper"],
-            look: "a lamp warden in an oilskin coat",
+            look: "a lamp warden",
         },
     ),
     (
         "ferry-clerk",
         Person {
             tags: &["clerk", "keeper"],
-            look: "a ferry clerk with ink-stained fingers",
+            look: "a ferry clerk",
         },
     ),
     (
         "miller",
         Person {
             tags: &["tradesman"],
-            look: "a miller in a flour-dusted shirt and a leather apron",
+            look: "a miller",
         },
     ),
     (
         "mapmaker",
         Person {
             tags: &["scholar"],
-            look: "an old mapmaker in a long coat",
+            look: "an old mapmaker",
         },
     ),
     (
         "river-healer",
         Person {
             tags: &["healer"],
-            look: "a river healer in a worn shawl",
+            look: "a river healer",
         },
     ),
     (
         "shrine-keeper",
         Person {
             tags: &["keeper", "healer"],
-            look: "a shrine keeper in a plain grey robe",
+            look: "a shrine keeper",
         },
     ),
     (
         "tinker",
         Person {
             tags: &["tradesman"],
-            look: "a tinker with a heavy pack and a leather vest",
+            look: "a tinker",
         },
     ),
     (
         "watch-sergeant",
         Person {
             tags: &["guard", "fighter"],
-            look: "a watch sergeant in mail and a blue tabard",
+            look: "a watch sergeant",
         },
     ),
     (
         "guard",
         Person {
             tags: &["guard", "fighter"],
-            look: "a guard in a blue tabard",
+            look: "a guard",
         },
     ),
     (
         "bandit",
         Person {
             tags: &["fighter"],
-            look: "a hard-faced fighter in patched leather",
+            look: "a fighter",
         },
     ),
     (
         "",
         Person {
             tags: &[],
-            look: "a person in plain working clothes",
+            look: "a person",
         },
     ),
 ];
@@ -793,6 +795,23 @@ fn layout_for(slot: SpeakerSlot, camera: Camera) -> PlateLayout {
         head_width_permille: width,
         head_height_permille: height,
     }
+}
+
+/// Where one hero's head is in the plate (permille of the plate), and the side of it on which the
+/// hero's speech bubble stands: toward the middle of the frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct HeroHead {
+    /// The hero's art number: the party member at this position (art minus one) in the party.
+    pub(in crate::gameplay) art: u8,
+    pub(in crate::gameplay) layout: PlateLayout,
+}
+
+/// Where the heads are in a finished plate: the speaker's and those of heroes the vision model
+/// could find (a hero seen from behind is not always found).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct PlatePlacement {
+    pub(in crate::gameplay) speaker: PlateLayout,
+    pub(in crate::gameplay) heroes: Vec<HeroHead>,
 }
 
 /// The layout for a head that was found in the finished plate (fractions of the picture): the

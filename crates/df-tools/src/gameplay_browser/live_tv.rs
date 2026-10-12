@@ -117,7 +117,14 @@ struct PlateLayer {
     scene: RefCell<String>,
     /// Which of the two pictures is the next to be filled.
     next: Cell<usize>,
+    /// The scene the last view was for, so a new scene can be told from the one on screen.
+    seen: RefCell<String>,
+    /// Plate pictures fetched ahead, by path, so a scene change can show its plate at once.
+    preloads: RefCell<Vec<(String, Element)>>,
 }
+
+/// How many plate pictures are kept fetched ahead.
+const MAXIMUM_PRELOADS: usize = 6;
 
 pub(super) struct TvStage {
     root: Element,
@@ -281,6 +288,8 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
         listeners,
         scene: RefCell::new(String::new()),
         next: Cell::new(0),
+        seen: RefCell::new(String::new()),
+        preloads: RefCell::new(Vec::new()),
     })
 }
 
@@ -757,13 +766,44 @@ impl TvStage {
         Ok(())
     }
 
+    /// PLAY-V09: starts fetching a plate picture the moment a view names it, usually while the
+    /// scene before it is still being spoken, so that the scene change can show it at once.
+    pub(super) fn preload_plate(&self, url: &str) -> Result<(), JsValue> {
+        let mut preloads = self.plate.preloads.borrow_mut();
+        if preloads.iter().any(|(known, _)| known == url) {
+            return Ok(());
+        }
+        let document = self.root.owner_document().ok_or("document absent")?;
+        let image = document.create_element("img")?;
+        image.set_attribute("src", url)?;
+        preloads.push((url.to_owned(), image));
+        if preloads.len() > MAXIMUM_PRELOADS {
+            preloads.remove(0);
+        }
+        Ok(())
+    }
+
+    /// Whether the plate picture at `url` has been fetched and decoded already.
+    fn preloaded(&self, url: &str) -> bool {
+        self.plate
+            .preloads
+            .borrow()
+            .iter()
+            .find(|(known, _)| known == url)
+            .and_then(|(_, image)| js_sys::Reflect::get(image, &JsValue::from_str("complete")).ok())
+            .and_then(|complete| complete.as_bool())
+            .unwrap_or(false)
+    }
+
     /// PLAY-V09: shows the scene plate the server made, or leaves the scene as it was.
     ///
     /// `data-plate-state` is the server's word (none, pending, ready, failed; failed also when the
     /// picture does not load) and `data-plate-key` names the plate. The cut-outs go once the
-    /// picture has loaded (`data-plate-loaded`), or at once when a new scene arrives with its
-    /// plate already ready (`data-plate-hold`), so a pre-made plate never shows the cut-out stage.
-    /// A new picture for the scene already on screen (a mood edit) comes in as a focus pull.
+    /// picture has loaded and faded in (`data-plate-loaded`; they fade out after it is opaque, so
+    /// there is never a frame with neither), or not at all when a new scene arrives with its plate
+    /// already ready and already fetched (`data-plate-hold`): then the plate is shown at once and
+    /// the cut-out stage is never drawn. A new picture for the scene already on screen (a mood
+    /// edit) comes in as a focus pull.
     fn set_plate(&self, plate: &PlateView, scene_key: &str) -> Result<(), JsValue> {
         let layer = &self.plate;
         let failed = layer.root.get_attribute("data-failed");
@@ -783,12 +823,14 @@ impl TvStage {
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-push")?;
             layer.root.remove_attribute("data-pull")?;
+            layer.root.remove_attribute("data-instant")?;
             layer.scene.borrow_mut().clear();
+            *layer.seen.borrow_mut() = scene_key.to_owned();
             self.figures.set_plate(None)?;
             return Ok(());
         };
-        self.figures.set_plate(plate.layout)?;
-        if let Some(layout) = plate.layout {
+        self.figures.set_plate(plate.layout.clone())?;
+        if let Some(layout) = &plate.layout {
             layer.root.set_attribute(
                 "style",
                 &format!(
@@ -817,9 +859,18 @@ impl TvStage {
         } else {
             layer.root.remove_attribute("data-pull")?;
             self.root.remove_attribute("data-plate-loaded")?;
-            self.root.set_attribute("data-plate-hold", "")?;
+            // Only a new scene whose plate is already here skips the cut-out stage; a plate that
+            // arrives for the scene on screen leaves the cut-outs drawn until it is opaque.
+            let new_scene = layer.seen.borrow().as_str() != scene_key;
+            if new_scene && self.preloaded(url) {
+                self.root.set_attribute("data-plate-hold", "")?;
+                layer.root.set_attribute("data-instant", "")?;
+            } else {
+                layer.root.remove_attribute("data-instant")?;
+            }
             *layer.scene.borrow_mut() = scene_key.to_owned();
         }
+        *layer.seen.borrow_mut() = scene_key.to_owned();
         image.set_attribute("data-src", url)?;
         image.set_attribute("src", url)
     }

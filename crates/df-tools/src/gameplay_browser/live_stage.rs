@@ -237,7 +237,7 @@ pub(super) struct Figures {
     /// PLAY-V09: where the bubbles stand while a scene plate covers the cut-outs.
     plate_bubbles: Element,
     /// PLAY-V09: the plate's layout while it is on screen.
-    plate: Cell<Option<PlateGeometry>>,
+    plate: RefCell<Option<PlateGeometry>>,
     figures: Vec<Figure>,
     hud: Vec<HudCard>,
     animation_end: Closure<dyn FnMut(Event)>,
@@ -408,7 +408,7 @@ impl Figures {
         Ok(Self {
             root,
             plate_bubbles,
-            plate: Cell::new(None),
+            plate: RefCell::new(None),
             figures,
             hud,
             animation_end,
@@ -919,7 +919,8 @@ impl Figures {
     /// head, the roll panel or the screen edge. When none fits, the narrowest stays.
     fn place_bubble(&self, speaker: &Figure) {
         // PLAY-V09: over a scene plate the bubble stands beside the speaker's head in the picture.
-        if let Some(geometry) = self.plate.get() {
+        let geometry = self.plate.borrow().clone();
+        if let Some(geometry) = geometry {
             self.place_bubble_on_plate(speaker, geometry);
             return;
         }
@@ -980,7 +981,7 @@ impl Figures {
     /// `None`, that none does). The bubbles then stand in the plate's own layer and are placed
     /// from the layout; without a plate they return to their figures.
     pub(super) fn set_plate(&self, geometry: Option<PlateGeometry>) -> Result<(), JsValue> {
-        let before = self.plate.replace(geometry);
+        let before = self.plate.replace(geometry.clone());
         if before == geometry {
             return Ok(());
         }
@@ -1041,18 +1042,33 @@ impl Figures {
             .root
             .get_attribute("data-slot")
             .unwrap_or_default();
-        let (head, side, mut avoid) = match slot.as_str() {
-            "hero-1" => (
-                frame.head_box(150, 560, 100, 150),
-                Side::Right,
-                vec![speaker_head],
-            ),
-            "hero-2" => (
-                frame.head_box(850, 560, 100, 150),
-                Side::Left,
-                vec![speaker_head],
-            ),
-            _ => (speaker_head, geometry.bubble_side, Vec::new()),
+        // A hero's bubble stands beside the hero's head when the server found it, and otherwise
+        // under that hero's card in the party strip (the plate's own staging of the heroes is not
+        // known then, and a guess would put the bubble over somebody else).
+        let hero_index = slot
+            .strip_prefix("hero-")
+            .and_then(|number| number.parse::<usize>().ok())
+            .and_then(|number| number.checked_sub(1));
+        let mut on_card = false;
+        let (head, side, mut avoid) = match hero_index {
+            Some(index) => match geometry.heroes.iter().find(|hero| hero.index == index) {
+                Some(hero) => (
+                    frame.head_box(hero.head_x, hero.head_y, hero.head_width, hero.head_height),
+                    hero.bubble_side,
+                    vec![speaker_head],
+                ),
+                None => {
+                    on_card = true;
+                    let card = self.hud.get(index).map(|card| rectangle(&card.root));
+                    let (left, top, right, bottom) = card.unwrap_or((0.0, 0.0, 1.0, 1.0));
+                    (
+                        Rect::new(left, top, right, bottom),
+                        Side::Right,
+                        vec![speaker_head],
+                    )
+                }
+            },
+            None => (speaker_head, geometry.bubble_side, Vec::new()),
         };
         let mut interface = Vec::new();
         let mut keep_clear = |element: &Element| {
@@ -1083,8 +1099,12 @@ impl Figures {
                 f64::from(container.client_width()),
                 f64::from(container.client_height()),
             );
-            placement = plate_layout::place_bubble(screen, head, side, size, tail_offset, &avoid)
-                .or_else(|| plate_layout::place_bubble_stacked(screen, head, size, &avoid));
+            placement = if on_card {
+                plate_layout::place_bubble_stacked(screen, head, size, &avoid)
+            } else {
+                plate_layout::place_bubble(screen, head, side, size, tail_offset, &avoid)
+                    .or_else(|| plate_layout::place_bubble_stacked(screen, head, size, &avoid))
+            };
             if placement.is_some() {
                 break;
             }

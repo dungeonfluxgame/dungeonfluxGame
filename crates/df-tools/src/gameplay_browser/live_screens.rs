@@ -406,8 +406,12 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
             _ => None,
         },
     });
+    // PLAY-V09: a ready scene plate is the scene picture at the top of the player page, cropped to
+    // keep the speaker in view; the authored painting stays the fallback behind it.
+    let plate = crate::presentation::plate_of(input.scene);
     Ok(ExplorationModel {
-        scene_asset: asset_url(&input.scene.scene_asset),
+        plate_focus: plate.layout.map(|layout| layout.head_x),
+        scene_asset: plate.url.or_else(|| asset_url(&input.scene.scene_asset)),
         portrait_asset: asset_url(&input.scene.speaker_portrait),
         has_whisper: !input.clue.is_empty(),
         rules_note: input.scene.rules_note.clone(),

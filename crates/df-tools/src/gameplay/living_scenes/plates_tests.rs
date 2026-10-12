@@ -186,7 +186,16 @@ fn ready(shared: &Shared, id: &str, plate: char) {
     shared.finish(Done::Fresh {
         id: id.to_owned(),
         elapsed: Duration::from_secs(14),
-        result: Ok((key(plate), Some(layout()))),
+        result: Ok((
+            key(plate),
+            Some(PlatePlacement {
+                speaker: layout(),
+                heroes: vec![HeroHead {
+                    art: 2,
+                    layout: layout(),
+                }],
+            }),
+        )),
     });
 }
 
@@ -282,6 +291,12 @@ async fn a_ready_plate_reaches_the_display_and_the_phones_with_its_layout() {
         assert_eq!(layout.bubble_side, rpc::PlateSide::Left as i32);
         assert_eq!(layout.head_x_permille, 640);
         assert_eq!(layout.head_y_permille, 380);
+        assert_eq!(layout.heroes.len(), 1);
+        assert_eq!(
+            layout.heroes[0].hero_index, 1,
+            "art 2 is the party's second hero"
+        );
+        assert_eq!(layout.heroes[0].bubble_side, rpc::PlateSide::Left as i32);
     }
     assert!(locked(&shared.inner.state).plate_covers);
 }
@@ -509,4 +524,31 @@ async fn a_hurt_hero_stands_in_the_plate_as_their_health_variant_and_makes_anoth
     };
     assert_eq!(faces, &[(1, key('d'))], "only the hurt hero has a variant");
     assert!(id.contains("dddddddd"), "the variant names the plate: {id}");
+}
+
+#[test]
+fn a_measured_placement_survives_the_note_beside_the_cached_plate_and_a_damaged_note_is_refused() {
+    let placement = PlatePlacement {
+        speaker: layout(),
+        heroes: vec![HeroHead {
+            art: 1,
+            layout: layout(),
+        }],
+    };
+    let note = serde_json::to_vec(&StoredPlacement::of(&placement)).unwrap();
+    let restored = serde_json::from_slice::<StoredPlacement>(&note)
+        .unwrap()
+        .placement()
+        .unwrap();
+    assert_eq!(restored, placement);
+    let damaged = String::from_utf8(note)
+        .unwrap()
+        .replace("\"width\":", "\"width\":9000,\"unused\":");
+    assert!(
+        serde_json::from_str::<StoredPlacement>(&damaged)
+            .ok()
+            .and_then(|stored| stored.placement())
+            .is_none(),
+        "numbers outside the plate are not trusted"
+    );
 }

@@ -351,14 +351,29 @@ impl PlateState {
     }
 }
 
-/// Where the speaker's head is in the plate (permille of the plate) and which side of it is calm.
+/// Where one hero's head is in the plate (permille of the plate), and the side of it a bubble
+/// stands on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlateHero {
+    /// The party member, counted from 0.
+    pub(crate) index: usize,
+    pub(crate) bubble_side: crate::plate_layout::Side,
+    pub(crate) head_x: u32,
+    pub(crate) head_y: u32,
+    pub(crate) head_width: u32,
+    pub(crate) head_height: u32,
+}
+
+/// Where the speaker's head is in the plate (permille of the plate) and which side of it is calm,
+/// and where the heroes' heads are when the server found them.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlateGeometry {
     pub(crate) bubble_side: crate::plate_layout::Side,
     pub(crate) head_x: u32,
     pub(crate) head_y: u32,
     pub(crate) head_width: u32,
     pub(crate) head_height: u32,
+    pub(crate) heroes: Vec<PlateHero>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -379,18 +394,33 @@ pub(crate) fn plate_of(scene: &rpc::GameplayScene) -> PlateView {
         Ok(rpc::PlateState::Unspecified) | Err(_) => PlateState::None,
     };
     let url = imagery_url(&scene.live_plate);
+    let side_of = |side: i32| match rpc::PlateSide::try_from(side) {
+        Ok(rpc::PlateSide::Left) => Some(crate::plate_layout::Side::Left),
+        Ok(rpc::PlateSide::Right) => Some(crate::plate_layout::Side::Right),
+        Ok(rpc::PlateSide::Unspecified) | Err(_) => None,
+    };
     let layout = scene.plate_layout.as_ref().and_then(|layout| {
-        let bubble_side = match rpc::PlateSide::try_from(layout.bubble_side) {
-            Ok(rpc::PlateSide::Left) => crate::plate_layout::Side::Left,
-            Ok(rpc::PlateSide::Right) => crate::plate_layout::Side::Right,
-            Ok(rpc::PlateSide::Unspecified) | Err(_) => return None,
-        };
         Some(PlateGeometry {
-            bubble_side,
+            bubble_side: side_of(layout.bubble_side)?,
             head_x: layout.head_x_permille,
             head_y: layout.head_y_permille,
             head_width: layout.head_width_permille,
             head_height: layout.head_height_permille,
+            // A hero entry with no usable side is left out: that hero's bubble stands by their card.
+            heroes: layout
+                .heroes
+                .iter()
+                .filter_map(|hero| {
+                    Some(PlateHero {
+                        index: usize::try_from(hero.hero_index).ok()?,
+                        bubble_side: side_of(hero.bubble_side)?,
+                        head_x: hero.head_x_permille,
+                        head_y: hero.head_y_permille,
+                        head_width: hero.head_width_permille,
+                        head_height: hero.head_height_permille,
+                    })
+                })
+                .collect(),
         })
     });
     match (state, url) {
@@ -684,6 +714,14 @@ mod tests {
                 head_y_permille: 370,
                 head_width_permille: 120,
                 head_height_permille: 180,
+                heroes: vec![rpc::PlateHead {
+                    hero_index: 1,
+                    bubble_side: rpc::PlateSide::Right as i32,
+                    head_x_permille: 150,
+                    head_y_permille: 420,
+                    head_width_permille: 100,
+                    head_height_permille: 150,
+                }],
             }),
             ..Default::default()
         }
@@ -703,6 +741,17 @@ mod tests {
         assert_eq!(
             (layout.bubble_side, layout.head_x, layout.head_y),
             (crate::plate_layout::Side::Left, 640, 370)
+        );
+        assert_eq!(
+            layout.heroes,
+            vec![PlateHero {
+                index: 1,
+                bubble_side: crate::plate_layout::Side::Right,
+                head_x: 150,
+                head_y: 420,
+                head_width: 100,
+                head_height: 150,
+            }]
         );
         let bad = plate_of(&plate_scene(
             rpc::PlateState::Ready,
