@@ -604,5 +604,280 @@
       "bell-chamber"
     ],
     "prompt": "Moonlit heroic fantasy bell chamber interior, warm amber lanterns, readable wide scene without text."
+  },
+  {
+    "art_key": "dest-chandlers-back-room",
+    "kind": "scene",
+    "file_stem": "scene-dest-chandlers-back-room",
+    "aspect": "16:9",
+    "used_by": "places.destinations.chandlers-back-room",
+    "depicts": [
+      "chandlers-room"
+    ],
+    "prompt": "The back room of a ship chandler's: lamp-oil barrels and coils of rope stacked along the walls, a long scarred table, a banked fire, hanging ship lanterns, a shuttered window."
+  },
+  {
+    "art_key": "dest-tidewatch-lamp-room",
+    "kind": "scene",
+    "file_stem": "scene-dest-tidewatch-lamp-room",
+    "aspect": "16:9",
+    "used_by": "places.destinations.tidewatch-lamp-room",
+    "depicts": [
+      "lamp-room"
+    ],
+    "prompt": "The lamp room at the top of a harbour watch tower: a great brass lamp behind glass panes throwing light across black water far below, a spiral stair hatch, charts and oil cans at the sides."
+  },
+  {
+    "art_key": "dest-old-boathouse",
+    "kind": "scene",
+    "file_stem": "scene-dest-old-boathouse",
+    "aspect": "16:9",
+    "used_by": "places.destinations.old-boathouse",
+    "depicts": [
+      "boathouse"
+    ],
+    "prompt": "Inside an old boathouse: upturned skiffs on trestles at the sides, oars and nets on the walls, a single hanging lantern, the slipway doors ajar at the back onto moonlit water."
+  },
+  {
+    "art_key": "dest-charcoal-hut",
+    "kind": "scene",
+    "file_stem": "scene-dest-charcoal-hut",
+    "aspect": "16:9",
+    "used_by": "places.destinations.charcoal-hut",
+    "depicts": [
+      "charcoal-hut"
+    ],
+    "prompt": "Inside a charcoal-burners' hut in a pine forest: a low smoke-dark room, a banked hearth, sacks of charcoal and stacked split logs at the sides, drying herbs overhead, a door ajar onto dark pines."
+  },
+  {
+    "art_key": "dest-hermits-cabin",
+    "kind": "scene",
+    "file_stem": "scene-dest-hermits-cabin",
+    "aspect": "16:9",
+    "used_by": "places.destinations.hermits-cabin",
+    "depicts": [
+      "hermits-cabin"
+    ],
+    "prompt": "Inside a hermit's tiny cabin among pines: one candlelit room, a cot and a shelf of worn books at the sides, a small iron stove, carved wooden charms hanging, a window with moonlit trunks."
+  },
+  {
+    "art_key": "dest-pilgrims-rest",
+    "kind": "scene",
+    "file_stem": "scene-dest-pilgrims-rest",
+    "aspect": "16:9",
+    "used_by": "places.destinations.pilgrims-rest",
+    "depicts": [
+      "pilgrims-hall"
+    ],
+    "prompt": "A pilgrims' rest hall: whitewashed stone walls, long benches pushed to the sides, a roaring fire in a wide hearth at the back, staffs and travel cloaks hung on pegs, a small wayside shrine niche."
+  },
+  {
+    "art_key": "dest-shepherds-bothy",
+    "kind": "scene",
+    "file_stem": "scene-dest-shepherds-bothy",
+    "aspect": "16:9",
+    "used_by": "places.destinations.shepherds-bothy",
+    "depicts": [
+      "bothy"
+    ],
+    "prompt": "Inside a mountain shepherds' bothy: stone-and-turf walls, an iron stove with a kettle, bunks and fleeces at the sides, crooks by the door, a small window showing a moonlit pass."
+  },
+  {
+    "art_key": "dest-muleteers-inn",
+    "kind": "scene",
+    "file_stem": "scene-dest-muleteers-inn",
+    "aspect": "16:9",
+    "used_by": "places.destinations.muleteers-inn",
+    "depicts": [
+      "inn"
+    ],
+    "prompt": "The common room of a mountain muleteers' inn: a heavy-beamed room with a great hearth at the back, pack saddles and harness hung on the walls, a rough bar with kegs at one side, benches pushed aside, snow at the window."
+  },
+  {
+    "art_key": "dest-cairn-house",
+    "kind": "scene",
+    "file_stem": "scene-dest-cairn-house",
+    "aspect": "16:9",
+    "used_by": "places.destinations.cairn-house",
+    "depicts": [
+      "refuge-hall"
+    ],
+    "prompt": "Inside a squat stone refuge house on a high pass: thick walls, a long plank table at one side, an iron lamp hanging from a beam, stacked firewood, a storm door at the back with wind-blown snow at its foot."
+  },
+  {
+    "art_key": "dest-tin-street-tea-house",
+    "kind": "scene",
+    "file_stem": "scene-dest-tin-street-tea-house",
+    "aspect": "16:9",
+    "used_by": "places.destinations.tin-street-tea-house",
+    "depicts": [
+      "tea-house"
+    ],
+    "prompt": "A market tea house: glowing paper screens along the back, low tables with steaming cups pushed to the sides, shelves of tea caddies and brass kettles on a brazier, hanging paper lanterns."
+  },
+  {
+    "art_key": "dest-puppet-theater",
+    "kind": "scene",
+    "file_stem": "scene-dest-puppet-theater",
+    "aspect": "16:9",
+    "used_by": "places.destinations.puppet-theater",
+    "depicts": [
+      "theater"
+    ],
+    "prompt": "A small puppet theatre: a little stage with a half-drawn red curtain at the back, shelves of marionettes and painted backdrops at the sides, a few stools pushed aside, footlight candles."
+  },
+  {
+    "art_key": "dest-lantern-makers-shop",
+    "kind": "scene",
+    "file_stem": "scene-dest-lantern-makers-shop",
+    "aspect": "16:9",
+    "used_by": "places.destinations.lantern-makers-shop",
+    "depicts": [
+      "lantern-shop"
+    ],
+    "prompt": "A lantern-maker's workshop: dozens of unlit lamps hanging from the rafters like sleeping fruit, a workbench with glass panes, tin snips and solder at one side, one lit lamp, a shop window at the back onto a lamplit street."
+  },
+  {
+    "art_key": "dest-caretakers-lodge",
+    "kind": "scene",
+    "file_stem": "scene-dest-caretakers-lodge",
+    "aspect": "16:9",
+    "used_by": "places.destinations.caretakers-lodge",
+    "depicts": [
+      "caretakers-lodge"
+    ],
+    "prompt": "A graveyard caretaker's lodge: a tidy little room, a kettle on a small hearth, a board of hanging iron keys, spades and a lantern by the door, a window at the back onto moonlit headstones."
+  },
+  {
+    "art_key": "dest-undercroft-study",
+    "kind": "scene",
+    "file_stem": "scene-dest-undercroft-study",
+    "aspect": "16:9",
+    "used_by": "places.destinations.undercroft-study",
+    "depicts": [
+      "undercroft-study"
+    ],
+    "prompt": "A below-ground study in a chapel undercroft: stone vaults, a desk heaped with old papers under a single lamp at one side, shelves of ledgers, a stair rising at the back into shadow."
+  },
+  {
+    "art_key": "dest-vestry",
+    "kind": "scene",
+    "file_stem": "scene-dest-vestry",
+    "aspect": "16:9",
+    "used_by": "places.destinations.vestry",
+    "depicts": [
+      "vestry"
+    ],
+    "prompt": "A chapel vestry: robes hanging on pegs, candle stubs and a brass snuffer on a lamplit table at one side, a carved cupboard, a narrow pointed window with moonlight, a door to the chapel at the back."
+  },
+  {
+    "art_key": "dest-heron-shrine",
+    "kind": "scene",
+    "file_stem": "scene-dest-heron-shrine",
+    "aspect": "16:9",
+    "used_by": "places.destinations.heron-shrine",
+    "depicts": [
+      "shrine"
+    ],
+    "prompt": "A marsh shrine on stilts: polished board floor, carved heron lanterns glowing on posts along the sides, a small altar with reed offerings at the back, open sides showing moonlit reeds and still water."
+  },
+  {
+    "art_key": "dest-eel-catchers-hall",
+    "kind": "scene",
+    "file_stem": "scene-dest-eel-catchers-hall",
+    "aspect": "16:9",
+    "used_by": "places.destinations.eel-catchers-hall",
+    "depicts": [
+      "eel-catchers-hall"
+    ],
+    "prompt": "An eel-catchers' hall on the marsh: a smoky timber hall, wicker eel baskets and nets hanging from the beams, a long fire trench at the back, benches pushed to the sides, hanging lanterns."
+  },
+  {
+    "art_key": "dest-ferrymans-hut",
+    "kind": "scene",
+    "file_stem": "scene-dest-ferrymans-hut",
+    "aspect": "16:9",
+    "used_by": "places.destinations.ferrymans-hut",
+    "depicts": [
+      "ferrymans-hut"
+    ],
+    "prompt": "A ferryman's hut at the marsh edge: a low room, a small stove, a rope bed and oilskins at the sides, a swinging lamp, a door open at the back onto a moored flat-bottomed ferry in mist."
+  },
+  {
+    "art_key": "dest-old-hayloft",
+    "kind": "scene",
+    "file_stem": "scene-dest-old-hayloft",
+    "aspect": "16:9",
+    "used_by": "places.destinations.old-hayloft",
+    "depicts": [
+      "hayloft"
+    ],
+    "prompt": "An old hayloft in a barn: hay bales stacked at the sides under lantern-lit rafters, a pitchfork and a ladder hatch, the loading door open at the back onto a moonlit farmyard."
+  },
+  {
+    "art_key": "dest-mill-house",
+    "kind": "scene",
+    "file_stem": "scene-dest-mill-house",
+    "aspect": "16:9",
+    "used_by": "places.destinations.mill-house",
+    "depicts": [
+      "mill-house"
+    ],
+    "prompt": "Inside a mill house: great wooden gear wheels and a millstone at the back, flour sacks stacked at the sides, a supper table pushed to one wall, a lantern, flour dust in the light."
+  },
+  {
+    "art_key": "dest-cider-cellar",
+    "kind": "scene",
+    "file_stem": "scene-dest-cider-cellar",
+    "aspect": "16:9",
+    "used_by": "places.destinations.cider-cellar",
+    "depicts": [
+      "cider-cellar"
+    ],
+    "prompt": "A farmhouse cider cellar: brick vaults, rows of casks along both sides, a crooked little table with a candle and tankards at one side, apples in crates, stone steps at the back."
+  },
+  {
+    "art_key": "dest-binding-workshop",
+    "kind": "scene",
+    "file_stem": "scene-dest-binding-workshop",
+    "aspect": "16:9",
+    "used_by": "places.destinations.binding-workshop",
+    "depicts": [
+      "bindery"
+    ],
+    "prompt": "A bookbinder's workshop in a great library: unfinished books in presses, leather hides, gilt tools and thread on benches at the sides, a glue pot on a small burner, tall shelves at the back."
+  },
+  {
+    "art_key": "dest-archivists-study",
+    "kind": "scene",
+    "file_stem": "scene-dest-archivists-study",
+    "aspect": "16:9",
+    "used_by": "places.destinations.archivists-study",
+    "depicts": [
+      "archivists-study"
+    ],
+    "prompt": "A tall narrow archivist's study: ladder shelves rising into shadow on both sides, a writing desk with a green-shaded lamp at one side, an orrery model glinting, a round window at the back."
+  },
+  {
+    "art_key": "dest-reading-gallery",
+    "kind": "scene",
+    "file_stem": "scene-dest-reading-gallery",
+    "aspect": "16:9",
+    "used_by": "places.destinations.reading-gallery",
+    "depicts": [
+      "reading-gallery"
+    ],
+    "prompt": "A library reading gallery: a balcony with a carved rail overlooking rows of dark desks below, a single lamp on the rail, shelves at the sides, tall arched windows at the back with moonlight."
+  },
+  {
+    "art_key": "loc-orrery-library-forecourt",
+    "kind": "scene",
+    "file_stem": "scene-dest-orrery-library-forecourt",
+    "aspect": "16:9",
+    "used_by": "places.confrontation.orrery-library",
+    "depicts": [
+      "library-forecourt"
+    ],
+    "prompt": "The forecourt outside a great domed library at night: wide worn steps and tall bronze doors at the back with lit lamps either side, a brass armillary sphere on a plinth at one side, wet flagstones, moon above the dome."
   }
 ]

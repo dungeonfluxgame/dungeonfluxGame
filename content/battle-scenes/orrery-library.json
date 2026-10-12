@@ -1,0 +1,123 @@
+{
+  "schema": 1,
+  "location_id": "orrery-library",
+  "title": "The Orrery Library",
+  "theme": {
+    "name": "library"
+  },
+  "ground": {
+    "stem": "ground-orrery-library",
+    "size_m": 24.0,
+    "centre": [
+      0.0,
+      0.0
+    ],
+    "falloff_m": 6.0
+  },
+  "backdrop": {
+    "stem": "scene-orrery-library-arrival",
+    "distance_m": 9.0,
+    "width_m": 34.0,
+    "base_m": -6.4,
+    "height_m": 19.125
+  },
+  "grid": {
+    "origin": [
+      -6.0,
+      -4.5
+    ],
+    "cell_m": 1.5,
+    "cols": 8,
+    "rows": 6,
+    "blocked": [
+      [
+        0,
+        0
+      ],
+      [
+        7,
+        0
+      ],
+      [
+        0,
+        5
+      ],
+      [
+        7,
+        5
+      ],
+      [
+        4,
+        3
+      ]
+    ]
+  },
+  "cameras": {
+    "tactical": {
+      "target": [
+        0,
+        0.8,
+        0
+      ],
+      "distance": 15.0,
+      "yaw_deg": 0,
+      "pitch_deg": 26,
+      "fov_deg": 40
+    },
+    "combat_est": {
+      "target": [
+        0,
+        0.8,
+        0
+      ],
+      "distance": 10.0,
+      "yaw_deg": 0,
+      "pitch_deg": 16,
+      "fov_deg": 40
+    },
+    "turn_focus": {
+      "target": [
+        0,
+        0.9,
+        0
+      ],
+      "distance": 8.0,
+      "yaw_deg": 32,
+      "pitch_deg": 13,
+      "fov_deg": 38
+    },
+    "impact": {
+      "target": [
+        0,
+        0.9,
+        0
+      ],
+      "distance": 7.0,
+      "yaw_deg": -48,
+      "pitch_deg": 11,
+      "fov_deg": 36
+    },
+    "ko": {
+      "target": [
+        0,
+        0.5,
+        0
+      ],
+      "distance": 8.0,
+      "yaw_deg": 28,
+      "pitch_deg": 22,
+      "fov_deg": 40
+    },
+    "victory": {
+      "target": [
+        0,
+        1.0,
+        0
+      ],
+      "distance": 6.0,
+      "yaw_deg": -30,
+      "pitch_deg": 8,
+      "fov_deg": 34
+    }
+  }
+}

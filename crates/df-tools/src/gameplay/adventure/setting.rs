@@ -31,6 +31,7 @@ pub(crate) enum SettingKind {
     MarshBoardwalk,
     Farmyard,
     LibraryHall,
+    LibraryForecourt,
     NetLoft,
     ChandlersRoom,
     Boathouse,
@@ -74,6 +75,7 @@ impl SettingKind {
                 | Self::GraveyardGate
                 | Self::MarshBoardwalk
                 | Self::Farmyard
+                | Self::LibraryForecourt
         )
     }
 }
@@ -261,8 +263,10 @@ impl Places {
             if c.exterior != c.kind.exterior() {
                 return Err(invalid("confrontation exterior does not match kind"));
             }
-            if c.art != loc.art.arrival || c.bridges.die != 4 || c.bridges.entries.len() != 4 {
-                return Err(invalid("confrontation art or bridge d4"));
+            // The fight's painting only has to depict its setting; the library, whose arrival
+            // painting is its indoor hall, fights in its forecourt.
+            if c.bridges.die != 4 || c.bridges.entries.len() != 4 {
+                return Err(invalid("confrontation bridge d4"));
             }
             if !tables
                 .patrons

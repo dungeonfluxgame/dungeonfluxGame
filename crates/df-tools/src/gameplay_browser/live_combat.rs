@@ -14,8 +14,8 @@ pub(super) mod sheet;
 mod style;
 
 use super::{
-    Client, button, dialogue_recovery, live_rules, live_screens, live_stage, live_tv,
-    live_tv::TvStage, node, recovery_needs, recovery_prompt, replay,
+    Client, button, dialogue_recovery, live_battlefield, live_rules, live_screens, live_stage,
+    live_tv, live_tv::TvStage, node, recovery_needs, recovery_prompt, replay,
 };
 use df_protocol::common as rpc;
 use df_types::{RecoveryEpoch, SessionRevision};
@@ -355,6 +355,8 @@ fn mount_rules_badge(
 /// other view, which the other renderers show.
 pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Result<bool, JsValue> {
     let Some(screen) = classify(view) else {
+        // PLAY-F02: any non-combat view ends the 3D battlefield (it finishes its blow first).
+        live_battlefield::release();
         return Ok(false);
     };
     let (narration, custom_rules) = split_rules_marker(view.narration);
@@ -401,6 +403,15 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     mount_rules_badge(client, &host, custom_rules)?;
     // PLAY-F03: the scene's rules note on its own line under the narration (see live_rules).
     live_rules::mount(&client.borrow().document, &host, &view.scene.rules_note)?;
+    // PLAY-F02 dispatch point: on the shared display the 3D battlefield overlays this flat view
+    // when it can run; otherwise today's view above is what the table sees.
+    if !player {
+        if screen == Screen::Combat {
+            live_battlefield::present(client, view);
+        } else {
+            live_battlefield::release();
+        }
+    }
     Ok(true)
 }
 
@@ -443,6 +454,7 @@ pub(super) fn release(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     if let Some(host) = host {
         host.remove();
     }
+    live_battlefield::release();
     cleanup.map(|_| ())
 }
 
@@ -458,5 +470,6 @@ pub(super) fn dispose(client: &mut Client) -> Result<(), JsValue> {
     if let Some(host) = host {
         host.remove();
     }
+    live_battlefield::release();
     cleanup.map(|_| ())
 }
