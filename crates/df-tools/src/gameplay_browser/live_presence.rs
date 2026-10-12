@@ -1,11 +1,11 @@
-//! The phone's speech-intent signal: while a player types in the dialogue box or holds to talk,
-//! the shared display shows a loader bubble on that player's hero.
+//! The phone's speech-intent signal: while a player types in the dialogue box or talks, the
+//! shared display shows a loader bubble on that player's hero.
 //!
 //! Only an ephemeral state leaves the phone (typing, speaking, submitted, stopped) through the
 //! generated `DialogueService.Compose` call; the draft text and the audio never leave before
 //! submit. It is not game state: the server only keeps it in memory and expires it after about
 //! five seconds, so the phone sends on a change, refreshes while the intent lasts at most every
-//! [`REFRESH_MS`], and sends a stop when the player submits, blurs, clears or releases. Table
+//! [`REFRESH_MS`], and sends a stop when the player submits, blurs, clears or stops talking. Table
 //! talk ("About the game", "Plan only") shows no bubble. A failed send is recorded on the
 //! player's root as `data-presence="failed"`; it never blocks typing, a submit or the session.
 use super::*;
@@ -98,14 +98,14 @@ pub(super) fn signal(client: &Rc<RefCell<Client>>, requested: Intent) {
 }
 
 /// Whether the intent is still true: the draft is non-empty and focused, or the talk control is
-/// held.
+/// listening.
 fn still(client: &Rc<RefCell<Client>>, intent: Intent) -> bool {
     let state = client.borrow();
     if table_talk(&state) {
         return false;
     }
     match intent {
-        Intent::Speaking => state.dialogue.talk.is_held(),
+        Intent::Speaking => state.dialogue.talk.is_listening(),
         Intent::Typing => state.dialogue.editor().is_some_and(|editor| {
             let element: &Element = editor.as_ref();
             !editor.value().trim().is_empty()

@@ -206,13 +206,16 @@ policy. A refusal or empty reply falls back to the prepared in-character line an
 retried with reworded instructions to get around it. The setting is read once at startup. A saved
 adventure keeps the text it was generated with.
 
-### Speech input (hold to talk)
+### Speech input (tap to talk)
 
-On the phone, a "Hold to talk" button sits under the dialogue text box. The player holds it
-(pointer, touch, or Space/Enter), speaks for up to 15 seconds and releases; the server
-transcribes the clip and the words appear in the same text box. The player edits them and
-presses Send (the same path as a typed line) or Clear. Typing works throughout, and a press is
-the only thing that ever asks the browser for the microphone.
+On the phone, a "Tap to talk" button sits under the dialogue text box. The player taps it
+(pointer, touch, or Space/Enter) to start; the button reads "Listening… tap to stop" while it
+listens, for up to 15 seconds. A second tap stops it, and the server transcribes the clip and the
+words appear in the same text box. Listening also ends without a tap when the page is hidden, the
+connection drops, the text box goes away, or the player starts typing. A press that is cancelled
+or dragged off the button does nothing, and Escape cancels. The player edits the words and presses
+Send (the same path as a typed line) or Clear. Typing works throughout, and a tap is the only thing
+that ever asks the browser for the microphone.
 
 Settings (process environment; invalid values refuse startup without echoing them):
 

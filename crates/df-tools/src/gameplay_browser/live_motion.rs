@@ -51,7 +51,7 @@ enum Detail {
     /// The title card of the story's beginning or the closing card of a fight.
     Card(Box<Card>),
     Heal,
-    /// A hero typing or holding to talk: a loader on that hero.
+    /// A hero typing or talking: a loader on that hero.
     Intent {
         kind: IntentKind,
         hero: String,
@@ -227,7 +227,7 @@ fn roll_detail(
     })
 }
 
-/// The heroes the table says are typing or holding to talk (an ephemeral signal of the phones).
+/// The heroes the table says are typing or talking (an ephemeral signal of the phones).
 fn intent_marks(journey: &rpc::JourneyView) -> Vec<IntentMark<Detail>> {
     journey
         .composing
