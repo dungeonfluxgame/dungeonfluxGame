@@ -113,6 +113,8 @@ struct PreviewRequest {
     /// `&reach`: the first hero's full reach (every walkable cell within six, 30 ft) and every foe
     /// are shown as the server's reachable and target cells, as on a hero's turn.
     reach: bool,
+    /// `&grid=1`: draw the cell grid (off by default, as on the TV).
+    grid: bool,
 }
 
 fn free_camera(text: &str) -> Option<battle::CameraPose> {
@@ -165,6 +167,7 @@ fn preview_request() -> Option<PreviewRequest> {
         heroes: DEFAULT_PREVIEW_HEROES,
         enemies: DEFAULT_PREVIEW_ENEMIES,
         reach: false,
+        grid: false,
         demo: None,
         slow: None,
     };
@@ -261,6 +264,7 @@ fn preview_request() -> Option<PreviewRequest> {
             }
             "restrained" => request.restrained = true,
             "reach" => request.reach = true,
+            "grid=1" => request.grid = true,
             "statuses" => request.mode = PreviewMode::Statuses,
             "still" => request.mode = PreviewMode::Still,
             "close" => request.close = true,
@@ -640,6 +644,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             feel_off: request.feel_off,
             slow: request.slow,
             splat_lod: request.splat_lod,
+            show_grid: request.grid,
             ..StageOptions::default()
         },
     )
@@ -1756,6 +1761,8 @@ fn start_mount(
         .get_attribute("data-battle-splat-lod")
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(DEFAULT_SPLAT_LOD);
+    // `DF_GAMEPLAY_BATTLE_GRID=on` reaches the page as `data-battle-grid` (validated at startup).
+    let show_grid = host.get_attribute("data-battle-grid").as_deref() == Some("on");
     let layout = server_layout.or_else(|| chosen_layout_id(&scene, key));
     let _ = host.set_attribute(
         "data-battlefield-layout",
@@ -1783,6 +1790,7 @@ fn start_mount(
                 feel_off: false,
                 slow: None,
                 splat_lod,
+                show_grid,
             },
         )
         .await;

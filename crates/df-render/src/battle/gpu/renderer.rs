@@ -1113,6 +1113,9 @@ impl Renderer {
                         continue;
                     }
                     if obstacle.sprite == "none" {
+                        if !frame.show_grid {
+                            continue;
+                        }
                         push(
                             [at.x, at.z, half, half],
                             [0.0, 0.02, 0.05, 1.0],
@@ -1131,7 +1134,7 @@ impl Renderer {
         }
         // The grid lines themselves are the grid pass's; this is the fill of highlighted tiles and
         // the hatch of difficult ground.
-        for cell in grid.walkable_cells() {
+        for cell in grid.walkable_cells().filter(|_| frame.show_grid) {
             let at = grid.cell_centre(cell);
             let shape = [at.x, at.z, half, half];
             match highlighted(cell) {
@@ -1179,14 +1182,14 @@ impl Renderer {
                     [8.0, 0.0, 0.0],
                 );
             }
-            if figure.statuses.contains(Status::Marked) {
+            if figure.statuses.contains(Status::Marked) && frame.show_grid {
                 push(
                     [figure.position.x, figure.position.z, half * 1.2, half * 1.2],
                     [1.0, 0.55, 0.25, 1.0],
                     [9.0, 0.0, 0.0],
                 );
             }
-            if figure.statuses.contains(Status::Concentrating) {
+            if figure.statuses.contains(Status::Concentrating) && frame.show_grid {
                 push(
                     [figure.position.x, figure.position.z, 0.8, 0.8],
                     [0.65, 0.85, 1.0, 1.0],
@@ -1194,6 +1197,7 @@ impl Renderer {
                 );
             }
             if let Some(pip) = figure.cover
+                && frame.show_grid
                 && let Some(cell) = grid.cell_at(figure.position)
             {
                 let at = grid.cell_centre(cell);
@@ -1217,7 +1221,7 @@ impl Renderer {
                 );
             }
         }
-        for figure in &frame.figures {
+        for figure in frame.figures.iter().filter(|f| frame.show_grid || f.active) {
             let colour = match figure.side {
                 Side::Hero => [0.5, 0.86, 1.0, 1.0],
                 Side::Enemy => [1.0, 0.34, 0.28, 1.0],
@@ -1629,10 +1633,12 @@ impl Renderer {
         // The grid: where the scan is not in front of it, then dimmed where it is.
         pass.set_bind_group(0, &self.frame_group);
         pass.set_bind_group(1, &self.grid_group);
-        pass.set_pipeline(&self.pipelines.grid_front);
-        pass.draw(6, 1, 0, 0);
-        pass.set_pipeline(&self.pipelines.grid_behind);
-        pass.draw(6, 1, 0, 1);
+        if frame.show_grid {
+            pass.set_pipeline(&self.pipelines.grid_front);
+            pass.draw(6, 1, 0, 0);
+            pass.set_pipeline(&self.pipelines.grid_behind);
+            pass.draw(6, 1, 0, 1);
+        }
         if decal_count > 0 {
             pass.set_pipeline(&self.pipelines.decal);
             pass.set_bind_group(0, &self.frame_group);

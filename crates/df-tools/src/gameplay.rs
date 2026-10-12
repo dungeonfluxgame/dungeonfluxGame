@@ -329,6 +329,8 @@ struct PageState {
     battle_fps: u32,
     /// `DF_GAMEPLAY_SPLAT_LOD`: the tier of a streamed scan the battlefield draws as its finest.
     splat_lod: u32,
+    /// `DF_GAMEPLAY_BATTLE_GRID`: whether the TV draws the cell grid (off by default).
+    battle_grid: bool,
 }
 async fn socket(
     State(state): State<PageState>,
@@ -444,6 +446,7 @@ async fn both(State(state): State<PageState>) -> Html<String> {
         state.battle_scene.as_deref(),
         state.battle_fps,
         state.splat_lod,
+        state.battle_grid,
     )
 }
 async fn player() -> Html<String> {
@@ -453,6 +456,7 @@ async fn player() -> Html<String> {
         None,
         df_render::battle::BattleFps::DEFAULT.hz(),
         0,
+        false,
     )
 }
 async fn display(State(state): State<PageState>) -> Html<String> {
@@ -462,6 +466,7 @@ async fn display(State(state): State<PageState>) -> Html<String> {
         state.battle_scene.as_deref(),
         state.battle_fps,
         state.splat_lod,
+        state.battle_grid,
     )
 }
 fn page(
@@ -470,6 +475,7 @@ fn page(
     battle_scene: Option<&str>,
     battle_fps: u32,
     splat_lod: u32,
+    battle_grid: bool,
 ) -> Html<String> {
     // The browser waits a little longer than the server for any one request; both come from the
     // same setting (see `timing`).
@@ -480,7 +486,7 @@ fn page(
             journey::ROOM_CODE
         )
     } else {
-        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\" data-request-timeout-ms=\"{wait}\" data-battle-fps=\"{battle_fps}\" data-battle-splat-lod=\"{splat_lod}\"{}><div class=\"view\"></div></section>",hex(&credential),battle_scene.map(|scene|format!(" data-battle-scene=\"{scene}\"")).unwrap_or_default())).unwrap_or_default()
+        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\" data-request-timeout-ms=\"{wait}\" data-battle-fps=\"{battle_fps}\" data-battle-splat-lod=\"{splat_lod}\"{}{}><div class=\"view\"></div></section>",hex(&credential),battle_scene.map(|scene|format!(" data-battle-scene=\"{scene}\"")).unwrap_or_default(),if battle_grid{" data-battle-grid=\"on\""}else{""})).unwrap_or_default()
     };
     Html(HTML.replace("__ROOTS__", &roots).replace(
         "__LAYOUT__",
@@ -572,6 +578,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     journey::tactical::force_scene(battle_scene.as_deref()).map_err(std::io::Error::other)?;
     let battle_fps = startup_configuration::battle_fps(std::env::var("DF_GAMEPLAY_BATTLE_FPS"))?;
     let splat_lod = startup_configuration::splat_lod(std::env::var("DF_GAMEPLAY_SPLAT_LOD"))?;
+    let battle_grid = startup_configuration::battle_grid(std::env::var("DF_GAMEPLAY_BATTLE_GRID"))?;
     let choice_hints_hidden = if interactive {
         startup_configuration::choice_hints_hidden(std::env::var("DF_GAMEPLAY_CHOICE_HINTS"))?
     } else {
@@ -1410,6 +1417,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         battle_scene: battle_scene.map(Arc::from),
         battle_fps,
         splat_lod,
+        battle_grid,
     };
     let router = Router::new()
         .route("/gameplay", get(both))
@@ -1741,14 +1749,17 @@ mod battle_scene_page_tests {
     #[test]
     fn the_display_page_names_the_forced_battle_scene_and_the_player_page_never_does() {
         let credential = Some([7u8; 32]);
-        let forced = page(false, credential, Some("scan-village"), 24, 2).0;
+        let forced = page(false, credential, Some("scan-village"), 24, 2, true).0;
+        assert!(forced.contains("data-battle-grid=\"on\""));
         assert!(forced.contains("data-battle-scene=\"scan-village\""));
         assert!(forced.contains("data-battle-fps=\"24\""));
         assert!(forced.contains("data-battle-splat-lod=\"2\""));
-        let default = page(false, credential, None, 30, 1).0;
+        let default = page(false, credential, None, 30, 1, false).0;
+        assert!(!default.contains("data-battle-grid"));
         assert!(!default.contains("data-battle-scene"));
         assert!(default.contains("data-battle-fps=\"30\""));
-        let player = page(true, None, Some("scan-village"), 24, 1).0;
+        let player = page(true, None, Some("scan-village"), 24, 1, true).0;
+        assert!(!player.contains("data-battle-grid"));
         assert!(!player.contains("data-battle-scene"));
         assert!(!player.contains("data-battle-fps"));
         assert!(!player.contains("data-battle-splat-lod"));

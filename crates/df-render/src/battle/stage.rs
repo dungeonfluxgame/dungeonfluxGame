@@ -306,6 +306,9 @@ pub struct FrameView<'a> {
     pub clock_s: f32,
     /// The restrained content rating: no blood in the effects.
     pub restrained: bool,
+    /// Draw the cell grid, the reachable region and the target cells (a development view; the
+    /// table reads the fight from rings, the figures' paths and their shadows).
+    pub show_grid: bool,
 }
 
 pub struct Stage {
@@ -352,6 +355,7 @@ pub struct Stage {
     last_framing: Option<(TokenId, Option<TokenId>)>,
     /// The resting wide shot the camera was last sent to, while it is the shot being held.
     rest_pose: Option<CameraPose>,
+    show_grid: bool,
     /// Something the resting shot depends on changed (figures, cells, a beat ended): refit it once
     /// the stage is idle.
     rest_dirty: bool,
@@ -411,6 +415,7 @@ impl Stage {
             last_angles: None,
             last_framing: None,
             rest_pose: None,
+            show_grid: false,
             rest_dirty: false,
             was_idle: true,
         }
@@ -641,6 +646,11 @@ impl Stage {
             self.rest_pose = Some(pose);
             self.rig.cut_to(pose);
         }
+    }
+
+    /// Whether the battlefield draws the cell grid (off unless asked for).
+    pub fn set_show_grid(&mut self, show: bool) {
+        self.show_grid = show;
     }
 
     /// Mutes blood in the figure and tile effects (the restrained content rating).
@@ -1860,6 +1870,7 @@ impl Stage {
         }
         let rig_shake = self.rig.shake_offset_px();
         FrameView {
+            show_grid: self.show_grid,
             camera,
             roll_deg,
             feel: view,
