@@ -1013,6 +1013,22 @@ impl Stage {
                         self.feel.focus_pull();
                     }
                     self.last_framing = framing;
+                    // A move that would lose the fighters part of the way is a cut, not a pan.
+                    let mut cut = cut;
+                    if let CameraFocus::Action { actor, target, .. } = &command.focus
+                        && !cut
+                    {
+                        let bodies: Vec<Body> = std::iter::once(actor)
+                            .chain(target.as_ref())
+                            .filter_map(|id| self.body_of(id))
+                            .collect();
+                        cut = !framing::pan_keeps_in_view(
+                            &self.rig.pose(),
+                            &pose,
+                            &bodies,
+                            framing::FRAMED_ASPECT,
+                        );
+                    }
                     if cut {
                         self.rig.cut_to(pose);
                     } else {
@@ -1965,10 +1981,14 @@ mod tests {
         let mut stage = stage(false);
         stage.stage(killing_blow()).unwrap();
         run(&mut stage, 20.0);
+        // The finishing shot has the victory lens and pitch, and holds the fallen foe and the
+        // attacker both in frame, off the line between them.
         let victory = stage.scene().cameras[&ShotName::Victory];
         let pose = stage.camera_pose();
-        assert!((pose.yaw_deg - victory.yaw_deg).abs() < 0.01);
-        assert!(pose.distance < victory.distance, "pushed in");
+        assert!((pose.pitch_deg - victory.pitch_deg).abs() < 0.01);
+        assert!((pose.fov_deg - victory.fov_deg).abs() < 0.01);
+        assert!(projected_inside_safe(&stage, "hero"));
+        assert!(projected_inside_safe(&stage, "enemy"));
     }
 
     #[test]
@@ -3151,5 +3171,109 @@ mod tests {
             }
         }
         assert!(shown_at.is_some(), "and then it shows");
+    }
+
+    /// Tonight's village fight: Brakka, the weasel (a third of a hero's height) on his line along
+    /// z, and Sylvie nearby. Brakka kills the weasel, then the weasel hits Brakka.
+    fn weasel_fight() -> Stage {
+        let scene = load_embedded("scan-village").unwrap().unwrap();
+        let mut stage = Stage::new(scene, false);
+        let mut weasel = token("weasel", Side::Enemy, Cell::new(3, 1), 4);
+        weasel.height_m = 0.6;
+        stage.set_tokens(vec![
+            token("brakka", Side::Hero, Cell::new(3, 4), 12),
+            weasel,
+            token("sylvie", Side::Hero, Cell::new(4, 4), 12),
+        ]);
+        for _ in 0..30 {
+            frame_step(&mut stage);
+        }
+        stage
+    }
+
+    fn weasel_hidden_by_brakka(stage: &Stage) -> bool {
+        let pose = stage.rig.pose();
+        let (brakka, weasel) = (
+            body_of_figure(stage, "brakka"),
+            body_of_figure(stage, "weasel"),
+        );
+        let (Some(a), Some(b)) = (
+            framing::project_body(&pose, framing::FRAMED_ASPECT, &brakka),
+            framing::project_body(&pose, framing::FRAMED_ASPECT, &weasel),
+        ) else {
+            return true;
+        };
+        let width = (a.2.min(b.2) - a.0.max(b.0)).max(0.0);
+        let height = (a.3.min(b.3) - a.1.max(b.1)).max(0.0);
+        let smaller = ((a.2 - a.0) * (a.3 - a.1)).min((b.2 - b.0) * (b.3 - b.1));
+        width * height / smaller > framing::MAX_PAIR_COVER
+    }
+
+    /// The killing strike and the finishing-blow shot are off the line between the fighters: the
+    /// attacker never covers the foe, and the foe is on screen for the whole fall.
+    #[test]
+    fn a_killing_strike_on_a_small_foe_keeps_it_visible_through_the_fall_and_the_finishing_shot() {
+        let mut stage = weasel_fight();
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("brakka"),
+                target: TokenId::new("weasel"),
+                result: AttackResult::Hit {
+                    damage: 13,
+                    critical: false,
+                    downed: true,
+                },
+                target_hit_points_after: Some(0),
+            })
+            .unwrap();
+        let mut frames = 0;
+        while stage.is_busy() && frames < 1200 {
+            frame_step(&mut stage);
+            frames += 1;
+            let pose = stage.rig.pose();
+            let weasel = body_of_figure(&stage, "weasel");
+            let centre = framing::project_body(&pose, framing::FRAMED_ASPECT, &weasel)
+                .map(|(l, t, r, b)| ((l + r) * 0.5, (t + b) * 0.5));
+            let Some((x, y)) = centre else {
+                panic!("frame {frames}: the foe is behind the camera");
+            };
+            assert!(
+                (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y),
+                "frame {frames}: the foe is off the screen at {x:.2},{y:.2}"
+            );
+            if !stage.rig.is_panning() {
+                assert!(
+                    !weasel_hidden_by_brakka(&stage),
+                    "frame {frames}: the attacker's body covers the foe"
+                );
+            }
+        }
+        assert!(frames < 1200);
+    }
+
+    /// The weasel's hit on Brakka: from the first moment the weasel (a small attacker) is on
+    /// the screen and so is the target; there is no empty lawn.
+    #[test]
+    fn a_small_attackers_hit_is_framed_from_the_first_frame() {
+        let mut stage = weasel_fight();
+        stage.stage(ordinary_hit("weasel", "brakka", 3)).unwrap();
+        let mut frames = 0;
+        while stage.is_busy() && frames < 900 {
+            frame_step(&mut stage);
+            frames += 1;
+            let pose = stage.rig.pose();
+            for id in ["weasel", "brakka"] {
+                let body = body_of_figure(&stage, id);
+                let centre = framing::project_body(&pose, framing::FRAMED_ASPECT, &body)
+                    .map(|(l, t, r, b)| ((l + r) * 0.5, (t + b) * 0.5));
+                let Some((x, y)) = centre else {
+                    panic!("frame {frames}: {id} is behind the camera");
+                };
+                assert!(
+                    (0.02..=0.98).contains(&x) && (0.02..=0.98).contains(&y),
+                    "frame {frames}: {id} is off the screen at {x:.2},{y:.2}"
+                );
+            }
+        }
     }
 }

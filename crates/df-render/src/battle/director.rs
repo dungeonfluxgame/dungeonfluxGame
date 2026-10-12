@@ -897,13 +897,15 @@ fn strike(
                             enemy: target.id.clone(),
                         },
                     );
+                    // The foe's fall is the subject: both are framed, off the line between them, so
+                    // the falling foe is on screen for its whole duration.
                     builder.at(
                         cue,
                         Step::Camera {
                             command: camera(
                                 ShotName::Victory,
-                                CameraFocus::Token(attacker.id.clone()),
-                                0.7,
+                                action_focus(&attacker.id, Some(&target.id), None),
+                                0.92,
                             ),
                             pan: FINISHING_PUSH,
                         },
@@ -915,7 +917,11 @@ fn strike(
                 builder.at(
                     fall,
                     Step::Camera {
-                        command: camera(ShotName::Ko, CameraFocus::Token(target.id.clone()), 1.0),
+                        command: camera(
+                            ShotName::Ko,
+                            action_focus(&attacker.id, Some(&target.id), None),
+                            1.0,
+                        ),
                         pan: SETTLE_PAN,
                     },
                 );

@@ -529,6 +529,15 @@ async fn run_preview(host: Element, request: PreviewRequest) {
     stage.set_sound_sink(Rc::new(|event| {
         live_sfx::play_event(&event, content_rating());
     }));
+    // A harness reads when each blow lands, from the same impact event the HUD work subscribes to.
+    let impact_host = host.clone();
+    stage.set_impact_sink(Rc::new(move |event| {
+        mark(
+            &impact_host,
+            "data-battlefield-impact",
+            &format!("{:?}:{:.2}", event.class, event.intensity),
+        );
+    }));
     PREVIEW.with(|slot| *slot.borrow_mut() = Some(stage));
     with_preview(|stage| {
         stage.set_restrained(
@@ -598,6 +607,46 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             // One attack of the asked kind on a camera that has idled a moment, then hold.
             with_preview(|stage| stage.establish());
             TimeoutFuture::new(2500).await;
+            if kind == "selfheal" {
+                // A self action (Second Wind): the actor alone, clear of everyone else.
+                with_preview(|stage| {
+                    let _ = stage.stage(Beat::Heal {
+                        source: TokenId::new("tobin"),
+                        target: TokenId::new("tobin"),
+                        amount: 5,
+                        target_hit_points_after: Some(12),
+                    });
+                });
+                mark(&host, "data-battlefield-demo", &kind);
+                loop {
+                    TimeoutFuture::new(1000).await;
+                    if PREVIEW.with(|slot| slot.borrow().is_none()) {
+                        return;
+                    }
+                }
+            }
+            if kind == "enemyhit" {
+                // The enemy's turn: the goblin hits the hero.
+                with_preview(|stage| {
+                    let _ = stage.stage(Beat::Attack {
+                        attacker: TokenId::new("goblin"),
+                        target: TokenId::new("tobin"),
+                        result: AttackResult::Hit {
+                            damage: 3,
+                            critical: false,
+                            downed: false,
+                        },
+                        target_hit_points_after: Some(9),
+                    });
+                });
+                mark(&host, "data-battlefield-demo", &kind);
+                loop {
+                    TimeoutFuture::new(1000).await;
+                    if PREVIEW.with(|slot| slot.borrow().is_none()) {
+                        return;
+                    }
+                }
+            }
             let (result, after) = match kind.as_str() {
                 "graze" => (
                     AttackResult::Hit {

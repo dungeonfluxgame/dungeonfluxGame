@@ -131,6 +131,56 @@ fn boxes_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
     a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
 }
 
+/// The share of the smaller box that the other covers.
+fn covered_share(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> f32 {
+    let width = (a.2.min(b.2) - a.0.max(b.0)).max(0.0);
+    let height = (a.3.min(b.3) - a.1.max(b.1)).max(0.0);
+    let smaller = ((a.2 - a.0) * (a.3 - a.1)).min((b.2 - b.0) * (b.3 - b.1));
+    if smaller <= 0.0 {
+        0.0
+    } else {
+        width * height / smaller
+    }
+}
+
+/// How much of the farther fighter the nearer one may hide before the angle is rejected: the two
+/// silhouettes have to be separate on the screen (a camera along the line of action puts the
+/// attacker's body over the target).
+pub const MAX_PAIR_COVER: f32 = 0.3;
+
+/// Whether the two fighters hide each other too much from `pose`.
+fn pair_hidden(pose: &CameraPose, aspect: f32, a: &Body, b: &Body) -> bool {
+    if (a.feet - b.feet).length() < 1e-3 {
+        return false;
+    }
+    let view = View::new(pose, aspect);
+    let (Some(first), Some(second)) = (view.project(a), view.project(b)) else {
+        return true;
+    };
+    covered_share(first, second) > MAX_PAIR_COVER
+}
+
+/// Whether panning from `from` to `to` keeps every body on the screen the whole way (the middle of
+/// the move is where an orbit around a far subject loses it). A move that does not is a cut.
+pub fn pan_keeps_in_view(from: &CameraPose, to: &CameraPose, bodies: &[Body], aspect: f32) -> bool {
+    for step in 1..=4 {
+        let t = super::math::ease_in_out(step as f32 / 5.0);
+        let view = View::new(&from.lerp(to, t), aspect);
+        for body in bodies {
+            let on_screen = view
+                .project(body)
+                .is_some_and(|(left, top, right, bottom)| {
+                    let (x, y) = ((left + right) * 0.5, (top + bottom) * 0.5);
+                    (0.03..=0.97).contains(&x) && (0.03..=0.97).contains(&y)
+                });
+            if !on_screen {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// How many bystanders stand in front of an involved fighter on the screen (overlapping its box
 /// and nearer the camera).
 fn blocked_by_bystanders(
@@ -234,11 +284,14 @@ pub fn action_shot(
     let mut chosen: Option<(usize, f32, CameraPose)> = None;
     for (swing, _) in &candidates {
         let pose = fit(*swing);
-        let blocked = if bystanders.is_empty() {
+        let mut blocked = if bystanders.is_empty() {
             0
         } else {
             blocked_by_bystanders(&pose, aspect, &involved, bystanders)
         };
+        if has_line && pair_hidden(&pose, aspect, actor, &other) {
+            blocked += 1;
+        }
         if chosen.is_none_or(|(least, _, _)| blocked < least) {
             chosen = Some((blocked, *swing, pose));
         }
@@ -658,5 +711,76 @@ mod tests {
             );
             assert!(in_safe_area(&shot.pose, FRAMED_ASPECT, &actor), "yaw {yaw}");
         }
+    }
+
+    /// Tonight's defect: attacker and target stand on one line (here along z) and the camera sat
+    /// on that line, so the attacker's body covered a foe a third of his height. The chosen angle
+    /// is off the line and the two silhouettes are separate.
+    #[test]
+    fn a_small_foe_on_the_attackers_line_is_not_covered_by_him() {
+        let brakka = body(-0.7, 2.1);
+        let weasel = Body {
+            feet: Vec3::new(-0.7, 0.0, -2.1),
+            height_m: 0.6,
+        };
+        // Camera on the line, behind the weasel looking at Brakka: the worst case.
+        for current_yaw in [180.0, 0.0, 90.0, -90.0] {
+            let current = CameraPose {
+                yaw_deg: current_yaw,
+                ..style()
+            };
+            let shot = action_shot(
+                &style(),
+                &current,
+                &brakka,
+                Some(&weasel),
+                &[],
+                &[],
+                FRAMED_ASPECT,
+            );
+            assert!(
+                in_safe_area(&shot.pose, FRAMED_ASPECT, &brakka),
+                "{current_yaw}"
+            );
+            assert!(
+                in_safe_area(&shot.pose, FRAMED_ASPECT, &weasel),
+                "{current_yaw}"
+            );
+            let a = project_body(&shot.pose, FRAMED_ASPECT, &brakka).unwrap();
+            let b = project_body(&shot.pose, FRAMED_ASPECT, &weasel).unwrap();
+            assert!(
+                covered_share(a, b) <= MAX_PAIR_COVER + 1e-4,
+                "{current_yaw}: {shot:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pan_that_would_lose_the_fighters_midway_is_reported() {
+        let near = CameraPose {
+            target: Vec3::new(0.0, 1.0, 0.0),
+            distance: 10.0,
+            yaw_deg: 0.0,
+            pitch_deg: 20.0,
+            fov_deg: 38.0,
+        };
+        let far = CameraPose {
+            target: Vec3::new(40.0, 1.0, 0.0),
+            ..near
+        };
+        // From a shot on the origin to one 40 m aside, the middle looks at empty ground.
+        assert!(!pan_keeps_in_view(
+            &near,
+            &far,
+            &[body(0.0, 0.0), body(40.0, 0.0)],
+            FRAMED_ASPECT
+        ));
+        // A pan that stays on the fighters is a pan.
+        assert!(pan_keeps_in_view(
+            &near,
+            &near,
+            &[body(0.0, 0.0)],
+            FRAMED_ASPECT
+        ));
     }
 }

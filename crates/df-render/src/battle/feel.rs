@@ -241,8 +241,8 @@ pub fn motion_blur_px(speed_deg_s: f32) -> f32 {
 /// and small; peak is quicker and tighter.
 pub const SWAY_CALM_HZ: f32 = 0.09;
 pub const SWAY_PEAK_HZ: f32 = 0.42;
-pub const SWAY_CALM_DEG: f32 = 0.14;
-pub const SWAY_PEAK_DEG: f32 = 0.2;
+pub const SWAY_CALM_DEG: f32 = 0.3;
+pub const SWAY_PEAK_DEG: f32 = 0.42;
 /// The slow orbit drift on a wide shot: how far it wanders (degrees of yaw) and how slowly.
 pub const ORBIT_DRIFT_DEG: f32 = 2.2;
 pub const ORBIT_DRIFT_HZ: f32 = 0.018;
@@ -681,7 +681,7 @@ mod tests {
         let (peak_width, peak_turns) = swing(1000);
         assert!(calm_turns < peak_turns, "{calm_turns} vs {peak_turns}");
         assert!(peak_width >= calm_width * 0.9);
-        assert!(calm_width > 0.05 && peak_width < 0.5, "small either way");
+        assert!(calm_width > 0.1 && peak_width < 0.8, "small either way");
         // Tempo beyond 1000 behaves as 1000.
         assert_eq!(sway(3.0, 5000, false), sway(3.0, 1000, false));
     }
