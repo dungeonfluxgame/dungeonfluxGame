@@ -99,6 +99,39 @@ struct Runtime {
 pub const HP_HOLD_SECONDS: f32 = 8.0;
 /// How long the roll panel stays up.
 pub const ROLL_CARD_SECONDS: f32 = 3.4;
+/// The celebration (or the defeat) after the blow that decides a fight, in seconds from that blow
+/// landing: the last foe falls, the finishing card, then a held wide shot of the party with the
+/// sting and the heroes reacting. The stage is busy for all of it, so nothing that waits on the
+/// stage (the victory card, leaving the battlefield) starts before it is over.
+pub const CELEBRATION_SECONDS: f32 = 6.0;
+/// The wide shot of the party is held at least this long, however long the blow itself took.
+const PARTY_HOLD_MIN_S: f32 = 1.6;
+/// The sting sounds this long after the blow lands.
+const STING_AT_S: f32 = 0.9;
+/// The camera's pan to the party, in seconds.
+const PARTY_PAN_S: f32 = 1.1;
+/// Gap between one hero's reaction and the next, in seconds.
+const REACT_STAGGER_S: f32 = 0.3;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Ending {
+    Victory,
+    Defeat,
+}
+
+/// The held beat after a deciding blow.
+struct Celebration {
+    ending: Ending,
+    /// Seconds since the blow landed.
+    since_s: f32,
+    /// Seconds still to hold.
+    left_s: f32,
+    sting_played: bool,
+    /// Seconds since the camera went to the party, once it has.
+    party_for_s: Option<f32>,
+    /// How many figures have reacted so far.
+    reacted: usize,
+}
 
 struct Playback {
     timeline: Timeline,
@@ -265,6 +298,7 @@ pub struct Stage {
     highlight: Option<Highlight>,
     tactical_highlights: Vec<Highlight>,
     speech: Option<Speech>,
+    celebration: Option<Celebration>,
     /// The attack names waiting for their blow's result: who struck, and with what.
     attack_labels: Vec<(TokenId, String)>,
     hud: HudState,
@@ -323,6 +357,7 @@ impl Stage {
             highlight: None,
             tactical_highlights: Vec::new(),
             speech: None,
+            celebration: None,
             attack_labels: Vec::new(),
             hud: HudState::default(),
             floats: Vec::new(),
@@ -584,7 +619,10 @@ impl Stage {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.playing.is_some() || !self.queue.is_empty() || self.feel.is_active()
+        self.playing.is_some()
+            || !self.queue.is_empty()
+            || self.feel.is_active()
+            || self.celebration.is_some()
     }
 
     pub fn tokens(&self) -> impl Iterator<Item = &Token> {
@@ -808,6 +846,7 @@ impl Stage {
             self.start_next();
         }
         self.advance_playback(sim);
+        self.advance_celebration(real_dt);
         let mut footfalls = Vec::new();
         for runtime in &mut self.tokens {
             for _ in 0..advance_runtime(runtime, dt) {
@@ -1409,10 +1448,162 @@ impl Stage {
         });
     }
 
+    /// Whether `runtime` is down (or going down this moment).
+    fn is_down(runtime: &Runtime, falling: &TokenId) -> bool {
+        runtime.token.id == *falling
+            || runtime.downed
+            || matches!(&runtime.anim, Some(active) if matches!(active.anim, Anim::Fall))
+            || runtime.shown_hp.is_some_and(|hp| hp.current == 0)
+    }
+
+    /// A figure starts to fall: if that leaves no one standing on its side, the fight is decided
+    /// and the held beat begins from this blow.
+    fn note_fall(&mut self, id: &TokenId) {
+        if self.celebration.is_some() {
+            return;
+        }
+        let Some(side) = self
+            .token_index(id)
+            .map(|index| self.tokens[index].token.side)
+        else {
+            return;
+        };
+        let everyone_down = self
+            .tokens
+            .iter()
+            .filter(|runtime| runtime.token.side == side)
+            .all(|runtime| Self::is_down(runtime, id));
+        if !everyone_down {
+            return;
+        }
+        let ending = if side == Side::Enemy {
+            Ending::Victory
+        } else {
+            Ending::Defeat
+        };
+        self.celebration = Some(Celebration {
+            ending,
+            since_s: 0.0,
+            left_s: CELEBRATION_SECONDS,
+            sting_played: false,
+            party_for_s: None,
+            reacted: 0,
+        });
+    }
+
+    /// The camera, the sting and the reactions of the held beat; ends it when its time is up.
+    fn advance_celebration(&mut self, real_dt: f32) {
+        let Some(mut beat) = self.celebration.take() else {
+            return;
+        };
+        beat.since_s += real_dt;
+        beat.left_s -= real_dt;
+        let ending = beat.ending;
+        if !beat.sting_played && beat.since_s >= STING_AT_S {
+            beat.sting_played = true;
+            let kind = match ending {
+                Ending::Victory => SoundKind::VictorySting,
+                Ending::Defeat => SoundKind::DefeatSting,
+            };
+            let heard_by = self
+                .tokens
+                .iter()
+                .find(|runtime| {
+                    runtime.token.side
+                        == if ending == Ending::Victory {
+                            Side::Hero
+                        } else {
+                            Side::Enemy
+                        }
+                })
+                .map(|runtime| runtime.token.id.clone());
+            if let Some(token) = heard_by {
+                self.emit(kind, &token);
+            }
+        }
+        // The blow's own timeline (the fall and the finishing card) plays out first; then the
+        // camera goes to the party and holds there.
+        let timeline_over = self.playing.is_none() && self.queue.is_empty();
+        if timeline_over && beat.party_for_s.is_none() {
+            beat.party_for_s = Some(0.0);
+            beat.left_s = beat.left_s.max(PARTY_HOLD_MIN_S);
+            if let Some(pose) = self.party_pose(ending) {
+                self.rig.pan_to(pose, Duration::from_secs_f32(PARTY_PAN_S));
+            }
+        } else if let Some(held) = &mut beat.party_for_s {
+            *held += real_dt;
+        }
+        if let Some(held) = beat.party_for_s {
+            // The figures react one after another: the heroes raise their weapons in a victory,
+            // the enemies snarl over a defeat.
+            let side = if ending == Ending::Victory {
+                Side::Hero
+            } else {
+                Side::Enemy
+            };
+            let actors: Vec<TokenId> = self
+                .tokens
+                .iter()
+                .filter(|runtime| runtime.token.side == side && !runtime.downed)
+                .map(|runtime| runtime.token.id.clone())
+                .collect();
+            while beat.reacted < actors.len()
+                && held >= beat.reacted as f32 * REACT_STAGGER_S + 0.25
+            {
+                let style = if ending == Ending::Victory {
+                    ReadyStyle::Brandish
+                } else {
+                    ReadyStyle::Snarl
+                };
+                self.start_anim(&actors[beat.reacted], Anim::Ready { style });
+                beat.reacted += 1;
+            }
+        }
+        if beat.left_s > 0.0 {
+            self.celebration = Some(beat);
+        }
+    }
+
+    /// The wide shot of the party on the field: every hero in frame (the fallen ones too, in a
+    /// defeat), from the side the camera already holds.
+    fn party_pose(&self, ending: Ending) -> Option<CameraPose> {
+        let base = *self.scene.cameras.get(&ShotName::CombatEst)?;
+        let party: Vec<Body> = self
+            .tokens
+            .iter()
+            .filter(|runtime| runtime.token.side == Side::Hero)
+            .map(|runtime| Body {
+                feet: runtime.position,
+                height_m: runtime.token.clamped_height(),
+            })
+            .collect();
+        let (first, rest) = party.split_first()?;
+        let home_yaw = self
+            .scene
+            .cameras
+            .get(&ShotName::Tactical)
+            .map(|pose| pose.yaw_deg);
+        let _ = ending;
+        let shot = framing::action_shot_from(
+            &base,
+            &self.rig.pose(),
+            first,
+            None,
+            rest,
+            &[],
+            framing::FRAMED_ASPECT,
+            home_yaw,
+        );
+        Some(shot.pose)
+    }
+
     fn start_anim(&mut self, id: &TokenId, anim: Anim) {
         let Some(index) = self.token_index(id) else {
             return;
         };
+        if matches!(anim, Anim::Fall) {
+            self.note_fall(id);
+        }
         let here = self.tokens[index].position;
         let other = match &anim {
             Anim::Lunge { toward: other }
@@ -2063,18 +2254,178 @@ mod tests {
     }
 
     #[test]
-    fn the_camera_ends_on_the_victory_shot_after_the_finishing_blow() {
+    fn the_finishing_shot_has_the_victory_lens_then_the_camera_holds_the_party_wide() {
         let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
-        run(&mut stage, 20.0);
-        // The finishing shot has the victory lens and pitch, and holds the fallen foe and the
-        // attacker both in frame, off the line between them.
-        let victory = stage.scene().cameras[&ShotName::Victory];
-        let pose = stage.camera_pose();
-        assert!((pose.pitch_deg - victory.pitch_deg).abs() < 0.01);
-        assert!((pose.fov_deg - victory.fov_deg).abs() < 0.01);
+        // While the finishing card is up: the victory lens and pitch, the fallen foe and the
+        // attacker both in frame.
+        let mut on_victory_shot = false;
+        let mut ended = false;
+        for _ in 0..1200 {
+            stage.update(Duration::from_millis(20));
+            let victory = stage.scene().cameras[&ShotName::Victory];
+            let pose = stage.camera_pose();
+            if stage.hud().finishing_blow.is_some()
+                && !stage.rig.is_panning()
+                && (pose.pitch_deg - victory.pitch_deg).abs() < 0.01
+                && (pose.fov_deg - victory.fov_deg).abs() < 0.01
+                && projected_inside_safe(&stage, "hero")
+                && projected_inside_safe(&stage, "enemy")
+            {
+                on_victory_shot = true;
+            }
+            if !stage.is_busy() {
+                ended = true;
+                break;
+            }
+        }
+        assert!(on_victory_shot && ended);
+        // The beat ends on the party held wide: every hero in frame.
         assert!(projected_inside_safe(&stage, "hero"));
-        assert!(projected_inside_safe(&stage, "enemy"));
+        assert!(projected_inside_safe(&stage, "ally"));
+    }
+
+    /// The deciding blow is followed by a held beat of CELEBRATION_SECONDS from the blow
+    /// landing, the stage is busy for all of it, and the victory sting and the heroes' reactions
+    /// happen inside it.
+    #[test]
+    fn the_last_foe_down_holds_a_six_second_victory_beat_with_the_stage_busy_throughout() {
+        assert_eq!(CELEBRATION_SECONDS, 6.0);
+        let mut stage = stage();
+        stage.stage(killing_blow()).unwrap();
+        let mut impact_at = None;
+        let mut idle_at = None;
+        let mut sting_at = None;
+        let mut elapsed = 0.0f32;
+        for _ in 0..2000 {
+            stage.update(Duration::from_millis(20));
+            elapsed += 0.02;
+            if impact_at.is_none() && stage.take_impacts().into_iter().next().is_some() {
+                impact_at = Some(elapsed);
+            }
+            for event in stage.take_sounds() {
+                if event.kind == SoundKind::VictorySting && sting_at.is_none() {
+                    sting_at = Some(elapsed);
+                }
+            }
+            if impact_at.is_some() && !stage.is_busy() && idle_at.is_none() {
+                idle_at = Some(elapsed);
+            }
+            if idle_at.is_some() {
+                break;
+            }
+        }
+        let (impact, idle) = (
+            impact_at.expect("a blow landed"),
+            idle_at.expect("the beat ended"),
+        );
+        assert!(
+            idle - impact >= CELEBRATION_SECONDS - 0.5,
+            "busy {} s after the blow",
+            idle - impact
+        );
+        assert!(
+            idle - impact < CELEBRATION_SECONDS + 2.5,
+            "{}",
+            idle - impact
+        );
+        let sting = sting_at.expect("the victory sting played");
+        assert!(
+            sting > impact && sting < idle,
+            "sting {sting} within {impact}..{idle}"
+        );
+    }
+
+    /// The stage never reports idle between the blow and the end of the beat, so whatever waits
+    /// on it (the victory card, leaving the battlefield) cannot start early.
+    #[test]
+    fn the_stage_is_never_idle_between_the_deciding_blow_and_the_end_of_the_beat() {
+        let mut stage = stage();
+        stage.stage(killing_blow()).unwrap();
+        let mut landed = false;
+        let mut gaps = 0;
+        let mut frames_after = 0;
+        for _ in 0..2000 {
+            stage.update(Duration::from_millis(20));
+            landed |= stage.take_impacts().into_iter().next().is_some();
+            if landed {
+                frames_after += 1;
+                if !stage.is_busy() {
+                    break;
+                }
+            }
+        }
+        assert!(landed);
+        assert!(frames_after as f32 * 0.02 >= CELEBRATION_SECONDS - 0.5);
+        for _ in 0..50 {
+            stage.update(Duration::from_millis(20));
+            if stage.is_busy() {
+                gaps += 1;
+            }
+        }
+        assert_eq!(gaps, 0, "idle stays idle once the beat is over");
+    }
+
+    #[test]
+    fn a_blow_that_leaves_another_foe_standing_holds_no_celebration() {
+        let mut stage = stage();
+        let mut tokens: Vec<Token> = stage.tokens().cloned().collect();
+        tokens.push(token("enemy2", Side::Enemy, Cell::new(6, 1), 5));
+        stage.set_tokens(tokens);
+        stage.stage(killing_blow()).unwrap();
+        let mut sting = false;
+        for _ in 0..1500 {
+            stage.update(Duration::from_millis(20));
+            sting |= stage
+                .take_sounds()
+                .iter()
+                .any(|event| event.kind == SoundKind::VictorySting);
+        }
+        assert!(!sting, "one foe is still standing");
+        assert!(!stage.is_busy());
+    }
+
+    #[test]
+    fn the_last_hero_down_holds_a_defeat_beat_of_the_same_length_with_its_own_sting() {
+        let mut stage = stage();
+        for target in ["hero", "ally"] {
+            stage
+                .stage(Beat::Attack {
+                    attacker: TokenId::new("enemy"),
+                    target: TokenId::new(target),
+                    result: AttackResult::Hit {
+                        damage: 20,
+                        critical: false,
+                        downed: true,
+                    },
+                    target_hit_points_after: Some(0),
+                })
+                .unwrap();
+        }
+        let mut sting_at = None;
+        let mut victory_sting = false;
+        let mut elapsed = 0.0f32;
+        let mut last_busy = 0.0f32;
+        for _ in 0..3000 {
+            stage.update(Duration::from_millis(20));
+            elapsed += 0.02;
+            for event in stage.take_sounds() {
+                victory_sting |= event.kind == SoundKind::VictorySting;
+                if event.kind == SoundKind::DefeatSting && sting_at.is_none() {
+                    sting_at = Some(elapsed);
+                }
+            }
+            if stage.is_busy() {
+                last_busy = elapsed;
+            }
+        }
+        let sting = sting_at.expect("the defeat sting played");
+        assert!(!victory_sting);
+        assert!(
+            last_busy - sting >= CELEBRATION_SECONDS - STING_AT_S - 0.6,
+            "held {} s after the sting",
+            last_busy - sting
+        );
     }
 
     #[test]

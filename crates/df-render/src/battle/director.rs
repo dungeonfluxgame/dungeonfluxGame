@@ -1083,6 +1083,8 @@ mod tests {
                     SoundKind::DiceLand => "snd-dice-land",
                     SoundKind::InitiativeStop => "snd-stop",
                     SoundKind::InitiativeFinal => "snd-final",
+                    SoundKind::VictorySting => "snd-victory",
+                    SoundKind::DefeatSting => "snd-defeat",
                 },
                 Step::Whip { .. } => "whip",
                 Step::Banner(Some(text)) if text.starts_with("Roll") => "banner-roll",
