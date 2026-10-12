@@ -3228,7 +3228,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 96,
@@ -3493,7 +3493,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 96,
@@ -3890,7 +3890,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 99,
@@ -4299,7 +4299,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 96,
@@ -4527,7 +4527,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 95,
@@ -4851,7 +4851,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 90,
@@ -4926,7 +4926,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 94,
@@ -5003,7 +5003,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 97,
@@ -5078,7 +5078,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 95,
@@ -5159,7 +5159,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 98,
@@ -5234,7 +5234,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 95,
@@ -5314,7 +5314,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 99,
@@ -5399,7 +5399,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 96,
@@ -5478,7 +5478,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 93,
@@ -5700,7 +5700,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 70,
@@ -5770,7 +5770,7 @@
         "out_of_scope": [],
         "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
       },
-      "status": "pending",
+      "status": "review",
       "blocking_reason": null,
       "originating_task_id": null,
       "priority": 93,
