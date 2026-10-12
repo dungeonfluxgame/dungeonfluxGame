@@ -47,9 +47,10 @@ pub struct GpuCore {
     pub context: GpuCanvasContext,
     pub format: &'static str,
     pub adapter_description: String,
+    /// The device was created with `timestamp-query`, so pass durations can be measured.
+    pub timestamps: bool,
     pub layout_frame: JsValue,
     pub layout_texture: JsValue,
-    pub layout_splat: JsValue,
     pub layout_post: JsValue,
     pub sampler_repeat: GpuSampler,
     pub sampler_clamp: GpuSampler,
@@ -96,7 +97,25 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
         .unchecked_into::<GpuAdapter>();
     let info = adapter.info();
     let adapter_description = format!("{}/{}", text(&info, "vendor"), text(&info, "architecture"));
-    let device: GpuDevice = JsFuture::from(adapter.request_device(&Descriptor::new().build()))
+    // GPU pass timing is optional: it is requested only when the adapter offers it.
+    let timestamps = property(&adapter, "features")
+        .and_then(|features| {
+            let has = property(&features, "has")?
+                .dyn_into::<js_sys::Function>()
+                .ok()?;
+            has.call1(&features, &JsValue::from_str("timestamp-query"))
+                .ok()
+        })
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let mut device_descriptor = Descriptor::new();
+    if timestamps {
+        device_descriptor = device_descriptor.with(
+            "requiredFeatures",
+            array([JsValue::from_str("timestamp-query")]),
+        );
+    }
+    let device: GpuDevice = JsFuture::from(adapter.request_device(&device_descriptor.build()))
         .await
         .map_err(|_| UnavailableReason::NoDevice)?
         .unchecked_into();
@@ -182,23 +201,6 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
             ),
         ],
     );
-    let layout_splat = bind_group_layout(
-        &device,
-        vec![
-            layout_entry(
-                0,
-                SHADER_VERTEX,
-                "buffer",
-                Descriptor::new().with("type", "read-only-storage").build(),
-            ),
-            layout_entry(
-                1,
-                SHADER_VERTEX,
-                "buffer",
-                Descriptor::new().with("type", "read-only-storage").build(),
-            ),
-        ],
-    );
     let layout_post = bind_group_layout(
         &device,
         vec![
@@ -243,9 +245,9 @@ pub async fn acquire(canvas: &HtmlCanvasElement) -> Result<GpuCore, UnavailableR
         context,
         format,
         adapter_description,
+        timestamps,
         layout_frame,
         layout_texture,
-        layout_splat,
         layout_post,
         sampler_repeat,
         sampler_clamp,

@@ -436,6 +436,11 @@ impl Stage {
     }
 
     /// Opens on the wide tactical shot and eases to the combat establishing shot.
+    /// Cuts straight to `pose` (used by the preview to look at a scene from any angle).
+    pub fn set_camera_pose(&mut self, pose: CameraPose) {
+        self.rig.cut_to(pose);
+    }
+
     pub fn establish(&mut self) {
         if let Some(wide) = self.scene.cameras.get(&ShotName::Tactical) {
             self.rig.cut_to(*wide);
@@ -1018,6 +1023,18 @@ impl Stage {
         Some((x * 0.5 + 0.5, 0.5 - y * 0.5))
     }
 
+    /// Replaces the painted ground and backdrop and drops the splat layer: the fallback when a
+    /// scan cannot be drawn.
+    pub fn replace_painted_layers(
+        &mut self,
+        ground: super::scene_file::GroundLayer,
+        backdrop: super::scene_file::BackdropLayer,
+    ) {
+        self.scene.ground = ground;
+        self.scene.backdrop = backdrop;
+        self.scene.splat = None;
+    }
+
     pub fn frame(&self) -> FrameView<'_> {
         let eye = self.rig.pose().eye();
         let mut figures: Vec<FigureView> = self
@@ -1414,6 +1431,39 @@ mod tests {
         let hero = figure(&stage, "hero");
         assert_eq!(hero.position, stage.grid().cell_centre(Cell::new(3, 4)));
         assert!(hero.lean.abs() < 0.03 && hero.alpha == 1.0);
+    }
+
+    #[test]
+    fn figures_stand_on_the_flat_play_plane_fitted_to_the_scanned_ground() {
+        let mut scene = load_embedded("salt-quay").unwrap().unwrap();
+        // A gently sloping field, 10 cm per metre along x, covering the grid.
+        let origin = [scene.grid.origin()[0] - 1.0, scene.grid.origin()[1] - 1.0];
+        let heights: Vec<f32> = (0..40)
+            .flat_map(|_| (0..40).map(|col| col as f32 * 0.1))
+            .collect();
+        let field = super::super::terrain::HeightField::new(origin, 1.0, 40, 40, heights).unwrap();
+        scene.grid = scene.grid.clone().with_terrain(field);
+        let mut stage = Stage::new(scene, false);
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(1, 4), 10),
+            token("goblin", Side::Enemy, Cell::new(6, 4), 8),
+        ]);
+        let frame = stage.frame();
+        let heights: Vec<(f32, f32)> = frame
+            .figures
+            .iter()
+            .map(|figure| (figure.position.x, figure.position.y))
+            .collect();
+        assert_eq!(heights.len(), 2);
+        let plane = stage.scene().grid.play_plane_y();
+        for (_, y) in heights {
+            assert!(
+                (y - plane).abs() < 1e-5,
+                "feet at {y} on the flat play plane {plane}"
+            );
+        }
+        // The sloping field is only measured against the plane, never followed.
+        assert!(stage.scene().grid.plane_deviation_m() > 0.3);
     }
 
     #[test]

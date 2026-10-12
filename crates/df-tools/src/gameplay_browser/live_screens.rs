@@ -207,7 +207,6 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         mode: if lobby { TvMode::Lobby } else { TvMode::Scene },
         title: input.scene.title.clone(),
         lede: crate::presentation::first_sentence(input.narration),
-        narration: input.narration.to_owned(),
         speaker,
         room_code: input.journey.room_code.clone(),
         join_label: join_label(&input.journey.join_path),

@@ -4,6 +4,14 @@
 //! deliberate gesture, so the control starts `Locked`; the first deliberate press on the locked
 //! control unlocks sound and turns it on, never leaving it muted. A mute choice lives only in
 //! the page's memory: a reload starts locked and unmuted again.
+//!
+//! One physical click fires several events (pointerdown, mousedown, pointerup, mouseup, click),
+//! and the page unlocks on the first of them. The press that follows within
+//! [`ONE_GESTURE_MS`] of the unlocking gesture belongs to the same click and changes nothing, so
+//! a single click on the locked control ends in `On`; only a later, separate click toggles mute.
+
+/// A press this soon after the gesture that unlocked sound is the same physical click.
+pub(crate) const ONE_GESTURE_MS: u64 = 500;
 
 /// What the viewer sees and what the audio engines obey.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,6 +26,8 @@ pub(crate) enum Sound {
 pub(crate) enum Press {
     /// Audio was locked: play the unlock clip inside this gesture.
     Unlocked,
+    /// The click that already unlocked sound: nothing more to do.
+    SameGesture,
     Muted,
     Unmuted,
 }
@@ -26,6 +36,8 @@ pub(crate) enum Press {
 pub(crate) struct SoundSwitch {
     unlocked: bool,
     muted: bool,
+    /// When the gesture that unlocked sound happened.
+    unlocked_at_ms: u64,
 }
 
 impl SoundSwitch {
@@ -33,6 +45,7 @@ impl SoundSwitch {
         Self {
             unlocked: false,
             muted: false,
+            unlocked_at_ms: 0,
         }
     }
 
@@ -52,13 +65,17 @@ impl SoundSwitch {
         self.muted
     }
 
-    /// A deliberate press on the control itself.
-    pub(crate) fn press(&mut self) -> Press {
+    /// A deliberate press on the control itself, at `now_ms`.
+    pub(crate) fn press(&mut self, now_ms: u64) -> Press {
         match self.sound() {
             Sound::Locked => {
                 self.unlocked = true;
                 self.muted = false;
+                self.unlocked_at_ms = now_ms;
                 Press::Unlocked
+            }
+            Sound::On if now_ms.saturating_sub(self.unlocked_at_ms) < ONE_GESTURE_MS => {
+                Press::SameGesture
             }
             Sound::On => {
                 self.muted = true;
@@ -71,11 +88,14 @@ impl SoundSwitch {
         }
     }
 
-    /// A click or key press elsewhere on the page. It unlocks audio but changes no mute
-    /// choice; returns whether it was the unlocking gesture.
-    pub(crate) fn gesture_elsewhere(&mut self) -> bool {
+    /// A pointer or key press anywhere on the page, the control included. It unlocks audio but
+    /// changes no mute choice; returns whether it was the unlocking gesture.
+    pub(crate) fn gesture(&mut self, now_ms: u64) -> bool {
         let first = !self.unlocked;
-        self.unlocked = true;
+        if first {
+            self.unlocked = true;
+            self.unlocked_at_ms = now_ms;
+        }
         first
     }
 
@@ -89,6 +109,9 @@ impl SoundSwitch {
 mod tests {
     use super::*;
 
+    /// Long enough after the unlocking click that a press is a separate one.
+    const LATER_MS: u64 = 5_000;
+
     #[test]
     fn a_new_page_is_locked_and_not_muted() {
         let switch = SoundSwitch::new();
@@ -100,53 +123,87 @@ mod tests {
     #[test]
     fn the_first_press_on_the_locked_control_turns_sound_on() {
         let mut switch = SoundSwitch::new();
-        assert_eq!(switch.press(), Press::Unlocked);
+        assert_eq!(switch.press(0), Press::Unlocked);
         assert_eq!(switch.sound(), Sound::On);
     }
 
     #[test]
     fn the_control_toggles_between_on_and_muted() {
         let mut switch = SoundSwitch::new();
-        switch.press();
-        assert_eq!(switch.press(), Press::Muted);
+        switch.press(0);
+        assert_eq!(switch.press(LATER_MS), Press::Muted);
         assert_eq!(switch.sound(), Sound::Muted);
-        assert_eq!(switch.press(), Press::Unmuted);
+        assert_eq!(switch.press(2 * LATER_MS), Press::Unmuted);
+        assert_eq!(switch.sound(), Sound::On);
+    }
+
+    /// The real event order of one physical click on the locked control: the page unlocks on the
+    /// pointer press, and the click handler that follows must not mute what it just unlocked.
+    #[test]
+    fn one_real_click_on_the_locked_control_ends_in_on_and_a_later_click_mutes() {
+        let mut switch = SoundSwitch::new();
+        // pointerdown, mousedown: the page-level gesture listener (the control is no exception).
+        assert!(switch.gesture(1_000));
+        assert!(!switch.gesture(1_001));
+        // pointerup, mouseup: no handler. click, about 90 ms after the press:
+        assert_eq!(switch.press(1_090), Press::SameGesture);
+        assert_eq!(switch.sound(), Sound::On);
+        // A separate click much later toggles mute, and the next one unmutes.
+        assert_eq!(switch.press(1_090 + LATER_MS), Press::Muted);
+        assert_eq!(switch.press(1_090 + 2 * LATER_MS), Press::Unmuted);
+        assert_eq!(switch.sound(), Sound::On);
+    }
+
+    #[test]
+    fn a_click_delivered_twice_in_one_gesture_still_ends_in_on() {
+        let mut switch = SoundSwitch::new();
+        assert_eq!(switch.press(10), Press::Unlocked);
+        assert_eq!(switch.press(14), Press::SameGesture);
+        assert_eq!(switch.sound(), Sound::On);
+    }
+
+    #[test]
+    fn a_keyboard_press_on_the_focused_locked_control_ends_in_on() {
+        let mut switch = SoundSwitch::new();
+        // keydown unlocks, then the click the browser synthesises from Enter or Space.
+        assert!(switch.gesture(300));
+        assert_eq!(switch.press(305), Press::SameGesture);
         assert_eq!(switch.sound(), Sound::On);
     }
 
     #[test]
     fn a_mute_choice_survives_only_inside_the_page_session() {
         let mut switch = SoundSwitch::new();
-        switch.press();
-        switch.press();
+        switch.press(0);
+        switch.press(LATER_MS);
         assert_eq!(switch.sound(), Sound::Muted);
         // A reload builds a new switch: locked, and the first press enables sound.
         let mut reloaded = SoundSwitch::new();
         assert_eq!(reloaded.sound(), Sound::Locked);
-        reloaded.press();
+        reloaded.press(0);
         assert_eq!(reloaded.sound(), Sound::On);
     }
 
     #[test]
     fn a_refused_play_relocks_and_the_next_press_enables_sound_not_mute() {
         let mut switch = SoundSwitch::new();
-        switch.press();
-        switch.press();
+        switch.press(0);
+        switch.press(LATER_MS);
         switch.refused();
         assert_eq!(switch.sound(), Sound::Locked);
-        assert_eq!(switch.press(), Press::Unlocked);
+        assert_eq!(switch.press(2 * LATER_MS), Press::Unlocked);
         assert_eq!(switch.sound(), Sound::On);
     }
 
     #[test]
     fn a_gesture_elsewhere_unlocks_without_changing_the_mute_choice() {
         let mut switch = SoundSwitch::new();
-        assert!(switch.gesture_elsewhere());
+        assert!(switch.gesture(0));
         assert_eq!(switch.sound(), Sound::On);
-        assert!(!switch.gesture_elsewhere());
-        switch.press();
+        assert!(!switch.gesture(1));
+        assert_eq!(switch.press(LATER_MS), Press::Muted);
         assert_eq!(switch.sound(), Sound::Muted);
-        assert!(!switch.gesture_elsewhere());
+        assert!(!switch.gesture(2 * LATER_MS));
         assert_eq!(switch.sound(), Sound::Muted);
     }
 }

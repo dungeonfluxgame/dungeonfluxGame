@@ -297,6 +297,10 @@ struct PageState {
     display: [u8; 32],
     glue: bytes::Bytes,
     wasm: bytes::Bytes,
+    /// `DF_GAMEPLAY_BATTLE_SCENE`: a scene id the display uses for every fight, when set.
+    battle_scene: Option<Arc<str>>,
+    /// `DF_GAMEPLAY_BATTLE_FPS`: the battlefield's fixed presentation rate (24 or 30).
+    battle_fps: u32,
 }
 async fn socket(
     State(state): State<PageState>,
@@ -397,15 +401,30 @@ fn bounded_asset(path: std::path::PathBuf, maximum: u64) -> Result<bytes::Bytes,
     Ok(bytes.into())
 }
 async fn both(State(state): State<PageState>) -> Html<String> {
-    page(false, Some(state.display))
+    page(
+        false,
+        Some(state.display),
+        state.battle_scene.as_deref(),
+        state.battle_fps,
+    )
 }
 async fn player() -> Html<String> {
-    page(true, None)
+    page(true, None, None, df_render::battle::BattleFps::DEFAULT.hz())
 }
 async fn display(State(state): State<PageState>) -> Html<String> {
-    page(false, Some(state.display))
+    page(
+        false,
+        Some(state.display),
+        state.battle_scene.as_deref(),
+        state.battle_fps,
+    )
 }
-fn page(player: bool, display: Option<[u8; 32]>) -> Html<String> {
+fn page(
+    player: bool,
+    display: Option<[u8; 32]>,
+    battle_scene: Option<&str>,
+    battle_fps: u32,
+) -> Html<String> {
     // The browser waits a little longer than the server for any one request; both come from the
     // same setting (see `timing`).
     let wait = timing::active().browser_request().as_millis();
@@ -415,7 +434,7 @@ fn page(player: bool, display: Option<[u8; 32]>) -> Html<String> {
             journey::ROOM_CODE
         )
     } else {
-        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\" data-request-timeout-ms=\"{wait}\"><div class=\"view\"></div></section>",hex(&credential))).unwrap_or_default()
+        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\" data-request-timeout-ms=\"{wait}\" data-battle-fps=\"{battle_fps}\"{}><div class=\"view\"></div></section>",hex(&credential),battle_scene.map(|scene|format!(" data-battle-scene=\"{scene}\"")).unwrap_or_default())).unwrap_or_default()
     };
     Html(HTML.replace("__ROOTS__", &roots).replace(
         "__LAYOUT__",
@@ -497,6 +516,14 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&asset_root),
     )?;
     home_theme::install(std::path::Path::new(&asset_root))?;
+    let splat_directory = startup_configuration::splat_directory(
+        std::env::var("DF_GAMEPLAY_SPLAT_DIR"),
+        &std::path::Path::new(&asset_root).join("../splat"),
+        &std::env::current_dir()?,
+    )?;
+    let battle_scene =
+        startup_configuration::battle_scene(std::env::var("DF_GAMEPLAY_BATTLE_SCENE"))?;
+    let battle_fps = startup_configuration::battle_fps(std::env::var("DF_GAMEPLAY_BATTLE_FPS"))?;
     if interactive {
         timing::install(timing::Timing::from_environment()?);
         let timing = timing::active();
@@ -1283,6 +1310,8 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         display: display_credential,
         glue: glue_bytes,
         wasm: wasm_bytes,
+        battle_scene: battle_scene.map(Arc::from),
+        battle_fps,
     };
     let router = Router::new()
         .route("/gameplay", get(both))
@@ -1306,9 +1335,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .merge(music_assets::router(
             &std::path::Path::new(&asset_root).join("../music"),
         )?)
-        .merge(splat_assets::router(
-            &std::path::Path::new(&asset_root).join("../splat"),
-        )?)
+        .merge(splat_assets::router(&splat_directory)?)
         .merge(voice::router(voice.clone()))
         .merge(imagery::router(imagery.clone()))
         .merge(speech_input::router(
@@ -1593,4 +1620,22 @@ fn database_config() -> Result<tokio_postgres::Config, io::Error> {
         configuration.dbname(name);
     }
     Ok(configuration)
+}
+#[cfg(test)]
+mod battle_scene_page_tests {
+    use super::page;
+
+    #[test]
+    fn the_display_page_names_the_forced_battle_scene_and_the_player_page_never_does() {
+        let credential = Some([7u8; 32]);
+        let forced = page(false, credential, Some("scan-village"), 24).0;
+        assert!(forced.contains("data-battle-scene=\"scan-village\""));
+        assert!(forced.contains("data-battle-fps=\"24\""));
+        let default = page(false, credential, None, 30).0;
+        assert!(!default.contains("data-battle-scene"));
+        assert!(default.contains("data-battle-fps=\"30\""));
+        let player = page(true, None, Some("scan-village"), 24).0;
+        assert!(!player.contains("data-battle-scene"));
+        assert!(!player.contains("data-battle-fps"));
+    }
 }

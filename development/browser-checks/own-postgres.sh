@@ -9,14 +9,15 @@ R=${DUNGEONFLUX_ARTIFACT_ROOT:-$WT/artifacts}
 PG=${DUNGEONFLUX_POSTGRES_BIN:-$R/build/postgres-g05/install/bin}
 DIR=$R/tmp/browser-checks
 PORT=${DF_CHECK_PG_PORT:-55531}
-mkdir -p "$DIR/pgsock"
+SOCK=${DF_CHECK_PG_SOCKET_DIR:-$DIR/pgsock}
+mkdir -p "$SOCK"
 case "$1" in
   start)
     if test ! -d "$DIR/pgdata"; then
       "$PG/initdb" -D "$DIR/pgdata" -U df_gameplay_demo_admin_20261004 --auth-host=trust --auth-local=trust -E UTF8 --locale=C > "$DIR/initdb.log" 2>&1
     fi
     if ! "$PG/pg_ctl" -D "$DIR/pgdata" status > /dev/null 2>&1; then
-      "$PG/pg_ctl" -D "$DIR/pgdata" -l "$DIR/postgres.log" -o "-p $PORT -h 127.0.0.1 -k $DIR/pgsock -c max_connections=60" -w start
+      "$PG/pg_ctl" -D "$DIR/pgdata" -l "$DIR/postgres.log" -o "-p $PORT -h 127.0.0.1 -k $SOCK -c max_connections=60" -w start
     fi
     ;;
   stop)
