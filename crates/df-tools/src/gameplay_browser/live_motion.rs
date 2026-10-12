@@ -368,6 +368,7 @@ fn enter(
     detail: Option<&Detail>,
     short: bool,
 ) -> Result<(), JsValue> {
+    battlefield_cue(state, detail);
     set_stage(client, state_name(state))?;
     match (state, detail) {
         (StageState::LeavingScene, _) => {
@@ -402,6 +403,34 @@ fn enter(
         _ => {}
     }
     Ok(())
+}
+
+/// PLAY-F02 hook: the 3D battlefield follows this same cue stream (roll, then impact), so the dice
+/// sound, the approach and strike, and the damage number stay in step. Copies what it needs.
+fn battlefield_cue(state: StageState, detail: Option<&Detail>) {
+    let summary = match detail {
+        Some(Detail::Roll(roll)) => Some(super::live_battlefield::RollSummary {
+            attacker: roll.attacker.clone(),
+            target: roll.target.clone(),
+            hit: roll.hit,
+            critical: roll.critical,
+            grazed: roll.grazed,
+            damage: roll.damage,
+            target_down: roll.target_down,
+            card: roll
+                .description
+                .as_ref()
+                .map(|description| df_render::battle::RollCard {
+                    value: description.value.clone(),
+                    label: description.label.clone(),
+                    explanation: description.explanation.clone(),
+                    verdict: description.verdict.to_owned(),
+                    tone: verdict_name(roll).to_owned(),
+                }),
+        }),
+        _ => None,
+    };
+    super::live_battlefield::on_cue(state_name(state), summary.as_ref());
 }
 
 fn roll_cue(roll: &RollDetail) -> Cue {

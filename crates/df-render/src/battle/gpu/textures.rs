@@ -29,6 +29,8 @@ pub struct ImageTexture {
     pub bind_group: GpuBindGroup,
     pub width: u32,
     pub height: u32,
+    /// Where the figure is inside the picture (cut-outs); typical values until measured.
+    pub bounds: crate::battle::VisibleBounds,
 }
 
 impl Drop for ImageTexture {
@@ -148,6 +150,7 @@ pub async fn load_image(
         bind_group,
         width,
         height,
+        bounds: crate::battle::VisibleBounds::TYPICAL,
     })
 }
 
@@ -169,6 +172,7 @@ pub fn solid(core: &GpuCore, rgba: [u8; 4]) -> ImageTexture {
         bind_group,
         width: 1,
         height: 1,
+        bounds: crate::battle::VisibleBounds::TYPICAL,
     }
 }
 
@@ -194,6 +198,18 @@ pub async fn read_exact_rgba(
     );
     copy_bitmap(core, &image, &texture, 0, false, width, height);
     image.close();
+    let result = read_texture_rgba(core, &texture, width, height).await;
+    texture.destroy_texture();
+    result.map(|rgba| (rgba, width, height))
+}
+
+/// Reads the base level of a texture created with `TEXTURE_COPY_SRC` back to the CPU.
+pub async fn read_texture_rgba(
+    core: &GpuCore,
+    texture: &GpuTexture,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, TextureError> {
     let bytes_per_row = (width * 4).next_multiple_of(256);
     let size = bytes_per_row as f64 * height as f64;
     let readback = core.device.create_buffer(
@@ -222,12 +238,11 @@ pub async fn read_exact_rgba(
                 let start = row * bytes_per_row as usize;
                 rows.extend_from_slice(&padded[start..start + (width * 4) as usize]);
             }
-            Ok((rows, width, height))
+            Ok(rows)
         }
         Err(_) => Err(TextureError::Readback),
     };
     readback.unmap();
     readback.destroy_buffer();
-    texture.destroy_texture();
     result
 }

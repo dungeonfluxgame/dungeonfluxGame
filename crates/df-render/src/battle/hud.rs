@@ -34,6 +34,11 @@ pub struct Hud {
     party: Element,
     enemies: Element,
     floats: Element,
+    roll: Element,
+    roll_value: Element,
+    roll_label: Element,
+    roll_verdict: Element,
+    roll_text: Element,
     finish_label: Element,
     finish_title: Element,
     finish_names: Element,
@@ -91,6 +96,12 @@ impl Hud {
         let party = element(document, &root, "aside", "bf-party", "")?;
         let enemies = element(document, &root, "aside", "bf-enemies", "")?;
         let floats = element(document, &root, "div", "bf-floats", "")?;
+        let roll = element(document, &root, "section", "bf-roll", "")?;
+        let roll_value = element(document, &roll, "div", "bf-roll-die", "")?;
+        let roll_words = element(document, &roll, "div", "bf-roll-words", "")?;
+        let roll_label = element(document, &roll_words, "h2", "bf-roll-label", "")?;
+        let roll_verdict = element(document, &roll_words, "p", "bf-roll-verdict", "")?;
+        let roll_text = element(document, &roll_words, "p", "bf-roll-text", "")?;
         element(document, &root, "div", "bf-bar bf-bar-top", "")?;
         element(document, &root, "div", "bf-bar bf-bar-bottom", "")?;
         let finish = element(document, &root, "section", "bf-finish", "")?;
@@ -113,6 +124,11 @@ impl Hud {
             party,
             enemies,
             floats,
+            roll,
+            roll_value,
+            roll_label,
+            roll_verdict,
+            roll_text,
             finish_label,
             finish_title,
             finish_names,
@@ -268,6 +284,17 @@ impl Hud {
             )?;
         }
 
+        match &frame.hud.roll_card {
+            Some(card) => {
+                self.roll.set_attribute("data-tone", &card.tone)?;
+                self.roll_value.set_text_content(Some(&card.value));
+                self.roll_label.set_text_content(Some(&card.label));
+                self.roll_verdict.set_text_content(Some(&card.verdict));
+                self.roll_text.set_text_content(Some(&card.explanation));
+                self.roll.set_attribute("data-open", "")?;
+            }
+            None => self.roll.remove_attribute("data-open")?,
+        }
         self.update_floats(stage, frame, aspect)?;
         match &frame.hud.finishing_blow {
             Some(blow) => {

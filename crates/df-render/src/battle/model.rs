@@ -126,6 +126,20 @@ pub enum Beat {
     TurnStart {
         actor: TokenId,
     },
+    /// The attacker steps beside the target under the turn-focus shot. Cues that arrive in two
+    /// parts (roll, then impact) stage the first half with this and the second with `Strike`.
+    Approach {
+        attacker: TokenId,
+        target: TokenId,
+    },
+    /// The lunge, contact and aftermath of a blow already approached (it approaches first if not).
+    Strike {
+        attacker: TokenId,
+        target: TokenId,
+        result: AttackResult,
+        target_hit_points_after: Option<u32>,
+    },
+    /// `Approach` followed by `Strike` as one timeline.
     Attack {
         attacker: TokenId,
         target: TokenId,
@@ -144,11 +158,24 @@ pub enum Beat {
 /// What the HUD should show at the moment.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HudState {
+    /// The roll panel the table reads while a blow resolves; clears itself after a few seconds.
+    pub roll_card: Option<RollCard>,
     pub active: Option<TokenId>,
     pub round: u32,
     /// Turn order, first to act first. Empty means the order tokens were supplied in.
     pub initiative: Vec<TokenId>,
     pub finishing_blow: Option<FinishingBlow>,
+}
+
+/// What the d20 panel shows, copied from the server's roll description.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RollCard {
+    pub value: String,
+    pub label: String,
+    pub explanation: String,
+    pub verdict: String,
+    /// `hit`, `miss`, `critical` or `graze`, for styling only.
+    pub tone: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]

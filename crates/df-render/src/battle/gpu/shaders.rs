@@ -12,6 +12,7 @@ struct Frame {
     light: vec4<f32>,     // x, z of the lit centre, light radius, unused
     ground: vec4<f32>,    // centre x, centre z, half size, fall-off
     backdrop: vec4<f32>,  // wall z, half width, base y, height
+    spot: vec4<f32>,      // warm pool under the acting figure: x, z, radius, strength
 }
 @group(0) @binding(0) var<uniform> frame: Frame;
 "#;
@@ -23,6 +24,7 @@ const BACKDROP: &str = r#"
 struct VOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) height: f32,
 }
 
 @vertex
@@ -38,13 +40,16 @@ fn vs(@builtin(vertex_index) i: u32) -> VOut {
     var out: VOut;
     out.pos = frame.view_proj * vec4<f32>(world, 1.0);
     out.uv = vec2<f32>(c.x * 0.5 + 0.5, 1.0 - c.y);
+    out.height = world.y;
     return out;
 }
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
-    let colour = textureSampleLevel(tex, samp, in.uv, 0.0);
-    return vec4<f32>(colour.rgb, 1.0);
+    let colour = textureSampleLevel(tex, samp, in.uv, 0.0).rgb;
+    // The flat stands behind the far edge of the ground; its foot sinks into darkness there.
+    let fog = smoothstep(-0.4, 3.2, in.height);
+    return vec4<f32>(colour * mix(0.12, 0.85, fog), 1.0);
 }
 "#;
 
@@ -72,15 +77,21 @@ fn vs(@builtin(vertex_index) i: u32) -> VOut {
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
-    // One painting spans 12 metres, repeated, so the grain keeps its scale under the figures.
-    let uv = in.world_xz / 12.0;
+    // The painting covers the whole ground once; it is not tileable, so it is never repeated.
+    let uv = (in.world_xz - frame.ground.xy) / (2.0 * frame.ground.z) + vec2<f32>(0.5);
     let colour = textureSample(tex, samp, uv).rgb;
     let offset = abs(in.world_xz - frame.ground.xy);
     let edge = frame.ground.z - max(offset.x, offset.y);
-    let alpha = smoothstep(0.0, max(frame.ground.w, 0.01), edge);
-    // A pool of light around the fight that falls off toward the dark edges.
+    let sides = smoothstep(0.0, max(frame.ground.w, 0.01), edge);
+    // The far edge dissolves into the standing painting (wall at z = frame.backdrop.x).
+    let far = smoothstep(frame.backdrop.x + 0.2, frame.backdrop.x + 4.5, in.world_xz.y);
+    let alpha = sides * far;
+    // A pool of light around the fight lifts the middle; the outer edges stay dark.
     let pool = 1.0 - smoothstep(0.0, frame.light.z, distance(in.world_xz, frame.light.xy));
-    let lit = colour * (0.42 + 0.9 * pool);
+    let to_spot = in.world_xz - frame.spot.xy;
+    let spot = frame.spot.w * exp(-dot(to_spot, to_spot) / (frame.spot.z * frame.spot.z));
+    let warm = vec3<f32>(1.0, 0.72, 0.4);
+    let lit = colour * (0.62 + 1.05 * pool) + colour * warm * (spot * 2.1);
     return vec4<f32>(lit * alpha, alpha);
 }
 "#;
@@ -129,7 +140,9 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let aa = max(fwidth(edge), 0.002);
     let aa_inner = max(fwidth(square_edge(in.c / 0.74)), 0.002);
     if (kind == 0) {
-        let l = line(edge, aa, 0.03);
+        let core = line(edge, aa, 0.018);
+        let halo = exp(-edge * 22.0) * 0.32;
+        let l = max(core, halo);
         return vec4<f32>(in.col.rgb * l * in.col.a, l * in.col.a);
     }
     if (kind == 1 || kind == 2) {
@@ -167,10 +180,6 @@ struct VOut {
     @location(3) side: f32,
 }
 
-// The cut-out images keep a little margin below the feet and above the head.
-const FOOT_INSET: f32 = 0.045;
-const HEAD_INSET: f32 = 0.04;
-
 @vertex
 fn vs(
     @builtin(vertex_index) i: u32,
@@ -178,33 +187,34 @@ fn vs(
     @location(1) pose: vec4<f32>,    // lean, alpha, red flash, heal glow
     @location(2) tint: vec4<f32>,    // rgb tint, breath
     @location(3) kind: vec4<f32>,    // aspect, kind (0 cut-out, 1 token), has texture, side
+    @location(4) bounds: vec4<f32>,  // visible top, bottom, centre x (picture fractions)
 ) -> VOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(-1.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
         vec2<f32>(-1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0));
     let c = corners[i];
-    var height = place.w;
-    var bottom = -FOOT_INSET;
+    var bottom = 0.0;
     var span = 1.0;
     var half_width = 0.0;
+    var shift = 0.0;
     if (kind.y < 0.5) {
-        // Visible height is the part of the image between feet and head.
-        let full = place.w / (1.0 - FOOT_INSET - HEAD_INSET);
-        height = full * tint.w;
-        bottom = -FOOT_INSET * height;
-        span = height;
+        // The visible figure (not the canvas) is `place.w` metres tall, its feet on the ground and
+        // centred under the point it stands on.
+        let full = place.w / max(bounds.y - bounds.x, 0.05);
+        span = full * tint.w;
+        bottom = -(1.0 - bounds.y) * span;
         half_width = full * kind.x * 0.5;
+        shift = (bounds.z - 0.5) * full * kind.x;
     } else {
         // A round token about 0.9 m across standing on the tile.
         span = 0.95;
         bottom = 0.18;
         half_width = 0.475;
     }
-    let local = vec2<f32>(c.x * half_width, bottom + c.y * span);
+    let local = vec2<f32>(c.x * half_width - shift, bottom + c.y * span);
     let s = sin(pose.x);
     let k = cos(pose.x);
     var rotated = vec2<f32>(local.x * k + local.y * s, -local.x * s + local.y * k);
-    rotated.y = rotated.y + abs(s) * half_width;
     let world = vec3<f32>(place.xyz) + frame.right.xyz * rotated.x + vec3<f32>(0.0, rotated.y, 0.0);
     var out: VOut;
     out.pos = frame.view_proj * vec4<f32>(world, 1.0);

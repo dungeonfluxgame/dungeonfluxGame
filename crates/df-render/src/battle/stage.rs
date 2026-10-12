@@ -49,8 +49,17 @@ struct Runtime {
     anim: Option<ActiveAnim>,
     downed: bool,
     shown_hp: Option<HitPoints>,
+    /// While set, the server's newer hit points wait in `pending_hp` until the blow lands on
+    /// screen (`ShowHitPoints`) or this many seconds pass.
+    hp_hold_s: Option<f32>,
+    pending_hp: Option<HitPoints>,
     phase: f32,
 }
+
+/// How long a hit-point change waits for its blow to be staged before the bar catches up anyway.
+pub const HP_HOLD_SECONDS: f32 = 8.0;
+/// How long the roll panel stays up.
+pub const ROLL_CARD_SECONDS: f32 = 3.4;
 
 struct Playback {
     timeline: Timeline,
@@ -123,6 +132,7 @@ pub struct Stage {
     reduced_motion: bool,
     dropped_beats: u32,
     next_float_id: u64,
+    roll_card_left_s: f32,
 }
 
 fn flat_direction(from: Vec3, to: Vec3) -> Vec3 {
@@ -157,6 +167,7 @@ impl Stage {
             reduced_motion,
             dropped_beats: 0,
             next_float_id: 0,
+            roll_card_left_s: 0.0,
         }
     }
 
@@ -174,6 +185,11 @@ impl Stage {
 
     pub fn set_round(&mut self, round: u32) {
         self.hud.round = round;
+    }
+
+    pub fn show_roll_card(&mut self, card: super::model::RollCard) {
+        self.hud.roll_card = Some(card);
+        self.roll_card_left_s = ROLL_CARD_SECONDS;
     }
 
     pub fn set_initiative(&mut self, order: Vec<TokenId>) {
@@ -241,8 +257,12 @@ impl Stage {
                     if runtime.token.cell != incoming.cell {
                         runtime.position = centre;
                     }
-                    runtime.shown_hp = incoming.hit_points;
-                    runtime.downed = incoming.hit_points.is_some_and(|hp| hp.current == 0);
+                    if runtime.hp_hold_s.is_some() {
+                        runtime.pending_hp = incoming.hit_points;
+                    } else {
+                        runtime.shown_hp = incoming.hit_points;
+                        runtime.downed = incoming.hit_points.is_some_and(|hp| hp.current == 0);
+                    }
                     runtime.token = incoming;
                 }
                 None => {
@@ -254,10 +274,22 @@ impl Stage {
                         anim: None,
                         downed,
                         shown_hp: incoming.hit_points,
+                        hp_hold_s: None,
+                        pending_hp: None,
                         phase,
                         token: incoming,
                     });
                 }
+            }
+        }
+    }
+
+    /// Keeps the shown hit points of these tokens until their blow is staged, so a bar never
+    /// drops before the hit it belongs to. A hold expires after [`HP_HOLD_SECONDS`].
+    pub fn hold_hit_points<'a>(&mut self, ids: impl IntoIterator<Item = &'a TokenId>) {
+        for id in ids {
+            if let Some(index) = self.token_index(id) {
+                self.tokens[index].hp_hold_s = Some(HP_HOLD_SECONDS);
             }
         }
     }
@@ -268,6 +300,10 @@ impl Stage {
         let missing = match &beat {
             Beat::TurnStart { actor } => (!known(actor)).then(|| actor.clone()),
             Beat::Attack {
+                attacker, target, ..
+            }
+            | Beat::Approach { attacker, target }
+            | Beat::Strike {
                 attacker, target, ..
             } => [attacker, target]
                 .into_iter()
@@ -321,6 +357,24 @@ impl Stage {
         self.advance_playback(elapsed);
         for runtime in &mut self.tokens {
             advance_runtime(runtime, dt);
+            if let Some(left) = runtime.hp_hold_s {
+                if left <= dt {
+                    // The blow never reached the screen: let the bar catch up with the server.
+                    runtime.hp_hold_s = None;
+                    if let Some(pending) = runtime.pending_hp.take() {
+                        runtime.shown_hp = Some(pending);
+                        runtime.downed = pending.current == 0;
+                    }
+                } else {
+                    runtime.hp_hold_s = Some(left - dt);
+                }
+            }
+        }
+        if self.roll_card_left_s > 0.0 {
+            self.roll_card_left_s -= dt;
+            if self.roll_card_left_s <= 0.0 {
+                self.hud.roll_card = None;
+            }
         }
         for text in &mut self.floats {
             text.age_s += dt;
@@ -405,11 +459,11 @@ impl Stage {
                 }
             }
             Step::Highlight(highlight) => self.highlight = highlight,
-            Step::Walk {
+            Step::MoveTo {
                 token,
-                path,
+                cell,
                 per_step,
-            } => self.start_walk(&token, path, per_step),
+            } => self.move_to(&token, cell, per_step),
             Step::Animate { token, anim } => self.start_anim(&token, anim),
             Step::Shake {
                 amplitude_px,
@@ -445,6 +499,8 @@ impl Stage {
                         current: current.min(maximum),
                         maximum,
                     });
+                    runtime.hp_hold_s = None;
+                    runtime.pending_hp = None;
                 }
             }
             Step::FinishingBlow { hero, enemy } => {
@@ -462,29 +518,35 @@ impl Stage {
         }
     }
 
-    fn start_walk(&mut self, id: &TokenId, path: Vec<Cell>, per_step: Duration) {
+    /// Walks the token from where it stands to `cell`. Its formation cell does not change: the
+    /// token's `cell` stays home so the strike can send it back.
+    fn move_to(&mut self, id: &TokenId, cell: Cell, per_step: Duration) {
         let Some(index) = self.token_index(id) else {
             return;
         };
-        let Some(last) = path.last().copied() else {
-            return;
-        };
         let reduced = self.reduced_motion;
-        let grid_points: Vec<Vec3> = path
-            .iter()
-            .map(|cell| self.scene.grid.cell_centre(*cell))
-            .collect();
+        let grid = &self.scene.grid;
+        let target = grid.cell_centre(cell);
         let runtime = &mut self.tokens[index];
-        if reduced {
-            runtime.position = self.scene.grid.cell_centre(last);
-            runtime.token.cell = last;
+        let from = grid.cell_at(runtime.position).unwrap_or(runtime.token.cell);
+        let path = grid.path(from, cell).unwrap_or_default();
+        if reduced || per_step.is_zero() {
+            runtime.walk = None;
+            runtime.position = target;
             return;
         }
+        if path.len() < 2 {
+            if (runtime.position - target).length() > 0.02 {
+                runtime.position = target;
+            }
+            return;
+        }
+        let steps: Vec<Cell> = path[1..].to_vec();
         let mut points = vec![runtime.position];
-        points.extend(grid_points);
+        points.extend(steps.iter().map(|step| grid.cell_centre(*step)));
         runtime.walk = Some(Walk {
             points,
-            cells: path,
+            cells: steps,
             per_step_s: per_step.as_secs_f32().max(0.01),
             elapsed_s: 0.0,
         });
@@ -650,9 +712,6 @@ fn advance_runtime(runtime: &mut Runtime, dt: f32) {
     if let Some(walk) = &mut runtime.walk {
         walk.elapsed_s += dt;
         if walk.elapsed_s >= walk.per_step_s * walk.cells.len() as f32 {
-            if let Some(last) = walk.cells.last() {
-                runtime.token.cell = *last;
-            }
             if let Some(end) = walk.points.last() {
                 runtime.position = *end;
             }
@@ -789,6 +848,54 @@ mod tests {
         );
         assert_eq!(enemy.hit_points.unwrap().current, 0);
         assert!(!stage.is_busy());
+    }
+
+    #[test]
+    fn held_hit_points_wait_for_the_impact_then_expire_if_the_blow_never_comes() {
+        let mut stage = stage(false);
+        let enemy = TokenId::new("enemy");
+        stage.hold_hit_points([&enemy]);
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 4), 12),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 2),
+        ]);
+        assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 5);
+        run(&mut stage, HP_HOLD_SECONDS + 1.0);
+        assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 2);
+    }
+
+    #[test]
+    fn an_approach_then_a_strike_land_the_blow_after_the_step_and_return_home() {
+        let mut stage = stage(false);
+        stage
+            .stage(Beat::Approach {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+            })
+            .unwrap();
+        run(&mut stage, 1.3);
+        let beside = figure(&stage, "hero").position;
+        assert!(
+            (beside - stage.grid().cell_centre(Cell::new(3, 4))).length() > 1.0,
+            "stepped forward"
+        );
+        stage
+            .stage(Beat::Strike {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Hit {
+                    damage: 2,
+                    critical: false,
+                    downed: false,
+                },
+                target_hit_points_after: Some(3),
+            })
+            .unwrap();
+        run(&mut stage, 6.0);
+        let hero = figure(&stage, "hero");
+        assert!((hero.position - stage.grid().cell_centre(Cell::new(3, 4))).length() < 0.01);
+        assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 3);
     }
 
     #[test]

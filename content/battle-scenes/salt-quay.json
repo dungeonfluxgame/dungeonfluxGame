@@ -16,10 +16,10 @@
   },
   "backdrop": {
     "stem": "scene-salt-quay-arrival",
-    "distance_m": 17.0,
-    "width_m": 60.0,
-    "base_m": -8.0,
-    "height_m": 33.75
+    "distance_m": 9.0,
+    "width_m": 34.0,
+    "base_m": -6.4,
+    "height_m": 19.125
   },
   "grid": {
     "origin": [
@@ -61,7 +61,7 @@
       ],
       "distance": 15.0,
       "yaw_deg": 0,
-      "pitch_deg": 30,
+      "pitch_deg": 26,
       "fov_deg": 40
     },
     "combat_est": {
@@ -70,9 +70,9 @@
         0.8,
         0
       ],
-      "distance": 10.5,
+      "distance": 10.0,
       "yaw_deg": 0,
-      "pitch_deg": 21,
+      "pitch_deg": 16,
       "fov_deg": 40
     },
     "turn_focus": {
@@ -81,9 +81,9 @@
         0.9,
         0
       ],
-      "distance": 8.5,
+      "distance": 8.0,
       "yaw_deg": 32,
-      "pitch_deg": 18,
+      "pitch_deg": 13,
       "fov_deg": 38
     },
     "impact": {
@@ -92,9 +92,9 @@
         0.9,
         0
       ],
-      "distance": 7.2,
+      "distance": 7.0,
       "yaw_deg": -48,
-      "pitch_deg": 15,
+      "pitch_deg": 11,
       "fov_deg": 36
     },
     "ko": {
@@ -103,9 +103,9 @@
         0.5,
         0
       ],
-      "distance": 8.5,
+      "distance": 8.0,
       "yaw_deg": 28,
-      "pitch_deg": 26,
+      "pitch_deg": 22,
       "fov_deg": 40
     },
     "victory": {
@@ -114,9 +114,9 @@
         1.0,
         0
       ],
-      "distance": 6.5,
+      "distance": 6.0,
       "yaw_deg": -30,
-      "pitch_deg": 9,
+      "pitch_deg": 8,
       "fov_deg": 34
     }
   }

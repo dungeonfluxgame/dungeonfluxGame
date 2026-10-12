@@ -15,8 +15,16 @@ use super::{
     stage::Stage,
 };
 
-const HERO_HEIGHT_M: f32 = 1.8;
-const ENEMY_HEIGHT_M: f32 = 1.6;
+/// Who stages a reported outcome.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FeedMode {
+    /// The feed stages each new outcome as a whole attack as soon as it is reported.
+    #[default]
+    StageOutcomes,
+    /// Another owner (the display's cue director) stages the attack when its roll and impact
+    /// cues play. The feed only keeps the target's hit-point bar from dropping before then.
+    HoldForCues,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Member {
@@ -25,6 +33,8 @@ pub struct Member {
     pub side: Side,
     pub hit_points: u32,
     pub maximum_hit_points: u32,
+    /// Standing height of the figure in metres (dwarf heroes about 1.35, goblins about 1.0).
+    pub height_m: f32,
     pub figure: Option<String>,
     pub portrait: Option<String>,
 }
@@ -58,6 +68,7 @@ pub struct FeedReport {
 
 #[derive(Debug, Default)]
 pub struct CombatFeed {
+    pub mode: FeedMode,
     started: bool,
     roster: Vec<String>,
     seen_outcomes: usize,
@@ -71,10 +82,7 @@ fn token_for(member: &Member, cell: super::grid::Cell) -> Token {
         side: member.side,
         name: member.name.clone(),
         cell,
-        height_m: match member.side {
-            Side::Hero => HERO_HEIGHT_M,
-            Side::Enemy => ENEMY_HEIGHT_M,
-        },
+        height_m: member.height_m,
         figure: member.figure.clone(),
         portrait: member.portrait.clone(),
         hit_points: (member.maximum_hit_points > 0).then_some(HitPoints {
@@ -86,11 +94,22 @@ fn token_for(member: &Member, cell: super::grid::Cell) -> Token {
 }
 
 impl CombatFeed {
+    pub fn new(mode: FeedMode) -> Self {
+        Self {
+            mode,
+            ..Self::default()
+        }
+    }
+
     /// Brings `stage` in line with `snapshot`. Returns `None` when the formation has no room for
     /// the roster, in which case the caller keeps the flat view.
     pub fn apply(&mut self, stage: &mut Stage, snapshot: &CombatSnapshot) -> Option<FeedReport> {
         let roster: Vec<String> = snapshot.members.iter().map(|m| m.id.clone()).collect();
-        let heroes = snapshot.members.iter().filter(|m| m.side == Side::Hero).count();
+        let heroes = snapshot
+            .members
+            .iter()
+            .filter(|m| m.side == Side::Hero)
+            .count();
         let enemies = snapshot.members.len() - heroes;
         let layout = formation::derive(stage.grid(), heroes, enemies).ok()?;
         let (mut hero_cells, mut enemy_cells) =
@@ -123,24 +142,26 @@ impl CombatFeed {
                 .map(|member| (member.id.clone(), member.hit_points))
                 .collect();
         } else {
+            let fresh: Vec<&Outcome> = snapshot.outcomes.iter().skip(self.seen_outcomes).collect();
+            self.seen_outcomes = snapshot.outcomes.len();
+            let targets: Vec<TokenId> = fresh
+                .iter()
+                .map(|outcome| TokenId::new(outcome.target.clone()))
+                .collect();
+            stage.hold_hit_points(&targets);
             stage.set_tokens(tokens);
-            for outcome in snapshot.outcomes.iter().skip(self.seen_outcomes) {
-                match stage.stage(beat_for(outcome)) {
-                    Ok(()) => report.staged += 1,
-                    Err(_) => report.dropped += 1,
+            if self.mode == FeedMode::StageOutcomes {
+                for outcome in &fresh {
+                    match stage.stage(beat_for(outcome)) {
+                        Ok(()) => report.staged += 1,
+                        Err(_) => report.dropped += 1,
+                    }
                 }
             }
-            self.seen_outcomes = snapshot.outcomes.len();
-            let outcome_targets: Vec<&str> = snapshot
-                .outcomes
-                .iter()
-                .skip(self.seen_outcomes.saturating_sub(report.staged as usize))
-                .map(|outcome| outcome.target.as_str())
-                .collect();
             for member in &snapshot.members {
                 let before = self.last_hit_points.get(&member.id).copied();
                 let healed = before.is_some_and(|before| member.hit_points > before)
-                    && !outcome_targets.contains(&member.id.as_str());
+                    && !fresh.iter().any(|outcome| outcome.target == member.id);
                 if healed {
                     let amount = member.hit_points - before.unwrap_or(0);
                     let beat = Beat::Heal {
@@ -158,6 +179,7 @@ impl CombatFeed {
                     .insert(member.id.clone(), member.hit_points);
             }
             if report.staged == 0
+                && fresh.is_empty()
                 && snapshot.active != self.last_active
                 && let Some(active) = &snapshot.active
             {
@@ -172,7 +194,13 @@ impl CombatFeed {
         }
         stage.set_round(snapshot.round);
         stage.set_active(snapshot.active.clone().map(TokenId::new));
-        stage.set_initiative(snapshot.members.iter().map(|m| TokenId::new(m.id.clone())).collect());
+        stage.set_initiative(
+            snapshot
+                .members
+                .iter()
+                .map(|m| TokenId::new(m.id.clone()))
+                .collect(),
+        );
         Some(report)
     }
 }
@@ -207,6 +235,7 @@ mod tests {
             side,
             hit_points: hp,
             maximum_hit_points: 12,
+            height_m: 1.5,
             figure: None,
             portrait: None,
         }
@@ -246,7 +275,9 @@ mod tests {
         let mut stage = stage();
         let mut feed = CombatFeed::default();
         let history = vec![strike(true, 4, 8, false), strike(false, 0, 8, false)];
-        let report = feed.apply(&mut stage, &snapshot(history, [12, 12, 8])).unwrap();
+        let report = feed
+            .apply(&mut stage, &snapshot(history, [12, 12, 8]))
+            .unwrap();
         assert_eq!(report, FeedReport::default());
         assert!(!stage.is_busy());
         assert_eq!(stage.tokens().count(), 3);
@@ -257,7 +288,8 @@ mod tests {
     fn a_new_outcome_is_staged_once_and_not_again_on_a_redraw() {
         let mut stage = stage();
         let mut feed = CombatFeed::default();
-        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 12])).unwrap();
+        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 12]))
+            .unwrap();
         let after = snapshot(vec![strike(true, 5, 7, false)], [12, 12, 7]);
         assert_eq!(feed.apply(&mut stage, &after).unwrap().staged, 1);
         assert!(stage.is_busy());
@@ -268,9 +300,13 @@ mod tests {
     fn a_downing_outcome_ends_with_the_enemy_fallen_and_the_finishing_card_shown_then_cleared() {
         let mut stage = stage();
         let mut feed = CombatFeed::default();
-        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 5])).unwrap();
-        feed.apply(&mut stage, &snapshot(vec![strike(true, 6, 0, true)], [12, 12, 0]))
+        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 5]))
             .unwrap();
+        feed.apply(
+            &mut stage,
+            &snapshot(vec![strike(true, 6, 0, true)], [12, 12, 0]),
+        )
+        .unwrap();
         let mut saw_card = false;
         for _ in 0..400 {
             stage.update(Duration::from_millis(50));
@@ -286,8 +322,11 @@ mod tests {
     fn a_hit_point_rise_without_an_outcome_is_staged_as_a_heal() {
         let mut stage = stage();
         let mut feed = CombatFeed::default();
-        feed.apply(&mut stage, &snapshot(vec![], [6, 12, 12])).unwrap();
-        let report = feed.apply(&mut stage, &snapshot(vec![], [10, 12, 12])).unwrap();
+        feed.apply(&mut stage, &snapshot(vec![], [6, 12, 12]))
+            .unwrap();
+        let report = feed
+            .apply(&mut stage, &snapshot(vec![], [10, 12, 12]))
+            .unwrap();
         assert_eq!(report.staged, 1);
         assert!(stage.is_busy());
     }
@@ -296,7 +335,8 @@ mod tests {
     fn a_turn_change_alone_stages_a_turn_focus_and_an_unknown_participant_is_counted() {
         let mut stage = stage();
         let mut feed = CombatFeed::default();
-        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 12])).unwrap();
+        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 12]))
+            .unwrap();
         let mut next = snapshot(vec![], [12, 12, 12]);
         next.active = Some("b".to_owned());
         feed.apply(&mut stage, &next).unwrap();
@@ -314,12 +354,85 @@ mod tests {
     fn a_changed_roster_resets_without_replay() {
         let mut stage = stage();
         let mut feed = CombatFeed::default();
-        feed.apply(&mut stage, &snapshot(vec![strike(true, 1, 11, false)], [12, 12, 11]))
-            .unwrap();
+        feed.apply(
+            &mut stage,
+            &snapshot(vec![strike(true, 1, 11, false)], [12, 12, 11]),
+        )
+        .unwrap();
         let mut smaller = snapshot(vec![], [12, 12, 12]);
         smaller.members.pop();
         let report = feed.apply(&mut stage, &smaller).unwrap();
         assert_eq!(report, FeedReport::default());
         assert_eq!(stage.tokens().count(), 2);
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+    use crate::battle::scene_file::load_embedded;
+
+    #[test]
+    fn in_cue_mode_a_new_outcome_stages_nothing_but_keeps_the_bar_until_the_cue_strikes() {
+        let mut stage = Stage::new(load_embedded("salt-quay").unwrap().unwrap(), false);
+        let mut feed = CombatFeed {
+            mode: FeedMode::HoldForCues,
+            ..CombatFeed::default()
+        };
+        let member = |id: &str, side, hp| Member {
+            id: id.to_owned(),
+            name: id.to_uppercase(),
+            side,
+            hit_points: hp,
+            maximum_hit_points: 12,
+            height_m: 1.5,
+            figure: None,
+            portrait: None,
+        };
+        let snapshot = |hp, outcomes| CombatSnapshot {
+            members: vec![member("a", Side::Hero, 12), member("e", Side::Enemy, hp)],
+            active: Some("a".to_owned()),
+            round: 1,
+            outcomes,
+        };
+        feed.apply(&mut stage, &snapshot(12, vec![])).unwrap();
+        let hit = Outcome {
+            actor: "a".to_owned(),
+            target: "e".to_owned(),
+            hit: true,
+            critical: false,
+            damage: 5,
+            target_hit_points_after: 7,
+            downed: false,
+        };
+        let report = feed.apply(&mut stage, &snapshot(7, vec![hit])).unwrap();
+        assert_eq!(report.staged, 0);
+        assert!(!stage.is_busy());
+        let shown = |stage: &Stage| {
+            stage
+                .frame()
+                .figures
+                .iter()
+                .find(|figure| figure.id.0 == "e")
+                .and_then(|figure| figure.hit_points)
+                .map(|hp| hp.current)
+        };
+        assert_eq!(shown(&stage), Some(12));
+        stage
+            .stage(Beat::Strike {
+                attacker: TokenId::new("a"),
+                target: TokenId::new("e"),
+                result: AttackResult::Hit {
+                    damage: 5,
+                    critical: false,
+                    downed: false,
+                },
+                target_hit_points_after: Some(7),
+            })
+            .unwrap();
+        for _ in 0..40 {
+            stage.update(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(shown(&stage), Some(7));
     }
 }

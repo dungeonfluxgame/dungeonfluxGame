@@ -17,15 +17,16 @@ use super::{
     },
 };
 
-const FOCUS_PAN: Duration = Duration::from_millis(700);
-const FOCUS_HOLD: Duration = Duration::from_millis(250);
-const STEP: Duration = Duration::from_millis(300);
+const FOCUS_PAN: Duration = Duration::from_millis(650);
+const FOCUS_HOLD: Duration = Duration::from_millis(200);
+const STEP: Duration = Duration::from_millis(260);
+const WALK_START: Duration = Duration::from_millis(150);
 const IMPACT_PAN: Duration = Duration::from_millis(380);
 const SETTLE_PAN: Duration = Duration::from_millis(900);
 const FINISHING_PUSH: Duration = Duration::from_millis(3200);
 const FINISHING_HOLD: Duration = Duration::from_millis(3600);
 pub const LUNGE: Duration = Duration::from_millis(460);
-pub const LUNGE_CONTACT: Duration = Duration::from_millis(230);
+pub const LUNGE_CONTACT: Duration = Duration::from_millis(170);
 pub const RECOIL: Duration = Duration::from_millis(420);
 pub const FALL: Duration = Duration::from_millis(900);
 pub const HEAL: Duration = Duration::from_millis(1300);
@@ -67,10 +68,10 @@ pub enum Step {
         pan: Duration,
     },
     Highlight(Option<Highlight>),
-    /// Move a token cell by cell; `path` excludes the cell it starts on.
-    Walk {
+    /// Walk a token cell by cell from wherever it stands to `cell` (nothing if already there).
+    MoveTo {
         token: TokenId,
-        path: Vec<Cell>,
+        cell: Cell,
         per_step: Duration,
     },
     Animate {
@@ -149,23 +150,65 @@ fn camera(shot: ShotName, focus: CameraFocus, dolly: f32) -> CameraCommand {
     CameraCommand { shot, focus, dolly }
 }
 
-/// Plans the staging of `beat` against the current formation.
+/// Plans the staging of `beat` against the current formation. `tokens` carry their formation
+/// (home) cells; the attacker's steps are planned from home and the stage resolves where it
+/// actually stands.
 pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, PlanError> {
     match beat {
         Beat::TurnStart { actor } => plan_turn(tokens, actor),
+        Beat::Approach { attacker, target } => {
+            let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
+            let mut builder = Builder { steps: Vec::new() };
+            let end = approach(&mut builder, grid, tokens, attacker, target, Duration::ZERO);
+            Ok(builder.finish(end))
+        }
+        Beat::Strike {
+            attacker,
+            target,
+            result,
+            target_hit_points_after,
+        } => {
+            let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
+            let mut builder = Builder { steps: Vec::new() };
+            builder.at(Duration::ZERO, Step::SetActive(Some(attacker.id.clone())));
+            let beside = fighting_cell(grid, tokens, attacker, target);
+            builder.at(
+                Duration::ZERO,
+                Step::MoveTo {
+                    token: attacker.id.clone(),
+                    cell: beside,
+                    per_step: Duration::ZERO,
+                },
+            );
+            let end = strike(
+                &mut builder,
+                attacker,
+                target,
+                *result,
+                *target_hit_points_after,
+                Duration::ZERO,
+            );
+            Ok(builder.finish(end))
+        }
         Beat::Attack {
             attacker,
             target,
             result,
             target_hit_points_after,
-        } => plan_attack(
-            grid,
-            tokens,
-            attacker,
-            target,
-            *result,
-            *target_hit_points_after,
-        ),
+        } => {
+            let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
+            let mut builder = Builder { steps: Vec::new() };
+            let ready = approach(&mut builder, grid, tokens, attacker, target, Duration::ZERO);
+            let end = strike(
+                &mut builder,
+                attacker,
+                target,
+                *result,
+                *target_hit_points_after,
+                ready + FOCUS_HOLD,
+            );
+            Ok(builder.finish(end))
+        }
         Beat::Heal {
             source,
             target,
@@ -196,101 +239,113 @@ fn plan_turn(tokens: &[Token], actor: &TokenId) -> Result<Timeline, PlanError> {
     Ok(builder.finish(FOCUS_PAN))
 }
 
-fn plan_attack(
+/// The cell the attacker fights from: its own when already beside the target, else the free
+/// cell beside the target closest to it. Deterministic, so the approach and the strike agree.
+fn fighting_cell(grid: &Grid, tokens: &[Token], attacker: &Token, target: &Token) -> Cell {
+    if attacker.cell.steps_to(target.cell) <= 1 {
+        return attacker.cell;
+    }
+    let occupied: Vec<Cell> = tokens
+        .iter()
+        .filter(|token| token.id != attacker.id)
+        .map(|token| token.cell)
+        .collect();
+    grid.free_cell_beside(target.cell, attacker.cell, &occupied)
+        .unwrap_or(attacker.cell)
+}
+
+/// Turn-focus shot on the attacker while it steps next to the target. Returns when it is set.
+fn approach(
+    builder: &mut Builder,
     grid: &Grid,
     tokens: &[Token],
-    attacker_id: &TokenId,
-    target_id: &TokenId,
-    result: AttackResult,
-    hit_points_after: Option<u32>,
-) -> Result<Timeline, PlanError> {
-    let attacker = find(tokens, attacker_id)?;
-    let target = find(tokens, target_id)?;
-    let mut builder = Builder { steps: Vec::new() };
-    builder.at(Duration::ZERO, Step::SetActive(Some(attacker_id.clone())));
+    attacker: &Token,
+    target: &Token,
+    base: Duration,
+) -> Duration {
+    builder.at(base, Step::SetActive(Some(attacker.id.clone())));
     builder.at(
-        Duration::ZERO,
+        base,
         Step::Camera {
             command: camera(
                 ShotName::TurnFocus,
-                CameraFocus::Token(attacker_id.clone()),
+                CameraFocus::Token(attacker.id.clone()),
                 1.0,
             ),
             pan: FOCUS_PAN,
         },
     );
-    let mut now = FOCUS_PAN + FOCUS_HOLD;
-
-    // Step next to the target when not already beside it.
-    let occupied: Vec<Cell> = tokens
-        .iter()
-        .filter(|token| token.id != *attacker_id)
-        .map(|token| token.cell)
-        .collect();
-    let approach = (attacker.cell.steps_to(target.cell) > 1)
-        .then(|| grid.free_cell_beside(target.cell, attacker.cell, &occupied))
-        .flatten()
-        .and_then(|beside| grid.path(attacker.cell, beside));
-    let stepped = approach.as_ref().is_some_and(|path| path.len() > 1);
-    if let Some(path) = approach.filter(|path| path.len() > 1) {
-        let steps: Vec<Cell> = path[1..].to_vec();
-        let walk = STEP * steps.len() as u32;
+    let mut end = base + FOCUS_PAN;
+    let beside = fighting_cell(grid, tokens, attacker, target);
+    if beside != attacker.cell {
+        let steps = grid
+            .path(attacker.cell, beside)
+            .map_or(0, |path| path.len().saturating_sub(1)) as u32;
         builder.at(
-            now,
-            Step::Walk {
-                token: attacker_id.clone(),
-                path: steps,
+            base + WALK_START,
+            Step::MoveTo {
+                token: attacker.id.clone(),
+                cell: beside,
                 per_step: STEP,
             },
         );
-        now += walk;
+        end = end.max(base + WALK_START + STEP * steps);
     }
-    let beside = approach_end(&builder, attacker.cell);
+    end
+}
 
+/// Lunge, contact (impact shot, shake, flash, number, recoil) and then either the fall and the
+/// finishing cue, or everyone settling back to formation. Returns when it is over.
+fn strike(
+    builder: &mut Builder,
+    attacker: &Token,
+    target: &Token,
+    result: AttackResult,
+    hit_points_after: Option<u32>,
+    base: Duration,
+) -> Duration {
     builder.at(
-        now,
+        base,
         Step::Highlight(Some(Highlight {
             kind: HighlightKind::Attack,
             cells: vec![target.cell],
         })),
     );
     builder.at(
-        now,
+        base,
         Step::Animate {
-            token: attacker_id.clone(),
+            token: attacker.id.clone(),
             anim: Anim::Lunge {
-                toward: target_id.clone(),
+                toward: target.id.clone(),
             },
         },
     );
-    let contact = now + LUNGE_CONTACT;
-    let mut end = now + LUNGE;
+    let contact = base + LUNGE_CONTACT;
+    let impact_camera = Step::Camera {
+        command: camera(
+            ShotName::Impact,
+            CameraFocus::Between(attacker.id.clone(), target.id.clone()),
+            1.0,
+        ),
+        pan: IMPACT_PAN,
+    };
+    let mut end = base + LUNGE;
     match result {
         AttackResult::Miss => {
-            builder.at(
-                contact,
-                Step::Camera {
-                    command: camera(
-                        ShotName::Impact,
-                        CameraFocus::Between(attacker_id.clone(), target_id.clone()),
-                        1.0,
-                    ),
-                    pan: IMPACT_PAN,
-                },
-            );
+            builder.at(contact, impact_camera);
             builder.at(
                 contact,
                 Step::Animate {
-                    token: target_id.clone(),
+                    token: target.id.clone(),
                     anim: Anim::Dodge {
-                        from: attacker_id.clone(),
+                        from: attacker.id.clone(),
                     },
                 },
             );
             builder.at(
                 contact,
                 Step::Float {
-                    token: target_id.clone(),
+                    token: target.id.clone(),
                     text: "Miss".to_owned(),
                     tone: FloatTone::Miss,
                 },
@@ -301,17 +356,7 @@ fn plan_attack(
             critical,
             downed,
         } => {
-            builder.at(
-                contact,
-                Step::Camera {
-                    command: camera(
-                        ShotName::Impact,
-                        CameraFocus::Between(attacker_id.clone(), target_id.clone()),
-                        1.0,
-                    ),
-                    pan: IMPACT_PAN,
-                },
-            );
+            builder.at(contact, impact_camera);
             builder.at(
                 contact,
                 Step::Shake {
@@ -333,7 +378,7 @@ fn plan_attack(
             builder.at(
                 contact,
                 Step::Float {
-                    token: target_id.clone(),
+                    token: target.id.clone(),
                     text: damage.to_string(),
                     tone: if critical {
                         FloatTone::Critical
@@ -345,9 +390,9 @@ fn plan_attack(
             builder.at(
                 contact,
                 Step::Animate {
-                    token: target_id.clone(),
+                    token: target.id.clone(),
                     anim: Anim::Recoil {
-                        from: attacker_id.clone(),
+                        from: attacker.id.clone(),
                     },
                 },
             );
@@ -355,7 +400,7 @@ fn plan_attack(
                 builder.at(
                     contact,
                     Step::ShowHitPoints {
-                        token: target_id.clone(),
+                        token: target.id.clone(),
                         current,
                     },
                 );
@@ -365,7 +410,7 @@ fn plan_attack(
                 builder.at(
                     fall,
                     Step::Animate {
-                        token: target_id.clone(),
+                        token: target.id.clone(),
                         anim: Anim::Fall,
                     },
                 );
@@ -374,8 +419,8 @@ fn plan_attack(
                     builder.at(
                         cue,
                         Step::FinishingBlow {
-                            hero: attacker_id.clone(),
-                            enemy: target_id.clone(),
+                            hero: attacker.id.clone(),
+                            enemy: target.id.clone(),
                         },
                     );
                     builder.at(
@@ -383,7 +428,7 @@ fn plan_attack(
                         Step::Camera {
                             command: camera(
                                 ShotName::Victory,
-                                CameraFocus::Token(attacker_id.clone()),
+                                CameraFocus::Token(attacker.id.clone()),
                                 0.7,
                             ),
                             pan: FINISHING_PUSH,
@@ -391,17 +436,16 @@ fn plan_attack(
                     );
                     let over = cue + FINISHING_HOLD;
                     builder.at(over, Step::EndFinishingBlow);
-                    return Ok(builder.finish(over));
+                    return over;
                 }
                 builder.at(
                     fall,
                     Step::Camera {
-                        command: camera(ShotName::Ko, CameraFocus::Token(target_id.clone()), 1.0),
+                        command: camera(ShotName::Ko, CameraFocus::Token(target.id.clone()), 1.0),
                         pan: SETTLE_PAN,
                     },
                 );
-                end = fall + FALL;
-                return Ok(builder.finish(end));
+                return fall + FALL;
             }
         }
     }
@@ -409,43 +453,22 @@ fn plan_attack(
     // Settle: everyone returns to formation and the camera widens.
     end += Duration::from_millis(220);
     builder.at(end, Step::Highlight(None));
-    if stepped {
-        let home = grid.path(beside, attacker.cell).unwrap_or_default();
-        if home.len() > 1 {
-            let steps: Vec<Cell> = home[1..].to_vec();
-            let walk = STEP * steps.len() as u32;
-            builder.at(
-                end,
-                Step::Walk {
-                    token: attacker_id.clone(),
-                    path: steps,
-                    per_step: STEP,
-                },
-            );
-            end += walk;
-        }
-    }
     builder.at(
         end,
+        Step::MoveTo {
+            token: attacker.id.clone(),
+            cell: attacker.cell,
+            per_step: STEP,
+        },
+    );
+    builder.at(
+        end + Duration::from_millis(200),
         Step::Camera {
             command: camera(ShotName::CombatEst, CameraFocus::Scene, 1.0),
             pan: SETTLE_PAN,
         },
     );
-    Ok(builder.finish(end + SETTLE_PAN))
-}
-
-/// The cell the attacker ends its approach on: the last cell of a queued walk, else where it was.
-fn approach_end(builder: &Builder, start: Cell) -> Cell {
-    builder
-        .steps
-        .iter()
-        .rev()
-        .find_map(|timed| match &timed.step {
-            Step::Walk { path, .. } => path.last().copied(),
-            _ => None,
-        })
-        .unwrap_or(start)
+    end + SETTLE_PAN + Duration::from_millis(200)
 }
 
 fn plan_heal(
@@ -566,7 +589,7 @@ mod tests {
                     ShotName::Tactical => "tactical-shot",
                 },
                 Step::Highlight(_) => "highlight",
-                Step::Walk { .. } => "walk",
+                Step::MoveTo { .. } => "walk",
                 Step::Animate { anim, .. } => match anim {
                     Anim::Lunge { .. } => "lunge",
                     Anim::Recoil { .. } => "recoil",
@@ -627,6 +650,17 @@ mod tests {
         assert!(timeline.duration >= *times.last().unwrap());
     }
 
+    fn moves(timeline: &Timeline) -> Vec<(Cell, Duration)> {
+        timeline
+            .steps
+            .iter()
+            .filter_map(|timed| match &timed.step {
+                Step::MoveTo { cell, per_step, .. } => Some((*cell, *per_step)),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn the_attacker_walks_to_a_free_cell_beside_the_target_and_back() {
         let (grid, tokens) = field();
@@ -640,34 +674,66 @@ mod tests {
             }),
         )
         .unwrap();
-        let walks: Vec<&Step> = timeline
-            .steps
-            .iter()
-            .map(|timed| &timed.step)
-            .filter(|step| matches!(step, Step::Walk { .. }))
-            .collect();
-        assert_eq!(walks.len(), 2, "out and back");
-        let Step::Walk { path: out, .. } = walks[0] else {
-            unreachable!()
-        };
-        let Step::Walk { path: back, .. } = walks[1] else {
-            unreachable!()
-        };
-        let beside = *out.last().unwrap();
+        let moves = moves(&timeline);
+        assert_eq!(moves.len(), 2, "out and back");
+        let beside = moves[0].0;
         assert_eq!(beside.steps_to(Cell::new(4, 1)), 1);
         assert_ne!(beside, Cell::new(4, 1));
-        assert_eq!(*back.last().unwrap(), Cell::new(3, 4));
+        assert_eq!(moves[1].0, Cell::new(3, 4));
         let names = names(&timeline);
         assert!(!names.contains(&"fall"));
         assert_eq!(names.last(), Some(&"settle-shot"));
     }
 
     #[test]
-    fn an_attacker_already_beside_the_target_does_not_walk() {
+    fn an_attacker_already_beside_the_target_never_leaves_its_cell() {
         let (grid, mut tokens) = field();
         tokens[0].cell = Cell::new(4, 2);
         let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
-        assert!(!names(&timeline).contains(&"walk"));
+        assert!(
+            moves(&timeline)
+                .iter()
+                .all(|(cell, _)| *cell == Cell::new(4, 2))
+        );
+    }
+
+    #[test]
+    fn approach_and_strike_together_match_the_whole_attack_in_order() {
+        let (grid, tokens) = field();
+        let result = AttackResult::Hit {
+            damage: 4,
+            critical: false,
+            downed: false,
+        };
+        let approach_only = plan(
+            &grid,
+            &tokens,
+            &Beat::Approach {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+            },
+        )
+        .unwrap();
+        let strike_only = plan(
+            &grid,
+            &tokens,
+            &Beat::Strike {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result,
+                target_hit_points_after: Some(3),
+            },
+        )
+        .unwrap();
+        let first = names(&approach_only);
+        assert_eq!(first, vec!["active", "focus", "walk"]);
+        assert!(!first.contains(&"lunge"));
+        let second = names(&strike_only);
+        assert!(position(&second, "lunge") < position(&second, "impact-shot"));
+        assert!(!second.contains(&"focus"));
+        // The strike snaps the attacker beside the target first, in case the approach was skipped.
+        assert_eq!(moves(&strike_only)[0].1, Duration::ZERO);
+        assert!(approach_only.duration < Duration::from_millis(1200));
     }
 
     #[test]

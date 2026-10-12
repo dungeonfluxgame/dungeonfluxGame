@@ -10,7 +10,7 @@ use web_sys::HtmlCanvasElement;
 use super::sys::{
     self, Descriptor, Gpu, GpuAdapter, GpuBindGroup, GpuCanvasContext, GpuDevice, GpuQueue,
     GpuSampler, GpuTexture, SHADER_FRAGMENT, SHADER_VERTEX, TEXTURE_BINDING, TEXTURE_COPY_DST,
-    TEXTURE_RENDER_ATTACHMENT, array,
+    TEXTURE_COPY_SRC, TEXTURE_RENDER_ATTACHMENT, array,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -331,4 +331,5 @@ impl Drop for GpuCore {
 }
 
 pub const COLOUR_TARGET_USAGE: u32 = TEXTURE_RENDER_ATTACHMENT | TEXTURE_BINDING;
-pub const IMAGE_USAGE: u32 = TEXTURE_BINDING | TEXTURE_COPY_DST | TEXTURE_RENDER_ATTACHMENT;
+pub const IMAGE_USAGE: u32 =
+    TEXTURE_BINDING | TEXTURE_COPY_DST | TEXTURE_RENDER_ATTACHMENT | TEXTURE_COPY_SRC;

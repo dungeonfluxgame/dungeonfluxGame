@@ -416,9 +416,8 @@ impl SplatLoader for ProceduralGround {
                 let lump = 1.0
                     + (smooth_noise(normal.x * 3.0 + rock as f32, normal.z * 3.0, 13) - 0.5) * 0.5;
                 let position = Vec3::new(cx, base - radius * 0.15, cz) + normal * (radius * lump);
-                let shade = 0.28
-                    + smooth_noise(position.x * 6.0, position.y * 6.0 + position.z * 6.0, 17)
-                        * 0.25;
+                let shade = 0.1
+                    + smooth_noise(position.x * 6.0, position.y * 6.0 + position.z * 6.0, 17) * 0.2;
                 splats.push(RawSplat {
                     position,
                     scale: Vec3::new(0.05, 0.05, 0.05),

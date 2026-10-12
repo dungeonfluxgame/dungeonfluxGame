@@ -14,7 +14,9 @@ mod host;
 mod hud;
 
 mod camera;
+mod combat_feed;
 mod director;
+mod figure_art;
 mod formation;
 mod grid;
 mod math;
@@ -25,13 +27,15 @@ mod stage;
 mod theme;
 
 pub use camera::{CameraPose, CameraRig, PoseError, ShotName};
+pub use combat_feed::{CombatFeed, CombatSnapshot, FeedMode, FeedReport, Member, Outcome};
 pub use director::{Anim, FlashTone, PlanError, Step, TimedStep, Timeline, plan};
+pub use figure_art::{VisibleBounds, visible_bounds};
 pub use formation::{Formation, FormationError, derive as derive_formation};
 pub use grid::{Cell, Grid, GridError};
 pub use math::{Mat4, Quat, Vec3};
 pub use model::{
     AttackResult, Beat, CameraCommand, CameraFocus, FinishingBlow, FloatTone, FloatingText,
-    Highlight, HighlightKind, HitPoints, HudState, Side, Status, Token, TokenId,
+    Highlight, HighlightKind, HitPoints, HudState, RollCard, Side, Status, Token, TokenId,
 };
 pub use scene_file::{
     BackdropLayer, BattleScene, DEFAULT_SCENE_ID, GroundLayer, SceneFileError, SplatFormat,

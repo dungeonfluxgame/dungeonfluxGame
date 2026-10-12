@@ -1,8 +1,9 @@
 /* The 3D battlefield and its heads-up display. --u is 1% of the width of the largest 16:9 box that
    fits, as on the shared display, so type scales together on a television. The smallest text here
-   is 1.1 * --u, which is 21px at 1920x1080 (above 1.6vh). */
+   is 1.3 * --u, which is 25px at 1920x1080 (above 1.6vh = 17px). */
 .battlefield{--u:min(1vw,1.7778vh);--gold:#e8cb94;--ivory:#f7efdc;position:fixed;inset:0;z-index:40;overflow:hidden;background:#05090f;color:var(--ivory);font-family:var(--serif,Georgia,'Times New Roman',serif);text-shadow:0 2px 12px #000c}
 .battlefield *{box-sizing:border-box;min-width:0}
+.battlefield[data-closing]{opacity:0;transition:opacity .7s ease}
 .bf-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .bf-hud{position:absolute;inset:0;pointer-events:none}
 
@@ -10,7 +11,7 @@
 .bf-title{margin:0;font-size:calc(var(--u)*2.3);font-weight:400;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);text-shadow:0 3px 22px #000}
 .bf-turn{margin:0;min-height:calc(var(--u)*2);font-size:calc(var(--u)*1.7);font-style:italic;color:#eadfc6}
 .bf-order{display:flex;align-items:center;gap:calc(var(--u)*1);padding:calc(var(--u)*.45) calc(var(--u)*1.2);background:#0a1018d9;border:1px solid #c9a35f77;border-radius:calc(var(--u)*.6)}
-.bf-round{font-size:calc(var(--u)*1.2);letter-spacing:.2em;text-transform:uppercase;color:var(--gold);text-shadow:none}
+.bf-round{font-size:calc(var(--u)*1.3);letter-spacing:.2em;text-transform:uppercase;color:var(--gold);text-shadow:none}
 .bf-round:empty{display:none}
 .bf-chips{display:flex;gap:calc(var(--u)*.7)}
 .bf-chip{position:relative;display:grid;place-items:center;width:calc(var(--u)*3.4);height:calc(var(--u)*3.4);border-radius:50%;border:max(2px,calc(var(--u)*.14)) solid #6c7f93;background:#162230 center 18%/cover;opacity:.78;transition:transform .3s ease,box-shadow .3s ease,opacity .3s ease}
@@ -27,8 +28,8 @@
 .bf-plate[data-active=true]{border-color:#f2c773;box-shadow:0 0 calc(var(--u)*1.2) #f2c77366}
 .bf-plate[data-down=true]{opacity:.55;filter:grayscale(.7)}
 .bf-portrait{display:grid;place-items:center;width:calc(var(--u)*4.4);height:calc(var(--u)*4.4);border-radius:calc(var(--u)*.45);border:max(2px,calc(var(--u)*.1)) solid #cba466b3;background:#162230 center 18%/cover;font-size:calc(var(--u)*2);color:var(--gold)}
-.bf-plate-name{font-size:calc(var(--u)*1.6);line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bf-plate-hp{font-size:calc(var(--u)*1.15);color:#c9bb9b;text-shadow:none;margin-top:calc(var(--u)*.1)}
+.bf-plate-name{font-size:calc(var(--u)*1.55);line-height:1.12;overflow-wrap:anywhere}
+.bf-plate-hp{font-size:calc(var(--u)*1.3);color:#c9bb9b;text-shadow:none;margin-top:calc(var(--u)*.1)}
 .bf-hp{height:calc(var(--u)*.7);margin-top:calc(var(--u)*.3);background:#1a0c0cb3;border-radius:calc(var(--u)*.4);overflow:hidden}
 .bf-hp-fill{height:100%;background:linear-gradient(90deg,#b52f2a,#e2553f);transition:width .6s ease}
 .bf-party .bf-hp-fill{background:linear-gradient(90deg,#3f9d58,#7fd68a)}
@@ -39,18 +40,27 @@
 .bf-float[data-tone=miss]{font-size:calc(var(--u)*2.8);font-style:italic;font-weight:400;color:#c9d3df}
 .bf-float[data-tone=heal]{color:#7ee8a0}
 
+.bf-roll{position:absolute;left:50%;bottom:calc(var(--u)*3);transform:translate(-50%,calc(var(--u)*1.5));display:flex;align-items:center;gap:calc(var(--u)*1.6);max-width:calc(var(--u)*58);padding:calc(var(--u)*.8) calc(var(--u)*1.6);background:linear-gradient(135deg,#0b1623ee,#050b13f2);border:1px solid #c9a35fa6;border-radius:calc(var(--u)*.7);opacity:0;transition:opacity .35s ease,transform .35s ease}
+.bf-roll[data-open]{opacity:1;transform:translate(-50%,0)}
+.bf-roll-die{display:grid;place-items:center;flex:none;width:calc(var(--u)*6.4);height:calc(var(--u)*6.4);border:max(2px,calc(var(--u)*.16)) solid var(--gold);border-radius:calc(var(--u)*1.1);font-size:calc(var(--u)*3.6);font-weight:700;color:var(--gold);background:#101a28}
+.bf-roll-label{margin:0;font-size:calc(var(--u)*1.6);font-weight:400}
+.bf-roll-verdict{margin:calc(var(--u)*.2) 0;font-size:calc(var(--u)*1.7);letter-spacing:.18em;text-transform:uppercase;color:#bfe0b4}
+.bf-roll[data-tone=miss] .bf-roll-verdict{color:#e7a39a}
+.bf-roll[data-tone=critical] .bf-roll-verdict{color:#ffd24a}
+.bf-roll-text{margin:0;font-size:calc(var(--u)*1.3);color:#c9bb9b;text-shadow:none}
+.bf-hud[data-finish] .bf-roll{opacity:0}
 .bf-bar{position:absolute;left:0;right:0;height:0;background:#000;transition:height .9s ease}
 .bf-bar-top{top:0}
 .bf-bar-bottom{bottom:0}
 .bf-finish{position:absolute;left:7vw;bottom:calc(var(--u)*10.5);display:flex;flex-direction:column;gap:calc(var(--u)*.35);opacity:0;transform:translateY(calc(var(--u)*1.2));transition:opacity .9s ease .5s,transform .9s ease .5s}
-.bf-finish-label{margin:0;font-size:calc(var(--u)*1.2);letter-spacing:.3em;text-transform:uppercase;color:var(--gold)}
+.bf-finish-label{margin:0;font-size:calc(var(--u)*1.3);letter-spacing:.3em;text-transform:uppercase;color:var(--gold)}
 .bf-finish-title{margin:0;font-size:calc(var(--u)*5.2);font-weight:400;letter-spacing:.05em;text-transform:uppercase;line-height:1.05;text-shadow:0 4px 30px #000}
 .bf-finish-names{margin:0;font-size:calc(var(--u)*1.6);color:#d6cdb6}
 .bf-hud[data-finish] .bf-bar{height:13vh}
 .bf-hud[data-finish] .bf-finish{opacity:1;transform:none}
 .bf-hud[data-finish] .bf-top,.bf-hud[data-finish] .bf-party,.bf-hud[data-finish] .bf-enemies{opacity:0}
 
-.bf-unavailable{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;padding:calc(var(--u)*1.4) calc(var(--u)*2);background:#080f19f2;border:1px solid #c9a35f99;border-radius:10px;text-align:center;font:calc(var(--u)*1.6)/1.35 var(--serif,Georgia,serif);color:#f0d9aa;z-index:60}
+.bf-unavailable{--u:min(1vw,1.7778vh);position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;padding:calc(var(--u)*1.4) calc(var(--u)*2);background:#080f19f2;border:1px solid #c9a35f99;border-radius:10px;text-align:center;font:calc(var(--u)*1.6)/1.35 var(--serif,Georgia,serif);color:#f0d9aa;z-index:60}
 
 @media (prefers-reduced-motion:reduce){
   .bf-chip,.bf-top,.bf-party,.bf-enemies,.bf-hp-fill,.bf-bar,.bf-finish,.bf-plate{transition:none}

@@ -29,7 +29,7 @@ const GENERATED: &str = "/assets/ui/generated";
 const DEPTH_FORMAT: &str = "depth32float";
 const COLOUR_FORMAT: &str = "rgba8unorm";
 const DECAL_STRIDE: usize = 12;
-const FIGURE_STRIDE: usize = 16;
+const FIGURE_STRIDE: usize = 20;
 const MAX_DECALS: usize = 768;
 const MAX_FIGURES: usize = 16;
 const NEAR: f32 = 0.1;
@@ -108,6 +108,8 @@ pub struct Renderer {
     sorter: SplatSorter,
     pub quality: Quality,
     frame_ms_average: f32,
+    spot: (f32, f32, f32),
+    last_clock_s: f32,
     frames_seen: u32,
     stats: RenderStats,
 }
@@ -244,7 +246,7 @@ impl Renderer {
                 &texture_layout,
                 vec![],
                 "triangle-list",
-                Some((false, "always")),
+                Some((true, "always")),
                 COLOUR_FORMAT,
                 false,
             ),
@@ -272,7 +274,7 @@ impl Renderer {
                 &core,
                 &shaders::figure(),
                 &texture_layout,
-                vec![instance_layout(FIGURE_STRIDE, 4)],
+                vec![instance_layout(FIGURE_STRIDE, 5)],
                 "triangle-list",
                 Some((false, "less-equal")),
                 COLOUR_FORMAT,
@@ -353,6 +355,8 @@ impl Renderer {
                 tilt_shift: true,
             },
             frame_ms_average: 16.0,
+            spot: (0.0, 0.0, 0.0),
+            last_clock_s: 0.0,
             frames_seen: 0,
             stats: RenderStats::default(),
         };
@@ -382,7 +386,30 @@ impl Renderer {
         wasm_bindgen_futures::spawn_local(async move {
             let url = format!("{GENERATED}/{stem}");
             let slot = match textures::load_image(&core, &url, premultiplied, repeat).await {
-                Ok(texture) => Slot::Ready(Rc::new(texture)),
+                Ok(mut texture) => {
+                    if premultiplied {
+                        // Measure the visible figure so it is scaled and planted by its own box.
+                        let pixels = textures::read_texture_rgba(
+                            &core,
+                            &texture.texture,
+                            texture.width,
+                            texture.height,
+                        )
+                        .await;
+                        if let Ok(pixels) = pixels
+                            && let Some(bounds) = crate::battle::visible_bounds(
+                                &pixels,
+                                texture.width,
+                                texture.height,
+                                24,
+                                3,
+                            )
+                        {
+                            texture.bounds = bounds;
+                        }
+                    }
+                    Slot::Ready(Rc::new(texture))
+                }
                 Err(_) => Slot::Failed,
             };
             cache.borrow_mut().insert(stem, slot);
@@ -496,6 +523,7 @@ impl Renderer {
 
     fn write_frame(
         &self,
+        spot: (f32, f32, f32),
         frame: &FrameView<'_>,
         scene: &BattleScene,
         size: (u32, u32),
@@ -515,7 +543,7 @@ impl Renderer {
         };
         let focal = 0.5 * size.1 as f32 / (pose.fov_deg.to_radians() * 0.5).tan();
         let centre = scene.grid.centre();
-        let mut data = Vec::with_capacity(56);
+        let mut data = Vec::with_capacity(60);
         data.extend_from_slice(&view_proj.0);
         data.extend_from_slice(&view.0);
         data.extend_from_slice(&[eye.x, eye.y, eye.z, frame.clock_s]);
@@ -534,6 +562,7 @@ impl Renderer {
             scene.backdrop.base_m,
             scene.backdrop.height_m,
         ]);
+        data.extend_from_slice(&[spot.0, spot.1, 3.4, spot.2]);
         self.core
             .queue
             .write_buffer(&self.frame_buffer, 0.0, &float_array(&data));
@@ -692,6 +721,12 @@ impl Renderer {
                 has_texture,
                 if figure.side == Side::Enemy { 1.0 } else { 0.0 },
             ]);
+            data.extend_from_slice(&[
+                texture.bounds.top,
+                texture.bounds.bottom,
+                texture.bounds.centre(),
+                0.0,
+            ]);
             bound.push(texture);
         }
         (data, bound)
@@ -735,7 +770,23 @@ impl Renderer {
         };
         let pose = frame.camera;
         let forward = (pose.target - pose.eye()).normalized();
-        self.write_frame(frame, scene, size, forward);
+        let dt = (frame.clock_s - self.last_clock_s).clamp(0.0, 0.1);
+        self.last_clock_s = frame.clock_s;
+        let acting = frame.figures.iter().find(|figure| figure.active);
+        let ease = 1.0 - (-6.0 * dt).exp();
+        match acting {
+            Some(figure) => {
+                if self.spot.2 < 0.02 {
+                    self.spot.0 = figure.position.x;
+                    self.spot.1 = figure.position.z;
+                }
+                self.spot.0 += (figure.position.x - self.spot.0) * ease;
+                self.spot.1 += (figure.position.z - self.spot.1) * ease;
+                self.spot.2 += (1.0 - self.spot.2) * ease;
+            }
+            None => self.spot.2 += (0.0 - self.spot.2) * ease,
+        }
+        self.write_frame(self.spot, frame, scene, size, forward);
         self.write_post(frame, scene, size);
         let decals = self.decals(frame, &scene.grid);
         let decal_count = decals.len() / DECAL_STRIDE;
