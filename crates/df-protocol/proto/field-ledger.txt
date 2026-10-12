@@ -386,5 +386,14 @@ field dungeonflux.public.v1.JourneyView 13 standing type=11 label=3 presence=fal
 field dungeonflux.public.v1.GameplayScene 6 rules_note type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 7 place type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 12 table_choices type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 8 location_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatView 8 initiative type=11 label=3 presence=false target=.dungeonflux.public.v1.InitiativeRoll oneof=-
+message dungeonflux.public.v1.InitiativeRoll
+field dungeonflux.public.v1.InitiativeRoll 1 participant_id type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.InitiativeRoll 2 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.InitiativeRoll 3 die type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.InitiativeRoll 4 modifier type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.InitiativeRoll 5 total type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.InitiativeRoll 6 order type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 15 presentation_sequence type=4 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 16 reply_speaker type=9 label=1 presence=false target=- oneof=-

@@ -2,6 +2,12 @@
 //! membership, not production bootstrap. The action and its outcome use generated RPC.
 mod actor;
 mod adventure;
+mod beat_script;
+mod beat_script_runtime;
+#[cfg(test)]
+mod beat_script_tests;
+#[cfg(test)]
+mod beat_script_variety_tests;
 #[cfg(test)]
 mod connection_tests;
 #[cfg(test)]

@@ -3,7 +3,7 @@
 //! is staging. The server owns every outcome; a client builds these values from the server's
 //! audience-safe combat view and never decides a hit, a miss or damage itself.
 
-use super::{camera::ShotName, grid::Cell};
+use super::{camera::ShotName, grid::Cell, status::Status};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TokenId(pub String);
@@ -20,37 +20,14 @@ pub enum Side {
     Enemy,
 }
 
-/// A condition tint shown on the figure. Cosmetic only.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Status {
-    Poisoned,
-    Burning,
-    Frozen,
-    Blessed,
-    Stunned,
-}
-
-impl Status {
-    pub fn from_key(key: &str) -> Option<Self> {
-        Some(match key {
-            "poisoned" => Self::Poisoned,
-            "burning" => Self::Burning,
-            "frozen" => Self::Frozen,
-            "blessed" => Self::Blessed,
-            "stunned" => Self::Stunned,
-            _ => return None,
-        })
-    }
-
-    pub fn tint(self) -> [f32; 3] {
-        match self {
-            Self::Poisoned => [0.55, 1.0, 0.45],
-            Self::Burning => [1.0, 0.62, 0.35],
-            Self::Frozen => [0.6, 0.85, 1.0],
-            Self::Blessed => [1.0, 0.92, 0.6],
-            Self::Stunned => [0.85, 0.85, 0.6],
-        }
-    }
+/// How a combatant delivers an attack on screen. Staging only: the server decides the outcome.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AttackStyle {
+    /// Steps up beside the target and strikes.
+    #[default]
+    Melee,
+    /// Stays put, draws and looses an arrow that flies to the target.
+    Ranged,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +59,7 @@ pub struct Token {
     pub portrait: Option<String>,
     pub hit_points: Option<HitPoints>,
     pub statuses: Vec<Status>,
+    pub attack: AttackStyle,
 }
 
 pub const MIN_HEIGHT_M: f32 = 0.6;
@@ -153,6 +131,78 @@ pub enum Beat {
         amount: u32,
         target_hit_points_after: Option<u32>,
     },
+    /// The start of a fight: everyone's d20 tumbles and lands, then the camera visits each
+    /// combatant in turn order. `rolls` are the server's recorded rolls, first to act first.
+    Initiative {
+        rolls: Vec<InitiativeRoll>,
+    },
+}
+
+/// One recorded initiative roll. Copied from the server; nothing is rolled here.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitiativeRoll {
+    pub token: TokenId,
+    pub die: u32,
+    pub modifier: i32,
+    pub total: i32,
+}
+
+/// 1 -> "1st", 2 -> "2nd", 11 -> "11th", 22 -> "22nd".
+pub fn ordinal(number: u32) -> String {
+    let suffix = match (number % 100, number % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    format!("{number}{suffix}")
+}
+
+/// The phone's header line for a player's own initiative roll, for example
+/// `Initiative 14 + 1 = 15 \u{2014} you act 2nd`.
+pub fn initiative_line(die: u32, modifier: i32, total: i32, order: u32) -> String {
+    let sign = if modifier >= 0 { '+' } else { '\u{2212}' };
+    format!(
+        "Initiative {die} {sign} {} = {total} \u{2014} you act {}",
+        modifier.unsigned_abs(),
+        ordinal(order)
+    )
+}
+
+/// A die above a figure during the initiative roll. It tumbles for `tumble_s` seconds after it
+/// appears (0 under reduced motion) and then shows its total.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DieView {
+    pub token: TokenId,
+    pub face: u32,
+    pub modifier: i32,
+    pub total: i32,
+    pub age_s: f32,
+    pub tumble_s: f32,
+    /// Set once the die has landed on its number.
+    pub landed: bool,
+}
+
+/// The big order badge that slams in beside a figure at its roll-call stop.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BadgeView {
+    pub token: TokenId,
+    pub order: u32,
+    pub name: String,
+    pub total: i32,
+    pub age_s: f32,
+}
+
+/// Everything the HUD shows for the initiative moment.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InitiativeShow {
+    pub banner: Option<String>,
+    pub dice: Vec<DieView>,
+    pub badges: Vec<BadgeView>,
+    /// While set, the round tracker shows only these tokens, in this order: it fills in as the
+    /// roll-call visits each combatant.
+    pub tracker: Option<Vec<TokenId>>,
 }
 
 /// What the HUD should show at the moment.
@@ -165,6 +215,7 @@ pub struct HudState {
     /// Turn order, first to act first. Empty means the order tokens were supplied in.
     pub initiative: Vec<TokenId>,
     pub finishing_blow: Option<FinishingBlow>,
+    pub roll_for_initiative: InitiativeShow,
 }
 
 /// What the d20 panel shows, copied from the server's roll description.
@@ -221,4 +272,35 @@ pub struct CameraCommand {
     pub shot: ShotName,
     pub focus: CameraFocus,
     pub dolly: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordinals_follow_english_including_the_teens() {
+        let words: Vec<String> = [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111]
+            .map(ordinal)
+            .into();
+        assert_eq!(
+            words,
+            [
+                "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd",
+                "101st", "111th"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_phone_line_reads_like_the_example() {
+        assert_eq!(
+            initiative_line(14, 1, 15, 2),
+            "Initiative 14 + 1 = 15 \u{2014} you act 2nd"
+        );
+        assert_eq!(
+            initiative_line(9, -1, 8, 3),
+            "Initiative 9 \u{2212} 1 = 8 \u{2014} you act 3rd"
+        );
+    }
 }

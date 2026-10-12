@@ -169,8 +169,21 @@ pub(super) fn initial() -> Result<Checkpoint, RepositoryError> {
     model::checkpoint(model::basis()?, state)
 }
 pub(super) fn phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryError> {
+    if let Some(phase) = super::beat_script::with_script(|script| {
+        if script.uses_encounter() {
+            None
+        } else {
+            Some(super::beat_script_runtime::validate(current, script))
+        }
+    }) {
+        return phase;
+    }
     let phase = narrative_phase::validate(current)?;
     encounter_outcome::validate(current, phase)?;
+    super::beat_script::with_script(|script| {
+        script.current(current.state())?;
+        super::beat_script_runtime::validate_encounter_choices(current, script)
+    })?;
     Ok(phase)
 }
 pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
@@ -451,6 +464,9 @@ fn beat(state: &mut GameState, next: &str) -> Result<(), RepositoryError> {
     Ok(())
 }
 pub(super) fn offer_id(current: &Checkpoint, kind: rpc::GameplayActionKind) -> String {
+    if let Some(id) = super::beat_script_runtime::scripted_id(current, kind) {
+        return id;
+    }
     if kind == rpc::GameplayActionKind::ChooseHarborScene {
         return format!(
             "journey-inn-{}-{}-{}",
@@ -495,6 +511,13 @@ fn authored_offered(
     current: &Checkpoint,
     member: MemberId,
 ) -> Result<Vec<(rpc::GameplayActionKind, String)>, RepositoryError> {
+    super::beat_script::admit_offers(current, handler_offered(current, member)?)
+}
+
+fn handler_offered(
+    current: &Checkpoint,
+    member: MemberId,
+) -> Result<Vec<(rpc::GameplayActionKind, String)>, RepositoryError> {
     let phase = phase(current)?;
     let who = player_entity(member, current)?;
     let ready = current
@@ -507,6 +530,24 @@ fn authored_offered(
             rpc::GameplayActionKind::CreateCharacter,
             pack::offer_label(rpc::GameplayActionKind::CreateCharacter),
         )]);
+    }
+    if let Some(offers) = super::beat_script::with_script(|script| {
+        if !script.uses_encounter() && phase != rpc::JourneyPhase::Room {
+            Some(script.current(current.state()).and_then(|beat| {
+                beat.offers
+                    .iter()
+                    .map(|offer| {
+                        script
+                            .label(offer)
+                            .map(|label| (offer.effect.action(), label))
+                    })
+                    .collect()
+            }))
+        } else {
+            None
+        }
+    }) {
+        return offers;
     }
     let result = match phase {
         rpc::JourneyPhase::Room
@@ -663,6 +704,7 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
         // The view fills in the rules note and the place, which the pack alone knows.
         rules_note: String::new(),
         place: String::new(),
+        location_id: String::new(),
     }
 }
 pub(super) fn accepted(
@@ -689,6 +731,55 @@ pub(super) enum CombatRoundError {
     Duration,
     Chronology,
     Capacity,
+}
+
+/// The initiative rolls the encounter started with, in turn order (first to act first), read
+/// from the recorded d20 draws and ability scores exactly as `combat_round` validates them:
+/// nothing is re-rolled or invented. A tie keeps the recorded turn order, so `order` is the
+/// authoritative tie-break result.
+pub(super) fn initiative_rolls(
+    current: &Checkpoint,
+) -> Result<Vec<rpc::InitiativeRoll>, CombatRoundError> {
+    use CombatRoundError as Error;
+    let state = current.state();
+    let [encounter] = state.encounters.as_slice() else {
+        return Err(Error::Encounter);
+    };
+    let start = state
+        .facts
+        .iter()
+        .find(|fact| {
+            matches!(&fact.value, FactValue::ContentEvent { definition, .. }
+            if definition.entry.as_str() == "defend-courier")
+        })
+        .ok_or(Error::Start)?;
+    let mut rolls = Vec::with_capacity(encounter.participants.len());
+    for (ordinal, who) in encounter.participants.iter().enumerate() {
+        let draw = state
+            .draws
+            .iter()
+            .find(|draw| draw.operation == start.operation && draw.ordinal == ordinal as u32)
+            .ok_or(Error::Start)?;
+        let dexterity =
+            u8::try_from(value(state, *who, "dexterity").map_err(|_| Error::Encounter)?)
+                .map_err(|_| Error::Encounter)?;
+        let modifier = rules::ability_modifier(dexterity);
+        let order = encounter
+            .turn_order
+            .iter()
+            .position(|turn| turn == who)
+            .ok_or(Error::Encounter)?;
+        rolls.push(rpc::InitiativeRoll {
+            participant_id: who.as_bytes().to_vec(),
+            name: name(state, *who).map_err(|_| Error::Source)?,
+            die: draw.value,
+            modifier,
+            total: draw.value as i32 + modifier,
+            order: order as u32 + 1,
+        });
+    }
+    rolls.sort_by_key(|roll| roll.order);
+    Ok(rolls)
 }
 
 /// Count only the current authored encounter's accepted initiative wraps.
@@ -1030,6 +1121,7 @@ pub(super) fn stage_join(
             reaction: None,
             escort_target: None,
             objective_command: None,
+            script_choice: None,
         },
     )
 }
@@ -1041,6 +1133,7 @@ struct DecisionContent<'a> {
     reaction: Option<Box<df_interaction::reactions::ReactionProposal>>,
     escort_target: Option<EntityId>,
     objective_command: Option<&'a CommandInput>,
+    script_choice: Option<(ContentReference, EntityId)>,
 }
 fn finish(
     current: &Checkpoint,
@@ -1058,6 +1151,7 @@ fn finish(
         reaction,
         escort_target,
         objective_command,
+        script_choice,
     } = content;
     let objective = objective_command
         .map(|command| objective_outcome::pending(current, &state, command))
@@ -1275,6 +1369,26 @@ fn finish(
             ordinal,
             id,
         )?;
+        facts.push(id);
+    }
+    if let Some((definition, actor)) = script_choice {
+        let ordinal = u32::try_from(facts.len()).map_err(bad)?;
+        let id = make_id(ordinal)?;
+        state.facts.push(GameFact {
+            id,
+            revision: basis.revision,
+            operation,
+            ordinal,
+            cause: facts
+                .last()
+                .copied()
+                .or_else(|| current.state().facts.last().map(|fact| fact.id)),
+            audience: AudienceScope::Shared,
+            value: FactValue::ContentEvent {
+                definition,
+                subjects: vec![actor],
+            },
+        });
         facts.push(id);
     }
     let escort_contact = if let Some(target) = escort_target {
@@ -2311,9 +2425,7 @@ fn stage_using(
     input: &GameInput,
     supplier: DiceSource<'_>,
 ) -> Result<Checkpoint, RepositoryError> {
-    current
-        .validate_resume(current.basis(), &model::pins()?)
-        .map_err(bad)?;
+    super::beat_script::validate_resume(current).map_err(bad)?;
     df_model::commands::validate_client_command(
         input,
         current,
@@ -2331,11 +2443,17 @@ fn stage_using(
     )
     .map_err(bad)?;
     let command = command(input)?;
+    if !super::beat_script::with_script(|script| script.is_canonical())
+        && (command.basis != current.basis()
+            || command.observed_revision != current.basis().revision)
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
     let GameCommand::ProposeAction {
         actor: who,
         action,
         targets,
-        ..
+        choices: submitted_choices,
     } = &command.command
     else {
         return Err(RepositoryError::InvalidCandidate);
@@ -2344,6 +2462,13 @@ fn stage_using(
         return Err(RepositoryError::Unauthorized);
     }
     let kind = wire::action_kind(action.entry.as_str()).ok_or(RepositoryError::InvalidCandidate)?;
+    let selected = super::beat_script_runtime::select(current, kind, submitted_choices)?;
+    let original_kind = kind;
+    let kind = if selected.effect == super::beat_script::BeatEffect::ThirdApproach {
+        rpc::GameplayActionKind::EscortCourier
+    } else {
+        kind
+    };
     affordance::validate(current, command.member, action, targets).map_err(bad)?;
     // Target identity is validated against the current source-admitted binding above.
     // The registered handlers consume their existing authored, implicit target form;
@@ -2352,10 +2477,20 @@ fn stage_using(
     let GameInput::Game(source_command) = &mut source_input else {
         return Err(RepositoryError::InvalidCandidate);
     };
-    let GameCommand::ProposeAction { targets, .. } = &mut source_command.command else {
+    let GameCommand::ProposeAction {
+        targets,
+        choices,
+        action: source_action,
+        ..
+    } = &mut source_command.command
+    else {
         return Err(RepositoryError::InvalidCandidate);
     };
     targets.clear();
+    choices.retain(|(group, _)| group.as_str() != super::beat_script_runtime::CHOICE_GROUP);
+    if selected.effect == super::beat_script::BeatEffect::ThirdApproach {
+        *source_action = model::content("escort-courier")?;
+    }
     let input = &source_input;
     let command = self::command(input)?;
     let GameCommand::ProposeAction {
@@ -2372,7 +2507,28 @@ fn stage_using(
     let mut draws = Vec::new();
     let mut outcomes = Vec::new();
     let mut private = false;
+    let pure_target = super::beat_script_runtime::pure_target(current, &selected)?;
     match kind {
+        _ if pure_target.is_some() => {
+            let target = pure_target
+                .as_ref()
+                .ok_or(RepositoryError::InvalidCandidate)?;
+            if selected.effect == super::beat_script::BeatEffect::ChooseHarborScene {
+                if choices.as_slice()
+                    != [(
+                        model::label("harbor-destination")?,
+                        model::label("harbor-inn")?,
+                    )]
+                {
+                    return Err(RepositoryError::InvalidCandidate);
+                }
+            } else if !choices.is_empty() {
+                return Err(RepositoryError::InvalidCandidate);
+            }
+            if state.narrative.active_beats.as_slice() != [model::content(&target.state.durable)?] {
+                super::beat_script_runtime::advance_state(&mut state, &target.state.durable)?;
+            }
+        }
         rpc::GameplayActionKind::CreateCharacter => {
             accept_character(&mut state, *who, command.member, choices)?
         }
@@ -2494,7 +2650,11 @@ fn stage_using(
     let result = rpc::AcceptedAction {
         check: None,
         scene: if kind == rpc::GameplayActionKind::ChooseHarborScene {
-            Some(inn_scene())
+            if let Some(target) = &pure_target {
+                Some(super::beat_script_runtime::destination_scene(target)?)
+            } else {
+                Some(inn_scene())
+            }
         } else {
             None
         },
@@ -2504,10 +2664,14 @@ fn stage_using(
             None
         },
         combat: outcomes,
-        phase: phase_from_state(&state)? as i32,
+        phase: phase_from_state(current, &state, &selected.id)? as i32,
     };
     let semantic = Some(hex(&result.encode_to_vec()));
-    let entry = if private {
+    let entry = if pure_target.is_some() {
+        super::beat_script_runtime::STEP
+    } else if selected.effect == super::beat_script::BeatEffect::ThirdApproach {
+        "escort-courier"
+    } else if private {
         "private-courier-note"
     } else if kind == rpc::GameplayActionKind::ChooseHarborScene {
         "harbor-inn"
@@ -2537,18 +2701,133 @@ fn stage_using(
             reaction,
             escort_target: (kind == rpc::GameplayActionKind::EscortCourier).then_some(*who),
             objective_command: Some(command),
+            script_choice: if super::beat_script::with_script(|script| script.is_canonical())
+                || original_kind == rpc::GameplayActionKind::CreateCharacter
+            {
+                None
+            } else {
+                Some((super::beat_script_runtime::marker(&selected.id)?, *who))
+            },
         },
     )?;
+    super::beat_script::validate_step(current, &candidate, original_kind, &selected.id)?;
     if private {
         super::courier_ai::append_request(candidate, command.operation)
     } else {
         Ok(candidate)
     }
 }
-fn phase_from_state(state: &GameState) -> Result<rpc::JourneyPhase, RepositoryError> {
-    // The receipt is encoded before its causal fact exists. Admission follows finish(),
-    // after the accepted decision and authored thread consequences have been staged.
-    narrative_phase::classify(state)
+/// Qualify the earned native prefix independently of subsequent nonmechanical script
+/// scenes. This detached validation projection never changes the durable checkpoint.
+pub(super) fn validate_script_native_prefix(
+    current: &Checkpoint,
+    durable: &str,
+) -> Result<(), RepositoryError> {
+    let mut state = current.state().clone();
+    state.narrative.active_beats = vec![model::content(durable)?];
+    state.narrative.completed_beats = match durable {
+        "room" => Vec::new(),
+        "opening" => vec![model::content("room")?],
+        "courier-answer-seal" | "courier-answer-escort" => {
+            vec![model::content("room")?, model::content("opening")?]
+        }
+        _ => return Err(RepositoryError::InvalidCandidate),
+    };
+    let prefix = model::checkpoint(current.basis(), state)?;
+    narrative_phase::validate(&prefix).map(|_| ())
+}
+/// Reuse character admission to verify a no-encounter script has preserved all source
+/// choices, abilities, resources, equipment identities and creation provenance.
+pub(super) fn validate_script_characters(state: &GameState) -> Result<(), RepositoryError> {
+    let source = rule()?;
+    let bootstrap = bootstrap_member()?;
+    if state.characters.len() > 2
+        || state
+            .resources
+            .iter()
+            .any(|r| !state.characters.iter().any(|c| c.entity == r.owner))
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    let mut expected = state.clone();
+    expected.characters.clear();
+    expected.resources.clear();
+    expected.inventory.clear();
+    expected.continuity.creation.clear();
+    expected
+        .entities
+        .retain(|entity| !pack::COMPILED_ITEMS.contains(&entity.definition.entry.as_str()));
+    for character in &state.characters {
+        if character.build != model::content("dwarf-fighter-soldier")?
+            || character.owner == bootstrap
+            || !state.members.iter().any(|link| {
+                link.member == character.owner && link.character == Some(character.entity)
+            })
+            || character
+                .choices
+                .iter()
+                .any(|choice| choice.participant != character.owner || choice.source != source)
+        {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        let choices = character
+            .choices
+            .iter()
+            .map(|choice| {
+                let value = if choice.offer.as_str() == "name" {
+                    model::label(&hex(choice.selected.as_str().as_bytes()))?
+                } else {
+                    choice.selected.clone()
+                };
+                Ok((choice.offer.clone(), value))
+            })
+            .collect::<Result<Vec<_>, RepositoryError>>()?;
+        accept_character(&mut expected, character.entity, character.owner, &choices)?;
+    }
+    let actual_items = state
+        .entities
+        .iter()
+        .filter(|entity| pack::COMPILED_ITEMS.contains(&entity.definition.entry.as_str()))
+        .collect::<Vec<_>>();
+    let expected_items = expected
+        .entities
+        .iter()
+        .filter(|entity| pack::COMPILED_ITEMS.contains(&entity.definition.entry.as_str()))
+        .collect::<Vec<_>>();
+    if expected.characters != state.characters
+        || expected.resources != state.resources
+        || expected.inventory != state.inventory
+        || expected.continuity.creation != state.continuity.creation
+        || actual_items != expected_items
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    Ok(())
+}
+
+fn phase_from_state(
+    before: &Checkpoint,
+    state: &GameState,
+    selected_id: &str,
+) -> Result<rpc::JourneyPhase, RepositoryError> {
+    // The selected transition is validated at load and admission. Its receipt is
+    // encoded before the new choice fact exists; finish validates the owned fact.
+    super::beat_script::with_script(|script| {
+        if script.uses_encounter() {
+            narrative_phase::classify(state)
+        } else {
+            let beat = script.current(before.state())?;
+            let trigger = super::beat_script::BeatTrigger::Offer {
+                offer: selected_id.into(),
+            };
+            beat.transitions
+                .iter()
+                .find(|transition| transition.trigger == trigger)
+                .and_then(|transition| script.find(&transition.target))
+                .map(super::beat_script_runtime::phase_of)
+                .ok_or(RepositoryError::InvalidCandidate)
+        }
+    })
 }
 
 struct JourneyHandler {
@@ -3350,6 +3629,81 @@ mod tests {
         assert_eq!(calls, 0);
         assert_eq!(current, before);
         assert!(current.state().characters.is_empty());
+    }
+    #[test]
+    fn the_initiative_rolls_come_from_the_recorded_draws_in_turn_order() {
+        let mut current = initial().expect("empty room");
+        for op in [1, 2] {
+            current = stage_join(
+                &current,
+                &input(
+                    &current,
+                    bootstrap_member().expect("bootstrap"),
+                    op,
+                    "join-room",
+                    vec![],
+                ),
+            )
+            .expect("actual join");
+        }
+        let first = MemberId::from_bytes(&MEMBERS[0]).expect("first");
+        let second = MemberId::from_bytes(&MEMBERS[1]).expect("second");
+        let mut none = |_: u32| Err(RepositoryError::InvalidCandidate);
+        for (op, member, name) in [(3, second, "Vale"), (4, first, "Brynn")] {
+            current = stage_using(
+                &current,
+                &input(&current, member, op, "create-character", build(name)),
+                &mut none,
+            )
+            .expect("character");
+        }
+        for (op, kind) in [(5, "begin-story"), (6, "ask-courier")] {
+            current = stage_using(
+                &current,
+                &input(&current, first, op, kind, vec![]),
+                &mut none,
+            )
+            .expect("story step");
+        }
+        // Three recorded d20 faces: the first hero 4, the second 15, the bandit 15.
+        let mut faces = [4, 15, 15].into_iter();
+        let mut dice = |_: u32| Ok(faces.next().expect("three initiative draws"));
+        current = stage_using(
+            &current,
+            &input(&current, first, 7, "defend-courier", vec![]),
+            &mut dice,
+        )
+        .expect("initiative");
+        let rolls = initiative_rolls(&current).expect("rolls from the record");
+        let encounter = current.state().encounters.first().expect("encounter");
+        assert_eq!(rolls.len(), 3);
+        let ids: Vec<Vec<u8>> = rolls
+            .iter()
+            .map(|roll| roll.participant_id.clone())
+            .collect();
+        let turn: Vec<Vec<u8>> = encounter
+            .turn_order
+            .iter()
+            .map(|who| who.as_bytes().to_vec())
+            .collect();
+        assert_eq!(ids, turn, "listed in the encounter's own turn order");
+        assert_eq!(
+            rolls.iter().map(|roll| roll.order).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        for roll in &rolls {
+            assert_eq!(roll.total, roll.die as i32 + roll.modifier);
+            assert!([4, 15].contains(&roll.die));
+            assert!(!roll.name.is_empty());
+        }
+        let totals: Vec<i32> = rolls.iter().map(|roll| roll.total).collect();
+        assert!(
+            totals.windows(2).all(|pair| pair[0] >= pair[1]),
+            "highest first: {totals:?}"
+        );
+        // The tie between the second hero and the bandit (both rolled 15) resolves by the
+        // recorded order, not a re-roll: no new draw was made to produce the view.
+        assert_eq!(current.state().draws.len(), 3);
     }
     #[test]
     fn reverse_character_finalization_preserves_join_order_initiative_and_private_dialogue() {

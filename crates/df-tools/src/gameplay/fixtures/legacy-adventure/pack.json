@@ -1,0 +1,472 @@
+{
+  "schema": "df-gameplay-pack/1",
+  "id": "adv-000000000000002a",
+  "locale": "en",
+  "room_code": "LANTERN",
+  "creation": {
+    "description": "Supported adventure builds: Level 1 Dwarf Fighter / Soldier. Choose one option in each group. Other classes and species remain in development; every submitted build is validated on the server.",
+    "groups": [
+      {
+        "id": "species",
+        "label": "Ancestry",
+        "description_template": null,
+        "options": [
+          {
+            "id": "dwarf",
+            "label": "Dwarf",
+            "description": "Dwarven Toughness, Darkvision, Dwarven Resilience and Stonecunning retained."
+          }
+        ]
+      },
+      {
+        "id": "class",
+        "label": "Class",
+        "description_template": null,
+        "options": [
+          {
+            "id": "fighter-1",
+            "label": "Fighter · level 1",
+            "description": "Weapon training, Fighting Style, Second Wind, three masteries."
+          }
+        ]
+      },
+      {
+        "id": "background",
+        "label": "Background",
+        "description_template": null,
+        "options": [
+          {
+            "id": "soldier",
+            "label": "Soldier",
+            "description": "Athletics, Intimidation, gaming set and Savage Attacker."
+          }
+        ]
+      },
+      {
+        "id": "array",
+        "label": "Ability training",
+        "description_template": "STR{0} DEX{1} CON{2} INT{3} WIS{4} CHA{5} · Soldier +{bonus_str}STR/+{bonus_con}CON",
+        "options": [
+          {
+            "id": "stalwart",
+            "label": "Stalwart",
+            "description": null
+          },
+          {
+            "id": "vanguard",
+            "label": "Vanguard",
+            "description": null
+          }
+        ]
+      },
+      {
+        "id": "equipment",
+        "label": "Starting equipment",
+        "description_template": null,
+        "options": [
+          {
+            "id": "fighter-a-soldier-a",
+            "label": "Fighter A + Soldier A",
+            "description": "Chain Mail, Greatsword, Flail, 8 Javelins, Dungeoneer's Pack; Spear, Shortbow, 20 arrows, gaming set, Healer's Kit, Quiver, Traveler's Clothes; 18 GP."
+          }
+        ]
+      },
+      {
+        "id": "style-masteries",
+        "label": "Fighting Style and masteries",
+        "description_template": null,
+        "options": [
+          {
+            "id": "defense-greatsword-flail-javelin",
+            "label": "Defense · Greatsword / Flail / Javelin",
+            "description": "Defense +1 armored AC. Graze / Sap / Slow masteries. This encounter offers Greatsword only."
+          }
+        ]
+      },
+      {
+        "id": "allied-ties",
+        "label": "Initiative tie agreement",
+        "description_template": null,
+        "options": [
+          {
+            "id": "join-order",
+            "label": "Party agrees: earlier join acts first",
+            "description": "Party ties use join order; the GM chooses allies before the Bandit when tied."
+          }
+        ]
+      }
+    ],
+    "pick_lists": {
+      "alignment": [
+        "lawful-good",
+        "neutral-good",
+        "chaotic-good",
+        "lawful-neutral",
+        "neutral",
+        "chaotic-neutral"
+      ],
+      "language": [
+        "common-sign",
+        "draconic",
+        "dwarvish",
+        "elvish",
+        "giant",
+        "gnomish",
+        "goblin",
+        "halfling",
+        "orc"
+      ],
+      "skill": [
+        "acrobatics",
+        "animal-handling",
+        "history",
+        "insight",
+        "persuasion",
+        "perception",
+        "survival"
+      ],
+      "gaming-set": [
+        "dice",
+        "dragonchess",
+        "playing-cards",
+        "three-dragon-ante"
+      ]
+    }
+  },
+  "equipment": [
+    {
+      "item": "chain-mail",
+      "quantity": 1
+    },
+    {
+      "item": "greatsword",
+      "quantity": 1
+    },
+    {
+      "item": "flail",
+      "quantity": 1
+    },
+    {
+      "item": "javelin",
+      "quantity": 8
+    },
+    {
+      "item": "dungeoneer-pack",
+      "quantity": 1
+    },
+    {
+      "item": "spear",
+      "quantity": 1
+    },
+    {
+      "item": "shortbow",
+      "quantity": 1
+    },
+    {
+      "item": "arrow",
+      "quantity": 20
+    },
+    {
+      "item": "gaming-set",
+      "quantity": 1
+    },
+    {
+      "item": "healers-kit",
+      "quantity": 1
+    },
+    {
+      "item": "quiver",
+      "quantity": 1
+    },
+    {
+      "item": "travelers-clothes",
+      "quantity": 1
+    },
+    {
+      "item": "gold-piece",
+      "quantity": 18
+    }
+  ],
+  "antagonist": {
+    "name": "Bristling Giant Rat",
+    "srd_id": "giant-rat"
+  },
+  "destination_label": "the Caretaker's Lodge",
+  "offer_labels": {
+    "create-character": "Bring your hero to life",
+    "begin-story": "Begin at the Rookhill Gate",
+    "ask-courier": "Ask Eldric what is wrong",
+    "escort-courier": "Pledge your help to Eldric",
+    "defend-courier": "Face down the giant rat",
+    "greatsword-attack": "Greatsword strike · nonlethal",
+    "second-wind": "Second Wind · bonus action",
+    "end-turn": "End your turn",
+    "short-rest": "Short Rest · 1 hour, no Hit Point Dice",
+    "choose-harbor-scene": "Follow Eldric to the lodge"
+  },
+  "courier_clue": "Eldric whispers to you alone: The fever-herb waits with Liora Brightwater at the Caretaker's Lodge. Liora owes me an old kindness, so ask her plainly for help. Keep it between us.",
+  "escort_support_suffix": "The lamp warden now looks to {name} for support on the way.",
+  "scenes": [
+    {
+      "key": "room",
+      "title": "Night at the Rookhill Gate",
+      "narration": "Night has settled over the Rookhill Gate. A cold bell tolls once in the chapel tower. Share the room with your companions, then bring your heroes into the story.",
+      "narration_rested": null,
+      "speaker": "",
+      "dialogue": "",
+      "asset": "assets/ui/generated/scene-rookhill-gate-arrival",
+      "setting": {
+        "place_id": "rookhill-gate",
+        "name": "the Rookhill Gate",
+        "short": "the gate",
+        "kind": "graveyard-gate",
+        "exterior": true,
+        "art_key": "loc-rookhill-gate-arrival"
+      },
+      "speaker_portrait": ""
+    },
+    {
+      "key": "opening",
+      "title": "A Remedy Promised",
+      "narration": "You meet Eldric in the lamp room near the Rookhill Gate. Lamp oil scents the air.",
+      "cast": [
+        {
+          "id": "lamp-warden",
+          "name": "Eldric",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-patron-lamp-warden",
+          "portrait": "assets/ui/generated/portrait-patron-lamp-warden",
+          "voice": "weary middle-aged man",
+          "gender": "he",
+          "age": "adult"
+        }
+      ],
+      "narration_rested": null,
+      "speaker": "Eldric",
+      "dialogue": "A child I know is ill, and only a rare white fever-herb will help. Liora holds it, but I daren't go alone.",
+      "asset": "assets/ui/generated/scene-place-lamp-room",
+      "setting": {
+        "place_id": "place-lamp-room",
+        "name": "the lamp room near the Rookhill Gate",
+        "short": "the lamp room",
+        "kind": "lamp-room",
+        "exterior": false,
+        "art_key": "place-lamp-room"
+      },
+      "speaker_portrait": "assets/ui/generated/portrait-patron-lamp-warden"
+    },
+    {
+      "key": "dialogue-seal",
+      "title": "Whispers in the Dark",
+      "narration": "Eldric lowers his voice and leans close, standing very straight.",
+      "cast": [
+        {
+          "id": "lamp-warden",
+          "name": "Eldric",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-patron-lamp-warden",
+          "portrait": "assets/ui/generated/portrait-patron-lamp-warden",
+          "voice": "weary middle-aged man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "giant-rat",
+          "name": "Bristling Giant Rat",
+          "role": "antagonist",
+          "sprite": "assets/ui/generated/sprite-ant-giant-rat",
+          "portrait": "assets/ui/generated/portrait-ant-giant-rat",
+          "voice": "",
+          "gender": "it",
+          "age": "adult"
+        }
+      ],
+      "narration_rested": null,
+      "speaker": "Eldric",
+      "dialogue": "I was told Liora would give it freely, if I can only reach her in one piece.",
+      "asset": "assets/ui/generated/scene-place-lamp-room",
+      "setting": {
+        "place_id": "place-lamp-room",
+        "name": "the lamp room near the Rookhill Gate",
+        "short": "the lamp room",
+        "kind": "lamp-room",
+        "exterior": false,
+        "art_key": "place-lamp-room"
+      },
+      "speaker_portrait": "assets/ui/generated/portrait-patron-lamp-warden"
+    },
+    {
+      "key": "dialogue-escort",
+      "title": "Allies in the Dark",
+      "narration": "Eldric nods, standing very straight, and stays close at your shoulder.",
+      "cast": [
+        {
+          "id": "lamp-warden",
+          "name": "Eldric",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-patron-lamp-warden",
+          "portrait": "assets/ui/generated/portrait-patron-lamp-warden",
+          "voice": "weary middle-aged man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "giant-rat",
+          "name": "Bristling Giant Rat",
+          "role": "antagonist",
+          "sprite": "assets/ui/generated/sprite-ant-giant-rat",
+          "portrait": "assets/ui/generated/portrait-ant-giant-rat",
+          "voice": "",
+          "gender": "it",
+          "age": "adult"
+        }
+      ],
+      "narration_rested": null,
+      "speaker": "Eldric",
+      "dialogue": "The Caretaker's Lodge. Hurry, if you can. Every hour counts, and I will not forget your kindness.",
+      "asset": "assets/ui/generated/scene-place-lamp-room",
+      "setting": {
+        "place_id": "place-lamp-room",
+        "name": "the lamp room near the Rookhill Gate",
+        "short": "the lamp room",
+        "kind": "lamp-room",
+        "exterior": false,
+        "art_key": "place-lamp-room"
+      },
+      "speaker_portrait": "assets/ui/generated/portrait-patron-lamp-warden"
+    },
+    {
+      "key": "combat",
+      "title": "Trouble at the gate",
+      "narration": "You follow the commotion to the gate. The Bristling Giant Rat rears up on its haunches and hisses at the lantern light. It circles you.",
+      "rules_note": "Both heroes are within 5 feet of the giant rat, and everyone fights in the open: no surprise, cover or movement. This encounter uses nonlethal melee attacks.",
+      "cast": [
+        {
+          "id": "giant-rat",
+          "name": "Bristling Giant Rat",
+          "role": "antagonist",
+          "sprite": "assets/ui/generated/sprite-ant-giant-rat",
+          "portrait": "assets/ui/generated/portrait-ant-giant-rat",
+          "voice": "",
+          "gender": "it",
+          "age": "adult"
+        }
+      ],
+      "narration_rested": null,
+      "speaker": "",
+      "dialogue": "",
+      "asset": "assets/ui/generated/scene-rookhill-gate-arrival",
+      "setting": {
+        "place_id": "rookhill-gate",
+        "name": "the Rookhill Gate",
+        "short": "the gate",
+        "kind": "graveyard-gate",
+        "exterior": true,
+        "art_key": "loc-rookhill-gate-arrival"
+      },
+      "speaker_portrait": "assets/ui/generated/portrait-ant-giant-rat"
+    },
+    {
+      "key": "inn",
+      "title": "Caretaker's Lodge",
+      "narration": "The lodge is small and tidy, with a kettle on the stove and keys hanging in neat rows. There, tugging at her sleeve, stands Liora, a gentle river healer.",
+      "cast": [
+        {
+          "id": "river-healer",
+          "name": "Liora",
+          "role": "contact",
+          "sprite": "assets/ui/generated/sprite-contact-river-healer",
+          "portrait": "assets/ui/generated/portrait-contact-river-healer",
+          "voice": "gentle middle-aged woman",
+          "gender": "she",
+          "age": "adult"
+        }
+      ],
+      "narration_rested": null,
+      "speaker": "Liora",
+      "dialogue": "Yes, I owe Eldric an old kindness. Consider it paid. Now, then. Ask for me by name in any town along this route, and doors will open.",
+      "asset": "assets/ui/generated/scene-dest-caretakers-lodge",
+      "setting": {
+        "place_id": "caretakers-lodge",
+        "name": "the Caretaker's Lodge",
+        "short": "the lodge",
+        "kind": "caretakers-lodge",
+        "exterior": false,
+        "art_key": "dest-caretakers-lodge"
+      },
+      "speaker_portrait": "assets/ui/generated/portrait-contact-river-healer"
+    },
+    {
+      "key": "victory",
+      "title": "Breathing Room",
+      "narration": "At the Caretaker's Lodge, you work out what drove the fight. It had a nest close by and took every passer-by for a threat.",
+      "rules_note": "The Bristling Giant Rat falls unconscious with 1 HP. Its Short Rest has begun; campaign time has not completed it.",
+      "cast": [
+        {
+          "id": "lamp-warden",
+          "name": "Eldric",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-patron-lamp-warden",
+          "portrait": "assets/ui/generated/portrait-patron-lamp-warden",
+          "voice": "weary middle-aged man",
+          "gender": "he",
+          "age": "adult"
+        }
+      ],
+      "narration_rested": "The Bristling Giant Rat was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Knocked-out creatures are awake with 1 HP, still Prone; their held weapons remain dropped. The original victory and Eldric's unresolved journey remain.",
+      "speaker": "Eldric",
+      "dialogue": "We are safe here. Thank you for seeing me through.",
+      "asset": "assets/ui/generated/scene-dest-caretakers-lodge",
+      "setting": {
+        "place_id": "caretakers-lodge",
+        "name": "the Caretaker's Lodge",
+        "short": "the lodge",
+        "kind": "caretakers-lodge",
+        "exterior": false,
+        "art_key": "dest-caretakers-lodge"
+      },
+      "speaker_portrait": "assets/ui/generated/portrait-patron-lamp-warden"
+    },
+    {
+      "key": "defeat",
+      "title": "A Costly Encounter",
+      "narration": "Liora keeps the fever-herb for now, and Eldric must try again another night.",
+      "rules_note": "Both heroes are unconscious with 1 HP after nonlethal attacks. Their Short Rests have begun; campaign time has not completed them.",
+      "narration_rested": "Both heroes were defeated by nonlethal attacks. An uninterrupted hour has passed without Hit Point Dice or healing. They awaken with 1 HP, still Prone, and their held weapons remain dropped. That rest does not change the original defeat.",
+      "speaker": "",
+      "dialogue": "",
+      "asset": "assets/ui/generated/scene-rookhill-gate-arrival",
+      "setting": {
+        "place_id": "rookhill-gate",
+        "name": "the Rookhill Gate",
+        "short": "the gate",
+        "kind": "graveyard-gate",
+        "exterior": true,
+        "art_key": "loc-rookhill-gate-arrival"
+      },
+      "speaker_portrait": ""
+    }
+  ],
+  "secret_terms": [
+    "old kindness",
+    "Caretaker's Lodge",
+    "Liora",
+    "Brightwater"
+  ],
+  "speakers": [
+    {
+      "name": "Eldric",
+      "gender": "he",
+      "age": "adult",
+      "role": "a weary lamp warden who asks the heroes for help",
+      "voice": "weary middle-aged man"
+    },
+    {
+      "name": "Liora",
+      "gender": "she",
+      "age": "adult",
+      "role": "a gentle river healer, the heroes' contact at the end of the road",
+      "voice": "gentle middle-aged woman"
+    }
+  ]
+}

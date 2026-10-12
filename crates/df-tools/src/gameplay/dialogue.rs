@@ -319,11 +319,11 @@ impl actor::Actor {
             && finality == InputFinality::Final
             && !request.offer_id.is_empty()
         {
-            let kind = journey::offered(current, member)
+            let kind = super::beat_script_runtime::view_offers(current, member)
                 .map_err(actor::unavailable)?
                 .into_iter()
-                .map(|(kind, _)| kind)
-                .find(|kind| journey::offer_id(current, *kind) == request.offer_id)
+                .find(|(_, _, id)| *id == request.offer_id)
+                .map(|(kind, _, _)| kind)
                 .ok_or_else(|| Status::failed_precondition("current offered choice required"))?;
             let charge = current
                 .retained_bytes()
@@ -462,7 +462,8 @@ impl actor::Actor {
                 .map_err(actor::unavailable)?
                 .iter()
                 .any(|(kind, _)| *kind == pending.kind)
-                || journey::offer_id(current, pending.kind) != pending.offer
+                || !super::beat_script_runtime::matches_id(current, pending.kind, &pending.offer)
+                    .map_err(actor::unavailable)?
             {
                 return Err(Status::failed_precondition("confirmed offer changed"));
             }

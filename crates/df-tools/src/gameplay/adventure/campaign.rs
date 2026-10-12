@@ -120,15 +120,33 @@ pub(crate) struct ChapterSlot {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ChapterResult {
+    /// The authored goal completed without an encounter or a combat victory.
+    Completed,
     Victory,
     Defeat,
     Abandoned,
+}
+impl ChapterResult {
+    pub(crate) fn progressed(&self) -> bool {
+        matches!(self, Self::Victory | Self::Completed)
+    }
+    pub(crate) fn phrase(&self) -> &'static str {
+        match self {
+            Self::Victory => "won",
+            Self::Completed => "resolved the chapter",
+            Self::Defeat => "lost",
+            Self::Abandoned => "lost",
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Approach {
     Asked,
     Escorted,
+    Third,
+    Investigated,
+    Continued,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -977,8 +995,8 @@ impl CampaignRecord {
                 return Err(CampaignError::Invalid("chapter site outside region".into()));
             }
             if chapter.outcome.as_ref().is_some_and(|outcome| {
-                outcome.result != ChapterResult::Victory
-                    && (outcome.destination_reached || outcome.antagonist_spared)
+                (!outcome.result.progressed() && outcome.destination_reached)
+                    || (outcome.result != ChapterResult::Victory && outcome.antagonist_spared)
             }) {
                 return Err(CampaignError::Invalid(
                     "defeat cannot reach destination or spare antagonist".into(),
@@ -1190,11 +1208,7 @@ impl CampaignRecord {
             text: format!(
                 "{}: the party {} at {}.",
                 plan.title,
-                if outcome.result == ChapterResult::Victory {
-                    "won"
-                } else {
-                    "lost"
-                },
+                outcome.result.phrase(),
                 plan.site
             ),
             audience: Audience::Public,
@@ -1307,7 +1321,7 @@ impl CampaignRecord {
                 .find(|npc| npc.id == id)
                 .ok_or_else(|| CampaignError::Invalid("chapter cast".into()))?;
             npc.last_seen = number;
-            npc.attitude = if outcome.result == ChapterResult::Victory
+            npc.attitude = if outcome.result.progressed()
                 && (outcome.approach == Approach::Escorted || role == "contact")
             {
                 "friendly"
@@ -1511,7 +1525,7 @@ pub(crate) fn next_chapter(
             .outcome
             .as_ref()
             .ok_or_else(|| CampaignError::Invalid("unfinished chapter".into()))?;
-        let bias = if outcome.result == ChapterResult::Victory {
+        let bias = if outcome.result.progressed() {
             &previous_type.on_victory
         } else {
             &previous_type.on_defeat
@@ -1903,11 +1917,7 @@ pub(crate) fn next_chapter(
     let hook_context = match last.and_then(|c| c.outcome.as_ref()) {
         Some(outcome) => format!(
             "After the party {} at {}, {}.",
-            if outcome.result == ChapterResult::Victory {
-                "won"
-            } else {
-                "lost"
-            },
+            outcome.result.phrase(),
             last.map(|c| c.plan.site.as_str())
                 .ok_or_else(|| CampaignError::Invalid("previous site".into()))?,
             if outcome.approach == Approach::Escorted {

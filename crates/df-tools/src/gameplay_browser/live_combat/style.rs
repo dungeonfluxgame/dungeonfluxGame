@@ -80,6 +80,10 @@ const COMMON: &str = r#"
 @S .aftermath-member[data-portrait=hero-1] .aftermath-portrait::before{background-image:var(--asset-portrait-hero-1)}
 @S .aftermath-member[data-portrait=hero-2] .aftermath-portrait::before{background-image:var(--asset-portrait-hero-2)}
 @S .live-keyart{display:none}
+@S .live-initiative{position:absolute;left:0;right:0;top:0;z-index:5;padding:14px 16px;text-align:center;font:700 clamp(22px,7vw,34px)/1.2 Georgia,serif;color:#f4d98d;background:linear-gradient(#0a1018f5,#0a1018d6);border-bottom:2px solid #e0b877;pointer-events:none;animation:live-initiative 7s ease forwards}
+@S[data-role=display] .live-initiative{display:none}
+@keyframes live-initiative{0%{transform:translateY(-100%);opacity:0}8%{transform:none;opacity:1}88%{transform:none;opacity:1}100%{transform:none;opacity:0;visibility:hidden}}
+@media (prefers-reduced-motion:reduce){@S .live-initiative{animation:live-initiative-calm 7s linear forwards}@keyframes live-initiative-calm{0%,90%{opacity:1}100%{opacity:0;visibility:hidden}}}
 .live-rules-badge{display:inline-block;padding:4px 12px;border:1px solid #d9b77a;border-radius:6px;font:700 12px/1.4 system-ui,sans-serif;letter-spacing:.18em;text-transform:uppercase;color:#e8cb94;background:#0a1018d9}
 @S .combat-actor{align-items:center}
 @S .combat-actor[data-active=true] .combat-initiative-value{border:3px solid #e0b877;box-shadow:0 0 22px #e0b87780}

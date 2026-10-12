@@ -15,3 +15,6 @@ pub mod local_journey;
 
 mod srd_creatures;
 pub use srd_creatures::{SRD_521_CREATURES, SrdCreature};
+
+/// Source-pinned, pure grid combat subset; game integration is a separate milestone.
+pub mod tactical;

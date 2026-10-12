@@ -9,6 +9,8 @@ autotests = false
 df-types = { path = "../df-types" }
 df-model = { path = "../df-model" }
 df-content = { path = "../df-content" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [[test]]
 name = "dispatch"

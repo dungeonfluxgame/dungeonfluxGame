@@ -1,0 +1,587 @@
+{
+  "schema": "df-adventure-record/1",
+  "seed": "0x000000000000002a",
+  "tables_revision": "240e6e2c61f570021d766978a24dc1bf68ea97155ec76be7a2b886a980a83602",
+  "generator_version": "splitmix64-patterns-1",
+  "rules_mode": "standard",
+  "rolls": [
+    {
+      "n": 1,
+      "table": "location",
+      "die": 8,
+      "natural": 5,
+      "entry_id": "rookhill-gate",
+      "status": "ok"
+    },
+    {
+      "n": 2,
+      "table": "hook",
+      "die": 12,
+      "natural": 10,
+      "entry_id": "promised-remedy",
+      "status": "ok"
+    },
+    {
+      "n": 3,
+      "table": "patron",
+      "die": 10,
+      "natural": 3,
+      "entry_id": "lamp-warden",
+      "status": "ok"
+    },
+    {
+      "n": 4,
+      "table": "stake",
+      "die": 20,
+      "natural": 17,
+      "entry_id": "debt-ledger",
+      "status": "rejected"
+    },
+    {
+      "n": 5,
+      "table": "stake",
+      "die": 20,
+      "natural": 2,
+      "entry_id": "brass-key",
+      "status": "rejected"
+    },
+    {
+      "n": 6,
+      "table": "stake",
+      "die": 20,
+      "natural": 4,
+      "entry_id": "steady-lantern",
+      "status": "rejected"
+    },
+    {
+      "n": 7,
+      "table": "stake",
+      "die": 20,
+      "natural": 13,
+      "entry_id": "fever-herb",
+      "status": "ok"
+    },
+    {
+      "n": 8,
+      "table": "antagonist",
+      "die": 12,
+      "natural": 3,
+      "entry_id": "guard",
+      "status": "rejected"
+    },
+    {
+      "n": 9,
+      "table": "antagonist",
+      "die": 12,
+      "natural": 4,
+      "entry_id": "goblin-warrior",
+      "status": "rejected"
+    },
+    {
+      "n": 10,
+      "table": "antagonist",
+      "die": 12,
+      "natural": 9,
+      "entry_id": "giant-rat",
+      "status": "ok"
+    },
+    {
+      "n": 11,
+      "table": "complication",
+      "die": 20,
+      "natural": 15,
+      "entry_id": "old-binding",
+      "status": "rejected"
+    },
+    {
+      "n": 12,
+      "table": "complication",
+      "die": 20,
+      "natural": 5,
+      "entry_id": "toll-claim",
+      "status": "rejected"
+    },
+    {
+      "n": 13,
+      "table": "complication",
+      "die": 20,
+      "natural": 11,
+      "entry_id": "guarding-nest",
+      "status": "ok"
+    },
+    {
+      "n": 14,
+      "table": "secret",
+      "die": 12,
+      "natural": 5,
+      "entry_id": "owes-kindness",
+      "status": "ok"
+    },
+    {
+      "n": 15,
+      "table": "destination",
+      "die": 4,
+      "natural": 1,
+      "entry_id": "caretakers-lodge",
+      "status": "ok"
+    },
+    {
+      "n": 16,
+      "table": "contact",
+      "die": 6,
+      "natural": 5,
+      "entry_id": "tinker",
+      "status": "rejected"
+    },
+    {
+      "n": 17,
+      "table": "contact",
+      "die": 6,
+      "natural": 2,
+      "entry_id": "river-healer",
+      "status": "ok"
+    },
+    {
+      "n": 18,
+      "table": "reward",
+      "die": 12,
+      "natural": 2,
+      "entry_id": "variant 2",
+      "status": "ok"
+    },
+    {
+      "n": 19,
+      "table": "name.patron.given",
+      "die": 20,
+      "natural": 4,
+      "entry_id": "Eldric",
+      "status": "ok"
+    },
+    {
+      "n": 20,
+      "table": "name.patron.surname",
+      "die": 20,
+      "natural": 18,
+      "entry_id": "Underhill",
+      "status": "ok"
+    },
+    {
+      "n": 21,
+      "table": "name.contact.given",
+      "die": 20,
+      "natural": 12,
+      "entry_id": "Liora",
+      "status": "ok"
+    },
+    {
+      "n": 22,
+      "table": "name.contact.surname",
+      "die": 20,
+      "natural": 2,
+      "entry_id": "Brightwater",
+      "status": "ok"
+    },
+    {
+      "n": 23,
+      "table": "name.antagonist.adjective",
+      "die": 12,
+      "natural": 5,
+      "entry_id": "Bristling",
+      "status": "ok"
+    },
+    {
+      "n": 24,
+      "table": "trait.patron.mannerism",
+      "die": 12,
+      "natural": 4,
+      "entry_id": "variant 4",
+      "status": "ok"
+    },
+    {
+      "n": 25,
+      "table": "trait.patron.speech",
+      "die": 12,
+      "natural": 1,
+      "entry_id": "variant 1",
+      "status": "ok"
+    },
+    {
+      "n": 26,
+      "table": "trait.contact.mannerism",
+      "die": 12,
+      "natural": 3,
+      "entry_id": "variant 3",
+      "status": "ok"
+    },
+    {
+      "n": 27,
+      "table": "trait.contact.speech",
+      "die": 12,
+      "natural": 3,
+      "entry_id": "variant 3",
+      "status": "ok"
+    },
+    {
+      "n": 28,
+      "table": "atmosphere.a",
+      "die": 6,
+      "natural": 5,
+      "entry_id": "variant 5",
+      "status": "ok"
+    },
+    {
+      "n": 29,
+      "table": "atmosphere.b",
+      "die": 6,
+      "natural": 5,
+      "entry_id": "variant 5",
+      "status": "rejected"
+    },
+    {
+      "n": 30,
+      "table": "atmosphere.b",
+      "die": 6,
+      "natural": 2,
+      "entry_id": "variant 2",
+      "status": "ok"
+    },
+    {
+      "n": 31,
+      "table": "atmosphere.c",
+      "die": 6,
+      "natural": 1,
+      "entry_id": "variant 1",
+      "status": "ok"
+    },
+    {
+      "n": 32,
+      "table": "setting.meeting.detail",
+      "die": 4,
+      "natural": 1,
+      "entry_id": "Lamp oil scents the air.",
+      "status": "ok"
+    },
+    {
+      "n": 33,
+      "table": "setting.confrontation.bridge",
+      "die": 4,
+      "natural": 2,
+      "entry_id": "You follow the commotion to the gate.",
+      "status": "ok"
+    },
+    {
+      "n": 34,
+      "table": "prose.begin_label",
+      "die": 4,
+      "natural": 3,
+      "entry_id": "variant 3",
+      "status": "ok"
+    },
+    {
+      "n": 35,
+      "table": "prose.room_title",
+      "die": 4,
+      "natural": 4,
+      "entry_id": "variant 4",
+      "status": "ok"
+    },
+    {
+      "n": 36,
+      "table": "prose.room_narration",
+      "die": 4,
+      "natural": 3,
+      "entry_id": "variant 3",
+      "status": "ok"
+    },
+    {
+      "n": 37,
+      "table": "prose.opening_narration",
+      "die": 4,
+      "natural": 1,
+      "entry_id": "variant 1",
+      "status": "ok"
+    },
+    {
+      "n": 38,
+      "table": "prose.foreshadow_beast",
+      "die": 4,
+      "natural": 4,
+      "entry_id": "variant 4",
+      "status": "ok"
+    },
+    {
+      "n": 39,
+      "table": "prose.ask_label",
+      "die": 4,
+      "natural": 1,
+      "entry_id": "variant 1",
+      "status": "ok"
+    },
+    {
+      "n": 40,
+      "table": "prose.help_label",
+      "die": 4,
+      "natural": 4,
+      "entry_id": "variant 4",
+      "status": "ok"
+    },
+    {
+      "n": 41,
+      "table": "prose.stand_label",
+      "die": 4,
+      "natural": 2,
+      "entry_id": "variant 2",
+      "status": "ok"
+    },
+    {
+      "n": 42,
+      "table": "prose.continue_label",
+      "die": 4,
+      "natural": 2,
+      "entry_id": "variant 2",
+      "status": "ok"
+    },
+    {
+      "n": 43,
+      "table": "prose.ask_title",
+      "die": 4,
+      "natural": 3,
+      "entry_id": "variant 3",
+      "status": "ok"
+    },
+    {
+      "n": 44,
+      "table": "prose.ask_narration",
+      "die": 4,
+      "natural": 2,
+      "entry_id": "variant 2",
+      "status": "ok"
+    },
+    {
+      "n": 45,
+      "table": "antagonist.arrival",
+      "die": 4,
+      "natural": 3,
+      "entry_id": "variant 3",
+      "status": "ok"
+    },
+    {
+      "n": 46,
+      "table": "prose.help_title",
+      "die": 4,
+      "natural": 4,
+      "entry_id": "variant 4",
+      "status": "ok"
+    },
+    {
+      "n": 47,
+      "table": "prose.help_narration",
+      "die": 4,
+      "natural": 3,
+      "entry_id": "variant 3",
+      "status": "ok"
+    },
+    {
+      "n": 48,
+      "table": "prose.route_retrieve",
+      "die": 4,
+      "natural": 4,
+      "entry_id": "variant 2",
+      "status": "ok"
+    },
+    {
+      "n": 49,
+      "table": "prose.clue",
+      "die": 4,
+      "natural": 1,
+      "entry_id": "variant 1",
+      "status": "ok"
+    },
+    {
+      "n": 50,
+      "table": "prose.combat_title",
+      "die": 4,
+      "natural": 2,
+      "entry_id": "variant 2",
+      "status": "ok"
+    },
+    {
+      "n": 51,
+      "table": "prose.combat_open_beast",
+      "die": 4,
+      "natural": 4,
+      "entry_id": "variant 4",
+      "status": "ok"
+    },
+    {
+      "n": 52,
+      "table": "prose.victory_title",
+      "die": 4,
+      "natural": 3,
+      "entry_id": "variant 3",
+      "status": "ok"
+    },
+    {
+      "n": 53,
+      "table": "prose.victory_lead",
+      "die": 4,
+      "natural": 4,
+      "entry_id": "variant 4",
+      "status": "ok"
+    },
+    {
+      "n": 54,
+      "table": "prose.victory_dialogue",
+      "die": 4,
+      "natural": 4,
+      "entry_id": "variant 4",
+      "status": "ok"
+    },
+    {
+      "n": 55,
+      "table": "prose.defeat_title",
+      "die": 4,
+      "natural": 1,
+      "entry_id": "variant 1",
+      "status": "ok"
+    },
+    {
+      "n": 56,
+      "table": "prose.defeat_retrieve",
+      "die": 4,
+      "natural": 2,
+      "entry_id": "variant 1",
+      "status": "ok"
+    },
+    {
+      "n": 57,
+      "table": "prose.inn_title",
+      "die": 4,
+      "natural": 1,
+      "entry_id": "variant 1",
+      "status": "ok"
+    },
+    {
+      "n": 58,
+      "table": "prose.inn_intro",
+      "die": 4,
+      "natural": 2,
+      "entry_id": "variant 2",
+      "status": "ok"
+    },
+    {
+      "n": 59,
+      "table": "prose.inn_dialogue",
+      "die": 4,
+      "natural": 2,
+      "entry_id": "variant 2",
+      "status": "ok"
+    }
+  ],
+  "expression": {
+    "source": "patterns",
+    "fact_sheet_sha256": "d70cd54ac9f6f22c2cd69fbf1e969d5273f376311b85b9008cf725e351d5cd74",
+    "output_sha256": "2034bbe8c5e35e2c2913ba26931e30d76cd218f3451072528b77e8fc0a6a124c"
+  },
+  "pack_sha256": "43de47e07259de25654b61bb68a4225ecf7cbefbd668f201d405c65048805288",
+  "tuning_sha256": "d781837f00b8499ae58fa3697bd3ac86f71aec9144a69cb4d061a67ac47a4476",
+  "seeded_dice": true,
+  "settings": {
+    "meeting": {
+      "place_id": "place-lamp-room",
+      "name": "the lamp room near the Rookhill Gate",
+      "short": "the lamp room",
+      "kind": "lamp-room",
+      "exterior": false,
+      "art_key": "place-lamp-room"
+    },
+    "confrontation": {
+      "place_id": "rookhill-gate",
+      "name": "the Rookhill Gate",
+      "short": "the gate",
+      "kind": "graveyard-gate",
+      "exterior": true,
+      "art_key": "loc-rookhill-gate-arrival"
+    },
+    "destination": {
+      "place_id": "caretakers-lodge",
+      "name": "the Caretaker's Lodge",
+      "short": "the lodge",
+      "kind": "caretakers-lodge",
+      "exterior": false,
+      "art_key": "dest-caretakers-lodge"
+    }
+  },
+  "secret_terms": [
+    "old kindness",
+    "Caretaker's Lodge",
+    "Liora",
+    "Brightwater"
+  ],
+  "speakers": [
+    {
+      "name": "Eldric",
+      "gender": "he",
+      "age": "adult",
+      "role": "a weary lamp warden who asks the heroes for help",
+      "voice": "weary middle-aged man"
+    },
+    {
+      "name": "Liora",
+      "gender": "she",
+      "age": "adult",
+      "role": "a gentle river healer, the heroes' contact at the end of the road",
+      "voice": "gentle middle-aged woman"
+    }
+  ],
+  "scene_cast": [
+    {
+      "scene": "opening",
+      "id": "lamp-warden",
+      "name": "Eldric",
+      "role": "patron"
+    },
+    {
+      "scene": "dialogue-seal",
+      "id": "lamp-warden",
+      "name": "Eldric",
+      "role": "patron"
+    },
+    {
+      "scene": "dialogue-seal",
+      "id": "giant-rat",
+      "name": "Bristling Giant Rat",
+      "role": "antagonist"
+    },
+    {
+      "scene": "dialogue-escort",
+      "id": "lamp-warden",
+      "name": "Eldric",
+      "role": "patron"
+    },
+    {
+      "scene": "dialogue-escort",
+      "id": "giant-rat",
+      "name": "Bristling Giant Rat",
+      "role": "antagonist"
+    },
+    {
+      "scene": "combat",
+      "id": "giant-rat",
+      "name": "Bristling Giant Rat",
+      "role": "antagonist"
+    },
+    {
+      "scene": "inn",
+      "id": "river-healer",
+      "name": "Liora",
+      "role": "contact"
+    },
+    {
+      "scene": "victory",
+      "id": "lamp-warden",
+      "name": "Eldric",
+      "role": "patron"
+    }
+  ]
+}

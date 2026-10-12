@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fmt,
     fs::File,
     io::{self, Read},
@@ -167,8 +168,12 @@ impl fmt::Display for CrossRefReason {
 /// contents beyond a short, truncated parser message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PackError {
+    Script(super::beat_script::ScriptError),
     /// The file (or its directory) does not exist.
-    Missing { file: SourceFile, path: PathBuf },
+    Missing {
+        file: SourceFile,
+        path: PathBuf,
+    },
     /// The file exists but could not be read.
     Io {
         file: SourceFile,
@@ -229,6 +234,7 @@ pub(super) enum PackError {
 impl fmt::Display for PackError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Script(error) => error.fmt(formatter),
             Self::Missing { file, path } => write!(
                 formatter,
                 "gameplay file {} is missing (expected at {})",
@@ -590,6 +596,9 @@ pub(super) struct PackFile {
     pub(super) id: String,
     pub(super) locale: String,
     pub(super) room_code: String,
+    /// Absence is the versioned canonical legacy journey, with unchanged stored bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) beat_script: Option<super::beat_script::BeatScript>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) campaign: Option<CampaignIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -859,6 +868,10 @@ pub(super) struct LoadedPack {
     /// JSON key paths of "standard" values that differ from the compiled SRD 5.2.1 baseline, in
     /// a fixed order. Computed by the loader; the files cannot declare themselves standard.
     pub(super) departures: Vec<String>,
+    /// Original base assets remain available for authored receipts after presentation substitution.
+    pub(super) source_scene_assets: Vec<(SceneKey, String)>,
+    /// Native startup substitutes unavailable script paintings only in view projection.
+    pub(super) script_scene_assets: BTreeMap<String, String>,
 }
 
 /// Load `pack.json` and `tuning.json` from `directory`.
@@ -878,15 +891,28 @@ pub(super) fn load_from_bytes(
     pack_bytes: &[u8],
     tuning_bytes: &[u8],
 ) -> Result<LoadedPack, PackError> {
+    super::beat_script::preflight(pack_bytes).map_err(PackError::Script)?;
     let pack: PackFile = parse(SourceFile::Pack, pack_bytes)?;
     require_schema(SourceFile::Pack, &pack.schema, PACK_SCHEMA)?;
     let tuning: TuningFile = parse(SourceFile::Tuning, tuning_bytes)?;
     require_schema(SourceFile::Tuning, &tuning.schema, TUNING_SCHEMA)?;
     validate_pack(&pack)?;
+    pack.beat_script
+        .as_ref()
+        .unwrap_or(super::beat_script::canonical())
+        .validate(&pack)
+        .map_err(PackError::Script)?;
     validate_tuning(&tuning)?;
     validate_cross_references(&pack, &tuning)?;
     let departures = departures(&pack, &tuning);
+    let source_scene_assets = pack
+        .scenes
+        .iter()
+        .map(|scene| (scene.key, scene.asset.clone()))
+        .collect();
     Ok(LoadedPack {
+        source_scene_assets,
+        script_scene_assets: BTreeMap::new(),
         pack,
         tuning,
         pack_revision: Revision::of(pack_bytes),
@@ -1882,6 +1908,39 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
 // Cross-file checks and baseline comparison
 // ---------------------------------------------------------------------------------------------
 
+pub(super) fn validate_script_scene(content: &PackFile, scene: &Scene) -> Result<(), PackError> {
+    if [
+        &scene.title,
+        &scene.narration,
+        &scene.speaker,
+        &scene.dialogue,
+    ]
+    .iter()
+    .any(|text| {
+        text.chars().any(char::is_control)
+            || (!content.courier_clue.is_empty() && text.contains(&content.courier_clue))
+    }) {
+        return Err(malformed(
+            SourceFile::Pack,
+            "beat_script.scenes",
+            "bounded public plain text without private clue payload",
+        ));
+    }
+    let mut scenes = content.scenes.clone();
+    let destination = scenes
+        .iter_mut()
+        .find(|s| s.key == scene.key)
+        .ok_or_else(|| {
+            cross_reference(
+                SourceFile::Pack,
+                "beat_script.scenes",
+                CrossRefReason::MissingScene,
+            )
+        })?;
+    *destination = scene.clone();
+    validate_scenes(&scenes)
+}
+
 fn validate_cross_references(pack: &PackFile, tuning: &TuningFile) -> Result<(), PackError> {
     if !pack
         .equipment
@@ -2300,6 +2359,19 @@ pub(super) fn with_content<T>(run: impl FnOnce(&PackFile) -> T) -> T {
     run(content)
 }
 
+pub(super) fn source_scene_asset(
+    key: SceneKey,
+) -> Result<String, df_session::submission::RepositoryError> {
+    match active() {
+        Some(loaded) => loaded
+            .source_scene_assets
+            .iter()
+            .find(|(scene, _)| *scene == key)
+            .map(|(_, asset)| asset.clone())
+            .ok_or(df_session::submission::RepositoryError::InvalidCandidate),
+        None => Ok(scene(key).asset),
+    }
+}
 pub(super) fn scene(key: SceneKey) -> Scene {
     with_content(|pack| {
         pack.scenes
