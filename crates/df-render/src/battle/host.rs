@@ -13,15 +13,18 @@ use web_sys::{Element, HtmlCanvasElement};
 use super::{
     gpu::{
         core::{self, GpuCore},
-        renderer::{PendingSplats, Renderer},
+        renderer::{DEFAULT_SPLAT_CAPACITY, Renderer, SplatSetup},
+        splat_engine::{LoadState, Shared, SharedSplats},
+        splat_stream::{self, StreamConfig, next_frame},
         textures,
     },
     hud::Hud,
-    scene_file::{BattleScene, SplatFormat, SplatLayer},
+    pacing::{BattleFps, FramePacer, Pace},
+    scene_file::{BackdropLayer, BattleScene, GroundLayer, SplatFormat, SplatGrade, SplatLayer},
     sound::SoundEvent,
     splat::{
-        ProceduralGround, SogLoader, SogMeta, SogPlanes, SplatCloud, SplatFileLoader, SplatLoader,
-        SplatTransform,
+        ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, SplatFileLoader, SplatLoader,
+        SplatTransform, pack_records,
     },
     stage::Stage,
 };
@@ -41,11 +44,29 @@ pub enum Availability {
     Unavailable(UnavailableReason),
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct StageOptions {
     pub reduced_motion: bool,
     /// Replace the scene's own splat layer with the built-in procedural ground.
     pub procedural_splats: bool,
+    /// The painted ground and backdrop to show instead when the scene's splats cannot be drawn
+    /// (files missing, decode failure, or a frame budget that cannot be met). Without it the
+    /// scene's own painted layers stay.
+    pub fallback_layers: Option<(GroundLayer, BackdropLayer)>,
+    /// Measurement overrides: freeze the frame ladder at these values.
+    pub fixed_quality: Option<FixedQuality>,
+    /// The presentation rate: the battlefield never draws faster than this.
+    pub fps: BattleFps,
+}
+
+/// Quality held constant for benchmarks (`#battle-preview=...&fixed&budget=..&minc=..&rscale=..`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FixedQuality {
+    pub splat_budget: Option<u32>,
+    pub min_contribution: Option<f32>,
+    pub render_scale: Option<f32>,
+    pub splat_scale: Option<f32>,
+    pub debug_switches: u32,
 }
 
 struct Inner {
@@ -56,12 +77,15 @@ struct Inner {
     stage: Stage,
     renderer: Option<Renderer>,
     availability: Availability,
-    last_timestamp: Option<f64>,
+    /// Decides which animation-frame calls present a frame (the fixed 30 or 24 fps cadence).
+    pacer: FramePacer,
     frame_handle: Option<i32>,
     disposed: bool,
     revealed: bool,
     frames: u64,
     stats_every: u64,
+    fallback: Option<(GroundLayer, BackdropLayer)>,
+    fallback_applied: bool,
     /// Where the stage's sounds go, at the frame they happen. Without one they are dropped.
     sound_sink: Option<Rc<dyn Fn(SoundEvent)>>,
 }
@@ -93,12 +117,14 @@ impl BattleStage {
                 stage: Stage::new(scene, true),
                 renderer: None,
                 availability: Availability::Unavailable(reason),
-                last_timestamp: None,
+                pacer: FramePacer::new(BattleFps::DEFAULT),
                 frame_handle: None,
                 disposed: false,
                 revealed: false,
                 frames: 0,
                 stats_every: 60,
+                fallback: None,
+                fallback_applied: false,
                 sound_sink: None,
             })),
             frame_callback: Rc::new(RefCell::new(None)),
@@ -133,23 +159,6 @@ impl BattleStage {
                 return Self::unavailable(host, scene, reason);
             }
         };
-        let pending: PendingSplats = Rc::new(RefCell::new(None));
-        let renderer = match Renderer::new(gpu.clone(), &scene, pending.clone()).await {
-            Ok(renderer) => renderer,
-            Err((reason, message)) => {
-                container.remove();
-                let stage = Self::unavailable(host, scene, reason);
-                let _ = host.set_attribute("data-battlefield-error", &message);
-                return stage;
-            }
-        };
-        let hud = match Hud::mount(&document, &container, &scene.title) {
-            Ok(hud) => hud,
-            Err(_) => {
-                container.remove();
-                return Self::unavailable(host, scene, UnavailableReason::NotMounted);
-            }
-        };
         let splat_layer = if options.procedural_splats {
             Some(SplatLayer {
                 url: String::new(),
@@ -159,12 +168,59 @@ impl BattleStage {
                 rot_y_deg: 0.0,
                 translate: super::math::Vec3::ZERO,
                 max_splats: None,
+                orient: super::math::Quat::IDENTITY,
+                levels: None,
+                detail_radius_m: None,
+                grade: SplatGrade::NEUTRAL,
+                depth_bias_m: 0.15,
+                clip: None,
             })
         } else {
             scene.splat.clone()
         };
-        if let Some(layer) = splat_layer {
-            spawn_splat_load(gpu.clone(), layer, pending);
+        let splat_setup = splat_layer.as_ref().map(|layer| SplatSetup {
+            shared: Rc::new(RefCell::new(Shared::new(
+                layer.max_splats.unwrap_or(DEFAULT_SPLAT_CAPACITY),
+            ))),
+            layer: layer.clone(),
+        });
+        let splat_shared = splat_setup.as_ref().map(|setup| setup.shared.clone());
+        let renderer = match Renderer::new(gpu.clone(), &scene, splat_setup).await {
+            Ok(renderer) => renderer,
+            Err((reason, message)) => {
+                container.remove();
+                let stage = Self::unavailable(host, scene, reason);
+                let _ = host.set_attribute("data-battlefield-error", &message);
+                return stage;
+            }
+        };
+        let mut renderer = renderer;
+        if let Some(fixed) = options.fixed_quality {
+            renderer.debug_switches = fixed.debug_switches;
+            renderer.freeze_quality(
+                fixed.splat_budget,
+                fixed.min_contribution,
+                fixed.render_scale,
+                fixed.splat_scale,
+            );
+        }
+        let hud = match Hud::mount(&document, &container, &scene.title) {
+            Ok(hud) => hud,
+            Err(_) => {
+                container.remove();
+                return Self::unavailable(host, scene, UnavailableReason::NotMounted);
+            }
+        };
+        if let (Some(layer), Some(shared)) = (splat_layer, splat_shared) {
+            spawn_splat_load(
+                gpu.clone(),
+                layer,
+                shared,
+                renderer.splat_chunk_layout(),
+                scene.grid.centre(),
+                scene.grid.cols() as f32 * scene.grid.cell_m(),
+                scene.grid.rows() as f32 * scene.grid.cell_m(),
+            );
         }
         mark(host, "active");
         let _ = host.set_attribute("data-battlefield-adapter", &gpu.adapter_description);
@@ -177,12 +233,14 @@ impl BattleStage {
             stage,
             renderer: Some(renderer),
             availability: Availability::Available,
-            last_timestamp: None,
+            pacer: FramePacer::new(options.fps),
             frame_handle: None,
             disposed: false,
             revealed: false,
             frames: 0,
             stats_every: 30,
+            fallback: options.fallback_layers,
+            fallback_applied: false,
             sound_sink: None,
         }));
         let callback: FrameCallback = Rc::new(RefCell::new(None));
@@ -270,6 +328,13 @@ fn fail(inner: &mut Inner, reason: UnavailableReason) {
     mark(&inner.host, &format!("unavailable:{}", reason.key()));
 }
 
+/// Milliseconds on the page's high-resolution clock; zero when there is no `performance`.
+fn now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map_or(0.0, |performance| performance.now())
+}
+
 fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     let mut guard = inner.borrow_mut();
     let state = &mut *guard;
@@ -282,10 +347,14 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
         fail(state, UnavailableReason::DeviceLost);
         return;
     }
-    let delta_ms = state
-        .last_timestamp
-        .map_or(16.0, |last| (timestamp - last).clamp(0.0, 100.0));
-    state.last_timestamp = Some(timestamp);
+    // Ticks between presented frames do no work at all: no update, no GPU submission.
+    let Pace::Present { elapsed_ms } = state.pacer.tick(timestamp) else {
+        return;
+    };
+    let tick_started_ms = now_ms();
+    // The simulation advances by real time since the previous presented frame, so speeds are
+    // unchanged by the cap.
+    let delta_ms = elapsed_ms.clamp(0.0, 100.0);
     state
         .stage
         .update(Duration::from_secs_f64(delta_ms / 1000.0));
@@ -308,8 +377,35 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
         canvas.set_height(height);
     }
     let frame = state.stage.frame();
+    // Where the figures stand, written with the periodic stats (for harnesses and diagnostics).
+    let figures: Vec<String> = if (state.frames + 1).is_multiple_of(state.stats_every) {
+        frame
+            .figures
+            .iter()
+            .map(|figure| {
+                format!(
+                    "{}@{:.2},{:.2},{:.2}",
+                    figure.name, figure.position.x, figure.position.y, figure.position.z
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     renderer.render(&frame, state.stage.scene(), (width, height));
-    renderer.observe_frame_ms(delta_ms as f32);
+    // What the frame cost, not how long the cap lets it take: the quality ladder compares it with
+    // the cap's period. Without GPU timing, only an interval well over the period shows a miss.
+    let period_ms = state.pacer.target().period_ms() as f32;
+    let gpu_ms = renderer.stats().gpu_ms;
+    let cpu_ms = (now_ms() - tick_started_ms) as f32;
+    let cost_ms = if gpu_ms > 0.0 {
+        gpu_ms.max(cpu_ms)
+    } else if delta_ms as f32 > period_ms * 1.25 {
+        delta_ms as f32
+    } else {
+        cpu_ms
+    };
+    renderer.observe_frame_cost(cost_ms, period_ms);
     state.frames += 1;
     // Show the battlefield once its art has arrived (or after a moment regardless), so the table
     // does not watch placeholder discs turn into figures.
@@ -329,21 +425,117 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
             return;
         }
     }
+    if !state.fallback_applied
+        && let Some((ground, backdrop)) = state.fallback.clone()
+        && renderer.splat_unusable()
+    {
+        state.fallback_applied = true;
+        renderer.set_painted(&ground.stem, &backdrop.stem);
+        state.stage.replace_painted_layers(ground, backdrop);
+        let _ = state
+            .host
+            .set_attribute("data-battlefield-fallback", "painted");
+    }
     if state.frames.is_multiple_of(state.stats_every) {
+        let _ = state
+            .host
+            .set_attribute("data-battlefield-figures", &figures.join(";"));
         let stats = renderer.stats();
         let summary = format!(
-            "ms={delta_ms:.1} splats={}/{} cap={} scale={:.2} frames={}",
-            stats.splats_drawn, stats.splats_loaded, stats.splat_cap, stats.scale, state.frames
+            "ms={delta_ms:.1} fps_target={} fps_presented={:.1} fps_divisor={} display_hz={:.0} cost_ms={cost_ms:.1} gpu_ms={:.1} sort_ms={:.2} splat_ms={:.2} overlay_ms={:.2} post_ms={:.2} visible={} planned={} budget={} min_contribution={:.2} scale={:.2} splat_scale={:.2} frames={}",
+            state.pacer.target().hz(),
+            state.pacer.presented_fps(),
+            state.pacer.divisor(),
+            1000.0 / state.pacer.display_interval_ms(),
+            stats.gpu_ms,
+            stats.sort_ms,
+            stats.splat_ms,
+            stats.overlay_ms,
+            stats.post_ms,
+            stats.splats_visible,
+            stats.splats_planned,
+            stats.budget,
+            stats.min_contribution,
+            stats.scale,
+            stats.splat_scale,
+            state.frames
         );
         let _ = state.host.set_attribute("data-battlefield-stats", &summary);
+        if let Some(splat) = renderer.splat_shared() {
+            let shared = splat.borrow();
+            let label = match (stats.given_up, shared.state) {
+                (true, _) => "given-up",
+                (_, LoadState::Idle) => "idle",
+                (_, LoadState::Loading) => "loading",
+                (_, LoadState::Showing) => "showing",
+                (_, LoadState::Complete) => "complete",
+                (_, LoadState::Failed) => "failed",
+            };
+            let _ = state.host.set_attribute("data-battlefield-splat", label);
+            let load = &shared.stats;
+            let timing = |value: Option<f64>| value.map_or("-".to_owned(), |ms| format!("{ms:.0}"));
+            let _ = state.host.set_attribute(
+                "data-battlefield-load",
+                &format!(
+                    "first_ms={} full_ms={} chunks={}/{}",
+                    timing(load.first_draw_ms),
+                    timing(load.full_detail_ms),
+                    load.chunks_loaded,
+                    load.chunks_wanted
+                ),
+            );
+        }
         if let Some(message) = renderer.core().first_error() {
             let _ = state.host.set_attribute("data-battlefield-error", &message);
         }
     }
 }
 
-fn spawn_splat_load(gpu: Rc<GpuCore>, layer: SplatLayer, pending: PendingSplats) {
+/// Starts loading the scene's splats. A streamed scan hands everything to the streaming task; the
+/// small formats are decoded here and uploaded once as packed records, in slices so the page
+/// keeps drawing.
+fn spawn_splat_load(
+    gpu: Rc<GpuCore>,
+    layer: SplatLayer,
+    shared: SharedSplats,
+    chunk_layout: Option<JsValue>,
+    grid_centre: super::math::Vec3,
+    grid_width_m: f32,
+    grid_depth_m: f32,
+) {
     wasm_bindgen_futures::spawn_local(async move {
+        let transform = SplatTransform {
+            scale: layer.scale,
+            offset_y: layer.offset_y,
+            rot_y_deg: layer.rot_y_deg,
+            translate: layer.translate,
+            orient: layer.orient,
+        };
+        if layer.format == SplatFormat::Lod {
+            let Some(chunk_layout) = chunk_layout else {
+                shared.borrow_mut().state = LoadState::Failed;
+                return;
+            };
+            // Finest detail covers the grid and a margin; the scene file may widen it.
+            let derived =
+                0.5 * (grid_width_m * grid_width_m + grid_depth_m * grid_depth_m).sqrt() + 3.0;
+            let (finest, coarsest) = layer.levels.unwrap_or((0, 0));
+            splat_stream::stream(
+                gpu,
+                shared,
+                chunk_layout,
+                StreamConfig {
+                    index_url: layer.url.clone(),
+                    levels: (finest, coarsest),
+                    transform,
+                    focus_world: grid_centre,
+                    detail_radius_m: layer.detail_radius_m.unwrap_or(derived),
+                },
+            )
+            .await;
+            return;
+        }
+        shared.borrow_mut().state = LoadState::Loading;
         let raw = match layer.format {
             SplatFormat::Procedural => ProceduralGround {
                 seed: 1,
@@ -359,20 +551,31 @@ fn spawn_splat_load(gpu: Rc<GpuCore>, layer: SplatLayer, pending: PendingSplats)
                 }
             }
             SplatFormat::Sog => load_sog(&gpu, &layer.url).await,
+            SplatFormat::Lod => None,
         };
         let Some(raw) = raw else {
             // The splat scene is optional: without it the painted ground stays.
+            shared.borrow_mut().state = LoadState::Failed;
             return;
         };
-        let transform = SplatTransform {
-            scale: layer.scale,
-            offset_y: layer.offset_y,
-            rot_y_deg: layer.rot_y_deg,
-            translate: layer.translate,
-        };
-        let (cloud, _dropped) = SplatCloud::bake(&raw, transform);
-        *pending.borrow_mut() = Some(cloud);
+        let words = pack_in_slices(&raw, transform).await;
+        let mut state = shared.borrow_mut();
+        state.stats.splats_planned = (words.len() / super::splat::RECORD_WORDS) as u32;
+        state.records = Some(words);
+        state.state = LoadState::Complete;
     });
+}
+
+/// Packs `raw` into GPU records a slice at a time, yielding a frame between slices.
+async fn pack_in_slices(raw: &[RawSplat], transform: SplatTransform) -> Vec<u32> {
+    const SLICE: usize = 60_000;
+    let mut words = Vec::with_capacity(raw.len() * super::splat::RECORD_WORDS);
+    for slice in raw.chunks(SLICE) {
+        let (part, _dropped) = pack_records(slice, transform);
+        words.extend_from_slice(&part);
+        next_frame().await;
+    }
+    words
 }
 
 /// Fetches `<base>/meta.json` and its five planes, decodes each plane exactly, and loads them.

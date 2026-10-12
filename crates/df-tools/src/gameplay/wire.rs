@@ -789,6 +789,8 @@ pub(super) fn project_journey(
         standing: Vec::new(),
         live_faces: Vec::new(),
         table_choices,
+        presentation_sequence: 0,
+        reply_speaker: String::new(),
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
     let mut scene = if super::beat_script_runtime::native_inn(state)? {

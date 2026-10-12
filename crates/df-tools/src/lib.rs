@@ -22,6 +22,10 @@ mod qualification_verdict;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod music_score;
+#[cfg(any(target_arch = "wasm32", test))]
+mod reconnect;
+#[cfg(any(target_arch = "wasm32", test))]
+mod sound_switch;
 mod speech_clip;
 mod voice_line;
 
@@ -39,9 +43,13 @@ pub(crate) mod health_tier;
 mod health_cues;
 mod stage_art;
 #[cfg(any(target_arch = "wasm32", test))]
+mod stage_conductor;
+#[cfg(any(target_arch = "wasm32", test))]
 mod stage_depth;
 #[cfg(any(target_arch = "wasm32", test))]
 mod stage_director;
+#[cfg(any(target_arch = "wasm32", test))]
+mod stage_machines;
 
 /// Source identity injected by the reproducible fixture build command.
 pub const BUILD_ID: &str = match option_env!("DF_FIXTURE_BUILD") {

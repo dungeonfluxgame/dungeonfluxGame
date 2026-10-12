@@ -31,6 +31,7 @@ use crate::health_cues::Blow;
 use crate::{
     presentation::{ActorSlot, MAX_NPCS, SceneFamily, StageActor},
     stage_art, stage_depth,
+    stage_machines::{ActorState, LineState},
 };
 use std::{cell::Cell, time::Duration};
 use web_sys::Event;
@@ -48,7 +49,8 @@ const ACTION_HOLD_MS: u64 = 5500;
 const HOLD_PER_EXTRA_CHARACTER_MS: u64 = 40;
 const MAXIMUM_ACTION_HOLD_MS: u64 = 8500;
 /// A hero's typed line stays this long before it fades; a non-player line stays until replaced.
-const TYPED_HOLD_MS: u64 = 12_000;
+/// It outlasts a slow model-written reply, which the hero's line waits beside.
+const TYPED_HOLD_MS: u64 = 20_000;
 const FADE_OUT_MS: u64 = 500;
 const BUBBLE_OUT_ANIMATION: &str = "df-bubble-out";
 const FLOAT_ANIMATION: &str = "df-float-up";
@@ -127,6 +129,11 @@ fn index(slot: ActorSlot) -> Option<usize> {
         ActorSlot::Npc(position) if position < MAX_NPCS => Some(HEROES + position),
         ActorSlot::Hero(_) | ActorSlot::Npc(_) => None,
     }
+}
+
+/// The stage position of a standing place: heroes first, then the non-player figures.
+pub(super) fn slot_index(slot: ActorSlot) -> Option<usize> {
+    index(slot)
 }
 
 fn slot_at(position: usize) -> ActorSlot {
@@ -216,6 +223,14 @@ struct HudCard {
     maximum: Cell<u32>,
 }
 
+/// What a line's bubble shows.
+pub(super) struct LineBubble<'a> {
+    pub(super) kind: BubbleKind,
+    pub(super) speaker: &'a str,
+    pub(super) text: &'a str,
+    pub(super) voiced: bool,
+}
+
 pub(super) struct Figures {
     root: Element,
     figures: Vec<Figure>,
@@ -291,6 +306,7 @@ impl Figures {
             let figure = node(document, &root, "figure", "tv-fig", "")?;
             figure.set_attribute("data-slot", &slot_name(position))?;
             figure.set_attribute("data-present", "false")?;
+            figure.set_attribute("data-actor-state", ActorState::Offstage.name())?;
             let bubbles = node(document, &figure, "div", "tv-fig-bubbles", "")?;
             let body = node(document, &figure, "div", "tv-fig-body", "")?;
             node(document, &body, "div", "tv-fig-shadow", "")?;
@@ -459,7 +475,6 @@ impl Figures {
             .count();
         self.root
             .set_attribute("data-back", &stood_back.to_string())?;
-        let mut lit = false;
         let mut rank = 0;
         let mut foe_shown = false;
         for (position, figure) in self.figures.iter().enumerate() {
@@ -468,7 +483,6 @@ impl Figures {
                 .find(|actor| index(actor.slot) == Some(position));
             match actor {
                 Some(actor) => {
-                    lit |= actor.speaking;
                     let role = if matches!(actor.slot, ActorSlot::Hero(_)) {
                         None
                     } else if Self::holds_stage(actor, mode) {
@@ -524,11 +538,7 @@ impl Figures {
                 }
             }
         }
-        if lit {
-            self.root.set_attribute("data-lit", "")
-        } else {
-            self.root.remove_attribute("data-lit")
-        }
+        Ok(())
     }
 
     /// The one non-player character who speaks in a scene stands centre stage.
@@ -550,7 +560,6 @@ impl Figures {
     fn apply(&self, figure: &Figure, actor: &StageActor, depth: Depth) -> Result<(), JsValue> {
         let root = &figure.root;
         root.set_attribute("data-present", "true")?;
-        flag(root, "data-speaking", actor.speaking)?;
         flag(root, "data-down", actor.down)?;
         if *figure.name_text.borrow() != actor.name {
             *figure.name_text.borrow_mut() = actor.name.clone();
@@ -779,28 +788,6 @@ impl Figures {
             })
     }
 
-    /// Where a non-player line is shown: the figure named like its speaker, otherwise the one
-    /// holding the stage, otherwise the first non-player figure present.
-    pub(super) fn npc_slot_for(&self, name: &str) -> Option<ActorSlot> {
-        let npcs = || {
-            self.figures
-                .iter()
-                .enumerate()
-                .skip(HEROES)
-                .filter(|(_, figure)| Self::present(figure))
-        };
-        self.slot_named(name)
-            .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
-            .or_else(|| {
-                npcs()
-                    .find(|(_, figure)| {
-                        figure.root.get_attribute("data-role").as_deref() == Some("focus")
-                    })
-                    .map(|(position, _)| slot_at(position))
-            })
-            .or_else(|| npcs().next().map(|(position, _)| slot_at(position)))
-    }
-
     /// The sign (+1 right, -1 left) from `from` towards `to` across the screen.
     pub(super) fn direction(from: ActorSlot, to: ActorSlot) -> i32 {
         match (index(from), index(to)) {
@@ -992,9 +979,131 @@ impl Figures {
         }
     }
 
-    fn clear_bubbles(&self) -> Result<(), JsValue> {
+    /// Sets the actor machine's state on the figure at `position`. The speaking mark and the
+    /// stage lighting follow it, never the raw view's speaker field.
+    pub(super) fn set_actor_state(
+        &self,
+        position: usize,
+        state: ActorState,
+    ) -> Result<(), JsValue> {
+        let Some(figure) = self.figures.get(position) else {
+            return Ok(());
+        };
+        figure
+            .root
+            .set_attribute("data-actor-state", state.name())?;
+        flag(&figure.root, "data-speaking", state == ActorState::Speaking)?;
+        let lit = self
+            .figures
+            .iter()
+            .any(|other| other.root.has_attribute("data-speaking"));
+        flag(&self.root, "data-lit", lit)
+    }
+
+    /// Applies one transition of a line's machine to its bubble at the figure at `position`:
+    /// the bubble opens as the line opens, shows the speaking mark while it speaks, closes
+    /// through the machine and is removed when the line is done. Returns whether a new bubble
+    /// was opened.
+    pub(super) fn set_line(
+        &self,
+        position: usize,
+        id: u64,
+        state: LineState,
+        bubble: &LineBubble<'_>,
+    ) -> Result<bool, JsValue> {
+        let Some(figure) = self.figures.get(position) else {
+            return Ok(false);
+        };
+        let existing = figure
+            .bubbles
+            .query_selector(&format!("[data-line-id=\"{id}\"]"))?;
+        let (element, opened) = match (existing, state) {
+            (Some(element), _) => (element, false),
+            (None, LineState::Opening | LineState::Speaking | LineState::Lingering) => {
+                (self.open_managed(figure, id, state, bubble)?, true)
+            }
+            (None, _) => return Ok(false),
+        };
+        element.set_attribute("data-line-state", state.name())?;
+        match state {
+            LineState::Speaking => {
+                element.class_list().add_1("speaking")?;
+            }
+            LineState::Lingering | LineState::Closing => {
+                element.class_list().remove_1("speaking")?;
+            }
+            LineState::Done => element.remove(),
+            _ => {}
+        }
+        Ok(opened)
+    }
+
+    fn open_managed(
+        &self,
+        figure: &Figure,
+        id: u64,
+        state: LineState,
+        bubble: &LineBubble<'_>,
+    ) -> Result<Element, JsValue> {
+        figure.bubbles.set_text_content(None);
+        let element = node(&self.document, &figure.bubbles, "div", "tv-bubble", "")?;
+        element.set_attribute("data-kind", bubble.kind.name())?;
+        element.set_attribute("data-line-id", &id.to_string())?;
+        element.set_attribute("data-managed", "")?;
+        if state == LineState::Lingering {
+            // A line already on screen when the page was (a reload): no entrance.
+            element.set_attribute("data-instant", "")?;
+        }
+        if bubble.voiced {
+            element.set_attribute("data-voice-role", "npc")?;
+        }
+        let head = node(&self.document, &element, "div", "tv-bubble-head", "")?;
+        node(
+            &self.document,
+            &head,
+            "span",
+            "tv-bubble-name",
+            bubble.speaker,
+        )?;
+        let wave = node(&self.document, &head, "i", "tv-wave", "")?;
+        for _ in 0..3 {
+            node(&self.document, &wave, "b", "", "")?;
+        }
+        node(&self.document, &element, "p", "tv-bubble-text", bubble.text)?;
+        self.place_bubble(figure);
+        Ok(element)
+    }
+
+    pub(super) fn clear_bubbles(&self) -> Result<(), JsValue> {
         for figure in &self.figures {
             figure.bubbles.set_text_content(None);
+            figure.root.remove_attribute("data-thinking")?;
+        }
+        Ok(())
+    }
+
+    /// Shows the small thinking indicator at the figure in `slot` (a speaker writing a reply),
+    /// or at none. Showing it where it already is changes nothing, so its animation is not
+    /// restarted by every view.
+    pub(super) fn set_thinking(&self, slot: Option<ActorSlot>) -> Result<(), JsValue> {
+        let target = slot.and_then(|slot| self.figure(slot));
+        for figure in &self.figures {
+            let wanted = target.is_some_and(|target| target.root.is_same_node(Some(&figure.root)));
+            let shown = figure.root.has_attribute("data-thinking");
+            if wanted && !shown {
+                figure.root.set_attribute("data-thinking", "")?;
+                let dots = node(&self.document, &figure.bubbles, "div", "tv-thinking", "")?;
+                dots.set_attribute("aria-hidden", "true")?;
+                for _ in 0..3 {
+                    node(&self.document, &dots, "i", "", "")?;
+                }
+                self.place_bubble(figure);
+            } else if !wanted && shown {
+                figure.root.remove_attribute("data-thinking")?;
+                if let Some(dots) = figure.bubbles.query_selector(".tv-thinking")? {
+                    dots.remove();
+                }
+            }
         }
         Ok(())
     }

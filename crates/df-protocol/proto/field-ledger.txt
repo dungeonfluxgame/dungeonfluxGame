@@ -401,3 +401,5 @@ message dungeonflux.public.v1.LiveFace
 field dungeonflux.public.v1.LiveFace 1 name type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.LiveFace 2 sprite type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 14 live_faces type=11 label=3 presence=false target=.dungeonflux.public.v1.LiveFace oneof=-
+field dungeonflux.public.v1.JourneyView 15 presentation_sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 16 reply_speaker type=9 label=1 presence=false target=- oneof=-

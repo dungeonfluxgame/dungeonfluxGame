@@ -49,6 +49,10 @@ extern "C" {
     pub fn create_shader_module(this: &GpuDevice, descriptor: &JsValue) -> GpuShaderModule;
     #[wasm_bindgen(method, js_name = createRenderPipeline)]
     pub fn create_render_pipeline(this: &GpuDevice, descriptor: &JsValue) -> GpuRenderPipeline;
+    #[wasm_bindgen(method, js_name = createQuerySet)]
+    pub fn create_query_set(this: &GpuDevice, descriptor: &JsValue) -> GpuQuerySet;
+    #[wasm_bindgen(method, js_name = createComputePipeline)]
+    pub fn create_compute_pipeline(this: &GpuDevice, descriptor: &JsValue) -> GpuComputePipeline;
     #[wasm_bindgen(method, js_name = createBindGroup)]
     pub fn create_bind_group(this: &GpuDevice, descriptor: &JsValue) -> GpuBindGroup;
     #[wasm_bindgen(method, js_name = createCommandEncoder)]
@@ -75,6 +79,8 @@ extern "C" {
         layout: &JsValue,
         size: &JsValue,
     );
+    #[wasm_bindgen(method, js_name = onSubmittedWorkDone)]
+    pub fn on_submitted_work_done(this: &GpuQueue) -> js_sys::Promise;
     #[wasm_bindgen(method, js_name = copyExternalImageToTexture)]
     pub fn copy_external_image_to_texture(
         this: &GpuQueue,
@@ -126,10 +132,54 @@ extern "C" {
     pub fn get_bind_group_layout(this: &GpuRenderPipeline, index: u32) -> JsValue;
 
     #[derive(Clone)]
+    #[wasm_bindgen(extends = Object, js_name = GPUQuerySet)]
+    pub type GpuQuerySet;
+
+    #[derive(Clone)]
+    #[wasm_bindgen(extends = Object, js_name = GPUComputePipeline)]
+    pub type GpuComputePipeline;
+    #[wasm_bindgen(method, js_name = getBindGroupLayout)]
+    pub fn get_compute_bind_group_layout(this: &GpuComputePipeline, index: u32) -> JsValue;
+
+    #[derive(Clone)]
+    #[wasm_bindgen(extends = Object, js_name = GPUComputePassEncoder)]
+    pub type GpuComputePass;
+    #[wasm_bindgen(method, js_name = setPipeline)]
+    pub fn set_compute_pipeline(this: &GpuComputePass, pipeline: &GpuComputePipeline);
+    #[wasm_bindgen(method, js_name = setBindGroup)]
+    pub fn set_compute_bind_group(this: &GpuComputePass, index: u32, group: &GpuBindGroup);
+    #[wasm_bindgen(method, js_name = dispatchWorkgroups)]
+    pub fn dispatch_workgroups(this: &GpuComputePass, x: u32, y: u32, z: u32);
+    #[wasm_bindgen(method, js_name = end)]
+    pub fn end_compute(this: &GpuComputePass);
+
+    #[derive(Clone)]
     #[wasm_bindgen(extends = Object, js_name = GPUCommandEncoder)]
     pub type GpuCommandEncoder;
     #[wasm_bindgen(method, js_name = beginRenderPass)]
     pub fn begin_render_pass(this: &GpuCommandEncoder, descriptor: &JsValue) -> GpuRenderPass;
+    #[wasm_bindgen(method, js_name = beginComputePass)]
+    pub fn begin_compute_pass(this: &GpuCommandEncoder, descriptor: &JsValue) -> GpuComputePass;
+    #[wasm_bindgen(method, js_name = resolveQuerySet)]
+    pub fn resolve_query_set(
+        this: &GpuCommandEncoder,
+        query_set: &GpuQuerySet,
+        first: u32,
+        count: u32,
+        destination: &GpuBuffer,
+        offset: f64,
+    );
+    #[wasm_bindgen(method, js_name = clearBuffer)]
+    pub fn clear_buffer(this: &GpuCommandEncoder, buffer: &GpuBuffer);
+    #[wasm_bindgen(method, js_name = copyBufferToBuffer)]
+    pub fn copy_buffer_to_buffer(
+        this: &GpuCommandEncoder,
+        source: &GpuBuffer,
+        source_offset: f64,
+        destination: &GpuBuffer,
+        destination_offset: f64,
+        size: f64,
+    );
     #[wasm_bindgen(method, js_name = copyTextureToBuffer)]
     pub fn copy_texture_to_buffer(
         this: &GpuCommandEncoder,
@@ -155,6 +205,8 @@ extern "C" {
         offset: f64,
         size: f64,
     );
+    #[wasm_bindgen(method, js_name = drawIndirect)]
+    pub fn draw_indirect(this: &GpuRenderPass, buffer: &GpuBuffer, offset: f64);
     #[wasm_bindgen(method)]
     pub fn draw(
         this: &GpuRenderPass,
@@ -180,6 +232,10 @@ extern "C" {
 pub const BUFFER_MAP_READ: u32 = 0x0001;
 pub const SHADER_VERTEX: u32 = 0x1;
 pub const SHADER_FRAGMENT: u32 = 0x2;
+pub const SHADER_COMPUTE: u32 = 0x4;
+pub const BUFFER_INDIRECT: u32 = 0x0100;
+pub const BUFFER_QUERY_RESOLVE: u32 = 0x0200;
+pub const BUFFER_COPY_SRC: u32 = 0x0004;
 pub const BUFFER_COPY_DST: u32 = 0x0008;
 pub const BUFFER_UNIFORM: u32 = 0x0040;
 pub const BUFFER_STORAGE: u32 = 0x0080;

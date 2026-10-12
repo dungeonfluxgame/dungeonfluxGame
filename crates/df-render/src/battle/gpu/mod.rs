@@ -5,5 +5,8 @@ pub mod core;
 pub mod renderer;
 pub mod shaders;
 pub mod shaders_figure;
+pub mod splat_engine;
+pub mod splat_shaders;
+pub mod splat_stream;
 pub mod sys;
 pub mod textures;

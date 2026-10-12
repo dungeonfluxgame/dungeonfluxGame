@@ -24,7 +24,7 @@
 
 .bf-party,.bf-enemies{position:absolute;top:calc(var(--u)*2.4);display:flex;flex-direction:column;gap:calc(var(--u)*.8);transition:opacity .6s ease}
 .bf-party{left:calc(var(--u)*2.4)}
-.bf-enemies{right:calc(var(--u)*2.4)}
+.bf-enemies{right:calc(var(--u)*2.4);top:calc(var(--u)*6.6)}
 .bf-plate{display:grid;grid-template-columns:auto minmax(0,1fr);gap:calc(var(--u)*.9);align-items:center;width:calc(var(--u)*19.5);padding:calc(var(--u)*.6) calc(var(--u)*.9);background:linear-gradient(135deg,#0b1623e6,#050b13ed);border:1px solid #c9a35f88;border-radius:calc(var(--u)*.5);transition:border-color .3s ease,box-shadow .3s ease}
 .bf-enemies .bf-plate{border-color:#b6544c99}
 .bf-plate[data-active=true]{border-color:#f2c773;box-shadow:0 0 calc(var(--u)*1.2) #f2c77366}

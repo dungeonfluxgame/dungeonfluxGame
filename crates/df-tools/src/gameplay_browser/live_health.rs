@@ -288,7 +288,9 @@ const PHONE_CARDS: &str = ".live-hero-head, #hero-sheet .live-sheet-head";
 
 fn vibrate(milliseconds: u32) {
     // Only with sound and haptics on, and only for the player's own hero.
-    if !super::live_voice::haptics_allowed() {
+    // The sound control's mute (where the page has one) also silences the buzz; a phone has no
+    // voice director of its own, so there it buzzes unless sound was muted on this page.
+    if super::live_voice::effects_muted() == Some(true) {
         return;
     }
     if let Some(window) = web_sys::window() {

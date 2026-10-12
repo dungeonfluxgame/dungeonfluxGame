@@ -1,0 +1,3998 @@
+{
+  "schema": "df-hero-tables/1",
+  "file": "life-path",
+  "revision": "1",
+  "source": "custom-v1",
+  "description": "The eight stages of the backstory-driven hero creator (planning/character-backstory-creation.md sections 4.2 and 6) as data. Option cards are original DungeonFlux presentation aids, not rules: they can only spend the free choices of the standard build (background, class, ability order, skills, languages, alignment, kit, fighting style). Text is mature by default; text_restrained is given where the restrained rating must differ. Roll tables follow the dossier face rule (smallest die in 4, 6, 8, 10, 12, 20 with n <= die, faces spread evenly).",
+  "signal_notation": {
+    "weights": "1 nudge, 2 strong, 3 decisive for background and class; species and ability and skills and languages and tools are 1 or 2; alignment axis points are 1 or 2.",
+    "background": "Weights on the four SRD carrier backgrounds (acolyte, criminal, sage, soldier). Custom backgrounds are reached through the trade, never by weight.",
+    "class": "Weights on SRD class ids.",
+    "species": "Weak lean on SRD species ids, only used to fill an unchosen species tile.",
+    "ability": "Emphasis points on str dex con int wis cha (design 4.5).",
+    "skills": "Leans for the class's own skill picks.",
+    "languages": "Leans for the two free standard languages.",
+    "tools": "Leans for a free tool choice (gaming set variant).",
+    "alignment": "Axis points: law, chaos, good. Evil is never produced (design 4.7).",
+    "tags": "Closed list in story_tags. Campaign story tags and location tags (design 7.1)."
+  },
+  "story_tags": [
+    {
+      "id": "water",
+      "kind": "location",
+      "meaning": "Rivers, harbours and fens."
+    },
+    {
+      "id": "town",
+      "kind": "location",
+      "meaning": "Streets, mills and crowds."
+    },
+    {
+      "id": "wild",
+      "kind": "location",
+      "meaning": "Forest, moor and open country."
+    },
+    {
+      "id": "mountain",
+      "kind": "location",
+      "meaning": "High ground and stone country."
+    },
+    {
+      "id": "sacred",
+      "kind": "location",
+      "meaning": "Shrines, cloisters and holy ground."
+    },
+    {
+      "id": "grave",
+      "kind": "location",
+      "meaning": "Ruins, graveyards and the dead."
+    },
+    {
+      "id": "farm",
+      "kind": "location",
+      "meaning": "Fields, gardens and farmsteads."
+    },
+    {
+      "id": "scholar",
+      "kind": "location",
+      "meaning": "Libraries and places of study."
+    },
+    {
+      "id": "market",
+      "kind": "location",
+      "meaning": "Stalls, trade and haggling."
+    },
+    {
+      "id": "road",
+      "kind": "theme",
+      "meaning": "Travel, caravans and the long way round."
+    },
+    {
+      "id": "court",
+      "kind": "theme",
+      "meaning": "Great houses, rank and service."
+    },
+    {
+      "id": "craft",
+      "kind": "theme",
+      "meaning": "Workshops, guilds and made things."
+    },
+    {
+      "id": "underworld",
+      "kind": "theme",
+      "meaning": "The hidden side of a town."
+    },
+    {
+      "id": "loss",
+      "kind": "theme",
+      "meaning": "Grief and what was taken."
+    },
+    {
+      "id": "disaster",
+      "kind": "theme",
+      "meaning": "Fire, flood and the night it happened."
+    },
+    {
+      "id": "war",
+      "kind": "theme",
+      "meaning": "Soldiers, skirmishes and what they leave."
+    },
+    {
+      "id": "faith",
+      "kind": "theme",
+      "meaning": "Vows, shrines and belief."
+    },
+    {
+      "id": "lore",
+      "kind": "theme",
+      "meaning": "Books, teachers and hard-won knowledge."
+    },
+    {
+      "id": "debt",
+      "kind": "theme",
+      "meaning": "Owing, being owed, and the weight of both."
+    },
+    {
+      "id": "hardship",
+      "kind": "theme",
+      "meaning": "Cold winters, harsh masters, long walks."
+    },
+    {
+      "id": "missing-person",
+      "kind": "theme",
+      "meaning": "Someone is gone and must be found."
+    },
+    {
+      "id": "glory",
+      "kind": "theme",
+      "meaning": "A name, a triumph, being seen."
+    },
+    {
+      "id": "home",
+      "kind": "theme",
+      "meaning": "A place or people worth defending."
+    },
+    {
+      "id": "atonement",
+      "kind": "theme",
+      "meaning": "Making amends or running from them."
+    },
+    {
+      "id": "mystery",
+      "kind": "theme",
+      "meaning": "A question that will not let go."
+    },
+    {
+      "id": "betrayal",
+      "kind": "theme",
+      "meaning": "Trust sold or broken."
+    },
+    {
+      "id": "guilt",
+      "kind": "theme",
+      "meaning": "Something done that cannot be undone."
+    },
+    {
+      "id": "vengeance",
+      "kind": "theme",
+      "meaning": "Wanting a wrong answered."
+    },
+    {
+      "id": "rivalry",
+      "kind": "theme",
+      "meaning": "A long contest with one particular person."
+    }
+  ],
+  "hero_rows": {
+    "note": "Rows in the shape of the NPC dossier tables (id, speakers, text) for hero-only ids the picker needs and the dossier tables lack. Ids never collide with a dossier id. They are not listed in tables.json, so existing adventure revisions do not move. Third-person phrase text, as in the dossier.",
+    "origins": [
+      {
+        "id": "woodcutters-clearing",
+        "speakers": [
+          "person"
+        ],
+        "text": "raised in a woodcutters' clearing where the trees were the nearest neighbours"
+      },
+      {
+        "id": "charcoal-hollow",
+        "speakers": [
+          "person"
+        ],
+        "text": "brought up in a charcoal burners' hollow, black to the elbows from the age of six"
+      },
+      {
+        "id": "cistern-lanes",
+        "speakers": [
+          "person"
+        ],
+        "text": "born in the cistern lanes under a walled town, learning every dry way through"
+      },
+      {
+        "id": "tannery-row",
+        "speakers": [
+          "person"
+        ],
+        "text": "raised on tannery row, where the smell kept the watch away and the neighbours close"
+      }
+    ],
+    "formative_events": [
+      {
+        "id": "betrayed-by-a-friend",
+        "speakers": [
+          "person"
+        ],
+        "text": "was sold out by someone they trusted and has watched people's hands ever since"
+      },
+      {
+        "id": "blood-on-your-hands",
+        "speakers": [
+          "person"
+        ],
+        "text": "killed someone in an unfair fight and has never told the whole story",
+        "text_restrained": "hurt someone badly in an unfair fight and has never told the whole story"
+      },
+      {
+        "id": "burned-village",
+        "speakers": [
+          "person"
+        ],
+        "text": "watched a village burn from a hillside, too far away to help",
+        "text_restrained": "watched a village lost to fire from a hillside, too far away to help"
+      }
+    ],
+    "wants": [
+      {
+        "id": "settle-a-score",
+        "text": "wants someone to answer for a wrong the law will not touch",
+        "text_restrained": "wants a wrong set right that the law will not touch"
+      }
+    ],
+    "bonds": [
+      {
+        "id": "lost-love",
+        "speakers": [
+          "person"
+        ],
+        "text": "still carries a loss no one is allowed to mention"
+      },
+      {
+        "id": "haunted-ruin",
+        "speakers": [
+          "person"
+        ],
+        "text": "keeps returning to a ruin that no one else remembers"
+      },
+      {
+        "id": "old-ship",
+        "speakers": [
+          "person"
+        ],
+        "text": "would answer the call of one particular old ship"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "id": "origin",
+      "order": 1,
+      "title": "Where you come from",
+      "question": "Where did you grow up?",
+      "fills": {
+        "field": "origin",
+        "tier": "public"
+      },
+      "fast_path": false,
+      "skippable": true,
+      "pick_slots": {
+        "min": 1,
+        "max": 1
+      },
+      "slots": [
+        {
+          "id": "main",
+          "prompt": "Pick the place that raised you.",
+          "roll": {
+            "die": 8,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "waterside"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "highland-and-stone"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "town-and-market"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "on-the-road"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "shrine-and-cloister"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "great-house"
+              },
+              {
+                "faces": [
+                  7,
+                  7
+                ],
+                "option": "forest-and-fell"
+              },
+              {
+                "faces": [
+                  8,
+                  8
+                ],
+                "option": "under-the-city"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "waterside",
+              "title": "Waterside",
+              "text": "Your cradle was planking and your lullaby was water on hull. You still wake before the tide turns, and your hand goes looking for a rope.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "origins",
+                "ids": [
+                  "river-barge",
+                  "lighthouse-cottage",
+                  "fen-village"
+                ]
+              },
+              "signals": {
+                "species": {
+                  "human": 1,
+                  "halfling": 1
+                },
+                "ability": {
+                  "dex": 1
+                },
+                "languages": {
+                  "halfling": 1
+                },
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "water"
+                ]
+              },
+              "fills": {
+                "field": "origin",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "highland-and-stone",
+              "title": "Highland and stone",
+              "text": "Wind, rock and long silences. You learned to read weather in the colour of a cliff, and to save your voice for the moments that needed it.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "origins",
+                "ids": [
+                  "shepherd-hut",
+                  "quarry-camp",
+                  "salt-flats"
+                ]
+              },
+              "signals": {
+                "species": {
+                  "dwarf": 1,
+                  "goliath": 1
+                },
+                "ability": {
+                  "str": 1,
+                  "con": 1
+                },
+                "languages": {
+                  "dwarvish": 1,
+                  "giant": 1
+                },
+                "tags": [
+                  "mountain"
+                ]
+              },
+              "fills": {
+                "field": "origin",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "town-and-market",
+              "title": "Town and market",
+              "text": "Everyone's business was everyone's business. You grew up counting change, reading faces, and knowing which doors stayed open after dark.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "origins",
+                "ids": [
+                  "mill-town",
+                  "market-stall",
+                  "copyists-house"
+                ]
+              },
+              "signals": {
+                "species": {
+                  "human": 1
+                },
+                "ability": {
+                  "cha": 1,
+                  "int": 1
+                },
+                "languages": {
+                  "gnomish": 1
+                },
+                "tags": [
+                  "town",
+                  "market"
+                ]
+              },
+              "fills": {
+                "field": "origin",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "on-the-road",
+              "title": "On the road",
+              "text": "You never slept in the same bed twice. Wheels, hooves and strangers' fires were home, and saying goodbye was a skill you practised early.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "origins",
+                "ids": [
+                  "puppet-troupe",
+                  "trade-caravan"
+                ]
+              },
+              "signals": {
+                "species": {
+                  "human": 1,
+                  "elf": 1
+                },
+                "ability": {
+                  "dex": 1,
+                  "wis": 1
+                },
+                "languages": {
+                  "goblin": 1
+                },
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "road"
+                ]
+              },
+              "fills": {
+                "field": "origin",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "shrine-and-cloister",
+              "title": "Shrine and cloister",
+              "text": "Bells before dawn, floors scrubbed by hand, and a great many rules nobody would explain. You kept most of them, and some you still keep in your sleep.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "origins",
+                "ids": [
+                  "shrine-gate"
+                ]
+              },
+              "signals": {
+                "background": {
+                  "acolyte": 1
+                },
+                "ability": {
+                  "wis": 1
+                },
+                "alignment": {
+                  "law": 1
+                },
+                "tags": [
+                  "sacred"
+                ]
+              },
+              "fills": {
+                "field": "origin",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "great-house",
+              "title": "Great house",
+              "text": "You knew the great house from its wrong end: cellars, back stairs, and what was said when no one thought you listened. Standing or ruined, it still has your keys.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "origins",
+                "ids": [
+                  "great-kitchen",
+                  "ruined-estate"
+                ]
+              },
+              "signals": {
+                "background": {
+                  "sage": 1
+                },
+                "ability": {
+                  "int": 1,
+                  "cha": 1
+                },
+                "languages": {
+                  "elvish": 1
+                },
+                "tags": [
+                  "court"
+                ]
+              },
+              "fills": {
+                "field": "origin",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "forest-and-fell",
+              "title": "Forest and fell",
+              "text": "The trees closed over your childhood like a lid. You knew birdsong before letters, and how to walk without a sound, because something was always listening.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "origins",
+                "ids": [],
+                "hero_only": [
+                  "woodcutters-clearing",
+                  "charcoal-hollow"
+                ]
+              },
+              "signals": {
+                "species": {
+                  "elf": 1
+                },
+                "ability": {
+                  "dex": 1,
+                  "wis": 1
+                },
+                "skills": {
+                  "survival": 1
+                },
+                "languages": {
+                  "elvish": 1
+                },
+                "tags": [
+                  "wild"
+                ]
+              },
+              "fills": {
+                "field": "origin",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "under-the-city",
+              "title": "Under the city",
+              "text": "A city has a basement, and you were raised in it: drains, tanneries, rooftops, the hours no watchman keeps. Light was something other people owned.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "origins",
+                "ids": [],
+                "hero_only": [
+                  "cistern-lanes",
+                  "tannery-row"
+                ]
+              },
+              "signals": {
+                "background": {
+                  "criminal": 1
+                },
+                "ability": {
+                  "dex": 1,
+                  "con": 1
+                },
+                "skills": {
+                  "stealth": 1
+                },
+                "languages": {
+                  "goblin": 1
+                },
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "town",
+                  "underworld"
+                ]
+              },
+              "fills": {
+                "field": "origin",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "upbringing",
+      "order": 2,
+      "title": "Who raised you",
+      "question": "Who raised you?",
+      "fills": {
+        "field": "upbringing",
+        "tier": "public"
+      },
+      "fast_path": false,
+      "skippable": true,
+      "pick_slots": {
+        "min": 1,
+        "max": 1
+      },
+      "slots": [
+        {
+          "id": "main",
+          "prompt": "Pick who looked after you.",
+          "roll": {
+            "die": 8,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "parents-and-kin"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "the-street"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "temple-or-master"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "garrison-or-crew"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "wanderers"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "on-your-own"
+              },
+              {
+                "faces": [
+                  7,
+                  7
+                ],
+                "option": "guild-or-workshop"
+              },
+              {
+                "faces": [
+                  8,
+                  8
+                ],
+                "option": "taken-in"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "parents-and-kin",
+              "title": "Parents and kin",
+              "text": "Someone of your own blood raised you, with more love than money. Their sayings still turn up in your mouth when you are tired or afraid.",
+              "signals": {
+                "alignment": {
+                  "good": 1
+                }
+              },
+              "fills": {
+                "field": "upbringing",
+                "tier": "public"
+              },
+              "tie_handle": "family",
+              "source": "custom-v1"
+            },
+            {
+              "id": "the-street",
+              "title": "The street and neighbours",
+              "text": "No single hand raised you. The whole lane did, each keeping a different part of you alive. You owe a baker, a cobbler and a woman nobody names.",
+              "signals": {
+                "background": {
+                  "criminal": 1,
+                  "soldier": 1
+                },
+                "alignment": {
+                  "chaos": 1
+                }
+              },
+              "fills": {
+                "field": "upbringing",
+                "tier": "public"
+              },
+              "tie_handle": "community",
+              "source": "custom-v1"
+            },
+            {
+              "id": "temple-or-master",
+              "title": "A temple or a master",
+              "text": "One teacher shaped you, in a cell or a workshop or a cold lecture room. Praise was rare and exact, and you can still hear the corrections.",
+              "signals": {
+                "background": {
+                  "acolyte": 2,
+                  "sage": 1
+                },
+                "alignment": {
+                  "law": 1
+                }
+              },
+              "fills": {
+                "field": "upbringing",
+                "tier": "public"
+              },
+              "tie_handle": "mentor",
+              "source": "custom-v1"
+            },
+            {
+              "id": "garrison-or-crew",
+              "title": "A garrison or a ship's crew",
+              "text": "Barracks bunks or a swaying hammock, drum-calls and a rule for everything. They looked after you the way soldiers look after tools: thoroughly, and without sentiment.",
+              "signals": {
+                "background": {
+                  "soldier": 2
+                },
+                "class": {
+                  "fighter": 1
+                },
+                "alignment": {
+                  "law": 1
+                }
+              },
+              "fills": {
+                "field": "upbringing",
+                "tier": "public"
+              },
+              "tie_handle": "comrades",
+              "source": "custom-v1"
+            },
+            {
+              "id": "wanderers",
+              "title": "Wanderers",
+              "text": "A troupe, a caravan, a band on the move. You were passed between laps and wagon seats, and taught tricks, tunes and the right face for a toll-keeper.",
+              "signals": {
+                "background": {
+                  "criminal": 1
+                },
+                "class": {
+                  "bard": 1
+                },
+                "alignment": {
+                  "chaos": 1
+                }
+              },
+              "fills": {
+                "field": "upbringing",
+                "tier": "public"
+              },
+              "tie_handle": "troupe",
+              "source": "custom-v1"
+            },
+            {
+              "id": "on-your-own",
+              "title": "On your own, or in the wild",
+              "text": "Nobody raised you in particular. You raised yourself on what could be snared, begged or borrowed, and learned early that you could not afford to be told twice.",
+              "signals": {
+                "class": {
+                  "ranger": 1,
+                  "druid": 1,
+                  "barbarian": 1
+                },
+                "skills": {
+                  "survival": 1
+                },
+                "alignment": {
+                  "chaos": 1
+                }
+              },
+              "fills": {
+                "field": "upbringing",
+                "tier": "public"
+              },
+              "tie_handle": "wild",
+              "source": "custom-v1"
+            },
+            {
+              "id": "guild-or-workshop",
+              "title": "A guild or workshop",
+              "text": "You grew up between a bench and a bed in the back of a workshop, paid in food and lessons. The master's rules were hard, and so was their hand, and you are good at the work.",
+              "signals": {
+                "background": {
+                  "soldier": 1,
+                  "sage": 1
+                },
+                "alignment": {
+                  "law": 1
+                },
+                "tags": [
+                  "craft"
+                ]
+              },
+              "fills": {
+                "field": "upbringing",
+                "tier": "public"
+              },
+              "tie_handle": "guild",
+              "source": "custom-v1"
+            },
+            {
+              "id": "taken-in",
+              "title": "Taken in",
+              "text": "You were no one's, until someone made you theirs: a farmer's widow, a ferryman, a priest with a spare cot. You still don't know what you did to deserve it.",
+              "signals": {
+                "background": {
+                  "criminal": 1,
+                  "acolyte": 1
+                },
+                "alignment": {
+                  "good": 1
+                }
+              },
+              "fills": {
+                "field": "upbringing",
+                "tier": "public"
+              },
+              "tie_handle": "foster",
+              "bond_lean": [
+                "paying-it-forward"
+              ],
+              "source": "custom-v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "job",
+      "order": 3,
+      "title": "What you did for a living",
+      "question": "Who were you before?",
+      "fills": {
+        "field": "past_trade",
+        "tier": "public"
+      },
+      "fast_path": true,
+      "skippable": true,
+      "pick_slots": {
+        "min": 1,
+        "max": 1
+      },
+      "slots": [
+        {
+          "id": "main",
+          "prompt": "Pick the kind of work. Then pick the trade (jobs.json).",
+          "roll": {
+            "die": 6,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "arms-and-guard"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "road-and-river"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "shadow-and-street"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "faith-and-healing"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "books-and-ledgers"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "craft-and-field"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "arms-and-guard",
+              "title": "Arms and guard",
+              "text": "You stood a post for wages: gate, wall, quarry or caravan. Long hours of boredom with a few minutes of fear in them taught you to spot trouble before it spoke.",
+              "signals": {
+                "background": {
+                  "soldier": 3
+                }
+              },
+              "fills": {
+                "field": "past_trade",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "road-and-river",
+              "title": "Road and river",
+              "text": "You moved goods and people from one place to another, by barge, cart or on foot. You know ferrymen's gossip, stable-yard prices and which bridges are rotten.",
+              "signals": {
+                "background": {
+                  "soldier": 2,
+                  "criminal": 1
+                }
+              },
+              "fills": {
+                "field": "past_trade",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "shadow-and-street",
+              "title": "Shadow and street",
+              "text": "You worked the margins of a town: lamps and tunes, back-door deals and quick fingers. Most people look past you, and you have found that useful.",
+              "signals": {
+                "background": {
+                  "criminal": 3
+                }
+              },
+              "fills": {
+                "field": "past_trade",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "faith-and-healing",
+              "title": "Faith and healing",
+              "text": "You tended the sick, the hives, the bells or the lamp before a shrine. The work was gentle and relentless, and it showed you how people behave in their worst hour.",
+              "signals": {
+                "background": {
+                  "acolyte": 3
+                }
+              },
+              "fills": {
+                "field": "past_trade",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "books-and-ledgers",
+              "title": "Books and ledgers",
+              "text": "You lived among ink, tallies and shelves. Someone had to know what was owed, what was written and what had quietly been scraped out, and for years that was you.",
+              "signals": {
+                "background": {
+                  "sage": 3
+                }
+              },
+              "fills": {
+                "field": "past_trade",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "craft-and-field",
+              "title": "Craft and field",
+              "text": "Your hands learned a trade or a harvest: nets, stone, thread, furrows. Good work is its own kind of quiet, and you know what a day of it does to a body.",
+              "signals": {
+                "background": {
+                  "soldier": 1,
+                  "sage": 1,
+                  "acolyte": 1
+                }
+              },
+              "fills": {
+                "field": "past_trade",
+                "tier": "public"
+              },
+              "weak": true,
+              "follow_up": "work-taught-you",
+              "source": "custom-v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "event",
+      "order": 4,
+      "title": "The event that changed everything",
+      "question": "What changed everything?",
+      "fills": {
+        "field": "formative_event",
+        "tier": "public"
+      },
+      "fast_path": false,
+      "skippable": true,
+      "pick_slots": {
+        "min": 1,
+        "max": 1
+      },
+      "slots": [
+        {
+          "id": "main",
+          "prompt": "Pick the turning point.",
+          "roll": {
+            "die": 10,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "a-loss"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "a-disaster-survived"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "war-at-the-edge"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "a-calling-or-a-lesson"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "a-debt-of-kindness"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "a-hard-master-or-a-long-walk"
+              },
+              {
+                "faces": [
+                  7,
+                  7
+                ],
+                "option": "a-small-triumph"
+              },
+              {
+                "faces": [
+                  8,
+                  8
+                ],
+                "option": "a-friendship-broken"
+              },
+              {
+                "faces": [
+                  9,
+                  9
+                ],
+                "option": "a-killing"
+              },
+              {
+                "faces": [
+                  10,
+                  10
+                ],
+                "option": "a-village-burned"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "a-loss",
+              "title": "A loss",
+              "text": "You lost people, or a home, to fever or flood, and learned that grief is also work that somebody has to do. Mostly you did it alone.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "formative_events",
+                "ids": [
+                  "fever-winter",
+                  "street-raised",
+                  "spring-flood"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "good": 1
+                },
+                "tags": [
+                  "loss"
+                ]
+              },
+              "fills": {
+                "field": "formative_event",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "community",
+                "charity",
+                "mercy"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-disaster-survived",
+              "title": "A disaster survived",
+              "text": "Fire took the guildhall, or every bell in town rang with no hand on a rope. You were there. Certain smells and sounds still bring the night back whole.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "formative_events",
+                "ids": [
+                  "guildhall-fire",
+                  "ringing-night"
+                ]
+              },
+              "signals": {
+                "ability": {
+                  "con": 1
+                },
+                "skills": {
+                  "perception": 1
+                },
+                "tags": [
+                  "disaster"
+                ]
+              },
+              "fills": {
+                "field": "formative_event",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "vigilance",
+                "duty"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "war-at-the-edge",
+              "title": "War at the edge",
+              "text": "A border skirmish went through you like weather. You saw what steel does to people who were singing that morning, and walked away with only the sound of it.",
+              "text_restrained": "A border skirmish swept past you like weather. You saw how quickly a quiet field turns, and walked away with only the sound of it.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "formative_events",
+                "ids": [
+                  "border-skirmish"
+                ]
+              },
+              "signals": {
+                "class": {
+                  "fighter": 1,
+                  "barbarian": 1
+                },
+                "skills": {
+                  "perception": 1
+                },
+                "tags": [
+                  "war"
+                ]
+              },
+              "fills": {
+                "field": "formative_event",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "prudence",
+                "vigilance"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-calling-or-a-lesson",
+              "title": "A calling or a lesson",
+              "text": "You walked a long pilgrim road, or learned your letters from a widow who asked only that you teach another. Either way you came back different, and a little more careful.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "formative_events",
+                "ids": [
+                  "pilgrim-road",
+                  "widows-lessons"
+                ]
+              },
+              "signals": {
+                "background": {
+                  "acolyte": 1,
+                  "sage": 1
+                },
+                "alignment": {
+                  "law": 1
+                },
+                "tags": [
+                  "faith",
+                  "lore",
+                  "scholar"
+                ]
+              },
+              "fills": {
+                "field": "formative_event",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "knowledge",
+                "tradition",
+                "charity"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-debt-of-kindness",
+              "title": "A debt of kindness",
+              "text": "A stranger took you in out of a storm, or you returned a purse you could have kept. Either kindness cost something and paid something back. You still keep that account.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "formative_events",
+                "ids": [
+                  "storm-shelter",
+                  "purse-returned"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "good": 1
+                },
+                "tags": [
+                  "debt"
+                ]
+              },
+              "fills": {
+                "field": "formative_event",
+                "tier": "public"
+              },
+              "bond_lean": [
+                "paying-it-forward"
+              ],
+              "ideal_lean": [
+                "hospitality",
+                "charity",
+                "honor"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-hard-master-or-a-long-walk",
+              "title": "A hard master or a long walk",
+              "text": "At twelve you were sent to a master who never smiled, or at fifteen you walked alone to a distant city. Either road taught you how much you can carry without saying so.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "formative_events",
+                "ids": [
+                  "stern-master",
+                  "long-walk"
+                ]
+              },
+              "signals": {
+                "ability": {
+                  "con": 1
+                },
+                "tags": [
+                  "hardship"
+                ]
+              },
+              "fills": {
+                "field": "formative_event",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "independence",
+                "prudence",
+                "ambition"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-small-triumph",
+              "title": "A small triumph",
+              "text": "You won a race that mattered to a whole village, or fed a hundred people from almost nothing. For one day you were somebody, and you have been chasing or dodging that feeling since.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "formative_events",
+                "ids": [
+                  "harvest-footrace",
+                  "feast-from-nothing"
+                ]
+              },
+              "signals": {
+                "class": {
+                  "bard": 1
+                },
+                "skills": {
+                  "athletics": 1
+                },
+                "tags": [
+                  "glory"
+                ]
+              },
+              "fills": {
+                "field": "formative_event",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "joy",
+                "craft",
+                "ambition"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-friendship-broken",
+              "title": "A friendship broken",
+              "text": "You watched an old friendship end over a few words, or you were sold out by someone you trusted. The wound closed. The habit of watching hands stayed.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "formative_events",
+                "ids": [
+                  "old-friends-parted"
+                ],
+                "hero_only": [
+                  "betrayed-by-a-friend"
+                ]
+              },
+              "signals": {
+                "skills": {
+                  "insight": 1
+                },
+                "tags": [
+                  "betrayal"
+                ]
+              },
+              "fills": {
+                "field": "formative_event",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "loyalty",
+                "independence"
+              ],
+              "flaw_lean": [
+                "distrustful"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-killing",
+              "title": "A killing",
+              "text": "You killed someone, and it was not a fair fight. You have told the story three ways. None of them is the whole truth, and the dead do not argue.",
+              "text_restrained": "You hurt someone badly, and it was not a fair fight. You have told the story three ways. None of them is the whole truth.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "formative_events",
+                "ids": [],
+                "hero_only": [
+                  "blood-on-your-hands"
+                ]
+              },
+              "signals": {
+                "class": {
+                  "rogue": 1,
+                  "warlock": 1
+                },
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "guilt",
+                  "atonement"
+                ]
+              },
+              "fills": {
+                "field": "formative_event",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "redemption",
+                "mercy"
+              ],
+              "secret_lean": [
+                "a-crime"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-village-burned",
+              "title": "A village burned",
+              "text": "You watched a village burn, and counted the bodies in the road because you could not stop counting. You were too far away to help and too close to forget.",
+              "text_restrained": "You watched a village burn from a hillside, and counted the roofs because you could not stop counting. You were too far away to help and too close to forget.",
+              "dossier": {
+                "file": "npc-background",
+                "table": "formative_events",
+                "ids": [],
+                "hero_only": [
+                  "burned-village"
+                ]
+              },
+              "signals": {
+                "ability": {
+                  "con": 1
+                },
+                "skills": {
+                  "perception": 1
+                },
+                "tags": [
+                  "war",
+                  "loss"
+                ]
+              },
+              "fills": {
+                "field": "formative_event",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "vigilance",
+                "mercy"
+              ],
+              "fear_lean": [
+                "night-fire"
+              ],
+              "source": "custom-v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "learned",
+      "order": 5,
+      "title": "How you learned to fight or cast",
+      "question": "How do you fight?",
+      "fills": {
+        "field": "learned",
+        "tier": "public"
+      },
+      "fast_path": true,
+      "skippable": true,
+      "pick_slots": {
+        "min": 1,
+        "max": 1
+      },
+      "shown_first": 6,
+      "show_all_label": "Show all 12",
+      "slots": [
+        {
+          "id": "main",
+          "prompt": "Pick how you came by your skill.",
+          "roll": {
+            "die": 12,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "drilled-in-formation"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "learned-to-shoot-straight"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "fury-and-endurance"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "quiet-blades-and-shadows"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "prayer-and-vows"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "study-and-spellbooks"
+              },
+              {
+                "faces": [
+                  7,
+                  7
+                ],
+                "option": "the-hunt-and-the-wild"
+              },
+              {
+                "faces": [
+                  8,
+                  8
+                ],
+                "option": "song-and-story"
+              },
+              {
+                "faces": [
+                  9,
+                  9
+                ],
+                "option": "inner-discipline"
+              },
+              {
+                "faces": [
+                  10,
+                  10
+                ],
+                "option": "a-gift-in-the-blood"
+              },
+              {
+                "faces": [
+                  11,
+                  11
+                ],
+                "option": "a-bargain-with-something"
+              },
+              {
+                "faces": [
+                  12,
+                  12
+                ],
+                "option": "the-wilds-own-magic"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "drilled-in-formation",
+              "title": "Drilled in a formation",
+              "text": "You learned to fight shoulder to shoulder, where holding your place mattered more than winning the exchange. A sergeant's voice still moves your feet.",
+              "signals": {
+                "class": {
+                  "fighter": 3,
+                  "paladin": 1,
+                  "barbarian": 1
+                },
+                "ability": {
+                  "str": 1,
+                  "con": 1
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "featured": true,
+              "level1": {
+                "fighting_style": [
+                  "defense",
+                  "great-weapon-fighting"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "learned-to-shoot-straight",
+              "title": "Learned to shoot straight",
+              "text": "A bow, a target and a stubborn teacher. You learned to breathe out, wait for the wind to pause, and loose before you felt sure. Mostly you were right.",
+              "signals": {
+                "class": {
+                  "fighter": 2,
+                  "ranger": 2,
+                  "rogue": 1
+                },
+                "ability": {
+                  "dex": 2
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "featured": true,
+              "level1": {
+                "fighting_style": [
+                  "archery"
+                ]
+              },
+              "kit_hint": "ranged",
+              "source": "custom-v1"
+            },
+            {
+              "id": "fury-and-endurance",
+              "title": "Fury and endurance",
+              "text": "Something in you does not stop when it should. You learned to trust the red tide, to hit through pain, and to remember afterwards only the sound.",
+              "signals": {
+                "class": {
+                  "barbarian": 3,
+                  "fighter": 1
+                },
+                "ability": {
+                  "str": 1,
+                  "con": 1
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "featured": true,
+              "level1": {
+                "weapon_masteries": [
+                  "greataxe",
+                  "handaxe"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "quiet-blades-and-shadows",
+              "title": "Quiet blades and shadows",
+              "text": "You learned to be where no one was looking: locks, shadows, the one loose stair, and a knife kept for the day quiet fails.",
+              "signals": {
+                "class": {
+                  "rogue": 3,
+                  "ranger": 1,
+                  "bard": 1
+                },
+                "ability": {
+                  "dex": 2
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "featured": true,
+              "level1": {
+                "expertise": [
+                  "sleight-of-hand",
+                  "stealth"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "prayer-and-vows",
+              "title": "Prayer and vows",
+              "text": "You learned by vow and candle: long kneeling hours, hard promises, and the discovery that faith can be held like a shield and swung like a hammer.",
+              "signals": {
+                "class": {
+                  "cleric": 3,
+                  "paladin": 2
+                },
+                "ability": {
+                  "wis": 1
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "featured": true,
+              "ability_alt": [
+                {
+                  "class": "paladin",
+                  "ability": {
+                    "str": 1,
+                    "cha": 1
+                  }
+                }
+              ],
+              "level1": {
+                "divine_order": [
+                  "protector",
+                  "thaumaturge"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "study-and-spellbooks",
+              "title": "Study and spellbooks",
+              "text": "Cold rooms, bad light and books that argued with each other. You learned that power is mostly preparation, and that the dangerous page is the one you skipped.",
+              "signals": {
+                "class": {
+                  "wizard": 3
+                },
+                "ability": {
+                  "int": 2
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "featured": true,
+              "source": "custom-v1"
+            },
+            {
+              "id": "the-hunt-and-the-wild",
+              "title": "The hunt and the wild",
+              "text": "You learned by following: broken twigs, cold ashes, the way a hare sits when it knows. Hunger was a good teacher, and so was whatever hunted you back.",
+              "signals": {
+                "class": {
+                  "ranger": 3,
+                  "druid": 2
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "level1": {
+                "primal_order": [
+                  "warden",
+                  "magician"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "song-and-story",
+              "title": "Song and story",
+              "text": "You learned in taverns and at hearths, from people who could hold a room with a pause. Names, tunes and a hundred old tales are your weapons, and memory is your armour.",
+              "signals": {
+                "class": {
+                  "bard": 3
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "inner-discipline",
+              "title": "Inner discipline",
+              "text": "Breath, balance and a thousand repetitions. Someone made you hold a stance until your legs shook, then told you the shaking was the lesson.",
+              "signals": {
+                "class": {
+                  "monk": 3
+                },
+                "ability": {
+                  "dex": 2,
+                  "wis": 1
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-gift-in-the-blood",
+              "title": "A gift in the blood",
+              "text": "The power was never taught; it arrived. A flicker when you were angry, a hum when you were afraid, and the slow, uneasy understanding that it is yours.",
+              "signals": {
+                "class": {
+                  "sorcerer": 3
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-bargain-with-something",
+              "title": "A bargain with something",
+              "text": "You asked for something in the dark, and something answered. The terms sounded generous, the signature was yours, and the other party has never once forgotten.",
+              "text_restrained": "You asked for help in the dark, and something answered. The terms sounded generous, and the other party has never once forgotten them.",
+              "signals": {
+                "class": {
+                  "warlock": 3
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "the-wilds-own-magic",
+              "title": "The wild's own magic",
+              "text": "The old places taught you, not people: stone circles, spring water, the long breath of a forest. You listen before you act, and the land sometimes answers.",
+              "signals": {
+                "class": {
+                  "druid": 3
+                }
+              },
+              "fills": {
+                "field": "learned",
+                "tier": "public"
+              },
+              "level1": {
+                "primal_order": [
+                  "magician",
+                  "warden"
+                ]
+              },
+              "source": "custom-v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "want",
+      "order": 6,
+      "title": "What you want now",
+      "question": "What do you want?",
+      "fills": {
+        "field": "want",
+        "tier": "public"
+      },
+      "fast_path": true,
+      "skippable": true,
+      "pick_slots": {
+        "min": 1,
+        "max": 1
+      },
+      "slots": [
+        {
+          "id": "main",
+          "prompt": "Pick what drives you.",
+          "roll": {
+            "die": 8,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "clear-a-debt"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "find-someone"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "earn-a-name"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "protect-a-place"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "leave-the-past-behind"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "understand-a-mystery"
+              },
+              {
+                "faces": [
+                  7,
+                  7
+                ],
+                "option": "see-a-rival-brought-low"
+              },
+              {
+                "faces": [
+                  8,
+                  8
+                ],
+                "option": "make-someone-pay"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "clear-a-debt",
+              "title": "To clear a debt",
+              "text": "There is a debt, in coin or in kindness, and it sits on your chest at night. You mean to clear it before it clears you.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "wants",
+                "ids": [
+                  "free-of-debt"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "law": 1
+                },
+                "tags": [
+                  "debt"
+                ]
+              },
+              "fills": {
+                "field": "want",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "duty",
+                "honor",
+                "prudence"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "find-someone",
+              "title": "To find someone",
+              "text": "Someone is missing: a sibling, a teacher, a friend who stopped writing. You carry their last words like a coin you won't spend, and ask every stranger the same question.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "wants",
+                "ids": [
+                  "word-of-sibling"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "good": 1
+                },
+                "tags": [
+                  "missing-person"
+                ]
+              },
+              "fills": {
+                "field": "want",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "loyalty",
+                "charity"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "earn-a-name",
+              "title": "To earn a name",
+              "text": "You want your name said in rooms you have never entered, with respect, by people who need not be polite. You are patient about it. You are also not a patient person.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "wants",
+                "ids": [
+                  "be-remembered",
+                  "be-noticed"
+                ]
+              },
+              "signals": {
+                "class": {
+                  "fighter": 1,
+                  "bard": 1
+                },
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "glory"
+                ]
+              },
+              "fills": {
+                "field": "want",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "ambition",
+                "craft"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "protect-a-place",
+              "title": "To protect a place or people",
+              "text": "Somewhere is yours to keep safe: a street, a mill, a ferry crossing. You will stand in the road for it, and you have already thought about what that costs.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "wants",
+                "ids": [
+                  "neighbours-safe"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "law": 1,
+                  "good": 1
+                },
+                "tags": [
+                  "home"
+                ]
+              },
+              "fills": {
+                "field": "want",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "community",
+                "duty",
+                "vigilance"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "leave-the-past-behind",
+              "title": "To leave the past behind",
+              "text": "You want to stop running. You want to wake in one place twice in a row and not check the door. First you must do something about whatever is following you.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "wants",
+                "ids": [
+                  "stop-running"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "atonement"
+                ]
+              },
+              "fills": {
+                "field": "want",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "redemption",
+                "freedom"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "understand-a-mystery",
+              "title": "To understand a mystery",
+              "text": "A question has hold of you: a locked room, a missing page, a story that does not add up. You will follow it somewhere unwise just to see how it ends.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "wants",
+                "ids": [
+                  "old-truth"
+                ]
+              },
+              "signals": {
+                "background": {
+                  "sage": 1
+                },
+                "class": {
+                  "wizard": 1,
+                  "warlock": 1
+                },
+                "tags": [
+                  "mystery"
+                ]
+              },
+              "fills": {
+                "field": "want",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "curiosity",
+                "knowledge"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "see-a-rival-brought-low",
+              "title": "To see a rival brought low",
+              "text": "One face keeps coming back, smiling. You don't need them dead. You need to watch their certainty crack, and to be standing close when it does.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "wants",
+                "ids": [
+                  "rival-humbled"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "rivalry"
+                ]
+              },
+              "fills": {
+                "field": "want",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "ambition",
+                "independence"
+              ],
+              "source": "custom-v1"
+            },
+            {
+              "id": "make-someone-pay",
+              "title": "To make someone pay",
+              "text": "Someone took something from you, and the law will not collect it. You keep a list with one name on it, and you have kept it short on purpose.",
+              "text_restrained": "Someone took something from you, and the law will not set it right. You keep a list with one name on it, and your patience is not endless.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "wants",
+                "ids": [],
+                "hero_only": [
+                  "settle-a-score"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "vengeance"
+                ]
+              },
+              "fills": {
+                "field": "want",
+                "tier": "public"
+              },
+              "ideal_lean": [
+                "honor",
+                "vigilance"
+              ],
+              "source": "custom-v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ties",
+      "order": 7,
+      "title": "Who you are tied to",
+      "question": "Who or what are you tied to?",
+      "fills": {
+        "field": "ties",
+        "tier": "per-slot"
+      },
+      "fast_path": false,
+      "skippable": true,
+      "pick_slots": {
+        "min": 1,
+        "max": 2
+      },
+      "slot_roll": {
+        "kind_die": {
+          "die": 4,
+          "map": [
+            {
+              "faces": [
+                1,
+                1
+              ],
+              "option": "person"
+            },
+            {
+              "faces": [
+                2,
+                2
+              ],
+              "option": "place"
+            },
+            {
+              "faces": [
+                3,
+                3
+              ],
+              "option": "debt"
+            },
+            {
+              "faces": [
+                4,
+                4
+              ],
+              "option": "enemy"
+            }
+          ]
+        },
+        "second_kind": {
+          "die": 6,
+          "faces_add_second": [
+            5,
+            6
+          ],
+          "note": "On a 5 or 6 roll the kind table again and keep a different kind."
+        }
+      },
+      "slots": [
+        {
+          "id": "person",
+          "prompt": "Pick a person.",
+          "kind": "person",
+          "tier": "private",
+          "roll": {
+            "die": 6,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "younger-sibling"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "old-teacher"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "comrade"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "rival"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "lost-love"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "aging-parent"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "younger-sibling",
+              "title": "A younger sibling",
+              "text": "A younger brother or sister who still thinks you can fix anything. You send what you can and lie about how you earned it.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [
+                  "younger-sister"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "good": 1
+                }
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "person",
+              "tie_handle": "tie.person",
+              "hook": {
+                "cast": "patron",
+                "kinds": [
+                  "escort",
+                  "warn"
+                ],
+                "stake_tags": [
+                  "message"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "old-teacher",
+              "title": "An old teacher",
+              "text": "A teacher who saw something in you before you did and never said so aloud. When you hesitate, you hear their voice.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [
+                  "late-teacher"
+                ]
+              },
+              "signals": {
+                "background": {
+                  "sage": 1
+                }
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "person",
+              "tie_handle": "tie.person",
+              "hook": {
+                "cast": "contact",
+                "kinds": [
+                  "deliver",
+                  "warn"
+                ],
+                "stake_tags": [
+                  "heirloom",
+                  "message"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "comrade",
+              "title": "A comrade",
+              "text": "A comrade whose back you guarded, and who guarded yours. Living or dead, you made them a promise, and you intend to keep it.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [
+                  "kept-promise"
+                ]
+              },
+              "signals": {
+                "background": {
+                  "soldier": 1
+                }
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "person",
+              "tie_handle": "tie.person",
+              "hook": {
+                "cast": "contact",
+                "kinds": [
+                  "escort",
+                  "retrieve"
+                ],
+                "stake_tags": [
+                  "heirloom",
+                  "carry"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "rival",
+              "title": "A rival",
+              "text": "A rival who has measured themselves against you for years. If you fell, they would pick you up and complain about it the whole way home.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [
+                  "friendly-rival"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "chaos": 1
+                }
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "person",
+              "tie_handle": "tie.person",
+              "hook": {
+                "cast": "recurring-minor",
+                "kinds": [
+                  "warn",
+                  "retrieve"
+                ],
+                "stake_tags": [
+                  "carry"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "lost-love",
+              "title": "A lost love",
+              "text": "Someone you loved, and lost to distance or death or your own pride. You do not speak of them. In crowds, you notice anyone who walks the way they did.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [],
+                "hero_only": [
+                  "lost-love"
+                ]
+              },
+              "signals": {
+                "tags": [
+                  "loss"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "person",
+              "tie_handle": "tie.person",
+              "adults_only": true,
+              "hook": {
+                "cast": "contact",
+                "kinds": [
+                  "deliver",
+                  "warn"
+                ],
+                "stake_tags": [
+                  "message",
+                  "heirloom"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "aging-parent",
+              "title": "A parent growing old",
+              "text": "A parent whose hands are slowing. The letters from home are shorter each year, and you read them twice before you sleep.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [
+                  "aging-parent"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "good": 1,
+                  "law": 1
+                }
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "person",
+              "tie_handle": "tie.person",
+              "hook": {
+                "cast": "patron",
+                "kinds": [
+                  "deliver",
+                  "escort"
+                ],
+                "stake_tags": [
+                  "remedy",
+                  "message"
+                ]
+              },
+              "source": "custom-v1"
+            }
+          ]
+        },
+        {
+          "id": "place",
+          "prompt": "Pick a place.",
+          "kind": "place",
+          "tier": "public",
+          "roll": {
+            "die": 6,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "home-town"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "a-ruin"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "a-ship"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "a-shrine"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "a-garden"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "a-supper-table"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "home-town",
+              "title": "The home town",
+              "text": "Bread smoke, wet slate, one crooked clock everyone ignores. You would crawl back to it, if it came to that.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [
+                  "home-town"
+                ]
+              },
+              "signals": {
+                "tags": [
+                  "home"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "public"
+              },
+              "tie_kind": "place",
+              "tie_handle": "tie.place",
+              "hook": {
+                "location_tags": [
+                  "town"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-ruin",
+              "title": "A ruin",
+              "text": "A ruin you cannot stay away from: the broken stair, the cold hearth, the wall with a hand printed in soot. Someone should remember what stood there.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [],
+                "hero_only": [
+                  "haunted-ruin"
+                ]
+              },
+              "signals": {
+                "tags": [
+                  "loss"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "public"
+              },
+              "tie_kind": "place",
+              "tie_handle": "tie.place",
+              "hook": {
+                "location_tags": [
+                  "grave"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-ship",
+              "title": "A ship",
+              "text": "A ship, or the memory of one: the creak of her ribs, the beat of the pumps, the smell of tar. If she ever called, you would answer.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [],
+                "hero_only": [
+                  "old-ship"
+                ]
+              },
+              "signals": {
+                "tags": [
+                  "water"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "public"
+              },
+              "tie_kind": "place",
+              "tie_handle": "tie.place",
+              "hook": {
+                "location_tags": [
+                  "water"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-shrine",
+              "title": "A shrine",
+              "text": "A small shrine you tend out of habit: fresh water, a pinch of salt, a word. You don't know whether anyone listens. You would feel it if you stopped.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [
+                  "roadside-shrine"
+                ]
+              },
+              "signals": {
+                "background": {
+                  "acolyte": 1
+                },
+                "tags": [
+                  "faith"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "public"
+              },
+              "tie_kind": "place",
+              "tie_handle": "tie.place",
+              "hook": {
+                "location_tags": [
+                  "sacred"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-garden",
+              "title": "A garden",
+              "text": "A plot, a row of beans that wants water at dawn wherever else life leads. A neighbour has your key. You think about those beans more than you would admit.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [
+                  "dawn-garden"
+                ]
+              },
+              "signals": {
+                "tags": [
+                  "home"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "public"
+              },
+              "tie_kind": "place",
+              "tie_handle": "tie.place",
+              "hook": {
+                "location_tags": [
+                  "farm"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-supper-table",
+              "title": "A supper table",
+              "text": "A table in a noisy kitchen where a seat is always kept for you, and a plate set. It is the nearest thing you have to proof that you belong somewhere.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "bonds",
+                "ids": [
+                  "supper-circle"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "good": 1
+                }
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "public"
+              },
+              "tie_kind": "place",
+              "tie_handle": "tie.place",
+              "hook": {
+                "location_tags": [
+                  "town",
+                  "market"
+                ]
+              },
+              "source": "custom-v1"
+            }
+          ]
+        },
+        {
+          "id": "debt",
+          "prompt": "Pick a debt.",
+          "kind": "debt",
+          "tier": "private",
+          "roll": {
+            "die": 6,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "you-owe-a-person"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "you-owe-a-guild"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "you-owe-a-temple"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "a-person-owes-you"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "a-guild-owes-you"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "a-temple-owes-you"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "you-owe-a-person",
+              "title": "You owe a person",
+              "text": "You owe someone more than money: a life, a lie they kept for you, a night's shelter that cost them dearly. You mean to repay it exactly, and in full.",
+              "signals": {
+                "alignment": {
+                  "law": 1
+                },
+                "tags": [
+                  "debt"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "debt",
+              "tie_handle": "tie.debt",
+              "direction": "you-owe",
+              "creditor": "person",
+              "hook": {
+                "kinds": [
+                  "deliver",
+                  "retrieve"
+                ],
+                "stake_tags": [
+                  "remedy",
+                  "carry"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "you-owe-a-guild",
+              "title": "You owe a guild",
+              "text": "A guild paid for your training and expects its years back, with interest. The ledger is longer than your patience, and its collectors are always polite.",
+              "signals": {
+                "background": {
+                  "sage": 1
+                },
+                "alignment": {
+                  "law": 1
+                },
+                "tags": [
+                  "debt"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "debt",
+              "tie_handle": "tie.debt",
+              "direction": "you-owe",
+              "creditor": "guild",
+              "hook": {
+                "kinds": [
+                  "retrieve",
+                  "deliver"
+                ],
+                "stake_tags": [
+                  "carry",
+                  "heirloom"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "you-owe-a-temple",
+              "title": "You owe a temple",
+              "text": "A temple fed you through a bad winter and keeps your name in a book. They have never asked for repayment, which is exactly why you cannot stop thinking about it.",
+              "signals": {
+                "background": {
+                  "acolyte": 1
+                },
+                "tags": [
+                  "debt",
+                  "faith"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "debt",
+              "tie_handle": "tie.debt",
+              "direction": "you-owe",
+              "creditor": "temple",
+              "hook": {
+                "kinds": [
+                  "deliver",
+                  "escort"
+                ],
+                "stake_tags": [
+                  "remedy",
+                  "message"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-person-owes-you",
+              "title": "A person owes you",
+              "text": "Someone owes you: coin, an apology, a favour that cost you dear. They have not forgotten. They are waiting to see whether you will make them say it.",
+              "signals": {
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "debt"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "debt",
+              "tie_handle": "tie.debt",
+              "direction": "owed-to-you",
+              "creditor": "person",
+              "hook": {
+                "kinds": [
+                  "retrieve",
+                  "warn"
+                ],
+                "stake_tags": [
+                  "carry",
+                  "heirloom"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-guild-owes-you",
+              "title": "A guild owes you",
+              "text": "A guild owes you wages, or credit, or your name on a piece of work. They hope you will let it lapse. You have kept the papers, and the memory of who signed.",
+              "signals": {
+                "background": {
+                  "sage": 1
+                },
+                "tags": [
+                  "debt"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "debt",
+              "tie_handle": "tie.debt",
+              "direction": "owed-to-you",
+              "creditor": "guild",
+              "hook": {
+                "kinds": [
+                  "retrieve",
+                  "warn"
+                ],
+                "stake_tags": [
+                  "message",
+                  "heirloom"
+                ]
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-temple-owes-you",
+              "title": "A temple owes you",
+              "text": "A temple promised you something when you were at your lowest, and the promise went quiet. Maybe the priest died. Maybe they simply stopped answering.",
+              "signals": {
+                "background": {
+                  "acolyte": 1
+                },
+                "tags": [
+                  "debt",
+                  "faith"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "debt",
+              "tie_handle": "tie.debt",
+              "direction": "owed-to-you",
+              "creditor": "temple",
+              "hook": {
+                "kinds": [
+                  "retrieve",
+                  "deliver"
+                ],
+                "stake_tags": [
+                  "message",
+                  "remedy"
+                ]
+              },
+              "source": "custom-v1"
+            }
+          ]
+        },
+        {
+          "id": "enemy",
+          "prompt": "Pick an enemy.",
+          "kind": "enemy",
+          "tier": "private",
+          "roll": {
+            "die": 6,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "a-captain-who-sold-you-out"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "a-creditor-who-took-everything"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "a-former-master"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "a-comrade-you-left-behind"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "a-family-you-ruined"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "an-innocent-you-blamed"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "a-captain-who-sold-you-out",
+              "title": "A captain who sold you out",
+              "text": "A captain gave you up to save their own neck and watched you go over the side. You have a good memory for faces and a longer one for the names of ships.",
+              "signals": {
+                "background": {
+                  "soldier": 1
+                },
+                "tags": [
+                  "betrayal"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "enemy",
+              "tie_handle": "tie.enemy",
+              "direction": "wronged-you",
+              "hook": {
+                "cast": "recurring-minor",
+                "binding": "antagonist-agent"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-creditor-who-took-everything",
+              "title": "A creditor who took everything",
+              "text": "A creditor took the house, the tools and the cart in a single afternoon and called it business. You can still recite the clerk's phrasing.",
+              "signals": {
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "hardship"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "enemy",
+              "tie_handle": "tie.enemy",
+              "direction": "wronged-you",
+              "hook": {
+                "cast": "recurring-minor",
+                "binding": "antagonist-agent"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-former-master",
+              "title": "A former master",
+              "text": "A former master worked you hard and hit you harder, and told the world you were lazy. You see their kind everywhere, and your jaw tightens.",
+              "text_restrained": "A former master worked you hard and spoke you down, and told the world you were lazy. You see their kind everywhere, and your jaw tightens.",
+              "signals": {
+                "tags": [
+                  "hardship",
+                  "vengeance"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "enemy",
+              "tie_handle": "tie.enemy",
+              "direction": "wronged-you",
+              "hook": {
+                "cast": "recurring-minor",
+                "binding": "antagonist-agent"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-comrade-you-left-behind",
+              "title": "A comrade you left behind",
+              "text": "You left a comrade behind on a bad day and told yourself it was the only choice. They survived. You have not stopped listening for the news.",
+              "signals": {
+                "background": {
+                  "soldier": 1
+                },
+                "tags": [
+                  "guilt"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "enemy",
+              "tie_handle": "tie.enemy",
+              "direction": "you-wronged",
+              "hook": {
+                "cast": "recurring-minor",
+                "binding": "antagonist-agent"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-family-you-ruined",
+              "title": "A family you ruined",
+              "text": "A family you ruined, through a lie or a debt or one careless word. They did not deserve it. When you hear their name, your next breath comes late.",
+              "signals": {
+                "tags": [
+                  "guilt",
+                  "atonement"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "enemy",
+              "tie_handle": "tie.enemy",
+              "direction": "you-wronged",
+              "hook": {
+                "cast": "recurring-minor",
+                "binding": "antagonist-agent"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "an-innocent-you-blamed",
+              "title": "An innocent you blamed",
+              "text": "You put your own fault on someone else to save yourself, and they paid for it. They know the truth. You wonder what they have made of it.",
+              "signals": {
+                "alignment": {
+                  "chaos": 1
+                },
+                "tags": [
+                  "guilt"
+                ]
+              },
+              "fills": {
+                "field": "ties",
+                "tier": "private"
+              },
+              "tie_kind": "enemy",
+              "tie_handle": "tie.enemy",
+              "direction": "you-wronged",
+              "hook": {
+                "cast": "recurring-minor",
+                "binding": "antagonist-agent"
+              },
+              "source": "custom-v1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shadow",
+      "order": 8,
+      "title": "A flaw, a secret, a fear",
+      "question": "What do you hide?",
+      "fills": {
+        "field": "flaw+secret+fear",
+        "tier": "per-slot"
+      },
+      "fast_path": false,
+      "skippable": true,
+      "pick_slots": {
+        "min": 2,
+        "max": 3
+      },
+      "slots": [
+        {
+          "id": "flaw",
+          "prompt": "Pick a flaw.",
+          "required": true,
+          "tier": "private",
+          "roll": {
+            "die": 8,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "gambler"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "boaster"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "grudge-keeper"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "hot-tempered"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "fibber"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "proud"
+              },
+              {
+                "faces": [
+                  7,
+                  7
+                ],
+                "option": "meddler"
+              },
+              {
+                "faces": [
+                  8,
+                  8
+                ],
+                "option": "pilferer"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "gambler",
+              "title": "A gambler",
+              "text": "You cannot walk past a game of chance. The dice have your name on them, you swear, and by the second round you almost believe it.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "flaws",
+                "ids": [
+                  "gambler"
+                ]
+              },
+              "signals": {
+                "tools": {
+                  "dice-set": 1,
+                  "playing-cards": 1
+                }
+              },
+              "fills": {
+                "field": "flaw",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "boaster",
+              "title": "A boaster",
+              "text": "You tell your exploits loud and bright, and a good half of them belonged to someone else. When silence comes, you fill it with the next story.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "flaws",
+                "ids": [
+                  "boaster"
+                ]
+              },
+              "signals": {},
+              "fills": {
+                "field": "flaw",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "grudge-keeper",
+              "title": "A grudge-keeper",
+              "text": "You never forgive a slight. You make no plans; you simply remember every one, in perfect order, and each one sits in your gut, cold and exact.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "flaws",
+                "ids": [
+                  "grudge-keeper"
+                ]
+              },
+              "signals": {},
+              "fills": {
+                "field": "flaw",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "hot-tempered",
+              "title": "Hot-tempered",
+              "text": "When you are hurried, your temper bites first and thinks afterwards. You have broken more than one door, and apologised for fewer than you should.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "flaws",
+                "ids": [
+                  "hot-tempered"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "chaos": 1
+                }
+              },
+              "fills": {
+                "field": "flaw",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "fibber",
+              "title": "A fibber",
+              "text": "Small lies keep your life interesting: a titled uncle, a famous teacher. Nobody is hurt by them, until the day somebody checks.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "flaws",
+                "ids": [
+                  "fibber"
+                ]
+              },
+              "signals": {
+                "skills": {
+                  "deception": 1
+                }
+              },
+              "fills": {
+                "field": "flaw",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "proud",
+              "title": "Too proud",
+              "text": "You cannot take help. You would carry a fallen wall on your back before you asked a neighbour to hold the other end.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "flaws",
+                "ids": [
+                  "proud"
+                ]
+              },
+              "signals": {
+                "alignment": {
+                  "law": 1
+                }
+              },
+              "fills": {
+                "field": "flaw",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "meddler",
+              "title": "A meddler",
+              "text": "You cannot leave a secret alone. A closed door is an insult, a sealed letter a challenge, and other people's business your favourite pastime.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "flaws",
+                "ids": [
+                  "meddler"
+                ]
+              },
+              "signals": {
+                "skills": {
+                  "investigation": 1
+                }
+              },
+              "fills": {
+                "field": "flaw",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "pilferer",
+              "title": "A pilferer",
+              "text": "Small things find their way into your pockets: a spoon, a button, a pinch from the common purse. You always mean to give them back.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "flaws",
+                "ids": [
+                  "pilferer"
+                ]
+              },
+              "signals": {
+                "skills": {
+                  "sleight-of-hand": 1
+                },
+                "alignment": {
+                  "chaos": 1
+                }
+              },
+              "fills": {
+                "field": "flaw",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            }
+          ]
+        },
+        {
+          "id": "secret",
+          "prompt": "Pick a secret.",
+          "required": true,
+          "tier": "sealed",
+          "roll": {
+            "die": 6,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "a-crime"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "a-broken-oath"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "a-lie-i-told"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "a-dangerous-debt"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "a-thing-i-carry"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "a-belief-about-my-birth"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "a-crime",
+              "title": "A crime",
+              "text": "There is a crime in your past that no court ever heard of. You were never caught, and on some nights you wish you had been.",
+              "signals": {},
+              "fills": {
+                "field": "secret",
+                "tier": "sealed"
+              },
+              "secret_kind": "crime",
+              "secret_terms": [
+                "crime",
+                "caught",
+                "stole"
+              ],
+              "known_by": "none",
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-broken-oath",
+              "title": "A broken oath",
+              "text": "You swore an oath on something sacred and then broke it. Nobody else knows the words you used, or which of them you chose to betray.",
+              "signals": {},
+              "fills": {
+                "field": "secret",
+                "tier": "sealed"
+              },
+              "secret_kind": "broken-oath",
+              "secret_terms": [
+                "oath",
+                "sworn",
+                "broke"
+              ],
+              "known_by": "none",
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-lie-i-told",
+              "title": "A lie I told",
+              "text": "You told a lie that other people have since built on. If it cracked, a good deal would fall. You tend it carefully, like a wall you built crooked.",
+              "signals": {},
+              "fills": {
+                "field": "secret",
+                "tier": "sealed"
+              },
+              "secret_kind": "lie",
+              "secret_terms": [
+                "lie",
+                "lied",
+                "false"
+              ],
+              "known_by": "none",
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-dangerous-debt",
+              "title": "A dangerous debt",
+              "text": "You owe something to someone you should never have borrowed from. They have been patient so far. Patience is a loan, too.",
+              "signals": {},
+              "fills": {
+                "field": "secret",
+                "tier": "sealed"
+              },
+              "secret_kind": "dangerous-debt",
+              "secret_terms": [
+                "debt",
+                "owe",
+                "borrowed"
+              ],
+              "known_by": "none",
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-thing-i-carry",
+              "title": "A thing I carry",
+              "text": "You carry something you should have given up or handed over: a letter, a ring, a key. You never open it. You never put it down.",
+              "signals": {},
+              "fills": {
+                "field": "secret",
+                "tier": "sealed"
+              },
+              "secret_kind": "carried-thing",
+              "secret_terms": [
+                "letter",
+                "ring",
+                "key"
+              ],
+              "known_by": "none",
+              "source": "custom-v1"
+            },
+            {
+              "id": "a-belief-about-my-birth",
+              "title": "A belief about my birth",
+              "text": "You believe your birth was not what you were told: another name, a grander house, or a darker one. You have no proof, only a feeling that will not leave.",
+              "signals": {},
+              "fills": {
+                "field": "secret",
+                "tier": "sealed"
+              },
+              "secret_kind": "birth-belief",
+              "secret_terms": [
+                "birth",
+                "born",
+                "heir"
+              ],
+              "known_by": "none",
+              "creates_claim": {
+                "kind": "title",
+                "stance": "believes",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            }
+          ]
+        },
+        {
+          "id": "fear",
+          "prompt": "Pick a fear, or none.",
+          "required": false,
+          "tier": "private",
+          "roll": {
+            "die": 6,
+            "map": [
+              {
+                "faces": [
+                  1,
+                  1
+                ],
+                "option": "deep-water"
+              },
+              {
+                "faces": [
+                  2,
+                  2
+                ],
+                "option": "night-fire"
+              },
+              {
+                "faces": [
+                  3,
+                  3
+                ],
+                "option": "failing-others"
+              },
+              {
+                "faces": [
+                  4,
+                  4
+                ],
+                "option": "the-dark"
+              },
+              {
+                "faces": [
+                  5,
+                  5
+                ],
+                "option": "forgotten"
+              },
+              {
+                "faces": [
+                  6,
+                  6
+                ],
+                "option": "crowds"
+              }
+            ]
+          },
+          "options": [
+            {
+              "id": "deep-water",
+              "title": "Deep water",
+              "text": "Deep water. Whether or not you can swim, the dark underneath turns your knees to wet rope.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "fears",
+                "ids": [
+                  "deep-water"
+                ]
+              },
+              "signals": {},
+              "fills": {
+                "field": "fear",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "night-fire",
+              "title": "Fire in the night",
+              "text": "Fire in the night. The light comes first, then the sound, and your body is running for the door before your mind has said why.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "fears",
+                "ids": [
+                  "night-fire"
+                ]
+              },
+              "signals": {},
+              "fills": {
+                "field": "fear",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "failing-others",
+              "title": "Failing others",
+              "text": "Failing the people who rely on you. You have rehearsed it in the dark so many times that it feels like a memory.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "fears",
+                "ids": [
+                  "failing-others"
+                ]
+              },
+              "signals": {},
+              "fills": {
+                "field": "fear",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "the-dark",
+              "title": "The dark",
+              "text": "The thick dark with no edges. You sleep with a candle burning and tell everyone it is thrift.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "fears",
+                "ids": [
+                  "the-dark"
+                ]
+              },
+              "signals": {},
+              "fills": {
+                "field": "fear",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "forgotten",
+              "title": "Being forgotten",
+              "text": "Being forgotten. Not killed: forgotten, your name worn smooth as a pilgrim's step until even you cannot read it.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "fears",
+                "ids": [
+                  "forgotten"
+                ]
+              },
+              "signals": {},
+              "fills": {
+                "field": "fear",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            },
+            {
+              "id": "crowds",
+              "title": "Crowds",
+              "text": "Crowds. All those elbows, all that breath, and nowhere to put your back. You manage fine, right up until you don't.",
+              "dossier": {
+                "file": "npc-character",
+                "table": "fears",
+                "ids": [
+                  "crowds"
+                ]
+              },
+              "signals": {},
+              "fills": {
+                "field": "fear",
+                "tier": "private"
+              },
+              "source": "custom-v1"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "follow_ups": [
+    {
+      "id": "work-taught-you",
+      "question": "What did the work teach you?",
+      "when": "The chosen trade belongs to a weak job family (craft-and-field), or the top two background weights tie after stage 3, or a free-text story names two trades that disagree.",
+      "applies_to": "background",
+      "skippable": true,
+      "counts_toward_free_text_limit": true,
+      "options": [
+        {
+          "id": "discipline",
+          "label": "Discipline",
+          "effect": {
+            "background": {
+              "soldier": 3
+            }
+          }
+        },
+        {
+          "id": "cunning",
+          "label": "Cunning",
+          "effect": {
+            "background": {
+              "criminal": 3
+            }
+          }
+        },
+        {
+          "id": "faith",
+          "label": "Faith",
+          "effect": {
+            "background": {
+              "acolyte": 3
+            }
+          }
+        },
+        {
+          "id": "lore",
+          "label": "Lore",
+          "effect": {
+            "background": {
+              "sage": 3
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "which-fighter",
+      "question": "Which of these sounds most like you?",
+      "when": "The top two class weights tie after stage 5. Options are the stage-5 cards of the tied classes; if stage 5 was never answered, the six featured stage-5 cards.",
+      "applies_to": "class",
+      "skippable": true,
+      "counts_toward_free_text_limit": true,
+      "options_from": {
+        "stage": "learned",
+        "filter": "tied-classes-or-featured"
+      }
+    },
+    {
+      "id": "reach",
+      "question": "At arm's length, or up close?",
+      "when": "The class is Fighter (the only class with a Fighting Style feature at level 1 in the SRD set). Asked after stage 5.",
+      "applies_to": "fighting-style",
+      "skippable": true,
+      "counts_toward_free_text_limit": false,
+      "options": [
+        {
+          "id": "from-a-distance",
+          "label": "From a distance",
+          "effect": {
+            "fighting_style": "archery"
+          }
+        },
+        {
+          "id": "behind-armor",
+          "label": "Behind a wall of armor",
+          "effect": {
+            "fighting_style": "defense"
+          }
+        },
+        {
+          "id": "one-heavy-blow",
+          "label": "One heavy swing at a time",
+          "effect": {
+            "fighting_style": "great-weapon-fighting"
+          }
+        },
+        {
+          "id": "two-blades",
+          "label": "Two blades, no pause",
+          "effect": {
+            "fighting_style": "two-weapon-fighting"
+          }
+        }
+      ]
+    },
+    {
+      "id": "order",
+      "question": "Did you fight more than you healed, or the reverse?",
+      "when": "The class is Cleric (Divine Order) or Druid (Primal Order).",
+      "applies_to": "class-order",
+      "skippable": true,
+      "counts_toward_free_text_limit": false,
+      "options": [
+        {
+          "id": "fought",
+          "label": "I fought more",
+          "effect": {
+            "divine_order": "protector",
+            "primal_order": "warden"
+          }
+        },
+        {
+          "id": "tended",
+          "label": "I tended more",
+          "effect": {
+            "divine_order": "thaumaturge",
+            "primal_order": "magician"
+          }
+        }
+      ]
+    },
+    {
+      "id": "claim-stance",
+      "question": "Is this a rumour your hero believes, a lie they tell, or a daydream?",
+      "when": "The record holds a claim (title, rank, wealth, an item or a relationship) taken from a secret card or free text. A claim never grants anything.",
+      "applies_to": "claim",
+      "skippable": true,
+      "counts_toward_free_text_limit": true,
+      "options": [
+        {
+          "id": "believes",
+          "label": "A rumour they believe",
+          "effect": {
+            "stance": "believes"
+          }
+        },
+        {
+          "id": "boasts",
+          "label": "A lie they tell",
+          "effect": {
+            "stance": "boasts"
+          }
+        },
+        {
+          "id": "daydreams",
+          "label": "A daydream",
+          "effect": {
+            "stance": "daydreams"
+          }
+        }
+      ]
+    },
+    {
+      "id": "spotlight-consent",
+      "question": "Let the story bring your past into play?",
+      "when": "The last card of creation. Shown unchecked; skipping counts as 'not-yet'.",
+      "applies_to": "consent",
+      "skippable": true,
+      "counts_toward_free_text_limit": false,
+      "default": "not-yet",
+      "options": [
+        {
+          "id": "yes",
+          "label": "Yes",
+          "effect": {
+            "story_may_use": true
+          }
+        },
+        {
+          "id": "not-yet",
+          "label": "Not yet",
+          "effect": {
+            "story_may_use": false
+          }
+        }
+      ]
+    }
+  ]
+}

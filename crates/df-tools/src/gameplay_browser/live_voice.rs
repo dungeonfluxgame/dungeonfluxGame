@@ -1,24 +1,26 @@
-//! Spoken narration and NPC lines on the shared display only.
+//! Spoken narration and NPC lines on the shared display only: the voice player.
 //!
-//! The browser decides nothing: for every accepted display view it asks the server for the
-//! audio of the lines the view carries (`/gameplay/voice/<key>`) and plays what comes back,
-//! one clip at a time. A non-200 answer, a decode failure or a blocked play call just skips
-//! the line. Phones never reach this module, so a room does not echo.
+//! The browser decides nothing about order. The stage conductor (`stage_conductor`) owns the
+//! line and clip machines; this module only does what it is told and reports what happened.
+//! `request` fetches and decodes the audio of a line from the server (`/gameplay/voice/<key>`),
+//! `play` plays a requested clip, `cancel` drops it, and the player reports `Loaded`,
+//! `Started`, `Finished` or `Error` for the line so its machine follows the real audio. A
+//! non-200 answer, a decode failure or a blocked play call is an `Error`, and the line then runs
+//! on reading time. Phones never reach this module, so a room does not echo.
 //!
 //! Browsers refuse audio until the page has had a user gesture, so the display shows one
 //! small "Enable sound" control until a click or key press, then a mute toggle that is
-//! remembered for the tab. While a clip plays the element holding its text gets the
-//! `speaking` class.
+//! kept only until the page reloads (a reload starts locked and the first press enables
+//! sound). The conductor asks for clips only while sound is on.
 use super::*;
-use crate::voice_line::{VoiceLine, display_lines};
-use std::collections::VecDeque;
+use crate::sound_switch::{Press, Sound, SoundSwitch};
+use crate::stage_conductor::{ClipSignal, LineId};
+use crate::voice_line::VoiceLine;
+use std::collections::HashMap;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
-use web_sys::{Blob, BlobPropertyBag, Event, EventTarget, HtmlAudioElement, Node, Response, Url};
+use web_sys::{Blob, BlobPropertyBag, Event, EventTarget, HtmlAudioElement, Response, Url};
 
 const VOICE_PATH: &str = "/gameplay/voice";
-const MUTED_KEY: &str = "df.voice.muted";
-const SPEAKING_CLASS: &str = "speaking";
-const SPOKEN_MEMORY: usize = 256;
 const MAXIMUM_CLIP_BYTES: u32 = 4 * 1024 * 1024;
 /// A zero-length WAV played inside the first gesture so Safari lets this element play later.
 const UNLOCK_CLIP: &str =
@@ -36,47 +38,29 @@ const WAVE_PATHS: &str =
     "<path d=\"M15.5 8.5a5 5 0 0 1 0 7\"/><path d=\"M18.5 5.5a9 9 0 0 1 0 13\"/>";
 const MUTE_PATHS: &str = "<path d=\"M16 9l6 6M22 9l-6 6\"/>";
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Sound {
-    Locked,
-    On,
-    Muted,
+/// A requested clip that is not playing yet.
+enum Clip {
+    Fetching,
+    /// Decoded and waiting for its turn, as an object URL.
+    Ready(String),
 }
 
-/// The clip being fetched or played.
-struct Playing {
-    line: VoiceLine,
-    speaking: Option<Element>,
-    object_url: Option<String>,
-}
-
-impl Playing {
-    /// Clears the speaking mark and frees the clip's object URL. Both are cosmetic or
-    /// memory cleanup of a clip that is already over, so a failure changes nothing visible.
-    fn release(self) {
-        if let Some(element) = self.speaking {
-            let _cleared = element.class_list().remove_1(SPEAKING_CLASS);
-        }
-        if let Some(url) = self.object_url {
-            let _revoked = Url::revoke_object_url(&url);
-        }
-    }
+/// The clip on the audio element.
+struct Current {
+    id: LineId,
+    url: String,
+    /// `Started` was reported (the `playing` event repeats after buffering).
+    started: bool,
 }
 
 struct Director {
-    document: Document,
     audio: HtmlAudioElement,
     control: Element,
     icon: Element,
     label: Element,
-    unlocked: bool,
-    muted: bool,
-    /// Lines of the newest accepted view; older views' queued lines are discarded.
-    latest: Vec<VoiceLine>,
-    queue: VecDeque<VoiceLine>,
-    spoken: VecDeque<String>,
-    current: Option<Playing>,
-    play_id: u64,
+    switch: SoundSwitch,
+    clips: HashMap<LineId, Clip>,
+    current: Option<Current>,
     listeners: Vec<Closure<dyn FnMut(Event)>>,
 }
 
@@ -86,11 +70,7 @@ thread_local! {static DIRECTOR:RefCell<Option<Shared>>=const{RefCell::new(None)}
 
 impl Director {
     fn sound(&self) -> Sound {
-        match (self.unlocked, self.muted) {
-            (false, _) => Sound::Locked,
-            (true, false) => Sound::On,
-            (true, true) => Sound::Muted,
-        }
+        self.switch.sound()
     }
 
     fn render_control(&self) {
@@ -108,44 +88,15 @@ impl Director {
         ));
     }
 
-    fn has_spoken(&self, key: &str) -> bool {
-        self.spoken.iter().any(|known| known == key)
-    }
-
-    fn remember(&mut self, key: String) {
-        if self.has_spoken(&key) {
-            return;
-        }
-        if self.spoken.len() >= SPOKEN_MEMORY {
-            self.spoken.pop_front();
-        }
-        self.spoken.push_back(key);
-    }
-
-    fn forget(&mut self, key: &str) {
-        self.spoken.retain(|known| known != key);
-    }
-
-    /// The queue is rebuilt from the newest view only: lines not yet started for an older
-    /// scene are dropped, and a clip already playing is left to finish.
-    fn refill(&mut self) {
-        self.queue.clear();
-        for line in &self.latest {
-            let playing = self
-                .current
-                .as_ref()
-                .is_some_and(|current| current.line == *line);
-            if !playing && !self.has_spoken(&line.key()) {
-                self.queue.push_back(line.clone());
-            }
-        }
-    }
-
     fn plays(&self, url: &str) -> bool {
         self.current
             .as_ref()
-            .and_then(|current| current.object_url.as_deref())
-            .is_some_and(|expected| expected == url)
+            .is_some_and(|current| current.url == url)
+    }
+
+    /// Frees an object URL; a refusal only leaves a little memory until the page closes.
+    fn release(url: &str) {
+        let _revoked = Url::revoke_object_url(url);
     }
 }
 
@@ -164,12 +115,7 @@ pub(super) struct SoundState {
 pub(super) fn sound_state() -> Option<SoundState> {
     let shared = DIRECTOR.with(|slot| slot.borrow().clone())?;
     let state = shared.try_borrow().ok()?;
-    let clip_playing = state
-        .current
-        .as_ref()
-        .is_some_and(|current| current.object_url.is_some())
-        && !state.audio.paused()
-        && !state.audio.ended();
+    let clip_playing = state.current.is_some() && !state.audio.paused() && !state.audio.ended();
     Some(SoundState {
         enabled: state.sound() == Sound::On,
         speaking: clip_playing,
@@ -203,41 +149,27 @@ pub(super) fn effects_gate() -> Option<EffectsGate> {
 
 /// `None` while audio is still locked, otherwise whether the viewer muted sound.
 pub(super) fn effects_muted() -> Option<bool> {
-    with_director(|state| state.unlocked.then_some(state.muted)).flatten()
+    with_director(|state| {
+        state
+            .switch
+            .is_unlocked()
+            .then_some(state.switch.is_muted())
+    })
+    .flatten()
 }
 
-/// Called once per newly applied view. Voice is best effort: a failure here marks the
-/// display root and never affects rendering.
+/// Called once per newly applied view: makes sure the sound control exists. Voice is best
+/// effort: a failure here marks the display root and never affects rendering.
 pub(super) fn observe(client: &Rc<RefCell<Client>>) {
-    let (document, root, view) = {
+    let (document, root) = {
         let state = client.borrow();
         if state.role != "display" {
             return;
         }
-        let Some(view) = state
-            .views
-            .as_ref()
-            .and_then(|views| views.current().cloned())
-        else {
-            return;
-        };
-        (state.document.clone(), state.root.clone(), view)
+        (state.document.clone(), state.root.clone())
     };
-    let Some(rpc::view_message::Audience::Display(display)) = view.audience else {
-        return;
-    };
-    match director(&document, &root) {
-        Ok(director) => {
-            {
-                let mut state = director.borrow_mut();
-                state.latest = display_lines(&display);
-                state.refill();
-            }
-            pump(&director);
-        }
-        Err(_) => {
-            let _marked = root.set_attribute("data-voice", "unavailable");
-        }
+    if director(&document, &root).is_err() {
+        let _marked = root.set_attribute("data-voice", "unavailable");
     }
 }
 
@@ -273,24 +205,19 @@ fn create(document: &Document) -> Result<Shared, JsValue> {
     let icon = node(document, &control, "span", "tv-voice-icon", "")?;
     let label = node(document, &control, "span", "tv-voice-label", "")?;
     let shared = Rc::new(RefCell::new(Director {
-        document: document.clone(),
         audio: audio.clone(),
         control: control.clone(),
         icon,
         label,
-        unlocked: false,
-        muted: stored_mute(),
-        latest: Vec::new(),
-        queue: VecDeque::new(),
-        spoken: VecDeque::new(),
+        switch: SoundSwitch::new(),
+        clips: HashMap::new(),
         current: None,
-        play_id: 0,
         listeners: Vec::new(),
     }));
     shared.borrow().render_control();
     listen(&shared, audio.as_ref(), "playing", on_playing)?;
-    listen(&shared, audio.as_ref(), "ended", on_clip_over)?;
-    listen(&shared, audio.as_ref(), "error", on_clip_over)?;
+    listen(&shared, audio.as_ref(), "ended", on_ended)?;
+    listen(&shared, audio.as_ref(), "error", on_error)?;
     listen(&shared, control.as_ref(), "click", on_control)?;
     listen(&shared, document.as_ref(), "pointerdown", on_gesture)?;
     listen(&shared, document.as_ref(), "keydown", on_gesture)?;
@@ -316,35 +243,37 @@ fn listen(
     Ok(())
 }
 
-/// Any click or key press outside the control unlocks audio; the control handles its own.
-fn on_gesture(shared: &Shared, event: &Event) {
-    let inside_control = event
-        .target()
-        .and_then(|target| target.dyn_into::<Node>().ok())
-        .is_some_and(|target| shared.borrow().control.contains(Some(&target)));
-    if !inside_control {
-        unlock(shared);
+/// Any pointer or key press on the page unlocks audio, the control included: the click that
+/// follows on the control is part of the same gesture (see `sound_switch`).
+fn on_gesture(shared: &Shared, _event: &Event) {
+    let first = shared.borrow_mut().switch.gesture(now_ms());
+    if first {
+        start_unlocked(shared);
     }
 }
 
 fn on_control(shared: &Shared, _event: &Event) {
     // Read the state first: a borrow held across the match would still be live when the
     // arms borrow mutably, which aborts the whole client.
-    let sound = shared.borrow().sound();
-    match sound {
-        Sound::Locked => unlock(shared),
-        Sound::On => set_muted(shared, true),
-        Sound::Muted => set_muted(shared, false),
+    let pressed = shared.borrow_mut().switch.press(now_ms());
+    match pressed {
+        Press::Unlocked => start_unlocked(shared),
+        Press::SameGesture => {}
+        Press::Muted => apply_mute(shared, true),
+        Press::Unmuted => apply_mute(shared, false),
     }
 }
 
-fn unlock(shared: &Shared) {
+fn now_ms() -> u64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map_or(0, |performance| performance.now() as u64)
+}
+
+/// Audio was just unlocked by a gesture: play the unlock clip inside it.
+fn start_unlocked(shared: &Shared) {
     {
-        let mut state = shared.borrow_mut();
-        if state.unlocked {
-            return;
-        }
-        state.unlocked = true;
+        let state = shared.borrow();
         state.render_control();
         state.audio.set_src(UNLOCK_CLIP);
         // Playing inside the gesture is what unlocks the element; a browser that refuses
@@ -354,197 +283,213 @@ fn unlock(shared: &Shared) {
                 let _settled = JsFuture::from(promise).await;
             });
         }
-        state.refill();
     }
     live_sfx::sync();
-    pump(shared);
+    live_motion::sound_changed(true);
 }
 
-fn set_muted(shared: &Shared, muted: bool) {
+/// The switch already holds the new mute choice; stop the clip on the air to match it. The
+/// line it belonged to ends (its machine sees an error) and later lines run on reading time.
+fn apply_mute(shared: &Shared, muted: bool) {
     let stopped = {
         let mut state = shared.borrow_mut();
-        state.muted = muted;
-        let _stored = store_mute(muted);
-        state.play_id += 1;
         if muted {
             let _paused = state.audio.pause();
-            state.queue.clear();
-        } else {
-            state.refill();
         }
         state.render_control();
-        state.current.take()
+        if muted { state.current.take() } else { None }
     };
     live_sfx::sync();
-    if let Some(playing) = stopped {
-        playing.release();
+    live_motion::sound_changed(!muted);
+    if let Some(current) = stopped {
+        Director::release(&current.url);
+        live_motion::clip_signal(current.id, ClipSignal::Error);
     }
-    pump(shared);
 }
 
-/// Starts the next queued line when sound is on and nothing is playing.
-fn pump(shared: &Shared) {
-    let (line, id) = {
+/// Reports a signal after the current event handler has returned, so a signal never nests
+/// inside the call that produced it.
+fn signal_later(id: LineId, signal: ClipSignal) {
+    spawn_local(async move {
+        live_motion::clip_signal(id, signal);
+    });
+}
+
+/// Fetches and decodes the audio of the line `id`, without playing it.
+pub(super) fn request(id: LineId, line: &VoiceLine) {
+    let Some(shared) = DIRECTOR.with(|slot| slot.borrow().clone()) else {
+        signal_later(id, ClipSignal::Error);
+        return;
+    };
+    {
         let mut state = shared.borrow_mut();
-        if state.sound() != Sound::On || state.current.is_some() {
+        if state.clips.contains_key(&id) {
             return;
         }
-        let Some(line) = state.queue.pop_front() else {
-            return;
-        };
-        // A started line counts as spoken even if its clip fails, so a refused line is
-        // not requested again on every view.
-        state.remember(line.key());
-        state.play_id += 1;
-        state.current = Some(Playing {
-            line: line.clone(),
-            speaking: None,
-            object_url: None,
-        });
-        (line, state.play_id)
-    };
-    let shared = Rc::clone(shared);
+        state.clips.insert(id, Clip::Fetching);
+    }
+    let key = line.key();
     spawn_local(async move {
-        match fetch_clip(&line.key()).await {
-            Ok(url) => start(&shared, id, url),
-            Err(_) => abandon(&shared, id),
+        let fetched = fetch_clip(&key).await;
+        let signal = {
+            let mut state = shared.borrow_mut();
+            let wanted = matches!(state.clips.get(&id), Some(Clip::Fetching));
+            match (wanted, fetched) {
+                (true, Ok(url)) => {
+                    state.clips.insert(id, Clip::Ready(url));
+                    Some(ClipSignal::Loaded)
+                }
+                (true, Err(_)) => {
+                    state.clips.remove(&id);
+                    Some(ClipSignal::Error)
+                }
+                // Cancelled while it was on its way.
+                (false, Ok(url)) => {
+                    Director::release(&url);
+                    None
+                }
+                (false, Err(_)) => None,
+            }
+        };
+        if let Some(signal) = signal {
+            live_motion::clip_signal(id, signal);
         }
     });
 }
 
-fn start(shared: &Shared, id: u64, url: String) {
-    let played = {
-        let mut state = shared.borrow_mut();
-        if state.play_id != id || state.current.is_none() {
-            let _revoked = Url::revoke_object_url(&url);
-            return;
-        }
-        state.audio.set_src(&url);
-        if let Some(current) = state.current.as_mut() {
-            current.object_url = Some(url);
-        }
-        state.audio.play()
+/// Plays the decoded clip of the line `id`. The player reports `Started` when the browser
+/// begins playing it, `Finished` when it ends, or `Error` when the play call is refused.
+pub(super) fn play(id: LineId) {
+    let Some(shared) = DIRECTOR.with(|slot| slot.borrow().clone()) else {
+        signal_later(id, ClipSignal::Error);
+        return;
     };
-    match played {
-        Ok(promise) => {
-            let shared = Rc::clone(shared);
-            spawn_local(async move {
-                if let Err(refusal) = JsFuture::from(promise).await {
-                    refused(&shared, id, &refusal);
-                }
-            });
+    let started = {
+        let mut state = shared.borrow_mut();
+        match state.clips.remove(&id) {
+            Some(Clip::Ready(url)) => {
+                state.audio.set_src(&url);
+                state.current = Some(Current {
+                    id,
+                    url,
+                    started: false,
+                });
+                Some(state.audio.play())
+            }
+            Some(other) => {
+                state.clips.insert(id, other);
+                None
+            }
+            None => None,
         }
-        Err(refusal) => refused(shared, id, &refusal),
+    };
+    match started {
+        Some(Ok(promise)) => spawn_local(async move {
+            if let Err(refusal) = JsFuture::from(promise).await {
+                refused(&shared, id, &refusal);
+            }
+        }),
+        Some(Err(refusal)) => refused(&shared, id, &refusal),
+        None => signal_later(id, ClipSignal::Error),
     }
 }
 
-/// A play call the browser refused: if it was the autoplay policy the control comes back
-/// and the line waits; any other refusal skips the line.
-fn refused(shared: &Shared, id: u64, refusal: &JsValue) {
+/// Drops the clip of the line `id`; if it is on the air it stops. The line's machine has
+/// already moved on, so nothing is reported.
+pub(super) fn cancel(id: LineId) {
+    let Some(shared) = DIRECTOR.with(|slot| slot.borrow().clone()) else {
+        return;
+    };
+    let mut state = shared.borrow_mut();
+    if let Some(Clip::Ready(url)) = state.clips.remove(&id) {
+        Director::release(&url);
+    }
+    if state
+        .current
+        .as_ref()
+        .is_some_and(|current| current.id == id)
+    {
+        let _paused = state.audio.pause();
+        if let Some(current) = state.current.take() {
+            Director::release(&current.url);
+        }
+    }
+}
+
+/// A play call the browser refused: if it was the autoplay policy the control comes back and
+/// sound is off again; either way the line runs on reading time.
+fn refused(shared: &Shared, id: LineId, refusal: &JsValue) {
     let blocked = js_sys::Reflect::get(refusal, &JsValue::from_str("name"))
         .ok()
         .and_then(|name| name.as_string())
         .is_some_and(|name| name == "NotAllowedError");
-    if !blocked {
-        abandon(shared, id);
-        return;
-    }
     let released = {
         let mut state = shared.borrow_mut();
-        if state.play_id != id {
+        if !state
+            .current
+            .as_ref()
+            .is_some_and(|current| current.id == id)
+        {
             return;
         }
-        state.unlocked = false;
-        state.render_control();
-        let released = state.current.take();
-        if let Some(playing) = &released {
-            state.forget(&playing.line.key());
+        if blocked {
+            state.switch.refused();
+            state.render_control();
         }
-        state.refill();
-        released
+        state.current.take()
     };
-    if let Some(playing) = released {
-        playing.release();
+    if let Some(current) = released {
+        Director::release(&current.url);
     }
-}
-
-/// Gives up on the clip `id` (fetch failed, refused or undecodable) and moves on.
-fn abandon(shared: &Shared, id: u64) {
-    if shared.borrow().play_id != id {
-        return;
+    if blocked {
+        live_motion::sound_changed(false);
     }
-    finish(shared);
-}
-
-fn finish(shared: &Shared) {
-    let over = shared.borrow_mut().current.take();
-    if let Some(playing) = over {
-        let character = playing.line.is_npc();
-        playing.release();
-        live_motion::voice_over(character);
-    }
-    pump(shared);
+    live_motion::clip_signal(id, ClipSignal::Error);
 }
 
 fn on_playing(shared: &Shared, _event: &Event) {
-    let line = {
-        let state = shared.borrow();
+    let reported = {
+        let mut state = shared.borrow_mut();
         let url = state.audio.current_src();
-        if !state.plays(&url) {
-            return;
+        let seconds = state.audio.duration();
+        match state.current.as_mut() {
+            Some(current) if current.url == url && !current.started => {
+                current.started = true;
+                let duration_ms = (seconds.is_finite() && seconds > 0.0)
+                    .then(|| (seconds * 1000.0).min(f64::from(u32::MAX)) as u32);
+                Some((current.id, duration_ms))
+            }
+            _ => None,
         }
-        state.current.as_ref().map(|current| current.line.clone())
     };
-    // The display follows the voice: the line's speaker takes the screen as its audio starts,
-    // before the speaking mark looks for the element that shows the words.
-    if let Some(line) = &line {
-        live_motion::voice_started(line.speaker(), &line.text);
-    }
-    let mut state = shared.borrow_mut();
-    let element = state
-        .current
-        .as_ref()
-        .and_then(|current| locate(&state.document, &current.line));
-    if let Some(element) = &element {
-        let _marked = element.class_list().add_1(SPEAKING_CLASS);
-    }
-    if let Some(current) = state.current.as_mut() {
-        current.speaking = element;
+    if let Some((id, duration_ms)) = reported {
+        live_motion::clip_signal(id, ClipSignal::Started { duration_ms });
     }
 }
 
 /// `ended` or `error`, but only for the real clip, never for the unlock clip.
-fn on_clip_over(shared: &Shared, _event: &Event) {
-    let url = shared.borrow().audio.current_src();
-    if shared.borrow().plays(&url) {
-        finish(shared);
+fn finish(shared: &Shared, signal: ClipSignal) {
+    let over = {
+        let mut state = shared.borrow_mut();
+        let url = state.audio.current_src();
+        if state.plays(&url) {
+            state.current.take()
+        } else {
+            None
+        }
+    };
+    if let Some(current) = over {
+        Director::release(&current.url);
+        live_motion::clip_signal(current.id, signal);
     }
 }
 
-/// The element showing `line`: an element carrying `data-voice-role` for the line's role
-/// if the interface provides one, otherwise the known narration and quote elements, matched
-/// by their text so a changed layout simply gets no mark.
-fn locate(document: &Document, line: &VoiceLine) -> Option<Element> {
-    let attribute = format!(
-        "[data-voice-role=\"{}\"]",
-        if line.is_npc() { "npc" } else { "narrator" }
-    );
-    let spoken = line.text.trim();
-    [
-        attribute.as_str(),
-        ".tv-narration",
-        ".narration",
-        ".tv-quote",
-        ".dialogue blockquote",
-    ]
-    .into_iter()
-    .find_map(|selector| {
-        let element = document.query_selector(selector).ok().flatten()?;
-        element
-            .text_content()
-            .is_some_and(|text| text.contains(spoken))
-            .then_some(element)
-    })
+fn on_ended(shared: &Shared, _event: &Event) {
+    finish(shared, ClipSignal::Finished);
+}
+
+fn on_error(shared: &Shared, _event: &Event) {
+    finish(shared, ClipSignal::Error);
 }
 
 /// Fetches one clip and returns an object URL for it. Anything but a non-empty, bounded
@@ -566,25 +511,4 @@ async fn fetch_clip(key: &str) -> Result<String, JsValue> {
     options.set_type("audio/mpeg");
     let blob = Blob::new_with_u8_array_sequence_and_options(&js_sys::Array::of1(&bytes), &options)?;
     Url::create_object_url_with_blob(&blob)
-}
-
-/// PLAY-H01: whether the phone may vibrate: the same remembered mute choice as sound (a phone
-/// has no voice director of its own, so the stored choice is the preference).
-pub(super) fn haptics_allowed() -> bool {
-    !stored_mute()
-}
-
-/// The remembered mute choice of this tab. Unavailable storage means "not muted".
-fn stored_mute() -> bool {
-    web_sys::window()
-        .and_then(|window| window.session_storage().ok().flatten())
-        .and_then(|storage| storage.get_item(MUTED_KEY).ok().flatten())
-        .is_some_and(|value| value == "1")
-}
-
-fn store_mute(muted: bool) -> Result<(), JsValue> {
-    let storage = web_sys::window()
-        .and_then(|window| window.session_storage().ok().flatten())
-        .ok_or_else(|| JsValue::from_str("session storage unavailable"))?;
-    storage.set_item(MUTED_KEY, if muted { "1" } else { "0" })
 }

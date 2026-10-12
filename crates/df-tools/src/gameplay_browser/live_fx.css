@@ -32,7 +32,9 @@
 
 /* ---------- scene states: leave, interstitial, enter ---------- */
 .tv-safe,.tv-figures,.tv-choices,.tv-stage .live-screen{transition:opacity .4s ease}
-.tv-stage:is([data-stage=leaving],[data-stage=interstitial],[data-stage=title],[data-stage=closing]) :is(.tv-safe,.tv-figures,.live-screen,.tv-final-roll,.tv-choices){opacity:0}
+.tv-stage:is([data-stage=interstitial],[data-stage=title],[data-stage=closing]) :is(.tv-safe,.tv-figures,.live-screen,.tv-final-roll,.tv-choices){opacity:0}
+/* leaving: the scene's chrome fades, each actor leaves or stays through its own machine */
+.tv-stage[data-stage=leaving] :is(.tv-safe,.live-screen,.tv-final-roll,.tv-choices){opacity:0}
 .tv-stage:is([data-stage=leaving],[data-stage=interstitial]) .tv-figures{transition-duration:.3s}
 .tv-stage[data-scene-swap=a] .tv-dm{animation:df-rise-a .7s ease .5s backwards}
 .tv-stage[data-scene-swap=a] .tv-stagebox .tv-divider{animation:df-draw-a .8s ease .6s backwards}

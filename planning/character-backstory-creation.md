@@ -1511,6 +1511,44 @@ the bribe and desertion, with `known_by: ["Vesk"]`.
 
 ## 14. Changelog of this document
 
+2026-10-12 PLAY-C08: the data for the picker, jobs, custom backgrounds and SRD catalog now exists in `content/hero-tables/` (README there); disagreements found are in "Data notes" below.
 2026-10-12 owner decisions on O1-O4 recorded in section 11.
 2026-10-11 first version (PLAY-C07). Appendix material for later tasks: new hero table
 file (stage tables 4.2), schemas (5.2, 6.1), validation list V1-V14 (5.4).
+
+### Data notes (PLAY-C08, 2026-10-12)
+
+Where the design, the SRD 5.2.1 text or the dossier tables disagreed or were silent, and
+what the data in `content/hero-tables/` chose. The design text above is unchanged.
+
+- **Mature wording lives on the card, not in the overlay.** Section 4.2 says darker event rows
+  can come through the mature overlay, but `mature-overlay.json` only replaces
+  `prose-patterns.json`, antagonist arrivals and warnings, and `npc-social.json`; it cannot
+  replace dossier background or event rows. Chosen: `text` is the mature default and an
+  optional `text_restrained` is shown under the restrained rating; hero-only dossier-shaped
+  rows carry the same pair.
+- **More than six cards.** The design lists six cards per stage (fewer in stage 7). The data
+  needs at least six per slot, so it adds cards: stage 1 +2 (forest, under the city; four
+  hero-only origins), stage 2 +2 (guild, taken in), stage 4 +4 (small triumph and
+  friendship broken, which use the three person events the design left unused, plus
+  two hero-only dark events), stage 6 +2, stage 7 six per kind, stage 8 eight flaws.
+  Every design card keeps the design's signals.
+- **Unassigned tiers.** The design gives tier defaults for origin line, public want,
+  calling, flaw, fear, secret and claims but not upbringing, formative event or learned.
+  Chosen: public for those three; person, debt and enemy ties private; place ties public.
+- **`learned.style_hint`** (6.1) became a `level1` map (fighting style, masteries,
+  Expertise, Divine Order, Primal Order) because those are the only level-1 choices that
+  exist in the free-choice budget; class features such as Rage are not choices and are not data.
+- **Ideal** is not picked by any stage; cards give `ideal_lean` dossier ids instead.
+- **SRD pages.** The extracted PDF puts all four background entries on p.83 (the design says
+  83-84), the Standard Languages and Rare Languages tables on p.20, and all four Origin
+  feats on p.87.
+- **Background packages are not all 50 GP.** At SRD prices the packages are Acolyte 50.00,
+  Criminal 50.00, Soldier 49.10 (with dice) and Sage 45.00. The custom backgrounds are all
+  exactly 50.00 GP, the top of that range.
+- **Carrier background can now be custom.** A trade names an SRD `srd_background` and an
+  optional `custom_background`; a record's `carrier_background` may therefore be a
+  `custom-v1` id when the table enables that pack. Craft-and-field trades carry a
+  provisional SRD default that the "what did the work teach you" answer overrides.
+- **Enemies and debts have no dossier counterpart.** Only person and place ties carry bond
+  ids (three hero-only bonds were added: lost-love, haunted-ruin, old-ship).

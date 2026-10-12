@@ -13,7 +13,10 @@
 use super::live_sfx::{self, Cue};
 use super::live_stage::{Figures, StageMode};
 use super::*;
-use crate::presentation::{Card, CardKind, HERO_ROLE, SceneFamily, StageActor};
+use crate::{
+    presentation::{Card, CardKind, HERO_ROLE, SceneFamily, StageActor},
+    stage_machines::LineState,
+};
 use std::{cell::Cell, time::Duration};
 use web_sys::Event;
 
@@ -46,7 +49,6 @@ pub(super) struct TvModel {
     pub(super) mode: TvMode,
     pub(super) title: String,
     pub(super) lede: String,
-    pub(super) narration: String,
     pub(super) speaker: Option<TvSpeaker>,
     pub(super) room_code: String,
     pub(super) join_label: String,
@@ -413,6 +415,30 @@ impl TvStage {
         }
     }
 
+    /// Applies one transition of the narrator line's machine to the Dungeon Master's box: the
+    /// text is set as the line opens, never earlier. Returns whether the line opened.
+    pub(super) fn narrator_line(&self, state: LineState, text: &str) -> Result<bool, JsValue> {
+        let opened = matches!(
+            state,
+            LineState::Opening | LineState::Speaking | LineState::Lingering
+        ) && self.narration.text_content().as_deref() != Some(text);
+        if opened {
+            self.narration.set_text_content(Some(text));
+            self.narration.set_attribute("title", text)?;
+        }
+        if let Some(caption) = self.narration.parent_element() {
+            caption.set_attribute("data-line-state", state.name())?;
+        }
+        match state {
+            LineState::Speaking => self.narration.class_list().add_1("speaking")?,
+            LineState::Lingering | LineState::Closing | LineState::Done => {
+                self.narration.class_list().remove_1("speaking")?;
+            }
+            _ => {}
+        }
+        Ok(opened)
+    }
+
     /// Restarts the staggered title, narration and figure entrance.
     pub(super) fn begin_entering(&self) -> Result<(), JsValue> {
         // A beat in the same place only cross-fades its title; a new place replays the entrance.
@@ -449,8 +475,6 @@ impl TvStage {
         self.place.set_text_content(Some(&model.place));
         set_hidden(&self.place, model.place.is_empty())?;
         self.lede.set_text_content(Some(&model.lede));
-        self.narration.set_text_content(Some(&model.narration));
-        self.narration.set_attribute("title", &model.narration)?;
         self.rules_text.set_text_content(Some(&model.rules_note));
         set_hidden(&self.rules, model.rules_note.is_empty() || lobby)?;
         self.set_choices(if lobby { &[] } else { &model.choices })?;

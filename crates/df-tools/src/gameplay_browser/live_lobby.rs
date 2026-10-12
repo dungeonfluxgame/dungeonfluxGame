@@ -130,11 +130,12 @@ fn render_error(client: &Rc<RefCell<Client>>, error: &dyn std::fmt::Display) -> 
     JsValue::from_str(&format!("The lobby could not be displayed: {error}"))
 }
 
-/// The room code is fixed by the page and the player's name is chosen during character
-/// creation, so the join form shows the code read-only and offers no name field.
+/// The player's name is chosen during character creation, so the join form offers no name
+/// field. The room code is filled in from the page or the `?room=` link and can be corrected
+/// by typing the one shown on the display.
 fn fix_fields(surface: &JoinPhaseSurface) -> Result<(), JsValue> {
     surface.player_name().root().set_attribute("hidden", "")?;
-    surface.invitation().input().set_read_only(true);
+    surface.invitation().input().set_read_only(false);
     Ok(())
 }
 
@@ -172,7 +173,11 @@ impl LobbyScreen {
                     return;
                 };
                 match intent {
-                    JoinPhaseIntent::Join { .. } => join_room(client),
+                    JoinPhaseIntent::Join { invitation, .. } => {
+                        if use_room_code(&client, &invitation) {
+                            join_room(client);
+                        }
+                    }
                     JoinPhaseIntent::LobbyAction { offer_key, .. } => {
                         live_screens::submit_offer(&client, &offer_key);
                     }

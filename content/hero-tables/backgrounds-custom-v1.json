@@ -1,0 +1,1013 @@
+{
+  "schema": "df-hero-backgrounds/1",
+  "file": "backgrounds-custom-v1",
+  "source": "custom-v1",
+  "description": "Original DungeonFlux backgrounds, built exactly on the 2024 background template as the SRD 5.2.1 defines it (p.83): three ability scores, one Origin feat from the SRD, two skill proficiencies, one tool proficiency, and an equipment choice of package A (worth 50 GP) or 50 GP. Nothing here grants a feature, feat, item or coin beyond that template. Disclosed, versioned custom content; a table can switch the pack off and heroes built with it carry source custom-v1.",
+  "backgrounds": [
+    {
+      "id": "quarry-guard",
+      "name": "Quarry Guard",
+      "family": "arms-and-guard",
+      "description": "You walked the cut-stone rim above the pits with a horn at your hip, watching for thieves, slides and foremen who counted blocks twice. The work taught you to read a face and a crack in one glance.",
+      "ability_scores": [
+        "str",
+        "con",
+        "cha"
+      ],
+      "origin_feat": {
+        "id": "savage-attacker"
+      },
+      "skill_proficiencies": [
+        "perception",
+        "survival"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "musical-instrument",
+        "variant": "horn"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "spear",
+              "qty": 1
+            },
+            {
+              "item": "light-hammer",
+              "qty": 1
+            },
+            {
+              "item": "horn",
+              "qty": 1
+            },
+            {
+              "item": "lantern-hooded",
+              "qty": 1
+            },
+            {
+              "item": "rope",
+              "qty": 1
+            },
+            {
+              "item": "crowbar",
+              "qty": 1
+            },
+            {
+              "item": "climbers-kit",
+              "qty": 1
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            },
+            {
+              "item": "rations",
+              "qty": 4
+            },
+            {
+              "item": "waterskin",
+              "qty": 1
+            },
+            {
+              "item": "blanket",
+              "qty": 1
+            },
+            {
+              "item": "oil",
+              "qty": 3
+            }
+          ],
+          "gp": 6
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "quarry-guard"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "tollhouse-warden",
+      "name": "Tollhouse Warden",
+      "family": "arms-and-guard",
+      "description": "You sat in a draughty booth at the road's narrowest point, where every cart paid and every driver had a story. You learned seals, tallies and which stories came with a forged paper behind them.",
+      "ability_scores": [
+        "con",
+        "int",
+        "cha"
+      ],
+      "origin_feat": {
+        "id": "alert"
+      },
+      "skill_proficiencies": [
+        "intimidation",
+        "investigation"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "forgery-kit"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "forgery-kit",
+              "qty": 1
+            },
+            {
+              "item": "ink",
+              "qty": 1
+            },
+            {
+              "item": "paper",
+              "qty": 10
+            },
+            {
+              "item": "lock",
+              "qty": 1
+            },
+            {
+              "item": "manacles",
+              "qty": 1
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            },
+            {
+              "item": "pouch",
+              "qty": 2
+            },
+            {
+              "item": "lamp",
+              "qty": 1
+            },
+            {
+              "item": "bell",
+              "qty": 1
+            },
+            {
+              "item": "oil",
+              "qty": 5
+            }
+          ],
+          "gp": 6
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "toll-warden"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "ferry-hand",
+      "name": "Ferry Hand",
+      "family": "road-and-river",
+      "description": "You poled, hauled and bailed on a wide brown river, and could judge a crossing by the sound of the water under the planks. You also learned how little passengers tell you until they are halfway over.",
+      "ability_scores": [
+        "str",
+        "wis",
+        "cha"
+      ],
+      "origin_feat": {
+        "id": "skilled"
+      },
+      "skill_proficiencies": [
+        "acrobatics",
+        "athletics"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "carpenters-tools"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "carpenters-tools",
+              "qty": 1
+            },
+            {
+              "item": "rope",
+              "qty": 3
+            },
+            {
+              "item": "block-and-tackle",
+              "qty": 1
+            },
+            {
+              "item": "net",
+              "qty": 1
+            },
+            {
+              "item": "grappling-hook",
+              "qty": 1
+            },
+            {
+              "item": "chain",
+              "qty": 1
+            },
+            {
+              "item": "lantern-hooded",
+              "qty": 1
+            },
+            {
+              "item": "tinderbox",
+              "qty": 1
+            },
+            {
+              "item": "waterskin",
+              "qty": 1
+            },
+            {
+              "item": "blanket",
+              "qty": 1
+            },
+            {
+              "item": "bedroll",
+              "qty": 1
+            },
+            {
+              "item": "backpack",
+              "qty": 1
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            },
+            {
+              "item": "healers-kit",
+              "qty": 1
+            },
+            {
+              "item": "rations",
+              "qty": 4
+            },
+            {
+              "item": "pole",
+              "qty": 2
+            },
+            {
+              "item": "bucket",
+              "qty": 1
+            },
+            {
+              "item": "oil",
+              "qty": 6
+            },
+            {
+              "item": "signal-whistle",
+              "qty": 1
+            }
+          ],
+          "gp": 11
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "ferry-hand"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "caravan-runner",
+      "name": "Caravan Runner",
+      "family": "road-and-river",
+      "description": "You ran messages and spare parts the length of a moving column, between wagon masters, drovers and one mule that bit. Your boots were the first thing you ever learned to care for.",
+      "ability_scores": [
+        "dex",
+        "con",
+        "cha"
+      ],
+      "origin_feat": {
+        "id": "alert"
+      },
+      "skill_proficiencies": [
+        "animal-handling",
+        "deception"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "cobblers-tools"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "cobblers-tools",
+              "qty": 1
+            },
+            {
+              "item": "backpack",
+              "qty": 1
+            },
+            {
+              "item": "bedroll",
+              "qty": 1
+            },
+            {
+              "item": "tent",
+              "qty": 1
+            },
+            {
+              "item": "map",
+              "qty": 1
+            },
+            {
+              "item": "case-map-or-scroll",
+              "qty": 1
+            },
+            {
+              "item": "signal-whistle",
+              "qty": 1
+            },
+            {
+              "item": "bell",
+              "qty": 1
+            },
+            {
+              "item": "rope",
+              "qty": 2
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 2
+            },
+            {
+              "item": "rations",
+              "qty": 6
+            },
+            {
+              "item": "waterskin",
+              "qty": 2
+            },
+            {
+              "item": "lantern-hooded",
+              "qty": 1
+            },
+            {
+              "item": "dagger",
+              "qty": 1
+            },
+            {
+              "item": "mirror",
+              "qty": 1
+            },
+            {
+              "item": "blanket",
+              "qty": 1
+            },
+            {
+              "item": "pole",
+              "qty": 1
+            }
+          ],
+          "gp": 15
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "caravan-runner",
+        "grain-courier"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "street-singer",
+      "name": "Street Singer",
+      "family": "shadow-and-street",
+      "description": "You sang for coin at crossroads and tavern doors, and learned which verses settle a crowd and which start a brawl. You always know where the nearest exit is, and who stands between you and it.",
+      "ability_scores": [
+        "dex",
+        "int",
+        "cha"
+      ],
+      "origin_feat": {
+        "id": "skilled"
+      },
+      "skill_proficiencies": [
+        "insight",
+        "performance"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "musical-instrument",
+        "variant": "lute"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "lute",
+              "qty": 1
+            },
+            {
+              "item": "costume",
+              "qty": 1
+            },
+            {
+              "item": "pouch",
+              "qty": 2
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            }
+          ],
+          "gp": 7
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "street-singer"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "lamplighter",
+      "name": "Lamplighter",
+      "family": "shadow-and-street",
+      "description": "You climbed at dusk and dawn, trimming wicks across a whole district. Nobody looks up at the lamplighter, so you have seen what happens at windows and on rooftops after dark.",
+      "ability_scores": [
+        "dex",
+        "wis",
+        "cha"
+      ],
+      "origin_feat": {
+        "id": "alert"
+      },
+      "skill_proficiencies": [
+        "acrobatics",
+        "investigation"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "potters-tools"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "potters-tools",
+              "qty": 1
+            },
+            {
+              "item": "lantern-bullseye",
+              "qty": 1
+            },
+            {
+              "item": "lamp",
+              "qty": 3
+            },
+            {
+              "item": "tinderbox",
+              "qty": 1
+            },
+            {
+              "item": "pole",
+              "qty": 2
+            },
+            {
+              "item": "rope",
+              "qty": 1
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            },
+            {
+              "item": "rations",
+              "qty": 3
+            },
+            {
+              "item": "grappling-hook",
+              "qty": 1
+            },
+            {
+              "item": "backpack",
+              "qty": 1
+            },
+            {
+              "item": "lantern-hooded",
+              "qty": 1
+            },
+            {
+              "item": "string",
+              "qty": 4
+            }
+          ],
+          "gp": 14
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "lamplighter"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "healers-aide",
+      "name": "Healer's Aide",
+      "family": "faith-and-healing",
+      "description": "You carried the basin, boiled the linen and held the patient still. You are not a healer, but you have watched what healing costs, and where the people who need it hide their pain.",
+      "ability_scores": [
+        "con",
+        "wis",
+        "cha"
+      ],
+      "origin_feat": {
+        "id": "magic-initiate",
+        "list": "druid"
+      },
+      "skill_proficiencies": [
+        "medicine",
+        "persuasion"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "herbalism-kit"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "herbalism-kit",
+              "qty": 1
+            },
+            {
+              "item": "healers-kit",
+              "qty": 1
+            },
+            {
+              "item": "book",
+              "qty": 1
+            },
+            {
+              "item": "robe",
+              "qty": 1
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            },
+            {
+              "item": "pot-iron",
+              "qty": 1
+            },
+            {
+              "item": "vial",
+              "qty": 2
+            }
+          ],
+          "gp": 8
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "healers-aide",
+        "hospice-orderly"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "hive-tender",
+      "name": "Hive Tender",
+      "family": "faith-and-healing",
+      "description": "You kept a shrine's bees through three winters, learning patience from things that sting. Smoke, wax and a slow hand are the only tools you have ever trusted completely.",
+      "ability_scores": [
+        "dex",
+        "con",
+        "wis"
+      ],
+      "origin_feat": {
+        "id": "skilled"
+      },
+      "skill_proficiencies": [
+        "nature",
+        "religion"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "brewers-supplies"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "brewers-supplies",
+              "qty": 1
+            },
+            {
+              "item": "bottle-glass",
+              "qty": 4
+            },
+            {
+              "item": "vial",
+              "qty": 4
+            },
+            {
+              "item": "robe",
+              "qty": 1
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            },
+            {
+              "item": "net",
+              "qty": 1
+            },
+            {
+              "item": "holy-symbol",
+              "qty": 1
+            },
+            {
+              "item": "rations",
+              "qty": 4
+            },
+            {
+              "item": "rope",
+              "qty": 1
+            }
+          ],
+          "gp": 6
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "bee-keeper"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "tally-clerk",
+      "name": "Tally Clerk",
+      "family": "books-and-ledgers",
+      "description": "You counted coin and cargo in a counting-house until your eyes could find a wrong figure like a pebble in a boot. You have never trusted a round number since.",
+      "ability_scores": [
+        "int",
+        "wis",
+        "cha"
+      ],
+      "origin_feat": {
+        "id": "alert"
+      },
+      "skill_proficiencies": [
+        "history",
+        "investigation"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "jewelers-tools"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "jewelers-tools",
+              "qty": 1
+            },
+            {
+              "item": "ink",
+              "qty": 1
+            },
+            {
+              "item": "paper",
+              "qty": 20
+            },
+            {
+              "item": "parchment",
+              "qty": 10
+            },
+            {
+              "item": "case-map-or-scroll",
+              "qty": 1
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            },
+            {
+              "item": "pouch",
+              "qty": 2
+            }
+          ],
+          "gp": 6
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "counting-house-copyist"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "bookbinders-hand",
+      "name": "Bookbinder's Hand",
+      "family": "books-and-ledgers",
+      "description": "You sewed signatures, pressed boards and gilded spines in a cramped shop that smelled of paste. Odd volumes passed through your hands, and you read more of them than you admit.",
+      "ability_scores": [
+        "str",
+        "dex",
+        "int"
+      ],
+      "origin_feat": {
+        "id": "skilled"
+      },
+      "skill_proficiencies": [
+        "arcana",
+        "insight"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "leatherworkers-tools"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "leatherworkers-tools",
+              "qty": 1
+            },
+            {
+              "item": "parchment",
+              "qty": 20
+            },
+            {
+              "item": "paper",
+              "qty": 20
+            },
+            {
+              "item": "ink",
+              "qty": 1
+            },
+            {
+              "item": "case-map-or-scroll",
+              "qty": 2
+            },
+            {
+              "item": "string",
+              "qty": 5
+            },
+            {
+              "item": "lamp",
+              "qty": 1
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            },
+            {
+              "item": "pouch",
+              "qty": 1
+            },
+            {
+              "item": "chest",
+              "qty": 1
+            },
+            {
+              "item": "lock",
+              "qty": 1
+            },
+            {
+              "item": "tinderbox",
+              "qty": 1
+            }
+          ],
+          "gp": 8
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "bookbinder"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "masons-apprentice",
+      "name": "Mason's Apprentice",
+      "family": "craft-and-field",
+      "description": "You dressed stone with mallet and chisel and carried the plans in your head. A season on a scaffold teaches you what keeps a thing standing, and what only looks as if it will.",
+      "ability_scores": [
+        "str",
+        "con",
+        "int"
+      ],
+      "origin_feat": {
+        "id": "savage-attacker"
+      },
+      "skill_proficiencies": [
+        "history",
+        "perception"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "masons-tools"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "masons-tools",
+              "qty": 1
+            },
+            {
+              "item": "block-and-tackle",
+              "qty": 1
+            },
+            {
+              "item": "rope",
+              "qty": 2
+            },
+            {
+              "item": "shovel",
+              "qty": 1
+            },
+            {
+              "item": "bucket",
+              "qty": 1
+            },
+            {
+              "item": "pole",
+              "qty": 2
+            },
+            {
+              "item": "crowbar",
+              "qty": 1
+            },
+            {
+              "item": "lantern-hooded",
+              "qty": 1
+            },
+            {
+              "item": "backpack",
+              "qty": 1
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            },
+            {
+              "item": "rations",
+              "qty": 4
+            },
+            {
+              "item": "waterskin",
+              "qty": 1
+            },
+            {
+              "item": "blanket",
+              "qty": 1
+            },
+            {
+              "item": "chain",
+              "qty": 1
+            },
+            {
+              "item": "healers-kit",
+              "qty": 1
+            },
+            {
+              "item": "barrel",
+              "qty": 1
+            },
+            {
+              "item": "oil",
+              "qty": 1
+            },
+            {
+              "item": "torch",
+              "qty": 5
+            }
+          ],
+          "gp": 9
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "mason-apprentice"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    },
+    {
+      "id": "net-mender",
+      "name": "Net Mender",
+      "family": "craft-and-field",
+      "description": "You sat on the quay with a netting needle and listened to every boat that came in. The sea gives up its news to anyone patient and not in a hurry.",
+      "ability_scores": [
+        "str",
+        "dex",
+        "wis"
+      ],
+      "origin_feat": {
+        "id": "savage-attacker"
+      },
+      "skill_proficiencies": [
+        "nature",
+        "survival"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "weavers-tools"
+      },
+      "equipment": {
+        "a": {
+          "items": [
+            {
+              "item": "weavers-tools",
+              "qty": 1
+            },
+            {
+              "item": "net",
+              "qty": 3
+            },
+            {
+              "item": "rope",
+              "qty": 3
+            },
+            {
+              "item": "string",
+              "qty": 10
+            },
+            {
+              "item": "needles",
+              "qty": 20
+            },
+            {
+              "item": "grappling-hook",
+              "qty": 1
+            },
+            {
+              "item": "chest",
+              "qty": 1
+            },
+            {
+              "item": "bell",
+              "qty": 1
+            },
+            {
+              "item": "basket",
+              "qty": 2
+            },
+            {
+              "item": "lantern-hooded",
+              "qty": 1
+            },
+            {
+              "item": "clothes-travelers",
+              "qty": 1
+            },
+            {
+              "item": "waterskin",
+              "qty": 1
+            },
+            {
+              "item": "blanket",
+              "qty": 1
+            },
+            {
+              "item": "bedroll",
+              "qty": 1
+            },
+            {
+              "item": "rations",
+              "qty": 4
+            },
+            {
+              "item": "backpack",
+              "qty": 1
+            },
+            {
+              "item": "healers-kit",
+              "qty": 1
+            },
+            {
+              "item": "oil",
+              "qty": 1
+            }
+          ],
+          "gp": 15
+        },
+        "b_gp": 50
+      },
+      "carries_trades": [
+        "net-mender"
+      ],
+      "source": "custom-v1",
+      "disclosure": "DungeonFlux original background, not from the published rules"
+    }
+  ]
+}

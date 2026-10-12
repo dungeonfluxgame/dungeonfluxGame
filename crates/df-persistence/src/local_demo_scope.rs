@@ -54,6 +54,20 @@ impl LocalDemoRole {
     }
 }
 
+/// How long the demo's owner lease and access grants last before they must be renewed.
+static LEASE_SECONDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(300);
+
+/// Sets the lease length for this process, before startup seeds or claims a session. The owner
+/// renews it long before it lapses (see [`LocalDemoScopeIssuer::renew_owner`]).
+pub fn set_lease_seconds(seconds: u64) {
+    LEASE_SECONDS.store(seconds.max(1), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The lease length in seconds (300 unless set).
+pub fn lease_seconds() -> u64 {
+    LEASE_SECONDS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 const VERIFY: &str = "SELECT p.*, g.active AND g.expires_at > clock_timestamp() AS permission_current FROM df_local_demo.scope_proofs p JOIN df_local_demo.grants g ON g.credential = p.credential WHERE p.binding = $1::bytea AND p.session_id = $2::bytea";
 
 pub fn verifier() -> NativeVerifierSource {
@@ -127,6 +141,52 @@ struct LocalInputBinding {
     pins: CheckpointPins,
 }
 impl LocalDemoScopeIssuer {
+    /// Extends this owner's session lease and every active access grant of the session by the
+    /// lease length. It succeeds whether or not the lease has already lapsed, because the owner
+    /// fence is what names the owner: while the fence is still this process's, nobody else has
+    /// claimed the session (a claim replaces the fence), so an idle table never loses its game.
+    /// A different fence means ownership was taken over, which is `RevisionConflict`.
+    pub fn renew_owner(&mut self) -> Result<(), RepositoryError> {
+        let runtime = self.authority.runtime.clone();
+        crate::native_connection::actor_block_on(&runtime, self.renew_owner_owned())?
+    }
+
+    async fn renew_owner_owned(&mut self) -> Result<(), RepositoryError> {
+        self.reconnect_owned().await?;
+        let seconds = i64::try_from(lease_seconds()).map_err(|_| RepositoryError::Capacity)?;
+        let (session, fence) = (self.session, self.fence);
+        let client = self.authority.client_mut()?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let transaction = client
+                .transaction()
+                .await
+                .map_err(|_| RepositoryError::Unavailable)?;
+            let renewed = transaction
+                .execute(
+                    "UPDATE df_game.sessions SET lease_until=clock_timestamp()+($3::bigint * interval '1 second') WHERE tenant_id=$1::bytea AND session_id=$2::bytea AND owner_fence=$4::bytea",
+                    &[&TENANT.as_slice(), &session.as_bytes().as_slice(), &seconds, &fence.as_slice()],
+                )
+                .await
+                .map_err(|_| RepositoryError::Unavailable)?;
+            if renewed != 1 {
+                return Err(RepositoryError::RevisionConflict);
+            }
+            transaction
+                .execute(
+                    "UPDATE df_local_demo.grants SET expires_at=clock_timestamp()+($3::bigint * interval '1 second') WHERE tenant_id=$1::bytea AND session_id=$2::bytea AND active",
+                    &[&TENANT.as_slice(), &session.as_bytes().as_slice(), &seconds],
+                )
+                .await
+                .map_err(|_| RepositoryError::Unavailable)?;
+            transaction
+                .commit()
+                .await
+                .map_err(|_| RepositoryError::Unavailable)
+        })
+        .await
+        .map_err(|_| RepositoryError::Unavailable)?
+    }
+
     /// Call only after the serialization inbox has stopped admission and drained.
     pub fn release_owner(&mut self) -> Result<(), RepositoryError> {
         let runtime = self.authority.runtime.clone();
@@ -639,7 +699,7 @@ async fn initialize_with_adventure(
     let basis = checkpoint.basis();
     let epoch = basis.revision.epoch().get().to_string();
     let sequence = basis.revision.sequence().to_string();
-    transaction.execute("INSERT INTO df_game.sessions VALUES ($1::bytea,$2::bytea,$3::bytea,$4::text::numeric,$5::text::numeric,$6::bytea,clock_timestamp()+interval '300 seconds')", &[&TENANT.as_slice(), &basis.session.as_bytes().as_slice(), &basis.run.as_bytes().as_slice(), &epoch, &sequence, &fence.as_slice()]).await.map_err(|_| DemoInitializationError { stage:"session_seed",class:RepositoryError::InputBinding })?;
+    transaction.execute(&format!("INSERT INTO df_game.sessions VALUES ($1::bytea,$2::bytea,$3::bytea,$4::text::numeric,$5::text::numeric,$6::bytea,clock_timestamp()+interval '{} seconds')", lease_seconds()), &[&TENANT.as_slice(), &basis.session.as_bytes().as_slice(), &basis.run.as_bytes().as_slice(), &epoch, &sequence, &fence.as_slice()]).await.map_err(|_| DemoInitializationError { stage:"session_seed",class:RepositoryError::InputBinding })?;
     let bytes =
         encode_checkpoint(checkpoint, codec_limits).map_err(|_| DemoInitializationError {
             stage: "checkpoint_encoding",
@@ -669,7 +729,7 @@ async fn initialize_with_adventure(
         (player_credential, PLAYER, LocalDemoRole::Player),
         (display_credential, DISPLAY, LocalDemoRole::Display),
     ] {
-        transaction.execute("INSERT INTO df_local_demo.grants VALUES ($1,$2,$3,$4,$5,$6,$7,true,clock_timestamp()+interval '300 seconds')", &[&credential.as_slice(), &TENANT.as_slice(), &principal.as_slice(), &CAMPAIGN.as_slice(), &role.bytes(), &b"local-demo-access-1".as_slice(), &basis.session.as_bytes().as_slice()]).await.map_err(|_| DemoInitializationError { stage:"grant_seed",class:RepositoryError::Unavailable })?;
+        transaction.execute(&format!("INSERT INTO df_local_demo.grants VALUES ($1,$2,$3,$4,$5,$6,$7,true,clock_timestamp()+interval '{} seconds')", lease_seconds()), &[&credential.as_slice(), &TENANT.as_slice(), &principal.as_slice(), &CAMPAIGN.as_slice(), &role.bytes(), &b"local-demo-access-1".as_slice(), &basis.session.as_bytes().as_slice()]).await.map_err(|_| DemoInitializationError { stage:"grant_seed",class:RepositoryError::Unavailable })?;
     }
     transaction
         .commit()
