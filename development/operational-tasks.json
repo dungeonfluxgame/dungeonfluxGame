@@ -4223,6 +4223,85 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T04:10:04+00:00",
       "updated_at": "2026-10-12T04:10:04+00:00"
+    },
+    {
+      "id": "PLAY-H01",
+      "feature_id": "F04",
+      "title": "Show health at a glance: faces, bar colour and shake by hit points",
+      "objective": "Every character with hit points gets a health tier (Healthy, Hurt, Bloodied, Critical, Down) derived from the server view. Portraits and figures show a matching face from cached generated variants, the health bar changes colour with a damage chip that drains, and HUD cards and figures shake in proportion to the hit, with a heartbeat tremor at Critical. The player's own phone card shakes and vignettes on their damage.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-tools/src/gameplay/",
+        "crates/df-render/src/battle/"
+      ],
+      "acceptance_json": [
+        "The tier is one tested function with thresholds at 75, 50 and 25 percent and Down at zero.",
+        "At each tier the display and the player's phone show the tier colour, a second non-colour cue and the matching face; identity of the character holds across variants.",
+        "Combat never waits on image generation: only cached variants are swapped in.",
+        "Shake amplitude and duration scale with the share of maximum hit points lost, stay inside named bounds, and play for every player regardless of the device's reduce-motion setting.",
+        "Mature shows wounds; restrained shows battered without blood.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for tiers, intensity bounds, pre-warm order and budget.",
+        "Browser frames through every tier on display and phone, including mid-shake."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M8",
+        "milestone_goal": "A battle worth watching: a staged battlefield, readable turns and felt impacts.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-12: character health based facial expressions and health bar color and small shaking patterns for player visibility and intensity.",
+        "objective": "Every character with hit points gets a health tier (Healthy, Hurt, Bloodied, Critical, Down) derived from the server view. Portraits and figures show a matching face from cached generated variants, the health bar changes colour with a damage chip that drains, and HUD cards and figures shake in proportion to the hit, with a heartbeat tremor at Critical. The player's own phone card shakes and vignettes on their damage.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Show health at a glance: faces, bar colour and shake by hit points",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "9bdc95af889745782335e18c6da26a739fd0d688a47762ba2a074a9e5c8129f6"
+          }
+        ],
+        "input_revision": "5197d388f257e8355fe68129c19c441d8705b611",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "Colour alone is not enough: pair it with a notch, label or pattern."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T04:19:55+00:00",
+      "updated_at": "2026-10-12T04:19:55+00:00"
     }
   ],
   "dependencies": [

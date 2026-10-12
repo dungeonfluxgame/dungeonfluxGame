@@ -1184,7 +1184,6 @@ fn restrained_generation_is_byte_identical_to_the_tables_before_the_content_rati
         .unwrap()
         .documents(true)
         .unwrap();
-        let scripted = String::from_utf8_lossy(&documents.pack).contains("\"beat_script\"");
         assert_eq!(sha256(&documents.pack), pack, "{seed:#x} pack");
         assert_eq!(sha256(&documents.tuning), tuning, "{seed:#x} tuning");
         assert_eq!(sha256(&documents.record), record, "{seed:#x} record");

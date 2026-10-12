@@ -139,5 +139,4 @@ pub(crate) const STYLES: &str = r#"
 [data-combat-client=player] .df-combat .combat-fixture-tools{order:5}
 }
 @media(max-width:360px){.df-combat .combat-brand{font-size:20px}.df-combat .combat-notice{max-width:99px;font-size:7px}.df-combat h1{font-size:33px}.df-combat .combat-narration{font-size:13px}.df-combat .combat-action-rail{padding:15px 12px}.df-combat .combat-offers{gap:9px}}
-@media(prefers-reduced-motion:reduce){.df-combat *,.df-combat *:before,.df-combat *:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 "#;
