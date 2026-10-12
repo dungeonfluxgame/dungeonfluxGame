@@ -3,7 +3,9 @@
 //! No production bootstrap, arbitrary scope constructor, or hosted identity is provided.
 mod adventure;
 mod recovery;
+mod table_settings;
 pub use adventure::{AdventureStartup, DemoAdventure, stored_adventure};
+pub use table_settings::StoredTableSettings;
 mod startup;
 pub use startup::{
     DemoStartup, DemoStartupIdentity, admit_startup, admit_startup_with_adventure, release_owner,

@@ -430,7 +430,10 @@ fn present_stage(
         return Ok(());
     };
     // PLAY-F03: the table's choices row follows the view (empty during a fight).
-    stage.set_choices(&view.journey.table_choices)?;
+    stage.set_choices(
+        &view.journey.table_choices,
+        view.journey.choice_hints_hidden,
+    )?;
     let art = live_screens::asset_url(&view.scene.scene_asset)
         .unwrap_or_else(|| style::COMBAT_ART_URL.to_owned());
     stage.set_art(&live_tv::image_layers(&art, style::COMBAT_ART_URL))?;
