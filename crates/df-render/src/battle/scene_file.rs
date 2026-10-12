@@ -588,4 +588,139 @@ mod tests {
             Err(SceneFileError::Splat(_))
         ));
     }
+
+    #[test]
+    fn every_location_has_three_distinct_valid_layouts_that_play_differently() {
+        let mut total = 0;
+        for id in LOCATIONS.into_iter().chain([DEFAULT_SCENE_ID]) {
+            let scene = load_embedded(id).unwrap().unwrap();
+            assert!(scene.layouts.len() >= 3, "{id}: {} layouts", scene.layouts.len());
+            total += scene.layouts.len();
+            let signature = |layout: &Layout| {
+                let mut cells: Vec<_> = layout
+                    .obstacles
+                    .iter()
+                    .flat_map(|obstacle| obstacle.cells.clone())
+                    .collect();
+                cells.sort();
+                cells
+            };
+            let mut seen = Vec::new();
+            for layout in &scene.layouts {
+                assert!(layout.heroes.len() >= 4 && layout.enemies.len() >= 4);
+                assert_eq!(layout.validate(&scene.grid), Ok(()), "{id}/{}", layout.id);
+                let shape = signature(layout);
+                assert!(!seen.contains(&shape), "{id}/{} repeats another layout", layout.id);
+                seen.push(shape);
+            }
+            let ids: std::collections::BTreeSet<_> = scene.layouts.iter().map(|l| &l.id).collect();
+            assert_eq!(ids.len(), scene.layouts.len(), "{id}: unique layout ids");
+        }
+        assert!(total >= 27);
+    }
+
+    #[test]
+    fn grid_sizes_vary_from_eight_by_six_up_to_fourteen_by_ten() {
+        let sizes: std::collections::BTreeSet<(u32, u32)> = LOCATIONS
+            .into_iter()
+            .chain([DEFAULT_SCENE_ID])
+            .map(|id| {
+                let scene = load_embedded(id).unwrap().unwrap();
+                (scene.grid.cols(), scene.grid.rows())
+            })
+            .collect();
+        assert!(sizes.len() >= 6, "{sizes:?}");
+        assert!(sizes.contains(&(8, 6)) && sizes.contains(&(14, 10)));
+        assert!(sizes.iter().all(|(c, r)| (8..=14).contains(c) && (6..=10).contains(r)));
+    }
+
+    #[test]
+    fn every_location_declares_its_ground_surface() {
+        let surfaces: Vec<(&str, Surface)> = [
+            ("salt-quay", Surface::Wood),
+            ("reedmoor-boardwalk", Surface::Wood),
+            ("orrery-library", Surface::Wood),
+            ("pinewood-trail", Surface::Dirt),
+            ("thistledown-farm", Surface::Dirt),
+            ("lamplit-market", Surface::Stone),
+            ("rookhill-gate", Surface::Stone),
+            ("windward-pass", Surface::Stone),
+        ]
+        .into();
+        for (id, surface) in surfaces {
+            assert_eq!(load_embedded(id).unwrap().unwrap().surface, surface, "{id}");
+        }
+    }
+
+    #[test]
+    fn the_wide_shots_pull_back_for_bigger_grids_and_not_for_the_authored_size() {
+        let library = load_embedded("orrery-library").unwrap().unwrap();
+        let quay = load_embedded("harbor-journey").unwrap().unwrap();
+        let tactical = |scene: &BattleScene| scene.cameras[&ShotName::Tactical].distance;
+        assert_eq!(tactical(&quay), 15.0);
+        assert!(tactical(&library) > 15.0 * 1.3);
+        let focus = |scene: &BattleScene| scene.cameras[&ShotName::TurnFocus].distance;
+        assert_eq!(focus(&library), focus(&quay), "close shots follow the figure instead");
+    }
+
+    fn v1() -> serde_json::Value {
+        let mut value = base();
+        value["schema"] = 1.into();
+        let object = value.as_object_mut().unwrap();
+        object.remove("layouts");
+        object.remove("surface");
+        value
+    }
+
+    #[test]
+    fn a_version_one_file_still_loads_with_no_layouts() {
+        let scene = parse(&v1().to_string()).unwrap();
+        assert!(scene.layouts.is_empty());
+        assert_eq!(scene.surface, Surface::Stone);
+    }
+
+    #[test]
+    fn layouts_and_a_surface_need_schema_two() {
+        let mut with_layouts = v1();
+        with_layouts["layouts"] = base()["layouts"].clone();
+        assert_eq!(
+            parse(&with_layouts.to_string()),
+            Err(SceneFileError::NeedsSchemaTwo("layouts"))
+        );
+        let mut with_surface = v1();
+        with_surface["surface"] = "wood".into();
+        assert_eq!(
+            parse(&with_surface.to_string()),
+            Err(SceneFileError::NeedsSchemaTwo("surface"))
+        );
+    }
+
+    #[test]
+    fn a_bad_surface_cover_spawn_or_cut_field_is_rejected() {
+        assert!(matches!(
+            rejects(|v| v["surface"] = "lava".into()),
+            SceneFileError::Surface(_)
+        ));
+        assert!(matches!(
+            rejects(|v| v["layouts"][0]["obstacles"][0]["cover"] = "full".into()),
+            SceneFileError::Layout(LayoutError::Identifier(_))
+        ));
+        assert!(matches!(
+            rejects(|v| v["layouts"][0]["spawns"]["heroes"] = serde_json::json!([[1, 1]])),
+            SceneFileError::Layout(LayoutError::TooFewSpawns(_))
+        ));
+        assert!(matches!(
+            rejects(|v| v["layouts"][1] = v["layouts"][0].clone()),
+            SceneFileError::Layout(LayoutError::DuplicateLayout(_))
+        ));
+        // A full-width wall of crates cuts every hero off from every enemy.
+        let wall: Vec<[i32; 2]> = (0..10).map(|col| [col, 3]).collect();
+        assert!(matches!(
+            rejects(|v| v["layouts"][0]["obstacles"] = serde_json::json!([{
+                "id": "wall", "kind": "crate", "cells": wall, "blocks_movement": true,
+                "cover": "half", "sprite": "prop-crates", "height_m": 1.0
+            }])),
+            SceneFileError::Layout(LayoutError::Unreachable(..))
+        ));
+    }
 }

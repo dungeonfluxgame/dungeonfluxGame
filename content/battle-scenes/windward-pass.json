@@ -1,123 +1,197 @@
 {
-  "schema": 1,
+  "schema": 2,
   "location_id": "windward-pass",
   "title": "Windward Pass",
   "theme": {
     "name": "mountain"
   },
+  "surface": "stone",
   "ground": {
     "stem": "ground-windward-pass",
     "size_m": 24.0,
-    "centre": [
-      0.0,
-      0.0
-    ],
-    "falloff_m": 6.0
+    "centre": [0.0, 0.0],
+    "falloff_m": 4.85
   },
   "backdrop": {
     "stem": "scene-windward-pass-arrival",
-    "distance_m": 9.0,
+    "distance_m": 9.45,
     "width_m": 34.0,
     "base_m": -6.4,
     "height_m": 19.125
   },
   "grid": {
-    "origin": [
-      -6.0,
-      -4.5
-    ],
+    "origin": [-6.75, -5.25],
     "cell_m": 1.5,
-    "cols": 8,
-    "rows": 6,
-    "blocked": [
-      [
-        7,
-        0
-      ],
-      [
-        7,
-        1
-      ],
-      [
-        0,
-        5
-      ],
-      [
-        0,
-        4
-      ],
-      [
-        5,
-        3
-      ]
-    ]
+    "cols": 9,
+    "rows": 7
   },
   "cameras": {
     "tactical": {
-      "target": [
-        0,
-        0.8,
-        0
-      ],
+      "target": [0, 0.8, 0],
       "distance": 15.0,
       "yaw_deg": 0,
       "pitch_deg": 26,
       "fov_deg": 40
     },
     "combat_est": {
-      "target": [
-        0,
-        0.8,
-        0
-      ],
+      "target": [0, 0.8, 0],
       "distance": 10.0,
       "yaw_deg": 0,
       "pitch_deg": 16,
       "fov_deg": 40
     },
     "turn_focus": {
-      "target": [
-        0,
-        0.9,
-        0
-      ],
+      "target": [0, 0.9, 0],
       "distance": 8.0,
       "yaw_deg": 32,
       "pitch_deg": 13,
       "fov_deg": 38
     },
     "impact": {
-      "target": [
-        0,
-        0.9,
-        0
-      ],
+      "target": [0, 0.9, 0],
       "distance": 7.0,
       "yaw_deg": -48,
       "pitch_deg": 11,
       "fov_deg": 36
     },
     "ko": {
-      "target": [
-        0,
-        0.5,
-        0
-      ],
+      "target": [0, 0.5, 0],
       "distance": 8.0,
       "yaw_deg": 28,
       "pitch_deg": 22,
       "fov_deg": 40
     },
     "victory": {
-      "target": [
-        0,
-        1.0,
-        0
-      ],
+      "target": [0, 1.0, 0],
       "distance": 6.0,
       "yaw_deg": -30,
       "pitch_deg": 8,
       "fov_deg": 34
     }
-  }
+  },
+  "layouts": [
+    {
+      "id": "pass-floor",
+      "label": "The pass floor",
+      "obstacles": [
+        {
+          "id": "snow-rocks-r1",
+          "kind": "snow-rocks",
+          "cells": [[0, 6]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-snow-rocks",
+          "height_m": 1.2
+        },
+        {
+          "id": "snow-rocks-r2",
+          "kind": "snow-rocks",
+          "cells": [[8, 6]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-snow-rocks",
+          "height_m": 1.2
+        }
+      ],
+      "difficult": [[4, 3], [5, 3]],
+      "spawns": {
+        "heroes": [[3, 5], [5, 5], [1, 5], [7, 5]],
+        "enemies": [[4, 1], [2, 1], [6, 1], [8, 1]]
+      }
+    },
+    {
+      "id": "narrow-ledge",
+      "label": "The narrow ledge",
+      "obstacles": [
+        {
+          "id": "boulder-o1",
+          "kind": "boulder",
+          "cells": [[0, 3], [1, 3], [2, 3], [3, 3]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-boulder",
+          "height_m": 1.5
+        },
+        {
+          "id": "boulder-o2",
+          "kind": "boulder",
+          "cells": [[6, 3], [7, 3], [8, 3]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-boulder",
+          "height_m": 1.5
+        }
+      ],
+      "difficult": [],
+      "spawns": {
+        "heroes": [[3, 5], [5, 5], [1, 5], [7, 5]],
+        "enemies": [[4, 1], [2, 1], [6, 1], [8, 1]]
+      }
+    },
+    {
+      "id": "snowfield-rocks",
+      "label": "Snow rocks",
+      "obstacles": [
+        {
+          "id": "boulder-o1",
+          "kind": "boulder",
+          "cells": [[4, 4], [5, 4]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-boulder",
+          "height_m": 1.5
+        },
+        {
+          "id": "snow-rocks-r1",
+          "kind": "snow-rocks",
+          "cells": [[1, 0]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-snow-rocks",
+          "height_m": 1.2
+        },
+        {
+          "id": "snow-rocks-r2",
+          "kind": "snow-rocks",
+          "cells": [[5, 2]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-snow-rocks",
+          "height_m": 1.2
+        },
+        {
+          "id": "snow-rocks-r3",
+          "kind": "snow-rocks",
+          "cells": [[1, 3]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-snow-rocks",
+          "height_m": 1.2
+        },
+        {
+          "id": "snow-rocks-r4",
+          "kind": "snow-rocks",
+          "cells": [[8, 3]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-snow-rocks",
+          "height_m": 1.2
+        },
+        {
+          "id": "snow-rocks-r5",
+          "kind": "snow-rocks",
+          "cells": [[7, 6]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-snow-rocks",
+          "height_m": 1.2
+        }
+      ],
+      "difficult": [[2, 3], [3, 3]],
+      "spawns": {
+        "heroes": [[3, 5], [5, 5], [1, 5], [7, 5]],
+        "enemies": [[4, 1], [2, 1], [6, 1], [8, 1]]
+      }
+    }
+  ]
 }
