@@ -33,6 +33,7 @@ mod rest_qualification;
 mod restart_qualification;
 mod room;
 mod room_code;
+mod session_recovery;
 mod social;
 mod speech_input;
 mod splat_assets;
@@ -43,6 +44,7 @@ mod storyteller;
 mod table_log;
 #[cfg(test)]
 mod tempo_clock;
+mod timing;
 mod voice;
 mod wire;
 
@@ -55,9 +57,7 @@ use axum::{
 };
 use df_observe::OperationContext;
 use df_persistence::local_demo_scope::{LocalDemoAuthority, LocalDemoRole, LocalDemoScopeIssuer};
-use df_persistence::{
-    NativeCodecLimits, NativeRepositoryOptions, NativeTransactionBounds, PostgresRepository,
-};
+use df_persistence::{NativeCodecLimits, NativeRepositoryOptions, PostgresRepository};
 use df_protocol::common as rpc;
 use df_rpc_bridge::{
     CONCURRENT_STREAMS, FRAME_BYTES, MESSAGE_BYTES, NativeAdmission, NativeIncoming,
@@ -118,7 +118,7 @@ impl Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
-        let viewed = tokio::time::timeout(Duration::from_secs(20), wait)
+        let viewed = tokio::time::timeout(timing::active().reply, wait)
             .await
             .map_err(|_| Status::deadline_exceeded("gameplay view deadline"))?
             .map_err(|_| Status::unavailable("gameplay actor stopped"))?;
@@ -158,7 +158,7 @@ impl rpc::action_service_server::ActionService for Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
-        let outcome = tokio::time::timeout(Duration::from_secs(20), wait)
+        let outcome = tokio::time::timeout(timing::active().reply, wait)
             .await
             .map_err(|_| Status::deadline_exceeded("retain your gameplay operation for lookup"))?
             .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
@@ -354,13 +354,16 @@ async fn display(State(state): State<PageState>) -> Html<String> {
     page(false, Some(state.display))
 }
 fn page(player: bool, display: Option<[u8; 32]>) -> Html<String> {
+    // The browser waits a little longer than the server for any one request; both come from the
+    // same setting (see `timing`).
+    let wait = timing::active().browser_request().as_millis();
     let roots = if player {
         format!(
-            "<section class=\"client player\" id=\"player\" data-room=\"{}\"><div class=\"view\"></div></section>",
+            "<section class=\"client player\" id=\"player\" data-room=\"{}\" data-request-timeout-ms=\"{wait}\"><div class=\"view\"></div></section>",
             journey::ROOM_CODE
         )
     } else {
-        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\"><div class=\"view\"></div></section>",hex(&credential))).unwrap_or_default()
+        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\" data-request-timeout-ms=\"{wait}\"><div class=\"view\"></div></section>",hex(&credential))).unwrap_or_default()
     };
     Html(HTML.replace("__ROOTS__", &roots).replace(
         "__LAYOUT__",
@@ -441,6 +444,16 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&web_root),
         std::path::Path::new(&asset_root),
     )?;
+    if interactive {
+        timing::install(timing::Timing::from_environment()?);
+        let timing = timing::active();
+        println!(
+            "TIMING commit={}s reply={}s browser={}s",
+            timing.commit.as_secs(),
+            timing.reply.as_secs(),
+            timing.browser_request().as_secs()
+        );
+    }
     let settings = if interactive {
         startup_configuration::session_settings(
             startup_configuration::SessionInputs::from_environment(),
@@ -853,13 +866,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         build: crate::BUILD_ID.to_owned(),
     };
     let repository_options = NativeRepositoryOptions {
-        transaction_bounds: NativeTransactionBounds {
-            // Generous so a commit that is slow on a busy machine finishes instead of
-            // leaving its outcome unknown and the session fenced.
-            transaction: Duration::from_secs(12),
-            rollback: Duration::from_secs(2),
-            driver_join: Duration::from_secs(5),
-        },
+        // Generous by default so a commit that is slow on a busy machine finishes instead of
+        // leaving its outcome unknown and the session fenced (see `timing`).
+        transaction_bounds: timing::active().transaction_bounds(),
         codec_limits: codec,
         maximum_receipt_bytes: 4096,
         verifier: Some(df_persistence::local_demo_scope::verifier()),
@@ -1057,6 +1066,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             None
         },
         completion_retry: None,
+        session: Default::default(),
         #[cfg(test)]
         completion_observer: None,
         qualification_inputs: if npc_phase.is_some()

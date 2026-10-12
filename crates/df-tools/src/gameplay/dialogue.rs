@@ -90,7 +90,7 @@ impl Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("dialogue actor queue full"))?;
-        tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+        tokio::time::timeout(super::timing::active().reply, wait)
             .await
             .map_err(|_| Status::deadline_exceeded("retain the confirmed operation for lookup"))?
             .map_err(|_| Status::unavailable("dialogue actor stopped"))?

@@ -113,6 +113,9 @@ impl actor::Actor {
         &mut self,
         request: rpc::JoinRoomRequest,
     ) -> Result<rpc::JoinRoomResponse, Status> {
+        if self.session_lost() {
+            return Err(actor::session_lost_status());
+        }
         if request.room_code.len() > 32
             || request.join_secret.len() != 32
             || request.join_secret.iter().all(|byte| *byte == 0)
@@ -149,6 +152,13 @@ impl actor::Actor {
             trace_parent: String::new(),
             build: crate::BUILD_ID.to_owned(),
         };
+        if !self.fenced {
+            self.session.attempt = Some(actor::Attempt::Input {
+                credential: self.bootstrap_credential,
+                fingerprint,
+                input: input.clone(),
+            });
+        }
         let recovering = self.fenced;
         let replaying_uncertain = recovering && self.owner.has_uncertain_operation();
         if recovering {
@@ -202,7 +212,10 @@ impl actor::Actor {
         }
         let prior = self.owner.checkpoint().basis().revision;
         let (item, receiver) = OwnedInput::new(context, scope, input.clone());
+        let commit_started = std::time::Instant::now();
         self.owner.reduce(AdmissionSequence(0), item);
+        self.session.commit_millis =
+            u64::try_from(commit_started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let receipt = match admit_join_outcome(
             self.owner.is_current(),
             receiver.try_recv(),
@@ -321,7 +334,7 @@ impl rpc::room_service_server::RoomService for Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("room actor queue full"))?;
-        let response = tokio::time::timeout(std::time::Duration::from_secs(20), wait)
+        let response = tokio::time::timeout(super::timing::active().reply, wait)
             .await
             .map_err(|_| Status::deadline_exceeded("retain your original room join proof"))?
             .map_err(|_| Status::unavailable("room owner stopped"))??;

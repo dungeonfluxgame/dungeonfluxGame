@@ -74,6 +74,8 @@ struct Client {
     served_run: Option<String>,
     /// Automatic repeats of the current join, which is idempotent.
     join_retries: u32,
+    /// Times the page has confirmed an unconfirmed choice by itself since it was sent.
+    auto_confirms: u8,
 }
 
 #[derive(Default)]
@@ -298,9 +300,18 @@ fn operation() -> Result<rpc::OperationId, String> {
         value: Some(random::<16>()?),
     })
 }
+thread_local! {
+    /// How long one request may take; the server publishes it with the page so that the browser
+    /// always waits a little longer than the server does.
+    static REQUEST_TIMEOUT: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::from_secs(25)) };
+}
+fn request_timeout() -> std::time::Duration {
+    REQUEST_TIMEOUT.with(std::cell::Cell::get)
+}
 fn request<T>(body: T, credential: &str) -> Result<tonic::Request<T>, String> {
     let mut request = tonic::Request::new(body);
-    request.set_timeout(std::time::Duration::from_secs(25));
+    request.set_timeout(request_timeout());
     request.metadata_mut().insert(
         "x-df-local-binding",
         credential
@@ -461,6 +472,8 @@ fn use_room_code(client: &Rc<RefCell<Client>>, typed: &str) -> bool {
 }
 
 const ROOM_CONNECTION_UNAVAILABLE: &str = "Room connection unavailable";
+/// What the server says when its saved state is gone for good (`SESSION_LOST_MESSAGE`).
+const SERVER_LOST: &str = "The game server lost its saved state and must be restarted";
 
 fn join_room(client: Rc<RefCell<Client>>) {
     let prepared = (|| -> Result<_, String> {
@@ -498,14 +511,18 @@ fn join_room(client: Rc<RefCell<Client>>) {
                 .max_decoding_message_size(8192)
                 .max_encoding_message_size(8192);
             let mut request = tonic::Request::new(body);
-            request.set_timeout(std::time::Duration::from_secs(25));
+            request.set_timeout(request_timeout());
             let reply = rooms
                 .join(request)
                 .await
                 .map(|reply| reply.into_inner())
-                .map_err(|_| {
-                    "Join outcome unknown. Confirm the same join; do not start a new one."
-                        .to_owned()
+                .map_err(|status| {
+                    if status.code() == tonic::Code::DataLoss {
+                        SERVER_LOST.to_owned()
+                    } else {
+                        "Join outcome unknown. Confirm the same join; do not start a new one."
+                            .to_owned()
+                    }
                 });
             connection.close();
             reply
@@ -519,7 +536,7 @@ fn join_room(client: Rc<RefCell<Client>>) {
             let mut state = client.borrow_mut();
             state.join_retries = 0;
             state.reconnect.attempt = 0;
-            show_reconnecting(&state, false);
+            show_notice(&state, None);
         }
         match outcome {
             Ok(reply) => match reply.outcome {
@@ -624,7 +641,8 @@ fn join_room(client: Rc<RefCell<Client>>) {
                 let retry = {
                     let mut state = client.borrow_mut();
                     let unreachable = error == ROOM_CONNECTION_UNAVAILABLE;
-                    let retry = unreachable || state.join_retries < crate::reconnect::JOIN_RETRIES;
+                    let retry = error != SERVER_LOST
+                        && (unreachable || state.join_retries < crate::reconnect::JOIN_RETRIES);
                     if retry && !unreachable {
                         state.join_retries += 1;
                     }
@@ -638,6 +656,9 @@ fn join_room(client: Rc<RefCell<Client>>) {
                     schedule_join_retry(&client);
                 } else {
                     feedback(&client.borrow(), &error);
+                    if error == SERVER_LOST {
+                        show_notice(&client.borrow(), Some(SERVER_LOST));
+                    }
                 }
             }
         }
@@ -652,7 +673,7 @@ fn schedule_join_retry(client: &Rc<RefCell<Client>>) {
         let jitter = (js_sys::Math::random() * 1000.0) as u32;
         let wait = crate::reconnect::delay(state.reconnect.attempt, jitter);
         state.reconnect.attempt = state.reconnect.attempt.saturating_add(1);
-        show_reconnecting(&state, true);
+        show_notice(&state, Some(RECONNECTING));
         (state.reconnect.token, wait)
     };
     let weak = Rc::downgrade(client);
@@ -773,6 +794,7 @@ fn connect(client: Rc<RefCell<Client>>) {
                     tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => {
                         SAVED_GAME_REFUSED
                     }
+                    tonic::Code::DataLoss => SERVER_LOST,
                     _ => "Saved game view unavailable",
                 })?
                 .into_inner();
@@ -819,50 +841,56 @@ fn connect(client: Rc<RefCell<Client>>) {
             // A lost, refused or closed connection is retried, never left on a dead screen.
             // Only a connection this page retired itself (an aborted run) stays down.
             if result.is_ok() {
-                schedule_reconnect(&owned, refused);
+                // A server that says its saved state is gone is still asked again (a restart
+                // brings it back), but the page says what is wrong instead of "Reconnecting…".
+                let lost = matches!(&result, Ok(Err(error)) if error == SERVER_LOST);
+                schedule_reconnect(&owned, refused, lost);
             }
         }
     });
 }
 
-/// Shows or removes the "Reconnecting…" notice on the page.
-fn show_reconnecting(client: &Client, on: bool) {
+const RECONNECTING: &str = "Reconnecting…";
+
+/// Shows `text` as the page's connection notice, or removes the notice.
+fn show_notice(client: &Client, text: Option<&str>) {
     let Ok(existing) = client.root.query_selector(".df-reconnecting") else {
         return;
     };
-    match (on, existing) {
-        (false, Some(notice)) => notice.remove(),
-        (true, None) => {
+    match (text, existing) {
+        (None, Some(notice)) => notice.remove(),
+        (Some(text), Some(notice)) => notice.set_text_content(Some(text)),
+        (Some(text), None) => {
             let Ok(notice) = client.document.create_element("div") else {
                 return;
             };
             notice.set_class_name("df-reconnecting");
             let _role = notice.set_attribute("role", "status");
             let _style = notice.set_attribute("style", RECONNECTING_STYLE);
-            notice.set_text_content(Some("Reconnecting…"));
+            notice.set_text_content(Some(text));
             let _added = client.root.append_child(&notice);
         }
-        _ => {}
+        (None, None) => {}
     }
 }
 
 // Sized for a TV seen from across a room as well as for a phone.
 const RECONNECTING_STYLE: &str = "position:fixed;left:50%;bottom:3vh;transform:translateX(-50%);\
-z-index:60;padding:.5em 1.4em;border-radius:999px;border:1px solid rgba(223,185,116,.7);\
+z-index:2147483000;padding:.5em 1.4em;border-radius:999px;border:1px solid rgba(223,185,116,.7);\
 background:rgba(8,15,23,.88);color:#efe6ce;font:clamp(20px,1.4vw,36px) \"Iowan Old Style\",\
 \"Palatino Linotype\",Palatino,Georgia,serif;letter-spacing:.03em;pointer-events:none";
 
 /// Tries the game connection again after a backoff, with a visible "Reconnecting…". A display
 /// whose credential the server refuses (the server restarted since the page was served) reloads
 /// itself to fetch a fresh one; a player's refused credential is handled by the caller.
-fn schedule_reconnect(client: &Rc<RefCell<Client>>, refused: bool) {
+fn schedule_reconnect(client: &Rc<RefCell<Client>>, refused: bool, lost: bool) {
     let (token, wait, display) = {
         let mut state = client.borrow_mut();
         state.reconnect.token += 1;
         let jitter = (js_sys::Math::random() * 1000.0) as u32;
         let wait = crate::reconnect::delay(state.reconnect.attempt, jitter);
         state.reconnect.attempt = state.reconnect.attempt.saturating_add(1);
-        show_reconnecting(&state, true);
+        show_notice(&state, Some(if lost { SERVER_LOST } else { RECONNECTING }));
         (state.reconnect.token, wait, state.role == "display")
     };
     let weak = Rc::downgrade(client);
@@ -929,6 +957,7 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
             state.dialogue.discard_unconfirmed();
             state.last_request = Some(body.clone());
             state.last_confirmed = false;
+            state.auto_confirms = 0;
         }
         state.busy = true;
         feedback(&state, "Waiting for the game server…");
@@ -947,7 +976,13 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
                 .submit(request)
                 .await
                 .map(|response| response.into_inner())
-                .map_err(|_| "Outcome unknown. Confirm the same operation or reconnect."),
+                .map_err(|status| {
+                    if status.code() == tonic::Code::DataLoss {
+                        SERVER_LOST
+                    } else {
+                        "Outcome unknown. Confirm the same operation or reconnect."
+                    }
+                }),
             Err(_) => Err("Input binding unavailable"),
         };
         if client.borrow().generation != generation {
@@ -1019,6 +1054,29 @@ fn complete_action_response(
         Err(error) => error.to_owned(),
     }
 }
+/// A choice whose outcome was unknown is confirmed by the page itself once the game answers
+/// again (the first view after a failure), a few times at most. Confirming repeats the same
+/// operation, which the server never applies twice, so it is what the player would click.
+fn auto_confirm(client: &Rc<RefCell<Client>>) {
+    let due = {
+        let mut state = client.borrow_mut();
+        let due = state.role == "player"
+            && !state.busy
+            && !state.last_confirmed
+            && state.last_request.is_some()
+            && state.action.is_some()
+            && !state.dialogue.has_confirmation()
+            && state.auto_confirms < 3;
+        if due {
+            state.auto_confirms += 1;
+        }
+        due
+    };
+    if due {
+        replay(client.clone(), false);
+    }
+}
+
 fn replay(client: Rc<RefCell<Client>>, first_attack: bool) {
     if !first_attack && client.borrow().dialogue.has_confirmation() {
         dialogue_recovery::retry(client);
@@ -1245,9 +1303,12 @@ fn receive_view(
     };
     if acceptance != ConnectionViewAcceptance::ObsoleteGeneration {
         // Any view (even one already held) proves the connection is good again.
-        let mut state = client.borrow_mut();
-        state.reconnect.attempt = 0;
-        show_reconnecting(&state, false);
+        {
+            let mut state = client.borrow_mut();
+            state.reconnect.attempt = 0;
+            show_notice(&state, None);
+        }
+        auto_confirm(client);
     }
     if acceptance == ConnectionViewAcceptance::View(ViewAcceptance::Applied) {
         let mut state = client.borrow_mut();
@@ -1567,6 +1628,13 @@ fn new_client(
     live_theme::install(document)?;
     let credential = root.get_attribute("data-local-binding").unwrap_or_default();
     root.remove_attribute("data-local-binding")?;
+    if let Some(milliseconds) = root
+        .get_attribute("data-request-timeout-ms")
+        .and_then(|text| text.parse::<u64>().ok())
+        .filter(|milliseconds| (1_000..=600_000).contains(milliseconds))
+    {
+        REQUEST_TIMEOUT.with(|timeout| timeout.set(std::time::Duration::from_millis(milliseconds)));
+    }
     let served_run = root.get_attribute("data-run").filter(|run| !run.is_empty());
     // The `?room=` link wins over the code the page was served with.
     let linked = web_sys::window()
@@ -1631,6 +1699,7 @@ fn new_client(
         reconnect: Reconnect::default(),
         served_run,
         join_retries: 0,
+        auto_confirms: 0,
     }));
     live_chrome::mount(&client)?;
     Ok(client)
