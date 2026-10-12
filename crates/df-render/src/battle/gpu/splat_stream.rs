@@ -204,14 +204,19 @@ async fn load_chunk(
 
 /// Chunk files in the order to fetch them: first everything at the coarsest level (the whole
 /// scene), then what the detailed selection wants, coarse before fine.
-fn fetch_order(index: &LodIndex, focus: Focus, limits: Limits) -> Vec<u32> {
+fn fetch_order(
+    index: &LodIndex,
+    focus: Focus,
+    limits: Limits,
+    usable: &dyn Fn(u32) -> bool,
+) -> Vec<u32> {
     let coarse = Limits {
         finest: limits.coarsest,
         budget: u32::MAX,
         ..limits
     };
-    let mut order = index.select(focus, coarse, None).files_coarse_first();
-    for file in index.select(focus, limits, None).files_coarse_first() {
+    let mut order = index.select(focus, coarse, Some(usable)).files_coarse_first();
+    for file in index.select(focus, limits, Some(usable)).files_coarse_first() {
         if !order.contains(&file) {
             order.push(file);
         }
@@ -266,6 +271,9 @@ async fn run(
     };
     let (finest, coarsest) = config.levels;
     let coarsest = coarsest.min(index.level_count().saturating_sub(1) as u32);
+    // Chunk files the server does not have (a scan downloaded only in part): the selection
+    // falls back to what exists, and each missing file is asked for once.
+    let mut unavailable: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut loaded_budget;
     loop {
         let budget = {
@@ -279,7 +287,7 @@ async fn run(
             coarsest,
             budget,
         };
-        let order = fetch_order(&index, focus, limits);
+        let order = fetch_order(&index, focus, limits, &|file| !unavailable.contains(&file));
         let wanted = order.len() as u32;
         shared.borrow_mut().stats.chunks_wanted = wanted;
         for file in order {
@@ -295,7 +303,17 @@ async fn run(
                 .get(file as usize)
                 .map(|chunk| chunk.folder.clone())
                 .ok_or(StreamError::Index)?;
-            load_chunk(core, shared, chunk_layout, &config.index_url, &folder, file).await?;
+            if load_chunk(core, shared, chunk_layout, &config.index_url, &folder, file)
+                .await
+                .is_err()
+            {
+                unavailable.insert(file);
+                if shared.borrow().chunks.is_empty() && unavailable.len() > 64 {
+                    return Err(StreamError::Chunk);
+                }
+                // What is wanted has changed: plan again from the top.
+                break;
+            }
             let planned = replan(&index, shared, focus, limits);
             let now = js_sys::Date::now() - started;
             let mut state = shared.borrow_mut();
@@ -310,7 +328,7 @@ async fn run(
         let settled = {
             let shared = shared.borrow();
             shared.budget == loaded_budget
-                && fetch_order(&index, focus, limits)
+                && fetch_order(&index, focus, limits, &|file| !unavailable.contains(&file))
                     .iter()
                     .all(|file| shared.chunks.contains_key(file))
         };

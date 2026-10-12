@@ -152,3 +152,53 @@ words to the player who sent them. Neither is written to disk, cached, logged or
 telemetry span (which records sizes, durations and an outcome label). Only the words are
 used: nothing is derived from the voice, and nothing is kept. Microphone tracks are stopped
 as soon as the recording ends.
+
+## Real Gaussian-splat scans as battle scenes
+
+Real photogrammetry scans (streamed level-of-detail SOG scenes from superspl.at: `lod-meta.json`
+plus `<level>_<chunk>/` folders of WebP planes) can stage a fight. Scan data is large and some
+scans carry no licence, so none of it is ever committed: keep it under the gitignored
+`artifacts/` folder (for example `artifacts/tmp/splat-dl/<scene-id>/v1/...`, exactly as
+downloaded) and point the server at it.
+
+- `DF_GAMEPLAY_SPLAT_DIR=<directory>`: where the server serves `/assets/splat/...` from. Default
+  `assets/splat`. Relative paths are taken from the current directory; an empty value or one
+  with `..` steps refuses startup. Only regular files (no symlinks) up to three directories
+  deep, lowercase `[a-z0-9._-]` names with a `.json`, `.webp` or `.splat` extension, at most
+  128 MiB each and 4096 files in all, are served.
+- `DF_GAMEPLAY_BATTLE_SCENE=<scene id>`: stage every live fight on that scene instead of the
+  per-location scenes. Unset keeps today's behaviour. The id must be a built-in scene (see
+  `content/battle-scenes/`); scenes marked `"distribution": "private-test-only"` can only be
+  reached this way (or by the `#battle-preview` address below), never from the default
+  rotation. If the scan cannot be drawn (files missing, decode failure, a frame budget that
+  cannot be met) the location's own painted ground and backdrop are shown instead.
+
+Run a real fight on a scan (the scans listed in `artifacts/tmp/splat-dl/README.txt`):
+
+```sh
+DF_GAMEPLAY_SPLAT_DIR=artifacts/tmp/splat-dl DF_GAMEPLAY_BATTLE_SCENE=scan-village \
+  development/run-gameplay.sh
+```
+
+The scenes are `scan-riverbed`, `scan-valley-bridges` and `scan-summit` (private test only, no
+licence: do not publish, record or ship them) and `scan-village` (CC BY 4.0, attribution in
+`THIRD_PARTY_NOTICES.md`). To look at one without playing, open
+`/gameplay/display#battle-preview=scan-village`; useful additions are `&hold` (stage the figures
+and stop), `&shot=<tactical|combat_est|turn_focus|impact|ko|victory>`, `&orbit`, a free camera
+`&cam=<target x,y,z>,<distance>,<yaw>,<pitch>,<fov>` and, for benchmarks, `&fixed` with
+`&budget=<splats>`, `&minc=<min contribution>`, `&sscale=<0.25-1>` and `&rscale=<0.25-1>`.
+
+Fitting a new scan or area is done with the native authoring tool, which reads the finest
+on-disk level, estimates the ground height field from the splats and marks cells a figure cannot
+stand in (it decodes WebP with macOS `sips`):
+
+```sh
+cargo run --release -p df-render --example splat_fit -- <scan>/v1 out.json \
+  --orient 180,0,0 --scale 1 --offset-y 0 --translate 0,0,0 --grid -9,-6.75,1.5,12,9 \
+  --finest 1 --coarsest 3 [--search -45,45,-45,45,3]
+```
+
+`--search` slides the grid over a region and ranks open, flat windows; the printed `terrain` and
+`blocked` data go into the scene file by hand. The real-data decode tests run when
+`DF_SPLAT_SCAN_DIR` (or `artifacts/tmp/splat-dl` beside the crate) holds the scans and skip
+otherwise.

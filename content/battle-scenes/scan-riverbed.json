@@ -222,6 +222,10 @@
       3
     ],
     "max_splats": 2500000,
+    "clip": {
+      "above_m": 6.0,
+      "radius_m": 45.0
+    },
     "grade": {
       "preset": "neutral"
     },
