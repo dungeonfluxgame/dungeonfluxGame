@@ -28,6 +28,9 @@ pub(super) const PREWARM_ORDER: [HealthTier; 4] = [
     HealthTier::Down,
 ];
 
+/// How many times a variant is tried before it is given up for this run.
+pub(super) const MAXIMUM_ATTEMPTS: u8 = 2;
+
 /// Image-service calls kept back for mood art; pre-warming stops when no more than this remain.
 pub(super) const PREWARM_RESERVE: u32 = 10;
 
@@ -48,7 +51,8 @@ pub(super) struct Book {
     known: BTreeMap<(String, HealthTier), ImageKey>,
     /// Characters whose cache has been looked through once.
     peeked: BTreeSet<String>,
-    failed: BTreeSet<(String, HealthTier)>,
+    /// How many attempts failed, by variant.
+    failed: BTreeMap<(String, HealthTier), u8>,
     in_flight: BTreeSet<(String, HealthTier)>,
 }
 
@@ -60,7 +64,7 @@ impl Book {
 
     pub(super) fn fail(&mut self, id: &str, tier: HealthTier) {
         self.in_flight.remove(&(id.to_owned(), tier));
-        self.failed.insert((id.to_owned(), tier));
+        *self.failed.entry((id.to_owned(), tier)).or_default() += 1;
     }
 
     /// Gives up an attempt without remembering it as a failure (the budget ran out).
@@ -68,12 +72,16 @@ impl Book {
         self.in_flight.remove(&(id.to_owned(), tier));
     }
 
-    /// Whether this variant is neither known, failed nor already being made.
+    /// Whether this variant is neither known, out of attempts nor already being made.
     pub(super) fn is_open(&self, id: &str, tier: HealthTier) -> bool {
         let key = (id.to_owned(), tier);
         !self.known.contains_key(&key)
-            && !self.failed.contains(&key)
+            && self.attempts(&key) < MAXIMUM_ATTEMPTS
             && !self.in_flight.contains(&key)
+    }
+
+    fn attempts(&self, key: &(String, HealthTier)) -> u8 {
+        self.failed.get(key).copied().unwrap_or(0)
     }
 
     pub(super) fn mark_peeked(&mut self, id: &str) {
@@ -125,15 +133,20 @@ impl Book {
         if in_combat || self.is_warming() || budget_remaining <= PREWARM_RESERVE {
             return None;
         }
-        PREWARM_ORDER.into_iter().find_map(|tier| {
-            characters
-                .iter()
-                .enumerate()
-                .find_map(|(index, character)| {
-                    let key = (character.id.clone(), tier);
-                    (!self.known.contains_key(&key) && !self.failed.contains(&key))
-                        .then_some((index, tier))
-                })
+        // Variants never tried come first; one that failed (the provider sometimes declines or
+        // fails a request that passes a minute later) is retried only when nothing else is
+        // left to warm, and only once.
+        (0..MAXIMUM_ATTEMPTS).find_map(|tried| {
+            PREWARM_ORDER.into_iter().find_map(|tier| {
+                characters
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, character)| {
+                        let key = (character.id.clone(), tier);
+                        (!self.known.contains_key(&key) && self.attempts(&key) == tried)
+                            .then_some((index, tier))
+                    })
+            })
         })
     }
 }
@@ -217,19 +230,29 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_variant_is_not_asked_for_again_and_a_known_one_is_skipped() {
+    fn a_failed_variant_is_retried_once_after_everything_else_and_a_known_one_is_skipped() {
         let characters = vec![character("hero-1")];
         let mut book = Book::default();
         book.learn("hero-1", HealthTier::Bloodied, key('a'));
         book.start_warming("hero-1", HealthTier::Critical);
         book.fail("hero-1", HealthTier::Critical);
+        // The untried tiers come before the failed one.
         assert_eq!(
             book.next_warm(&characters, 40, false),
             Some((0, HealthTier::Hurt))
         );
-        book.fail("hero-1", HealthTier::Hurt);
+        book.learn("hero-1", HealthTier::Hurt, key('d'));
         book.learn("hero-1", HealthTier::Down, key('c'));
+        // Then the failed one gets its second try, and after that no more.
+        assert_eq!(
+            book.next_warm(&characters, 40, false),
+            Some((0, HealthTier::Critical))
+        );
+        assert!(book.is_open("hero-1", HealthTier::Critical));
+        book.start_warming("hero-1", HealthTier::Critical);
+        book.fail("hero-1", HealthTier::Critical);
         assert_eq!(book.next_warm(&characters, 40, false), None);
+        assert!(!book.is_open("hero-1", HealthTier::Critical));
     }
 
     #[test]
