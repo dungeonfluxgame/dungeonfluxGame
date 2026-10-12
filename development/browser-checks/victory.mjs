@@ -56,7 +56,9 @@ const stored = await tv.evaluate(() => JSON.stringify({ ...sessionStorage, ...lo
 check(!stored.includes('voice.muted'), `no mute choice is stored across reloads (${stored})`);
 
 // ---- play to a win ----
+s.note('creating hero A');
 await create(s, pa, 'Brakka', 'Copper beard');
+s.note('hero A created');
 await click(s, pa, 'Confirm your hero');
 await create(s, pb, 'Thrain', 'Missing ear');
 await click(s, pb, 'Confirm your hero');
@@ -66,17 +68,17 @@ await settle(5000);
 await click(s, pa, s.label('ask-courier'));
 await click(s, pa, s.label('defend-courier'));
 let won = false;
-for (let turn = 0; turn < 60 && !won; turn += 1) {
-  const done = async (page) => (await page.locator('button:not([disabled])', { hasText: s.label('short-rest') }).count()) + (await page.locator('button:not([disabled])', { hasText: s.label('choose-harbor-scene') }).count());
-  if ((await done(pa)) + (await done(pb)) > 0) { won = true; break; }
+const fightEnd = Date.now() + 9 * 60 * 1000;
+for (let turn = 0; turn < 60 && !won && Date.now() < fightEnd; turn += 1) {
+  s.note(`fight turn ${turn}: ${(await tv.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 90)))}`);
+  // The fight is over when the display's music enters its Release.
+  won = await tv.evaluate(() => (window.__music || []).some((row) => row.phase === 'release'));
+  if (won) break;
   let acted = false;
   for (const page of [pa, pb]) {
-    if (await page.locator('button:not([disabled])', { hasText: s.label('greatsword-attack') }).count()) {
-      await click(s, page, s.label('greatsword-attack'), { wait: 800 });
-      await click(s, page, s.label('end-turn'), { optional: true, wait: 800 });
-      acted = true;
-    } else if (await page.locator('button:not([disabled])', { hasText: s.label('end-turn') }).count()) {
-      await click(s, page, s.label('end-turn'), { wait: 800 }); acted = true;
+    for (const pattern of [/Greatsword strike/, /End your turn/]) {
+      const button = page.locator('button:not([disabled])', { hasText: pattern }).first();
+      if (await button.count()) { await button.click(); await settle(800); acted = true; break; }
     }
   }
   if (!acted) await settle(1200);
@@ -89,9 +91,10 @@ fs.writeFileSync(`${out}/music-log.json`, JSON.stringify(log, null, 1));
 for (const row of log) s.note(`music t=${row.t} sound=${row.sound} phase=${row.phase} intensity=${row.intensity} cue=${row.cue} gains=${row.gains}`);
 // The cue's phase is the server's; the mix settles to the calm bed when the release hold has passed.
 const release = log.find((row) => row.phase === 'release');
-const calmGains = log.find((row) => row.sound === 'on' && row.phase === 'calm')?.gains;
+// The raw cue stays Release; the mix leaves the resolving motif (the next change of gains) when the hold ends.
+const calmGains = release?.gains;
 if (release && calmGains) {
-  const settled = log.find((row) => row.t > release.t && row.gains === calmGains);
+  const settled = log.find((row) => row.t > release.t && row.gains !== calmGains);
   const held = settled ? settled.t - release.t : null;
   s.note(`release began t=${release.t}; the mix is back at the calm bed ${held === null ? 'not within the window' : `${held} ms later`}`);
   check(held === null || held >= 12000, `the release is held about 14 s before the calm bed (${held} ms)`);
