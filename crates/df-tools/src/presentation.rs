@@ -502,16 +502,6 @@ fn scene_line(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) ->
     })
 }
 
-/// The server's table-talk counter of an audience view: it moves when a line is logged or a
-/// reply starts or ends, while the game revision does not.
-fn presentation_sequence(view: &rpc::ViewMessage) -> Option<u64> {
-    let journey = match view.audience.as_ref()? {
-        rpc::view_message::Audience::Display(display) => display.journey.as_ref(),
-        rpc::view_message::Audience::Player(player) => player.journey.as_ref(),
-    };
-    journey.map(|journey| journey.presentation_sequence)
-}
-
 /// Who is writing a reply to a hero's typed words right now, as the server says, unless that
 /// speaker's answer is already the last thing logged (the mark can outlive the line by a moment).
 pub(crate) fn replying_speaker(view: &rpc::ViewMessage) -> Option<String> {
@@ -529,13 +519,6 @@ pub(crate) fn replying_speaker(view: &rpc::ViewMessage) -> Option<String> {
             && last.speaker.trim() == speaker
     });
     (!answered).then(|| speaker.to_owned())
-}
-
-/// Whether `incoming`, which carries the same game revision as `current`, differs in table
-/// talk. A conversation changes what the room sees without changing any game state, so such a
-/// view must still reach the screens.
-pub(crate) fn table_talk_changed(current: &rpc::ViewMessage, incoming: &rpc::ViewMessage) -> bool {
-    presentation_sequence(current) != presentation_sequence(incoming)
 }
 
 /// The table lines of one audience view, oldest first: the scene's own speaker line, then the
@@ -744,25 +727,6 @@ mod tests {
         shown.reply_speaker = replying.to_owned();
         shown.table_log = last.into_iter().collect();
         view(shown)
-    }
-
-    #[test]
-    fn table_talk_changes_a_view_whose_game_revision_did_not_move() {
-        let before = talk_view(3, "", None);
-        assert!(!table_talk_changed(&before, &talk_view(3, "", None)));
-        let hero_line = server_line(
-            1,
-            "Brakka",
-            rpc::TableRole::Hero,
-            0,
-            rpc::TableKind::Speech,
-            "Who sent you?",
-        );
-        assert!(table_talk_changed(
-            &before,
-            &talk_view(4, "", Some(hero_line))
-        ));
-        assert!(table_talk_changed(&before, &talk_view(4, "Courier", None)));
     }
 
     #[test]

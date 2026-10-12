@@ -80,15 +80,28 @@ fn join_lookup_error(
 }
 
 pub(super) fn matches_room_code(code: &str) -> bool {
-    code == super::journey::room_code()
+    super::room_code::matches(&super::journey::room_code(), code)
 }
 
-/// The shell remains shared with qualification. Only its validated ASCII room binding changes.
-pub(super) async fn player_page() -> axum::response::Html<String> {
+/// The shell remains shared with qualification. Only its validated ASCII room binding and the
+/// run's public identity change.
+pub(super) async fn player_page(
+    axum::extract::State(state): axum::extract::State<super::PageState>,
+) -> axum::response::Html<String> {
+    player_page_for(&state.run_identity).await
+}
+
+/// The player shell for the run named `run_identity` (empty when the run publishes none).
+pub(super) async fn player_page_for(run_identity: &str) -> axum::response::Html<String> {
     let axum::response::Html(body) = super::player().await;
+    let run = if run_identity.is_empty() {
+        String::new()
+    } else {
+        format!(" data-run=\"{run_identity}\"")
+    };
     axum::response::Html(body.replace(
         &format!("data-room=\"{}\"", super::journey::ROOM_CODE),
-        &format!("data-room=\"{}\"", super::journey::room_code()),
+        &format!("data-room=\"{}\"{run}", super::journey::room_code()),
     ))
 }
 

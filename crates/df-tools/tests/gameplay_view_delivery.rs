@@ -288,3 +288,71 @@ fn replacing_authorized_scope_starts_with_no_previous_private_view() {
         Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
     );
 }
+
+fn talking(sequence: u64, presentation_sequence: u64, replying: &str) -> rpc::ViewMessage {
+    let mut message = frame(1, sequence, "The courier waits.");
+    if let Some(rpc::view_message::Audience::Player(player)) = message.audience.as_mut()
+        && let Some(journey) = player.journey.as_mut()
+    {
+        journey.presentation_sequence = presentation_sequence;
+        journey.reply_speaker = replying.to_owned();
+    }
+    message
+}
+
+fn current_reply_speaker(views: &GameplayViews) -> String {
+    match views.current().and_then(|view| view.audience.as_ref()) {
+        Some(rpc::view_message::Audience::Player(player)) => player
+            .journey
+            .as_ref()
+            .map(|journey| journey.reply_speaker.clone())
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+#[test]
+fn table_talk_reaches_the_screen_without_a_new_game_revision() {
+    let scope = scope(1, 2, 3, ViewRole::Player);
+    let connection = RpcConnection::new(());
+    let generation = connection.generation();
+    let mut views = GameplayViews::new(scope, generation.clone());
+
+    assert_eq!(
+        views.accept(&generation, scope, talking(7, 3, "")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+    );
+    // The same revision again, nothing said: still a duplicate.
+    assert!(matches!(
+        views.accept(&generation, scope, talking(7, 3, "")),
+        Ok(ConnectionViewAcceptance::View(
+            ViewAcceptance::Duplicate { .. }
+        ))
+    ));
+    // A hero speaks and a reply starts: the revision is the same but the room must see it.
+    assert_eq!(
+        views.accept(&generation, scope, talking(7, 4, "Courier")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+    );
+    assert_eq!(current_reply_speaker(&views), "Courier");
+    // The reply lands, still the same revision.
+    assert_eq!(
+        views.accept(&generation, scope, talking(7, 5, "")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+    );
+    assert_eq!(current_reply_speaker(&views), "");
+    // An older revision is still stale, and a newer one still supersedes the talk.
+    assert!(matches!(
+        views.accept(&generation, scope, talking(6, 9, "Courier")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Stale { .. }))
+    ));
+    assert_eq!(
+        views.accept(&generation, scope, talking(8, 0, "")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+    );
+    assert_eq!(
+        views.current_revision(),
+        Some(revision(1, 8)),
+        "the newer revision is the current one"
+    );
+}

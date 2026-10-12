@@ -94,6 +94,7 @@ mod tests {
         let switch = SoundSwitch::new();
         assert_eq!(switch.sound(), Sound::Locked);
         assert!(!switch.is_muted());
+        assert!(!switch.is_unlocked());
     }
 
     #[test]

@@ -2,6 +2,8 @@
 //! membership, not production bootstrap. The action and its outcome use generated RPC.
 mod actor;
 mod adventure;
+#[cfg(test)]
+mod connection_tests;
 mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
@@ -28,6 +30,7 @@ mod recovery_qualification;
 mod rest_qualification;
 mod restart_qualification;
 mod room;
+mod room_code;
 mod social;
 mod speech_input;
 mod splat_assets;
@@ -233,6 +236,7 @@ impl rpc::session_service_server::SessionService for Service {
 }
 #[derive(Clone)]
 struct PageState {
+    run_identity: Arc<str>,
     incoming: NativeAdmission,
     connections: Arc<Semaphore>,
     allowed_origins: Arc<[String]>,
@@ -415,6 +419,8 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let mut generated_adventure: Option<adventure::startup::PreparedAdventure> = None;
+    // Names the server run for pages that keep a seat; empty (no check) in qualification.
+    let mut run_identity = String::new();
     let web_root = std::env::args()
         .nth(2)
         .ok_or("generated gameplay web directory required")?;
@@ -579,6 +585,18 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         span.finish_unmeasured("loaded");
+        // Every run has its own room code, derived from its database so a restart keeps it.
+        let mut loaded = loaded;
+        let run = database_config()?
+            .get_dbname()
+            .unwrap_or_default()
+            .to_owned();
+        loaded.pack.room_code = room_code::select(
+            room_code::pinned(std::env::var("DF_GAMEPLAY_ROOM_CODE"))?,
+            &run,
+        );
+        run_identity = room_code::run_identity(&run, &loaded.pack_revision.to_hex());
+        println!("ROOM {}", loaded.pack.room_code);
         pack::install(loaded)?;
     }
     let voice = voice::Voice::start(
@@ -1150,6 +1168,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         )
         .serve_with_incoming(incoming);
     let state = PageState {
+        run_identity: run_identity.into(),
         incoming: incoming_sender,
         connections: Arc::new(Semaphore::new(settings.max_connections)),
         allowed_origins: settings.allowed_origins.clone().into(),
@@ -1256,7 +1275,11 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         let origin = &settings.allowed_origins[0];
         println!("{}", voice.startup_line());
         println!("{}", speech.startup_line());
-        println!("READY display={origin}/gameplay/display player={origin}/gameplay/player");
+        println!(
+            "READY display={origin}/gameplay/display player={origin}/gameplay/player?room={} room={}",
+            journey::room_code(),
+            journey::room_code()
+        );
     }
     let outcome: Result<(), Box<dyn std::error::Error>> = {
         tokio::select! {

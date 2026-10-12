@@ -66,6 +66,16 @@ impl ViewScope {
 
 /// Admission of the actual generated gameplay snapshots for one authorized scope.
 /// The connection owner issues generations; reconnect preserves the durable watermark.
+/// The server's table-talk counter of a view: it moves when a line is logged or a reply starts
+/// or ends, while the game revision does not.
+fn presentation_sequence(view: &rpc::ViewMessage) -> Option<u64> {
+    let journey = match view.audience.as_ref()? {
+        rpc::view_message::Audience::Display(display) => display.journey.as_ref(),
+        rpc::view_message::Audience::Player(player) => player.journey.as_ref(),
+    };
+    journey.map(|journey| journey.presentation_sequence)
+}
+
 /// An equal revision never replaces a view, with one exception: table talk (what heroes and
 /// speakers said) changes the room's screens without moving the game revision, so a same-revision
 /// view whose `presentation_sequence` differs is kept beside the store as the current view
@@ -136,7 +146,7 @@ impl GameplayViews {
         }
         let refresh = self
             .current()
-            .is_some_and(|current| crate::presentation::table_talk_changed(current, &view))
+            .is_some_and(|current| presentation_sequence(current) != presentation_sequence(&view))
             .then(|| view.clone());
         let acceptance = self.views.accept(generation, scope.binding, revision, view);
         match (acceptance, refresh) {
