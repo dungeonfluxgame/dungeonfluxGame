@@ -565,12 +565,18 @@ impl TvStage {
             live_sfx::play(Cue::PartyGathered, GATHERED_SOUND_DELAY);
         }
         if lobby {
-            self.figures
-                .update(&[], &model.scene_key, model.family, StageMode::Scene)?;
+            self.figures.update(
+                &[],
+                &model.scene_key,
+                &model.art,
+                model.family,
+                StageMode::Scene,
+            )?;
         } else {
             self.figures.update(
                 &model.cast,
                 &model.scene_key,
+                &model.art,
                 model.family,
                 StageMode::Scene,
             )?;

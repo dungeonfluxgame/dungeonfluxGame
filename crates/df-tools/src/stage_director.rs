@@ -1101,4 +1101,25 @@ mod tests {
             .collect();
         assert!(shown.contains(&"late line"), "{shown:?}");
     }
+
+    #[test]
+    fn a_fallen_character_is_held_long_enough_for_the_table_to_see_the_blow() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                roll: Some("roll"),
+                impact: Some("impact"),
+                defeat: Some("defeat"),
+                ..ViewDiff::default()
+            },
+        );
+        // Rolling 1.15 s and the impact 0.65 s come first; the defeat then holds 2.5 s.
+        run(&mut director, 50, 1_850);
+        assert_eq!(director.state(), StageState::Defeat);
+        run(&mut director, 1_900, 4_250);
+        assert_eq!(director.state(), StageState::Defeat);
+        run(&mut director, 4_300, 4_450);
+        assert_eq!(director.state(), StageState::Idle);
+    }
 }

@@ -435,6 +435,7 @@ fn present_stage(
     stage.figures().update(
         &cast,
         &view.scene.title,
+        &view.scene.scene_asset,
         crate::presentation::scene_family(&view.scene.scene_asset),
         if screen == Screen::Combat {
             live_stage::StageMode::Combat

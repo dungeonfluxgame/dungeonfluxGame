@@ -11,94 +11,118 @@
 .tv-final-panel{min-height:calc(var(--u)*19.4)}
 .tv-speaker{display:none!important}
 
-/* ---------- the characters standing in the scene ---------- */
-.tv-stage{--fig-h:calc(var(--u)*30);--fs-bubble:clamp(26px,calc(var(--u)*1.45),80px);--base:11vh}
-.tv-stage[data-chips="0"]{--base:5.5vh}
-.tv-figures{position:absolute;inset:0;pointer-events:none;--grade:brightness(1)}
+/* ---------- the characters standing in the scene: a floor, a depth axis, one light ----------
+   Near (the heroes) are knees-up and cropped by the screen edge, mid (the speaker, the cast) and
+   far (those who stand back) stand on the painting's floor band with their feet shown. The floor
+   band comes from `live_stage.rs` as `--feet-mid`, `--feet-far` (screen height of the feet) and
+   `--key` (+1 when the key light falls from the left). Depth sets size, dimming and haze. */
+.tv-stage{--fig-h:calc(var(--u)*30);--fs-bubble:clamp(26px,calc(var(--u)*1.45),80px);--feet-mid:88vh;--feet-far:75vh;--key:1}
+.tv-figures{position:absolute;inset:0;pointer-events:none;--tint:brightness(1)}
 .tv-stage[data-tv-mode=lobby] .tv-figures{display:none}
 .tv-stage[data-tv-mode=scene] .tv-partybar{display:none}
-.tv-figures[data-grade=interior]{--grade:sepia(.16) saturate(1.05) brightness(1.02) contrast(1.02)}
-.tv-figures[data-grade=exterior]{--grade:saturate(.9) hue-rotate(-6deg) brightness(.93) contrast(1.05)}
-.tv-fig{position:absolute;bottom:var(--base);width:calc(var(--fig-h)*.6667);display:flex;flex-direction:column;align-items:center;margin:0;opacity:1;transition:opacity .5s ease,visibility 0s,filter .6s ease}
+.tv-figures[data-grade=interior]{--tint:sepia(.12) saturate(1.02) brightness(.98) contrast(1.03)}
+.tv-figures[data-grade=exterior]{--tint:saturate(.85) hue-rotate(-8deg) brightness(.9) contrast(1.05)}
+.tv-fig{--depth-grade:brightness(1);--grade:var(--tint) var(--depth-grade);position:absolute;bottom:calc(100vh - var(--feet-mid));width:calc(var(--fig-h)*.6667);height:var(--fig-h);margin:0;opacity:1;transition:opacity .5s ease,visibility 0s}
 .tv-fig[data-present=false]{opacity:0;visibility:hidden;transition:opacity .4s ease,visibility 0s .4s}
-.tv-fig[data-slot=hero-1]{left:calc(var(--u)*3);--toward:1;--from-x:calc(var(--u)*-6);--enter-delay:.2s}
-.tv-fig[data-slot=hero-2]{right:calc(var(--u)*3);--toward:-1;--from-x:calc(var(--u)*6);--enter-delay:.3s}
+.tv-fig[data-slot=hero-1]{left:calc(var(--u)*-3);--toward:1;--from-x:calc(var(--u)*-6);--enter-delay:.2s}
+.tv-fig[data-slot=hero-2]{right:calc(var(--u)*-3);--toward:-1;--from-x:calc(var(--u)*6);--enter-delay:.3s}
 .tv-fig[data-slot^=npc]{--toward:-1;--from-x:calc(var(--u)*4);--enter-delay:.45s}
-.tv-fig-body{position:relative;width:100%;height:var(--fig-h);transition:transform .45s ease,opacity .9s ease,filter .9s ease}
-.tv-fig[data-speaking] .tv-fig-body{transform:translateX(calc(var(--toward)*var(--u)*.8)) scale(1.02)}
-.tv-fig-sprite{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:50% 100%;transform-origin:50% 100%;will-change:transform;filter:var(--grade);animation:df-breathe 4.6s ease-in-out infinite;-webkit-mask-image:linear-gradient(180deg,#000 82%,transparent 100%);mask-image:linear-gradient(180deg,#000 82%,transparent 100%);transition:filter .4s ease}
+.tv-fig-body{position:relative;width:100%;height:100%;transition:transform .45s ease,opacity .9s ease,filter .9s ease}
+.tv-fig-sprite{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:50% 100%;transform-origin:50% 100%;will-change:transform;filter:var(--grade) drop-shadow(calc(var(--key)*-1.5px) 0 .5px #ffb96e66) drop-shadow(calc(var(--key)*1.5px) 0 .5px #5b86c24d);animation:df-breathe 4.6s ease-in-out infinite;-webkit-mask-image:linear-gradient(180deg,#000 80%,transparent 100%);mask-image:linear-gradient(180deg,#000 80%,transparent 100%);transition:filter .5s ease}
 .tv-fig[data-slot=hero-2] .tv-fig-sprite{animation-delay:-1.9s}
 .tv-fig[data-slot^=npc] .tv-fig-sprite{animation-delay:-3.1s;animation-duration:5s}
 @keyframes df-breathe{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.012)}}
 .tv-fig[data-low] .tv-fig-sprite{animation-duration:6.4s}
-.tv-fig[data-low] .tv-fig-body::after{content:'';position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 55%,transparent 42%,#a8231a55 100%)}
-.tv-fig-shadow{position:absolute;left:10%;right:10%;bottom:-1.5%;height:7%;border-radius:50%;background:radial-gradient(ellipse at center,#000c 0,#0000 70%)}
+.tv-fig[data-low]{--depth-grade:brightness(.88) saturate(1.25) sepia(.28)}
+/* ground contact: a soft shadow stretched away from the key light, darkest at the feet */
+.tv-fig-shadow{position:absolute;left:-6%;right:-6%;bottom:-3%;height:9%;border-radius:50%;background:radial-gradient(ellipse at center,#000e 0,#000a 32%,#0000 72%);filter:blur(3px);transform:translateX(calc(var(--key)*-5%)) skewX(calc(var(--key)*-24deg))}
+.tv-fig[data-art=figure] .tv-fig-sprite{-webkit-mask-image:none;mask-image:none}
 .tv-fig[data-art=portrait] .tv-fig-sprite{object-fit:cover;object-position:50% 20%;-webkit-mask-image:radial-gradient(ellipse 62% 56% at 50% 46%,#000 52%,transparent 100%);mask-image:radial-gradient(ellipse 62% 56% at 50% 46%,#000 52%,transparent 100%)}
 .tv-fig[data-art=card] .tv-fig-sprite{inset:auto 15% 4% 15%;width:70%;height:auto;aspect-ratio:1;object-fit:cover;object-position:50% 20%;border:.2vw solid #cba466b3;border-radius:10%;-webkit-mask-image:none;mask-image:none}
 .tv-fig[data-art=none] .tv-fig-sprite{display:none}
-/* the talking figure is outlined in warm light, so it is never in doubt who is speaking */
-.tv-fig[data-speaking] .tv-fig-sprite{filter:var(--grade) drop-shadow(0 0 calc(var(--u)*.3) #f6d894) drop-shadow(0 0 calc(var(--u)*1.3) #e0b877aa)}
-.tv-fig:has(.tv-bubble.speaking) .tv-fig-sprite{animation:df-breathe 4.6s ease-in-out infinite,df-rim 1s ease-in-out infinite}
-@keyframes df-rim{0%,100%{opacity:1}50%{opacity:.82}}
+/* the speaker is lit and steps forward a little; the others dim and desaturate. No outline. */
+.tv-fig[data-speaking]{--depth-grade:brightness(1.1) saturate(1.06) sepia(.08)}
+.tv-figures[data-lit] .tv-fig:not([data-speaking]):not([data-depth=far]){--depth-grade:brightness(.74) saturate(.8)}
+.tv-fig[data-speaking] .tv-fig-body{transform:translateX(calc(var(--toward)*var(--u)*.5)) scale(1.025)}
 .tv-fig[data-down] .tv-fig-body{transform:translateY(calc(var(--u)*2)) rotate(calc(var(--toward)*-78deg));transform-origin:50% 92%;opacity:.7;filter:saturate(.3)}
-.tv-fig-plate{width:calc(100% - var(--u)*2);margin-top:calc(var(--u)*.3);padding:calc(var(--u)*.25) calc(var(--u)*.8);text-align:center;background:linear-gradient(#0a121cd9,#060b12e6);border:1px solid #c9a35f99;border-radius:calc(var(--u)*.5);text-shadow:none}
-.tv-fig[data-speaking] .tv-fig-plate{border-color:#f6d894;box-shadow:0 0 calc(var(--u)*1) #e0b877aa}
-.tv-fig-name{font-size:var(--fs-name);line-height:1.15;color:#f7efdc}
-.tv-fig-role{font:italic var(--fs-label)/1.2 var(--serif);color:#c9bb9b}
-.tv-fig-role:empty,.tv-fig-hp[hidden]{display:none}
-.tv-fig-hp{position:relative;height:calc(var(--u)*1.7);margin-top:calc(var(--u)*.2);border:1px solid #d9b77a59;border-radius:calc(var(--u)*.85);background:#0a0e0b;overflow:hidden}
-.tv-fig-hp-fill{position:absolute;inset:0 auto 0 0;width:var(--hp,0%);background:linear-gradient(90deg,#3f8553,#8fd18d);transition:width .8s ease-out 1.15s}
-.tv-fig[data-low] .tv-fig-hp-fill{background:linear-gradient(90deg,#92392a,#e0784f)}
-.tv-fig-hp-text{position:relative;display:block;font:700 var(--fs-label)/calc(var(--u)*1.7) system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px #000}
-.tv-fig-crest{display:none}
-
-/* Arrangement: the party stands large at the edges, the cast between them (nobody is centre stage). */
-.tv-figures[data-arrange=party] .tv-fig[data-slot^=hero]{--fig-h:calc(var(--u)*33)}
-.tv-figures[data-arrange=party] .tv-fig[data-role=back]{--fig-h:calc(var(--u)*29);left:50%;margin-left:calc(var(--fig-h)*-.3333)}
-.tv-figures[data-arrange=party][data-back="2"] .tv-fig[data-rank="0"]{left:40%}
-.tv-figures[data-arrange=party][data-back="2"] .tv-fig[data-rank="1"]{left:60%}
-.tv-figures[data-arrange=party][data-back="3"] .tv-fig[data-rank="0"]{left:34%}
-.tv-figures[data-arrange=party][data-back="3"] .tv-fig[data-rank="2"]{left:66%}
-
-/* Arrangement: a non-player character speaks. One large figure centre-right, the others stand
-   back and dim, and the heroes become compact crest plates down the left edge. */
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus]{--fig-h:calc(var(--u)*34);left:63%;margin-left:calc(var(--fig-h)*-.3333);bottom:calc(var(--base) + 2vh)}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=back]{--fig-h:calc(var(--u)*25);bottom:calc(var(--base) + 24vh);filter:brightness(.58) saturate(.8)}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=back][data-rank="0"]{left:45%;margin-left:calc(var(--fig-h)*-.3333)}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=back][data-rank="1"]{left:87%;margin-left:calc(var(--fig-h)*-.3333)}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=back] .tv-fig-bubbles{display:none}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=back] :is(.tv-fig-hp,.tv-fig-role){display:none}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-fig-plate{display:none}
-.tv-figures[data-arrange=stage] .tv-fig[data-slot^=hero]{--fig-h:0px;flex-direction:row;align-items:center;gap:calc(var(--u)*1.1);width:calc(var(--u)*25);bottom:auto;left:calc(var(--u)*3);right:auto}
-.tv-figures[data-arrange=stage] .tv-fig[data-slot=hero-1]{top:30vh}
-.tv-figures[data-arrange=stage] .tv-fig[data-slot=hero-2]{top:52vh}
-.tv-figures[data-arrange=stage] .tv-fig[data-slot^=hero] .tv-fig-body{display:none}
-.tv-figures[data-arrange=stage] .tv-fig[data-slot^=hero] .tv-fig-crest{display:block;flex:none;width:calc(var(--u)*7.4);aspect-ratio:1;border:max(2px,calc(var(--u)*.16)) solid #cba466;border-radius:50%;background:#162230 center 18%/cover no-repeat;box-shadow:0 calc(var(--u)*.5) calc(var(--u)*1.4) #000c,inset 0 0 calc(var(--u)*.8) #000a;transition:border-color .3s ease,box-shadow .3s ease}
-.tv-figures[data-arrange=stage] .tv-fig[data-slot^=hero] .tv-fig-plate{width:auto;flex:1;margin:0;padding:calc(var(--u)*.2) calc(var(--u)*.7);text-align:left}
-.tv-figures[data-arrange=stage] .tv-fig[data-slot^=hero]:is([data-speaking],:has(.tv-bubble[data-kind=typed])) .tv-fig-crest{border-color:#f6d894;box-shadow:0 0 calc(var(--u)*1.6) #f0c985,0 0 calc(var(--u)*.4) #f6d894}
-
-/* Arrangement: a fight and its aftermath. Heroes at the edges, the foe centre-right. */
-.tv-figures[data-arrange=combat] .tv-fig{bottom:4.5vh;--fig-h:calc(var(--u)*28)}
+/* near: the heroes, large, overlapping the frame, cropped by the bottom edge */
+.tv-fig[data-depth=near]{--fig-h:calc(var(--u)*38);bottom:-6vh;z-index:6;--depth-grade:brightness(.86) contrast(1.06)}
+.tv-fig[data-depth=near] .tv-fig-shadow{display:none}
+.tv-fig[data-depth=near] .tv-fig-sprite{-webkit-mask-image:none;mask-image:none}
+/* mid: the speaker and the cast, standing on the floor */
+.tv-fig[data-depth=mid]{--fig-h:calc(var(--u)*33);z-index:3;--depth-grade:brightness(.92) saturate(.92)}
+.tv-fig[data-depth=mid][data-speaking]{--fig-h:calc(var(--u)*34.5)}
+.tv-fig[data-depth=mid][data-speaking]{--depth-grade:brightness(1.1) saturate(1.06) sepia(.08)}
+/* far: smaller, higher toward the horizon, with the room's haze on it */
+.tv-fig[data-depth=far]{--fig-h:calc(var(--u)*21);bottom:calc(100vh - var(--feet-far));z-index:2;--depth-grade:brightness(.66) contrast(.86) saturate(.74) blur(.7px)}
+/* where the floor is wet or polished, a faint reflection under the feet */
+.tv-figures[data-wet] .tv-fig:is([data-depth=mid],[data-depth=far]) .tv-fig-body{-webkit-box-reflect:below -1.5% linear-gradient(transparent 66%,#ffffff1f)}
+/* arrangement: where the cast stands */
+.tv-figures[data-arrange=party] .tv-fig[data-role=back]{left:50%;margin-left:calc(var(--fig-h)*-.3333)}
+.tv-figures[data-arrange=party][data-back="2"] .tv-fig[data-rank="0"]{left:38%}
+.tv-figures[data-arrange=party][data-back="2"] .tv-fig[data-rank="1"]{left:62%}
+.tv-figures[data-arrange=party][data-back="3"] .tv-fig[data-rank="0"]{left:32%}
+.tv-figures[data-arrange=party][data-back="3"] .tv-fig[data-rank="2"]{left:68%}
+.tv-figures[data-arrange=stage] .tv-fig[data-role=focus]{left:50%;margin-left:calc(var(--fig-h)*-.3333)}
+.tv-figures[data-arrange=stage] .tv-fig[data-role=back][data-rank="0"]{left:33%;margin-left:calc(var(--fig-h)*-.3333)}
+.tv-figures[data-arrange=stage] .tv-fig[data-role=back][data-rank="1"]{left:73%;margin-left:calc(var(--fig-h)*-.3333)}
+/* thin air in front of the far and mid figures, behind the heroes */
+.tv-mist{position:absolute;inset:0;z-index:4;pointer-events:none;opacity:.12;filter:blur(22px);background:radial-gradient(ellipse 55% 16% at 28% 80%,#a9bdd2 0,transparent 72%),radial-gradient(ellipse 50% 14% at 74% 72%,#a9bdd2 0,transparent 72%),radial-gradient(ellipse 70% 12% at 50% 90%,#c9d6e3 0,transparent 74%);animation:df-mist 46s ease-in-out infinite alternate}
+.tv-figures[data-arrange=combat] .tv-mist{display:none}
+@keyframes df-mist{from{transform:translateX(-2%)}to{transform:translateX(2.4%) translateY(-.6%)}}
+/* parallax: the camera drifts slowly, the near figures moving most, the far ones least */
+.tv-figures:not([data-arrange=combat]) .tv-fig-body{animation:df-parallax 52s ease-in-out infinite alternate;--par:1}
+.tv-fig[data-depth=near]{--par:2.2}
+.tv-fig[data-depth=far]{--par:.45}
+@keyframes df-parallax{from{translate:calc(var(--u)*.55*var(--par)) 0}to{translate:calc(var(--u)*-.55*var(--par)) calc(var(--u)*-.12*var(--par))}}
+/* combat and its aftermath stay flat, as before */
+.tv-figures[data-arrange=combat] .tv-fig{--fig-h:calc(var(--u)*28);bottom:15vh;z-index:3}
+.tv-figures[data-arrange=combat] .tv-fig[data-slot=hero-1]{left:calc(var(--u)*3.5)}
+.tv-figures[data-arrange=combat] .tv-fig[data-slot=hero-2]{right:calc(var(--u)*3.5)}
 .tv-figures[data-arrange=combat] .tv-fig[data-role=foe]{left:calc(var(--u)*53)}
-.tv-figures[data-arrange=combat] .tv-fig[data-role=back]{--fig-h:calc(var(--u)*24);left:calc(var(--u)*40);filter:brightness(.55) saturate(.8)}
-.tv-figures[data-arrange=combat] .tv-fig[data-role=back] :is(.tv-fig-hp,.tv-fig-role){display:none}
-.tv-figures[data-mode=aftermath] .tv-fig[data-role=foe] .tv-fig-plate{visibility:hidden}
-.tv-figures[data-lit][data-arrange=combat] .tv-fig:not([data-speaking]){opacity:.85}
+.tv-figures[data-arrange=combat] .tv-fig[data-role=back]{--fig-h:calc(var(--u)*24);left:calc(var(--u)*40);--depth-grade:brightness(.6) saturate(.8)}
+.tv-figures[data-arrange=combat] .tv-fig-body{animation:none}
+.tv-figures[data-lit][data-arrange=combat] .tv-fig:not([data-speaking]){opacity:.88}
 
-/* ---------- speech bubbles: attached to the figure, named, tailed ---------- */
-.tv-fig-bubbles{position:absolute;top:1%;z-index:3;width:calc(var(--u)*22)}
-.tv-fig[data-slot=hero-1] .tv-fig-bubbles{left:80%}
-.tv-fig[data-slot=hero-2] .tv-fig-bubbles{right:80%}
-.tv-fig[data-slot^=npc] .tv-fig-bubbles{right:72%}
-.tv-bubble{position:relative;padding:calc(var(--u)*.5) calc(var(--u)*.9) calc(var(--u)*.7);border-radius:calc(var(--u)*1.1);background:#f6efdc;color:#1c160e;border:calc(var(--u)*.18) solid #c9a35f;box-shadow:0 calc(var(--u)*.5) calc(var(--u)*1.6) #000a;text-shadow:none;transform-origin:100% 50%;animation:df-bubble-in .2s ease-out var(--appear,0ms) backwards}
-.tv-fig[data-slot=hero-1] .tv-bubble{transform-origin:0 50%}
-.tv-bubble::after{content:'';position:absolute;top:46%;border:calc(var(--u)*.9) solid transparent}
-.tv-fig[data-slot=hero-1] .tv-bubble::after{left:calc(var(--u)*-1.7);border-right-color:#c9a35f}
-.tv-fig[data-slot=hero-2] .tv-bubble::after,.tv-fig[data-slot^=npc] .tv-bubble::after{right:calc(var(--u)*-1.7);border-left-color:#c9a35f}
+/* ---------- the HUD: names and health at the screen edge, not under the figures ---------- */
+.tv-hud{position:absolute;inset:0;z-index:8;pointer-events:none}
+.tv-hud-card{position:absolute;display:flex;align-items:center;gap:calc(var(--u)*.9);width:calc(var(--u)*24);transition:opacity .5s ease}
+.tv-hud-card[data-present=false]{opacity:0;visibility:hidden}
+.tv-hud-card[data-slot=hero-1]{left:calc(var(--u)*3);top:5vh}
+.tv-hud-card[data-slot=hero-2]{left:calc(var(--u)*28.5);top:5vh}
+.tv-hud-card[data-slot=foe]{display:none}
+.tv-hud-crest{flex:none;width:calc(var(--u)*5.6);aspect-ratio:1;border:max(2px,calc(var(--u)*.14)) solid #cba466;border-radius:50%;background:#162230 center 18%/cover no-repeat;box-shadow:0 calc(var(--u)*.4) calc(var(--u)*1.2) #000c}
+.tv-hud-plate{flex:1;padding:calc(var(--u)*.2) calc(var(--u)*.6);background:linear-gradient(#0a121cd9,#060b12e6);border:1px solid #c9a35f99;border-radius:calc(var(--u)*.5);text-shadow:none}
+.tv-hud-name{font-size:var(--fs-name);line-height:1.15;color:#f7efdc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tv-hud-role{display:none}
+.tv-fig-hp{position:relative;height:calc(var(--u)*1.7);margin-top:calc(var(--u)*.2);border:1px solid #d9b77a59;border-radius:calc(var(--u)*.85);background:#0a0e0b;overflow:hidden}
+.tv-fig-hp[hidden]{display:none}
+.tv-fig-hp-fill{position:absolute;inset:0 auto 0 0;width:var(--hp,0%);background:linear-gradient(90deg,#3f8553,#8fd18d);transition:width .8s ease-out 1.15s}
+.tv-hud-card[data-low] .tv-fig-hp-fill{background:linear-gradient(90deg,#92392a,#e0784f)}
+.tv-fig-hp-text{position:relative;display:block;text-align:center;font:700 var(--fs-label)/calc(var(--u)*1.7) system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px #000}
+.tv-hud-card[data-down]{opacity:.6;filter:saturate(.3)}
+/* a fight: the plates sit at the bottom, under the screen's own banner */
+.tv-stage[data-arrange=combat] .tv-hud-card[data-slot=hero-1]{left:calc(var(--u)*4);top:auto;bottom:4.5vh;width:calc(var(--u)*19)}
+.tv-stage[data-arrange=combat] .tv-hud-card[data-slot=hero-2]{left:auto;right:calc(var(--u)*3);top:auto;bottom:4.5vh;width:calc(var(--u)*19)}
+.tv-stage[data-arrange=combat] .tv-hud-card[data-slot=foe]{display:flex;left:calc(var(--u)*53);bottom:4.5vh;top:auto;width:calc(var(--u)*19)}
+.tv-stage[data-mode=aftermath] .tv-hud-card[data-slot=foe],.tv-figures[data-mode=aftermath] .tv-hud-card[data-slot=foe]{visibility:hidden}
+
+/* ---------- speech bubbles: beside the head, never on a face ----------
+   `live_stage.rs` tries each side, then narrower, until the bubble overlaps no head, the roll
+   panel or the screen edge, and sets `data-side` and `data-narrow` on the container. */
+.tv-fig:has(.tv-bubble){z-index:9}
+.tv-fig-bubbles{position:absolute;top:2%;z-index:9;width:calc(var(--u)*25)}
+.tv-fig-bubbles[data-narrow]{width:calc(var(--u)*17.5)}
+.tv-fig-bubbles:not([data-side=left]){left:88%}
+.tv-fig-bubbles[data-side=left]{right:88%}
+.tv-bubble{position:relative;padding:calc(var(--u)*.5) calc(var(--u)*.9) calc(var(--u)*.7);border-radius:calc(var(--u)*1.1);background:#f6efdc;color:#1c160e;border:calc(var(--u)*.18) solid #c9a35f;box-shadow:0 calc(var(--u)*.5) calc(var(--u)*1.6) #000a;text-shadow:none;transform-origin:0 12%;animation:df-bubble-in .2s ease-out var(--appear,0ms) backwards}
+.tv-fig-bubbles[data-side=left] .tv-bubble{transform-origin:100% 12%}
+.tv-bubble::after{content:'';position:absolute;top:calc(var(--u)*1.6);left:calc(var(--u)*-1.7);border:calc(var(--u)*.9) solid transparent;border-right-color:#c9a35f}
+.tv-fig-bubbles[data-side=left] .tv-bubble::after{left:auto;right:calc(var(--u)*-1.7);border-right-color:transparent;border-left-color:#c9a35f}
 .tv-bubble:is([data-kind=action],[data-kind=typed]){animation:df-bubble-in .2s ease-out var(--appear,0ms) backwards,df-bubble-out var(--fade,500ms) ease-in var(--hold,6s) forwards}
 .tv-bubble[data-kind=action]{background:#0e151fec;color:#f3ead6;font-style:italic}
 .tv-bubble-head{display:flex;align-items:center;gap:calc(var(--u)*.5)}
-.tv-bubble-name{font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.06em;color:#7a4b13}
+.tv-bubble-name{font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.14em;text-transform:uppercase;color:#7a4b13}
 .tv-bubble[data-kind=action] .tv-bubble-name{color:#e8cb94}
 .tv-bubble-text{margin:calc(var(--u)*.15) 0 0;font-size:var(--fs-bubble);line-height:1.22;overflow-wrap:anywhere}
 .tv-bubble[data-kind=action] .tv-bubble-text::before{content:'';display:inline-block;width:1em;height:1em;margin-right:.3em;vertical-align:-.12em;background:url(/assets/ui/generated/icon-sword) center/contain no-repeat}
@@ -111,32 +135,6 @@
 @keyframes df-bubble-out{from{opacity:1}to{opacity:0}}
 @keyframes df-wave{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}
 @keyframes df-speak-pulse{0%,100%{opacity:.35}50%{opacity:1}}
-
-/* In the stage arrangement the speaker's name and line stand directly beneath the figure:
-   the name in small gold capitals between thin rules, a tail up to the figure, the line below. */
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-fig-bubbles{left:50%;right:auto;top:calc(var(--fig-h)*.74);width:calc(var(--u)*52);transform:translateX(-50%)}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble{padding:calc(var(--u)*.9) calc(var(--u)*1.2) calc(var(--u)*.5);border:0;border-radius:0;background:linear-gradient(180deg,#03060e00 0,#03060ec8 26%,#03060ed8 100%);box-shadow:none;color:var(--ivory);text-align:center;transform-origin:50% 0;text-shadow:0 2px 10px #000}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble::after{top:calc(var(--u)*-.2);left:50%;right:auto;margin-left:calc(var(--u)*-.7);border:calc(var(--u)*.7) solid transparent;border-top:0;border-bottom:calc(var(--u)*1) solid #e8cb94;border-left-color:transparent}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-head{justify-content:center;gap:calc(var(--u)*1)}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-head::before,.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-head::after{content:'';flex:1 1 0;height:1px;background:linear-gradient(90deg,transparent,#c9a35f 40%,#c9a35f)}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-head::after{background:linear-gradient(270deg,transparent,#c9a35f 40%,#c9a35f)}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-name{flex:none;font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.26em;text-transform:uppercase;color:#e8cb94}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-text{margin-top:calc(var(--u)*.35);font-size:calc(var(--u)*1.75);line-height:1.28}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble.speaking::before{display:none}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-wave b{background:#e8cb94}
-/* a hero's line beside the crest, a fighter's call-out beside the body */
-.tv-figures[data-arrange=stage] .tv-fig[data-slot^=hero] .tv-fig-bubbles{left:100%;right:auto;top:0;margin-left:calc(var(--u)*1.6);width:calc(var(--u)*27)}
-.tv-figures[data-arrange=stage] .tv-fig[data-slot^=hero] .tv-bubble{transform-origin:0 50%}
-.tv-figures[data-arrange=stage] .tv-fig[data-slot^=hero] .tv-bubble::after{left:calc(var(--u)*-1.7);right:auto;border-left-color:transparent;border-right-color:#c9a35f}
-.tv-figures[data-arrange=party] .tv-fig[data-slot^=npc] .tv-fig-bubbles{top:-6%;right:auto;left:50%;width:calc(var(--u)*24);transform:translateX(-50%)}
-.tv-figures[data-arrange=party] .tv-fig[data-slot^=npc] .tv-bubble::after{top:auto;bottom:calc(var(--u)*-1.7);left:calc(50% - var(--u)*.9);right:auto;border-left-color:transparent;border-top-color:#c9a35f}
-.tv-figures[data-arrange=combat] .tv-fig .tv-fig-bubbles{top:40%}
-.tv-figures[data-arrange=combat] .tv-fig[data-slot=hero-1] .tv-fig-bubbles{left:92%}
-.tv-figures[data-arrange=combat] .tv-fig[data-slot=hero-2] .tv-fig-bubbles{right:92%}
-.tv-figures[data-arrange=combat] .tv-fig[data-slot^=npc] .tv-fig-bubbles{right:84%}
-.tv-figures[data-arrange=combat] .tv-fig .tv-fig-bubbles:has(.tv-bubble[data-kind=action]){top:58%;left:6%;right:auto}
-.tv-figures[data-arrange=combat] .tv-fig[data-slot=hero-2] .tv-fig-bubbles:has(.tv-bubble[data-kind=action]){left:auto;right:6%}
-.tv-figures[data-arrange=combat] .tv-bubble[data-kind=action]::after{display:none}
 
 /* ---------- the scene's title and place, top right: gold on navy, never a box ---------- */
 .tv-stage[data-tv-mode=scene] .tv-headline{justify-self:end;text-align:right;max-width:44%;margin-top:0;filter:drop-shadow(0 3px 8px #000d) drop-shadow(0 0 26px #000b);background:none}
@@ -212,10 +210,21 @@
 .tv-stage .rules-note-tag{font-size:1em}
 /* the aftermath and combat screens carry their own words: no chips or bubbles over them */
 .tv-stage:has(.tv-figures[data-arrange=combat]) .tv-choices{display:none}
-.tv-figures[data-mode=aftermath] .tv-fig[data-role=foe]{filter:brightness(.45)}
 
 /* the words follow the voice: the Dungeon Master's caption or the character's bubble, one at a time */
 .tv-stagebox{transition:opacity .45s ease,visibility 0s}
 .tv-stage[data-speaker=character] .tv-stagebox{opacity:0;visibility:hidden;transition:opacity .45s ease,visibility 0s .45s}
-.tv-stage[data-speaker=character] :is(.combat-narration,.aftermath-narrative){opacity:0;transition:opacity .45s ease}
+.tv-stage[data-speaker=character] :is(.combat-narration,.aftermath-narrative){color:transparent!important;text-shadow:none!important;transition:color .45s ease}
 .tv-stage[data-speaker=narrator] .tv-bubble[data-kind=speech]{visibility:hidden;opacity:0}
+.tv-stage[data-tv-mode=scene] .tv-safe{z-index:7}
+.tv-choices{z-index:7}
+
+/* a character's call-out in a fight sits beside the body below the roll panel; after the fight the foe's place moves aside of the story text */
+.tv-figures[data-arrange=combat] .tv-fig-bubbles{top:32%}
+.tv-figures[data-mode=aftermath] .tv-fig[data-role=foe]{left:calc(var(--u)*67);--fig-h:calc(var(--u)*22);--depth-grade:brightness(.6) saturate(.8)}
+.tv-figures[data-mode=aftermath] .tv-fig-bubbles{top:58%}
+.tv-fig[data-depth=far]{--depth-grade:brightness(.74) contrast(.88) saturate(.78) blur(.6px)}
+.tv-fig-shadow{background:radial-gradient(ellipse at center,#000f 0,#000b 34%,#0000 74%)}
+.tv-figures[data-arrange=combat] .tv-fig{--fig-h:calc(var(--u)*24);bottom:14vh}
+.tv-figures[data-arrange=combat] .tv-fig[data-role=back]{--fig-h:calc(var(--u)*21)}
+.tv-stage .rules-note{max-width:calc(var(--u)*30)}
