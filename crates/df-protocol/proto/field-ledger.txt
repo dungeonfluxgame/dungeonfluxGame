@@ -620,3 +620,10 @@ enum-value dungeonflux.public.v1.HomeVideoState 3 HOME_VIDEO_STATE_READY
 enum-value dungeonflux.public.v1.HomeVideoState 4 HOME_VIDEO_STATE_FAILED
 field dungeonflux.public.v1.JourneyView 31 home_video_state type=14 label=1 presence=false target=.dungeonflux.public.v1.HomeVideoState oneof=-
 field dungeonflux.public.v1.JourneyView 32 home_video_path type=9 label=1 presence=false target=- oneof=-
+# PLAY-U02: table settings (SET_TABLE_SETTING) and the choice-hint toggle on JourneyView
+enum-value dungeonflux.public.v1.GameplayActionKind 40 SET_TABLE_SETTING
+field dungeonflux.public.v1.SubmitActionRequest 12 table_setting type=11 label=1 presence=false target=.dungeonflux.public.v1.TableSettingChange oneof=-
+message dungeonflux.public.v1.TableSettingChange
+field dungeonflux.public.v1.TableSettingChange 1 choice_hints_hidden type=8 label=1 presence=false target=- oneof=value
+oneof dungeonflux.public.v1.TableSettingChange value
+field dungeonflux.public.v1.JourneyView 70 choice_hints_hidden type=8 label=1 presence=false target=- oneof=-

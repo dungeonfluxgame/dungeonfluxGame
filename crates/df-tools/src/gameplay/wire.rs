@@ -939,6 +939,8 @@ pub(super) fn project_journey(
             .then(|| super::home_theme::lobby_view(&authored.asset, authored.setting.as_ref())),
         adventure_ended: super::beat_script_runtime::ended(state)?,
         adventure_title: super::beat_script_runtime::adventure_title(state)?,
+        // The room's setting is attached to every view by the owner (see `TableSettings::attach`).
+        choice_hints_hidden: false,
         composing: Vec::new(),
         // PLAY-V10: set per view for the display's lobby by `home_video::apply`; none here.
         home_video_state: rpc::HomeVideoState::None as i32,

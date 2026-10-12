@@ -666,6 +666,12 @@ fn old_record_without_any_settings_loads_through_typed_legacy_path() {
     for scene in pack["scenes"].as_array_mut().unwrap() {
         scene.as_object_mut().unwrap().remove("setting");
     }
+    // A legacy record has none on the chapter's own closing scenes either.
+    if let Some(scenes) = pack["beat_script"]["scenes"].as_object_mut() {
+        for scene in scenes.values_mut() {
+            scene.as_object_mut().unwrap().remove("setting");
+        }
+    }
     documents.pack = serde_json::to_vec_pretty(&pack).unwrap();
     let mut record: serde_json::Value = serde_json::from_slice(&documents.record).unwrap();
     record.as_object_mut().unwrap().remove("settings");
@@ -710,7 +716,8 @@ fn startup_substitutes_missing_paintings_without_changing_stored_documents() {
     let general_file = directory.join("generated").join(format!("{general}.png"));
     std::fs::write(&general_file, b"fixture painting").unwrap();
     let substitutions = startup::substitute_missing_art(&mut loaded, &record, &directory);
-    assert_eq!(substitutions.len(), 5);
+    // Five base scenes and the eight closing-scene variants of a fight chapter.
+    assert_eq!(substitutions.len(), 13);
     assert!(
         loaded
             .pack
@@ -722,7 +729,7 @@ fn startup_substitutes_missing_paintings_without_changing_stored_documents() {
     assert!(loaded.pack.scenes.iter().all(|s| s.setting.is_some()));
     std::fs::remove_file(general_file).unwrap();
     let substitutions = startup::substitute_missing_art(&mut loaded, &record, &directory);
-    assert_eq!(substitutions.len(), 8);
+    assert_eq!(substitutions.len(), 16);
     assert!(
         loaded
             .pack
@@ -1143,29 +1150,34 @@ fn sha256(bytes: &[u8]) -> String {
 /// pins unchanged. PLAY-N06 added actionable rumours and the errand lines to the NPC knowledge
 /// table, so the record pins moved once more; pack and tuning stayed. Dossier text changes
 /// re-pin only the record hash, after review; the pack and tuning hashes never move with it.
+/// PLAY-E04 gave every fight chapter a resolution, an epilogue and an end card (labels, eight
+/// closing-scene patterns and four beats in `beat-scripts.json`), so the pack and record hashes
+/// moved. Verified for all three seeds by generating with the previous table: the old pack hash
+/// matched the pin above this change, the pack minus its `beat_script` was byte-identical to the
+/// new one, and the tuning hash is unchanged.
 const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
-            "90ce2101ed5685f506f74053c99a4c33f8f74d7eaa025c03e37cdd5ea239ff24",
+            "1b16ac7a2166fb290dd0635a71b80a84138556f67fc65b898623a7071d95e4eb",
             "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
-            "ec80fc60b2883b7608da6ba474ef0a51912b4a6b1251add47f03a9b1790f1df3",
+            "7fbd3f5aa72c7b25747524b5179b034891b21805d82d467ba6c8d7e70c4eb727",
         ],
     ),
     (
         0xdaa66d325ccc5aac,
         [
-            "a548dfd10ce55700b91bdbcbeec8210a7591a05a385ae8c8f735a9947485ba1d",
+            "9b0b741f88a0844859c29dce56a1b71d218839ac64361ad7ee30a18451cc0282",
             "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
-            "207c5bc8f1647f554da2da4f4bab77b8d3f746f3d3a8264e1c348c0e151a136a",
+            "50b400a98c37ee1b026fbbd66d8967d129ee208f979e9c60fbadde44b8613fc2",
         ],
     ),
     (
         0x11a25cdccc7d808f,
         [
-            "386ea601471af31c35f7c21850f6807734b7c68a7dbc6938d947764aecf1270e",
+            "3fa6fa40122363e9c884f5627b40d0a9cff858a135efde16a25721f61742856f",
             "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
-            "482739c403e7798b039aaeffb0ab5d08f9b634a02e10923e294c2ea1d2e0c43b",
+            "808f6857143a5362de861e0804ff766ac2129d41d7129a687ab7fc73ab10302f",
         ],
     ),
 ];

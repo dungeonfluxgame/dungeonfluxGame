@@ -951,6 +951,36 @@ fn prepare(
         savage_attacker: savage,
         graze,
         action_choices: Vec::new(),
+        table_setting: None,
+    })
+}
+/// A seated player's request to show or hide the choice chips on the shared display. It names no
+/// offer; the server checks the seat and the value.
+fn table_setting(
+    client: &Rc<RefCell<Client>>,
+    choice_hints_hidden: bool,
+) -> Result<rpc::SubmitActionRequest, String> {
+    let state = client.borrow();
+    if state.busy || (!state.last_confirmed && state.last_request.is_some()) {
+        return Err("Confirm the current operation before making a new choice.".to_owned());
+    }
+    Ok(rpc::SubmitActionRequest {
+        session_id: state.session.clone(),
+        run_id: state.run.clone(),
+        observed_revision: state.revision,
+        operation_id: Some(operation()?),
+        offer_id: String::new(),
+        action_kind: rpc::GameplayActionKind::SetTableSetting as i32,
+        destination: rpc::HarborDestination::Unspecified as i32,
+        character: None,
+        savage_attacker: false,
+        graze: false,
+        action_choices: Vec::new(),
+        table_setting: Some(rpc::TableSettingChange {
+            value: Some(rpc::table_setting_change::Value::ChoiceHintsHidden(
+                choice_hints_hidden,
+            )),
+        }),
     })
 }
 fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: bool) {
@@ -1044,7 +1074,8 @@ fn complete_action_response(
                     match receipt.outcome {
                                 Some(rpc::decision_receipt::Outcome::Accepted(_))=>{
                                     if body.action_kind==rpc::GameplayActionKind::GreatswordAttack as i32 && state.first_attack.is_none() {state.first_attack=Some(body.clone());}
-                                    if receipt.replayed {"Original saved outcome confirmed. No rolls or damage were repeated."} else {"Your choice is saved to the shared adventure."}.to_owned()
+                                    if body.action_kind==rpc::GameplayActionKind::SetTableSetting as i32 {"Table setting saved.".to_owned()}
+                                    else if receipt.replayed {"Original saved outcome confirmed. No rolls or damage were repeated.".to_owned()} else {"Your choice is saved to the shared adventure.".to_owned()}
                                 }
                                 Some(rpc::decision_receipt::Outcome::Rejected(rejection))=>match rpc::RejectionCode::try_from(rejection.code) {
                                     Ok(rpc::RejectionCode::InvalidSelection)=>"The server rejected that character or action selection. Review the offered choices.",

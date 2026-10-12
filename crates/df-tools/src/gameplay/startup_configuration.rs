@@ -1336,6 +1336,17 @@ pub(super) fn plates_enabled(input: Result<String, VarError>) -> Result<bool, io
     }
 }
 
+/// `DF_GAMEPLAY_CHOICE_HINTS=on|off`: the table's startup choice of whether the numbered choice
+/// chips show on the shared display (`on`, the default, or `off`). A stored choice made by a
+/// player overrides it. Returns whether the chips start hidden; anything else is refused.
+pub(super) fn choice_hints_hidden(input: Result<String, VarError>) -> Result<bool, io::Error> {
+    match optional(input)?.as_deref() {
+        None | Some("on") => Ok(false),
+        Some("off") => Ok(true),
+        Some(_) => Err(refused("DF_GAMEPLAY_CHOICE_HINTS")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1364,6 +1375,22 @@ mod tests {
                 ("/assets/ui/generated/sfx/hit", "audio/mpeg"),
             ]
         );
+    }
+
+    #[test]
+    fn choice_hints_default_to_shown_and_accept_only_on_or_off() {
+        let value = |text: &str| Ok::<_, VarError>(text.to_owned());
+        assert!(!choice_hints_hidden(Err(VarError::NotPresent)).unwrap());
+        assert!(!choice_hints_hidden(value("on")).unwrap());
+        assert!(choice_hints_hidden(value("off")).unwrap());
+        for refused_value in ["", "true", "OFF", "hidden"] {
+            let error = choice_hints_hidden(value(refused_value)).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "DF_GAMEPLAY_CHOICE_HINTS invalid",
+                "{refused_value:?} is refused without being echoed"
+            );
+        }
     }
 
     fn storyteller_inputs(values: [Option<&str>; 6]) -> StorytellerInputs {
