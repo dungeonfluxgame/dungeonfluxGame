@@ -1625,7 +1625,9 @@ pub(super) fn entrance() -> crate::stage_conductor::Battlefield {
             Phase::Idle | Phase::Mounting => Battlefield::Pending,
             Phase::Unavailable | Phase::Closing => Battlefield::Fallback,
             Phase::Active => {
-                let playing = live.begun_live
+                // Nothing is ready while the loading splash still holds the scene.
+                let playing = !scene_resolved()
+                    || live.begun_live
                     || live
                         .stage
                         .as_ref()
@@ -1638,6 +1640,18 @@ pub(super) fn entrance() -> crate::stage_conductor::Battlefield {
                 }
             }
         }
+    })
+}
+
+/// Whether the fight's scene is resolved: the scan at the chosen level fully drawn, its art arrived
+/// and the figures on their cells, with the loading splash already fading out over it. Nothing of
+/// the fight plays before this is true (the stage clock waits behind the splash), so the display's
+/// battle machine holds its cover until it reads true, then runs its own transition.
+pub(super) fn scene_resolved() -> bool {
+    LIVE.with(|live| {
+        let live = live.borrow();
+        matches!(live.phase, Phase::Active)
+            && live.stage.as_ref().is_some_and(|stage| stage.is_resolved())
     })
 }
 

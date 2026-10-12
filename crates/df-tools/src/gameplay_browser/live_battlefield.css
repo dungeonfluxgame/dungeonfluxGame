@@ -94,3 +94,14 @@
 .bf-badge-name{font-size:calc(var(--u)*1.9);color:var(--ivory)}
 @keyframes bf-slam{from{transform:translate(calc(var(--u)*2.6),-50%) scale(2.2);opacity:0}to{transform:translate(calc(var(--u)*2.6),-50%) scale(1);opacity:1}}
 
+
+/* Fight-loading splash: covers the battlefield until the scan is resolved, then fades out over the finished scene. */
+.bf-splash{position:fixed;inset:0;z-index:41;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(1.4*var(--u,1vw));background:radial-gradient(ellipse at 50% 42%,#14202e 0%,#070c13 62%,#030508 100%);color:#e8cb94;font-family:var(--serif,Georgia,'Times New Roman',serif);text-shadow:0 2px 12px #000c;opacity:1;transition:opacity .7s ease}
+.bf-splash[data-leaving]{opacity:0;pointer-events:none}
+.bf-splash-mark{width:calc(7*var(--u,1vw));height:calc(7*var(--u,1vw));color:#e8cb94;filter:drop-shadow(0 0 14px #e8cb9455)}
+.bf-splash-mark svg{width:100%;height:100%;display:block}
+.bf-splash-brand{font-size:calc(1.5*var(--u,1vw));letter-spacing:.42em;text-transform:uppercase;opacity:.8}
+.bf-splash-place{font-size:calc(3.4*var(--u,1vw));letter-spacing:.14em;text-transform:uppercase;color:#f7efdc;text-align:center;max-width:80vw}
+.bf-splash-track{width:calc(30*var(--u,1vw));height:calc(.38*var(--u,1vw));min-height:2px;background:#e8cb9426;border-radius:9px;overflow:hidden}
+.bf-splash-bar{display:block;height:100%;width:100%;background:linear-gradient(90deg,#b98b4a,#f2d9a0);transform-origin:0 50%;transform:scaleX(0);transition:transform .25s ease-out;box-shadow:0 0 10px #e8cb9488}
+.bf-splash-note{font-size:calc(1.35*var(--u,1vw));letter-spacing:.2em;text-transform:uppercase;opacity:.72;min-height:1.4em}

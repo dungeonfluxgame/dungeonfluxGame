@@ -30,6 +30,7 @@ mod pacing;
 pub mod particles;
 mod scene_file;
 mod sound;
+mod splash;
 mod splat;
 mod stage;
 mod status;
