@@ -1149,6 +1149,33 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
     });
 }
 
+/// How far the battlefield is with a fight's entrance, read by the display's battle machine:
+/// pending while it mounts or plays its banner, initiative roll and roll-call; a fallback when it
+/// will not appear.
+pub(super) fn entrance() -> crate::stage_conductor::Battlefield {
+    use crate::stage_conductor::Battlefield;
+    LIVE.with(|live| {
+        let live = live.borrow();
+        match live.phase {
+            Phase::Idle | Phase::Mounting => Battlefield::Pending,
+            Phase::Unavailable | Phase::Closing => Battlefield::Fallback,
+            Phase::Active => {
+                let playing = live.begun_live
+                    || live
+                        .stage
+                        .as_ref()
+                        .and_then(|stage| stage.with_stage(|stage| stage.is_busy()))
+                        .unwrap_or(false);
+                if playing {
+                    Battlefield::Pending
+                } else {
+                    Battlefield::Ready
+                }
+            }
+        }
+    })
+}
+
 fn reset_fight(live: &mut Live) {
     live.phase = Phase::Idle;
     live.latest = None;

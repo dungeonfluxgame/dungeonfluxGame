@@ -104,8 +104,8 @@ and open decisions above must not be treated as approved implementation contract
 
 ## Display stage machines
 
-Status: implemented for scene, line, voice clip and actor (PLAY-F06 M1); the battle machine
-and the hero speech-intent line states are added by later milestones of PLAY-F06/PLAY-N04.
+Status: implemented for scene, line, voice clip, actor and battle (PLAY-F06 M1, M2); the hero
+speech-intent line states are added by PLAY-N04.
 
 The shared display presents through closed (state, event) tables in `stage_machines.rs`,
 owned and driven by the conductor in `stage_conductor.rs`; nothing appears, changes or
@@ -118,6 +118,7 @@ only: the server still decides every outcome and phones are never delayed.
 | Scene (`data-scene-state`) | Hidden, Entering, Presenting, AwaitingChoice, Exiting | A new view only sets the pending successor (`data-stage-pending`); the swap is in Exiting, after the lines on screen. Choice chips are visible only in AwaitingChoice. |
 | Line (`data-line-state` on the stage, the narrator box and each bubble) | Queued, Opening, Speaking, Lingering, Closing, Done | At most one line in Opening/Speaking/Lingering. A voiced line opens when its clip starts; an unvoiced one reads for `reading_time_ms`. |
 | Clip (not on the DOM) | Silent, Requested, Ready, Playing, Ended, Failed, Skipped | Driven by the voice player's Loaded/Started/Finished/Error; watchdogs end a lost signal. |
+| Battle (`data-battle-state`) | Absent, Entering, TurnStart, Acting, Resolving, TurnEnd, Finishing, Exiting | In front of the battlefield's own animation. Entering covers the scene change, the 3D battlefield mounting and its banner, initiative roll and roll-call; dice that arrive meanwhile are held and play after it, and the flat combat view stays hidden (when WebGPU is present) so it never flashes before the 3D view. A battlefield that will not appear, or `BATTLE_ENTER_CAP_MS`, releases it. |
 | Actor (`data-actor-state` per figure) | Offstage, Entering, Idle, Speaking, Exiting | Speaking mark and stage lighting follow the line machine. Actors absent from the next scene exit before the backdrop changes. |
 
 Transitions (scene): Hidden -Restore-> Presenting; Entering -EntranceDone-> Presenting;
@@ -137,3 +138,9 @@ end) are not held behind speech: the line in progress fades within `FIGHT_LINE_F
 clip is cancelled. The cue sequencer (`stage_director.rs`) keeps the transition and outcome
 timings behind the conductor. A page whose animation frames are throttled still advances on a
 100 ms fallback timer.
+
+Battle transitions: Absent -Begin-> Entering -EntranceDone-> TurnStart -ActBegin-> Acting
+-ResolveBegin-> Resolving -TurnClose-> TurnEnd -TurnOpen-> TurnStart; a defeat on the last blow
+-Finish-> Finishing -FinishDone-> Exiting -ExitDone-> Absent. A fight that starts while a line is
+spoken fades that line within `FIGHT_LINE_FADE_MS` (chosen over letting it finish under the
+banner) so outcomes are never held behind story speech.

@@ -52,6 +52,12 @@ pub(crate) const ACTOR_EXIT_MS: u32 = 350;
 /// The scene transition's own bounds: leaving, and the wordmark, title card and entrance.
 pub(crate) const SCENE_EXIT_CAP_MS: u64 = 4_000;
 pub(crate) const SCENE_ENTER_CAP_MS: u64 = 8_000;
+/// A fight's entrance (the scene change, the 3D battlefield mounting, the initiative roll and
+/// roll-call) waits this long for the battlefield; then the flat combat view is the display.
+pub(crate) const BATTLE_ENTER_CAP_MS: u64 = 12_000;
+/// Outcome cues held back during a fight's entrance; beyond this the oldest are dropped (the
+/// newest view still draws the truth).
+pub(crate) const HELD_OUTCOMES_CAP: usize = 16;
 
 /// The time a line is read in when no sound plays.
 pub(crate) fn reading_time_ms(text: &str) -> u32 {
@@ -279,6 +285,73 @@ pub(crate) fn actor_next(state: ActorState, event: ActorEvent) -> Option<ActorSt
         (Speaking, LineClosed) => Some(Idle),
         (Entering | Idle | Speaking, Leave) => Some(Exiting),
         (Exiting, ExitDone) => Some(Offstage),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Battle (in front of the battlefield's own animation)
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleState {
+    Absent,
+    /// The banner, the initiative roll and the roll-call; no attack is shown before it is done.
+    Entering,
+    TurnStart,
+    Acting,
+    /// Dice, hit or miss.
+    Resolving,
+    TurnEnd,
+    /// The finishing blow.
+    Finishing,
+    /// Leaving for the victory or defeat scene.
+    Exiting,
+}
+
+impl BattleState {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Entering => "entering",
+            Self::TurnStart => "turn-start",
+            Self::Acting => "acting",
+            Self::Resolving => "resolving",
+            Self::TurnEnd => "turn-end",
+            Self::Finishing => "finishing",
+            Self::Exiting => "exiting",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BattleEvent {
+    Begin,
+    EntranceDone,
+    TurnOpen,
+    ActBegin,
+    ResolveBegin,
+    TurnClose,
+    Finish,
+    FinishDone,
+    ExitDone,
+    /// The fight is gone from the view without a finishing blow.
+    Abandon,
+}
+
+pub(crate) fn battle_next(state: BattleState, event: BattleEvent) -> Option<BattleState> {
+    use BattleEvent::*;
+    use BattleState::*;
+    match (state, event) {
+        (Absent, Begin) => Some(Entering),
+        (Entering, EntranceDone) => Some(TurnStart),
+        (TurnEnd, TurnOpen) => Some(TurnStart),
+        (TurnStart, ActBegin) => Some(Acting),
+        (Acting, ResolveBegin) => Some(Resolving),
+        (Resolving, TurnClose) => Some(TurnEnd),
+        (TurnStart | Acting | Resolving | TurnEnd, Finish) => Some(Finishing),
+        (Finishing, FinishDone) => Some(Exiting),
+        (Exiting, ExitDone) => Some(Absent),
+        (Entering | TurnStart | Acting | Resolving | TurnEnd, Abandon) => Some(Absent),
         _ => None,
     }
 }
@@ -545,6 +618,73 @@ mod tests {
             sorted.dedup();
             assert_eq!(sorted.len(), names.len(), "{names:?}");
         }
+    }
+
+    #[test]
+    fn a_fight_walks_its_phases_and_no_attack_precedes_the_entrance() {
+        let mut state = BattleState::Absent;
+        for (event, expected) in [
+            (BattleEvent::Begin, BattleState::Entering),
+            (BattleEvent::EntranceDone, BattleState::TurnStart),
+            (BattleEvent::ActBegin, BattleState::Acting),
+            (BattleEvent::ResolveBegin, BattleState::Resolving),
+            (BattleEvent::TurnClose, BattleState::TurnEnd),
+            (BattleEvent::TurnOpen, BattleState::TurnStart),
+            (BattleEvent::ActBegin, BattleState::Acting),
+            (BattleEvent::ResolveBegin, BattleState::Resolving),
+            (BattleEvent::Finish, BattleState::Finishing),
+            (BattleEvent::FinishDone, BattleState::Exiting),
+            (BattleEvent::ExitDone, BattleState::Absent),
+        ] {
+            state = battle_next(state, event).expect("legal");
+            assert_eq!(state, expected);
+        }
+        for early in [
+            BattleEvent::ActBegin,
+            BattleEvent::ResolveBegin,
+            BattleEvent::TurnClose,
+        ] {
+            assert_eq!(battle_next(BattleState::Entering, early), None);
+        }
+    }
+
+    #[test]
+    fn every_battle_pair_is_answered_and_an_idle_fight_ignores_everything_but_begin() {
+        let states = [
+            BattleState::Absent,
+            BattleState::Entering,
+            BattleState::TurnStart,
+            BattleState::Acting,
+            BattleState::Resolving,
+            BattleState::TurnEnd,
+            BattleState::Finishing,
+            BattleState::Exiting,
+        ];
+        let events = [
+            BattleEvent::Begin,
+            BattleEvent::EntranceDone,
+            BattleEvent::TurnOpen,
+            BattleEvent::ActBegin,
+            BattleEvent::ResolveBegin,
+            BattleEvent::TurnClose,
+            BattleEvent::Finish,
+            BattleEvent::FinishDone,
+            BattleEvent::ExitDone,
+            BattleEvent::Abandon,
+        ];
+        for state in states {
+            for event in events {
+                assert_eq!(battle_next(state, event), battle_next(state, event));
+            }
+        }
+        for event in events.into_iter().skip(1) {
+            assert_eq!(battle_next(BattleState::Absent, event), None);
+        }
+        let names: Vec<&str> = states.iter().map(|state| state.name()).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len());
     }
 
     #[test]

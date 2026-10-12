@@ -21,7 +21,7 @@ use crate::{
     },
     stage_conductor::{ClipOp, ClipSignal, Command, Conductor, LineId, ScriptLine, ViewPlan},
     stage_director::{StageState, ViewDiff},
-    stage_machines::{ActorState, LineState, SceneState, reading_time_ms},
+    stage_machines::{ActorState, BattleState, LineState, SceneState, reading_time_ms},
     voice_line::{VoiceLine, display_lines},
 };
 use std::{collections::VecDeque, rc::Weak, time::Duration};
@@ -441,6 +441,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             overlay.remove();
         }
         motion.conductor.set_sound(sound_on);
+        motion.conductor.set_battlefield_expected(gpu_expected());
         let commands = if restart {
             motion.conductor.restart(now, plan)
         } else {
@@ -479,16 +480,19 @@ fn show_thinking(client: &Rc<RefCell<Client>>, speaker: Option<&str>) -> Result<
 /// Publishes the machines' states on the stage element, so a browser check asserts on states
 /// instead of sleeping, and shows the thinking mark when the lines before the reply are done.
 fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let Some((scene, line, pending, waiting_lines, thinking, speaker)) = with_motion(|motion| {
-        (
-            motion.conductor.scene_state(),
-            motion.conductor.focus_line(),
-            motion.conductor.has_pending(),
-            motion.conductor.lines_waiting(),
-            motion.thinking_for.clone(),
-            motion.conductor.active_speaker(),
-        )
-    }) else {
+    let Some((scene, line, pending, waiting_lines, thinking, speaker, battle)) =
+        with_motion(|motion| {
+            (
+                motion.conductor.scene_state(),
+                motion.conductor.focus_line(),
+                motion.conductor.has_pending(),
+                motion.conductor.lines_waiting(),
+                motion.thinking_for.clone(),
+                motion.conductor.active_speaker(),
+                motion.conductor.battle_state(),
+            )
+        })
+    else {
         return Ok(());
     };
     {
@@ -507,6 +511,7 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 }
             }
             root.set_attribute("data-stage-pending", if pending { "true" } else { "false" })?;
+            root.set_attribute("data-battle-state", battle.name())?;
             // Whose words the stage shows follows the line being heard, not the raw view.
             stage.set_speaker(match speaker {
                 None => "",
@@ -552,6 +557,7 @@ fn apply(client: &Rc<RefCell<Client>>, commands: Vec<Command<Detail>>) -> Result
                 Ok(())
             }
             Command::Actor { slot, state } => actor_command(client, slot, state),
+            Command::Battle(state) => set_battle_state(client, state),
         };
         if let Err(error) = outcome {
             first_error.get_or_insert(error);
@@ -821,6 +827,24 @@ fn impact(client: &Rc<RefCell<Client>>, roll: &RollDetail) -> Result<(), JsValue
     Ok(())
 }
 
+/// Whether the browser offers WebGPU, so the 3D battlefield is expected to show a fight and the
+/// flat combat view must not appear before it.
+fn gpu_expected() -> bool {
+    web_sys::window().is_some_and(|window| {
+        js_sys::Reflect::get(window.navigator().as_ref(), &JsValue::from_str("gpu"))
+            .is_ok_and(|gpu| gpu.is_object())
+    })
+}
+
+fn set_battle_state(client: &Rc<RefCell<Client>>, state: BattleState) -> Result<(), JsValue> {
+    match client.borrow().live.tv.as_ref() {
+        Some(stage) => stage
+            .root()
+            .set_attribute("data-battle-state", state.name()),
+        None => Ok(()),
+    }
+}
+
 fn set_scene_state(client: &Rc<RefCell<Client>>, state: SceneState) -> Result<(), JsValue> {
     match client.borrow().live.tv.as_ref() {
         Some(stage) => stage.root().set_attribute("data-scene-state", state.name()),
@@ -1002,7 +1026,18 @@ fn frame(timestamp: f64) {
 
 /// Advances the conductor to `now` and applies what it commands.
 fn tick(now: u64) {
-    let commands = with_motion(|motion| (motion.client.upgrade(), motion.conductor.on_tick(now)));
+    let commands = with_motion(|motion| {
+        let mut commands = motion.conductor.on_tick(now);
+        // A fight's entrance waits for the battlefield; ask how far it is.
+        if motion.conductor.battle_state() == BattleState::Entering {
+            commands.extend(
+                motion
+                    .conductor
+                    .on_battlefield(now, super::live_battlefield::entrance()),
+            );
+        }
+        (motion.client.upgrade(), commands)
+    });
     if let Some((Some(client), commands)) = commands {
         // Errors of a redraw are already reported by `redraw_current`.
         let _applied = apply(&client, commands);
