@@ -137,6 +137,7 @@ pub(super) struct VoiceInputs {
     pub(super) cache_dir: Result<String, VarError>,
     pub(super) narrator_voice: Result<String, VarError>,
     pub(super) npc_voice: Result<String, VarError>,
+    pub(super) casting: Result<String, VarError>,
 }
 
 impl VoiceInputs {
@@ -148,14 +149,15 @@ impl VoiceInputs {
             cache_dir: std::env::var("DF_GAMEPLAY_VOICE_CACHE"),
             narrator_voice: std::env::var("DF_GAMEPLAY_VOICE_NARRATOR"),
             npc_voice: std::env::var("DF_GAMEPLAY_VOICE_NPC"),
+            casting: std::env::var("DF_GAMEPLAY_VOICE_CASTING"),
         }
     }
 }
 
-/// Stock ElevenLabs premade voices: "George", a warm storyteller for the narration, and
-/// "Callum", a husky character voice that sounds clearly different for NPC lines.
-const DEFAULT_NARRATOR_VOICE: &str = "JBFqnCBsd6RMkjVDRZzb";
-const DEFAULT_NPC_VOICE: &str = "N2lVS1w4EtoT3dr4eOWO";
+/// Stock ElevenLabs premade voice "George", a warm storyteller for the narration. Speakers
+/// are cast from the voice roster instead of one shared NPC voice.
+pub(super) const DEFAULT_NARRATOR_VOICE: &str = "JBFqnCBsd6RMkjVDRZzb";
+const DEFAULT_VOICE_CASTING: &str = "content/voice-casting.json";
 const DEFAULT_VOICE_CHARACTER_BUDGET: u32 = 12_000;
 const MAXIMUM_VOICE_CHARACTER_BUDGET: u32 = 1_000_000;
 const DEFAULT_VOICE_CACHE: &str = "artifacts/tmp/play/voice-cache";
@@ -204,7 +206,10 @@ pub(super) struct VoiceConfiguration {
     pub(super) character_budget: u32,
     pub(super) cache_dir: std::path::PathBuf,
     pub(super) narrator_voice: String,
-    pub(super) npc_voice: String,
+    /// When set, every NPC line uses this one voice instead of the cast roster voices.
+    pub(super) npc_voice_override: Option<String>,
+    /// The voice roster file that casts each speaker.
+    pub(super) casting_path: std::path::PathBuf,
 }
 
 #[derive(Debug)]
@@ -237,7 +242,13 @@ pub(super) fn voice_settings(inputs: VoiceInputs) -> Result<VoiceSettings, io::E
         DEFAULT_NARRATOR_VOICE,
         "DF_GAMEPLAY_VOICE_NARRATOR",
     )?;
-    let npc_voice = voice_identifier(inputs.npc_voice, DEFAULT_NPC_VOICE, "DF_GAMEPLAY_VOICE_NPC")?;
+    let npc_voice_override = optional(inputs.npc_voice)?
+        .filter(|value| !value.is_empty())
+        .map(|value| checked_voice_identifier(value, "DF_GAMEPLAY_VOICE_NPC"))
+        .transpose()?;
+    let casting_path = optional(inputs.casting)?
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_VOICE_CASTING.to_owned());
     if disabled {
         return Ok(VoiceSettings::Off(VoiceOff::Disabled));
     }
@@ -249,28 +260,38 @@ pub(super) fn voice_settings(inputs: VoiceInputs) -> Result<VoiceSettings, io::E
         character_budget,
         cache_dir: cache_dir.into(),
         narrator_voice,
-        npc_voice,
+        npc_voice_override,
+        casting_path: casting_path.into(),
     }))
 }
 
 /// An ElevenLabs voice id: letters, digits, `-` and `_` only, so it is always one safe
 /// URL path segment.
+pub(super) fn is_voice_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+fn checked_voice_identifier(value: String, name: &str) -> Result<String, io::Error> {
+    if is_voice_identifier(&value) {
+        Ok(value)
+    } else {
+        Err(refused(name))
+    }
+}
+
 fn voice_identifier(
     input: Result<String, VarError>,
     default: &str,
     name: &str,
 ) -> Result<String, io::Error> {
-    let Some(value) = optional(input)?.filter(|value| !value.is_empty()) else {
-        return Ok(default.to_owned());
-    };
-    if value.len() > 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-    {
-        return Err(refused(name));
+    match optional(input)?.filter(|value| !value.is_empty()) {
+        Some(value) => checked_voice_identifier(value, name),
+        None => Ok(default.to_owned()),
     }
-    Ok(value)
 }
 
 fn refused(name: &str) -> io::Error {

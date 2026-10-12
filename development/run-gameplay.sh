@@ -12,6 +12,9 @@ fi
 if test "${DF_GAMEPLAY_ADVENTURE_TABLES+x}" != x; then
   export DF_GAMEPLAY_ADVENTURE_TABLES="$ROOT/content/adventure-tables"
 fi
+if test "${DF_GAMEPLAY_VOICE_CASTING+x}" != x; then
+  export DF_GAMEPLAY_VOICE_CASTING="$ROOT/content/voice-casting.json"
+fi
 export RUSTUP_HOME="$ARTIFACT_ROOT/cache/rustup"
 export CARGO_HOME="$ARTIFACT_ROOT/cache/cargo"
 export CARGO_TARGET_DIR=${DUNGEONFLUX_BUILD_ROOT:-$ARTIFACT_ROOT/build/play}

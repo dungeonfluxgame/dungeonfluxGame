@@ -257,6 +257,19 @@ async fn socket(
             drop(permit);
         })
 }
+/// The speaking characters of the running adventure with the gender and casting phrase of
+/// their archetype, for voice casting.
+///
+/// COORDINATOR (PLAY-V02): fill this at merge from the pack's speaker profiles (name,
+/// `he`/`she`/`they`/`it`, optional age, casting phrase such as "gruff older woman"). On this
+/// branch neither the pack nor the adventure record exposes gender, so the list is empty and
+/// every NPC line is spoken by the roster's neutral fallback voice, never a gendered one.
+fn speaker_castings(
+    _adventure: Option<&adventure::startup::PreparedAdventure>,
+) -> Vec<voice::SpeakerCasting> {
+    Vec::new()
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -486,13 +499,21 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         span.finish_unmeasured("loaded");
         pack::install(loaded)?;
     }
-    let voice = voice::Voice::start(if interactive {
-        startup_configuration::voice_settings(
-            startup_configuration::VoiceInputs::from_environment(),
-        )?
-    } else {
-        startup_configuration::VoiceSettings::Off(startup_configuration::VoiceOff::Qualification)
-    })?;
+    let voice = voice::Voice::start(
+        if interactive {
+            startup_configuration::voice_settings(
+                startup_configuration::VoiceInputs::from_environment(),
+            )?
+        } else {
+            startup_configuration::VoiceSettings::Off(
+                startup_configuration::VoiceOff::Qualification,
+            )
+        },
+        &speaker_castings(generated_adventure.as_ref()),
+        generated_adventure
+            .as_ref()
+            .map_or("harbor", |prepared| prepared.record.seed.as_str()),
+    )?;
     let storyteller = std::sync::Arc::new(if interactive {
         let mode = startup_configuration::storyteller_mode(
             startup_configuration::StorytellerInputs::from_environment(),
