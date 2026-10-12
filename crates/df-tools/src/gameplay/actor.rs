@@ -78,7 +78,7 @@ pub(super) enum Call {
         request: rpc::WatchViewRequest,
         reply: oneshot::Sender<Result<(LocalDemoRole, rpc::ViewMessage), tonic::Status>>,
     },
-    /// A hero's speech intent (typing or holding to talk). Presentation only: it resolves the
+    /// A hero's speech intent (typing or talking). Presentation only: it resolves the
     /// caller's seat and updates the in-memory table log; it never commits, never moves a
     /// revision and is served before any heartbeat or committed-job dispatch.
     Presence {

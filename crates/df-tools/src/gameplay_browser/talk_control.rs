@@ -1,7 +1,7 @@
-//! The hold-to-talk control next to the dialogue text box.
+//! The tap-to-talk control next to the dialogue text box.
 //!
 //! The rules of the control live in [`crate::speech_capture`]; this module carries them out in
-//! the browser. The microphone is requested only on a deliberate press, never on page load, and
+//! the browser. The microphone is requested only on a deliberate tap, never on page load, and
 //! its tracks are stopped as soon as the recording ends. The recording is decoded to 16 kHz mono
 //! in the page, uploaded to the server, and the words that come back are only a draft in the
 //! dialogue text box: the player edits it and sends it like any typed line.
@@ -12,7 +12,9 @@
 use std::{cell::Cell, time::Duration};
 
 use super::*;
-use crate::speech_capture::{Capture, Command, Environment, MicrophoneFault, Notice, Phase};
+use crate::speech_capture::{
+    Capture, Command, Environment, Interruption, MicrophoneFault, Notice, Phase,
+};
 use crate::speech_clip::{
     BINDING_HEADER, CLIP_CONTENT_TYPE, MAXIMUM_RECORDING, OUTCOME_HEADER, SAMPLE_RATE, SPEECH_PATH,
     STATUS_PATH, SpeechOutcome, encode_wav,
@@ -37,7 +39,7 @@ const UPLOAD_DEADLINE_MILLISECONDS: u32 = 20_000;
 const DECODED_SLACK: Duration = Duration::from_millis(500);
 const PROBE_ATTEMPTS: u8 = 3;
 const REVIEW_HINT: &str = "Check the words, change them if you like, then send.";
-const RECORDING_HINT: &str = "Slide off the button or press Escape to cancel.";
+const RECORDING_HINT: &str = "Tap again when you are done, or press Escape to cancel.";
 
 type WeakClient = std::rc::Weak<RefCell<Client>>;
 
@@ -51,7 +53,7 @@ enum Availability {
     Unavailable,
 }
 
-/// What is holding the control down.
+/// What is pressing the control down.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Held {
     Pointer(i32),
@@ -109,9 +111,48 @@ pub(super) struct Talk {
 }
 
 impl Talk {
-    /// Whether the talk control is being held right now (speech intent is live).
-    pub(super) fn is_held(&self) -> bool {
-        self.held.is_some()
+    /// Whether the control is listening for the player's words, which keeps the speech-intent
+    /// mark live.
+    pub(super) fn is_listening(&self) -> bool {
+        self.capture.is_listening()
+    }
+
+    /// Ends listening at once for an interruption that needs no signal to the table: the text box
+    /// went away, the connection was reset, or the player typed. The redraw that follows shows it.
+    pub(super) fn interrupt_now(&mut self, why: Interruption) {
+        self.held = None;
+        if let Some(command) = self.capture.interrupt(why) {
+            self.carry_out(command);
+        }
+    }
+
+    fn carry_out(&mut self, command: Command) {
+        match command {
+            Command::Discard => self.discard(),
+            Command::AbortUpload => {
+                // The recorder may not have delivered its stop event yet; it must not upload.
+                self.discard();
+                if let Some(abort) = self.upload.take() {
+                    abort.abort();
+                }
+            }
+            // Only a tap opens or finishes a recording; an interruption never asks for either.
+            Command::OpenMicrophone | Command::FinishRecording => {}
+        }
+    }
+
+    /// Drops a recording unheard: the recorder stops, its data is dropped and the microphone is
+    /// released at once.
+    fn discard(&mut self) {
+        self.ticker = None;
+        if let Some(recording) = self.recording.take() {
+            recording.keep.set(false);
+            recording.detach_handlers();
+            if recording.recorder.state() != RecordingState::Inactive {
+                let _stopped = recording.recorder.stop();
+            }
+            recording.stop_tracks();
+        }
     }
 
     /// Releases the microphone and every listener. Used when the page's client is dropped.
@@ -214,7 +255,7 @@ fn build(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     hold.set_attribute("data-talk", "hold")?;
     hold.set_attribute("aria-keyshortcuts", "Space Enter")?;
     node(&document, &hold, "span", "talk-dot", "")?.set_attribute("aria-hidden", "true")?;
-    let label = node(&document, &hold, "span", "talk-label", "Hold to talk")?;
+    let label = node(&document, &hold, "span", "talk-label", "Tap to talk")?;
     let status = node(&document, &root, "p", "talk-status", "")?;
     status.set_attribute("role", "status")?;
     let actions = node(&document, &root, "div", "talk-actions", "")?;
@@ -233,7 +274,7 @@ fn build(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     listen(client, hold_target, "keydown", key_down)?;
     listen(client, hold_target, "keyup", key_up)?;
     listen(client, hold_target, "blur", |client, _| {
-        lose_key_hold(client)
+        lose_key_press(client)
     })?;
     // A long press on a phone opens the context menu, which would cancel the press.
     listen(client, hold_target, "contextmenu", |_, event| {
@@ -242,7 +283,7 @@ fn build(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     listen(client, window_target, "pointerup", pointer_up)?;
     listen(client, window_target, "pointercancel", |client, event| {
         if is_held_pointer(&client, event) {
-            cancel(&client);
+            abandon(&client);
         }
     })?;
     listen(client, window_target, "pointermove", pointer_move)?;
@@ -251,15 +292,20 @@ fn build(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             .dyn_ref::<KeyboardEvent>()
             .is_some_and(|key| key.key() == "Escape")
         {
-            cancel(&client);
+            interrupt(&client, Interruption::Cancelled);
         }
     })?;
     listen(client, document_target, "visibilitychange", |client, _| {
         let hidden = client.borrow().document.hidden();
         if hidden {
-            cancel(&client);
+            interrupt(&client, Interruption::PageHidden);
         }
     })?;
+    let editor = client.borrow().dialogue.editor().cloned();
+    if let Some(editor) = editor {
+        let editor_target: &EventTarget = editor.as_ref();
+        listen(client, editor_target, "input", |client, _| typed(&client))?;
+    }
     Ok(())
 }
 
@@ -354,7 +400,7 @@ fn pointer_down(client: Rc<RefCell<Client>>, event: &web_sys::Event) {
     }
     // No text selection, focus change or emulated mouse events from this press.
     event.prevent_default();
-    press(&client, Held::Pointer(pointer.pointer_id()));
+    press_down(&client, Held::Pointer(pointer.pointer_id()));
 }
 
 fn key_down(client: Rc<RefCell<Client>>, event: &web_sys::Event) {
@@ -367,7 +413,7 @@ fn key_down(client: Rc<RefCell<Client>>, event: &web_sys::Event) {
     // The click a held key would produce is not wanted either.
     event.prevent_default();
     if !key.repeat() {
-        press(&client, Held::Key);
+        press_down(&client, Held::Key);
     }
 }
 
@@ -384,9 +430,9 @@ fn key_up(client: Rc<RefCell<Client>>, event: &web_sys::Event) {
     }
 }
 
-fn lose_key_hold(client: Rc<RefCell<Client>>) {
+fn lose_key_press(client: Rc<RefCell<Client>>) {
     if client.borrow().dialogue.talk.held == Some(Held::Key) {
-        cancel(&client);
+        abandon(&client);
     }
 }
 
@@ -421,59 +467,92 @@ fn pointer_up(client: Rc<RefCell<Client>>, event: &web_sys::Event) {
 
 fn pointer_move(client: Rc<RefCell<Client>>, event: &web_sys::Event) {
     if is_held_pointer(&client, event) && !over_control(&client, event) {
-        cancel(&client);
+        abandon(&client);
     }
 }
 
-fn press(client: &Rc<RefCell<Client>>, held: Held) {
-    let command = {
-        let mut state = client.borrow_mut();
-        let talk = &mut state.dialogue.talk;
-        if talk.held.is_some() {
-            return;
-        }
-        let command = talk.capture.press(environment());
-        if command.is_some() {
-            talk.held = Some(held);
-        }
-        command
-    };
-    let started = command.is_some();
-    execute(client, command);
-    show(client);
-    if started {
-        live_presence::signal(client, live_presence::Intent::Speaking);
+/// Starts a press on the control. Nothing starts until the press is released over the control.
+fn press_down(client: &Rc<RefCell<Client>>, held: Held) {
+    let mut state = client.borrow_mut();
+    let talk = &mut state.dialogue.talk;
+    if talk.held.is_some() {
+        return;
     }
+    talk.held = Some(held);
+    talk.capture.press_down();
 }
 
+/// The press ended. Released over the control, it is a tap: it starts or stops listening.
 fn release(client: &Rc<RefCell<Client>>, inside: bool) {
-    let command = {
-        let mut state = client.borrow_mut();
-        let talk = &mut state.dialogue.talk;
+    step(client, |talk| {
         talk.held = None;
-        talk.capture.release(now(), inside)
-    };
-    execute(client, command);
-    show(client);
-    live_presence::signal(client, live_presence::Intent::Stopped);
+        talk.capture.release(now(), inside, environment())
+    });
 }
 
-fn cancel(client: &Rc<RefCell<Client>>) {
-    let command = {
+/// The press stopped being a tap: the pointer was cancelled or dragged off the control, or the
+/// key lost focus. Listening that is already under way goes on.
+fn abandon(client: &Rc<RefCell<Client>>) {
+    let mut state = client.borrow_mut();
+    state.dialogue.talk.held = None;
+    state.dialogue.talk.capture.abandon_press();
+}
+
+/// Ends listening for a reason other than a tap, such as Escape or a hidden page.
+fn interrupt(client: &Rc<RefCell<Client>>, why: Interruption) {
+    step(client, |talk| {
+        talk.held = None;
+        talk.capture.interrupt(why)
+    });
+}
+
+/// Typing in the text box ends listening. The draft's own signal already tells the table, so
+/// this stops the control without sending a stop of its own.
+fn typed(client: &Rc<RefCell<Client>>) {
+    if client.borrow().dialogue.talk.capture.is_busy() {
+        client
+            .borrow_mut()
+            .dialogue
+            .talk
+            .interrupt_now(Interruption::Typing);
+        show(client);
+    }
+}
+
+/// Runs one step of the control, carries out its command, shows the new state, and tells the
+/// table when listening starts or stops.
+fn step(client: &Rc<RefCell<Client>>, operation: impl FnOnce(&mut Talk) -> Option<Command>) {
+    let (command, before, after) = {
         let mut state = client.borrow_mut();
         let talk = &mut state.dialogue.talk;
-        talk.held = None;
-        talk.capture.cancel()
+        let before = talk.capture.is_listening();
+        let command = operation(talk);
+        (command, before, talk.capture.is_listening())
     };
     execute(client, command);
     show(client);
-    live_presence::signal(client, live_presence::Intent::Stopped);
+    if before != after {
+        let intent = if after {
+            live_presence::Intent::Speaking
+        } else {
+            live_presence::Intent::Stopped
+        };
+        live_presence::signal(client, intent);
+    }
 }
 
 fn tick(client: &Rc<RefCell<Client>>) {
-    let command = client.borrow_mut().dialogue.talk.capture.tick(now());
-    execute(client, command);
-    show(client);
+    let attached = client
+        .borrow()
+        .dialogue
+        .editor()
+        .is_some_and(|editor| editor.is_connected());
+    if attached {
+        step(client, |talk| talk.capture.tick(now()));
+    } else {
+        // The scene took the text box away, so there is nothing left to talk into.
+        interrupt(client, Interruption::SceneChanged);
+    }
 }
 
 fn execute(client: &Rc<RefCell<Client>>, command: Option<Command>) {
@@ -483,13 +562,8 @@ fn execute(client: &Rc<RefCell<Client>>, command: Option<Command>) {
             spawn_local(open_microphone(weak));
         }
         Some(Command::FinishRecording) => finish_recording(client),
-        Some(Command::Discard) => discard_recording(client),
-        Some(Command::AbortUpload) => {
-            // The recorder may not have delivered its stop event yet; it must not upload.
-            discard_recording(client);
-            if let Some(abort) = client.borrow_mut().dialogue.talk.upload.take() {
-                abort.abort();
-            }
+        Some(command @ (Command::Discard | Command::AbortUpload)) => {
+            client.borrow_mut().dialogue.talk.carry_out(command);
         }
         None => {}
     }
@@ -557,7 +631,7 @@ async fn open_microphone(weak: WeakClient) {
         .capture
         .microphone_ready(now());
     if command.is_some() {
-        // Nobody is holding the button any more; the microphone is not kept.
+        // The start was cancelled while the microphone opened, so the microphone is not kept.
         stop_tracks(&stream);
         client.borrow_mut().dialogue.talk.held = None;
         show(&client);
@@ -643,22 +717,6 @@ fn finish_recording(client: &Rc<RefCell<Client>>) {
             recording.detach_handlers();
             recording.stop_tracks();
         }
-    }
-}
-
-/// Drops a recording unheard: the recorder stops, its data is dropped and the microphone is
-/// released at once.
-fn discard_recording(client: &Rc<RefCell<Client>>) {
-    let mut state = client.borrow_mut();
-    let talk = &mut state.dialogue.talk;
-    talk.ticker = None;
-    if let Some(recording) = talk.recording.take() {
-        recording.keep.set(false);
-        recording.detach_handlers();
-        if recording.recorder.state() != RecordingState::Inactive {
-            let _stopped = recording.recorder.stop();
-        }
-        recording.stop_tracks();
     }
 }
 
@@ -854,13 +912,10 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     label.set_text_content(Some(&match phase {
         Phase::Requesting(_) => "Starting…".to_owned(),
         Phase::Recording { .. } => {
-            format!(
-                "Recording {}s · release to send",
-                elapsed.unwrap_or_default()
-            )
+            format!("Listening… tap to stop · {}s", elapsed.unwrap_or_default())
         }
         Phase::Listening => "Listening…".to_owned(),
-        Phase::Idle | Phase::Review => "Hold to talk".to_owned(),
+        Phase::Idle | Phase::Review => "Tap to talk".to_owned(),
     }));
     hold.set_attribute(
         "aria-pressed",
@@ -890,8 +945,10 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             button(client, &actions, "Clear", clear)?.set_attribute("data-talk", "clear")?;
         }
         Phase::Listening => {
-            button(client, &actions, "Cancel", |client| cancel(&client))?
-                .set_attribute("data-talk", "cancel")?;
+            button(client, &actions, "Cancel", |client| {
+                interrupt(&client, Interruption::Cancelled)
+            })?
+            .set_attribute("data-talk", "cancel")?;
         }
         _ => {}
     }

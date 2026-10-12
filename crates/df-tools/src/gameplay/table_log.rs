@@ -18,7 +18,7 @@ use tokio::sync::watch;
 pub(super) const RING_LINES: usize = 24;
 /// Longest text of one line, in characters.
 pub(super) const LINE_CHARACTERS: usize = 420;
-/// A speech-intent mark (typing or holding to talk) that is not refreshed this long is gone, so a
+/// A speech-intent mark (typing or talking) that is not refreshed this long is gone, so a
 /// closed tab never leaves a stuck bubble on the table. The phone refreshes about every 2 s.
 pub(super) const PRESENCE_EXPIRY: Duration = Duration::from_secs(5);
 /// Hero seats a presence mark can name.
@@ -42,7 +42,7 @@ struct Ring {
     presence_version: u64,
     /// The speakers whose reply to a hero's typed line is being written right now.
     replying: Vec<String>,
-    /// Heroes typing or holding to talk right now, until stopped or expired.
+    /// Heroes typing or talking right now, until stopped or expired.
     composing: Vec<Composing>,
     /// A task is waiting to expire the earliest mark.
     reaper_armed: bool,

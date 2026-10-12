@@ -63,7 +63,7 @@ service DialogueService {
   rpc Submit(RawDialogueRequest) returns (DialogueResponse);
   rpc Confirm(ConfirmDialogueRequest) returns (SubmitActionResponse);
   rpc Cancel(CancelDialogueRequest) returns (DialogueResponse);
-  // Ephemeral speech intent (typing or holding to talk). Presentation only: never committed, never a revision.
+  // Ephemeral speech intent (typing or talking). Presentation only: never committed, never a revision.
   rpc Compose(ComposeRequest) returns (ComposeResponse);
 }
 enum DialogueContext { DIALOGUE_CONTEXT_UNSPECIFIED = 0; DIALOGUE_CONTEXT_QUESTION = 1; DIALOGUE_CONTEXT_SOCIAL = 2; DIALOGUE_CONTEXT_PLAN_ONLY = 3; DIALOGUE_CONTEXT_META = 4; DIALOGUE_CONTEXT_JOKE = 5; DIALOGUE_CONTEXT_CLARIFY = 6; }

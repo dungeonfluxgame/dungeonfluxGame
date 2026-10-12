@@ -76,7 +76,7 @@ web-sys = { workspace = true, features = ["Window", "Document", "Element", "Html
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 web-sys = { workspace = true, features = ["AudioContext", "AudioContextState", "AudioBuffer", "AudioBufferSourceNode", "AudioDestinationNode", "AudioNode", "AudioParam", "AudioScheduledSourceNode", "BaseAudioContext", "BiquadFilterNode", "BiquadFilterType", "GainNode"] }
 
-# Hold-to-talk speech input: microphone capture, recording, decoding and the pointer geometry of
+# Tap-to-talk speech input: microphone capture, recording, decoding and the pointer geometry of
 # the control. A table of its own (the extra `target_env` term names the same browser target) so
 # that edits to the lists above never touch these lines.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown", target_env = ""))'.dependencies]
