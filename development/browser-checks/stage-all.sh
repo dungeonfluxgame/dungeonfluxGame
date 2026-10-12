@@ -6,7 +6,7 @@ OUT=${1:-/tmp}
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # A first game right after a new client bundle is served can stall in the headless browser; play one throwaway game first.
 node "$HERE/stage-offers.mjs" > "$OUT/warm-up.log" 2>&1
-for check in sound-click stage-opening stage-midspeech stage-muted stage-quick stage-battle stage-intent stage-victory stage-clean stage-replies; do
+for check in sound-click stage-opening stage-first-view stage-midspeech stage-muted stage-quick stage-battle stage-intent stage-victory stage-clean stage-replies; do
   node "$HERE/$check.mjs" > "$OUT/$check.log" 2>&1
   echo "$check exit $?" >> "$OUT/summary.txt"
 done
@@ -14,4 +14,8 @@ FIGHT=enemy node "$HERE/stage-fight.mjs" > "$OUT/stage-fight-enemy.log" 2>&1
 echo "stage-fight enemy exit $?" >> "$OUT/summary.txt"
 FIGHT=hero node "$HERE/stage-fight.mjs" > "$OUT/stage-fight-hero.log" 2>&1
 echo "stage-fight hero exit $?" >> "$OUT/summary.txt"
+node "$HERE/stage-tactical.mjs" > "$OUT/stage-tactical.log" 2>&1
+echo "stage-tactical exit $?" >> "$OUT/summary.txt"
+SCAN=1 node "$HERE/stage-tactical.mjs" > "$OUT/stage-tactical-scan.log" 2>&1
+echo "stage-tactical scan exit $?" >> "$OUT/summary.txt"
 echo done >> "$OUT/summary.txt"

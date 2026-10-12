@@ -10,8 +10,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runner, startServer, launchGpu, playToOpening, click, settle, until, events, clearEvents, framesDir, artifactRoot, root } from './stage.mjs';
 
-// blow cues (about 4.3 s) + BATTLE_FINISH_CAP_MS (8 s) + the scene transition (about 2 s) + slack
-const EXIT_BOUND_MS = 17000;
+// blow cues (about 4.3 s) + BATTLE_FINISH_CAP_MS (16 s) + the scene transition (about 2 s) + slack
+const EXIT_BOUND_MS = 25000;
 const { s, out, check, finish } = runner('stage-victory', process.argv[2] || framesDir);
 const pack = path.join(artifactRoot, 'tmp', 'play-f06', 'oneshot-pack');
 fs.rmSync(pack, { recursive: true, force: true });
@@ -59,7 +59,7 @@ const clickedAt = Date.now();
 let attacked = false;
 let lastSwing = 0;
 let frame = 0;
-const stop = Date.now() + 90000;
+const stop = Date.now() + 300000;
 let settled = null;
 while (Date.now() < stop) {
   const now = await sample();
@@ -91,11 +91,14 @@ const flash = samples.filter((m) => m.battle === 'absent' && m.field && m.fieldO
 check(flash.length === 0, `never battle=absent with a visible battlefield (${flash.length} samples)`);
 const leaked = samples.filter((m) => m.aftermath && m.actionBubbles.length);
 check(leaked.length === 0, `no combat call-out bubble on the victory scene (${leaked.length} samples)`);
-const total = settled ? settled.t - clickedAt : null;
-s.note(`exit took ${total} ms from the first attempt to attack`);
-check(total !== null && total <= EXIT_BOUND_MS + 8000, `the whole fight exit is inside its bound (${total} ms; blow plus cap ${EXIT_BOUND_MS} ms plus the click wait)`);
-const rolling = log.find((e) => e.type === 'attr' && e.name === 'data-stage' && e.value === 'rolling')?.t;
-const leaving = log.find((e) => e.type === 'attr' && e.name === 'data-stage' && e.value === 'leaving')?.t;
+const leavingAt = log.find((e) => e.type === 'attr' && e.name === 'data-stage' && e.value === 'leaving' && e.t >= (samples.find((m) => m.battle === 'finishing')?.t ?? 0))?.t;
+// The fight is several turns; the exit is measured from the killing blow (the last roll before the exit).
+const killing = [...log].reverse().find((e) => e.type === 'attr' && e.name === 'data-stage' && e.value === 'rolling' && leavingAt && e.t < leavingAt)?.t;
+const total = settled && killing ? settled.t - killing : null;
+s.note(`exit took ${total} ms from the killing blow`);
+check(total !== null && total <= EXIT_BOUND_MS, `the whole fight exit is inside its bound (${total} ms; blow plus cap plus the scene transition)`);
+const rolling = killing;
+const leaving = leavingAt;
 if (rolling && leaving) {
   s.note(`blow to leaving ${leaving - rolling} ms`);
   check(leaving - rolling >= 4000, `the finishing blow was shown in full before the scene left (${leaving - rolling} ms)`);

@@ -64,10 +64,11 @@ pub(crate) const SCENE_ENTER_CAP_MS: u64 = 8_000;
 /// roll-call) waits this long for the battlefield; then the flat combat view is the display.
 pub(crate) const BATTLE_ENTER_CAP_MS: u64 = 12_000;
 /// After a fight's finishing blow (dice, impact, fall) has been shown, the display waits this
-/// long for the battlefield to finish its own finishing shot before it leaves for the victory or
-/// defeat scene. The whole exit is then at most: the blow's cues (about 4.3 s), this wait, and
-/// the scene transition (about 2 s).
-pub(crate) const BATTLE_FINISH_CAP_MS: u64 = 8_000;
+/// long for the battlefield to finish its own finishing shot and held victory or defeat beat
+/// (about 6 s) before it leaves for the victory or defeat scene. This is only the cap on a
+/// battlefield that never reports done, never the normal path. The whole exit is then at most:
+/// the blow's cues (about 4.3 s), this wait, and the scene transition (about 2 s).
+pub(crate) const BATTLE_FINISH_CAP_MS: u64 = 16_000;
 /// Outcome cues held back during a fight's entrance; beyond this the oldest are dropped (the
 /// newest view still draws the truth).
 pub(crate) const HELD_OUTCOMES_CAP: usize = 16;

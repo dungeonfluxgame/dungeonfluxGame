@@ -107,6 +107,9 @@ pub(crate) struct ViewDiff<D> {
     pub(crate) banner: Option<D>,
     /// The closing card that follows the banner of a fight that ended in this view.
     pub(crate) closing: Option<D>,
+    /// Only the blow of an earlier turn that the same view resolved: dice, impact and fall, with
+    /// no redraw of the view, which belongs to the newest turn.
+    pub(crate) blow_only: bool,
 }
 
 impl<D> ViewDiff<D> {
@@ -135,6 +138,7 @@ impl<D> Default for ViewDiff<D> {
             heal: None,
             banner: None,
             closing: None,
+            blow_only: false,
         }
     }
 }
@@ -206,6 +210,9 @@ impl<D: Clone> StageDirector<D> {
 
     /// Queues the cues of a newly accepted view and returns what starts now.
     pub(crate) fn on_view(&mut self, now_ms: u64, diff: ViewDiff<D>) -> Vec<Command<D>> {
+        if diff.blow_only {
+            return self.on_blow(now_ms, diff);
+        }
         let finishing = diff.banner.is_some();
         let make = |kind, detail| Self::cue(kind, detail, now_ms, finishing);
         let mut cues = Vec::new();

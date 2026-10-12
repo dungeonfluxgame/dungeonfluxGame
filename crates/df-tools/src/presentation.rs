@@ -680,6 +680,33 @@ mod tests {
     }
 
     #[test]
+    fn every_outcome_a_view_adds_is_new_oldest_first() {
+        let before = snapshot(
+            &journey(
+                rpc::JourneyPhase::Combat,
+                false,
+                vec![outcome("Brakka", "Weasel 1", 13, true)],
+            ),
+            &scene(),
+        );
+        let after = journey(
+            rpc::JourneyPhase::Combat,
+            false,
+            vec![
+                outcome("Brakka", "Weasel 1", 13, true),
+                outcome("Weasel 1", "Brakka", 7, false),
+                outcome("Weasel 2", "Brakka", 11, true),
+            ],
+        );
+        let added: Vec<&str> = new_outcomes(Some(&before), &after)
+            .into_iter()
+            .map(|outcome| outcome.actor_name.as_str())
+            .collect();
+        assert_eq!(added, ["Weasel 1", "Weasel 2"]);
+        assert_eq!(new_outcomes(None, &after).len(), 3);
+    }
+
+    #[test]
     fn a_new_roll_is_reported_once() {
         let before = snapshot(&journey(rpc::JourneyPhase::Combat, false, vec![]), &scene());
         let after = snapshot(

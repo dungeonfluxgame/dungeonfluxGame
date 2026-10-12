@@ -111,6 +111,8 @@ struct Motion {
     thinking_for: Option<String>,
     previous: Option<CombatSnapshot>,
     scene_key: Option<String>,
+    /// The narration the scene last put on the stage, so only new narration is spoken again.
+    narration: String,
     party_hit_points: Vec<u32>,
     seen: VecDeque<u64>,
     generation: u64,
@@ -159,6 +161,7 @@ fn ensure_motion(client: &Rc<RefCell<Client>>) {
                 thinking_for: None,
                 previous: None,
                 scene_key: None,
+                narration: String::new(),
                 party_hit_points: Vec::new(),
                 seen: VecDeque::new(),
                 generation: 0,
@@ -294,6 +297,20 @@ fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> Scrip
     }
 }
 
+/// The narration a view adds to the scene on stage: nothing when it is the narration already
+/// told, the appended part when the told text grew, otherwise the whole new text.
+fn added_narration(told: &str, now: &str) -> Option<String> {
+    let now = now.trim();
+    if now.is_empty() || now == told.trim() {
+        return None;
+    }
+    let appended = now
+        .strip_prefix(told.trim())
+        .map(str::trim)
+        .filter(|rest| !rest.is_empty() && !told.trim().is_empty());
+    Some(appended.unwrap_or(now).to_owned())
+}
+
 /// A table line as a line of the stage script, or `None` when no figure carries it.
 fn script_line(
     line: &TableLine,
@@ -414,6 +431,11 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 script.extend(script_line(line, &cast, &voices, false));
             }
         } else {
+            // What the story adds to a scene already on stage (a look's result) is narrated once;
+            // a reply to table talk never replays the narration already told.
+            if !in_fight && let Some(added) = added_narration(&motion.narration, &narration) {
+                script.push(narration_line(&added, &voices, false));
+            }
             script.extend(
                 fresh
                     .iter()
@@ -486,6 +508,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                         journey, scene, &narration, victory,
                     )))
                 }),
+            blow_only: false,
         };
         let plan = ViewPlan {
             diff,
@@ -495,6 +518,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         let chime = transitions.turn_changed && !transitions.new_roll;
         motion.previous = Some(snapshot.clone());
         motion.scene_key = Some(key.clone());
+        motion.narration.clone_from(&narration);
         motion.party_hit_points = hit_points.clone();
         motion.generation = generation;
         motion.thinking_for = thinking.clone();
@@ -510,6 +534,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 defeat: roll
                     .target_down
                     .then(|| Detail::Roll(Box::new(roll.clone()))),
+                blow_only: true,
                 ..ViewDiff::default()
             },
             script: Vec::new(),

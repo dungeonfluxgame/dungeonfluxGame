@@ -163,8 +163,10 @@
 
 /* ---------- the Dungeon Master's caption: a ribbon, no tail, no character lit ---------- */
 .tv-stagebox{align-self:end}
-.tv-stage[data-tv-mode=scene] .tv-stagebox{justify-self:center;width:calc(var(--u)*46);margin-bottom:calc(var(--base) - 5.5vh)}
-.tv-stage:has(.tv-figures[data-arrange=stage]) .tv-stagebox{justify-self:start;width:calc(var(--u)*33);text-align:left}
+/* The centred box sits clear above the chip row; with the chips off (or none offered) it uses that space. */
+.tv-stage[data-tv-mode=scene] .tv-stagebox{justify-self:center;width:calc(var(--u)*46);margin-bottom:calc(4.5vh + var(--u)*5.5)}
+.tv-stage[data-tv-mode=scene]:is([data-chips="0"],[data-chips=off]) .tv-stagebox{margin-bottom:4.5vh}
+.tv-stage:has(.tv-figures[data-arrange=stage]) .tv-stagebox{justify-self:start;width:calc(var(--u)*33);text-align:left;margin-bottom:0}
 .tv-dm{width:100%;padding:calc(var(--u)*.6) calc(var(--u)*1.4) calc(var(--u)*.8);text-align:center;background:linear-gradient(180deg,#2b2214f0,#17110ae8);border-top:calc(var(--u)*.12) solid #d9b77a;border-bottom:calc(var(--u)*.12) solid #d9b77a;box-shadow:0 calc(var(--u)*.6) calc(var(--u)*2) #000a}
 .tv-dm-head{display:flex;align-items:center;justify-content:center;gap:calc(var(--u)*.7);margin-bottom:calc(var(--u)*.2)}
 .tv-dm-avatar{width:calc(var(--u)*3);height:calc(var(--u)*3);border-radius:50%;object-fit:cover;border:calc(var(--u)*.12) solid #d9b77a}
@@ -183,7 +185,7 @@
 
 /* ---------- what the table can do: a read-only row of numbered chips ---------- */
 .tv-choices{position:absolute;z-index:4;left:calc(var(--u)*34);right:calc(var(--u)*22);bottom:4.5vh;display:flex;flex-wrap:nowrap;justify-content:center;gap:calc(var(--u)*1.2);margin:0;padding:0;list-style:none;pointer-events:none}
-.tv-stage[data-chips="0"] .tv-choices,.tv-stage[data-tv-mode=lobby] .tv-choices{display:none}
+.tv-stage:is([data-chips="0"],[data-chips=off]) .tv-choices,.tv-stage[data-tv-mode=lobby] .tv-choices{display:none}
 .tv-choice{display:flex;align-items:center;gap:calc(var(--u)*.7);flex:1 1 0;min-width:0;padding:calc(var(--u)*.45) calc(var(--u)*1.1) calc(var(--u)*.45) calc(var(--u)*.6);background:linear-gradient(180deg,#0e1826f0,#070d16f4);border:1px solid #c9a35fa6;border-radius:calc(var(--u)*.4);box-shadow:0 calc(var(--u)*.4) calc(var(--u)*1.2) #000a;font:var(--fs-label)/1.2 var(--serif);color:#efe6ce;text-shadow:none}
 .tv-choice-number{flex:none;display:grid;place-items:center;width:calc(var(--u)*2.1);aspect-ratio:1;border-radius:50%;border:1px solid #e8cb94;background:#2b2214;color:#f3d59d;font:700 var(--fs-label)/1 system-ui,sans-serif}
 .tv-choice-label{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}

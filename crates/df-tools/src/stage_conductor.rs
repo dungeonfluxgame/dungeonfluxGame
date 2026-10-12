@@ -445,6 +445,7 @@ impl<D: Clone> Conductor<D> {
                 roll: plan.diff.roll.take(),
                 impact: plan.diff.impact.take(),
                 defeat: plan.diff.defeat.take(),
+                blow_only: true,
                 ..ViewDiff::default()
             };
             if opening.roll.is_some() || opening.impact.is_some() || opening.defeat.is_some() {
@@ -2708,6 +2709,84 @@ mod tests {
             })
             .collect();
         assert_eq!(rolls, ["first enemy", "second enemy", "third enemy"]);
+    }
+
+    #[test]
+    fn a_fight_lost_on_an_enemys_turn_shows_every_blow_then_exits_through_the_same_machine() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 2]);
+        harness.view(fight_start());
+        harness.run_to(5_000);
+        let rendered_before = harness.rendered().len();
+        let blow = |turn: &'static str| ViewPlan {
+            diff: ViewDiff {
+                roll: Some(turn),
+                impact: Some(turn),
+                blow_only: true,
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: vec![0, 2],
+        };
+        harness.view(blow("first enemy"));
+        harness.view(blow("second enemy"));
+        harness.view(ViewPlan {
+            diff: ViewDiff {
+                scene_changed: true,
+                roll: Some("last enemy"),
+                impact: Some("last enemy"),
+                defeat: Some("last enemy"),
+                banner: Some("defeat"),
+                closing: Some("closing"),
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: vec![0, 2],
+        });
+        let lost_at = harness.now;
+        harness.run_to(40_000);
+        let impacts: Vec<&str> = harness
+            .log
+            .iter()
+            .filter_map(|(_, command)| match command {
+                Command::Enter {
+                    state: StageState::Impact,
+                    detail,
+                    ..
+                } => *detail,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(impacts, ["first enemy", "second enemy", "last enemy"]);
+        let leaving = harness
+            .entered_after(StageState::LeavingScene, lost_at)
+            .expect("the scene leaves");
+        // The earlier blows never redrew the view, which would tear the battlefield down.
+        assert_eq!(
+            harness
+                .rendered()
+                .iter()
+                .filter(|at| **at < leaving)
+                .count(),
+            rendered_before
+        );
+        let order: Vec<BattleState> = battle_states(&harness)
+            .into_iter()
+            .filter(|state| {
+                matches!(
+                    state,
+                    BattleState::Finishing | BattleState::Exiting | BattleState::Absent
+                )
+            })
+            .collect();
+        assert_eq!(
+            order,
+            [
+                BattleState::Finishing,
+                BattleState::Exiting,
+                BattleState::Absent
+            ]
+        );
+        assert_eq!(harness.conductor.battle_state(), BattleState::Absent);
     }
 
     #[test]

@@ -644,8 +644,11 @@ impl TvStage {
     pub(super) fn set_choices(&self, labels: &[String]) -> Result<(), JsValue> {
         let shown: Vec<&str> = labels.iter().map(String::as_str).collect();
         let signature = shown.join("\u{1f}");
-        self.root
-            .set_attribute("data-chips", &shown.len().to_string())?;
+        // `data-chips="off"` is the table's setting that hides the hints; the count never replaces it.
+        if self.root.get_attribute("data-chips").as_deref() != Some("off") {
+            self.root
+                .set_attribute("data-chips", &shown.len().to_string())?;
+        }
         if self.choices.get_attribute("data-labels").as_deref() == Some(signature.as_str()) {
             return Ok(());
         }

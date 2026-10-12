@@ -58,7 +58,7 @@ await click(s, pa, s.label('defend-courier'), { wait: 0 });
 let frame = 0;
 let lastSwing = 0;
 let settled = null;
-const stop = Date.now() + 150000;
+const stop = Date.now() + 300000;
 while (Date.now() < stop) {
   const now = await sample();
   if (frame < 600) { await tv.screenshot({ path: `${out}-strip-${String(frame).padStart(3, '0')}.jpg`, type: 'jpeg', quality: 55 }); frame += 1; }

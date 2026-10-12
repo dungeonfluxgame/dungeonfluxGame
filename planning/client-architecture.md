@@ -165,3 +165,19 @@ queued behind the finishing blow: dice, impact and fall play, the battlefield fi
 finishing shot (at most `BATTLE_FINISH_CAP_MS`), the battlefield fades, and only then does the scene
 machine take the victory or defeat scene (one transition). While the 3D battlefield is live
 (`data-battlefield-live`) the flat combat screen, its dice card and its call-out bubbles never show.
+
+Tactical fights. A tactical fight (server-owned cells, several enemies, enemy turns resolved by the
+server between two hero actions) enters and exits through the same battle machine as a one-enemy
+fight. Every outcome a view adds is staged, oldest first (`presentation::new_outcomes`), each as a
+blow-only cue set (`ViewDiff.blow_only`: dice, impact, fall, and no redraw of the view, which
+belongs to the newest turn); blows are outcome-bearing cues, so a display that is behind shortens
+them and never drops them. A turn that ends on the server's next combatant reopens `TurnStart` once
+the beats are over. A fight that ends on an enemy's turn (a defeat) exits through
+Finishing > Exiting > Absent exactly as a victory does. A hero's opportunity-reaction prompt is part
+of the view the display receives, so staging simply waits on the server's resolution. A scene's
+own narration is told once: narration that changes inside a scene already on stage (a look's
+result) is told as a new narrator line (the appended part when the told text grew), a reply to table
+talk never replays it, and while a line presents the choice chips are hidden. `data-chips="off"`
+on the stage hides the chip row and gives its space to the narrator box. A session view may be as
+large as one RPC message (`RPC_MESSAGE_BYTES`); a smaller bound silently broke the acting hero's
+phone, whose tactical view is the largest.

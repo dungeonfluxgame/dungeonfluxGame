@@ -20,8 +20,8 @@ const MAXIMUM_EFFECT_BYTES: u32 = 2 * 1024 * 1024;
 /// drop to this fraction while a clip is speaking.
 const DUCKED_VOLUME: f32 = 0.3;
 const LOG_ATTRIBUTE: &str = "data-sfx-log";
-/// A whole fight's worth of footsteps, weapon and voice events fits.
-const LOG_LIMIT: usize = 160;
+/// A whole tactical fight's worth of footsteps, weapon and voice events fits.
+const LOG_LIMIT: usize = 1_500;
 const LOG_COUNT_ATTRIBUTE: &str = "data-sfx-count";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

@@ -108,5 +108,7 @@ const behindCover = sounds.filter((x) => COMBAT_SFX.has(x.name) && ['leaving', '
 check(behindCover.length === 0, `no combat sound behind the cover (${behindCover.length})`);
 check(!samples.some((m) => m.aftermath && m.dice), 'no dice card over the victory card');
 const transitions = sounds.filter((x) => x.name === 'scene-transition');
-s.note(`scene-transitions after the fight began: ${transitions.length} (entry and exit)`);
+s.note(`scene-transitions after the fight was chosen: ${transitions.length}`);
+// The entry transition's sound is heard while the choice is being pressed (before sampling starts): sampling sees the exit.
+check(transitions.length <= 2 && transitions.length >= 1, `the exit was one transition (${transitions.length} heard while sampling)`);
 await finish(browser);
