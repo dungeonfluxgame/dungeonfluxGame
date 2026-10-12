@@ -67,6 +67,8 @@ pub struct StageOptions {
     /// authors for the scan, 1 the next one down (the default of the live game), and so on, never
     /// coarser than the scene's coarsest tier.
     pub splat_lod: u32,
+    /// Draw the cell grid (off by default: a development view).
+    pub show_grid: bool,
 }
 
 /// Quality held constant for benchmarks (`#battle-preview=...&fixed&budget=..&minc=..&rscale=..`).
@@ -317,6 +319,7 @@ impl BattleStage {
         mark(host, "active");
         let _ = host.set_attribute("data-battlefield-adapter", &gpu.adapter_description);
         let mut stage = Stage::new(scene);
+        stage.set_show_grid(options.show_grid);
         if options.feel_off {
             stage.set_feel_enabled(false);
         }

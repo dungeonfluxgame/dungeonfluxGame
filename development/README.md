@@ -292,12 +292,22 @@ downloaded) and point the server at it.
   to the next even divisor (15, 10, 7.5 fps for the 30 setting) and tries the faster rate again
   later. `data-battlefield-stats` reports `fps_target`, `fps_presented`, `fps_divisor`,
   `display_hz` and `cost_ms`. The `#battle-preview` address takes `&fps=24` or `&fps=30`.
-- `DF_GAMEPLAY_SPLAT_LOD=<0-3>`: which tier of a streamed scan the battlefield draws as its finest;
-  default 1. Every scan is stored in tiers (level 0 the most splats, each next level about half as
-  many); the scene file authors the largest tier worth drawing for it (`levels`), which is level 0
-  here, and level 1 is the next one down (about half the splats, a lighter and faster load). A
-  tier never goes past the scene's coarsest one. Any other value
-  refuses startup. The `#battle-preview` address takes `&lod=<0-3>`.
+- `DF_GAMEPLAY_SPLAT_LOD=<0-3>`: which level of a streamed scan the battlefield draws as its finest, counted
+  from the best level the scan has on disk (the scene file's `levels`): 0 is the best on disk, 1 (the default) the
+  second best, and so on, never past the scene's coarsest. A scan stores its own levels (each about half the splats of
+  the one before); the village scan has 11 and only levels 3 to 10 are downloaded, so its 0 is the scan's own level 3
+  and its 1 the scan's level 4; the other scans have 4 and levels 1 to 3 are downloaded. The chosen level is drawn
+  complete out to as far from the grid as the splat budget allows (up to 60 m); only beyond that does the level step
+  coarser with distance, so there is no thinner ring just past the play area. Nothing is thinned, down-scaled or blurred
+  on top while the frame time holds. Any other value refuses startup. The `#battle-preview` address takes `&lod=<0-3>`.
+- `DF_GAMEPLAY_BATTLE_GRID=<on|off>`: whether the battlefield on the TV draws its cell grid at all, default
+  off. With it off the TV draws no cell borders, no reachable-region tint or outline and no blocked-cell marks,
+  in the resting shot or any action shot, on scans and painted scenes alike; what stays is a thin ring under
+  the acting figure, a thin ring under a legal target while it is being targeted, the figures walking their
+  paths and the ground contact shadows (positions and reach belong on the phones). The grid model, the reachable
+  cells and the layout stay in the scene data, the stage and the view, and the camera still frames the reachable
+  region. `on` turns the hairline grid back on for development. Any other value refuses startup. The
+  `#battle-preview` address takes `&grid=1`.
 
 ### Test fights against 1 to n enemies
 
@@ -331,11 +341,11 @@ DF_GAMEPLAY_SPLAT_DIR=artifacts/tmp/splat-dl DF_GAMEPLAY_BATTLE_SCENE=scan-villa
   development/run-gameplay.sh
 ```
 
-The grid on every scene (scans and painted grounds alike) is drawn as straight hairlines (about one pixel at
-1080p, low contrast, no glow) on one flat play plane: warm gold when neutral, cool blue on hero cells and red on
-enemy cells, fading with distance and toward the edge of the field. A hero's reachable region is one faint tint
-over its cells with a single thin outline around its outer edge (the lines inside it keep the base strength);
-legal targets and the acting figure's cell are thin rings, the only strong marks on the field. Where scan
+The cell grid is not drawn on the TV by default (`DF_GAMEPLAY_BATTLE_GRID`, above). When it is turned on it is drawn
+as straight hairlines (about one pixel at 1080p, low contrast, no glow) on one flat play plane: warm gold when
+neutral, cool blue on hero cells and red on enemy cells, fading with distance and toward the edge of the field. A
+hero's reachable region is one faint tint over its cells with a single thin outline around its outer edge (the
+lines inside it keep the base strength); legal targets and the acting figure's cell are thin rings. Where scan
 geometry stands well in front of a line the line dims instead of breaking. The look is tuned in one place,
 `crates/df-render/src/battle/grid_lines.rs`. A scan's plane sits at the median ground height under the
 open cells and figures stand on it; cells whose ground is more than 0.45 m from the plane are
@@ -383,6 +393,7 @@ with `&` and may come in any order:
 | `shot=<name>` | Cut to a named camera: `tactical`, `combat_est`, `turn_focus`, `impact`, `ko`, `victory`. |
 | `cam=<x,y,z>,<distance>,<yaw>,<pitch>,<fov>` | A free camera. |
 | `place=<token>:<col>:<row>` | Stand a token on a cell (repeatable). |
+| `grid=1` | Draw the cell grid (off by default, as on the TV). |
 | `reach` | Show the first hero's full reach (every walkable cell within six, 30 ft) as reachable cells and every foe as a target, as on a hero's turn. |
 | `beat=<kind>` | Stage one thing after the camera has idled, then hold: `rest` (a hero's turn begins: the lean toward it, then the solved resting shot), `graze`, `heavy`, `critical`, `miss`, `finish` (one blow of that kind), `selfheal`, `enemyhit`, `shoot` (the archer across the field), `speak` (an enemy's line, then a hero's, each with its bubble and the camera easing in and back), `named`, `namedmiss`, `namedcrit` (a blow whose floating result names the attack), `chain` (every enemy strikes in a row: stacked results), `victory` (every foe brought down: the held victory beat), `defeat` (every hero brought down). |
 | `lod=<0-3>` | The scan tier drawn as the finest (default 1; 0 is the largest). |

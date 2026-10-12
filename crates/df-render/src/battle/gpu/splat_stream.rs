@@ -32,6 +32,9 @@ const MAX_INDEX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CHUNK_META_BYTES: usize = 1024 * 1024;
 const MAX_PLANE_SIDE: u32 = 8192;
 const BUDGET_POLL_MS: i32 = 250;
+/// The widest ring around the grid that is drawn at the chosen level before the level steps
+/// coarser with distance, in metres (the budget usually ends it sooner).
+const FULL_DETAIL_MAX_M: f32 = 60.0;
 
 /// What to stream and where the detail goes.
 pub struct StreamConfig {
@@ -277,12 +280,22 @@ async fn run(
     let text = fetch_text(&config.index_url, MAX_INDEX_BYTES).await?;
     let index = LodIndex::parse(&text).map_err(|_| StreamError::Index)?;
     let transform = config.transform;
-    let focus = Focus {
-        centre: transform.to_scan(config.focus_world),
-        radius: config.detail_radius_m / transform.scale,
-    };
     let (finest, coarsest) = config.levels;
     let coarsest = coarsest.min(index.level_count().saturating_sub(1) as u32);
+    // The chosen level is drawn in full as far out as the budget allows: the distance rule that
+    // steps coarser starts there, not at the edge of the play area.
+    let centre = transform.to_scan(config.focus_world);
+    let radius = index.widest_full_detail_radius(
+        centre,
+        Limits {
+            finest,
+            coarsest,
+            budget: shared.borrow().budget,
+        },
+        config.detail_radius_m / transform.scale,
+        FULL_DETAIL_MAX_M / transform.scale,
+    );
+    let focus = Focus { centre, radius };
     // Chunk files the server does not have (a scan downloaded only in part): the selection
     // falls back to what exists, and each missing file is asked for once.
     let mut unavailable: std::collections::HashSet<u32> = std::collections::HashSet::new();

@@ -1013,6 +1013,20 @@ pub(super) fn splat_lod(input: Result<String, VarError>) -> Result<u32, io::Erro
         })
 }
 
+/// `DF_GAMEPLAY_BATTLE_GRID`: whether the battlefield on the TV draws its cell grid (hairlines, the
+/// reachable region and the legal targets) at all: `on` or `off`, default off. The table reads the
+/// fight from rings under the acting figure and the target, the figures walking their paths and the
+/// contact shadows; the grid itself is a development view. Anything else is refused at startup.
+pub(super) fn battle_grid(input: Result<String, VarError>) -> Result<bool, io::Error> {
+    match optional(input)?.as_deref() {
+        None | Some("off") => Ok(false),
+        Some("on") => Ok(true),
+        Some(_) => Err(io::Error::other(
+            "DF_GAMEPLAY_BATTLE_GRID invalid: use on or off (default off)",
+        )),
+    }
+}
+
 const DEFAULT_TEXT_MODEL: &str = "gpt-6-luna";
 const DEFAULT_TEXT_TOKEN_BUDGET: u64 = 150_000;
 const MAXIMUM_TEXT_TOKEN_BUDGET: u64 = 100_000_000;
@@ -2158,6 +2172,18 @@ mod adventure_settings_tests {
             assert!(splat_lod(set(bad)).is_err(), "{bad:?}");
         }
         assert!(splat_lod(Err(VarError::NotUnicode("x".into()))).is_err());
+    }
+
+    #[test]
+    fn the_battle_grid_is_off_by_default_and_only_on_or_off_are_accepted() {
+        let set = |value: &str| Ok::<_, VarError>(value.to_owned());
+        assert!(!battle_grid(Err(VarError::NotPresent)).unwrap());
+        assert!(!battle_grid(set("off")).unwrap());
+        assert!(battle_grid(set("on")).unwrap());
+        for bad in ["", "ON", "1", "true", "yes", "on ", "off\n"] {
+            assert!(battle_grid(set(bad)).is_err(), "{bad:?}");
+        }
+        assert!(battle_grid(Err(VarError::NotUnicode("x".into()))).is_err());
     }
 
     #[test]
