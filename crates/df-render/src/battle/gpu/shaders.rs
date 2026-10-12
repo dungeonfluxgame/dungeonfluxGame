@@ -365,7 +365,7 @@ fn shade(in: VOut) -> vec4<f32> {
     if (kind == 9) {
         // A rotating reticle: a ring with four ticks.
         let c = in.c;
-        let ang = frame.eye.w * 0.9 * (1.0 - in.params.y);
+        let ang = frame.eye.w * 0.9;
         let r = vec2<f32>(c.x * cos(ang) - c.y * sin(ang), c.x * sin(ang) + c.y * cos(ang));
         let d = length(c);
         let ring = 1.0 - smoothstep(0.0, 0.1, abs(d - 0.62));
@@ -377,7 +377,7 @@ fn shade(in: VOut) -> vec4<f32> {
     if (kind == 10) {
         // A thin rotating dashed focus ring.
         let d = length(in.c);
-        let ang = atan2(in.c.y, in.c.x) + frame.eye.w * 0.8 * (1.0 - in.params.y);
+        let ang = atan2(in.c.y, in.c.x) + frame.eye.w * 0.8;
         let dash = step(0.5, fract(ang * 1.9099));
         let ring = 1.0 - smoothstep(0.0, 0.1, abs(d - 0.74));
         let a = ring * (0.5 + 0.5 * dash) * in.col.a;
@@ -461,7 +461,7 @@ struct Post {
     shadow: vec4<f32>,
     highlight: vec4<f32>,
     tilt: vec4<f32>,       // centre, band, fall-off, blur px
-    misc: vec4<f32>,       // vignette, flash strength, fade, tilt-shift on
+    misc: vec4<f32>,       // vignette, flash strength, unused, tilt-shift on
     flash: vec4<f32>,      // flash colour rgb
     shake: vec4<f32>,      // dx px, dy px, texel w, texel h
     motion: vec4<f32>,     // motion blur direction x, y (unit), blur px, radial punch
@@ -560,7 +560,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // The pulse when a hero is hit: the vignette flushes red for a moment.
     colour = colour + vec3<f32>(0.55, 0.03, 0.03) * vignette * post.split.z;
     colour = colour + post.flash.rgb * post.misc.y * 0.55;
-    colour = colour * (1.0 - post.misc.z);
     return vec4<f32>(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }
 "#;

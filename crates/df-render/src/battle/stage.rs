@@ -205,7 +205,6 @@ pub struct FrameView<'a> {
     pub feel: FeelView,
     /// Particle instances for the renderer (see `particles`).
     pub particles: Vec<f32>,
-    pub fade: f32,
     /// Far to near, so alpha blending is correct.
     pub figures: Vec<FigureView>,
     pub highlight: Option<&'a Highlight>,
@@ -218,7 +217,6 @@ pub struct FrameView<'a> {
     pub floats: &'a [FloatingText],
     pub hud: &'a HudState,
     pub clock_s: f32,
-    pub reduced_motion: bool,
     /// The restrained content rating: no blood in the effects.
     pub restrained: bool,
 }
@@ -246,7 +244,6 @@ pub struct Stage {
     floats: Vec<FloatingText>,
     flash: Option<Flash>,
     clock_s: f32,
-    reduced_motion: bool,
     dropped_beats: u32,
     next_float_id: u64,
     roll_card_left_s: f32,
@@ -275,14 +272,14 @@ fn flat_direction(from: Vec3, to: Vec3) -> Vec3 {
 }
 
 impl Stage {
-    pub fn new(scene: BattleScene, reduced_motion: bool) -> Self {
+    pub fn new(scene: BattleScene) -> Self {
         let opening = scene
             .cameras
             .get(&ShotName::Tactical)
             .copied()
             .expect("scene files are validated to hold every named shot");
         Self {
-            rig: CameraRig::new(opening, reduced_motion),
+            rig: CameraRig::new(opening),
             grid: scene.grid.clone(),
             layout: None,
             sounds: VecDeque::new(),
@@ -302,7 +299,6 @@ impl Stage {
             floats: Vec::new(),
             flash: None,
             clock_s: 0.0,
-            reduced_motion,
             dropped_beats: 0,
             next_float_id: 0,
             roll_card_left_s: 0.0,
@@ -311,7 +307,7 @@ impl Stage {
             particles: Particles::default(),
             impacts: VecDeque::new(),
             tempo_permille: 300,
-            feel_enabled: !reduced_motion,
+            feel_enabled: true,
             last_angles: None,
             last_framing: None,
         }
@@ -427,10 +423,6 @@ impl Stage {
         self.hud.active = active;
     }
 
-    pub fn reduced_motion(&self) -> bool {
-        self.reduced_motion
-    }
-
     /// Whether the start-of-fight initiative sequence is playing.
     pub fn is_rolling_initiative(&self) -> bool {
         self.initiative_playing
@@ -471,11 +463,6 @@ impl Stage {
 
     pub fn restrained(&self) -> bool {
         self.restrained
-    }
-
-    pub fn set_reduced_motion(&mut self, reduced: bool) {
-        self.reduced_motion = reduced;
-        self.rig.set_reduced_motion(reduced);
     }
 
     /// Beats that could not be planned when their turn came (a token vanished meanwhile).
@@ -568,7 +555,7 @@ impl Stage {
             {
                 Some(runtime) => {
                     if runtime.token.cell != incoming.cell {
-                        if had_figures && !self.reduced_motion {
+                        if had_figures {
                             moves.push((incoming.id.clone(), runtime.token.cell, incoming.cell));
                         } else {
                             runtime.position = centre;
@@ -664,12 +651,7 @@ impl Stage {
 
     fn start_next(&mut self) {
         while let Some(beat) = self.queue.pop_front() {
-            match director::plan_with(
-                &self.grid,
-                &self.resting_tokens(),
-                &beat,
-                self.reduced_motion,
-            ) {
+            match director::plan(&self.grid, &self.resting_tokens(), &beat) {
                 Ok(timeline) => {
                     self.initiative_playing = matches!(beat, Beat::Initiative { .. });
                     self.playing = Some(Playback {
@@ -1103,12 +1085,7 @@ impl Stage {
             Step::Flash { tone, strength } => {
                 self.flash = Some(Flash {
                     tone,
-                    // Reduced motion softens the flash into a gentle fade.
-                    strength: if self.reduced_motion {
-                        strength * 0.35
-                    } else {
-                        strength
-                    },
+                    strength,
                     age_s: 0.0,
                 });
             }
@@ -1168,19 +1145,14 @@ impl Stage {
                 modifier,
                 total,
             } => {
-                let tumble_s = if self.reduced_motion {
-                    0.0
-                } else {
-                    DIE_TUMBLE_SECONDS
-                };
                 self.hud.roll_for_initiative.dice.push(DieView {
                     token,
                     face: die,
                     modifier,
                     total,
                     age_s: 0.0,
-                    tumble_s,
-                    landed: tumble_s == 0.0,
+                    tumble_s: DIE_TUMBLE_SECONDS,
+                    landed: false,
                 });
             }
             Step::InitiativeLand { token } => {
@@ -1274,13 +1246,12 @@ impl Stage {
         let Some(index) = self.token_index(id) else {
             return;
         };
-        let reduced = self.reduced_motion;
         let grid = &self.grid;
         let target = grid.cell_centre(cell);
         let runtime = &mut self.tokens[index];
         let from = grid.cell_at(runtime.position).unwrap_or(runtime.token.cell);
         let path = grid.path(from, cell).unwrap_or_default();
-        if reduced || per_step.is_zero() {
+        if per_step.is_zero() {
             runtime.walk = None;
             runtime.position = target;
             return;
@@ -1307,13 +1278,6 @@ impl Stage {
         let Some(index) = self.token_index(id) else {
             return;
         };
-        if matches!(anim, Anim::Fall) && self.reduced_motion {
-            self.tokens[index].downed = true;
-            return;
-        }
-        if matches!(anim, Anim::Draw { .. }) && self.reduced_motion {
-            return;
-        }
         let here = self.tokens[index].position;
         let other = match &anim {
             Anim::Lunge { toward: other }
@@ -1408,15 +1372,10 @@ impl Stage {
                 Vec::new()
             },
             shake_px: (rig_shake.0 + view.shake_px.0, rig_shake.1 + view.shake_px.1),
-            fade: self.rig.transition_fade(),
             figures,
             highlight: self.highlight.as_ref(),
             tactical_highlights: &self.tactical_highlights,
-            projectiles: self
-                .projectiles
-                .iter()
-                .map(|projectile| projectile_view(projectile, self.reduced_motion))
-                .collect(),
+            projectiles: self.projectiles.iter().map(projectile_view).collect(),
             layout: self.layout(),
             grid: &self.grid,
             flash: self.flash.map(|flash| FlashView {
@@ -1434,7 +1393,6 @@ impl Stage {
             floats: &self.floats,
             hud: &self.hud,
             clock_s: self.clock_s,
-            reduced_motion: self.reduced_motion,
             restrained: self.restrained,
         }
     }
@@ -1486,7 +1444,7 @@ impl Stage {
         let unit = phase / std::f32::consts::TAU;
         let reach = self.grid.cell_m() * 0.5;
         let statuses = self.display_statuses(runtime);
-        let pose = status::pose_for(statuses, self.reduced_motion);
+        let pose = status::pose_for(statuses);
         let mut slump = pose.slump;
         let mut busy = runtime.walk.is_some();
         let mut falling = false;
@@ -1550,7 +1508,7 @@ impl Stage {
             position = walk_position(walk);
         }
         let resting = !busy && !runtime.downed && !falling;
-        if resting && pose.idle > 0.0 && !self.reduced_motion {
+        if resting && pose.idle > 0.0 {
             // Weight shifts: two slow sways at rates that differ per figure, so a line of
             // figures never moves in step.
             lean += pose.idle
@@ -1653,7 +1611,7 @@ fn arrow_at(projectile: &Projectile, t: f32) -> Vec3 {
     projectile.from + travel * t + Vec3::new(0.0, height, 0.0)
 }
 
-fn projectile_view(projectile: &Projectile, reduced_motion: bool) -> ProjectileView {
+fn projectile_view(projectile: &Projectile) -> ProjectileView {
     let t = (projectile.age_s / projectile.flight_s).clamp(0.0, 1.0);
     let head = arrow_at(projectile, t);
     let tangent = (head - arrow_at(projectile, (t - 0.03).max(0.0))).normalized();
@@ -1663,11 +1621,7 @@ fn projectile_view(projectile: &Projectile, reduced_motion: bool) -> ProjectileV
         tangent
     };
     let tail = head - tangent * 0.85;
-    let trail = if reduced_motion {
-        tail
-    } else {
-        arrow_at(projectile, (t - 0.28).max(0.0))
-    };
+    let trail = arrow_at(projectile, (t - 0.28).max(0.0));
     let stuck_for = (projectile.age_s - projectile.flight_s).max(0.0);
     let alpha = if projectile.hits {
         1.0
@@ -1723,7 +1677,7 @@ mod tests {
     use super::*;
     use super::{Cover, SoundKind, Status};
     use crate::battle::{
-        model::{AttackResult, FloatTone, HitPoints},
+        model::{AttackResult, HitPoints},
         scene_file::load_embedded,
     };
 
@@ -1746,9 +1700,9 @@ mod tests {
         }
     }
 
-    fn stage(reduced: bool) -> Stage {
+    fn stage() -> Stage {
         let scene = load_embedded("salt-quay").unwrap().unwrap();
-        let mut stage = Stage::new(scene, reduced);
+        let mut stage = Stage::new(scene);
         stage.set_tokens(vec![
             token("hero", Side::Hero, Cell::new(3, 4), 12),
             token("ally", Side::Hero, Cell::new(5, 4), 12),
@@ -1788,7 +1742,7 @@ mod tests {
 
     #[test]
     fn figures_start_standing_on_their_cell_centres() {
-        let stage = stage(false);
+        let stage = stage();
         let hero = figure(&stage, "hero");
         assert_eq!(hero.position, stage.grid().cell_centre(Cell::new(3, 4)));
         assert!(hero.lean.abs() < 0.03 && hero.alpha == 1.0);
@@ -1804,7 +1758,7 @@ mod tests {
             .collect();
         let field = super::super::terrain::HeightField::new(origin, 1.0, 40, 40, heights).unwrap();
         scene.grid = scene.grid.clone().with_terrain(field);
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         stage.set_tokens(vec![
             token("hero", Side::Hero, Cell::new(1, 4), 10),
             token("goblin", Side::Enemy, Cell::new(6, 4), 8),
@@ -1829,7 +1783,7 @@ mod tests {
 
     #[test]
     fn frame_lists_figures_far_to_near() {
-        let stage = stage(false);
+        let stage = stage();
         let order: Vec<String> = stage
             .frame()
             .figures
@@ -1841,7 +1795,7 @@ mod tests {
 
     #[test]
     fn a_downing_blow_plays_through_walk_impact_fall_and_the_finishing_card() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         let mut saw_walk_away_from_cell = false;
         let mut saw_float = false;
@@ -1877,7 +1831,7 @@ mod tests {
 
     #[test]
     fn held_hit_points_wait_for_the_impact_then_expire_if_the_blow_never_comes() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let enemy = TokenId::new("enemy");
         stage.hold_hit_points([&enemy]);
         stage.set_tokens(vec![
@@ -1892,7 +1846,7 @@ mod tests {
 
     #[test]
     fn the_hit_point_bar_changes_only_at_the_moment_of_impact() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         run(&mut stage, 1.0);
         assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 5);
@@ -1902,7 +1856,7 @@ mod tests {
 
     #[test]
     fn an_ordinary_hit_returns_the_attacker_to_formation() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage
             .stage(Beat::Attack {
                 attacker: TokenId::new("hero"),
@@ -1926,7 +1880,7 @@ mod tests {
 
     #[test]
     fn a_late_token_update_waits_until_the_beat_finishes() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         run(&mut stage, 0.5);
         stage.set_tokens(vec![
@@ -1944,7 +1898,7 @@ mod tests {
 
     #[test]
     fn staging_a_beat_for_an_unknown_token_is_refused_and_the_queue_is_bounded() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         assert_eq!(
             stage.stage(Beat::TurnStart {
                 actor: TokenId::new("ghost")
@@ -1967,23 +1921,8 @@ mod tests {
     }
 
     #[test]
-    fn reduced_motion_cuts_the_camera_teleports_steps_and_drops_shake() {
-        let mut stage = stage(true);
-        stage.stage(killing_blow()).unwrap();
-        for _ in 0..400 {
-            stage.update(Duration::from_millis(50));
-            let frame = stage.frame();
-            assert_eq!(frame.shake_px, (0.0, 0.0));
-            assert!(frame.floats.iter().all(|text| text.tone != FloatTone::Miss));
-        }
-        let enemy = figure(&stage, "enemy");
-        assert!(enemy.downed && enemy.slump > 0.99);
-        assert!(!stage.is_busy());
-    }
-
-    #[test]
     fn the_camera_ends_on_the_victory_shot_after_the_finishing_blow() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         run(&mut stage, 20.0);
         // The finishing shot has the victory lens and pitch, and holds the fallen foe and the
@@ -1998,7 +1937,7 @@ mod tests {
 
     #[test]
     fn projecting_a_cell_centre_lands_inside_the_screen_for_the_establishing_shot() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.establish();
         run(&mut stage, 3.0);
         for cell in [Cell::new(3, 4), Cell::new(4, 1)] {
@@ -2024,25 +1963,8 @@ mod tests {
     }
 
     #[test]
-    fn reduced_motion_teleports_and_so_makes_no_footsteps() {
-        let mut stage = stage(true);
-        stage.stage(killing_blow()).unwrap();
-        let heard = sounds_after(&mut stage, 20.0);
-        assert!(
-            heard
-                .iter()
-                .all(|(_, kind, _)| *kind != SoundKind::Footstep)
-        );
-        assert!(
-            heard
-                .iter()
-                .any(|(_, kind, _)| *kind == SoundKind::BladeHit)
-        );
-    }
-
-    #[test]
     fn voices_follow_the_token_and_the_surface_the_scene() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         let mut seen = Vec::new();
         for _ in 0..400 {
@@ -2063,7 +1985,7 @@ mod tests {
 
     #[test]
     fn the_sound_queue_is_bounded_and_counts_what_it_dropped() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         for _ in 0..(MAX_PENDING_SOUNDS + 5) {
             stage.emit(SoundKind::HealBreath, &TokenId::new("hero"));
         }
@@ -2072,7 +1994,7 @@ mod tests {
     }
 
     fn archer_stage() -> Stage {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut archer = token("hero", Side::Hero, Cell::new(3, 4), 12);
         archer.attack = crate::battle::model::AttackStyle::Ranged;
         stage.set_tokens(vec![
@@ -2156,7 +2078,7 @@ mod tests {
 
     #[test]
     fn the_downed_state_kneels_then_lies_on_the_ground_with_a_landing_squash() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         let mut slumps = Vec::new();
         let mut thud_peak = 0.0f32;
@@ -2186,7 +2108,7 @@ mod tests {
 
     #[test]
     fn a_downed_figure_that_is_healed_stands_again() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         run(&mut stage, 20.0);
         stage.set_tokens(vec![
@@ -2201,7 +2123,7 @@ mod tests {
 
     #[test]
     fn idle_figures_sway_out_of_step_and_over_time() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         run(&mut stage, 1.0);
         let at_one: Vec<f32> = ["hero", "ally", "enemy"]
             .iter()
@@ -2210,17 +2132,11 @@ mod tests {
         assert!(at_one[0] != at_one[1] && at_one[1] != at_one[2]);
         run(&mut stage, 3.0);
         assert!(figure(&stage, "hero").lean != at_one[0]);
-        let reduced = {
-            let mut calm = self::stage(true);
-            run(&mut calm, 2.0);
-            figure(&calm, "hero").lean
-        };
-        assert_eq!(reduced, 0.0, "no idle sway under reduced motion");
     }
 
     #[test]
     fn the_target_ring_shows_during_the_focus_and_clears_at_contact() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage
             .stage(Beat::Attack {
                 attacker: TokenId::new("hero"),
@@ -2237,7 +2153,7 @@ mod tests {
 
     #[test]
     fn bloodied_follows_the_hit_points_on_screen_and_unconscious_the_fall() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         // The enemy has 5 of 12: already bloodied at rest (at or below half).
         assert!(figure(&stage, "enemy").statuses.contains(Status::Bloodied));
         assert!(!figure(&stage, "hero").statuses.contains(Status::Bloodied));
@@ -2259,7 +2175,7 @@ mod tests {
 
     #[test]
     fn a_server_status_waits_for_the_blow_that_causes_it() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let enemy_id = TokenId::new("enemy");
         stage.hold_hit_points([&enemy_id]);
         let mut poisoned = token("enemy", Side::Enemy, Cell::new(4, 1), 4);
@@ -2276,7 +2192,7 @@ mod tests {
 
     #[test]
     fn statuses_shape_the_pose_and_prone_with_poison_shows_both() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut ally = token("ally", Side::Hero, Cell::new(5, 4), 12);
         ally.statuses = vec![Status::Prone, Status::Poisoned];
         let mut hero = token("hero", Side::Hero, Cell::new(3, 4), 12);
@@ -2298,7 +2214,7 @@ mod tests {
 
     #[test]
     fn a_frightened_figure_leans_away_from_the_nearest_opponent() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut hero = token("hero", Side::Hero, Cell::new(1, 4), 12);
         hero.statuses = vec![Status::Frightened];
         stage.set_tokens(vec![
@@ -2336,7 +2252,7 @@ mod tests {
             heroes: (0..4).map(|col| Cell::new(col + 1, 5)).collect(),
             enemies: (0..4).map(|col| Cell::new(col + 1, 0)).collect(),
         }];
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         assert!(stage.set_layout("wall"));
         assert!(!stage.set_layout("missing"));
         stage.set_tokens(vec![
@@ -2470,7 +2386,7 @@ mod tests {
 
     #[test]
     fn the_roll_call_fills_the_tracker_in_the_servers_order_with_badges_1st_2nd_3rd() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage
             .stage(Beat::Initiative {
                 rolls: rolls_for(&["enemy", "hero", "ally"]),
@@ -2531,7 +2447,7 @@ mod tests {
 
     #[test]
     fn each_die_tumbles_then_lands_on_its_total() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage
             .stage(Beat::Initiative {
                 rolls: rolls_for(&["hero", "ally", "enemy"]),
@@ -2553,41 +2469,33 @@ mod tests {
     }
 
     #[test]
-    fn the_camera_whips_to_each_stop_and_cuts_with_a_fade_under_reduced_motion() {
-        let mut calm = stage(true);
-        calm.stage(Beat::Initiative {
-            rolls: rolls_for(&["hero", "enemy", "ally"]),
-        })
-        .unwrap();
-        let mut lively = stage(false);
+    fn the_camera_whips_to_each_stop_with_a_zoom_punch_on_arrival() {
+        let mut lively = stage();
         lively
             .stage(Beat::Initiative {
                 rolls: rolls_for(&["hero", "enemy", "ally"]),
             })
             .unwrap();
-        let (mut calm_panned, mut lively_overshoot) = (false, false);
         let mut closest = f32::MAX;
+        let mut panned = false;
         for _ in 0..900 {
-            calm.update(Duration::from_millis(20));
             lively.update(Duration::from_millis(20));
-            calm_panned |= calm.rig.is_panning();
             // A whip travels farther than it needs to and comes back: the lens punches in.
             closest = closest.min(lively.camera_pose().fov_deg);
-            lively_overshoot |= lively.rig.is_panning();
+            panned |= lively.rig.is_panning();
         }
-        assert!(!calm_panned, "reduced motion never pans: it cuts");
-        assert!(lively_overshoot);
+        assert!(panned);
         let victory = lively.scene().cameras[&ShotName::Victory].fov_deg;
         assert!(
             closest < victory * 0.97,
             "zoom punch on arrival: {closest} vs {victory}"
         );
-        assert!(!calm.is_busy() && !lively.is_busy());
+        assert!(!lively.is_busy());
     }
 
     #[test]
     fn a_newer_view_cuts_the_sequence_short_and_goes_to_the_current_turn() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.set_active(Some(TokenId::new("hero")));
         stage
             .stage(Beat::Initiative {
@@ -2659,7 +2567,7 @@ mod tests {
     #[test]
     fn the_initiative_is_staged_for_a_fight_the_display_watched_begin() {
         use crate::battle::{CombatFeed, FeedMode};
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut feed = CombatFeed::new(FeedMode::HoldForCues);
         feed.apply(&mut stage, &feed_snapshot(true, 0, 1)).unwrap();
         assert!(stage.is_busy());
@@ -2681,7 +2589,7 @@ mod tests {
     fn no_sequence_when_the_display_joins_a_fight_already_in_progress() {
         use crate::battle::{CombatFeed, FeedMode};
         for (live, outcomes, round) in [(false, 0, 1), (true, 2, 1), (true, 0, 2)] {
-            let mut stage = stage(false);
+            let mut stage = stage();
             let mut feed = CombatFeed::new(FeedMode::HoldForCues);
             feed.apply(&mut stage, &feed_snapshot(live, outcomes, round))
                 .unwrap();
@@ -2696,7 +2604,7 @@ mod tests {
     #[test]
     fn a_view_that_shows_someone_already_acted_ends_the_sequence_in_progress() {
         use crate::battle::{CombatFeed, FeedMode};
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut feed = CombatFeed::new(FeedMode::HoldForCues);
         feed.apply(&mut stage, &feed_snapshot(true, 0, 1)).unwrap();
         run(&mut stage, 1.0);
@@ -2708,7 +2616,7 @@ mod tests {
 
     #[test]
     fn the_archer_is_mirrored_when_her_target_is_on_the_left_of_the_screen() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut archer = token("hero", Side::Hero, Cell::new(3, 4), 12);
         archer.attack = crate::battle::model::AttackStyle::Ranged;
         stage.set_tokens(vec![
@@ -2773,7 +2681,7 @@ mod tests {
     /// that is not moving.
     #[test]
     fn both_fighters_stay_in_frame_through_a_whole_attack_and_the_camera_rests_at_contact() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         for _ in 0..30 {
             frame_step(&mut stage);
         }
@@ -2815,7 +2723,7 @@ mod tests {
     #[test]
     fn a_bystander_is_never_in_front_of_the_fighters() {
         let scene = load_embedded("scan-village").unwrap().unwrap();
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         stage.set_tokens(vec![
             token("brakka", Side::Hero, Cell::new(1, 2), 12),
             token("mudge", Side::Enemy, Cell::new(2, 1), 5),
@@ -2858,7 +2766,7 @@ mod tests {
     #[test]
     fn a_blow_emits_one_impact_event_scaled_by_its_size_and_a_heavy_one_shakes_harder() {
         let strength = |damage: u32| {
-            let mut stage = stage(false);
+            let mut stage = stage();
             stage.stage(ordinary_hit("hero", "enemy", damage)).unwrap();
             let mut peak = 0.0f32;
             let mut events = Vec::new();
@@ -2884,7 +2792,7 @@ mod tests {
 
     #[test]
     fn a_miss_sways_the_camera_without_an_impact_event_or_hit_stop() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage
             .stage(Beat::Attack {
                 attacker: TokenId::new("hero"),
@@ -2904,7 +2812,7 @@ mod tests {
 
     #[test]
     fn hit_stop_freezes_the_figures_for_a_few_frames_and_then_releases() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(ordinary_hit("hero", "enemy", 7)).unwrap();
         let mut frozen_frames = 0;
         let mut previous = None;
@@ -2932,7 +2840,7 @@ mod tests {
 
     #[test]
     fn the_finishing_blow_runs_in_slow_motion_and_is_busy_for_all_of_it() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         let mut saw_slow = false;
         for _ in 0..900 {
@@ -2950,7 +2858,7 @@ mod tests {
     #[test]
     fn the_camera_lives_while_it_waits_and_follows_the_tempo() {
         let sampled = |tempo: u16| {
-            let mut stage = stage(false);
+            let mut stage = stage();
             stage.set_tempo_intensity(tempo);
             let mut yaws = Vec::new();
             for _ in 0..(30 * 30) {
@@ -2974,7 +2882,7 @@ mod tests {
         assert!((calm[60] - calm[90]).abs() > 1e-3);
         assert!(peak != calm);
         // With effects off the camera is dead still, as before.
-        let mut off = stage(false);
+        let mut off = stage();
         off.set_feel_enabled(false);
         let first = off.frame().camera;
         for _ in 0..120 {
@@ -2989,7 +2897,7 @@ mod tests {
     #[test]
     fn the_camera_never_shows_a_frame_without_the_acting_figure_on_an_enemy_turn() {
         let scene = load_embedded("scan-riverbed").unwrap().unwrap();
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         stage.set_tokens(vec![
             token("dagna", Side::Hero, Cell::new(2, 4), 12),
             token("tomas", Side::Enemy, Cell::new(6, 1), 8),
@@ -3022,7 +2930,7 @@ mod tests {
     #[test]
     fn a_self_action_frames_the_actor_clear_of_a_bystander() {
         let scene = load_embedded("scan-village").unwrap().unwrap();
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         stage.set_tokens(vec![
             token("brakka", Side::Hero, Cell::new(1, 2), 6),
             token("mudge", Side::Enemy, Cell::new(2, 1), 5),
@@ -3070,7 +2978,7 @@ mod tests {
 
     #[test]
     fn a_roll_card_waits_for_the_camera_to_settle_on_the_fighters() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         // Start from the heading the framing will pick, so the move is a pan, not a cut.
         let pick = |stage: &Stage| {
             let attacker = body_of_figure(stage, "hero");
@@ -3125,7 +3033,7 @@ mod tests {
     /// z, and Sylvie nearby. Brakka kills the weasel, then the weasel hits Brakka.
     fn weasel_fight() -> Stage {
         let scene = load_embedded("scan-village").unwrap().unwrap();
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         let mut weasel = token("weasel", Side::Enemy, Cell::new(3, 1), 4);
         weasel.height_m = 0.6;
         stage.set_tokens(vec![
@@ -3256,7 +3164,7 @@ mod tests {
 
     #[test]
     fn an_attack_leaves_every_figure_exactly_where_the_server_put_it() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let home = |stage: &Stage, id: &str| {
             let offset =
                 figure(stage, id).position - stage.grid().cell_centre(figure_cell(stage, id));
@@ -3303,7 +3211,7 @@ mod tests {
 
     #[test]
     fn one_footstep_sounds_per_cell_the_server_moves_a_figure() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.set_tokens(vec![
             token("hero", Side::Hero, Cell::new(3, 2), 12),
             token("ally", Side::Hero, Cell::new(5, 4), 12),
@@ -3323,7 +3231,7 @@ mod tests {
 
     fn crowded_stage() -> Stage {
         let scene = load_embedded("scan-riverbed").unwrap().unwrap();
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         let mut archer = token("archer", Side::Hero, Cell::new(0, 5), 12);
         archer.attack = crate::battle::model::AttackStyle::Ranged;
         stage.set_tokens(vec![

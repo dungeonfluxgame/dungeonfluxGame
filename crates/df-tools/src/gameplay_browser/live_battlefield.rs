@@ -508,7 +508,6 @@ async fn run_preview(host: Element, request: PreviewRequest) {
         &host,
         scene,
         StageOptions {
-            reduced_motion: false,
             procedural_splats: request.procedural_splats,
             fixed_quality: request.fixed,
             fps: request.fps,
@@ -1446,7 +1445,6 @@ fn start_mount(
             &host,
             scene,
             StageOptions {
-                reduced_motion: false,
                 procedural_splats: false,
                 fallback_layers,
                 fixed_quality: None,

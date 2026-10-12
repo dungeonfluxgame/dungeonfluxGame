@@ -166,7 +166,7 @@ pub enum Step {
     },
     /// Rings the token being aimed at, with its name tag (or clears it).
     Target(Option<TokenId>),
-    /// A fast whip of the camera (a cut with a cross-fade under reduced motion).
+    /// A fast whip of the camera.
     Whip {
         command: CameraCommand,
         travel: Duration,
@@ -175,7 +175,7 @@ pub enum Step {
     Banner(Option<String>),
     /// Starts an initiative sequence: the tracker empties and refills as the camera visits.
     InitiativeStart,
-    /// A d20 appears above a figure and tumbles (appearing already landed under reduced motion).
+    /// A d20 appears above a figure and tumbles.
     InitiativeDie {
         token: TokenId,
         die: u32,
@@ -275,19 +275,8 @@ fn camera(shot: ShotName, focus: CameraFocus, dolly: f32) -> CameraCommand {
 /// (home) cells; the attacker's steps are planned from home and the stage resolves where it
 /// actually stands.
 pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, PlanError> {
-    plan_with(grid, tokens, beat, false)
-}
-
-/// As [`plan`], telling the director whether motion is reduced (the initiative dice then appear
-/// already landed and the sequence is shorter). Outcomes never depend on it.
-pub fn plan_with(
-    grid: &Grid,
-    tokens: &[Token],
-    beat: &Beat,
-    reduced_motion: bool,
-) -> Result<Timeline, PlanError> {
     match beat {
-        Beat::Initiative { rolls } => plan_initiative(tokens, rolls, reduced_motion),
+        Beat::Initiative { rolls } => plan_initiative(tokens, rolls),
         Beat::TurnStart { actor } => plan_turn(tokens, actor),
         Beat::Approach { attacker, target } => {
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
@@ -346,8 +335,6 @@ pub fn plan_with(
 /// Gap between one combatant's die and the next, and how long a die tumbles.
 const DICE_STAGGER: Duration = Duration::from_millis(280);
 const DICE_TUMBLE: Duration = Duration::from_millis(800);
-/// Under reduced motion the dice appear landed, one after another.
-const DICE_STAGGER_REDUCED: Duration = Duration::from_millis(160);
 const DICE_READ: Duration = Duration::from_millis(700);
 /// One roll-call stop is about a second; the whole roll-call never runs past this.
 pub const STOP: Duration = Duration::from_millis(1000);
@@ -361,11 +348,7 @@ const ROUND_BANNER: Duration = Duration::from_millis(1100);
 /// in seat order, then the roll-call (the camera whips to each combatant in the server's turn
 /// order, a badge slams in, a flourish plays and the tracker fills), a pull-back, the "Round 1"
 /// banner and the first turn-focus shot. The order is exactly `rolls`; nothing is re-sorted.
-fn plan_initiative(
-    tokens: &[Token],
-    rolls: &[InitiativeRoll],
-    reduced_motion: bool,
-) -> Result<Timeline, PlanError> {
+fn plan_initiative(tokens: &[Token], rolls: &[InitiativeRoll]) -> Result<Timeline, PlanError> {
     let mut builder = Builder { steps: Vec::new() };
     for roll in rolls {
         find(tokens, &roll.token)?;
@@ -389,19 +372,14 @@ fn plan_initiative(
 
     // The dice: seat order is the order of `tokens`.
     let dice_start = Duration::from_millis(1000);
-    let (stagger, tumble) = if reduced_motion {
-        (DICE_STAGGER_REDUCED, Duration::ZERO)
-    } else {
-        (DICE_STAGGER, DICE_TUMBLE)
-    };
     let seated: Vec<&InitiativeRoll> = tokens
         .iter()
         .filter_map(|token| rolls.iter().find(|roll| roll.token == token.id))
         .collect();
     let mut all_landed = dice_start;
     for (index, roll) in seated.iter().enumerate() {
-        let appears = dice_start + stagger * index as u32;
-        let lands = appears + tumble;
+        let appears = dice_start + DICE_STAGGER * index as u32;
+        let lands = appears + DICE_TUMBLE;
         builder.at(
             appears,
             Step::InitiativeDie {
@@ -411,21 +389,19 @@ fn plan_initiative(
                 total: roll.total,
             },
         );
-        if !reduced_motion {
-            builder.at(
-                appears,
-                Step::Sound {
-                    kind: SoundKind::DiceRattle,
-                    token: roll.token.clone(),
-                },
-            );
-            builder.at(
-                lands,
-                Step::InitiativeLand {
-                    token: roll.token.clone(),
-                },
-            );
-        }
+        builder.at(
+            appears,
+            Step::Sound {
+                kind: SoundKind::DiceRattle,
+                token: roll.token.clone(),
+            },
+        );
+        builder.at(
+            lands,
+            Step::InitiativeLand {
+                token: roll.token.clone(),
+            },
+        );
         builder.at(
             lands,
             Step::Sound {
@@ -1790,24 +1766,6 @@ mod tests {
         assert_eq!(styles["c0"], ReadyStyle::Brandish);
         assert_eq!(styles["c1"], ReadyStyle::Nock);
         assert_eq!(styles["c2"], ReadyStyle::Snarl);
-    }
-
-    #[test]
-    fn under_reduced_motion_the_dice_appear_landed_and_the_sequence_is_shorter() {
-        let (grid, _) = field();
-        let (tokens, rolls) = crowd(3);
-        let beat = Beat::Initiative { rolls };
-        let calm = plan_with(&grid, &tokens, &beat, true).unwrap();
-        let lively = plan_with(&grid, &tokens, &beat, false).unwrap();
-        let labels = names(&calm);
-        assert!(!labels.contains(&"snd-dice-rattle") && !labels.contains(&"die-land"));
-        assert!(calm.duration < lively.duration);
-        assert_eq!(
-            whip_targets(&calm),
-            whip_targets(&lively),
-            "same order, same information"
-        );
-        assert_eq!(badge_order(&calm), badge_order(&lively));
     }
 
     #[test]

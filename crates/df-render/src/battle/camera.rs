@@ -1,8 +1,7 @@
 //! Orbit camera poses, named shots and the rig that eases between them. Ported from the earlier
 //! build's `camera_motion.mjs`: eased pan of at most five seconds, impact shake of at most 200 ms
 //! and 32 px. The rig owns no clock; callers pass the elapsed time to [`CameraRig::update`], so
-//! tests drive it deterministically. Reduced motion replaces every pan with a cut that fades in
-//! (a dip to black) and drops the shake.
+//! tests drive it deterministically.
 
 use std::time::Duration;
 
@@ -11,10 +10,6 @@ use super::math::{Mat4, Vec3, ease_in_out, lerp};
 pub const MAX_PAN: Duration = Duration::from_secs(5);
 pub const MAX_SHAKE: Duration = Duration::from_millis(200);
 pub const MAX_SHAKE_PX: f32 = 32.0;
-/// How long the black dip after a reduced-motion cut takes to clear.
-pub const CUT_FADE: Duration = Duration::from_millis(280);
-/// How dark the dip after a reduced-motion cut starts: a soft blink, not a blackout.
-pub const CUT_FADE_PEAK: f32 = 0.55;
 
 /// The named shots of the earlier protocol. Their poses come from the scene file.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -179,19 +174,15 @@ pub struct CameraRig {
     punch: f32,
     pan: Option<Pan>,
     shake: Option<Shake>,
-    cut_fade: f32,
-    reduced_motion: bool,
 }
 
 impl CameraRig {
-    pub fn new(pose: CameraPose, reduced_motion: bool) -> Self {
+    pub fn new(pose: CameraPose) -> Self {
         Self {
             pose,
             punch: 0.0,
             pan: None,
             shake: None,
-            cut_fade: 0.0,
-            reduced_motion,
         }
     }
 
@@ -208,23 +199,8 @@ impl CameraRig {
         }
     }
 
-    pub fn set_reduced_motion(&mut self, reduced: bool) {
-        self.reduced_motion = reduced;
-        if reduced {
-            self.shake = None;
-            if let Some(pan) = self.pan.take() {
-                self.pose = pan.to;
-            }
-        }
-    }
-
     pub fn is_panning(&self) -> bool {
         self.pan.is_some()
-    }
-
-    /// Black dip strength from a reduced-motion cut: one right after the cut, easing to zero.
-    pub fn transition_fade(&self) -> f32 {
-        self.cut_fade
     }
 
     /// Jumps straight to `pose`, cancelling any pan and shake.
@@ -236,15 +212,11 @@ impl CameraRig {
     }
 
     /// A fast, snappy move to `pose`: `duration` of travel with a slight overshoot and settle,
-    /// then a short zoom punch on arrival. With reduced motion it is a cut with the short
-    /// cross-fade instead (no overshoot, no punch).
+    /// then a short zoom punch on arrival. A zero duration is a cut.
     pub fn whip_to(&mut self, pose: CameraPose, duration: Duration) {
         let duration = duration.min(MAX_PAN);
-        if self.reduced_motion || duration.is_zero() {
+        if duration.is_zero() {
             self.cut_to(pose);
-            if self.reduced_motion {
-                self.cut_fade = CUT_FADE_PEAK;
-            }
             return;
         }
         self.shake = None;
@@ -258,15 +230,11 @@ impl CameraRig {
         });
     }
 
-    /// Eases to `pose` over `duration` (clamped to [`MAX_PAN`]). With reduced motion, or a zero
-    /// duration, it is a cut; reduced motion also starts the fade.
+    /// Eases to `pose` over `duration` (clamped to [`MAX_PAN`]). A zero duration is a cut.
     pub fn pan_to(&mut self, pose: CameraPose, duration: Duration) {
         let duration = duration.min(MAX_PAN);
-        if self.reduced_motion || duration.is_zero() {
+        if duration.is_zero() {
             self.cut_to(pose);
-            if self.reduced_motion {
-                self.cut_fade = CUT_FADE_PEAK;
-            }
             return;
         }
         self.shake = None;
@@ -279,7 +247,7 @@ impl CameraRig {
         });
     }
 
-    /// Starts an impact shake. Amplitude and duration are clamped; reduced motion ignores it.
+    /// Starts an impact shake. Amplitude and duration are clamped.
     pub fn shake(&mut self, amplitude_px: f32, duration: Duration) {
         let amplitude = if amplitude_px.is_finite() {
             amplitude_px.clamp(0.0, MAX_SHAKE_PX)
@@ -287,7 +255,7 @@ impl CameraRig {
             0.0
         };
         let duration = duration.min(MAX_SHAKE);
-        if self.reduced_motion || amplitude == 0.0 || duration.is_zero() {
+        if amplitude == 0.0 || duration.is_zero() {
             return;
         }
         self.shake = Some(Shake {
@@ -334,9 +302,6 @@ impl CameraRig {
                 self.shake = Some(shake);
             }
         }
-        if self.cut_fade > 0.0 {
-            self.cut_fade = (self.cut_fade - CUT_FADE_PEAK * dt / CUT_FADE.as_secs_f32()).max(0.0);
-        }
     }
 }
 
@@ -380,7 +345,7 @@ mod tests {
 
     #[test]
     fn pan_eases_with_flat_ends_and_lands_exactly_on_the_target_pose() {
-        let mut rig = CameraRig::new(pose(10.0, 0.0), false);
+        let mut rig = CameraRig::new(pose(10.0, 0.0));
         rig.pan_to(pose(20.0, 40.0), Duration::from_secs(2));
         rig.update(Duration::from_millis(100));
         let early = rig.pose().distance;
@@ -394,7 +359,7 @@ mod tests {
 
     #[test]
     fn pan_duration_is_capped_at_five_seconds() {
-        let mut rig = CameraRig::new(pose(10.0, 0.0), false);
+        let mut rig = CameraRig::new(pose(10.0, 0.0));
         rig.pan_to(pose(20.0, 0.0), Duration::from_secs(60));
         rig.update(Duration::from_secs(1));
         rig.update(Duration::from_secs(1));
@@ -407,7 +372,7 @@ mod tests {
 
     #[test]
     fn shake_is_bounded_in_amplitude_and_duration_and_decays() {
-        let mut rig = CameraRig::new(pose(10.0, 0.0), false);
+        let mut rig = CameraRig::new(pose(10.0, 0.0));
         rig.shake(500.0, Duration::from_secs(10));
         let mut peak = 0.0f32;
         let mut ticks = 0;
@@ -420,30 +385,6 @@ mod tests {
         assert!(peak <= MAX_SHAKE_PX, "peak {peak}");
         assert!(ticks <= 21, "lasted {ticks} ticks of 10 ms");
         assert_eq!(rig.shake_offset_px(), (0.0, 0.0));
-    }
-
-    #[test]
-    fn reduced_motion_cuts_instead_of_panning_fades_and_drops_shake() {
-        let mut rig = CameraRig::new(pose(10.0, 0.0), true);
-        rig.pan_to(pose(20.0, 40.0), Duration::from_secs(2));
-        assert_eq!(rig.pose(), pose(20.0, 40.0));
-        assert!(!rig.is_panning());
-        assert_eq!(rig.transition_fade(), CUT_FADE_PEAK);
-        rig.shake(10.0, Duration::from_millis(200));
-        assert_eq!(rig.shake_offset_px(), (0.0, 0.0));
-        rig.update(Duration::from_millis(140));
-        assert!((rig.transition_fade() - CUT_FADE_PEAK * 0.5).abs() < 0.01);
-        rig.update(Duration::from_millis(400));
-        assert_eq!(rig.transition_fade(), 0.0);
-    }
-
-    #[test]
-    fn turning_reduced_motion_on_mid_pan_completes_the_move() {
-        let mut rig = CameraRig::new(pose(10.0, 0.0), false);
-        rig.pan_to(pose(20.0, 0.0), Duration::from_secs(2));
-        rig.set_reduced_motion(true);
-        assert_eq!(rig.pose().distance, 20.0);
-        assert!(!rig.is_panning());
     }
 
     #[test]
@@ -466,7 +407,7 @@ mod tests {
 
     #[test]
     fn a_whip_overshoots_a_little_settles_exactly_and_punches_the_lens() {
-        let mut rig = CameraRig::new(pose(10.0, 0.0), false);
+        let mut rig = CameraRig::new(pose(10.0, 0.0));
         rig.whip_to(pose(20.0, 0.0), Duration::from_millis(300));
         let mut peak = 0.0f32;
         let mut distances = Vec::new();
@@ -493,16 +434,5 @@ mod tests {
         assert_eq!(rig.pose(), pose(20.0, 0.0));
         // It travels fast: more than half the way in the first third of the time.
         assert!(distances[9] > 15.0, "snappy start: {}", distances[9]);
-    }
-
-    #[test]
-    fn a_whip_under_reduced_motion_is_a_cut_with_the_short_fade() {
-        let mut rig = CameraRig::new(pose(10.0, 0.0), true);
-        rig.whip_to(pose(20.0, 40.0), Duration::from_millis(300));
-        assert_eq!(rig.pose(), pose(20.0, 40.0));
-        assert!(!rig.is_panning());
-        assert_eq!(rig.transition_fade(), CUT_FADE_PEAK);
-        rig.update(Duration::from_millis(50));
-        assert_eq!(rig.pose(), pose(20.0, 40.0), "no punch either");
     }
 }

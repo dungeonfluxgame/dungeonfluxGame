@@ -360,9 +360,8 @@ pub struct StatusPose {
     pub afterimage: bool,
 }
 
-/// The pose for `set`. Reduced motion removes wobble, shiver and the heartbeat/afterimage pulses
-/// but keeps the static pose (slump, dimming).
-pub fn pose_for(set: StatusSet, reduced_motion: bool) -> StatusPose {
+/// The pose for `set`.
+pub fn pose_for(set: StatusSet) -> StatusPose {
     let has = |status| set.contains(status);
     let slump = [
         (Status::Prone, 1.0),
@@ -387,21 +386,12 @@ pub fn pose_for(set: StatusSet, reduced_motion: bool) -> StatusPose {
     } else {
         1.0
     };
-    let motion = !reduced_motion;
     StatusPose {
         slump,
         idle,
         breath: if has(Status::Raging) { 2.4 } else { 1.0 },
-        wobble: if has(Status::Stunned) && motion {
-            1.0
-        } else {
-            0.0
-        },
-        shiver: if has(Status::Frightened) && motion {
-            1.0
-        } else {
-            0.0
-        },
+        wobble: if has(Status::Stunned) { 1.0 } else { 0.0 },
+        shiver: if has(Status::Frightened) { 1.0 } else { 0.0 },
         flinch: if has(Status::Frightened) { 0.16 } else { 0.0 },
         dim: if unconscious || has(Status::Incapacitated) {
             0.45
@@ -411,8 +401,8 @@ pub fn pose_for(set: StatusSet, reduced_motion: bool) -> StatusPose {
             0.0
         },
         alpha: if has(Status::Invisible) { 0.3 } else { 1.0 },
-        heartbeat: has(Status::Dying) && motion,
-        afterimage: has(Status::Dodging) && motion,
+        heartbeat: has(Status::Dying),
+        afterimage: has(Status::Dodging),
     }
 }
 
@@ -548,57 +538,47 @@ mod tests {
     fn prone_and_poisoned_both_show() {
         let set = StatusSet::of(&[Status::Prone, Status::Poisoned]);
         assert!(resolve(set).body.contains(Status::Poisoned));
-        let pose = pose_for(set, false);
+        let pose = pose_for(set);
         assert_eq!(pose.slump, 1.0);
         assert_eq!(pose.dim, 0.0, "prone is conscious: normal colour");
     }
 
     #[test]
     fn unconscious_slumps_dim_and_dying_adds_a_heartbeat() {
-        let unconscious = pose_for(StatusSet::of(&[Status::Unconscious]), false);
+        let unconscious = pose_for(StatusSet::of(&[Status::Unconscious]));
         assert_eq!((unconscious.slump, unconscious.idle), (1.0, 0.0));
         assert!(unconscious.dim > 0.3);
-        let dying = pose_for(StatusSet::of(&[Status::Dying, Status::Unconscious]), false);
+        let dying = pose_for(StatusSet::of(&[Status::Dying, Status::Unconscious]));
         assert!(dying.heartbeat);
-        assert!(!pose_for(StatusSet::of(&[Status::Dying]), true).heartbeat);
     }
 
     #[test]
     fn stone_and_paralysis_are_rigid_and_restraints_constrain_motion() {
-        assert_eq!(
-            pose_for(StatusSet::of(&[Status::Petrified]), false).idle,
-            0.0
-        );
-        assert_eq!(
-            pose_for(StatusSet::of(&[Status::Paralyzed]), false).idle,
-            0.0
-        );
-        let restrained = pose_for(StatusSet::of(&[Status::Restrained]), false);
+        assert_eq!(pose_for(StatusSet::of(&[Status::Petrified])).idle, 0.0);
+        assert_eq!(pose_for(StatusSet::of(&[Status::Paralyzed])).idle, 0.0);
+        let restrained = pose_for(StatusSet::of(&[Status::Restrained]));
         assert!(restrained.idle > 0.0 && restrained.idle < 0.5);
-        assert!(pose_for(StatusSet::of(&[Status::Raging]), false).breath > 2.0);
+        assert!(pose_for(StatusSet::of(&[Status::Raging])).breath > 2.0);
     }
 
     #[test]
-    fn reduced_motion_removes_wobble_shiver_and_pulses_but_not_the_pose() {
+    fn stunned_frightened_and_dodging_move_and_the_pose_is_kept() {
         let set = StatusSet::of(&[
             Status::Stunned,
             Status::Frightened,
             Status::Dodging,
             Status::Prone,
         ]);
-        let moving = pose_for(set, false);
-        let calm = pose_for(set, true);
-        assert!(moving.wobble > 0.0 && moving.shiver > 0.0 && moving.afterimage);
-        assert_eq!((calm.wobble, calm.shiver), (0.0, 0.0));
-        assert!(!calm.afterimage);
-        assert_eq!(calm.slump, 1.0);
-        assert!(calm.flinch > 0.0, "the lean away is a pose, not motion");
+        let pose = pose_for(set);
+        assert!(pose.wobble > 0.0 && pose.shiver > 0.0 && pose.afterimage);
+        assert_eq!(pose.slump, 1.0);
+        assert!(pose.flinch > 0.0);
     }
 
     #[test]
     fn invisible_is_faint() {
-        assert!(pose_for(StatusSet::of(&[Status::Invisible]), false).alpha <= 0.3);
-        assert_eq!(pose_for(StatusSet::EMPTY, false).alpha, 1.0);
+        assert!(pose_for(StatusSet::of(&[Status::Invisible])).alpha <= 0.3);
+        assert_eq!(pose_for(StatusSet::EMPTY).alpha, 1.0);
     }
 
     #[test]

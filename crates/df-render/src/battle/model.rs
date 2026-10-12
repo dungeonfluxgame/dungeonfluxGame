@@ -179,7 +179,7 @@ pub fn initiative_line(die: u32, modifier: i32, total: i32, order: u32) -> Strin
 }
 
 /// A die above a figure during the initiative roll. It tumbles for `tumble_s` seconds after it
-/// appears (0 under reduced motion) and then shows its total.
+/// appears and then shows its total.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DieView {
     pub token: TokenId,

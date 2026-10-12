@@ -1009,7 +1009,7 @@ impl Renderer {
         data.extend_from_slice(&[
             0.62,
             flash_strength,
-            frame.fade,
+            0.0,
             if self.quality.tilt_shift { 1.0 } else { 0.0 },
         ]);
         data.extend_from_slice(&[flash_rgb[0], flash_rgb[1], flash_rgb[2], 0.0]);
@@ -1042,7 +1042,6 @@ impl Renderer {
     fn decals(&self, frame: &FrameView<'_>, grid: &Grid) -> Vec<f32> {
         let mut out = Vec::new();
         let half = grid.cell_m() * 0.5;
-        let reduced = if frame.reduced_motion { 1.0 } else { 0.0 };
         let mut push = |shape: [f32; 4], colour: [f32; 4], params: [f32; 3]| {
             if out.len() / DECAL_STRIDE < MAX_DECALS {
                 out.extend_from_slice(&shape);
@@ -1138,14 +1137,14 @@ impl Renderer {
                 push(
                     [figure.position.x, figure.position.z, half * 1.2, half * 1.2],
                     [1.0, 0.55, 0.25, 1.0],
-                    [9.0, reduced, 0.0],
+                    [9.0, 0.0, 0.0],
                 );
             }
             if figure.statuses.contains(Status::Concentrating) {
                 push(
                     [figure.position.x, figure.position.z, 0.8, 0.8],
                     [0.65, 0.85, 1.0, 1.0],
-                    [10.0, reduced, 0.0],
+                    [10.0, 0.0, 0.0],
                 );
             }
             if let Some(pip) = figure.cover
@@ -1194,7 +1193,6 @@ impl Renderer {
         let eye = frame.camera.eye();
         let right = forward.cross(Vec3::UP);
         let flat = Vec3::new(right.x, 0.0, right.z).normalized();
-        let reduced = if frame.reduced_motion { 1.0 } else { 0.0 };
         let mut list: Vec<Billboard> = Vec::new();
         if let Some(layout) = frame.layout {
             let cell_m = frame.grid.cell_m();
@@ -1238,7 +1236,7 @@ impl Renderer {
                                     ],
                                     [0.0; 4],
                                     [0.0; 4],
-                                    [reduced, 0.0, 0.0, 0.0],
+                                    [0.0; 4],
                                 ),
                                 texture,
                                 depth,
@@ -1254,7 +1252,7 @@ impl Renderer {
                                 [0.0; 4],
                                 [0.0; 4],
                                 [0.0; 4],
-                                [reduced, 0.0, 0.0, 0.0],
+                                [0.0; 4],
                             ),
                             texture: self.clear_pixel.clone(),
                             depth,
@@ -1314,7 +1312,7 @@ impl Renderer {
                         bounds,
                         [0.0; 4],
                         [0.0; 4],
-                        [reduced, 0.0, 0.0, figure.phase],
+                        [0.0, 0.0, 0.0, figure.phase],
                     ),
                     texture: texture.clone(),
                     depth: depth + 0.01,
@@ -1340,7 +1338,7 @@ impl Renderer {
                     bounds,
                     [body_lo, body_hi, edge_lo, edge_hi],
                     [over_lo, over_hi, figure.slump, figure.thud],
-                    [reduced, figure.dim, figure.heartbeat, figure.phase],
+                    [0.0, figure.dim, figure.heartbeat, figure.phase],
                 ),
                 texture,
                 depth,

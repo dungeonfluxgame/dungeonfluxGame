@@ -40,9 +40,7 @@ pub use camera::{CameraPose, CameraRig, PoseError, ShotName};
 pub use combat_feed::{
     CombatFeed, CombatSnapshot, FeedMode, FeedReport, InitiativeEntry, Member, Outcome,
 };
-pub use director::{
-    Anim, FlashTone, PlanError, ReadyStyle, Step, TimedStep, Timeline, plan, plan_with,
-};
+pub use director::{Anim, FlashTone, PlanError, ReadyStyle, Step, TimedStep, Timeline, plan};
 pub use figure_art::{VisibleBounds, visible_bounds};
 pub use formation::{Formation, FormationError, derive as derive_formation, from_layout};
 pub use grid::{Cell, Grid, GridError};

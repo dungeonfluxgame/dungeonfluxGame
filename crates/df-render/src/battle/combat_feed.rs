@@ -323,7 +323,7 @@ mod tests {
     }
 
     fn stage() -> Stage {
-        Stage::new(load_embedded("salt-quay").unwrap().unwrap(), false)
+        Stage::new(load_embedded("salt-quay").unwrap().unwrap())
     }
 
     fn strike(hit: bool, damage: u32, after: u32, downed: bool) -> Outcome {
@@ -442,7 +442,7 @@ mod hold_tests {
 
     #[test]
     fn in_cue_mode_a_new_outcome_stages_nothing_but_keeps_the_bar_until_the_cue_strikes() {
-        let mut stage = Stage::new(load_embedded("salt-quay").unwrap().unwrap(), false);
+        let mut stage = Stage::new(load_embedded("salt-quay").unwrap().unwrap());
         let mut feed = CombatFeed {
             mode: FeedMode::HoldForCues,
             ..CombatFeed::default()

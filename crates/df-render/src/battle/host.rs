@@ -46,7 +46,6 @@ pub enum Availability {
 
 #[derive(Clone, Debug, Default)]
 pub struct StageOptions {
-    pub reduced_motion: bool,
     /// Replace the scene's own splat layer with the built-in procedural ground.
     pub procedural_splats: bool,
     /// The painted ground and backdrop to show instead when the scene's splats cannot be drawn
@@ -124,7 +123,7 @@ impl BattleStage {
                 container: None,
                 canvas: None,
                 hud: None,
-                stage: Stage::new(scene, true),
+                stage: Stage::new(scene),
                 renderer: None,
                 availability: Availability::Unavailable(reason),
                 pacer: FramePacer::new(BattleFps::DEFAULT),
@@ -236,7 +235,7 @@ impl BattleStage {
         }
         mark(host, "active");
         let _ = host.set_attribute("data-battlefield-adapter", &gpu.adapter_description);
-        let mut stage = Stage::new(scene, options.reduced_motion);
+        let mut stage = Stage::new(scene);
         if options.feel_off {
             stage.set_feel_enabled(false);
         }
