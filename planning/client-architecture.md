@@ -104,8 +104,8 @@ and open decisions above must not be treated as approved implementation contract
 
 ## Display stage machines
 
-Status: implemented for scene, line, voice clip, actor and battle (PLAY-F06 M1, M2); the hero
-speech-intent line states are added by PLAY-N04.
+Status: implemented for scene, line, voice clip, actor, battle and the hero speech-intent loader
+(PLAY-F06 M1-M2, PLAY-N04 M3-M4).
 
 The shared display presents through closed (state, event) tables in `stage_machines.rs`,
 owned and driven by the conductor in `stage_conductor.rs`; nothing appears, changes or
@@ -144,3 +144,24 @@ Battle transitions: Absent -Begin-> Entering -EntranceDone-> TurnStart -ActBegin
 -Finish-> Finishing -FinishDone-> Exiting -ExitDone-> Absent. A fight that starts while a line is
 spoken fades that line within `FIGHT_LINE_FADE_MS` (chosen over letting it finish under the
 banner) so outcomes are never held behind story speech.
+
+Later additions. Line states Composing -> Submitted -> (replaced by the hero's own line) and
+Composing|Submitted -> Cancelled -> Closing (a loader on the hero's figure, or on the HUD card in a
+fight): Composing -Submit-> Submitted, -Cancel-> Cancelled, -Replace-> Done, -Close-> Closing; a
+loader never takes a turn, expires after `INTENT_EXPIRY_MS` without the table affirming it, and
+leaves with its scene. The signal is ephemeral (`DialogueService.Compose`, `JourneyView.composing`
+17, display audience only), kept in the server's table log, never committed.
+
+Voice rule: a reply's bubble opens when its clip starts, a clip that is coming is waited for up to
+`CLIP_READY_WAIT_MS` (the thinking mark stays meanwhile), and a clip that failed or was skipped is
+reported as `data-clip-state` rather than looking spoken.
+
+Fight entrance and exit. The entrance (scene change, the battlefield mounting, a scan's splat
+streaming in, banner, initiative roll and roll-call) always plays in full in front of the audience,
+whoever wins initiative: an enemy's opening turn carried by the starting view is held and staged
+as ordinary beats after the roll-call, nothing of the fight (including sounds) starts while the
+cover is up or the splat is incomplete, and there is one transition into the fight. The exit is
+queued behind the finishing blow: dice, impact and fall play, the battlefield finishes its own
+finishing shot (at most `BATTLE_FINISH_CAP_MS`), the battlefield fades, and only then does the scene
+machine take the victory or defeat scene (one transition). While the 3D battlefield is live
+(`data-battlefield-live`) the flat combat screen, its dice card and its call-out bubbles never show.

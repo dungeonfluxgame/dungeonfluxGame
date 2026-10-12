@@ -99,7 +99,7 @@ fn is_filler(word: &str) -> bool {
     // "uhhhh" and "ummmm" collapse to their short form.
     let mut collapsed = String::new();
     for character in word.chars() {
-        if collapsed.chars().last() != Some(character) {
+        if !collapsed.ends_with(character) {
             collapsed.push(character);
         }
     }

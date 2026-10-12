@@ -96,6 +96,8 @@ pub(crate) struct ViewDiff<D> {
     /// The story begins with this view: the scene change shows the title card (the payload)
     /// after the wordmark and before the scene enters.
     pub(crate) title: Option<D>,
+    /// The server's active combatant changed in this view.
+    pub(crate) turn_changed: bool,
     pub(crate) roll: Option<D>,
     pub(crate) impact: Option<D>,
     /// The target of the roll dropped to zero hit points.
@@ -126,6 +128,7 @@ impl<D> Default for ViewDiff<D> {
             scene_changed: false,
             enters_combat: false,
             title: None,
+            turn_changed: false,
             roll: None,
             impact: None,
             defeat: None,
@@ -233,6 +236,19 @@ impl<D: Clone> StageDirector<D> {
                     .map(|d| Self::cue(CueKind::Defeat, Some(d), now_ms, false)),
             );
         }
+        self.queue.extend(cues);
+        self.collapse_if_behind(now_ms);
+        self.advance(now_ms)
+    }
+
+    /// Queues only the blow of a finishing view (dice, impact, fall): no redraw and no scene
+    /// change. The scene change follows when the conductor says the blow has been seen out.
+    pub(crate) fn on_blow(&mut self, now_ms: u64, diff: ViewDiff<D>) -> Vec<Command<D>> {
+        let make = |kind, detail| Self::cue(kind, Some(detail), now_ms, true);
+        let mut cues = Vec::new();
+        cues.extend(diff.roll.map(|d| make(CueKind::Roll, d)));
+        cues.extend(diff.impact.map(|d| make(CueKind::Impact, d)));
+        cues.extend(diff.defeat.map(|d| make(CueKind::Defeat, d)));
         self.queue.extend(cues);
         self.collapse_if_behind(now_ms);
         self.advance(now_ms)

@@ -253,6 +253,12 @@
 .tv-hud-card .tv-intent::after{display:none}
 .tv-hud-card .tv-intent .tv-wave{height:calc(var(--u)*.9)}
 .tv-intent::after{display:none}
+/* while the 3D battlefield shows the fight, the flat combat screen and its dice card never do (not during
+   the entrance, the exit or the victory card); the battlefield's own cards show the dice */
+.tv-stage[data-battlefield-live=true] .live-screen[data-screen=combat]{visibility:hidden}
+.tv-stage[data-battlefield-live=true] .tv-final-roll{display:none}
+/* the Dungeon Master's line is shown whole, never cut with an ellipsis */
+.tv-narration,.tv-stage:has(.tv-figures[data-arrange=stage]) .tv-narration{display:block;-webkit-line-clamp:unset;overflow:visible}
 /* a fight's entrance: the flat combat view never shows before the 3D battlefield; the battle
    machine releases it only when the battlefield will not appear */
 .tv-stage[data-battle-state=entering] :is(.live-screen,.tv-figures){opacity:0;visibility:hidden}

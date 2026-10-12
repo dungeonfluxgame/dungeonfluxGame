@@ -136,6 +136,11 @@ pub(super) fn slot_index(slot: ActorSlot) -> Option<usize> {
     index(slot)
 }
 
+/// The standing place at a stage position (the inverse of [`slot_index`]).
+pub(super) fn slot_of_index(position: usize) -> ActorSlot {
+    slot_at(position)
+}
+
 fn slot_at(position: usize) -> ActorSlot {
     if position < HEROES {
         ActorSlot::Hero(position)

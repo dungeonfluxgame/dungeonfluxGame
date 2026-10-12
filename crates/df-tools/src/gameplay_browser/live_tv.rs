@@ -417,7 +417,12 @@ impl TvStage {
 
     /// Applies one transition of the narrator line's machine to the Dungeon Master's box: the
     /// text is set as the line opens, never earlier. Returns whether the line opened.
-    pub(super) fn narrator_line(&self, state: LineState, text: &str) -> Result<bool, JsValue> {
+    pub(super) fn narrator_line(
+        &self,
+        id: u64,
+        state: LineState,
+        text: &str,
+    ) -> Result<bool, JsValue> {
         let opened = matches!(
             state,
             LineState::Opening | LineState::Speaking | LineState::Lingering
@@ -427,6 +432,7 @@ impl TvStage {
             self.narration.set_attribute("title", text)?;
         }
         if let Some(caption) = self.narration.parent_element() {
+            caption.set_attribute("data-line-id", &id.to_string())?;
             caption.set_attribute("data-line-state", state.name())?;
         }
         match state {

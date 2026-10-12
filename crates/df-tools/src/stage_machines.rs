@@ -24,8 +24,12 @@ pub(crate) const LINE_CLOSE_MS: u32 = 400;
 /// The last line of a scene stays on screen while the table decides; it still closes after
 /// this long so a forgotten room does not keep a bubble for ever.
 pub(crate) const FINAL_LINGER_CAP_MS: u32 = 45_000;
-/// A requested clip that is not ready by now has failed (the line then runs on reading time).
-pub(crate) const CLIP_READY_WAIT_MS: u32 = 5_000;
+/// A requested clip that is not ready by now has failed (the line then runs on reading time and
+/// reports `data-clip-state=failed`). A character's reply is voiced on demand and a real voice
+/// provider can take several seconds under load, so a clip that is known to be coming is waited
+/// for, not raced: the reply bubble opens when its clip starts, and the thinking mark stays until
+/// then.
+pub(crate) const CLIP_READY_WAIT_MS: u32 = 20_000;
 /// A ready clip told to play that has not started by now has failed (a blocked play).
 pub(crate) const CLIP_START_WAIT_MS: u32 = 2_500;
 /// Past the clip's own length (or, unknown, the line's reading time) a missing end signal
@@ -59,6 +63,11 @@ pub(crate) const SCENE_ENTER_CAP_MS: u64 = 8_000;
 /// A fight's entrance (the scene change, the 3D battlefield mounting, the initiative roll and
 /// roll-call) waits this long for the battlefield; then the flat combat view is the display.
 pub(crate) const BATTLE_ENTER_CAP_MS: u64 = 12_000;
+/// After a fight's finishing blow (dice, impact, fall) has been shown, the display waits this
+/// long for the battlefield to finish its own finishing shot before it leaves for the victory or
+/// defeat scene. The whole exit is then at most: the blow's cues (about 4.3 s), this wait, and
+/// the scene transition (about 2 s).
+pub(crate) const BATTLE_FINISH_CAP_MS: u64 = 8_000;
 /// Outcome cues held back during a fight's entrance; beyond this the oldest are dropped (the
 /// newest view still draws the truth).
 pub(crate) const HELD_OUTCOMES_CAP: usize = 16;
@@ -220,6 +229,18 @@ pub(crate) enum ClipState {
 }
 
 impl ClipState {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Silent => "silent",
+            Self::Requested => "requested",
+            Self::Ready => "ready",
+            Self::Playing => "playing",
+            Self::Ended => "ended",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        }
+    }
+
     pub(crate) fn is_over(self) -> bool {
         matches!(self, Self::Ended | Self::Failed | Self::Skipped)
     }
@@ -666,7 +687,8 @@ mod tests {
         let scene: Vec<&str> = SCENE_STATES.iter().map(|state| state.name()).collect();
         let line: Vec<&str> = LINE_STATES.iter().map(|state| state.name()).collect();
         let actor: Vec<&str> = ACTOR_STATES.iter().map(|state| state.name()).collect();
-        for names in [scene, line, actor] {
+        let clip: Vec<&str> = CLIP_STATES.iter().map(|state| state.name()).collect();
+        for names in [scene, line, actor, clip] {
             let mut sorted = names.clone();
             sorted.sort_unstable();
             sorted.dedup();

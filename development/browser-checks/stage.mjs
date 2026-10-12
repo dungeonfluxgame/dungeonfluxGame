@@ -32,7 +32,7 @@ const RECORDER = `
 (() => {
   const rec = (window.__rec = []);
   const push = (type, data) => rec.push({ t: Math.round(performance.timeOrigin + performance.now()), type, ...data });
-  const names = ['data-scene-state', 'data-line-state', 'data-line-id', 'data-stage-pending', 'data-stage', 'data-speaker', 'data-actor-state', 'data-battle-state', 'data-intent-state', 'data-intent', 'data-thinking', 'data-present'];
+  const names = ['data-scene-state', 'data-line-state', 'data-line-id', 'data-stage-pending', 'data-stage', 'data-speaker', 'data-actor-state', 'data-battle-state', 'data-intent-state', 'data-intent', 'data-clip-state', 'data-thinking', 'data-present'];
   const describe = (target) => ({ cls: String(target.className || '').slice(0, 40), slot: target.getAttribute && target.getAttribute('data-slot') || undefined });
   const bubble = (b) => ({ kind: b.getAttribute('data-kind'), id: b.getAttribute('data-line-id'), state: b.getAttribute('data-line-state'),
     text: (b.querySelector('.tv-bubble-text') || b).textContent.trim().replace(/\\s+/g, ' ').slice(0, 160),

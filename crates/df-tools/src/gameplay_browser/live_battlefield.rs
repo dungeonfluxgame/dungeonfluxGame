@@ -867,6 +867,8 @@ struct Live {
     latest: Option<CombatSnapshot>,
     /// The fight began in front of the display and its first feed has not run yet.
     begun_live: bool,
+    /// The scene is a scan: its splat streams in, and the entrance waits for it.
+    expects_splat: bool,
 }
 
 thread_local! {
@@ -877,6 +879,7 @@ thread_local! {
         feed: CombatFeed::new(FeedMode::HoldForCues),
         latest: None,
         begun_live: false,
+        expects_splat: false,
     });
 }
 
@@ -1148,6 +1151,8 @@ fn start_mount(
         ),
         None => (location_scene, None),
     };
+    // A scan's splat streams in; the entrance waits for it (see `splat_streaming`).
+    let expects_splat = scene.splat.is_some();
     // Best-effort diagnostic attribute; a failure here changes nothing about the fight.
     let _ = host.set_attribute("data-battlefield-scene", &marker);
     if let Some(stem) = backdrop {
@@ -1176,6 +1181,7 @@ fn start_mount(
         let mut live = live.borrow_mut();
         live.phase = Phase::Mounting;
         live.host = Some(host.clone());
+        live.expects_splat = expects_splat;
     });
     wasm_bindgen_futures::spawn_local(async move {
         let stage = BattleStage::mount(
@@ -1236,6 +1242,9 @@ fn sync() {
         let (Some(stage), Some(snapshot)) = (&live.stage, &live.latest) else {
             return;
         };
+        if live.begun_live && splat_streaming(live) {
+            return;
+        }
         if matches!(stage.availability(), Availability::Unavailable(_)) {
             live.phase = Phase::Unavailable;
             live.stage = None;
@@ -1244,6 +1253,23 @@ fn sync() {
         let feed = &mut live.feed;
         let mut shown = snapshot.clone();
         shown.begun_live = live.begun_live;
+        if live.begun_live {
+            // The fight is opening in front of the audience: show it as it stood at the roll for
+            // initiative, before any combatant's turn. A view that already carries the enemy's
+            // resolved first attack (it won initiative) is wound back to that moment; the
+            // attack then plays as ordinary beats after the roll-call.
+            for outcome in &shown.outcomes {
+                if let Some(member) = shown.members.iter_mut().find(|m| m.name == outcome.target) {
+                    member.hit_points = member
+                        .hit_points
+                        .saturating_add(outcome.damage)
+                        .min(member.maximum_hit_points);
+                }
+            }
+            shown.outcomes.clear();
+            shown.round = 1;
+            shown.active = shown.initiative.first().map(|entry| entry.id.clone());
+        }
         let fits = stage
             .with_stage(|stage| feed.apply(stage, &shown))
             .flatten();
@@ -1324,13 +1350,22 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
 /// will not appear.
 pub(super) fn entrance() -> crate::stage_conductor::Battlefield {
     use crate::stage_conductor::Battlefield;
+    // The initiative roll waits for a scan's splat to finish streaming in: when it has, stage it.
+    let stage_initiative = LIVE.with(|live| {
+        let live = live.borrow();
+        matches!(live.phase, Phase::Active) && live.begun_live && !splat_streaming(&live)
+    });
+    if stage_initiative {
+        sync();
+    }
     LIVE.with(|live| {
         let live = live.borrow();
         match live.phase {
             Phase::Idle | Phase::Mounting => Battlefield::Pending,
             Phase::Unavailable | Phase::Closing => Battlefield::Fallback,
             Phase::Active => {
-                let playing = live.begun_live
+                let playing = splat_streaming(&live)
+                    || live.begun_live
                     || live
                         .stage
                         .as_ref()
@@ -1344,6 +1379,37 @@ pub(super) fn entrance() -> crate::stage_conductor::Battlefield {
             }
         }
     })
+}
+
+/// A scan's splat is still streaming in: part of the entrance, so nothing of the fight (not even
+/// the initiative roll) starts until it is complete or has failed and the fallback shows.
+fn splat_streaming(live: &Live) -> bool {
+    live.host.as_ref().is_some_and(|host| {
+        match host.get_attribute("data-battlefield-splat").as_deref() {
+            Some("idle" | "loading" | "showing") => true,
+            Some(_) => false,
+            // Before the renderer first reports, a scan scene is still on its way in.
+            None => live.expects_splat,
+        }
+    })
+}
+
+/// Applies the latest accepted snapshot again: called when a turn's beats are over so the turn
+/// label and marker follow the server's active combatant.
+pub(super) fn resync() {
+    sync();
+}
+
+/// The fight's exit has begun (its finishing blow has been shown out): the battlefield fades out
+/// now, under the scene transition, instead of being cut when the next scene is drawn.
+pub(super) fn fade_out() {
+    let host = LIVE.with(|live| live.borrow().host.clone());
+    if let Some(container) =
+        host.and_then(|host| host.query_selector(".battlefield").ok().flatten())
+    {
+        // The fade is cosmetic; the stage is dropped by `release` either way.
+        let _ = container.set_attribute("data-closing", "");
+    }
 }
 
 fn reset_fight(live: &mut Live) {

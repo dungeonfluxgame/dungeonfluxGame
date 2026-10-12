@@ -18,7 +18,7 @@ use crate::stage_conductor::{ClipSignal, LineId};
 use crate::voice_line::VoiceLine;
 use std::collections::HashMap;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
-use web_sys::{Blob, BlobPropertyBag, Event, EventTarget, HtmlAudioElement, Response, Url};
+use web_sys::{Blob, BlobPropertyBag, Event, EventTarget, HtmlAudioElement, Node, Response, Url};
 
 const VOICE_PATH: &str = "/gameplay/voice";
 const MAXIMUM_CLIP_BYTES: u32 = 4 * 1024 * 1024;
@@ -244,9 +244,13 @@ fn listen(
 }
 
 /// Any pointer or key press on the page unlocks audio, the control included: the click that
-/// follows on the control is part of the same gesture (see `sound_switch`).
-fn on_gesture(shared: &Shared, _event: &Event) {
-    let first = shared.borrow_mut().switch.gesture(now_ms());
+/// completes a press on the control is part of the same gesture (see `sound_switch`).
+fn on_gesture(shared: &Shared, event: &Event) {
+    let on_control = event
+        .target()
+        .and_then(|target| target.dyn_into::<Node>().ok())
+        .is_some_and(|target| shared.borrow().control.contains(Some(&target)));
+    let first = shared.borrow_mut().switch.gesture(now_ms(), on_control);
     if first {
         start_unlocked(shared);
     }
