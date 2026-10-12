@@ -22,7 +22,9 @@ pub(super) fn install(document: &Document) -> Result<(), JsValue> {
     }
     let style = document.create_element("style")?;
     style.set_attribute("data-live-theme", "")?;
-    style.set_text_content(Some(&format!("{LEGACY}\n{PLAYER}\n{TV}\n{MOTION}\n{STAGE}")));
+    style.set_text_content(Some(&format!(
+        "{LEGACY}\n{PLAYER}\n{TV}\n{MOTION}\n{STAGE}"
+    )));
     let host = match document.query_selector("head")? {
         Some(head) => head,
         None => document

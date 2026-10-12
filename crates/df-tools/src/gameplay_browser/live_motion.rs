@@ -40,7 +40,9 @@ const NARRATOR_NAME: &str = "Dungeon Master";
 enum Detail {
     Roll(Box<RollDetail>),
     Line(LineDetail),
-    Banner { victory: bool },
+    Banner {
+        victory: bool,
+    },
     /// The title card of the story's beginning or the closing card of a fight.
     Card(Box<Card>),
     Heal,
@@ -185,7 +187,10 @@ fn roll_detail(
         .iter()
         .rev()
         .find(|line| line.kind == TableKind::Action && line.speaker == outcome.actor_name)
-        .map_or_else(|| presentation::action_text(outcome), TableLine::short_text);
+        .map_or_else(
+            || presentation::action_text(outcome),
+            |line| line.text.clone(),
+        );
     Some(RollDetail {
         attacker: outcome.actor_name.clone(),
         target: outcome.target_name.clone(),
@@ -348,7 +353,9 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     }
     let applied = apply(client, commands);
     if let Some(line) = seed {
-        // A reload shows the current line silently, attributed to its speaker.
+        // A reload shows the current line silently, attributed to its speaker, and leaves the
+        // character's words on screen rather than the narration.
+        set_speaker(client, "character")?;
         show_line(client, &line, false)?;
     }
     for line in &immediate {
@@ -422,6 +429,7 @@ fn enter(
     set_stage(client, state_name(state))?;
     match (state, detail) {
         (StageState::LeavingScene, _) => {
+            set_speaker(client, "")?;
             live_sfx::cancel_unstarted();
             live_sfx::play(Cue::SceneTransition, Duration::ZERO);
         }
@@ -439,7 +447,11 @@ fn enter(
                 stage.figures().force_down(slot)?;
             }
         }
-        (StageState::Speaking, Some(Detail::Line(line))) => show_line(client, line, true)?,
+        (StageState::Narrating, _) => set_speaker(client, "narrator")?,
+        (StageState::Speaking, Some(Detail::Line(line))) => {
+            set_speaker(client, "character")?;
+            show_line(client, line, true)?;
+        }
         (StageState::TitleCard | StageState::ClosingCard, Some(Detail::Card(card))) => {
             let state = client.borrow();
             if let Some(stage) = state.live.tv.as_ref() {
@@ -656,13 +668,72 @@ fn show_line(client: &Rc<RefCell<Client>>, line: &LineDetail, sound: bool) -> Re
     Ok(())
 }
 
-/// A voice clip ended: the line the director waits for may finish early.
-pub(super) fn voice_over() {
+/// Which speaker the stage's words belong to: `narrator` (the Dungeon Master's caption),
+/// `character` (that character's bubble) or empty before anyone has spoken in the scene.
+fn set_speaker(client: &Rc<RefCell<Client>>, speaker: &str) -> Result<(), JsValue> {
+    match client.borrow().live.tv.as_ref() {
+        Some(stage) => stage.set_speaker(speaker),
+        None => Ok(()),
+    }
+}
+
+/// The audio of a line began: `speaker` is the character's name, or `None` for the narrator.
+/// The display follows the voice, so the Dungeon Master's caption leaves and the character's
+/// bubble appears (or the other way round) as the clip starts, whatever the timed sequence had
+/// planned. The director orders the state; showing the bubble is idempotent, so a line the
+/// director had no cue for still appears.
+pub(super) fn voice_started(speaker: Option<&str>, text: &str) {
+    let now = now_ms();
+    let kind = if speaker.is_some() {
+        CueKind::Speak
+    } else {
+        CueKind::Narrate
+    };
+    let planned = with_motion(|motion| {
+        (
+            motion.client.upgrade(),
+            motion.director.on_clip_started(now, kind),
+        )
+    });
+    let Some((Some(client), commands)) = planned else {
+        return;
+    };
+    // Errors of a redraw are already reported by `redraw_current`.
+    let _applied = apply(&client, commands);
+    let shown = match speaker {
+        Some(name) => set_speaker(&client, "character").and_then(|()| {
+            show_line(
+                &client,
+                &LineDetail {
+                    speaker: name.to_owned(),
+                    role: TableRole::Npc,
+                    kind: TableKind::Speech,
+                    text: text.to_owned(),
+                },
+                false,
+            )
+        }),
+        None => set_speaker(&client, "narrator"),
+    };
+    // A refused attribute write leaves the previous caption; the next view corrects it.
+    let _shown = shown;
+    ensure_frame();
+}
+
+/// A voice clip ended: the line the director waits for may finish early. `character` is
+/// whether it was a character's line rather than the narration.
+pub(super) fn voice_over(character: bool) {
     let now = now_ms();
     let commands = with_motion(|motion| {
-        let mut commands = motion.director.on_cue_finished(now, CueKind::Narrate);
-        commands.extend(motion.director.on_cue_finished(now, CueKind::Speak));
-        (motion.client.upgrade(), commands)
+        let kind = if character {
+            CueKind::Speak
+        } else {
+            CueKind::Narrate
+        };
+        (
+            motion.client.upgrade(),
+            motion.director.on_cue_finished(now, kind),
+        )
     });
     if let Some((Some(client), commands)) = commands {
         // Errors of a redraw are already reported by `redraw_current`.

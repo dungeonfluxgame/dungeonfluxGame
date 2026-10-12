@@ -476,44 +476,75 @@ pub(crate) fn action_text(outcome: &rpc::CombatOutcome) -> String {
     text
 }
 
-/// The table lines of one audience view, oldest first: the server's public table log.
+/// The line the scene itself opens with: its speaker's words, which the server's table log does
+/// not carry because they belong to the scene, not to anything said at the table. Its identity
+/// is a hash of the scene and the line, so it is shown once per scene and survives a redraw.
+fn scene_line(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) -> Option<TableLine> {
+    let text = journey.dialogue.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let title = scene.map_or("", |scene| scene.title.as_str());
+    let (speaker, role) = if journey.speaker.is_empty() {
+        ("", TableRole::Narrator)
+    } else {
+        (journey.speaker.as_str(), TableRole::Npc)
+    };
+    Some(TableLine {
+        sequence: fnv(&[title.as_bytes(), speaker.as_bytes(), text.as_bytes()]),
+        speaker: speaker.to_owned(),
+        role,
+        kind: TableKind::Speech,
+        text: text.to_owned(),
+    })
+}
+
+/// The table lines of one audience view, oldest first: the scene's own speaker line, then the
+/// server's public table log.
 ///
 /// SERVER FEED SWITCH POINT: this is the one place the feed is read; consumers in
-/// `live_motion` depend only on this signature. A line whose role or kind the server left
+/// `live_motion` depend only on this signature. A log line whose role or kind the server left
 /// unspecified is skipped. The private clue is never read.
 pub(crate) fn table_lines(view: &rpc::ViewMessage) -> Vec<TableLine> {
-    let journey = match &view.audience {
-        Some(rpc::view_message::Audience::Display(display)) => display.journey.as_ref(),
-        Some(rpc::view_message::Audience::Player(player)) => player.journey.as_ref(),
-        None => None,
+    let (journey, scene) = match &view.audience {
+        Some(rpc::view_message::Audience::Display(display)) => {
+            (display.journey.as_ref(), display.scene.as_ref())
+        }
+        Some(rpc::view_message::Audience::Player(player)) => {
+            (player.journey.as_ref(), player.scene.as_ref())
+        }
+        None => (None, None),
     };
     let Some(journey) = journey else {
         return Vec::new();
     };
-    journey
-        .table_log
-        .iter()
-        .filter_map(|line| {
-            let role = match rpc::TableRole::try_from(line.role).ok()? {
-                rpc::TableRole::Hero => TableRole::Hero(usize::try_from(line.hero_index).ok()?),
-                rpc::TableRole::Npc => TableRole::Npc,
-                rpc::TableRole::Narrator => TableRole::Narrator,
-                rpc::TableRole::Unspecified => return None,
-            };
-            let kind = match rpc::TableKind::try_from(line.kind).ok()? {
-                rpc::TableKind::Action => TableKind::Action,
-                rpc::TableKind::Speech => TableKind::Speech,
-                rpc::TableKind::Unspecified => return None,
-            };
-            Some(TableLine {
-                sequence: line.sequence,
-                speaker: line.speaker.clone(),
-                role,
-                kind,
-                text: line.text.trim().to_owned(),
-            })
-        })
+    scene_line(journey, scene)
+        .into_iter()
+        .chain(logged_lines(journey))
         .collect()
+}
+
+fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> + '_ {
+    journey.table_log.iter().filter_map(|line| {
+        let role = match rpc::TableRole::try_from(line.role).ok()? {
+            rpc::TableRole::Hero => TableRole::Hero(usize::try_from(line.hero_index).ok()?),
+            rpc::TableRole::Npc => TableRole::Npc,
+            rpc::TableRole::Narrator => TableRole::Narrator,
+            rpc::TableRole::Unspecified => return None,
+        };
+        let kind = match rpc::TableKind::try_from(line.kind).ok()? {
+            rpc::TableKind::Action => TableKind::Action,
+            rpc::TableKind::Speech => TableKind::Speech,
+            rpc::TableKind::Unspecified => return None,
+        };
+        Some(TableLine {
+            sequence: line.sequence,
+            speaker: line.speaker.clone(),
+            role,
+            kind,
+            text: line.text.trim().to_owned(),
+        })
+    })
 }
 
 #[cfg(test)]
@@ -705,7 +736,7 @@ mod tests {
             ),
         ];
         let lines = table_lines(&view(shown));
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 3, "an empty scene line adds nothing");
         assert_eq!(lines[0].sequence, 4);
         assert_eq!(lines[0].role, TableRole::Hero(1));
         assert_eq!(lines[0].kind, TableKind::Speech);
@@ -717,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn a_view_without_a_log_has_no_lines_even_with_a_roll_and_a_speaker() {
+    fn the_scene_speaker_line_leads_the_log_once_per_scene() {
         let mut shown = journey(
             rpc::JourneyPhase::Combat,
             false,
@@ -725,7 +756,44 @@ mod tests {
         );
         shown.speaker = "Courier".to_owned();
         shown.dialogue = "Quick.".to_owned();
-        assert!(table_lines(&view(shown)).is_empty());
+        shown.table_log = vec![server_line(
+            2,
+            "Brakka",
+            rpc::TableRole::Hero,
+            0,
+            rpc::TableKind::Speech,
+            "Easy now.",
+        )];
+        let lines = table_lines(&view(shown.clone()));
+        assert_eq!(lines.len(), 2, "a roll is not a table line by itself");
+        assert_eq!(lines[0].speaker, "Courier");
+        assert_eq!(lines[0].role, TableRole::Npc);
+        assert_eq!(lines[0].kind, TableKind::Speech);
+        assert_eq!(lines[1].sequence, 2);
+        // The same line in another scene is a new line; in the same scene, the same one.
+        assert_eq!(table_lines(&view(shown.clone()))[0], lines[0]);
+        let other_scene = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    journey: Some(shown),
+                    scene: Some(rpc::GameplayScene {
+                        title: "Elsewhere".to_owned(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert_ne!(table_lines(&other_scene)[0].sequence, lines[0].sequence);
+    }
+
+    #[test]
+    fn a_line_with_no_named_speaker_is_the_narrators() {
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.dialogue = "A bell tolls.".to_owned();
+        let lines = table_lines(&view(shown));
+        assert_eq!(lines[0].role, TableRole::Narrator);
     }
 
     #[test]
@@ -872,7 +940,10 @@ mod tests {
         assert!(transitions(Some(&room), &opening).story_begun);
         assert!(!transitions(Some(&opening), &dialogue).story_begun);
         assert!(!transitions(Some(&opening), &opening).story_begun);
-        assert!(!transitions(None, &opening).story_begun, "a reload shows no card");
+        assert!(
+            !transitions(None, &opening).story_begun,
+            "a reload shows no card"
+        );
     }
 
     #[test]
@@ -888,7 +959,10 @@ mod tests {
         );
         assert_eq!(card.kind, CardKind::Title);
         assert_eq!(card.headline, "A Parcel for Nolan");
-        assert_eq!(card.subline, "Gulls mutter in the rigging of sleeping boats.");
+        assert_eq!(
+            card.subline,
+            "Gulls mutter in the rigging of sleeping boats."
+        );
         assert_eq!(card.place, "The Salt Quay");
         assert!(card.heroes.is_empty());
     }
@@ -908,7 +982,10 @@ mod tests {
         assert_eq!(won.subline, "The bandit yields.");
         let names: Vec<&str> = won.heroes.iter().map(|hero| hero.name.as_str()).collect();
         assert_eq!(names, ["Brakka", "Thrain"]);
-        assert_eq!(won.heroes[1].portrait, "/assets/ui/generated/portrait-hero-2");
+        assert_eq!(
+            won.heroes[1].portrait,
+            "/assets/ui/generated/portrait-hero-2"
+        );
         let lost = closing_card(&ended, &closing, "Darkness.", false);
         assert_eq!(lost.kind, CardKind::Defeat);
         assert_ne!(lost.kicker, won.kicker);

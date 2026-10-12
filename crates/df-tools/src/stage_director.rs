@@ -22,6 +22,9 @@ pub(crate) const LAG_LIMIT_MS: u64 = 4_000;
 const SHORT_FLOOR_MS: u32 = 150;
 const VOICE_MINIMUM_MS: u32 = 1_200;
 const VOICE_GRACE_MS: u32 = 3_000;
+/// How long a fallen character is held on screen with the final roll visible, so the table
+/// registers the blow before the scene moves on.
+const DEFEAT_HOLD_MS: u32 = 2_500;
 /// The title card is about three seconds; the closing card stays a little longer.
 const TITLE_CARD_MS: u32 = 3_000;
 const CLOSING_CARD_MS: u32 = 4_500;
@@ -146,6 +149,12 @@ struct Active<D> {
 pub(crate) struct StageDirector<D> {
     queue: VecDeque<Cue<D>>,
     active: Option<Active<D>>,
+    /// A voice clip of this kind ended before its line's state began (the clip was quicker
+    /// than the scene change): the state ends as soon as it has been seen.
+    early_finished: Option<CueKind>,
+    /// The character's clip started while the display was still busy with something else:
+    /// the narration that would have come first is skipped.
+    early_started: Option<CueKind>,
 }
 
 impl<D: Clone> Default for StageDirector<D> {
@@ -167,6 +176,8 @@ impl<D: Clone> StageDirector<D> {
         Self {
             queue: VecDeque::new(),
             active: None,
+            early_finished: None,
+            early_started: None,
         }
     }
 
@@ -185,6 +196,8 @@ impl<D: Clone> StageDirector<D> {
     pub(crate) fn restart(&mut self) -> Vec<Command<D>> {
         self.queue.clear();
         self.active = None;
+        self.early_finished = None;
+        self.early_started = None;
         vec![Command::Render]
     }
 
@@ -285,13 +298,61 @@ impl<D: Clone> StageDirector<D> {
 
     /// A voice clip ended (or another awaited signal arrived) for the current line.
     pub(crate) fn on_cue_finished(&mut self, now_ms: u64, kind: CueKind) -> Vec<Command<D>> {
-        if let Some(active) = self.active.as_mut()
-            && active.kind == kind
-            && active.waits_for_signal
-        {
-            active.signalled = true;
+        match self.active.as_mut() {
+            Some(active) if active.kind == kind && active.waits_for_signal => {
+                active.signalled = true;
+            }
+            _ if self.queue.iter().any(|cue| cue.kind == kind && cue.voiced) => {
+                self.early_finished = Some(kind);
+            }
+            _ => {}
         }
         self.advance(now_ms)
+    }
+
+    /// The audio of a line of `kind` (narration or a character) just began. The display
+    /// follows the voice: the other speaker's dwell ends and this line's state starts now,
+    /// whatever the timed sequence had planned. While a roll, a scene change or another
+    /// outcome is on screen the line keeps its turn in the queue instead.
+    pub(crate) fn on_clip_started(&mut self, now_ms: u64, kind: CueKind) -> Vec<Command<D>> {
+        let state = match kind {
+            CueKind::Narrate => StageState::Narrating,
+            CueKind::Speak => StageState::Speaking,
+            _ => return Vec::new(),
+        };
+        let current = self.active.as_ref().map(|active| active.state);
+        if current == Some(state) {
+            return Vec::new();
+        }
+        let free = current
+            .is_none_or(|current| matches!(current, StageState::Narrating | StageState::Speaking));
+        let reachable = self
+            .queue
+            .iter()
+            .position(|cue| cue.kind == kind)
+            .filter(|position| {
+                self.queue.iter().take(*position).all(|cue| {
+                    matches!(
+                        cue.kind,
+                        CueKind::Render | CueKind::Narrate | CueKind::Speak
+                    )
+                })
+            });
+        let (true, Some(position)) = (free, reachable) else {
+            if kind == CueKind::Speak {
+                self.early_started = Some(kind);
+            }
+            return Vec::new();
+        };
+        let mut commands = Vec::new();
+        for cue in self.queue.drain(..position).collect::<Vec<_>>() {
+            if cue.kind == CueKind::Render {
+                commands.push(Command::Render);
+            }
+        }
+        self.active = None;
+        commands.extend(self.advance(now_ms));
+        commands
     }
 
     /// Drops stale cosmetic cues when the queue is long or the display is far behind. The
@@ -307,8 +368,19 @@ impl<D: Clone> StageDirector<D> {
         }
         let mut kept: Vec<Cue<D>> = Vec::new();
         let mut dropped_render = false;
+        // The newest narration and the newest character line survive without a dwell: what
+        // the table is responding to must still reach the screen.
+        let mut narration: Option<Cue<D>> = None;
+        let mut speech: Option<Cue<D>> = None;
         for mut cue in self.queue.drain(..) {
-            if cue.outcome {
+            if !cue.outcome && matches!(cue.kind, CueKind::Narrate | CueKind::Speak) {
+                cue.hold_ms = 0;
+                if cue.kind == CueKind::Narrate {
+                    narration = Some(cue);
+                } else {
+                    speech = Some(cue);
+                }
+            } else if cue.outcome {
                 cue.short = true;
                 // Two scene changes converge to one: the newest view is drawn once.
                 if cue.kind == CueKind::Scene
@@ -329,6 +401,8 @@ impl<D: Clone> StageDirector<D> {
         if dropped_render && !kept.iter().any(|cue| cue.kind == CueKind::Scene) {
             kept.push(Self::cue(CueKind::Render, None, now_ms, false));
         }
+        kept.extend(narration);
+        kept.extend(speech);
         self.queue = kept.into();
     }
 
@@ -345,8 +419,8 @@ impl<D: Clone> StageDirector<D> {
                 false,
             ),
             StageState::Defeat => (
-                shorten(1_100, cue.short, 3),
-                shorten(1_100, cue.short, 3),
+                shorten(DEFEAT_HOLD_MS, cue.short, 3),
+                shorten(DEFEAT_HOLD_MS, cue.short, 3),
                 false,
             ),
             StageState::Healing => (900, 900, false),
@@ -388,6 +462,10 @@ impl<D: Clone> StageDirector<D> {
             StageState::Narrating | StageState::Speaking => (cue.hold_ms, cue.hold_ms, false),
             StageState::Idle => (0, 0, false),
         };
+        let early = waits && self.early_finished == Some(cue.kind);
+        if early {
+            self.early_finished = None;
+        }
         let active = Active {
             kind: cue.kind,
             state,
@@ -396,7 +474,7 @@ impl<D: Clone> StageDirector<D> {
             minimum_ms,
             maximum_ms,
             waits_for_signal: waits,
-            signalled: false,
+            signalled: early,
             short: cue.short,
             voiced: cue.voiced,
         };
@@ -460,6 +538,13 @@ impl<D: Clone> StageDirector<D> {
                 }
                 break;
             };
+            if cue.kind == CueKind::Narrate && self.early_started == Some(CueKind::Speak) {
+                // The character is already speaking: the narration would only talk over it.
+                continue;
+            }
+            if cue.kind == CueKind::Speak {
+                self.early_started = None;
+            }
             let state = match cue.kind {
                 CueKind::Render => {
                     commands.push(Command::Render);
@@ -779,7 +864,11 @@ mod tests {
             } => *detail,
             _ => None,
         });
-        assert_eq!(card, Some("title"), "the card's payload reaches the browser");
+        assert_eq!(
+            card,
+            Some("title"),
+            "the card's payload reaches the browser"
+        );
     }
 
     #[test]
@@ -891,5 +980,125 @@ mod tests {
         assert_eq!(names(&commands), ["render"]);
         assert_eq!(director.state(), StageState::Speaking);
         assert_eq!(director.queue_len(), 0);
+    }
+
+    #[test]
+    fn a_character_clip_starting_moves_narrating_to_speaking() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                narration: Some(("narration", 6_000)),
+                speech: Some(("line", 4_000)),
+                voiced: true,
+                ..ViewDiff::default()
+            },
+        );
+        assert_eq!(director.state(), StageState::Narrating);
+        // The narration is still playing at 2 s; the character's audio starts.
+        let commands = director.on_clip_started(2_000, CueKind::Speak);
+        assert_eq!(director.state(), StageState::Speaking, "{commands:?}");
+        let entered = commands.iter().find_map(|command| match command {
+            Command::Enter {
+                state: StageState::Speaking,
+                detail,
+                ..
+            } => *detail,
+            _ => None,
+        });
+        assert_eq!(entered, Some("line"));
+        // The clip ends: the line's state ends and nothing replays the narration.
+        director.on_cue_finished(5_000, CueKind::Speak);
+        assert_eq!(director.state(), StageState::Idle);
+    }
+
+    #[test]
+    fn a_narration_clip_starting_returns_from_an_earlier_speaker() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                speech: Some(("old line", 6_000)),
+                voiced: true,
+                ..ViewDiff::default()
+            },
+        );
+        assert_eq!(director.state(), StageState::Speaking);
+        director.on_view(
+            100,
+            ViewDiff {
+                narration: Some(("new narration", 3_000)),
+                voiced: true,
+                ..ViewDiff::default()
+            },
+        );
+        let commands = director.on_clip_started(300, CueKind::Narrate);
+        assert_eq!(director.state(), StageState::Narrating, "{commands:?}");
+    }
+
+    #[test]
+    fn a_clip_starting_during_an_outcome_waits_its_turn() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                roll: Some("roll"),
+                speech: Some(("line", 2_000)),
+                voiced: true,
+                ..ViewDiff::default()
+            },
+        );
+        assert_eq!(director.state(), StageState::Rolling);
+        assert!(director.on_clip_started(100, CueKind::Speak).is_empty());
+        assert_eq!(director.state(), StageState::Rolling);
+    }
+
+    #[test]
+    fn a_clip_that_ended_early_does_not_hold_its_line_for_the_timeout() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                scene_changed: true,
+                narration: Some(("narration", 6_000)),
+                voiced: true,
+                ..ViewDiff::default()
+            },
+        );
+        // The narration clip is over before the scene has even entered.
+        director.on_cue_finished(500, CueKind::Narrate);
+        let mut commands = Vec::new();
+        commands.extend(run(&mut director, 550, 4_000));
+        assert_eq!(director.state(), StageState::Idle, "{commands:?}");
+    }
+
+    #[test]
+    fn a_collapsed_backlog_still_shows_the_newest_line() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                speech: Some(("blocker", 5_000)),
+                ..ViewDiff::default()
+            },
+        );
+        director.on_view(
+            1,
+            ViewDiff {
+                narration: Some(("late narration", 5_000)),
+                speech: Some(("late line", 5_000)),
+                ..ViewDiff::default()
+            },
+        );
+        let mut commands = director.on_tick(LAG_LIMIT_MS + 100);
+        commands.extend(run(&mut director, LAG_LIMIT_MS + 150, 9_000));
+        let shown: Vec<&str> = commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::Enter { detail, .. } => *detail,
+                _ => None,
+            })
+            .collect();
+        assert!(shown.contains(&"late line"), "{shown:?}");
     }
 }

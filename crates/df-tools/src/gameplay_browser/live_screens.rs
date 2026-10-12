@@ -394,6 +394,7 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         scene_asset: asset_url(&input.scene.scene_asset),
         portrait_asset: asset_url(&input.scene.speaker_portrait),
         has_whisper: !input.clue.is_empty(),
+        rules_note: input.scene.rules_note.clone(),
         binding,
         scene: art_scene,
         title: input.scene.title.clone(),

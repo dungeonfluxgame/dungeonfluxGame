@@ -363,9 +363,7 @@ impl Figures {
                         None => figure.root.remove_attribute("data-role")?,
                     }
                     if role == Some("back") {
-                        figure
-                            .root
-                            .set_attribute("data-rank", &rank.to_string())?;
+                        figure.root.set_attribute("data-rank", &rank.to_string())?;
                         rank += 1;
                     } else {
                         figure.root.remove_attribute("data-rank")?;
@@ -390,11 +388,15 @@ impl Figures {
         mode == StageMode::Scene && actor.speaking && matches!(actor.slot, ActorSlot::Npc(_))
     }
 
-    /// In a fight the foe is the non-player character who has hit points.
+    /// In a fight the foe is the non-player character who has hit points; once it is over,
+    /// the one who speaks stands where the foe stood.
     fn is_foe(actor: &StageActor, mode: StageMode) -> bool {
-        mode != StageMode::Scene
-            && matches!(actor.slot, ActorSlot::Npc(_))
-            && actor.hit_points.is_some()
+        matches!(actor.slot, ActorSlot::Npc(_))
+            && match mode {
+                StageMode::Scene => false,
+                StageMode::Combat => actor.hit_points.is_some(),
+                StageMode::Aftermath => actor.hit_points.is_some() || actor.speaking,
+            }
     }
 
     fn apply(&self, figure: &Figure, actor: &StageActor, mode: StageMode) -> Result<(), JsValue> {
@@ -623,10 +625,20 @@ impl Figures {
         appear: Duration,
         voiced: bool,
     ) -> Result<(), JsValue> {
-        // Newest replaces oldest for the same figure.
+        // The same line again (the audio starting after the director already showed it) stays
+        // as it is; otherwise the newest replaces the oldest for the same figure.
+        let identity = format!("{}|{}|{speaker}|{text}", kind.name(), voiced);
+        if kind == BubbleKind::Speech
+            && figure.bubbles.first_element_child().is_some_and(|bubble| {
+                bubble.get_attribute("data-line").as_deref() == Some(&identity)
+            })
+        {
+            return Ok(());
+        }
         figure.bubbles.set_text_content(None);
         let bubble = node(&self.document, &figure.bubbles, "div", "tv-bubble", "")?;
         bubble.set_attribute("data-kind", kind.name())?;
+        bubble.set_attribute("data-line", &identity)?;
         if voiced {
             bubble.set_attribute("data-voice-role", "npc")?;
         }

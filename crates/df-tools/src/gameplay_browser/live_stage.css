@@ -62,9 +62,9 @@
 
 /* Arrangement: a non-player character speaks. One large figure centre-right, the others stand
    back and dim, and the heroes become compact crest plates down the left edge. */
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus]{--fig-h:calc(var(--u)*37);left:63%;margin-left:calc(var(--fig-h)*-.3333);bottom:calc(var(--base) + 4vh)}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=back]{--fig-h:calc(var(--u)*25);bottom:calc(var(--base) + 8vh);filter:brightness(.5) saturate(.75)}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=back][data-rank="0"]{left:40%;margin-left:calc(var(--fig-h)*-.3333)}
+.tv-figures[data-arrange=stage] .tv-fig[data-role=focus]{--fig-h:calc(var(--u)*34);left:63%;margin-left:calc(var(--fig-h)*-.3333);bottom:calc(var(--base) + 2vh)}
+.tv-figures[data-arrange=stage] .tv-fig[data-role=back]{--fig-h:calc(var(--u)*25);bottom:calc(var(--base) + 24vh);filter:brightness(.58) saturate(.8)}
+.tv-figures[data-arrange=stage] .tv-fig[data-role=back][data-rank="0"]{left:45%;margin-left:calc(var(--fig-h)*-.3333)}
 .tv-figures[data-arrange=stage] .tv-fig[data-role=back][data-rank="1"]{left:87%;margin-left:calc(var(--fig-h)*-.3333)}
 .tv-figures[data-arrange=stage] .tv-fig[data-role=back] .tv-fig-bubbles{display:none}
 .tv-figures[data-arrange=stage] .tv-fig[data-role=back] :is(.tv-fig-hp,.tv-fig-role){display:none}
@@ -79,7 +79,7 @@
 
 /* Arrangement: a fight and its aftermath. Heroes at the edges, the foe centre-right. */
 .tv-figures[data-arrange=combat] .tv-fig{bottom:4.5vh;--fig-h:calc(var(--u)*28)}
-.tv-figures[data-arrange=combat] .tv-fig[data-role=foe]{--fig-h:calc(var(--u)*37);left:calc(var(--u)*53)}
+.tv-figures[data-arrange=combat] .tv-fig[data-role=foe]{left:calc(var(--u)*53)}
 .tv-figures[data-arrange=combat] .tv-fig[data-role=back]{--fig-h:calc(var(--u)*24);left:calc(var(--u)*40);filter:brightness(.55) saturate(.8)}
 .tv-figures[data-arrange=combat] .tv-fig[data-role=back] :is(.tv-fig-hp,.tv-fig-role){display:none}
 .tv-figures[data-mode=aftermath] .tv-fig[data-role=foe] .tv-fig-plate{visibility:hidden}
@@ -100,7 +100,7 @@
 .tv-bubble-head{display:flex;align-items:center;gap:calc(var(--u)*.5)}
 .tv-bubble-name{font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.06em;color:#7a4b13}
 .tv-bubble[data-kind=action] .tv-bubble-name{color:#e8cb94}
-.tv-bubble-text{margin:calc(var(--u)*.15) 0 0;font-size:var(--fs-bubble);line-height:1.22;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.tv-bubble-text{margin:calc(var(--u)*.15) 0 0;font-size:var(--fs-bubble);line-height:1.22;overflow-wrap:anywhere}
 .tv-bubble[data-kind=action] .tv-bubble-text::before{content:'';display:inline-block;width:1em;height:1em;margin-right:.3em;vertical-align:-.12em;background:url(/assets/ui/generated/icon-sword) center/contain no-repeat}
 .tv-wave{display:none;gap:calc(var(--u)*.25);align-items:center;height:calc(var(--u)*1.2)}
 .tv-wave b{display:block;width:calc(var(--u)*.25);height:100%;border-radius:2px;background:#b3741f;transform-origin:50% 50%;animation:df-wave .8s ease-in-out infinite}
@@ -121,7 +121,7 @@
 .tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-head::before,.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-head::after{content:'';flex:1 1 0;height:1px;background:linear-gradient(90deg,transparent,#c9a35f 40%,#c9a35f)}
 .tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-head::after{background:linear-gradient(270deg,transparent,#c9a35f 40%,#c9a35f)}
 .tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-name{flex:none;font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.26em;text-transform:uppercase;color:#e8cb94}
-.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-text{margin-top:calc(var(--u)*.35);font-size:calc(var(--u)*1.75);line-height:1.28;-webkit-line-clamp:4}
+.tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble-text{margin-top:calc(var(--u)*.35);font-size:calc(var(--u)*1.75);line-height:1.28}
 .tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-bubble.speaking::before{display:none}
 .tv-figures[data-arrange=stage] .tv-fig[data-role=focus] .tv-wave b{background:#e8cb94}
 /* a hero's line beside the crest, a fighter's call-out beside the body */
@@ -134,12 +134,29 @@
 .tv-figures[data-arrange=combat] .tv-fig[data-slot=hero-1] .tv-fig-bubbles{left:92%}
 .tv-figures[data-arrange=combat] .tv-fig[data-slot=hero-2] .tv-fig-bubbles{right:92%}
 .tv-figures[data-arrange=combat] .tv-fig[data-slot^=npc] .tv-fig-bubbles{right:84%}
+.tv-figures[data-arrange=combat] .tv-fig .tv-fig-bubbles:has(.tv-bubble[data-kind=action]){top:58%;left:6%;right:auto}
+.tv-figures[data-arrange=combat] .tv-fig[data-slot=hero-2] .tv-fig-bubbles:has(.tv-bubble[data-kind=action]){left:auto;right:6%}
+.tv-figures[data-arrange=combat] .tv-bubble[data-kind=action]::after{display:none}
 
-/* ---------- the scene's title and place, top right ---------- */
-.tv-stage[data-tv-mode=scene] .tv-headline{justify-self:end;text-align:right;max-width:44%;margin-top:0}
-.tv-stage[data-tv-mode=scene] .tv-title{font-size:calc(var(--u)*2.7);font-style:italic;line-height:1.1;text-shadow:0 3px 22px #000}
-.tv-place{margin:calc(var(--u)*.3) 0 0;font:var(--fs-label)/1.3 var(--serif);letter-spacing:.2em;text-transform:uppercase;color:#d9bf8c}
+/* ---------- the scene's title and place, top right: gold on navy, never a box ---------- */
+.tv-stage[data-tv-mode=scene] .tv-headline{justify-self:end;text-align:right;max-width:44%;margin-top:0;filter:drop-shadow(0 3px 8px #000d) drop-shadow(0 0 26px #000b);background:none}
+.tv-stage[data-tv-mode=scene] .tv-title{margin:0;font:500 calc(var(--u)*2.9)/1.08 var(--serif);letter-spacing:.01em;text-shadow:none;background:linear-gradient(180deg,#fff4d6 0%,#f3d595 42%,#cf9c42 100%);-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;overflow-wrap:break-word;animation:none}
+.tv-stage[data-tv-mode=scene] .tv-headline .tv-divider{display:block;width:calc(var(--u)*22);height:calc(var(--u)*1.6);margin:calc(var(--u)*.35) 0 calc(var(--u)*.35) auto;background-position:right center;animation:none}
+.tv-place{margin:0;font:700 var(--fs-label)/1.3 var(--serif);letter-spacing:.24em;text-transform:uppercase;color:#e0c48b;text-shadow:none}
 .tv-stage[data-tv-mode=lobby] .tv-place{display:none}
+/* the entrance moves only opacity and letter-spacing, so nothing is ever painted behind the words */
+.tv-stage[data-tv-mode=scene][data-scene-swap=a][data-title-anim=full] .tv-title{animation:df-title-in-a .9s ease .12s backwards}
+.tv-stage[data-tv-mode=scene][data-scene-swap=b][data-title-anim=full] .tv-title{animation:df-title-in-b .9s ease .12s backwards}
+.tv-stage[data-tv-mode=scene][data-scene-swap=a][data-title-anim=full] .tv-place{animation:df-place-in-a .9s ease .45s backwards}
+.tv-stage[data-tv-mode=scene][data-scene-swap=b][data-title-anim=full] .tv-place{animation:df-place-in-b .9s ease .45s backwards}
+.tv-stage[data-tv-mode=scene][data-scene-swap=a][data-title-anim=fade] .tv-title{animation:df-title-fade-a .7s ease backwards}
+.tv-stage[data-tv-mode=scene][data-scene-swap=b][data-title-anim=fade] .tv-title{animation:df-title-fade-b .7s ease backwards}
+@keyframes df-title-in-a{from{opacity:0;letter-spacing:.12em}to{opacity:1;letter-spacing:.01em}}
+@keyframes df-title-in-b{from{opacity:0;letter-spacing:.12em}to{opacity:1;letter-spacing:.01em}}
+@keyframes df-place-in-a{from{opacity:0;letter-spacing:.4em}to{opacity:1;letter-spacing:.24em}}
+@keyframes df-place-in-b{from{opacity:0;letter-spacing:.4em}to{opacity:1;letter-spacing:.24em}}
+@keyframes df-title-fade-a{from{opacity:0}to{opacity:1}}
+@keyframes df-title-fade-b{from{opacity:0}to{opacity:1}}
 
 /* ---------- the Dungeon Master's caption: a ribbon, no tail, no character lit ---------- */
 .tv-stagebox{align-self:end}
@@ -158,11 +175,11 @@
 .tv-dm:has(.tv-narration:empty){display:none}
 /* the rules wording: read, never voiced, and quieter than the story */
 .tv-rules{margin:calc(var(--u)*.5) 0 0;padding:0 calc(var(--u)*.4);font:italic var(--fs-label)/1.3 var(--serif);color:#b6b09f;text-shadow:0 1px 8px #000;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.tv-rules-tag{margin-right:.6em;font-style:normal;font-weight:700;font-size:.92em;letter-spacing:.2em;text-transform:uppercase;color:#8fb2c8}
+.tv-rules-tag{margin-right:.6em;font-style:normal;font-weight:700;font-size:1em;letter-spacing:.2em;text-transform:uppercase;color:#8fb2c8}
 .tv-stage[data-tv-mode=scene] .tv-stagebox .tv-divider{display:none}
 
 /* ---------- what the table can do: a read-only row of numbered chips ---------- */
-.tv-choices{position:absolute;z-index:4;left:calc(var(--u)*34);right:calc(var(--u)*3);bottom:4.5vh;display:flex;flex-wrap:nowrap;justify-content:center;gap:calc(var(--u)*1.2);margin:0;padding:0;list-style:none;pointer-events:none}
+.tv-choices{position:absolute;z-index:4;left:calc(var(--u)*34);right:calc(var(--u)*22);bottom:4.5vh;display:flex;flex-wrap:nowrap;justify-content:center;gap:calc(var(--u)*1.2);margin:0;padding:0;list-style:none;pointer-events:none}
 .tv-stage[data-chips="0"] .tv-choices,.tv-stage[data-tv-mode=lobby] .tv-choices{display:none}
 .tv-choice{display:flex;align-items:center;gap:calc(var(--u)*.7);min-width:0;max-width:calc(var(--u)*26);padding:calc(var(--u)*.45) calc(var(--u)*1.1) calc(var(--u)*.45) calc(var(--u)*.6);background:linear-gradient(180deg,#0e1826f0,#070d16f4);border:1px solid #c9a35fa6;border-radius:calc(var(--u)*.4);box-shadow:0 calc(var(--u)*.4) calc(var(--u)*1.2) #000a;font:var(--fs-label)/1.2 var(--serif);color:#efe6ce;text-shadow:none}
 .tv-choice-number{flex:none;display:grid;place-items:center;width:calc(var(--u)*2.1);aspect-ratio:1;border-radius:50%;border:1px solid #e8cb94;background:#2b2214;color:#f3d59d;font:700 var(--fs-label)/1 system-ui,sans-serif}
@@ -170,7 +187,7 @@
 .tv-stage[data-chips="1"] .tv-choices{left:calc(var(--u)*34)}
 
 /* ---------- the title card and the closing card ---------- */
-.tv-bigcard{position:absolute;inset:0;z-index:8;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--u)*1);padding:0 calc(var(--u)*10);text-align:center;opacity:0;visibility:hidden;pointer-events:none;background:radial-gradient(ellipse at 50% 46%,#03060e8c 0,#03060ee6 78%);transition:opacity .7s ease,visibility 0s .7s}
+.tv-bigcard{position:absolute;inset:0;z-index:8;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--u)*1);padding:0 calc(var(--u)*10);text-align:center;opacity:0;visibility:hidden;pointer-events:none;background:radial-gradient(ellipse at 50% 46%,#03060e55 0,#03060ec2 80%);transition:opacity .7s ease,visibility 0s .7s}
 .tv-stage:is([data-stage=title],[data-stage=closing]) .tv-bigcard{opacity:1;visibility:visible;transition:opacity .7s ease,visibility 0s}
 .tv-bigcard-kicker{margin:0;font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.34em;text-transform:uppercase;color:#e8cb94;text-shadow:none}
 .tv-bigcard-title{margin:0;max-width:calc(var(--u)*72);font:400 calc(var(--u)*5.4)/1.08 var(--serif);color:#f9f1de;text-shadow:0 4px 32px #000}
@@ -187,3 +204,18 @@
 @media (prefers-reduced-motion:reduce){
 .tv-bigcard{transition:opacity .3s ease,visibility 0s}
 }
+
+/* ---------- the rules note under the narration of the phone and of the combat screens ---------- */
+.rules-note{display:block;margin:10px 0 0;max-width:580px;font:italic 13px/1.5 var(--serif,Georgia,serif);color:#a9b3bd}
+.rules-note-tag{margin-right:.6em;font-style:normal;font-weight:700;font-size:.86em;letter-spacing:.16em;text-transform:uppercase;color:#8fb2c8}
+.tv-stage .rules-note{margin-top:calc(var(--u)*.6);max-width:calc(var(--u)*27);font-size:var(--fs-label);line-height:1.3;text-shadow:0 1px 8px #000}
+.tv-stage .rules-note-tag{font-size:1em}
+/* the aftermath and combat screens carry their own words: no chips or bubbles over them */
+.tv-stage:has(.tv-figures[data-arrange=combat]) .tv-choices{display:none}
+.tv-figures[data-mode=aftermath] .tv-fig[data-role=foe]{filter:brightness(.45)}
+
+/* the words follow the voice: the Dungeon Master's caption or the character's bubble, one at a time */
+.tv-stagebox{transition:opacity .45s ease,visibility 0s}
+.tv-stage[data-speaker=character] .tv-stagebox{opacity:0;visibility:hidden;transition:opacity .45s ease,visibility 0s .45s}
+.tv-stage[data-speaker=character] :is(.combat-narration,.aftermath-narrative){opacity:0;transition:opacity .45s ease}
+.tv-stage[data-speaker=narrator] .tv-bubble[data-kind=speech]{visibility:hidden;opacity:0}

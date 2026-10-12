@@ -15,9 +15,9 @@
 //! `data-music-state` attribute of the display root.
 use super::*;
 use crate::music_score::{
-    DUCK_ATTACK_SECONDS, DUCK_DECIBELS, DUCK_RELEASE_SECONDS, Facts, LAYER_TRACKS, LOOP_SECONDS,
-    CueMemory, Outcome, Phase, Stinger, Tempo, effective_phase, facts_of, mix_for, next_beat, stinger_between,
-    tempo_of,
+    CueMemory, DUCK_ATTACK_SECONDS, DUCK_DECIBELS, DUCK_RELEASE_SECONDS, Facts, LAYER_TRACKS,
+    LOOP_SECONDS, Outcome, Phase, Stinger, Tempo, effective_phase, facts_of, mix_for, next_beat,
+    stinger_between, tempo_of,
 };
 use gloo_timers::callback::Interval;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -611,7 +611,12 @@ pub(super) fn observe(client: &Rc<RefCell<Client>>) {
         else {
             return;
         };
-        (state.document.clone(), state.root.clone(), view, state.generation)
+        (
+            state.document.clone(),
+            state.root.clone(),
+            view,
+            state.generation,
+        )
     };
     let sequence = view
         .revision

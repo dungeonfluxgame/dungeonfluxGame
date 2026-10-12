@@ -34,23 +34,18 @@
 .tv-safe,.tv-figures,.tv-choices,.tv-stage .live-screen{transition:opacity .4s ease}
 .tv-stage:is([data-stage=leaving],[data-stage=interstitial],[data-stage=title],[data-stage=closing]) :is(.tv-safe,.tv-figures,.live-screen,.tv-final-roll,.tv-choices){opacity:0}
 .tv-stage:is([data-stage=leaving],[data-stage=interstitial]) .tv-figures{transition-duration:.3s}
-.tv-stage[data-scene-swap=a] .tv-title{animation:df-rise-a .7s ease .12s backwards}
-.tv-stage[data-scene-swap=a] .tv-headline .tv-divider{animation:df-draw-a .8s ease .35s backwards}
 .tv-stage[data-scene-swap=a] .tv-dm{animation:df-rise-a .7s ease .5s backwards}
 .tv-stage[data-scene-swap=a] .tv-stagebox .tv-divider{animation:df-draw-a .8s ease .6s backwards}
 .tv-stage[data-scene-swap=a] .tv-fig[data-present=true]{animation:df-fig-in-a .8s ease var(--enter-delay,.2s) backwards}
 @keyframes df-rise-a{from{opacity:0;transform:translateY(calc(var(--u)*1.2))}to{opacity:1;transform:none}}
 @keyframes df-draw-a{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
 @keyframes df-fig-in-a{from{opacity:0;transform:translateX(var(--from-x,0))}to{opacity:1;transform:none}}
-.tv-stage[data-scene-swap=b] .tv-title{animation:df-rise-b .7s ease .12s backwards}
-.tv-stage[data-scene-swap=b] .tv-headline .tv-divider{animation:df-draw-b .8s ease .35s backwards}
 .tv-stage[data-scene-swap=b] .tv-dm{animation:df-rise-b .7s ease .5s backwards}
 .tv-stage[data-scene-swap=b] .tv-stagebox .tv-divider{animation:df-draw-b .8s ease .6s backwards}
 .tv-stage[data-scene-swap=b] .tv-fig[data-present=true]{animation:df-fig-in-b .8s ease var(--enter-delay,.2s) backwards}
 @keyframes df-rise-b{from{opacity:0;transform:translateY(calc(var(--u)*1.2))}to{opacity:1;transform:none}}
 @keyframes df-draw-b{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
 @keyframes df-fig-in-b{from{opacity:0;transform:translateX(var(--from-x,0))}to{opacity:1;transform:none}}
-.tv-stage:not([data-scene-swap]) .tv-title{animation:df-rise-a .7s ease .12s backwards}
 .tv-stage:not([data-scene-swap]) .tv-dm{animation:df-rise-a .7s ease .5s backwards}
 
 /* ---------- lobby seats ---------- */
@@ -182,7 +177,7 @@
 .tv-art,.tv-fig-sprite,.tv-panel::after,.tv-card[data-state=empty],.tv-card[data-state=creating]::after,.tv-card[data-state=creating] .tv-portrait-img,.tv-card[data-state=creating] .tv-portrait::before,.tv-card[data-state=creating] .tv-member-name::after,.tv-splash-mark::after,.tv-wave b,.tv-bubble.speaking::before,.tv-dm:has(.tv-narration.speaking),.live-screen[data-role] .combat-actor[data-active=true]{animation:none!important}
 .tv-card[data-state=creating] .tv-member-name::after{clip-path:none}
 .tv-stage[data-art-swap] .tv-art,.tv-stage[data-art-swap] .tv-art-previous{animation-name:df-fade-only!important;transform:none!important}
-.tv-stage .tv-title,.tv-stage .tv-dm,.tv-stage .tv-headline .tv-divider,.tv-stage .tv-stagebox .tv-divider,.tv-stage .tv-fig[data-present=true]{animation:df-fade-only .5s ease backwards!important}
+.tv-stage .tv-dm,.tv-stage .tv-stagebox .tv-divider,.tv-stage .tv-fig[data-present=true]{animation:df-fade-only .5s ease backwards!important}
 .tv-fig-body,.tv-fig[data-speaking] .tv-fig-body{transform:none!important}
 .tv-fig[data-fx] .tv-fig-body{animation:none!important}
 .tv-fig[data-fx=hit] .tv-fig-sprite{animation:df-flash-only .6s ease var(--fx-delay,0ms) backwards!important}

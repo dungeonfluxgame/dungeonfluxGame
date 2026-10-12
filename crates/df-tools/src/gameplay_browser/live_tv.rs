@@ -99,6 +99,8 @@ pub(super) struct TvStage {
     gathered: Element,
     /// Whether a view has been drawn yet: the first one plays no seat sounds.
     drawn: Cell<bool>,
+    /// The scene just drawn is set in the place of the one before it.
+    same_place: Cell<bool>,
     title: Element,
     place: Element,
     lede: Element,
@@ -211,8 +213,8 @@ impl TvStage {
 
         let headline = node(document, &safe, "section", "tv-headline", "")?;
         let title = node(document, &headline, "h1", "tv-title", "")?;
-        let place = node(document, &headline, "p", "tv-place", "")?;
         node(document, &headline, "div", "tv-divider", "")?;
+        let place = node(document, &headline, "p", "tv-place", "")?;
         let lede = node(document, &headline, "p", "tv-lede", "")?;
 
         let lobby_row = node(document, &safe, "section", "tv-lobby-row", "")?;
@@ -306,6 +308,7 @@ impl TvStage {
             roster,
             gathered,
             drawn: Cell::new(false),
+            same_place: Cell::new(false),
             title,
             place,
             lede,
@@ -400,8 +403,27 @@ impl TvStage {
         Ok(())
     }
 
+    /// Which speaker the stage's words belong to; the stylesheet shows the Dungeon Master's
+    /// caption or the character's bubble accordingly, never both.
+    pub(super) fn set_speaker(&self, speaker: &str) -> Result<(), JsValue> {
+        if speaker.is_empty() {
+            self.root.remove_attribute("data-speaker")
+        } else {
+            self.root.set_attribute("data-speaker", speaker)
+        }
+    }
+
     /// Restarts the staggered title, narration and figure entrance.
     pub(super) fn begin_entering(&self) -> Result<(), JsValue> {
+        // A beat in the same place only cross-fades its title; a new place replays the entrance.
+        self.root.set_attribute(
+            "data-title-anim",
+            if self.same_place.get() {
+                "fade"
+            } else {
+                "full"
+            },
+        )?;
         let tick = if self.root.get_attribute("data-scene-swap").as_deref() == Some("a") {
             "b"
         } else {
@@ -420,6 +442,9 @@ impl TvStage {
         self.root
             .set_attribute("data-tv-mode", if lobby { "lobby" } else { "scene" })?;
         self.set_art(&image_layers(&model.art, model.art_fallback))?;
+        let known_place = self.place.text_content().unwrap_or_default();
+        self.same_place
+            .set(!model.place.is_empty() && known_place == model.place);
         self.title.set_text_content(Some(&model.title));
         self.place.set_text_content(Some(&model.place));
         set_hidden(&self.place, model.place.is_empty())?;
@@ -428,7 +453,7 @@ impl TvStage {
         self.narration.set_attribute("title", &model.narration)?;
         self.rules_text.set_text_content(Some(&model.rules_note));
         set_hidden(&self.rules, model.rules_note.is_empty() || lobby)?;
-        self.update_choices(model, lobby)?;
+        self.set_choices(if lobby { &[] } else { &model.choices })?;
         set_hidden(&self.lobby_row, !lobby)?;
         set_hidden(&self.stagebox, lobby)?;
         // The party cards are one set of nodes that moves with the mode.
@@ -556,12 +581,8 @@ impl TvStage {
 
     /// The read-only row of numbered chips: what the table can do now. It is replaced only
     /// when the labels change, so a redraw never restarts its animation.
-    fn update_choices(&self, model: &TvModel, lobby: bool) -> Result<(), JsValue> {
-        let shown: Vec<&str> = if lobby {
-            Vec::new()
-        } else {
-            model.choices.iter().map(String::as_str).collect()
-        };
+    pub(super) fn set_choices(&self, labels: &[String]) -> Result<(), JsValue> {
+        let shown: Vec<&str> = labels.iter().map(String::as_str).collect();
         let signature = shown.join("\u{1f}");
         self.root
             .set_attribute("data-chips", &shown.len().to_string())?;

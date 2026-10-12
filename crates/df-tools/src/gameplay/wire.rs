@@ -762,8 +762,8 @@ pub(super) fn project_journey(
     });
     // A rested scene and an epilogue replace the story text whole, and the rules wording
     // belonged to the text they replace.
-    let epilogue_replaces = key == SceneKey::Inn
-        && pack::with_content(|content| content.campaign_epilogue.is_some());
+    let epilogue_replaces =
+        key == SceneKey::Inn && pack::with_content(|content| content.campaign_epilogue.is_some());
     let rules_note = if rested || epilogue_replaces {
         String::new()
     } else {
