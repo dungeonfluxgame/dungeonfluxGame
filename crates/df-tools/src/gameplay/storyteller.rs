@@ -15,7 +15,9 @@
 //! To keep something from a listener, put the words in `facts.forbidden`, an array of strings
 //! (for example the destination of a secret packet for a player who has not been told it). The
 //! model is told never to write or hint at them, and a result containing any of them as a
-//! whole word is rejected, retried once, and then refused. Dice such as `d20`, `DC 15` and
+//! whole word is rejected, retried once, and then refused. A term that must not even reach the
+//! prompt goes in a slot's `withheld` list instead ([`Slot::withholding`]): it is checked in the
+//! answer the same way but is never shown to the model. Dice such as `d20`, `DC 15` and
 //! `hit points` are likewise rejected unless that exact text appears in the facts.
 //!
 //! The adventure generator calls [`Storyteller::express_adventure`] with its dice-derived

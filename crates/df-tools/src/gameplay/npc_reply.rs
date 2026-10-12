@@ -24,9 +24,9 @@ use serde_json::{Value, json};
 
 use super::{
     adventure::dossier::{Dossier, mentions_term},
-    npc_dossier::{self, Inputs, Turn},
+    npc_dossier::{self, Inputs, Turn, Withheld},
     pack::{PackFile, SpeakerProfile},
-    social::{Approach, SocialLedger, classify_keywords, shift_line},
+    social::{Approach, Shift, SocialLedger, classify_keywords, shift_line},
     storyteller::{CallProfile, Expression, Slot, Storyteller, contains_whole_word},
     table_log::TableLog,
 };
@@ -66,14 +66,24 @@ impl StoryFacts {
 /// elsewhere.
 pub(super) struct NpcReplyContext {
     member: MemberId,
-    facts: Value,
+    pub(super) facts: Value,
     speaker: String,
     hero_name: String,
     hero_index: u32,
     typed_words: String,
     /// Set when the addressed NPC has a backstory: the reply then draws on it and moves the
     /// NPC's attitude toward this hero.
-    turn: Option<Turn>,
+    pub(super) turn: Option<Box<Turn>>,
+}
+
+/// How one exchange with an NPC that has a backstory went.
+pub(super) struct Exchange {
+    pub(super) text: String,
+    /// What the hero's words did, as the model or the keyword reader read them.
+    pub(super) approach: Approach,
+    /// False when the dossier's prepared answer replied instead of the text model.
+    pub(super) from_model: bool,
+    pub(super) shift: Option<Shift>,
 }
 
 /// Who a typed line is for: the one on-stage NPC the words name, otherwise whoever is
@@ -152,15 +162,17 @@ impl NpcReplyContext {
             .filter(|offer| offer.action_kind != rpc::GameplayActionKind::CreateCharacter as i32)
             .map(|offer| offer.label.as_str())
             .collect();
+        let on_stage: Vec<&str> = scene.cast.iter().map(|actor| actor.name.as_str()).collect();
         let public = format!(
-            "{} {} {} {} {}",
+            "{} {} {} {} {} {}",
             scene.title,
             player.narration,
             journey.dialogue,
             hero.name,
             choices.join(" "),
+            on_stage.join(" "),
         );
-        let withheld = npc_dossier::withheld_terms(dossier, unheard_secret_terms(story, &public));
+        let withheld = Withheld::new(dossier, unheard_secret_terms(story, &public));
         let standing = social.standing(member, dossier);
         let recent = social.recent(member, &dossier.npc_id);
         let scripted = if actor.speaking {
@@ -193,13 +205,13 @@ impl NpcReplyContext {
             hero_name: hero.name.clone(),
             hero_index,
             typed_words: words,
-            turn: Some(Turn {
+            turn: Some(Box::new(Turn {
                 ledger: social.clone(),
                 dossier: dossier.clone(),
                 scene: scene_key.to_owned(),
                 standing,
                 withheld,
-            }),
+            })),
         })
     }
 
@@ -489,8 +501,41 @@ impl NpcVoice {
         if context.turn.is_none() {
             return self.reply_in_public(context, log).await;
         }
+        let exchange = self.converse_in_character(context, log).await?;
+        let operation = df_observe::OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        let mut span = df_observe::begin(&operation, "gameplay.social.exchange");
+        span.event(
+            "social.exchange",
+            &[
+                ("social.approach", exchange.approach.label().to_owned()),
+                (
+                    "social.source",
+                    if exchange.from_model {
+                        "model"
+                    } else {
+                        "prepared"
+                    }
+                    .to_owned(),
+                ),
+                ("social.shift", format!("{:?}", exchange.shift)),
+            ],
+        );
+        span.finish_unmeasured("replied");
+        Some(exchange.text)
+    }
+
+    /// [`Self::converse`] for an NPC with a backstory, reporting how the exchange went.
+    pub(super) async fn converse_in_character(
+        &self,
+        context: NpcReplyContext,
+        log: &TableLog,
+    ) -> Option<Exchange> {
         let modeled = self.model_dialogue(&context).await;
         let turn = context.turn.as_ref()?;
+        let from_model = modeled.is_some();
         let (text, approach) = match modeled {
             Some((reply, approach)) => (
                 reply,
@@ -548,20 +593,29 @@ impl NpcVoice {
             );
             span.finish_unmeasured("save_failed");
         }
-        Some(text)
+        Some(Exchange {
+            text,
+            approach,
+            from_model,
+            shift: recorded.shift,
+        })
     }
 
     /// The text model's in-character reply and its reading of the hero's approach. `None` when
     /// the storyteller is off, the member is over its bounds, or the model failed, timed out or
     /// broke a rule (a leak, a game number, or leaving character).
-    async fn model_dialogue(&self, context: &NpcReplyContext) -> Option<(String, Option<Approach>)> {
+    async fn model_dialogue(
+        &self,
+        context: &NpcReplyContext,
+    ) -> Option<(String, Option<Approach>)> {
         let turn = context.turn.as_ref()?;
         if !self.storyteller.is_on() {
             return None;
         }
         let _admission = self.limiter.admit(context.member, Instant::now())?;
         let slots = [
-            Slot::new("reply", npc_dossier::REPLY_CHARACTERS).withholding(turn.withheld.clone()),
+            Slot::new("reply", npc_dossier::REPLY_CHARACTERS)
+                .withholding(turn.withheld.all().to_vec()),
             Slot::new("approach", npc_dossier::APPROACH_CHARACTERS),
         ];
         let values = self
@@ -579,7 +633,9 @@ impl NpcVoice {
         if reply.is_empty() {
             return None;
         }
-        let approach = values.get("approach").and_then(|word| Approach::parse(word));
+        let approach = values
+            .get("approach")
+            .and_then(|word| Approach::parse(word));
         Some((reply, approach))
     }
 

@@ -21,10 +21,7 @@ pub(super) struct PublicStory {
     pub(super) extra_secret_terms: Vec<String>,
 }
 
-fn fact<'a>(
-    facts: &'a BTreeMap<String, String>,
-    key: &str,
-) -> Result<&'a String, GenerateError> {
+fn fact<'a>(facts: &'a BTreeMap<String, String>, key: &str) -> Result<&'a String, GenerateError> {
     facts
         .get(key)
         .ok_or_else(|| GenerateError::Pattern(format!("dossier fact {key}")))

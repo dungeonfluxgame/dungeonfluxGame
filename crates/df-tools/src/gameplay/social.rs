@@ -34,7 +34,7 @@ use df_types::MemberId;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    adventure::dossier::{Attitude, Dossier, Effect, Knowledge, Topic, mentions_term},
+    adventure::dossier::{Attitude, Dossier, Effect, Topic},
     storyteller::contains_whole_word,
 };
 
@@ -110,7 +110,15 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
     let lowered = typed.to_lowercase();
     let has = |phrases: &[&str]| mentions_any(&lowered, phrases);
     if has(&[
-        "bribe", "gold", "coin", "coins", "silver", "pay you", "paid", "how much", "reward you",
+        "bribe",
+        "gold",
+        "coin",
+        "coins",
+        "silver",
+        "pay you",
+        "paid",
+        "how much",
+        "reward you",
     ]) {
         Approach::Bribe
     } else if has(&[
@@ -130,8 +138,17 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
     ]) {
         Approach::Intimidation
     } else if has(&[
-        "idiot", "fool", "coward", "stupid", "worthless", "pathetic", "useless", "scum", "liar",
-        "ugly", "disgusting",
+        "idiot",
+        "fool",
+        "coward",
+        "stupid",
+        "worthless",
+        "pathetic",
+        "useless",
+        "scum",
+        "liar",
+        "ugly",
+        "disgusting",
     ]) {
         Approach::Insult
     } else if has(&[
@@ -160,6 +177,13 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "famous",
         "legend",
         "wise",
+        "wisest",
+        "smartest",
+        "bravest",
+        "strongest",
+        "amazing",
+        "incredible",
+        "magnificent",
         "great",
         "greatest",
     ]) {
@@ -193,7 +217,13 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "royal",
     ]) {
         Approach::Deception
-    } else if has(&["trust me", "i promise", "believe me", "surely you", "please"]) {
+    } else if has(&[
+        "trust me",
+        "i promise",
+        "believe me",
+        "surely you",
+        "please",
+    ]) {
         Approach::Persuasion
     } else if typed.contains('?')
         || has(&[
@@ -270,7 +300,15 @@ pub(super) fn topic_of(typed: &str, approach: Approach) -> Topic {
     ]) {
         Topic::TheAntagonist
     } else if has(&[
-        "town", "village", "here", "place", "area", "around", "this road", "the road", "local",
+        "town",
+        "village",
+        "here",
+        "place",
+        "area",
+        "around",
+        "this road",
+        "the road",
+        "local",
     ]) {
         Topic::ThePlace
     } else {
@@ -540,18 +578,16 @@ impl SocialLedger {
 
     /// How this NPC feels about this hero right now.
     pub(super) fn standing(&self, member: MemberId, dossier: &Dossier) -> Standing {
-        self.lock()
-            .get(&(member, dossier.npc_id.clone()))
-            .map_or(
-                Standing {
-                    attitude: dossier.starting_attitude,
-                    trust: 0,
-                },
-                |relationship| Standing {
-                    attitude: relationship.attitude,
-                    trust: relationship.trust,
-                },
-            )
+        self.lock().get(&(member, dossier.npc_id.clone())).map_or(
+            Standing {
+                attitude: dossier.starting_attitude,
+                trust: 0,
+            },
+            |relationship| Standing {
+                attitude: relationship.attitude,
+                trust: relationship.trust,
+            },
+        )
     }
 
     /// The last lines between this hero and this NPC, oldest first, as `(is_hero, text)`.
@@ -683,18 +719,6 @@ pub(super) fn shift_line(shift: Shift, hero: &str) -> String {
         Shift::Trust { warmer: true } => format!("softens a little toward {hero}"),
         Shift::Trust { warmer: false } => format!("grows wary of {hero}"),
     }
-}
-
-/// Lines of the trust-gated tier that a reply may use: none mentions a phrase the party must
-/// not hear. Unlike the public tier, the dossier tables allow secret terms here, so this is
-/// where they are kept out.
-pub(super) fn safe_lines<'a>(
-    items: &'a [Knowledge],
-    withheld: &'a [String],
-) -> impl Iterator<Item = &'a Knowledge> {
-    items
-        .iter()
-        .filter(move |item| !withheld.iter().any(|term| mentions_term(&item.text, term)))
 }
 
 fn read_saved(file: &PathBuf) -> Result<SavedFile, SocialError> {

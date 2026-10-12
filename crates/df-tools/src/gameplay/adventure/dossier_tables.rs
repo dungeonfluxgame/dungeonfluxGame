@@ -783,7 +783,10 @@ impl DossierTables {
             ("curt", &s.curt),
         ] {
             check_profiles(file, name, table, reaction, tags)?;
-            let moves = matches!(name, "flattery" | "flirting" | "threats" | "lies" | "bribes");
+            let moves = matches!(
+                name,
+                "flattery" | "flirting" | "threats" | "lies" | "bribes"
+            );
             if table
                 .entries
                 .iter()

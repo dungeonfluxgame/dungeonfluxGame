@@ -13,6 +13,10 @@ mod journey;
 mod model;
 mod music_assets;
 mod npc_dossier;
+#[cfg(test)]
+mod npc_dossier_live_tests;
+#[cfg(test)]
+mod npc_dossier_tests;
 mod npc_reply;
 mod pack;
 #[cfg(test)]

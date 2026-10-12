@@ -236,6 +236,17 @@ pub(crate) fn reload(
         }
         _ => {}
     }
+    // Stored backstories are spoken from, so a repeated id or a leak in their public tiers
+    // refuses the record like any other tampered document.
+    let mut npc_ids = BTreeSet::new();
+    if record.dossiers.len() > 20
+        || record
+            .dossiers
+            .iter()
+            .any(|dossier| !npc_ids.insert(dossier.npc_id.as_str()) || dossier.leak().is_some())
+    {
+        return Err(RecordError::Invalid("dossiers"));
+    }
     let mut story = BTreeSet::new();
     for (index, roll) in record.rolls.iter().enumerate() {
         if roll.n != index + 1
