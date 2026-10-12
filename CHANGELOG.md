@@ -16,6 +16,269 @@ Do not invent a self-hash or silently discard metadata commits.
 
 Integration history through 2026-10-11T15:25:07.071270-04:00, reconstructed from Git at this session close. Six-hour blocks use first-parent integration timestamps; each newly reachable branch commit is listed once in topological order. This history records commits and does not replace task acceptance. Empty intervals contain no commits. The bookkeeping commit writing this record belongs to the next block.
 
+Integration history from 2026-10-11T15:24:05-04:00 through 2026-10-12T04:33:02-04:00 on the integration branch `claude/playable-20261011`, generated from Git by revision range: six-hour blocks by first-parent commit time, each newly reachable commit listed once. The last block is open and shorter than six hours; the work session is still running.
+
+## 2026-10-12T03:33:42-04:00 to 2026-10-12T04:33:02-04:00
+
+Range: 9c56992ca60d8049aaa4c230e642a877d2aba43a..5310dcf601c50b60ecf17c3d297d524a3bf65029
+
+- 31cff3f34e26a6b64a9930ea259bd1b4d4f3be35 — Tactical combat in the live game: positions, movement, ranged attacks, reactions, multiple enemies and the archer build (PLAY-T02)
+- e460e2e2fde4b0d22833af47d3fba35b23b6443e — Merge tactical combat: server positions, movement, ranged attacks, reactions, several enemies and the archer build (PLAY-T02)
+- d43b7e0a65753a1e50ea9dcf08dc7e53dcf8a6e6 — Admit investigation choices and report refusals as typed
+- 78b58c030a987242b4a9404d33042ce5d4518960 — Merge the investigation fix: scripted choices reach the journey, a refused action says so plainly, four choice chips show whole (PLAY-E02)
+- c2635279996086d60cb49263418867a68f87e82d — Battle feel and attack framing: shake, hit-stop, slow motion, sway, particles, action shots
+- 17433e1a17cfec0741f028d05d8944e541e8007a — Battle feel in the post pass and renderer, the page hooks, the story-place title and a quieter village grade
+- 1351b78554dbe9a77d61cca1ec9695725637b782 — Attack and finishing shots off the line of action, pans that keep the fighters in view, stronger idle sway
+- e6eab66db5d9180043f780fc75f2d8caecac58fc — Action shots stay on the front side of the set
+- 0a7facb068d361bdf14f71f1826733396855ddc4 — Document the battle feel preview switches
+- a849923fc33656ba7c574ace6d5b8e9df7f15ae1 — Merge battle feel and camera rules: shake, hit-stop, slow-motion finishing blow, sway, particles, and framing that keeps both fighters in view (PLAY-S01, PLAY-F07)
+- 6286a345acf999712769b0e409f757012cdc6484 — Merge branch 'claude/playable-20261011' into worktree-agent-a507ceccb18c319e9
+- ce718c98025e946ca2e9ba611fd1f2107cad8f01 — PLAY-N05 M2: NPC replies carry a conversation
+- 6d2eb7241c1ad6d6fb1dddff6e5adae94fb9705b — Merge NPC conversation memory and pacing: replies lead with the answer, do not repeat themselves, and every speaker knows their side of the errand (PLAY-N05 milestone 2)
+- 0c87a8ce3baa18e2b8dde9fe261a9adf7e895491 — Analyse each home painting at runtime into a validated home theme
+- fb8c8a189634bdff642979ceec660ddb9665e300 — Merge branch 'claude/playable-20261011' into worktree-agent-a7a373d701ad1f2b2
+- b3f975b20455f63a5a150ab0c6ab5b485ea704a1 — Place the themed home screen blocks and mood on the shared display
+- e61f1bb2ce1ec2891f2f3c1da051e9fe49bf0810 — Keep home panels opaque and measure text by glyph extent
+- ccea1fc83d522c121944d0f63780892dacc7c74b — Merge branch 'claude/playable-20261011' into worktree-agent-a7a373d701ad1f2b2
+- b815b76da060c85d0336a281c625c4685b2b11ab — Give the join block room for the real QR and make the theme cache explicit
+- 357049ede1a8d3bc4ea6944dab755ad893168950 — Carry the theme into the panels and drift the atmosphere, masked off the blocks
+- 5310dcf601c50b60ecf17c3d297d524a3bf65029 — Merge the themed home screen: title, join block and party placed per painting, mood and atmosphere, with the real join QR (PLAY-V05, in progress)
+
+Next block baseline: `5310dcf601c50b60ecf17c3d297d524a3bf65029`.
+
+## 2026-10-11T21:23:37-04:00 to 2026-10-12T03:33:42-04:00
+
+Range: 27e6e917073350e8f7dbb73adbadfff67ff34f56..9c56992ca60d8049aaa4c230e642a877d2aba43a
+
+- 8280b8d517265e511f2370741b6c5f47c8689b2f — Add the battlefield core: camera, grid, director, stage, scene files, splats
+- 6cc63aba8c6ee888cde846609ffcf8022773ae67 — Add the WebGPU battlefield backend, HUD and #battle-preview
+- 9b6ef66638d204f691eac372937103073c69526e — Add the splat route, notices, combat feed, and tune the battlefield scenes
+- 38f914a85b0a3d43208f06e2a7d10b38f1ca5358 — Merge claude/playable-20261011 into the battlefield branch
+- 4803cf4a2757dcb2927c59000635289fa0c88496 — Battlefield: cue-driven live adapter, approach/strike split, roll card, figure bounds, lighting
+- f0483927dd191e0a8860099d4de3d179dc5ba0ca — Battlefield: soft reduced-motion blink, reveal after art loads, clippy fixes, splat route test
+- 02981ad25d45e63aeb74cd5da3cf5cf758dfcd38 — Battlefield: frame-budget ladder skips splat cap without splats, tighter ground, scene tuning
+- c51ee69d17c206f074db426f8676193a4503364d — Camera: reduced-motion blink decays from its own peak
+- 0546b194fdce4466856dcdca08a2bf9d4b8f7d9b — Merge the Rust WebGPU battlefield: 3D combat stage with Gaussian splat support
+- 64f80b60b983e1bc1cf1fbb75ef724580530be24 — Raise the launcher database's connection limit
+- 3936ab884353e41dffcd89f15b74ba5afa772ff3 — Add bounded speech input route and hold-to-talk contract (PLAY-N03)
+- 3874ced86a3f31e50ffdc152e592fe3aec8f494b — Add the hold-to-talk control to the dialogue panel (PLAY-N03)
+- 2830385bb7c2b10480992c02e159236be1e9615c — Document speech input and box the active speech route (PLAY-N03)
+- f0464c0553698570b40023f13d66b08fe8a348c7 — Merge hold-to-talk speech input
+- f9cc8bc9e5846414f1e302fb84d75363851f624e — Roll NPC dossiers with every generated adventure and persist them in its record
+- 28a6e83fc571060387a1ccfe21e4ccd3270da35b — Give NPCs with backstories attitude, trust and in-depth replies
+- 3bef1c4b17ae72eefa5f33953a3c8c59fe97636c — Test NPC replies, attitude bounds and persistence; document the dossier play layer
+- 63484e991213266767f04a72350f19bf7cd6274f — Merge backstory-guided NPC replies with attitude and trust
+- 1df12ab11cb69762aca534680967c9028f626219 — Queue battlefield layouts and sound, tactical combat rules and their integration
+- 5324346027fd9fc8b98fd52343b97d9bd56f77c6 — Queue living scenes, the investigation scene and status effects
+- d97605ce96a26865eb1ec9cfa6f79169aeffed56 — Queue real splat battle scenes and the content rating setting
+- cba67abc87b9f49201841b2f6c2fdb0c20d0664d — Add status effect icons, battlefield obstacle props and the archer hero art
+- e059c1ad19cb69cd8f0e9209b8b23ae751867ecb — Send rules wording, the place and the table's choices as separate view fields
+- ab7940d3415f8e2867e23bc1298511235603be11 — Use the server's tempo cue for the score, with the view only as a fallback
+- 185900788513afb88f87b3975d1071417b18a471 — Stage the TV from the server's cast and table log, with title and closing cards
+- 46e712520b7ef5ba62d5fb403ba0a9cf3beeeb3d — Make the words follow the voice, restyle the scene title, hold the fallen, move the sound control
+- bddda47d8359d2da3cff6f70fbf773d66cc2364c — Merge the integration branch (3D battlefield, figures) into PLAY-F03
+- 54fecce9e58f5ccb1786ca729b2a8bf44f586c68 — Stand the cast in the painting: depth, floor contact, HUD, bubbles beside heads
+- 812e956610786b1fe0cd4ed20d0dd54d6d62785b — Keep speech bubbles clear of a two-line place name
+- 3129bddb2b09787649ff014ff677a0b79264bff9 — Merge the story stage pass: bubbles that follow the voice, depth staging, title and closing cards
+- 914ad9b0098e7a0d40f78cf5f56cd3a83a369630 — Make the first press on the locked sound control enable sound
+- 71f570f1264485eb16d404a03fb6252ed19a5018 — Show a typed line and the speaker's reply on the TV as they happen
+- 568b9cfddbefd99b57b7ca4db7f6f2340aa8839c — Test that only a deliberate press can ask for the microphone
+- 2e3ce6100bdf73f61a8f6cc6ed63aa5fafb3ece8 — Send the real release duration with a Release tempo cue
+- c9dac077c50e411c19f857fd1caca83e01ea70ae — Reconnect with backoff, drop stale seats, release silent sockets and give each run its own room code
+- 48b4076669174cd341b308eaae3f639bde69f8b3 — Add content rating setting with mature default, overlay tables and rating-split guidance
+- cd3b94ebe802bb7d93eb68a066aafb95d7e0bddf — Test the content rating: parsing, guidance split, word lists, mature tables and limits
+- e24c9048a6978c86eb79e043da5d281f73047258 — Document the content rating setting, what each mode changes and the limits in both
+- c84501cff73fbcc63c0d0f7549442c07b6027452 — Add live content-rating checks and a menace sentence for hostile enemies when mature
+- a6b040b3392107fa2d4dbc0bbc2065ff1fffe1d2 — Merge the content rating: mature by default, restrained as the switch
+- 52245d9b9425f3e76027ee2576c8023121c58805 — Give slow commits time to finish instead of fencing the session
+- b16bfcab36b98fd4e920544448f86a4545328d3a — Merge the integration branch into PLAY-F05
+- 3c92f24123a992ab6ff902733c85fda5fb65682b — Let a fenced session heal itself and say so when it cannot
+- 51642ddb4c32944ba89ff22b2cebbaaa486604e7 — Renew the owner lease and grants on a heartbeat so an idle table keeps its session
+- 4d2ca0a3d60628299df5b028658cc9bdb817eb2f — Keep tuning bytes unchanged by the release hold and box the retained attempt
+- 76551ddc21cfbf426d894491a79f271513b664b8 — Add grid tactical combat rules: movement, cover, ranged attacks, enemies and the archer build (PLAY-T01)
+- b106a100b235ef97fef22d5b18a0c6af5d45e7aa — Merge grid tactical combat rules (PLAY-T01)
+- 306a9507befec2d811e97f1451e8dfdeb4b82aba — Battlefield core: layouts, A* paths, status set, combat sound events, ranged staging, downed state
+- 3d1ecd1041acd5929c82707e6969efa6ce833f21 — Author 27 battlefield layouts across nine scenes (schema v2) with validation tests
+- 222b328488aea85f4d2cd9a298727c3280a45051 — Add 38 combat sound clips with provenance, content-rating clip sets and allowlist entries
+- 5da4abd94a2a0c9593c555dbfc388919fa89abec — Keep the invisible outline in the resolved edge set
+- 6578d8e44c3604db996d719e257fba4712ec109e — Merge integration branch into PLAY-F04
+- 53cd456506758cf151afdcb504c946bc04bf1526 — Server: carry the recorded initiative rolls and the fight's location id in the views
+- e0c72d1ff28691c0965a42d7259117fa6e31482b — Hold the impact shot after a damaging hit
+- e5dcd94d0b9a0dbaab8e9369749ba4559973bc25 — Initiative roll-call: dice, whip camera stops, order badges, tracker fill, flourishes, rising stings
+- af9e1a5dc352693b9c8bb81e42f05c9bfe6ae82b — Renderer: props, tile treatments, arrows, status shaders and overlays, HUD pips, target tag and initiative overlays
+- 9315dc275b938739bff2935f14f17dfc3ff0ac2f — Adapter: location-keyed scenes, layout choice, archer, statuses, initiative, sounds, preview modes
+- cf3af19943d5762f49b1ef0d3d609c1b0df3fb37 — Fixes after first browser frames: figure mips, softer ground sharpening, screen-side archer mirror, roll-call tidy, phone initiative line
+- 705cfec31ad2cc7a104d3afc6e635c5b94b91651 — Visual tuning: ground detail, rings, aura, invisible body, review placements, rustfmt
+- 3015007ac2ea0d40e1e723d6b307d7fe9ecd7ea3 — Clippy fixes, ranged impact framing, cheaper ground shader, faster quality adaptation, close stills
+- 5880597872f3b525e7c52eda47e7fdfccfe7f128 — Arrow and cover pip legibility
+- 4990f4bed9ee63b19c1fdc46696efcaa437cadb4 — Merge the battlefield second pass: layouts and obstacles, combat sound, ranged staging, statuses, initiative roll-call (PLAY-F04)
+- 62105b7abf06f10b3632ebc5557a1b2b6df77db3 — Drive scene flow from a validated beat script per adventure (PLAY-E01)
+- ceeafa3eb47302a6d27a383cb8a01699d5855a24 — Merge the data-defined scene flow: beat scripts interpreted by the server (PLAY-E01)
+- a0e7977b75968490846b2ecd9714b43c27d0071f — Design backstory-driven character creation mapped onto SRD 5.2.1 (PLAY-C07)
+- ff9091dae662c37fc7cb90aec57f93d4eed78a43 — Merge the backstory-driven hero creation design (PLAY-C07)
+- ae919ff8f85b17dbe591b66e592523519c668b6d — Queue the stage pass, live-session fixes and backstory-driven hero creation
+- 5117177abffb39ce15a9c848639a10cf50f24a35 — Queue speech-led display sequencing with explicit stage state machines
+- adb5030d0a065fe6bad2695c627a9253c5a86b30 — Merge the integration branch (tactical rules, battlefield pass) into PLAY-F05
+- 8cabc2aff1e015bc6618face27c06be74df16254 — Browser checks: fight loop for the tactical combat and a release-hold measurement
+- 8e0315aa2db46442d92b2ecc5679c956155d0727 — PLAY-F06 (first part): a scene change waits for the line being spoken
+- de90e81ba12b312a0f3443cf335cbb2ec78fcdbe — Queue hero speech on the table: intent bubble and cleaned-up line
+- bec356d0db258f8c66c106c56501105a31011e95 — Record the owner's decisions on hero licensing, creation time, persistence and secrets
+- 21cdfbeb3592de0d1afe5f77192632c8b7a7727f — Queue the backstory creation build: hero tables, picker with saved heroes, catalog validator
+- b09971c7247f7aa00fa6cf26d47f127628d8e014 — Fix the stage of the hero tables task so the queue file matches the database
+- c4926dddf94730982cbc1f35759cd00235121dc9 — Add live_backdrop and live_sprite presentation fields for server-generated scene art
+- a204edb12b808cc53dcd313e5d66fa17a09358ac — Add runtime image service, scene mood and living-scenes director
+- 3002719e6bdc16eff7b35e95bbcf73399ca53aeb — Accept generated scene art in the display: live backdrop, expression sprites and a fade-out hook
+- bfe9a64f753181485b5b27b34bdaff1510bb0c9f — Test the image service, scene mood, living scenes and imagery settings
+- 517992fab575d55e258438242b3242cfb52d049b — Rename the two-person shot, tighten expression phrases, add provider tests and the provider research note
+- 746dfe97843922c22b1eaa18c2cbb66c3e440b3c — Wake only the display's stream when scene art is published
+- 5dfb8762de358560b86debf3f93bf926a0b04dd4 — Let the display take generated art from a view of the revision it already shows
+- 15cf5aa82425d60267576fe69cbe6764964149c2 — Keep backdrop prompts from inviting painted people; add the live operator checks
+- b82efd3ff145ee8b647fe8890682179be2f89167 — Merge claude/playable-20261011 into the living-scenes branch
+- 33879004d1eb5489cf3ff5a7dafdc6116a58e106 — Harness knob: DF_GAMEPLAY_DEMO_DATABASE_PORT names a private PostgreSQL port
+- 5197d388f257e8355fe68129c19c441d8705b611 — Merge living scenes and the runtime image service (PLAY-L01)
+- 29d90960e662dd698c6ddbc6e807df9e01403dc0 — Queue health-driven faces, bar colour and shake
+- 9d14b3b4991eebf785c2701824fcfff11c5372bb — Health cues play for everyone: drop the reduced-motion exception
+- a9413cb95e18d372492a3cf90b60a47d308b2899 — Never reduce the game's motion for the device's reduce-motion setting
+- 7aa4f26befbcce1e2492dc3c8b6050d688c7cb3b — Merge the integration branch into PLAY-F05/F06
+- 08d846ad802530ef0a3cd5c055fc2b27b4277a03 — Merge live-session fixes: lease heartbeat and self-healing, typed lines on the TV, sound control, room codes (PLAY-F05)
+- 1461c77c2ff3ff799e6c049651ff56bf53143d4d — Record the battle frame-rate lock and straight glowing grid on the splat scenes task
+- 335a9c330cd1bb3bd60009a03d12298f6a4f2584 — Add hero creator data: life-path stages, jobs, custom backgrounds, SRD catalog
+- 926f00aeb9c5a7b01704710f9e7f90b710085c51 — Merge the hero creator data: life-path stages, jobs, original backgrounds, SRD catalog (PLAY-C08)
+- d99960b6b4dff807ee34a2ba2edefd5bff062eaf — Queue composed scene exploration, the looping home-screen video probe and the theme-driven home screen
+- 8ae203215068e77c65c64c3213494cf6e504fbd4 — Backlog a table-chosen graphic style for the art pipeline
+- 699961607f23ba3928f67eb61335f7aadf73eb83 — Put speech bubbles above every character and require strictly rules-backed fight presentation
+- 2fa3cfa9e51fb61fab2e45f7873f7bc3cafe6aa1 — Add a pure-Rust image decoder to the server for runtime image analysis
+- f30da76c2f725e54100957746f50087ec3faf1d1 — Queue battle feel and the video dice roll template probe
+- deca89802f5600ac1dd55ae24974eef980c2a0a9 — Add splat LOD index selection and scan ground height estimation
+- 2721881a83049cb1c19cd7b9736bac7ee38e7eb9 — Stream and render real splat scans on the GPU
+- e23745168d58255984b735489aa78c27df7ebaf7 — Serve nested scan layouts, add splat directory and battle scene settings, real-chunk decode tests
+- 68a8aef3a73026b195696a65e0fcac7c6944cfc2 — Terrain-following grid tiles, GPU pass timing, splat-resolution ladder, ceiling cut, scan scenes and fit tool
+- 5244410f1b542ff39ebac8ee0e7b7dc191f11d7e — Pass scan settings through run-gameplay.sh, document scans, tolerate missing chunks
+- 2dc74c1fd7ead8936bff5d2ad16b2c07bc3a9659 — Extend third-party notices for the splat pipeline and the CC BY scan
+- 2d927a7f559dee04fdf9082263249f1457093959 — Test scan scene fields, terrain-following figures and the GPU depth key
+- 83dcfb9c84addcc064fc97353797e2ee4dd9c59a — Format, lint fixes, depth-off debug switch, figure positions in stats, nearest-first coarse loading
+- d2a955be85e63f3b213f8e62f65942da6782230c — Tidy submit_frame, final scene cameras
+- fef7e81000b8c83dd749a69b4900a4389949b229 — Scan depth fixes, decal lift along the line of sight, final scan cameras and scene biases
+- f2070e3840db86d87e407832d36abe0d3af62dd2 — Merge claude/playable-20261011 into the splat scenes work
+- 8a69c07d573debe8fe276b224092840026220207 — Fixed 24/30 fps battlefield cadence, straight glowing grid on a flat play plane, painted-size scan arenas
+- 4b1d9233c0ec6ebaa1cf071ab5b0fe02a2fa6c0b — Eight by six scan arenas with a closer wide camera, lit scan grades, enemy card clear of the sound control
+- 4ff3c0baa9f85573a2cc23ac9c8163a7de16c1be — Merge real splat scans as battle scenes, the fixed battle frame rate and the straight glowing grid (PLAY-S01, in progress)
+- 835bf87b6dab9f8ad2d25f61e777854b5a3858fa — PLAY-F06 M1: display scene, line, clip and actor state machines
+- 7164565c16869f24ef7a867568aa04b6fcb897b6 — PLAY-F06 M2: battle entrance machine in front of the battlefield
+- 014ac0dc849d024be77f15bf4bf04f90eb96676e — Merge display stage state machines and the battle entrance machine (PLAY-F06 milestones 1 and 2)
+- 14d3dcc8801363accd4332b07bcc0ddf72c1b144 — Add a QR encoder to the server for join codes on the home screen
+- c7b6c7ae2f3f77944481631c39007c8d748d6194 — Figures on a scan are never hidden by the ground they stand on
+- 758c9be73056f4e32446dac33e44a390e07c06a4 — Merge the splat-scene depth fix: a figure is never hidden by the ground it stands on (PLAY-S01)
+- 134d297d1aa0fd8523c0bb501e8bb3d173650333 — WIP PLAY-H01: shared health tier, health faces, WebP output (does not build yet)
+- e9cc29c622c5656848a5aaf3f55a9730eeaefc4f — Merge integration a9413cb into PLAY-H01
+- 630d06bb8bb71947766f8e3c34aae9969b19b153 — PLAY-H01: server health faces, pre-warm book, cached-only combat, hero live faces on every audience
+- 6972c8cc6a98986e5c3ba9c4669478eb02634a73 — PLAY-H01: browser health cues, bar chip, shake model, phone card cues, fight-scene warming
+- 47cb54d1a88b207fe633c30bdbfe3d23ff61450b — Merge integration 014ac0d into PLAY-H01
+- afd48825b12932ba0af351e3c9957f975e52d0e1 — Show art that finishes after table talk: merge it into the on-screen table-talk view (live defect), with a native test
+- 6da991d04f953bc8d2111d0b05cf7feff38b88bb — PLAY-H01: retry a failed health variant once after the untried ones
+- 79cac842bf283033dbf4e17a43a7ee12752a3cae — Merge health faces, health bar colours and shake cues, and art that finishes after table talk (PLAY-H01, in progress)
+- f7771244f2d0ca3a90996a48d9ff470229f5aa1b — Phone: attack switches no longer block ending a turn, and start switched on
+- cd51d11bcaba3cba6ab7cf807480180327e52ff5 — PLAY-Q01 M1: public join address, join link and join QR code route
+- fa101a25c6cd52538d41469be9ba3cc4bce965ef — PLAY-Q01 M2: QR code and room code in the shared display's join panel
+- e90b39aabfdc9cc8301b26769672e88c887f6243 — Merge the join QR code, room code panel and LAN join link (PLAY-Q01)
+- 1e833d5a386f86c23393f68ee9eda495b36d9a53 — PLAY-N05 M1: NPCs know what their adventure asks of them
+- e3b5dcc0e593544ffde8fe2a11a7d2737302ce49 — Merge NPC knowledge: a speaker knows the errand they give and the names the scenes speak aloud (PLAY-N05 milestone 1)
+- e88694fb1951a05a8aac18a83510d84b2102a446 — PLAY-H01: move the table-talk art test to the view delivery contract, asset-engine note
+- 9c56992ca60d8049aaa4c230e642a877d2aba43a — Merge the rest of the health cues work: the table-talk art test in the view delivery contract (PLAY-H01)
+
+Next block baseline: `9c56992ca60d8049aaa4c230e642a877d2aba43a`.
+
+## 2026-10-11T15:24:05-04:00 to 2026-10-11T21:23:37-04:00
+
+Range: b7216f693e62c37a2c1abd3aeb31e247b9e10491..27e6e917073350e8f7dbb73adbadfff67ff34f56
+
+- 0b32c6b001673db1dd4862dd486a7ffc219afb50 — Close development session and preserve reviewed progress
+- 162251c20d40be40db79fcad9f964fd311b92559 — Repair df-presentation committed eligibility test against current contract
+- a8be0a5daf4a6f77c3c2f1a80ed1c8accb69f90c — Mount owned dialogue clarification and confirmation recovery
+- fe85a8b80c1da54ff670b43e2f21e6713f568876 — Preserve ordered dialogue recovery guards with let chains
+- 9c8423e49c5661d222d8573d837edcb78b54d38d — Make gameplay demo session limits configurable
+- 0e30ccee26ff84c8528e9bfdef4ad2620c40362f — Add a one-command launcher for the playable game
+- f7f32db64aa81f5a81156556a0ecaab3ad6327fc — Add the playable-and-tunable track to the operational task manifest
+- ee7720b2fc07927893ee2d6cdc01ab0792f1d35e — Define gameplay tuning surface
+- f6e3b4df2ccf5665a3e5c9a56339883a7d6d93d3 — Resume players after reload and tidy the playable client
+- 5adfac5802f8bb3b255069ed8fd958b10d5a18b9 — Keep the saved player seat per tab so two players can share a browser
+- 1d6d86b9a1de4c4126a8d8c137f1465345c19db1 — Bring the README, agent rules and start guide up to date with the playable game
+- 1ecbefd0dc5ea43e379342606a6f7f15337d1f1c — Do not exhaust the call budget in normal play
+- 0a12ab546208038275f2fed4e675b0e2d3ce9815 — Parameterize the local journey rules for tuning
+- e24907024e8627b7e356bb0fef6c16678dfa280a — Add the gameplay pack and tuning loader with shipped harbor journey files
+- c3cd3c06dffddc8f3e4597397e743f3ff125b051 — Mount the designed lobby and exploration screens in the live client
+- 7d3766b53c1ba32d124ab780e1216afc22b87a82 — Test the allowlisted extra asset route
+- c44c81833d8833d585a09b1b3c74d9e60e9cb704 — Add generated interface art: wordmark, frames, d20, icons, portraits and scenes
+- c8ab9c72b02d7085bcefd6840652db1d61fa597c — Refine lobby and exploration screens toward the concept art
+- 7e00920c4fc74c88b5c5ccf4cc8eb5ca8c53598f — Mount designed combat screen in the live client
+- e8ef9559b3ebaf8cea28a567aff573b17d7402a2 — Mount the designed combat, aftermath and sheet screens in the live client
+- 0d911ad07668a779a4fe2f79e3781b93d0dee310 — Merge playable branch and mount combat inside the display stage
+- 1c2ab9845c60b0ea5e064810d52d415ef95bd5c6 — Mount the designed combat, aftermath and sheet screens in the live client
+- 9469df159137e57c2d9f59db9cf367bc5bdaf09d — Merge the designed combat, aftermath and sheet screens with the refined lobby and scene screens
+- 1b9be2be446085ca5764f8f94e5b283e137333e8 — Drive the game from the tuning and pack files, bind their revisions into the run, and mark custom rules
+- 6dd6a4adc62edccc7c57c34976eabbf77415ac3f — Merge the tuning-driven game with the redesigned screens
+- ae7aab83df71221a6332947518799b4c34c07d6e — Voice scene narration and NPC lines on the display
+- 392de25e68b9b0712570d56efa1ae7bdd5e36971 — Polish combat, aftermath and character creation toward the concept art
+- b317ce6d68c59d54b05fb60657f687cdefd4948a — Size the display sound control for a TV
+- e4ec0955d785e9771c0ecc62df919a56e0553472 — Design the random adventure generator and author its roll tables
+- 54ed003ad44905c6ded92a2bf4f9b1d58fccc113 — Add the campaign layer to the adventure generator design
+- 2196f2c06ab56d15a03096b05e36f3af48badb10 — Add the validated storyteller expression service over the text adapter
+- 15e97d9325b51148e528f0b10fde7f2cf11abd27 — Let the storyteller model voice NPC replies to typed dialogue
+- 34e414651cf6654cfbbb4789382e7e1b4b6a77c4 — Let the storyteller model voice NPC replies to typed dialogue
+- 169f7ac7fb2045319d8288155a58f9db49adf1f4 — Add the generated art pool for the adventure tables: locations, patrons, antagonists, contacts and villains
+- 06323d04c24b6de65a158ef4ed36639112132375 — Generate a dice-rolled adventure for each new game
+- 2134653015b30c925ef6e4240a812ede5d8564e8 — Merge the adventure generator with the storyteller, voice and redesigned screens
+- 2b57797454a91e5189d67dc050b12aa220f7b876 — Draw generated adventures: accept served scene art and report undrawable views
+- 3e6ea4f998069236abc5a77989431419135b5f9c — Fix the display crash when enabling sound
+- 2d0690e83db44f40549727a9e55db5f01bcb40aa — Add the first character cut-outs for the composited stage
+- a641dcc01dba6a61243358173778debab4de4448 — Queue the living-cast work: NPC backstories, backstory-guided replies, spoken input
+- e5e1a998328f3e2479fc2bc31fd91bbd6572583f — Queue data-driven scene flow, player photo likeness and pre-rendered investigation rooms
+- d4ac3a1ff599f44c7850615ecfc19aeb04c46c97 — Add generated adaptive score: layers, stingers and ambient beds
+- be08de4d7948441ab68b3f2f69de54d2cadf0c3f — Add adaptive background music that follows the story's tempo
+- 4fd22af736423049b9ce1421362b5e74adf519ce — Merge adaptive background music: layered score, stingers and location ambience
+- 372d3aa9f480ecafc5c0ee7538343038347624a0 — Add the campaign layer: rolled frame, chapter chaining and a durable campaign record
+- 4fd834a5567f0974a33071a9615f5c86b572e78a — Merge the campaign layer
+- 4733a7be40a7258a6bbce2413da8006b03247720 — Queue scene settings with matching backgrounds and gender-correct voice casting
+- b8af8e9b7b3fc2056feeb26e8a562735d10e3d0c — Add ten meeting-place backdrops and more character cut-outs
+- b1a47b5af4162afff91db6cdb2ba6c7ecd291c94 — Queue the staged battlefield (owner reference video)
+- 17741a53b129be6308cb04cb41130dccb8089778 — Rescope the battlefield todo to a Rust-only 3D splat renderer
+- 8e47bae789e77cb18b27682aca76f9d2a001fe5f — Add the storyteller expression step, explicit secret terms and speaker profiles
+- ca3bd33374028490e44afbc52dc3b1dfdc5c31be — Fit generated text on the TV, fix the aftermath eyebrow and lobby lede, refine the DM guidance
+- 3ba85ef721b0ffac7ccd58f5070a8590f0e45168 — Keep rules wording out of narration, add scene cast and the DM lint
+- dada79f02b22c47ecb0cbb4b0d5bdb54b2e43ce7 — Publish a public table log for the shared screen
+- 14a4a13c58edb87f980c98ed5d3bb02e5833cc77 — Record gender and age explicitly on archetypes, speakers and cast
+- f7f1eb4abba14ae5fc2112d9b6163709b1a75237 — Flag narration inside spoken lines; fmt and clippy clean
+- a6b9510f63836dc32b5b2445ebbce58a65287e5f — Merge the storyteller-written adventures, scene cast, table log and speaker profiles
+- 6622bbd1263da35630f0abd80cbda0b0cf0f7eff — Add provider-verified voice casting roster and its source metadata
+- 930a4da7e7b8cd1851e5403f13e15f9e6e87d877 — Cast each speaking character a gender-matched voice and key the audio cache by voice
+- 6379fd5c2c7b699d2d366855791bbc7c6ca09d71 — Merge gender-correct voice casting and join it to the storyteller and campaign work
+- 119fcc970e947b000e51bf7ab4d2a9dbc000d53f — Add generated tabletop sound-effect pack
+- 6c775fcf311151c9051723f3851319d75ff5fbc1 — Add heal chime to the effects pack
+- cc0a2d1b9efa22f80be1e8a62dd752fa0375a91a — Add presentation planner, stage director and sprite stem rule
+- 8a4a30d788ebae608686b9896868cfcd91cf78b1 — WIP: stage, motion, director wiring and effects stylesheet
+- b75a9acf9bf358c40b7133eaa233cba2dc4a4a56 — Fix combat stage layering, seat glyph, portrait fallback allowlist; darken backdrop and enlarge the speaking figure
+- b20e0f87bc1d53e42b52187aa6aa50f60ac2ee10 — Add seat states, dice and scene animation, transitions and sound effects
+- 1d860043264384e651803cf8761a04dcfefbbf54 — Merge the display feel pass: composited stage, director, dice, transitions and sound effects
+- 07b89203b5e13bf87d43d15de57a1254cf66275b — Add the hero cut-outs and the remaining villain, harbor and antagonist cut-outs
+- 3fdb343b41fdb020acc5fab099d8e9f35110170b — Wire the tempo engine into the running game as a live intensity cue
+- 4af2745b954af02406397c0b34b05693dfb95842 — Merge the tempo engine cue
+- 5ccc8eba3eb6719828849f417dfd35c149ab598f — Give every generated scene a defined setting and a background that depicts it
+- 21cb00eee283cf615d82f1ad26ccbbed99bf66e0 — Merge scene settings with matching backgrounds
+- ed5cc8519e684c18a4856bb745d08649710e5524 — Add NPC dossier roll tables: background, character, story ties, knowledge, social
+- bc251b0428faa842c15c2d24cd46c84ff6020399 — Add pure NPC dossier generator with per-NPC dice streams
+- 254e8e8d626e5674ffff6a2ef083a0db21f17bd4 — Document NPC dossiers (section 19) and refine dossier tables
+- f3c4da535476959cb4699d84e61b17df762224ee — Split dossier rolling into helpers and tidy clippy findings
+- 36d9c029ff0607c6fdc3531ed4692f5810ccbbec — Keep contact ties inside the destination's own location
+- d28eaca154c231473111a8e6f2bcbf7d7c0079e5 — Merge the NPC backstory dossier generator
+- 155a45c648a74e972ebaa27b435e95388d2a3756 — Enable every destination with its own painting and move the library fight to its forecourt
+- bc773d48771bfb938a8617beec6c4ce667290166 — Add full-body battle figures and top-down battlefield grounds
+- a5c4f119530d912a3658b3600b1c73647a25f1ce — Add table engagement model research and design (PLAY-X02)
+- 4a042f6d9d45ca829a911bf5af438a7078f82922 — Merge the engagement model research and design
+- 821df2f671fb4667be98149a820697e701bf8505 — Queue the engagement model work
+- 27e6e917073350e8f7dbb73adbadfff67ff34f56 — Cast the nearest age when the roster has no voice of the speaker's age
+
+Next block baseline: `27e6e917073350e8f7dbb73adbadfff67ff34f56`.
+
 ## 2026-10-11T10:38:04-04:00 to 2026-10-11T15:25:07.071270-04:00
 
 Range: a4bb079666eb54894e868fddcc32cea7658634b8..b7216f693e62c37a2c1abd3aeb31e247b9e10491
