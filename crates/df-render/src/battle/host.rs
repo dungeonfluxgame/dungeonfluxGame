@@ -19,7 +19,9 @@ use super::{
         textures,
     },
     hud::Hud,
-    scene_file::{BattleScene, SplatFormat, SplatGrade, SplatLayer},
+    scene_file::{
+        BackdropLayer, BattleScene, GroundLayer, SplatFormat, SplatGrade, SplatLayer,
+    },
     splat::{
         ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, SplatFileLoader, SplatLoader,
         SplatTransform, pack_records,
@@ -42,11 +44,15 @@ pub enum Availability {
     Unavailable(UnavailableReason),
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct StageOptions {
     pub reduced_motion: bool,
     /// Replace the scene's own splat layer with the built-in procedural ground.
     pub procedural_splats: bool,
+    /// The painted ground and backdrop to show instead when the scene's splats cannot be drawn
+    /// (files missing, decode failure, or a frame budget that cannot be met). Without it the
+    /// scene's own painted layers stay.
+    pub fallback_layers: Option<(GroundLayer, BackdropLayer)>,
 }
 
 struct Inner {
@@ -63,6 +69,8 @@ struct Inner {
     revealed: bool,
     frames: u64,
     stats_every: u64,
+    fallback: Option<(GroundLayer, BackdropLayer)>,
+    fallback_applied: bool,
 }
 
 /// The animation-frame closure, shared so the loop can reschedule itself and `dispose` can drop it.
@@ -120,6 +128,8 @@ impl BattleStage {
                 revealed: false,
                 frames: 0,
                 stats_every: 60,
+                fallback: None,
+                fallback_applied: false,
             })),
             frame_callback: Rc::new(RefCell::new(None)),
         }
@@ -222,6 +232,8 @@ impl BattleStage {
             revealed: false,
             frames: 0,
             stats_every: 30,
+            fallback: options.fallback_layers,
+            fallback_applied: false,
         }));
         let callback: FrameCallback = Rc::new(RefCell::new(None));
         {
@@ -355,6 +367,15 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
             fail(state, UnavailableReason::NotMounted);
             return;
         }
+    }
+    if !state.fallback_applied
+        && let Some((ground, backdrop)) = state.fallback.clone()
+        && renderer.splat_unusable()
+    {
+        state.fallback_applied = true;
+        renderer.set_painted(&ground.stem, &backdrop.stem);
+        state.stage.replace_painted_layers(ground, backdrop);
+        let _ = state.host.set_attribute("data-battlefield-fallback", "painted");
     }
     if state.frames.is_multiple_of(state.stats_every) {
         let stats = renderer.stats();

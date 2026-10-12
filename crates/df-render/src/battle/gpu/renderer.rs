@@ -451,6 +451,22 @@ impl Renderer {
         stats
     }
 
+    /// True when the scene has splats that failed to load or were given up for speed, so the
+    /// painted ground is what is drawn.
+    pub fn splat_unusable(&self) -> bool {
+        self.splat.as_ref().is_some_and(|scene| {
+            scene.given_up || scene.engine.shared().borrow().state == LoadState::Failed
+        })
+    }
+
+    /// Switches the painted ground and backdrop to other stems (the fallback for a failed scan).
+    pub fn set_painted(&mut self, ground_stem: &str, backdrop_stem: &str) {
+        self.ground_stem = ground_stem.to_owned();
+        self.backdrop_stem = backdrop_stem.to_owned();
+        self.request(ground_stem, false, true);
+        self.request(backdrop_stem, false, true);
+    }
+
     /// The loader's side of the splat scene, when this renderer has one.
     pub fn splat_shared(&self) -> Option<SharedSplats> {
         self.splat.as_ref().map(|scene| scene.engine.shared().clone())

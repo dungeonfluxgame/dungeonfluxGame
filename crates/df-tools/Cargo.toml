@@ -54,6 +54,7 @@ df-providers = { path = "../df-providers" }
 df-rules = { path = "../df-rules" }
 df-session = { path = "../df-session" }
 df-tempo = { path = "../df-tempo" }
+df-render = { path = "../df-render" }
 prost.workspace = true
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"

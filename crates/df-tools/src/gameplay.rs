@@ -239,6 +239,8 @@ struct PageState {
     display: [u8; 32],
     glue: bytes::Bytes,
     wasm: bytes::Bytes,
+    /// `DF_GAMEPLAY_BATTLE_SCENE`: a scene id the display uses for every fight, when set.
+    battle_scene: Option<Arc<str>>,
 }
 async fn socket(
     State(state): State<PageState>,
@@ -339,22 +341,22 @@ fn bounded_asset(path: std::path::PathBuf, maximum: u64) -> Result<bytes::Bytes,
     Ok(bytes.into())
 }
 async fn both(State(state): State<PageState>) -> Html<String> {
-    page(false, Some(state.display))
+    page(false, Some(state.display), state.battle_scene.as_deref())
 }
 async fn player() -> Html<String> {
-    page(true, None)
+    page(true, None, None)
 }
 async fn display(State(state): State<PageState>) -> Html<String> {
-    page(false, Some(state.display))
+    page(false, Some(state.display), state.battle_scene.as_deref())
 }
-fn page(player: bool, display: Option<[u8; 32]>) -> Html<String> {
+fn page(player: bool, display: Option<[u8; 32]>, battle_scene: Option<&str>) -> Html<String> {
     let roots = if player {
         format!(
             "<section class=\"client player\" id=\"player\" data-room=\"{}\"><div class=\"view\"></div></section>",
             journey::ROOM_CODE
         )
     } else {
-        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\"><div class=\"view\"></div></section>",hex(&credential))).unwrap_or_default()
+        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\"{}><div class=\"view\"></div></section>",hex(&credential),battle_scene.map(|scene|format!(" data-battle-scene=\"{scene}\"")).unwrap_or_default())).unwrap_or_default()
     };
     Html(HTML.replace("__ROOTS__", &roots).replace(
         "__LAYOUT__",
@@ -433,6 +435,13 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&web_root),
         std::path::Path::new(&asset_root),
     )?;
+    let splat_directory = startup_configuration::splat_directory(
+        std::env::var("DF_GAMEPLAY_SPLAT_DIR"),
+        &std::path::Path::new(&asset_root).join("../splat"),
+        &std::env::current_dir()?,
+    )?;
+    let battle_scene =
+        startup_configuration::battle_scene(std::env::var("DF_GAMEPLAY_BATTLE_SCENE"))?;
     let settings = if interactive {
         startup_configuration::session_settings(
             startup_configuration::SessionInputs::from_environment(),
@@ -1156,6 +1165,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         display: display_credential,
         glue: glue_bytes,
         wasm: wasm_bytes,
+        battle_scene: battle_scene.map(Arc::from),
     };
     let router = Router::new()
         .route("/gameplay", get(both))
@@ -1179,9 +1189,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .merge(music_assets::router(
             &std::path::Path::new(&asset_root).join("../music"),
         )?)
-        .merge(splat_assets::router(
-            &std::path::Path::new(&asset_root).join("../splat"),
-        )?)
+        .merge(splat_assets::router(&splat_directory)?)
         .merge(voice::router(voice.clone()))
         .merge(speech_input::router(
             speech.clone(),

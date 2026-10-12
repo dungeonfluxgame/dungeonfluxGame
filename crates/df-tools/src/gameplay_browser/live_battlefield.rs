@@ -218,6 +218,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
         StageOptions {
             reduced_motion: request.reduced_motion,
             procedural_splats: request.procedural_splats,
+            ..StageOptions::default()
         },
     )
     .await;
@@ -561,9 +562,22 @@ fn start_mount(client: &Rc<RefCell<Client>>, scene_id: &str) {
         let state = client.borrow();
         (state.document.clone(), state.root.clone())
     };
-    let Some(Ok(scene)) = battle::load_embedded(scene_id) else {
+    let Some(Ok(location_scene)) = battle::load_embedded(scene_id) else {
         LIVE.with(|live| live.borrow_mut().phase = Phase::Unavailable);
         return;
+    };
+    // `DF_GAMEPLAY_BATTLE_SCENE` reaches the page as `data-battle-scene`: every fight is staged
+    // on that scene (a scan, say), and the location's own painted layers are its fallback.
+    let forced = host
+        .get_attribute("data-battle-scene")
+        .and_then(|id| battle::load_embedded(&id))
+        .and_then(Result::ok);
+    let (scene, fallback_layers) = match forced {
+        Some(forced) => (
+            forced,
+            Some((location_scene.ground, location_scene.backdrop)),
+        ),
+        None => (location_scene, None),
     };
     if install_style(&document).is_err() {
         LIVE.with(|live| live.borrow_mut().phase = Phase::Unavailable);
@@ -581,6 +595,7 @@ fn start_mount(client: &Rc<RefCell<Client>>, scene_id: &str) {
             StageOptions {
                 reduced_motion: battle::prefers_reduced_motion(),
                 procedural_splats: false,
+                fallback_layers,
             },
         )
         .await;

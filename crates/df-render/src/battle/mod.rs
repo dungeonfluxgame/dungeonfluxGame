@@ -34,7 +34,10 @@ pub use director::{Anim, FlashTone, PlanError, Step, TimedStep, Timeline, plan};
 pub use figure_art::{VisibleBounds, visible_bounds};
 pub use formation::{Formation, FormationError, derive as derive_formation};
 pub use grid::{Cell, Grid, GridError};
-pub use lod::{ChunkFile, Focus, Limits, LodError, LodIndex, Pick, Range, Selection};
+pub use lod::{
+    ChunkFile, DecodeJob, DecodePlan, Focus, Limits, LodError, LodIndex, MAX_RANGES, Pick, Range,
+    Selection,
+};
 pub use math::{Mat4, Quat, Vec3};
 pub use model::{
     AttackResult, Beat, CameraCommand, CameraFocus, FinishingBlow, FloatTone, FloatingText,

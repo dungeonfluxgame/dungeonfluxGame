@@ -590,6 +590,18 @@ impl Stage {
         Some((x * 0.5 + 0.5, 0.5 - y * 0.5))
     }
 
+    /// Replaces the painted ground and backdrop and drops the splat layer: the fallback when a
+    /// scan cannot be drawn.
+    pub fn replace_painted_layers(
+        &mut self,
+        ground: super::scene_file::GroundLayer,
+        backdrop: super::scene_file::BackdropLayer,
+    ) {
+        self.scene.ground = ground;
+        self.scene.backdrop = backdrop;
+        self.scene.splat = None;
+    }
+
     pub fn frame(&self) -> FrameView<'_> {
         let eye = self.rig.pose().eye();
         let mut figures: Vec<FigureView> = self
