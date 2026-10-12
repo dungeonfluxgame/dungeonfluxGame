@@ -764,7 +764,9 @@ impl HarborEngine {
             if action.entry.as_str() == "join-room" {
                 return super::journey::stage_join(current, input);
             }
-            if super::journey::CONTENT_ENTRIES.contains(&action.entry.as_str()) {
+            if super::journey::CONTENT_ENTRIES.contains(&action.entry.as_str())
+                || action.entry.as_str() == super::beat_script_runtime::CHOICE_ACTION
+            {
                 return stage_registered_journey(current, input);
             }
         }

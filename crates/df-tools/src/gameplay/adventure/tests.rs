@@ -372,6 +372,7 @@ fn stored_adventure_resumes_identical_bytes_without_tables_or_new_seed() {
         seed: Some(999),
         rules_mode: RulesMode::CustomAllowed,
         tables: current.join("does-not-exist"),
+        chapter_type: None,
     };
     let resumed = super::startup::select(
         &settings,

@@ -1016,6 +1016,28 @@ impl Actor {
                 self.fence();
                 Err(tonic::Status::unavailable("operation lookup required"))
             }
+            // The owner stayed current, so no uncertain commit was recorded: the candidate was
+            // refused before anything reached durable storage. Nothing applies, so a retry of
+            // this operation is refused the same way and the player can choose again.
+            SubmissionOutcome::Refused(RepositoryError::InvalidCandidate)
+                if self.owner.is_current() =>
+            {
+                let context = OperationContext {
+                    trace_parent: String::new(),
+                    build: crate::BUILD_ID.to_owned(),
+                };
+                let mut span = df_observe::begin(&context, "gameplay.action_refused");
+                span.event(
+                    "gameplay.action_refused",
+                    &[("action.kind", request.action_kind.to_string())],
+                );
+                span.finish_unmeasured("refused");
+                Ok(wire::committed(wire::rejected(
+                    current,
+                    operation,
+                    rpc::RejectionCode::CapabilityUnavailable,
+                )))
+            }
             SubmissionOutcome::Refused(error) => {
                 if error == RepositoryError::UnresolvedCommit {
                     self.fence();

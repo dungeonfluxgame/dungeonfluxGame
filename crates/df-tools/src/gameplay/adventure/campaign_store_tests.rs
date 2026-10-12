@@ -147,6 +147,7 @@ fn campaign_startup_resumes_exact_bytes_requires_fresh_next_database_and_recover
         seed: None,
         tables: tables.clone(),
         rules_mode: super::RulesMode::Standard,
+        chapter_type: None,
     };
     let fresh = select_campaign(
         &settings,
@@ -225,6 +226,7 @@ fn campaign_startup_resumes_exact_bytes_requires_fresh_next_database_and_recover
         seed: None,
         tables,
         rules_mode: super::RulesMode::Standard,
+        chapter_type: None,
     };
     assert!(
         select_campaign(
@@ -297,6 +299,7 @@ fn startup_refuses_self_consistent_documents_with_swapped_campaign_identity() {
             tables: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../content/adventure-tables"),
             rules_mode: super::RulesMode::Standard,
+            chapter_type: None,
         };
         let fresh = select_campaign(
             &settings,

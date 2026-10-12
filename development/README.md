@@ -120,6 +120,10 @@ Short Rest seconds and narrative intervention budget. `pack.json` supplies scene
 text, offer labels, creation options, equipment, room code and the private courier clue.
 Restart to apply changes; re-run without `--database` for a fresh game.
 `DF_GAMEPLAY_PACK_DIR` selects another directory containing both required files.
+`DF_GAMEPLAY_CHAPTER_TYPE=<chapter type id>` (for example `mystery` or `parley`) forces the
+chapter type of a random adventure, to reach a scene flow for testing. It needs
+`DF_GAMEPLAY_ADVENTURE=random`, refuses other modes and unknown ids, and is unset by default;
+campaign chapters choose their own types.
 The startup line prints both file revisions; departures from SRD values show
 `CUSTOM RULES` there and a `+custom-<revision>` suffix on the in-game rules label.
 Saved games refuse changed revisions; start a new database after editing either file.
