@@ -869,6 +869,10 @@ struct Live {
     begun_live: bool,
     /// The scene is a scan: its splat streams in, and the entrance waits for it.
     expects_splat: bool,
+    /// The initiative roll and roll-call were staged and are not yet over: the entrance waits for
+    /// the battlefield's own HUD to show them and then to finish them.
+    initiative_pending: bool,
+    initiative_seen: bool,
 }
 
 thread_local! {
@@ -880,6 +884,8 @@ thread_local! {
         latest: None,
         begun_live: false,
         expects_splat: false,
+        initiative_pending: false,
+        initiative_seen: false,
     });
 }
 
@@ -1273,6 +1279,10 @@ fn sync() {
         let fits = stage
             .with_stage(|stage| feed.apply(stage, &shown))
             .flatten();
+        if live.begun_live && fits.is_some() && !shown.initiative.is_empty() {
+            live.initiative_pending = true;
+            live.initiative_seen = false;
+        }
         live.begun_live = false;
         if fits.is_none() {
             // No room on the grid for this roster: leave the flat view.
@@ -1359,13 +1369,29 @@ pub(super) fn entrance() -> crate::stage_conductor::Battlefield {
         sync();
     }
     LIVE.with(|live| {
-        let live = live.borrow();
+        let mut live = live.borrow_mut();
         match live.phase {
             Phase::Idle | Phase::Mounting => Battlefield::Pending,
             Phase::Unavailable | Phase::Closing => Battlefield::Fallback,
             Phase::Active => {
+                // The initiative roll and roll-call are on the battlefield's own HUD: the
+                // entrance is over only once they have shown and finished.
+                let showing = live.host.as_ref().is_some_and(|host| {
+                    host.query_selector(".bf-hud[data-initiative]")
+                        .ok()
+                        .flatten()
+                        .is_some()
+                });
+                if live.initiative_pending {
+                    if showing {
+                        live.initiative_seen = true;
+                    } else if live.initiative_seen {
+                        live.initiative_pending = false;
+                    }
+                }
                 let playing = splat_streaming(&live)
                     || live.begun_live
+                    || live.initiative_pending
                     || live
                         .stage
                         .as_ref()
@@ -1413,6 +1439,8 @@ pub(super) fn fade_out() {
 }
 
 fn reset_fight(live: &mut Live) {
+    live.initiative_pending = false;
+    live.initiative_seen = false;
     live.phase = Phase::Idle;
     live.latest = None;
     live.host = None;

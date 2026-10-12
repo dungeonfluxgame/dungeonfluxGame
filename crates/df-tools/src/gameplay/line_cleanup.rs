@@ -41,6 +41,7 @@ const QUESTION_STARTERS: [&str; 20] = [
     "who", "what", "whats", "where", "when", "why", "how", "which", "is", "are", "do", "does",
     "did", "can", "could", "will", "would", "should", "whose", "whom",
 ];
+const CONNECTIVES: [&str; 7] = ["and", "but", "so", "then", "also", "well", "ok"];
 const CONTRACTIONS: [(&str, &str); 18] = [
     ("whats", "what's"),
     ("thats", "that's"),
@@ -188,8 +189,13 @@ pub(super) fn normalise(raw: &str, names: &[String]) -> String {
     let addressed = kept
         .first()
         .is_some_and(|word| known_name(word, names).is_some());
+    // A leading "and", "so" or "okay" does not make a question a statement.
+    let lead = kept
+        .iter()
+        .position(|word| !CONNECTIVES.contains(&core(word).as_str()))
+        .unwrap_or(0);
     let question = kept
-        .first()
+        .get(lead)
         .is_some_and(|word| QUESTION_STARTERS.contains(&core(word).as_str()))
         || (addressed && kept.get(1).is_some_and(|word| wh(word)));
     let mut text = kept.join(" ");
@@ -442,6 +448,14 @@ mod tests {
         assert_eq!(
             normalise("uhh  garick whats  so special abt the wistle", &names()),
             "Garick what's so special about the wistle?"
+        );
+    }
+
+    #[test]
+    fn a_leading_connective_does_not_hide_a_question() {
+        assert_eq!(
+            normalise("and who is it that follows you", &[]),
+            "And who is it that follows you?"
         );
     }
 

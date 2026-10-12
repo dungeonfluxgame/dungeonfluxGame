@@ -453,11 +453,17 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             banner: transitions
                 .finished
                 .map(|victory| Detail::Banner { victory }),
-            closing: transitions.finished.map(|victory| {
-                Detail::Card(Box::new(presentation::closing_card(
-                    journey, scene, &narration, victory,
-                )))
-            }),
+            // A won fight goes straight from the battlefield to the victory card: a closing card
+            // would name the next scene before the audience has read the victory. Only a defeat
+            // gets its closing card.
+            closing: transitions
+                .finished
+                .filter(|victory| !victory)
+                .map(|victory| {
+                    Detail::Card(Box::new(presentation::closing_card(
+                        journey, scene, &narration, victory,
+                    )))
+                }),
         };
         let plan = ViewPlan {
             diff,

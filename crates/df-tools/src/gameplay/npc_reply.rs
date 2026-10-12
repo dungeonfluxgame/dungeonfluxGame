@@ -381,6 +381,11 @@ fn scene_names(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) -
                 .title
                 .split_whitespace()
                 .filter(|word| word.chars().next().is_some_and(char::is_uppercase))
+                // "The Broken Seal" names a place; "The" alone must not capitalise every "the".
+                .filter(|word| {
+                    !["the", "a", "an", "of", "and", "at", "in", "on", "to", "for"]
+                        .contains(&word.to_lowercase().as_str())
+                })
                 .map(str::to_owned),
         );
     }

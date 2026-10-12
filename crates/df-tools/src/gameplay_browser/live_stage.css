@@ -266,3 +266,6 @@
 .tv-bubble[data-managed]{animation:df-bubble-in .25s ease-out backwards}
 .tv-bubble[data-managed][data-instant]{animation:none}
 .tv-bubble[data-managed][data-line-state=closing]{animation:df-bubble-out .4s ease-in forwards}
+
+/* the victory card keeps its text clear of the figures: a left column, wrapped whole */
+.tv-stage .df-aftermath .aftermath-narrative,.tv-stage .df-aftermath .aftermath-lower{max-width:58%!important;margin-right:auto;text-align:left}

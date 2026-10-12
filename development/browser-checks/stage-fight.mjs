@@ -89,7 +89,14 @@ const revealed = (m) => m.field && m.splat !== 'loading' && m.splat !== 'showing
 const earlyCombat = sounds.filter((x) => COMBAT_SFX.has(x.name) && !revealed(x.at));
 check(earlyCombat.length === 0, `no combat sound while the cover is up or the splat is incomplete (${earlyCombat.map((x) => `${x.name}@${x.at.stage}/${x.at.splat}`).join(', ') || 'none'})`);
 const revealAt = samples.find((m) => m.field && revealed(m))?.t;
-const initiativeSamples = samples.filter((m) => m.initiative);
+// The initiative phase is the first contiguous run of samples with the initiative HUD up (one false sample may fall in it).
+const firstInitiative = samples.findIndex((m) => m.initiative);
+let endInitiative = firstInitiative;
+for (let i = firstInitiative; i >= 0 && i < samples.length; i += 1) {
+  if (samples[i].initiative) endInitiative = i;
+  else if (!samples.slice(i, i + 4).some((m) => m.initiative)) break;
+}
+const initiativeSamples = firstInitiative < 0 ? [] : samples.slice(firstInitiative, endInitiative + 1);
 const initiativeMs = initiativeSamples.length ? initiativeSamples[initiativeSamples.length - 1].t - initiativeSamples[0].t : 0;
 s.note(`revealed at +${revealAt - clickedAt} ms; initiative HUD on screen ${initiativeMs} ms`);
 check(initiativeMs >= 2500, `the initiative roll and roll-call were each on screen in full (${initiativeMs} ms)`);
@@ -108,8 +115,8 @@ if (lastRolling && exitAt) {
   check(between.every((m) => m.field), 'the battlefield was the visible screen throughout');
 }
 check(!samples.some((m) => m.aftermath && (m.dice || m.actionBubbles)), 'the victory card never coexisted with a combat dice card or bubble');
-const entryTransitions = transitions.filter((x) => !exitAt || x.t < (lastRolling?.t ?? Infinity));
-const exitTransitions = transitions.filter((x) => lastRolling && x.t >= lastRolling.t);
+const entryTransitions = transitions.filter((x) => !exitAt || x.t < exitAt - 1500);
+const exitTransitions = transitions.filter((x) => exitAt && x.t >= exitAt - 1500);
 s.note(`scene-transitions: ${entryTransitions.length} on entry, ${exitTransitions.length} on exit`);
 check(entryTransitions.length === 1, `exactly one scene-transition on entry (${entryTransitions.length})`);
 check(exitTransitions.length === 1, `exactly one scene-transition on exit (${exitTransitions.length})`);
