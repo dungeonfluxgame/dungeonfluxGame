@@ -230,20 +230,22 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
     let journey = display.journey.as_ref();
     let phase = journey.and_then(|journey| rpc::JourneyPhase::try_from(journey.phase).ok());
     let in_combat = phase == Some(rpc::JourneyPhase::Combat);
-    let tempo = journey.and_then(|journey| journey.tempo.as_ref()).and_then(|cue| {
-        let phase = match rpc::TempoPhase::try_from(cue.phase).ok()? {
-            rpc::TempoPhase::Calm => TempoLevel::Calm,
-            rpc::TempoPhase::Build => TempoLevel::Build,
-            rpc::TempoPhase::Anticipation => TempoLevel::Anticipation,
-            rpc::TempoPhase::Peak => TempoLevel::Peak,
-            rpc::TempoPhase::Release => TempoLevel::Release,
-            rpc::TempoPhase::Unspecified => return None,
-        };
-        Some(Tempo {
-            phase,
-            intensity_permille: u16::try_from(cue.intensity_permille).unwrap_or(u16::MAX),
-        })
-    });
+    let tempo = journey
+        .and_then(|journey| journey.tempo.as_ref())
+        .and_then(|cue| {
+            let phase = match rpc::TempoPhase::try_from(cue.phase).ok()? {
+                rpc::TempoPhase::Calm => TempoLevel::Calm,
+                rpc::TempoPhase::Build => TempoLevel::Build,
+                rpc::TempoPhase::Anticipation => TempoLevel::Anticipation,
+                rpc::TempoPhase::Peak => TempoLevel::Peak,
+                rpc::TempoPhase::Release => TempoLevel::Release,
+                rpc::TempoPhase::Unspecified => return None,
+            };
+            Some(Tempo {
+                phase,
+                intensity_permille: u16::try_from(cue.intensity_permille).unwrap_or(u16::MAX),
+            })
+        });
     let recent_kinds = journey
         .map(|journey| {
             let lines = &journey.table_log;
@@ -266,9 +268,10 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
     Some(Stage {
         scene_key: format!("{}|{}", scene.title, asset),
         scene_asset: asset,
-        revision: message.revision.as_ref().and_then(|revision| {
-            Some((revision.epoch.as_ref()?.value?, revision.sequence?))
-        }),
+        revision: message
+            .revision
+            .as_ref()
+            .and_then(|revision| Some((revision.epoch.as_ref()?.value?, revision.sequence?))),
         in_combat,
         tempo,
         speaking_ids: scene
@@ -338,10 +341,9 @@ fn role_of(role: pack::CastRole) -> CharacterRole {
 fn facts_of(stage: &Stage, social: &SocialLedger) -> SceneFacts {
     pack::with_content(|content| {
         let wanted = stage.scene_asset.trim_start_matches('/');
-        let scene = content
-            .scenes
-            .iter()
-            .find(|scene| scene.asset.trim_start_matches('/') == wanted && scene.title == stage.title);
+        let scene = content.scenes.iter().find(|scene| {
+            scene.asset.trim_start_matches('/') == wanted && scene.title == stage.title
+        });
         let Some(scene) = scene else {
             return SceneFacts {
                 place: None,
@@ -1010,7 +1012,7 @@ impl State {
 /// A gentle change of angle for a quiet scene: the same mood and light, another camera.
 fn alternate_look(target: Look, alternates: usize) -> Look {
     const ANGLES: [super::scene_mood::Shot; 4] = [
-        super::scene_mood::Shot::MediumTwoShot,
+        super::scene_mood::Shot::MediumConversation,
         super::scene_mood::Shot::LowAngle,
         super::scene_mood::Shot::HighAngle,
         super::scene_mood::Shot::OverShoulderTowardSpeaker,

@@ -29,7 +29,8 @@ const MATURE_STANCE: &str = "Mature content rating: violence, horror and desire 
     the story demands, not softened.";
 const KEEP_PLACE: &str = "Keep the same place: its architecture, props, palette and perspective \
     exactly as in the reference painting.";
-const NO_PEOPLE: &str = "Paint no people and no figures; the characters are added separately.";
+pub(super) const NO_PEOPLE: &str =
+    "Paint no people and no figures; the characters are added separately.";
 const KEEP_FLOOR: &str = "Keep a wide, clear, open floor across the lower third of the frame, \
     with the floor perspective and horizon of the reference, so figures can stand on it.";
 const KEEP_FRAME: &str = "Keep the exact aspect ratio and framing of the reference.";
@@ -90,15 +91,77 @@ impl AssembledPrompt {
 /// Words that never appear in a vetted fact or an artifact subject: instructions to the model,
 /// anyone younger than an adult, and brands. Matched as whole lowercase words.
 const DENIED_WORDS: &[&str] = &[
-    "ignore", "instruction", "instructions", "prompt", "system", "assistant", "developer",
-    "override", "jailbreak", "disregard", "pretend", "roleplay", "child", "children", "kid",
-    "kids", "boy", "girl", "teen", "teens", "teenager", "minor", "underage", "baby", "toddler",
-    "infant", "schoolgirl", "schoolboy", "loli", "shota", "youngster", "nike", "adidas",
-    "disney", "marvel", "pokemon", "nintendo", "sony", "apple", "google", "microsoft", "amazon",
-    "coca", "cola", "pepsi", "mcdonalds", "starbucks", "lego", "ikea", "tesla", "facebook",
-    "instagram", "tiktok", "youtube", "netflix", "samsung", "gucci", "prada", "rolex", "harley",
-    "toyota", "bmw", "mercedes", "ferrari", "barbie", "hasbro", "mattel", "trump", "biden",
-    "obama", "putin",
+    "ignore",
+    "instruction",
+    "instructions",
+    "prompt",
+    "system",
+    "assistant",
+    "developer",
+    "override",
+    "jailbreak",
+    "disregard",
+    "pretend",
+    "roleplay",
+    "child",
+    "children",
+    "kid",
+    "kids",
+    "boy",
+    "girl",
+    "teen",
+    "teens",
+    "teenager",
+    "minor",
+    "underage",
+    "baby",
+    "toddler",
+    "infant",
+    "schoolgirl",
+    "schoolboy",
+    "loli",
+    "shota",
+    "youngster",
+    "nike",
+    "adidas",
+    "disney",
+    "marvel",
+    "pokemon",
+    "nintendo",
+    "sony",
+    "apple",
+    "google",
+    "microsoft",
+    "amazon",
+    "coca",
+    "cola",
+    "pepsi",
+    "mcdonalds",
+    "starbucks",
+    "lego",
+    "ikea",
+    "tesla",
+    "facebook",
+    "instagram",
+    "tiktok",
+    "youtube",
+    "netflix",
+    "samsung",
+    "gucci",
+    "prada",
+    "rolex",
+    "harley",
+    "toyota",
+    "bmw",
+    "mercedes",
+    "ferrari",
+    "barbie",
+    "hasbro",
+    "mattel",
+    "trump",
+    "biden",
+    "obama",
+    "putin",
 ];
 
 pub(super) fn denied(word: &str) -> bool {
@@ -117,7 +180,8 @@ impl VettedFact {
         let length = collapsed.chars().count();
         if !(2..=MAXIMUM_FACT_CHARACTERS).contains(&length)
             || !collapsed.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, ' ' | '\'' | '-' | ',' | '.')
+                character.is_ascii_alphanumeric()
+                    || matches!(character, ' ' | '\'' | '-' | ',' | '.')
             })
         {
             return None;
@@ -185,8 +249,12 @@ pub(in crate::gameplay) enum CharacterRole {
 
 impl CharacterRole {
     #[cfg(test)]
-    pub(in crate::gameplay) const ALL: [Self; 4] =
-        [Self::Patron, Self::Antagonist, Self::Contact, Self::Bystander];
+    pub(in crate::gameplay) const ALL: [Self; 4] = [
+        Self::Patron,
+        Self::Antagonist,
+        Self::Contact,
+        Self::Bystander,
+    ];
 
     fn phrase(self) -> &'static str {
         match self {
@@ -258,7 +326,7 @@ fn mood_phrase(mood: Mood, rating: ContentRating) -> &'static str {
 fn shot_phrase(shot: Shot) -> &'static str {
     match shot {
         Shot::WideEstablishing => "a wide establishing view of the whole place",
-        Shot::MediumTwoShot => {
+        Shot::MediumConversation => {
             "a medium view, as if framing two people in conversation near the middle of the room"
         }
         Shot::CloseOnSpeaker => {
@@ -288,15 +356,17 @@ fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static 
     match expression {
         Expression::Neutral => "a calm, neutral expression",
         Expression::Smiling => "a warm, genuine smile",
-        Expression::Amused => "a wry, amused smirk with one brow raised",
+        Expression::Amused => {
+            "a broad, wry, amused grin: eyes crinkled, one brow raised, head tilted slightly"
+        }
         Expression::Flirtatious => {
-            "a flirtatious look: a playful half-smile, a raised brow and a lingering glance"
+            "a flirtatious look: a playful half-smile, one raised brow, a slow lingering sideways glance and a slight head tilt"
         }
         Expression::Seductive if mature => {
-            "a seductive, sultry look: heavy-lidded eyes, parted lips and an intent, inviting gaze"
+            "a seductive, sultry look: heavy-lidded eyes, parted lips, a slight head tilt and an intent, inviting gaze"
         }
         Expression::Seductive => {
-            "a flirtatious look: a playful half-smile, a raised brow and a lingering glance"
+            "a flirtatious look: a playful half-smile, one raised brow, a slow lingering sideways glance and a slight head tilt"
         }
         Expression::Angry => {
             "furious anger: brows lowered and drawn together, eyes narrowed and hard, jaw \
@@ -305,9 +375,7 @@ fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static 
         Expression::Contemptuous => {
             "cold contempt: a sneering curl of the lip and eyes looking down the nose"
         }
-        Expression::Afraid => {
-            "fear: wide eyes, raised brows, a tense open mouth and a recoiling posture"
-        }
+        Expression::Afraid => "fear: wide frightened eyes, raised brows and a tense, open mouth",
         Expression::Pained => "pain: a wince, eyes squeezed shut and teeth bared",
         Expression::Sorrowful => "deep sorrow: downcast, glistening eyes and a trembling mouth",
         Expression::Determined => "grim determination: a set jaw and a steady, unblinking stare",
@@ -350,7 +418,10 @@ pub(super) fn place_parts(place: &PlaceFacts) -> Vec<Part> {
         Part::Fact(format!("{}.", place.name.as_str().trim_end_matches('.'))),
     ];
     if let Some(short) = &place.short {
-        parts.push(Part::Fact(format!("{}.", short.as_str().trim_end_matches('.'))));
+        parts.push(Part::Fact(format!(
+            "{}.",
+            short.as_str().trim_end_matches('.')
+        )));
     }
     parts
 }

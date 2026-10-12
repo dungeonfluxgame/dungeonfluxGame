@@ -71,9 +71,9 @@ impl ReferenceStore {
         };
         if stem.is_empty()
             || stem.len() > 96
-            || !stem
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_'))
+            || !stem.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
         {
             return Err(ReferenceError::Name);
         }

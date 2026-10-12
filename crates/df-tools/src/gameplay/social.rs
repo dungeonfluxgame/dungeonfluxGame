@@ -30,9 +30,9 @@ use std::{
 };
 
 use df_protocol::common as rpc;
-use tokio::sync::watch;
 use df_types::MemberId;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
 use super::{
     adventure::dossier::{Attitude, Dossier, Effect, Topic},

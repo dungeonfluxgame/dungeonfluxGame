@@ -786,7 +786,10 @@ pub(super) fn install_content_rating(
 }
 
 /// The server's content rating: the installed one, `Mature` before any install.
-#[allow(dead_code, reason = "read by the storyteller and NPC replies, which share this setting")]
+#[allow(
+    dead_code,
+    reason = "read by the storyteller and NPC replies, which share this setting"
+)]
 pub(super) fn content_rating() -> ContentRating {
     CONTENT_RATING.get().copied().unwrap_or_default()
 }

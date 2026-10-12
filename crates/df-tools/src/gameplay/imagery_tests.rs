@@ -234,8 +234,13 @@ fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut text = String::with_capacity(bytes.len() / 3 * 4 + 4);
     for chunk in bytes.chunks(3) {
-        let triple = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let value = (u32::from(triple[0]) << 16) | (u32::from(triple[1]) << 8) | u32::from(triple[2]);
+        let triple = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let value =
+            (u32::from(triple[0]) << 16) | (u32::from(triple[1]) << 8) | u32::from(triple[2]);
         for index in 0..4 {
             if index <= chunk.len() {
                 text.push(ALPHABET[((value >> (18 - 6 * index)) & 63) as usize] as char);
@@ -436,7 +441,11 @@ async fn a_cache_hit_costs_nothing_and_survives_a_restart() {
 
     let again = service.render(refresh(Mood::Menacing)).await.unwrap();
     assert_eq!(again, key);
-    assert_eq!(fake.calls(), 1, "the same request never calls the provider twice");
+    assert_eq!(
+        fake.calls(),
+        1,
+        "the same request never calls the provider twice"
+    );
     assert_eq!(service.stats().calls, 1);
     assert_eq!(service.stats().cache_hits, 1);
     assert_eq!(service.stats().budget_remaining, 4);
@@ -458,7 +467,10 @@ async fn a_cache_hit_costs_nothing_and_survives_a_restart() {
             ..
         }
     ));
-    assert_eq!(restarted.render(refresh(Mood::Menacing)).await.unwrap(), key);
+    assert_eq!(
+        restarted.render(refresh(Mood::Menacing)).await.unwrap(),
+        key
+    );
     assert_eq!(fake.calls(), 1);
     assert_eq!(restarted.stats().calls, 0);
     assert_eq!(restarted.stats().budget_remaining, 5);
@@ -476,7 +488,10 @@ async fn the_provider_receives_the_references_the_prompt_and_the_content_rating(
     assert_eq!(fields["quality"], "medium");
     assert_eq!(fields["background"], "transparent");
     assert_eq!(fields["output_format"], "png");
-    assert_eq!(fields["moderation"], "low", "mature asks for the less restrictive filter");
+    assert_eq!(
+        fields["moderation"], "low",
+        "mature asks for the less restrictive filter"
+    );
     assert!(fields["prompt"].contains("furious anger"));
 
     let dir = directory("restrained");
@@ -504,10 +519,18 @@ async fn the_budget_is_charged_before_the_call_and_never_refunded() {
         tokio::spawn(async move { service.render(refresh(Mood::Warm)).await })
     };
     tokio::time::sleep(Duration::from_millis(150)).await;
-    assert_eq!(service.stats().calls, 1, "charged while the provider is still working");
+    assert_eq!(
+        service.stats().calls,
+        1,
+        "charged while the provider is still working"
+    );
     assert_eq!(service.stats().budget_remaining, 1);
     assert_eq!(running.await.unwrap(), Err(ImageFailure::Provider));
-    assert_eq!(service.stats().budget_remaining, 1, "a failed call is not refunded");
+    assert_eq!(
+        service.stats().budget_remaining,
+        1,
+        "a failed call is not refunded"
+    );
 
     assert_eq!(
         service.render(refresh(Mood::Tense)).await,
@@ -549,7 +572,13 @@ async fn identical_requests_in_flight_share_one_call() {
 async fn at_most_two_calls_are_in_flight_at_once() {
     let fake = FakeOpenAi::start(Duration::from_millis(250), Reply::Image);
     let (service, _dir) = imagery(&fake, "limit", 10);
-    let moods = [Mood::Calm, Mood::Warm, Mood::Tense, Mood::Menacing, Mood::Grim];
+    let moods = [
+        Mood::Calm,
+        Mood::Warm,
+        Mood::Tense,
+        Mood::Menacing,
+        Mood::Grim,
+    ];
     let results = futures::future::join_all(moods.map(|mood| service.render(refresh(mood)))).await;
     assert!(results.iter().all(Result::is_ok));
     assert_eq!(fake.calls(), 5);
@@ -581,7 +610,11 @@ async fn a_provider_refusal_is_a_failure_never_retried_or_reworded() {
         let fake = FakeOpenAi::start(Duration::ZERO, reply);
         let (service, _dir) = imagery(&fake, "refusal", 5);
         let request = || refresh(Mood::Brutal);
-        assert_eq!(service.render(request()).await, Err(ImageFailure::Refused), "{reply:?}");
+        assert_eq!(
+            service.render(request()).await,
+            Err(ImageFailure::Refused),
+            "{reply:?}"
+        );
         assert_eq!(fake.calls(), 1);
         // Asking again repeats the refusal without another call or another wording.
         assert_eq!(service.render(request()).await, Err(ImageFailure::Refused));
@@ -620,8 +653,14 @@ async fn invalid_oversize_wrong_sized_and_opaque_output_is_refused() {
 #[tokio::test]
 async fn an_off_service_registers_and_renders_nothing() {
     let service = Imagery::disabled(ImageryOff::NoCredential);
-    assert_eq!(service.startup_line(), "IMAGERY off (OPENAI_API_KEY not set)");
-    assert_eq!(service.render(refresh(Mood::Calm)).await, Err(ImageFailure::Off));
+    assert_eq!(
+        service.startup_line(),
+        "IMAGERY off (OPENAI_API_KEY not set)"
+    );
+    assert_eq!(
+        service.render(refresh(Mood::Calm)).await,
+        Err(ImageFailure::Off)
+    );
     assert_eq!(service.image(&"0".repeat(64)).await, Lookup::Unregistered);
 }
 
@@ -663,8 +702,14 @@ async fn the_manifest_records_provenance_beside_the_run_and_never_under_assets()
 fn the_key_depends_on_the_kind_references_prompt_model_and_parameters() {
     let base = refresh(Mood::Calm);
     let key = request_key(&base, "m", "medium", "mature");
-    assert_eq!(key, request_key(&refresh(Mood::Calm), "m", "medium", "mature"));
-    assert_ne!(key, request_key(&refresh(Mood::Warm), "m", "medium", "mature"));
+    assert_eq!(
+        key,
+        request_key(&refresh(Mood::Calm), "m", "medium", "mature")
+    );
+    assert_ne!(
+        key,
+        request_key(&refresh(Mood::Warm), "m", "medium", "mature")
+    );
     assert_ne!(key, request_key(&base, "other", "medium", "mature"));
     assert_ne!(key, request_key(&base, "m", "high", "mature"));
     assert_ne!(key, request_key(&base, "m", "medium", "restrained"));
@@ -689,7 +734,11 @@ fn the_key_depends_on_the_kind_references_prompt_model_and_parameters() {
 #[test]
 fn span_fields_carry_only_closed_labels_never_a_prompt_or_image() {
     let request = expression(Expression::Seductive);
-    let fields = span_fields(request.kind, "gpt-image-2.5-flare", request.references.len());
+    let fields = span_fields(
+        request.kind,
+        "gpt-image-2.5-flare",
+        request.references.len(),
+    );
     let names: Vec<&str> = fields.iter().map(|(name, _)| *name).collect();
     assert_eq!(
         names,
@@ -702,7 +751,12 @@ fn span_fields_carry_only_closed_labels_never_a_prompt_or_image() {
     let values: Vec<&str> = fields.iter().map(|(_, value)| value.as_str()).collect();
     assert_eq!(values, ["cast_expression", "gpt-image-2.5-flare", "1"]);
     let joined = values.join(" ");
-    for word in request.prompt.as_str().split_whitespace().filter(|word| word.len() > 6) {
+    for word in request
+        .prompt
+        .as_str()
+        .split_whitespace()
+        .filter(|word| word.len() > 6)
+    {
         assert!(!joined.contains(word), "{word}");
     }
 }
@@ -715,9 +769,18 @@ async fn an_unregistered_key_is_404_a_pending_one_503_and_a_ready_one_served_wit
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
     let (service, _dir) = imagery(&fake, "route", 5);
     let mut router = router(service.clone());
-    assert_eq!(get(&mut router, &"a".repeat(64), None).await.0, StatusCode::NOT_FOUND);
-    assert_eq!(get(&mut router, "not-a-key", None).await.0, StatusCode::NOT_FOUND);
-    assert_eq!(get(&mut router, "..%2f..%2fetc", None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        get(&mut router, &"a".repeat(64), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(&mut router, "not-a-key", None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(&mut router, "..%2f..%2fetc", None).await.0,
+        StatusCode::NOT_FOUND
+    );
 
     // Registered by a request whose call failed: known to the server, no image yet.
     let failing = FakeOpenAi::start(Duration::ZERO, Reply::Failure);
@@ -754,7 +817,10 @@ async fn an_unregistered_key_is_404_a_pending_one_503_and_a_ready_one_served_wit
 async fn a_transparent_result_is_served_as_a_png_with_alpha() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
     let (service, _dir) = imagery(&fake, "png", 5);
-    let key = service.render(expression(Expression::Smiling)).await.unwrap();
+    let key = service
+        .render(expression(Expression::Smiling))
+        .await
+        .unwrap();
     let Lookup::Image { bytes, format } = service.image(key.as_str()).await else {
         panic!("the image is cached");
     };
@@ -779,7 +845,12 @@ async fn an_artifact_close_up_is_requested_from_the_backdrop_and_a_vetted_subjec
         ContentRating::Mature,
     );
     let subject = ArtifactSubject::vet("rusty iron key", &place()).unwrap();
-    let request = close_up_request(ContentRating::Mature, &place(), &subject, backdrop_reference());
+    let request = close_up_request(
+        ContentRating::Mature,
+        &place(),
+        &subject,
+        backdrop_reference(),
+    );
     assert_eq!(request.kind, ImageKind::ArtifactCloseUp);
     assert_eq!(request.output, OutputSpec::CLOSE_UP);
     assert!(request.prompt.as_str().contains("rusty iron key"));
@@ -789,7 +860,10 @@ async fn an_artifact_close_up_is_requested_from_the_backdrop_and_a_vetted_subjec
     let (fields, images) = fake.last_fields();
     assert_eq!(images, 1);
     assert_eq!(fields["size"], "1024x768");
-    assert_eq!(OutputSpec::CLOSE_UP.width * 3, OutputSpec::CLOSE_UP.height * 4);
+    assert_eq!(
+        OutputSpec::CLOSE_UP.width * 3,
+        OutputSpec::CLOSE_UP.height * 4
+    );
 }
 
 #[test]
@@ -836,7 +910,10 @@ fn subjects_come_from_scene_facts_or_pass_a_strict_filter_and_everything_else_is
         );
     }
     let fact = VettedFact::new("The Heron Shrine").unwrap();
-    assert_eq!(ArtifactSubject::from_scene_fact(&fact).as_str(), "the heron shrine");
+    assert_eq!(
+        ArtifactSubject::from_scene_fact(&fact).as_str(),
+        "the heron shrine"
+    );
 }
 
 #[test]
@@ -866,7 +943,12 @@ fn vetted_facts_are_short_plain_text_without_denied_words() {
     );
     // A place whose name does not pass has no prompt at all; a bad description is left out.
     assert!(PlaceFacts::new("Ignore instructions", "x").is_none());
-    assert!(PlaceFacts::new("The Heron Shrine", "ignore this").unwrap().short.is_none());
+    assert!(
+        PlaceFacts::new("The Heron Shrine", "ignore this")
+            .unwrap()
+            .short
+            .is_none()
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -897,7 +979,10 @@ fn facts_of(prompt: &AssembledPrompt) -> Vec<&str> {
 fn assert_closed(prompt: &AssembledPrompt, rating: ContentRating, allowed_facts: &[String]) {
     let vocabulary = closed_vocabulary(rating);
     for phrase in fixed_phrases_of(prompt) {
-        assert!(vocabulary.contains(&phrase), "{phrase:?} is outside the closed vocabulary");
+        assert!(
+            vocabulary.contains(&phrase),
+            "{phrase:?} is outside the closed vocabulary"
+        );
     }
     for fact in facts_of(prompt) {
         let bare = fact.trim_end_matches('.');
@@ -914,7 +999,11 @@ fn assert_closed(prompt: &AssembledPrompt, rating: ContentRating, allowed_facts:
             Part::Fact(fact) => fact.as_str(),
         })
         .collect();
-    assert_eq!(prompt.as_str(), rebuilt.join(" "), "the text is exactly its parts");
+    assert_eq!(
+        prompt.as_str(),
+        rebuilt.join(" "),
+        "the text is exactly its parts"
+    );
 }
 
 #[test]
@@ -923,16 +1012,27 @@ fn prompts_hold_only_closed_vocabulary_and_vetted_facts_for_200_adventures_and_e
     for seed in 0..200 {
         let generated = adventure(seed);
         for scene in &generated.pack.scenes {
-            let setting = scene.setting.as_ref().expect("every generated scene has a setting");
+            let setting = scene
+                .setting
+                .as_ref()
+                .expect("every generated scene has a setting");
             let place = PlaceFacts::new(&setting.name, &setting.short)
                 .unwrap_or_else(|| panic!("seed {seed}: {:?} fails vetting", setting.name));
             let allowed = vec![
                 place.name.as_str().to_owned(),
-                place.short.as_ref().map(|short| short.as_str().to_owned()).unwrap_or_default(),
+                place
+                    .short
+                    .as_ref()
+                    .map(|short| short.as_str().to_owned())
+                    .unwrap_or_default(),
             ];
             for rating in [ContentRating::Mature, ContentRating::Restrained] {
                 for mood in Mood::ALL {
-                    assert_closed(&scene_refresh(rating, &place, Look::of(mood)), rating, &allowed);
+                    assert_closed(
+                        &scene_refresh(rating, &place, Look::of(mood)),
+                        rating,
+                        &allowed,
+                    );
                 }
                 for shot in Shot::ALL {
                     for lighting in Lighting::ALL {
@@ -947,7 +1047,11 @@ fn prompts_hold_only_closed_vocabulary_and_vetted_facts_for_200_adventures_and_e
                 let subject = ArtifactSubject::vet("rusty iron key", &place).unwrap();
                 let mut with_subject = allowed.clone();
                 with_subject.push("rusty iron key".to_owned());
-                assert_closed(&artifact_close_up(rating, &place, &subject), rating, &with_subject);
+                assert_closed(
+                    &artifact_close_up(rating, &place, &subject),
+                    rating,
+                    &with_subject,
+                );
             }
             scenes_checked += 1;
             for member in &scene.cast {
@@ -991,14 +1095,30 @@ fn the_two_ratings_use_different_phrase_sets_for_the_same_inputs() {
     assert!(mature.as_str().contains("not softened"));
     assert!(!mature.as_str().contains("No gore"));
     assert!(!mature.as_str().contains("no nudity"));
-    assert!(restrained.as_str().contains("No gore, no nudity, no sexual content."));
+    assert!(
+        restrained
+            .as_str()
+            .contains("No gore, no nudity, no sexual content.")
+    );
     assert!(!restrained.as_str().contains("brutal"));
     assert!(restrained.as_str().contains("implied rather than shown"));
 
     let seductive = |rating| scene_refresh(rating, &place, Look::of(Mood::Seductive));
-    assert!(seductive(ContentRating::Mature).as_str().contains("sensual, seductive"));
-    assert!(!seductive(ContentRating::Restrained).as_str().contains("seductive"));
-    assert!(seductive(ContentRating::Restrained).as_str().contains("flirtatious"));
+    assert!(
+        seductive(ContentRating::Mature)
+            .as_str()
+            .contains("sensual, seductive")
+    );
+    assert!(
+        !seductive(ContentRating::Restrained)
+            .as_str()
+            .contains("seductive")
+    );
+    assert!(
+        seductive(ContentRating::Restrained)
+            .as_str()
+            .contains("flirtatious")
+    );
 
     let patron = CharacterFacts {
         role: CharacterRole::Antagonist,
@@ -1007,19 +1127,33 @@ fn the_two_ratings_use_different_phrase_sets_for_the_same_inputs() {
     let face = |rating, expression, appearance| {
         cast_expression(rating, patron, expression, appearance, false).unwrap()
     };
-    let mature = face(ContentRating::Mature, Expression::Seductive, Appearance::Bloodied);
-    let restrained = face(ContentRating::Restrained, Expression::Seductive, Appearance::Bloodied);
+    let mature = face(
+        ContentRating::Mature,
+        Expression::Seductive,
+        Appearance::Bloodied,
+    );
+    let restrained = face(
+        ContentRating::Restrained,
+        Expression::Seductive,
+        Appearance::Bloodied,
+    );
     assert!(mature.as_str().contains("seductive, sultry"));
     assert!(mature.as_str().contains("badly bloodied"));
     assert!(!restrained.as_str().contains("sultry"));
     assert!(!restrained.as_str().contains("bloodied"));
     assert!(restrained.as_str().contains("flirtatious look"));
     assert!(restrained.as_str().contains("battered and exhausted"));
-    let wounded = face(ContentRating::Mature, Expression::Angry, Appearance::Wounded);
+    let wounded = face(
+        ContentRating::Mature,
+        Expression::Angry,
+        Appearance::Wounded,
+    );
     assert!(wounded.as_str().contains("visibly wounded"));
-    assert!(!face(ContentRating::Mature, Expression::Angry, Appearance::Unhurt)
-        .as_str()
-        .contains("appears"));
+    assert!(
+        !face(ContentRating::Mature, Expression::Angry, Appearance::Unhurt)
+            .as_str()
+            .contains("appears")
+    );
 }
 
 #[test]
@@ -1038,7 +1172,10 @@ fn both_ratings_keep_every_person_an_adult_and_name_no_real_person() {
             )
             .unwrap();
             let text = prompt.as_str();
-            assert!(text.contains("Every person shown is an adult."), "{rating:?}");
+            assert!(
+                text.contains("Every person shown is an adult."),
+                "{rating:?}"
+            );
             assert!(text.contains("No real people, celebrities or likenesses of real persons."));
             assert!(text.contains("No text, letters, numbers, logos or watermarks."));
             if life_stage == LifeStage::YoungAdult {
@@ -1047,7 +1184,10 @@ fn both_ratings_keep_every_person_an_adult_and_name_no_real_person() {
             let lowered = text.to_lowercase();
             for word in lowered.split(|c: char| !c.is_ascii_alphabetic()) {
                 assert!(
-                    !matches!(word, "child" | "children" | "kid" | "teen" | "teenager" | "minor"),
+                    !matches!(
+                        word,
+                        "child" | "children" | "kid" | "teen" | "teenager" | "minor"
+                    ),
                     "{word}"
                 );
             }
@@ -1058,8 +1198,14 @@ fn both_ratings_keep_every_person_an_adult_and_name_no_real_person() {
                 .contains("Every person shown is an adult.")
         );
     }
-    assert_eq!(LifeStage::from_age(Some(pack::Age::Young)), LifeStage::YoungAdult);
-    assert_eq!(LifeStage::from_age(Some(pack::Age::Elder)), LifeStage::Elder);
+    assert_eq!(
+        LifeStage::from_age(Some(pack::Age::Young)),
+        LifeStage::YoungAdult
+    );
+    assert_eq!(
+        LifeStage::from_age(Some(pack::Age::Elder)),
+        LifeStage::Elder
+    );
     assert_eq!(LifeStage::from_age(None), LifeStage::Adult);
 }
 
@@ -1071,11 +1217,21 @@ fn a_real_persons_likeness_never_gets_a_seductive_variant_under_either_rating() 
             life_stage: LifeStage::Adult,
         };
         assert_eq!(
-            cast_expression(rating, facts, Expression::Seductive, Appearance::Unhurt, true),
+            cast_expression(
+                rating,
+                facts,
+                Expression::Seductive,
+                Appearance::Unhurt,
+                true
+            ),
             Err(PromptRefusal::RealLikenessIntimate)
         );
         // Other expressions of the same character are not refused.
-        for other in [Expression::Angry, Expression::Smiling, Expression::Flirtatious] {
+        for other in [
+            Expression::Angry,
+            Expression::Smiling,
+            Expression::Flirtatious,
+        ] {
             assert!(cast_expression(rating, facts, other, Appearance::Unhurt, true).is_ok());
         }
     }
@@ -1172,10 +1328,18 @@ mod settings {
             set(&mut input);
             cases.push((name, input));
         };
-        add("DF_GAMEPLAY_IMAGERY", |i| i.mode = Ok("maybe-later".to_owned()));
-        add("DF_GAMEPLAY_IMAGERY_MODEL", |i| i.model = Ok("dall-e-3".to_owned()));
-        add("DF_GAMEPLAY_IMAGERY_QUALITY", |i| i.quality = Ok("ultra".to_owned()));
-        add("DF_GAMEPLAY_IMAGERY_BUDGET", |i| i.budget = Ok("many".to_owned()));
+        add("DF_GAMEPLAY_IMAGERY", |i| {
+            i.mode = Ok("maybe-later".to_owned())
+        });
+        add("DF_GAMEPLAY_IMAGERY_MODEL", |i| {
+            i.model = Ok("dall-e-3".to_owned())
+        });
+        add("DF_GAMEPLAY_IMAGERY_QUALITY", |i| {
+            i.quality = Ok("ultra".to_owned())
+        });
+        add("DF_GAMEPLAY_IMAGERY_BUDGET", |i| {
+            i.budget = Ok("many".to_owned())
+        });
         add("DF_GAMEPLAY_IMAGERY_INTERVAL_SECONDS", |i| {
             i.interval_seconds = Ok("19".to_owned());
         });

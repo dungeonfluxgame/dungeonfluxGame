@@ -82,7 +82,7 @@ impl Mood {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum Shot {
     WideEstablishing,
-    MediumTwoShot,
+    MediumConversation,
     CloseOnSpeaker,
     OverShoulderTowardSpeaker,
     LowAngle,
@@ -93,7 +93,7 @@ impl Shot {
     #[cfg(test)]
     pub(super) const ALL: [Self; 6] = [
         Self::WideEstablishing,
-        Self::MediumTwoShot,
+        Self::MediumConversation,
         Self::CloseOnSpeaker,
         Self::OverShoulderTowardSpeaker,
         Self::LowAngle,
@@ -103,7 +103,7 @@ impl Shot {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::WideEstablishing => "wide_establishing",
-            Self::MediumTwoShot => "medium_two_shot",
+            Self::MediumConversation => "medium_two_shot",
             Self::CloseOnSpeaker => "close_on_speaker",
             Self::OverShoulderTowardSpeaker => "over_shoulder",
             Self::LowAngle => "low_angle",
@@ -266,10 +266,10 @@ impl Look {
     pub(super) fn of(mood: Mood) -> Self {
         let (shot, lighting) = match mood {
             Mood::Calm => (Shot::WideEstablishing, Lighting::Unchanged),
-            Mood::Warm => (Shot::MediumTwoShot, Lighting::Warmer),
+            Mood::Warm => (Shot::MediumConversation, Lighting::Warmer),
             Mood::Tense => (Shot::OverShoulderTowardSpeaker, Lighting::Colder),
             Mood::Menacing => (Shot::LowAngle, Lighting::HarderShadows),
-            Mood::Playful => (Shot::MediumTwoShot, Lighting::Warmer),
+            Mood::Playful => (Shot::MediumConversation, Lighting::Warmer),
             Mood::Flirtatious => (Shot::CloseOnSpeaker, Lighting::Warmer),
             Mood::Seductive => (Shot::CloseOnSpeaker, Lighting::Flicker),
             Mood::Grim => (Shot::HighAngle, Lighting::Colder),
@@ -424,10 +424,7 @@ pub(super) fn ambient_mood(inputs: &MoodInputs<'_>) -> Mood {
 
 /// The scene mood and the speaker's expression one exchange gives. `recent` holds the approaches
 /// of earlier exchanges (not this one), oldest first.
-pub(super) fn exchange_reading(
-    signal: &ExchangeSignal,
-    recent: &[Approach],
-) -> (Mood, Expression) {
+pub(super) fn exchange_reading(signal: &ExchangeSignal, recent: &[Approach]) -> (Mood, Expression) {
     let again = recent
         .iter()
         .filter(|earlier| **earlier == signal.approach)

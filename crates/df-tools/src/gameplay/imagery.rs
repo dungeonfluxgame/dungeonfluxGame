@@ -48,13 +48,19 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Semaphore, watch};
 
-#[allow(unused_imports, reason = "the investigation task (a follow-up) is the first caller")]
+#[allow(
+    unused_imports,
+    reason = "the investigation task (a follow-up) is the first caller"
+)]
 pub(super) use artifact::{ArtifactSubject, SubjectRefusal, close_up_request};
 pub(super) use prompt::{
     AssembledPrompt, CharacterFacts, CharacterRole, LifeStage, PlaceFacts, cast_expression,
     scene_refresh,
 };
-#[allow(unused_imports, reason = "the investigation task (a follow-up) is the first caller")]
+#[allow(
+    unused_imports,
+    reason = "the investigation task (a follow-up) is the first caller"
+)]
 pub(super) use prompt::{PromptRefusal, VettedFact};
 pub(super) use references::{ReferenceImage, ReferenceStore};
 
@@ -145,8 +151,11 @@ pub(super) struct ImageKey(String);
 impl ImageKey {
     /// `Some` only for exactly 64 lowercase hexadecimal digits.
     pub(super) fn parse(text: &str) -> Option<Self> {
-        (text.len() == 64 && text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
-            .then(|| Self(text.to_owned()))
+        (text.len() == 64
+            && text
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+        .then(|| Self(text.to_owned()))
     }
 
     pub(super) fn as_str(&self) -> &str {
@@ -204,7 +213,10 @@ type Outcome = Result<(), ImageFailure>;
 /// The result of asking for the bytes of one key.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum Lookup {
-    Image { bytes: Bytes, format: ImageFormat },
+    Image {
+        bytes: Bytes,
+        format: ImageFormat,
+    },
     /// The server never registered this key.
     Unregistered,
     /// Registered, but no image exists (yet).
@@ -537,7 +549,11 @@ impl Engine {
         let mut span = df_observe::begin(&context, "gameplay.imagery_render");
         span.event(
             "gameplay.imagery.render",
-            &span_fields(request.kind, self.model.model_id(), request.references.len()),
+            &span_fields(
+                request.kind,
+                self.model.model_id(),
+                request.references.len(),
+            ),
         );
         let outcome = self.produce(&key, request).await;
         span.finish_unmeasured(match outcome {
@@ -598,7 +614,8 @@ impl Engine {
             return Err(ImageFailure::BadOutput);
         }
         let micro_dollars = usage_cost(generated.usage);
-        self.micro_dollars.fetch_add(micro_dollars, Ordering::SeqCst);
+        self.micro_dollars
+            .fetch_add(micro_dollars, Ordering::SeqCst);
         let bytes = Bytes::from(generated.bytes);
         let stored = self.store(key, format, bytes.clone()).await.is_ok();
         if stored {
@@ -722,8 +739,9 @@ impl Engine {
             } else {
                 ImageFormat::Jpeg
             };
-            let present = std::fs::symlink_metadata(self.cache_dir.join(Self::file_name(&key, format)))
-                .is_ok_and(|metadata| metadata.is_file());
+            let present =
+                std::fs::symlink_metadata(self.cache_dir.join(Self::file_name(&key, format)))
+                    .is_ok_and(|metadata| metadata.is_file());
             if present {
                 registry.register(&key, Registered { format });
             }
@@ -853,7 +871,10 @@ async fn serve_image(
             {
                 return (
                     StatusCode::NOT_MODIFIED,
-                    [(header::ETAG, etag), (header::CACHE_CONTROL, CACHE_CONTROL.to_owned())],
+                    [
+                        (header::ETAG, etag),
+                        (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
+                    ],
                 )
                     .into_response();
             }
@@ -875,3 +896,7 @@ async fn serve_image(
 #[cfg(test)]
 #[path = "imagery_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "imagery_live_tests.rs"]
+mod live_tests;

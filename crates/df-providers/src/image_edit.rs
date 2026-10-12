@@ -323,8 +323,8 @@ impl NativeImageEditProvider {
 
 fn validate(edit: &ImageEdit<'_>) -> Result<(), ImageEditError> {
     let pixels = u64::from(edit.width) * u64::from(edit.height);
-    let sides_ok = edit.width % 16 == 0
-        && edit.height % 16 == 0
+    let sides_ok = edit.width.is_multiple_of(16)
+        && edit.height.is_multiple_of(16)
         && edit.width.max(edit.height) <= 3840
         && edit.width.max(edit.height) <= edit.width.min(edit.height) * 3;
     let references_ok = !edit.references.is_empty()
@@ -332,11 +332,14 @@ fn validate(edit: &ImageEdit<'_>) -> Result<(), ImageEditError> {
         && edit.references.iter().all(|reference| {
             !reference.bytes.is_empty() && reference.bytes.len() <= MAXIMUM_REFERENCE_BYTES
         });
-    let output_ok = match (edit.background, edit.output) {
-        (ImageBackground::Transparent, ImageFormat::Png) => true,
-        (ImageBackground::Opaque, ImageFormat::Png | ImageFormat::Jpeg) => true,
-        _ => false,
-    };
+    let output_ok = matches!(
+        (edit.background, edit.output),
+        (ImageBackground::Transparent, ImageFormat::Png)
+            | (
+                ImageBackground::Opaque,
+                ImageFormat::Png | ImageFormat::Jpeg
+            )
+    );
     if edit.prompt.trim().is_empty()
         || edit.prompt.chars().count() > MAXIMUM_PROMPT_CHARACTERS
         || !references_ok

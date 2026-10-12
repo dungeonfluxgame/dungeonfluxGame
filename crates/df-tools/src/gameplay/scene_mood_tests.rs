@@ -57,7 +57,12 @@ fn tempo(phase: TempoLevel) -> Option<Tempo> {
 }
 
 /// The mood and expression one exchange gives, with no earlier approaches.
-fn reading(approach: Approach, effect: Effect, attitude: Attitude, opposes: bool) -> (Mood, Expression) {
+fn reading(
+    approach: Approach,
+    effect: Effect,
+    attitude: Attitude,
+    opposes: bool,
+) -> (Mood, Expression) {
     exchange_reading(&signal(1, approach, effect, attitude, opposes), &[])
 }
 
@@ -77,19 +82,41 @@ fn an_insult_makes_the_speaker_angry_and_a_friend_pained() {
 #[test]
 fn intimidation_frightens_or_enrages_by_the_characters_temperament() {
     assert_eq!(
-        reading(Approach::Intimidation, Effect::Warm, Attitude::Indifferent, false),
+        reading(
+            Approach::Intimidation,
+            Effect::Warm,
+            Attitude::Indifferent,
+            false
+        ),
         (Mood::Fearful, Expression::Afraid)
     );
     assert_eq!(
-        reading(Approach::Intimidation, Effect::Cool, Attitude::Hostile, true),
+        reading(
+            Approach::Intimidation,
+            Effect::Cool,
+            Attitude::Hostile,
+            true
+        ),
         (Mood::Menacing, Expression::Angry)
     );
     assert_eq!(
-        reading(Approach::Intimidation, Effect::Steady, Attitude::Indifferent, false).1,
+        reading(
+            Approach::Intimidation,
+            Effect::Steady,
+            Attitude::Indifferent,
+            false
+        )
+        .1,
         Expression::Afraid
     );
     assert_eq!(
-        reading(Approach::Intimidation, Effect::Steady, Attitude::Hostile, true).1,
+        reading(
+            Approach::Intimidation,
+            Effect::Steady,
+            Attitude::Hostile,
+            true
+        )
+        .1,
         Expression::Contemptuous
     );
 }
@@ -97,12 +124,24 @@ fn intimidation_frightens_or_enrages_by_the_characters_temperament() {
 #[test]
 fn a_second_intimidation_turns_the_scene_brutal() {
     let again = exchange_reading(
-        &signal(2, Approach::Intimidation, Effect::Warm, Attitude::Indifferent, false),
+        &signal(
+            2,
+            Approach::Intimidation,
+            Effect::Warm,
+            Attitude::Indifferent,
+            false,
+        ),
         &[Approach::Intimidation],
     );
     assert_eq!(again.0, Mood::Brutal);
     let after_other = exchange_reading(
-        &signal(2, Approach::Intimidation, Effect::Warm, Attitude::Indifferent, false),
+        &signal(
+            2,
+            Approach::Intimidation,
+            Effect::Warm,
+            Attitude::Indifferent,
+            false,
+        ),
         &[Approach::Question],
     );
     assert_eq!(after_other.0, Mood::Fearful);
@@ -115,11 +154,21 @@ fn flirting_charms_or_amuses_or_repels_by_the_characters_temperament() {
         (Mood::Flirtatious, Expression::Flirtatious)
     );
     assert_eq!(
-        reading(Approach::Flirting, Effect::Warm, Attitude::Indifferent, false),
+        reading(
+            Approach::Flirting,
+            Effect::Warm,
+            Attitude::Indifferent,
+            false
+        ),
         (Mood::Playful, Expression::Amused)
     );
     assert_eq!(
-        reading(Approach::Flirting, Effect::Steady, Attitude::Indifferent, false),
+        reading(
+            Approach::Flirting,
+            Effect::Steady,
+            Attitude::Indifferent,
+            false
+        ),
         (Mood::Playful, Expression::Amused)
     );
     assert_eq!(
@@ -127,7 +176,13 @@ fn flirting_charms_or_amuses_or_repels_by_the_characters_temperament() {
         (Mood::Tense, Expression::Contemptuous)
     );
     let again = exchange_reading(
-        &signal(2, Approach::Flirting, Effect::Warm, Attitude::Friendly, false),
+        &signal(
+            2,
+            Approach::Flirting,
+            Effect::Warm,
+            Attitude::Friendly,
+            false,
+        ),
         &[Approach::Flirting],
     );
     assert_eq!(again, (Mood::Seductive, Expression::Seductive));
@@ -136,7 +191,12 @@ fn flirting_charms_or_amuses_or_repels_by_the_characters_temperament() {
 #[test]
 fn kindness_warms_the_scene_and_smiles_unless_the_character_is_hostile() {
     assert_eq!(
-        reading(Approach::Kindness, Effect::Warm, Attitude::Indifferent, false),
+        reading(
+            Approach::Kindness,
+            Effect::Warm,
+            Attitude::Indifferent,
+            false
+        ),
         (Mood::Warm, Expression::Smiling)
     );
     assert_eq!(
@@ -152,7 +212,13 @@ fn flattery_bribery_and_deception_read_by_temperament() {
         (Mood::Warm, Expression::Smiling)
     );
     assert_eq!(
-        reading(Approach::Flattery, Effect::Cool, Attitude::Indifferent, false).1,
+        reading(
+            Approach::Flattery,
+            Effect::Cool,
+            Attitude::Indifferent,
+            false
+        )
+        .1,
         Expression::Contemptuous
     );
     assert_eq!(
@@ -160,11 +226,22 @@ fn flattery_bribery_and_deception_read_by_temperament() {
         Expression::Angry
     );
     assert_eq!(
-        reading(Approach::Deception, Effect::Cool, Attitude::Indifferent, false).1,
+        reading(
+            Approach::Deception,
+            Effect::Cool,
+            Attitude::Indifferent,
+            false
+        )
+        .1,
         Expression::Contemptuous
     );
     assert_eq!(
-        reading(Approach::Question, Effect::Steady, Attitude::Friendly, false),
+        reading(
+            Approach::Question,
+            Effect::Steady,
+            Attitude::Friendly,
+            false
+        ),
         (Mood::Calm, Expression::Smiling)
     );
 }
@@ -185,7 +262,13 @@ fn every_mood_has_a_look_and_every_expression_a_label() {
 #[test]
 fn the_same_inputs_and_clock_give_the_same_verdict() {
     let cast = [member(true, false, Appearance::Unhurt)];
-    let exchange = signal(1, Approach::Insult, Effect::Cool, Attitude::Indifferent, false);
+    let exchange = signal(
+        1,
+        Approach::Insult,
+        Effect::Cool,
+        Attitude::Indifferent,
+        false,
+    );
     let run = || {
         let mut tracker = MoodTracker::new(Hysteresis::default());
         (0..5)
@@ -207,7 +290,13 @@ fn an_exchange_changes_the_look_at_once_and_is_handled_only_once() {
     let calm = tracker.update(seconds(0), &inputs(&cast, None, None, &[]));
     assert!(!calm.scene_worth_rendering);
     assert!(calm.face_changes.is_empty());
-    let insult = signal(1, Approach::Insult, Effect::Cool, Attitude::Indifferent, false);
+    let insult = signal(
+        1,
+        Approach::Insult,
+        Effect::Cool,
+        Attitude::Indifferent,
+        false,
+    );
     let verdict = tracker.update(seconds(1), &inputs(&cast, Some(&insult), None, &[]));
     assert_eq!(verdict.look, Look::of(Mood::Tense));
     assert!(verdict.scene_worth_rendering);
@@ -262,14 +351,32 @@ fn a_flickering_input_never_flaps_the_look() {
 fn an_exchange_look_is_held_against_tempo_drift_then_released() {
     let cast = [member(true, false, Appearance::Unhurt)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
-    let flirt = signal(1, Approach::Flirting, Effect::Warm, Attitude::Friendly, false);
-    tracker.update(seconds(0), &inputs(&cast, Some(&flirt), tempo(TempoLevel::Calm), &[]));
-    let held = tracker.update(seconds(44), &inputs(&cast, Some(&flirt), tempo(TempoLevel::Peak), &[]));
+    let flirt = signal(
+        1,
+        Approach::Flirting,
+        Effect::Warm,
+        Attitude::Friendly,
+        false,
+    );
+    tracker.update(
+        seconds(0),
+        &inputs(&cast, Some(&flirt), tempo(TempoLevel::Calm), &[]),
+    );
+    let held = tracker.update(
+        seconds(44),
+        &inputs(&cast, Some(&flirt), tempo(TempoLevel::Peak), &[]),
+    );
     assert_eq!(held.look.mood, Mood::Flirtatious);
     // After the hold the ambient mood must still persist for the settle time.
-    let released = tracker.update(seconds(45), &inputs(&cast, Some(&flirt), tempo(TempoLevel::Peak), &[]));
+    let released = tracker.update(
+        seconds(45),
+        &inputs(&cast, Some(&flirt), tempo(TempoLevel::Peak), &[]),
+    );
     assert_eq!(released.look.mood, Mood::Flirtatious);
-    let settled = tracker.update(seconds(55), &inputs(&cast, Some(&flirt), tempo(TempoLevel::Peak), &[]));
+    let settled = tracker.update(
+        seconds(55),
+        &inputs(&cast, Some(&flirt), tempo(TempoLevel::Peak), &[]),
+    );
     assert_eq!(settled.look.mood, Mood::Tense);
 }
 
@@ -277,7 +384,13 @@ fn an_exchange_look_is_held_against_tempo_drift_then_released() {
 fn an_expression_relaxes_to_the_authored_face_after_the_hold() {
     let cast = [member(true, false, Appearance::Unhurt)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
-    let insult = signal(1, Approach::Insult, Effect::Cool, Attitude::Indifferent, false);
+    let insult = signal(
+        1,
+        Approach::Insult,
+        Effect::Cool,
+        Attitude::Indifferent,
+        false,
+    );
     let verdict = tracker.update(seconds(0), &inputs(&cast, Some(&insult), None, &[]));
     tracker.mark_face_shown("merchant", verdict.face_changes[0].1);
     let held = tracker.update(seconds(89), &inputs(&cast, Some(&insult), None, &[]));
@@ -293,7 +406,13 @@ fn an_expression_relaxes_to_the_authored_face_after_the_hold() {
 fn only_a_difference_from_what_is_on_screen_is_worth_a_rerender() {
     let cast = [member(false, false, Appearance::Unhurt)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
-    let flirt = signal(1, Approach::Flirting, Effect::Warm, Attitude::Friendly, false);
+    let flirt = signal(
+        1,
+        Approach::Flirting,
+        Effect::Warm,
+        Attitude::Friendly,
+        false,
+    );
     let verdict = tracker.update(seconds(0), &inputs(&cast, Some(&flirt), None, &[]));
     assert!(verdict.scene_worth_rendering);
     tracker.mark_scene_shown(verdict.look);
@@ -311,7 +430,13 @@ fn only_a_difference_from_what_is_on_screen_is_worth_a_rerender() {
 fn a_new_scene_starts_from_the_authored_look_and_replays_no_exchange() {
     let cast = [member(true, false, Appearance::Unhurt)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
-    let insult = signal(1, Approach::Insult, Effect::Cool, Attitude::Indifferent, false);
+    let insult = signal(
+        1,
+        Approach::Insult,
+        Effect::Cool,
+        Attitude::Indifferent,
+        false,
+    );
     tracker.update(seconds(0), &inputs(&cast, Some(&insult), None, &[]));
     tracker.reset_scene();
     let fresh = tracker.update(seconds(1), &inputs(&cast, Some(&insult), None, &[]));
@@ -323,7 +448,12 @@ fn a_new_scene_starts_from_the_authored_look_and_replays_no_exchange() {
 #[test]
 fn recent_actions_and_the_setting_colour_the_ambient_mood() {
     let cast = [member(false, false, Appearance::Unhurt)];
-    let actions = [TableKind::Action, TableKind::Speech, TableKind::Action, TableKind::Action];
+    let actions = [
+        TableKind::Action,
+        TableKind::Speech,
+        TableKind::Action,
+        TableKind::Action,
+    ];
     let busy = inputs(&cast, None, tempo(TempoLevel::Build), &actions);
     assert_eq!(ambient_mood(&busy), Mood::Tense);
     let quiet = inputs(&cast, None, tempo(TempoLevel::Build), &[TableKind::Speech]);
@@ -397,7 +527,9 @@ fn a_hurt_character_shows_pain_or_resolve_and_the_end_beats_show_relief_or_grief
         ..inputs(&patron, None, None, &[])
     };
     assert_eq!(
-        sorrow.update(seconds(0), &defeat).face_changes[0].1.expression,
+        sorrow.update(seconds(0), &defeat).face_changes[0]
+            .1
+            .expression,
         Expression::Sorrowful
     );
     let mut relief = MoodTracker::new(Hysteresis::default());
@@ -406,7 +538,9 @@ fn a_hurt_character_shows_pain_or_resolve_and_the_end_beats_show_relief_or_grief
         ..inputs(&patron, None, None, &[])
     };
     assert_eq!(
-        relief.update(seconds(0), &victory).face_changes[0].1.expression,
+        relief.update(seconds(0), &victory).face_changes[0]
+            .1
+            .expression,
         Expression::Smiling
     );
     // A character who is not speaking shows nothing at the end beats.

@@ -132,7 +132,11 @@ fn face_jobs(jobs: &[Job]) -> Vec<Face> {
 #[test]
 fn a_refresh_never_starts_inside_the_interval_the_first_seconds_or_a_roll() {
     let mut pacer = Pacer::new(timing(), Duration::ZERO);
-    assert_eq!(pacer.refresh_due(seconds(5), false, true), None, "the first seconds of a scene");
+    assert_eq!(
+        pacer.refresh_due(seconds(5), false, true),
+        None,
+        "the first seconds of a scene"
+    );
     assert_eq!(
         pacer.refresh_due(seconds(8), false, true),
         Some(RefreshReason::Change)
@@ -164,7 +168,10 @@ fn nothing_is_requested_or_published_in_combat() {
         assert!(pacer.may_publish(seconds(now), false));
     }
     pacer.note_action(seconds(2000));
-    assert!(!pacer.may_publish(seconds(2003), false), "a finished image waits out a roll");
+    assert!(
+        !pacer.may_publish(seconds(2003), false),
+        "a finished image waits out a roll"
+    );
     assert!(pacer.may_publish(seconds(2006), false));
 }
 
@@ -178,7 +185,11 @@ fn a_gentle_alternate_angle_comes_only_after_a_long_idle_and_then_sparingly() {
     );
     pacer.refresh_started(seconds(120), RefreshReason::AlternateAngle);
     assert_eq!(pacer.alternates(), 1);
-    assert_eq!(pacer.refresh_due(seconds(209), false, false), None, "every third interval at most");
+    assert_eq!(
+        pacer.refresh_due(seconds(209), false, false),
+        None,
+        "every third interval at most"
+    );
     assert_eq!(
         pacer.refresh_due(seconds(210), false, false),
         Some(RefreshReason::AlternateAngle)
@@ -208,7 +219,10 @@ fn alternate_angles_cycle_through_gentle_shots_keeping_the_mood_and_light() {
 fn an_exchange_asks_for_the_face_at_once_and_the_backdrop_only_when_the_interval_allows() {
     let dossier = dossier();
     let (inner, ledger) = director(&dossier);
-    assert!(inner.evaluate_at(seconds(10)).is_empty(), "no exchange, nothing to repaint");
+    assert!(
+        inner.evaluate_at(seconds(10)).is_empty(),
+        "no exchange, nothing to repaint"
+    );
 
     insult(&ledger, &dossier);
     let jobs = inner.evaluate_at(seconds(10));
@@ -244,7 +258,10 @@ fn an_exchange_asks_for_the_face_at_once_and_the_backdrop_only_when_the_interval
         result: Ok(key('b')),
     });
     assert!(inner.evaluate_at(seconds(12)).is_empty());
-    assert_eq!(locked(&inner.state).backdrop.as_ref().unwrap().key, key('b'));
+    assert_eq!(
+        locked(&inner.state).backdrop.as_ref().unwrap().key,
+        key('b')
+    );
 
     // A second exchange 10 seconds after the first repaint starts: the face may follow at once
     // but the backdrop waits for the interval.
@@ -279,8 +296,14 @@ fn a_finished_backdrop_waits_for_a_quiet_moment_and_then_wakes_the_watchers() {
     assert!(locked(&inner.state).backdrop.is_none());
     assert!(!wakes.has_changed().unwrap());
     inner.evaluate_at(seconds(17));
-    assert_eq!(locked(&inner.state).backdrop.as_ref().unwrap().key, key('c'));
-    assert!(wakes.has_changed().unwrap(), "watchers are woken to rebuild their view");
+    assert_eq!(
+        locked(&inner.state).backdrop.as_ref().unwrap().key,
+        key('c')
+    );
+    assert!(
+        wakes.has_changed().unwrap(),
+        "watchers are woken to rebuild their view"
+    );
     assert_eq!(locked(&inner.state).tracker.shown_look(), look);
 }
 
@@ -345,7 +368,10 @@ fn a_failed_face_is_not_asked_for_again_and_a_spent_budget_ends_requests() {
         result: Err(ImageFailure::BudgetExhausted),
     });
     flirt(&ledger, &dossier);
-    assert!(inner.evaluate_at(seconds(100)).is_empty(), "no further requests once the budget is spent");
+    assert!(
+        inner.evaluate_at(seconds(100)).is_empty(),
+        "no further requests once the budget is spent"
+    );
 }
 
 #[test]
@@ -459,7 +485,10 @@ fn a_display_view_gives_the_stage_its_scene_cast_tempo_and_table_kinds() {
     assert_eq!(stage.cast.len(), 1);
     assert_eq!(stage.cast[0].id, "merchant");
     assert!(stage.speaking_ids.contains("merchant"));
-    assert_eq!(stage.recent_kinds, vec![TableKind::Speech, TableKind::Action]);
+    assert_eq!(
+        stage.recent_kinds,
+        vec![TableKind::Speech, TableKind::Action]
+    );
     assert!(stage_of(&display_message(true)).unwrap().in_combat);
 }
 
@@ -469,13 +498,15 @@ fn a_player_view_is_never_observed_or_changed() {
     let (inner, _ledger) = director(&dossier);
     let player = rpc::ViewMessage {
         revision: None,
-        audience: Some(rpc::view_message::Audience::Player(rpc::PlayerGameplayView {
-            scene: Some(rpc::GameplayScene {
-                title: "The Heron Shrine".to_owned(),
+        audience: Some(rpc::view_message::Audience::Player(
+            rpc::PlayerGameplayView {
+                scene: Some(rpc::GameplayScene {
+                    title: "The Heron Shrine".to_owned(),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        })),
+            },
+        )),
     };
     assert!(stage_of(&player).is_none());
     locked(&inner.state).backdrop = Some(BackdropOverlay { key: key('9') });
@@ -516,8 +547,14 @@ fn published_art_changes_only_the_art_fields_of_the_display_view() {
         panic!("display view");
     };
     let scene = display.scene.as_mut().unwrap();
-    assert_eq!(scene.live_backdrop, format!("/gameplay/imagery/{}", "2".repeat(64)));
-    assert_eq!(scene.cast[0].live_sprite, format!("/gameplay/imagery/{}", "3".repeat(64)));
+    assert_eq!(
+        scene.live_backdrop,
+        format!("/gameplay/imagery/{}", "2".repeat(64))
+    );
+    assert_eq!(
+        scene.cast[0].live_sprite,
+        format!("/gameplay/imagery/{}", "3".repeat(64))
+    );
     // Put the two art fields back: every other field, the revision included, is untouched.
     scene.live_backdrop.clear();
     scene.cast[0].live_sprite.clear();

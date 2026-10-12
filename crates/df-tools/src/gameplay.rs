@@ -8,8 +8,8 @@ mod courier_process_qualification;
 mod dialogue;
 #[cfg(test)]
 mod dialogue_tests;
-mod inn_qualification;
 mod imagery;
+mod inn_qualification;
 mod journey;
 mod living_scenes;
 mod model;
@@ -208,7 +208,16 @@ impl rpc::session_service_server::SessionService for Service {
                 credential,
                 permit,
             ),
-            |(first, mut updates, mut table_lines, mut art, service, request, credential, permit)| async move {
+            |(
+                first,
+                mut updates,
+                mut table_lines,
+                mut art,
+                service,
+                request,
+                credential,
+                permit,
+            )| async move {
                 let next = if let Some(first) = first {
                     Ok(first)
                 } else {
@@ -1016,9 +1025,8 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     };
     // Living scenes: server-generated scene art that follows the story's mood. The content
     // rating is read here, once, and shared with the rest of the server.
-    let rating = startup_configuration::install_content_rating(std::env::var(
-        "DF_GAMEPLAY_CONTENT_RATING",
-    ))?;
+    let rating =
+        startup_configuration::install_content_rating(std::env::var("DF_GAMEPLAY_CONTENT_RATING"))?;
     let imagery_settings = if interactive {
         startup_configuration::imagery_settings(
             startup_configuration::ImageryInputs::from_environment(),
@@ -1026,7 +1034,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             rating,
         )?
     } else {
-        startup_configuration::ImagerySettings::Off(startup_configuration::ImageryOff::Qualification)
+        startup_configuration::ImagerySettings::Off(
+            startup_configuration::ImageryOff::Qualification,
+        )
     };
     let living_interval = match &imagery_settings {
         startup_configuration::ImagerySettings::On(configuration) => configuration.interval,

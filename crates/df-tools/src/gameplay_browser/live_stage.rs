@@ -215,7 +215,9 @@ impl Figures {
                 .ok()
                 .and_then(|name| name.as_string())
                 .is_some_and(|name| {
-                    name == BUBBLE_OUT_ANIMATION || name == FLOAT_ANIMATION || name == GHOST_ANIMATION
+                    name == BUBBLE_OUT_ANIMATION
+                        || name == FLOAT_ANIMATION
+                        || name == GHOST_ANIMATION
                 });
             if finished
                 && let Some(element) = event.target().and_then(|t| t.dyn_into::<Element>().ok())
@@ -395,7 +397,10 @@ impl Figures {
         while let Some(old) = body.query_selector(".tv-fig-ghost")? {
             old.remove();
         }
-        let ghost = figure.image.clone_node_with_deep(false)?.dyn_into::<Element>()?;
+        let ghost = figure
+            .image
+            .clone_node_with_deep(false)?
+            .dyn_into::<Element>()?;
         ghost.set_attribute("class", "tv-fig-sprite tv-fig-ghost")?;
         body.insert_before(&ghost, figure.image.next_sibling().as_ref())?;
         Ok(())
