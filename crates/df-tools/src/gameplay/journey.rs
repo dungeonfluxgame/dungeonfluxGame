@@ -663,6 +663,7 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
         // The view fills in the rules note and the place, which the pack alone knows.
         rules_note: String::new(),
         place: String::new(),
+        location_id: String::new(),
     }
 }
 pub(super) fn accepted(
@@ -689,6 +690,54 @@ pub(super) enum CombatRoundError {
     Duration,
     Chronology,
     Capacity,
+}
+
+/// The initiative rolls the encounter started with, in turn order (first to act first), read
+/// from the recorded d20 draws and ability scores exactly as `combat_round` validates them:
+/// nothing is re-rolled or invented. A tie keeps the recorded turn order, so `order` is the
+/// authoritative tie-break result.
+pub(super) fn initiative_rolls(
+    current: &Checkpoint,
+) -> Result<Vec<rpc::InitiativeRoll>, CombatRoundError> {
+    use CombatRoundError as Error;
+    let state = current.state();
+    let [encounter] = state.encounters.as_slice() else {
+        return Err(Error::Encounter);
+    };
+    let start = state
+        .facts
+        .iter()
+        .find(|fact| {
+            matches!(&fact.value, FactValue::ContentEvent { definition, .. }
+            if definition.entry.as_str() == "defend-courier")
+        })
+        .ok_or(Error::Start)?;
+    let mut rolls = Vec::with_capacity(encounter.participants.len());
+    for (ordinal, who) in encounter.participants.iter().enumerate() {
+        let draw = state
+            .draws
+            .iter()
+            .find(|draw| draw.operation == start.operation && draw.ordinal == ordinal as u32)
+            .ok_or(Error::Start)?;
+        let dexterity = u8::try_from(value(state, *who, "dexterity").map_err(|_| Error::Encounter)?)
+            .map_err(|_| Error::Encounter)?;
+        let modifier = rules::ability_modifier(dexterity);
+        let order = encounter
+            .turn_order
+            .iter()
+            .position(|turn| turn == who)
+            .ok_or(Error::Encounter)?;
+        rolls.push(rpc::InitiativeRoll {
+            participant_id: who.as_bytes().to_vec(),
+            name: name(state, *who).map_err(|_| Error::Source)?,
+            die: draw.value as u32,
+            modifier,
+            total: draw.value as i32 + modifier,
+            order: order as u32 + 1,
+        });
+    }
+    rolls.sort_by_key(|roll| roll.order);
+    Ok(rolls)
 }
 
 /// Count only the current authored encounter's accepted initiative wraps.
@@ -3349,6 +3398,71 @@ mod tests {
         assert_eq!(calls, 0);
         assert_eq!(current, before);
         assert!(current.state().characters.is_empty());
+    }
+    #[test]
+    fn the_initiative_rolls_come_from_the_recorded_draws_in_turn_order() {
+        let mut current = initial().expect("empty room");
+        for op in [1, 2] {
+            current = stage_join(
+                &current,
+                &input(
+                    &current,
+                    bootstrap_member().expect("bootstrap"),
+                    op,
+                    "join-room",
+                    vec![],
+                ),
+            )
+            .expect("actual join");
+        }
+        let first = MemberId::from_bytes(&MEMBERS[0]).expect("first");
+        let second = MemberId::from_bytes(&MEMBERS[1]).expect("second");
+        let mut none = |_: u32| Err(RepositoryError::InvalidCandidate);
+        for (op, member, name) in [(3, second, "Vale"), (4, first, "Brynn")] {
+            current = stage_using(
+                &current,
+                &input(&current, member, op, "create-character", build(name)),
+                &mut none,
+            )
+            .expect("character");
+        }
+        for (op, kind) in [(5, "begin-story"), (6, "ask-courier")] {
+            current = stage_using(&current, &input(&current, first, op, kind, vec![]), &mut none)
+                .expect("story step");
+        }
+        // Three recorded d20 faces: the first hero 4, the second 15, the bandit 15.
+        let mut faces = [4, 15, 15].into_iter();
+        let mut dice = |_: u32| Ok(faces.next().expect("three initiative draws"));
+        current = stage_using(
+            &current,
+            &input(&current, first, 7, "defend-courier", vec![]),
+            &mut dice,
+        )
+        .expect("initiative");
+        let rolls = initiative_rolls(&current).expect("rolls from the record");
+        let encounter = current.state().encounters.first().expect("encounter");
+        assert_eq!(rolls.len(), 3);
+        let ids: Vec<Vec<u8>> = rolls.iter().map(|roll| roll.participant_id.clone()).collect();
+        let turn: Vec<Vec<u8>> = encounter
+            .turn_order
+            .iter()
+            .map(|who| who.as_bytes().to_vec())
+            .collect();
+        assert_eq!(ids, turn, "listed in the encounter's own turn order");
+        assert_eq!(
+            rolls.iter().map(|roll| roll.order).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        for roll in &rolls {
+            assert_eq!(roll.total, roll.die as i32 + roll.modifier);
+            assert!([4, 15].contains(&roll.die));
+            assert!(!roll.name.is_empty());
+        }
+        let totals: Vec<i32> = rolls.iter().map(|roll| roll.total).collect();
+        assert!(totals.windows(2).all(|pair| pair[0] >= pair[1]), "highest first: {totals:?}");
+        // The tie between the second hero and the bandit (both rolled 15) resolves by the
+        // recorded order, not a re-roll: no new draw was made to produce the view.
+        assert_eq!(current.state().draws.len(), 3);
     }
     #[test]
     fn reverse_character_finalization_preserves_join_order_initiative_and_private_dialogue() {
