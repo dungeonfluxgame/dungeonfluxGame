@@ -61,6 +61,7 @@ struct VOut {
     @location(5) fx1: vec4<f32>,    // body mask lo/hi, edge mask lo/hi
     @location(6) fx2: vec4<f32>,    // overlay mask lo/hi, slump, thud
     @location(7) fx3: vec4<f32>,    // reduced motion, dim, heartbeat, phase
+    @location(8) world: vec3<f32>,
 }
 
 @vertex
@@ -130,11 +131,11 @@ fn vs(
     out.fx1 = fx1;
     out.fx2 = fx2;
     out.fx3 = fx3;
+    out.world = world;
     return out;
 }
 
-@fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
+fn shade(in: VOut) -> vec4<f32> {
     let aa = max(fwidth(length(in.uv * 2.0 - vec2<f32>(1.0))), 0.01);
     // Pick the mip from the screen-space derivatives while the control flow is still uniform, so
     // a sprite shrunk far below its 1024 pixels (and one squashed to the ground) stays smooth.
@@ -308,6 +309,14 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let out_rgb = rgb * alpha + glow * rim * min(glow_a, 1.0) * 0.8;
     return vec4<f32>(out_rgb, out_a);
 }
+
+@fragment
+fn fs(in: VOut) -> FOut {
+    var out: FOut;
+    out.colour = shade(in);
+    out.depth = standing_depth(in.world);
+    return out;
+}
 "#;
 
 const EFFECTS: &str = r#"
@@ -316,6 +325,7 @@ struct VOut {
     @location(0) p: vec2<f32>,      // position around the figure in units of its height
     @location(1) fx2: vec4<f32>,
     @location(2) fx3: vec4<f32>,
+    @location(3) world: vec3<f32>,
 }
 
 @vertex
@@ -343,6 +353,7 @@ fn vs(
     out.p = vec2<f32>(x, y);
     out.fx2 = fx2;
     out.fx3 = fx3;
+    out.world = world;
     return out;
 }
 
@@ -359,8 +370,7 @@ fn heart(q: vec2<f32>) -> f32 {
     return 1.0 - smoothstep(-0.25, 0.1, f);
 }
 
-@fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
+fn shade(in: VOut) -> vec4<f32> {
     let lo = in.fx2.x;
     let hi = in.fx2.y;
     let slump = in.fx2.z;
@@ -485,6 +495,14 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     }
     let total_a = clamp(cov.a, 0.0, 1.0);
     return vec4<f32>(add + cov.rgb, total_a);
+}
+
+@fragment
+fn fs(in: VOut) -> FOut {
+    var out: FOut;
+    out.colour = shade(in);
+    out.depth = standing_depth(in.world);
+    return out;
 }
 "#;
 
