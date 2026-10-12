@@ -491,12 +491,27 @@ pub(super) fn scene_cast(scene: &super::pack::Scene) -> Vec<rpc::SceneActor> {
         })
         .collect()
 }
+/// Typed semantics of the public scene selected by this same audience projection.
+/// These contain no private clue or mechanical statistics; editable prose is not a contract.
+pub(super) struct PublicJourneyProjection {
+    pub(super) view: rpc::ViewMessage,
+    pub(super) scene: super::pack::SceneKey,
+    pub(super) rested: bool,
+}
 
 pub(super) fn journey_view(
     current: &Checkpoint,
     role: df_persistence::local_demo_scope::LocalDemoRole,
     principal: df_types::MemberId,
 ) -> Result<rpc::ViewMessage, RepositoryError> {
+    project_journey(current, role, principal).map(|projection| projection.view)
+}
+
+pub(super) fn project_journey(
+    current: &Checkpoint,
+    role: df_persistence::local_demo_scope::LocalDemoRole,
+    principal: df_types::MemberId,
+) -> Result<PublicJourneyProjection, RepositoryError> {
     use super::journey;
     use df_persistence::local_demo_scope::LocalDemoRole;
     let observer = match role {
@@ -726,6 +741,7 @@ pub(super) fn journey_view(
         speaker: authored.speaker.clone(),
         dialogue: authored.dialogue.clone(),
         table_log: Vec::new(),
+        tempo: None,
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
     let mut scene = if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] {
@@ -759,9 +775,13 @@ pub(super) fn journey_view(
             journey: Some(journey),
         }),
     };
-    Ok(rpc::ViewMessage {
-        revision: Some(revision(current.basis().revision)),
-        audience: Some(audience),
+    Ok(PublicJourneyProjection {
+        view: rpc::ViewMessage {
+            revision: Some(revision(current.basis().revision)),
+            audience: Some(audience),
+        },
+        scene: key,
+        rested,
     })
 }
 

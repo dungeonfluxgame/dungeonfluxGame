@@ -1482,3 +1482,50 @@ fn shipped_pack_lists_its_secret_terms_and_speakers_and_bad_ones_are_refused() {
         PackError::Parse { .. }
     ));
 }
+
+#[test]
+fn tempo_is_optional_revisioned_presentation_tuning_without_rules_departures() {
+    let pack = shipped_pack();
+    let tuning = shipped_tuning();
+    let shipped = load_from_bytes(pack.as_bytes(), tuning.as_bytes()).unwrap();
+    let omitted = remove(&tuning, "/tempo");
+    let legacy = load_from_bytes(pack.as_bytes(), omitted.as_bytes()).unwrap();
+    assert_eq!(legacy.tuning.tempo, shipped.tuning.tempo);
+    let edited = set(&tuning, "/tempo/impulses_permille/critical", json!(200));
+    let changed = load_from_bytes(pack.as_bytes(), edited.as_bytes()).unwrap();
+    assert!(changed.departures.is_empty());
+    assert_ne!(shipped.tuning_revision, changed.tuning_revision);
+    assert_ne!(shipped.tuning.tempo, changed.tuning.tempo);
+}
+
+#[test]
+fn invalid_tempo_is_refused_with_a_typed_tuning_error() {
+    for (pointer, value) in [
+        ("/tempo/base_intensity_permille/combat", json!(1001)),
+        ("/tempo/impulses_permille/critical", json!(1001)),
+        ("/tempo/inertia_half_life_millis", json!(0)),
+        ("/tempo/phase_thresholds_permille", json!([500, 200, 600])),
+        ("/tempo/fatigue_charge_permille", json!(1001)),
+        ("/tempo/hysteresis_permille", json!(300)),
+    ] {
+        let changed = set(&shipped_tuning(), pointer, value);
+        assert!(matches!(
+            refusal(&shipped_pack(), &changed),
+            PackError::Bounds {
+                file: SourceFile::Tuning,
+                ..
+            } | PackError::Malformed {
+                file: SourceFile::Tuning,
+                ..
+            }
+        ));
+    }
+    let unknown = set(&shipped_tuning(), "/tempo/secret", json!(1));
+    assert!(matches!(
+        refusal(&shipped_pack(), &unknown),
+        PackError::Parse {
+            file: SourceFile::Tuning,
+            ..
+        }
+    ));
+}

@@ -1,3 +1,6 @@
+#[path = "tempo.rs"]
+pub(super) mod tempo;
+
 use df_model::checkpoint::{Checkpoint, EffectId, GameInput};
 use df_observe::OperationContext;
 use df_persistence::local_demo_scope::{
@@ -294,6 +297,7 @@ pub(super) struct Actor {
     /// The public table log; an accepted action and a typed line are appended here.
     pub table_log: std::sync::Arc<super::table_log::TableLog>,
     pub dialogue: super::dialogue::DialogueState,
+    pub tempo: Option<tempo::TempoOwner>,
     pub bootstrap_credential: [u8; 32],
     pub issuer: LocalDemoScopeIssuer,
     pub codec: NativeCodecLimits,
@@ -726,6 +730,17 @@ impl Actor {
                 if !replayed {
                     self.record_table_action(member, &request, &accepted);
                 }
+                if committed.basis().revision > prior_revision
+                    && self.owner.is_current()
+                    && let Some(tempo) = self.tempo.as_mut()
+                {
+                    tempo::observe(tempo.accepted(
+                        self.owner.checkpoint(),
+                        &accepted,
+                        request.action_kind,
+                        Instant::now(),
+                    ));
+                }
                 if let Some(inputs) = self.qualification_inputs.as_mut() {
                     retain_qualification_input(inputs, credential, &request);
                 }
@@ -855,6 +870,9 @@ impl Actor {
             .map_err(|_| tonic::Status::permission_denied("binding invalid"))?;
         let mut view = wire::journey_view(current, role, member).map_err(unavailable)?;
         self.table_log.attach(&mut view);
+        if let Some(tempo) = self.tempo.as_mut() {
+            tempo::observe(tempo.decorate(&mut view, current, Instant::now()));
+        }
         Ok((role, view))
     }
 }

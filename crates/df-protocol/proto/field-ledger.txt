@@ -364,3 +364,17 @@ method dungeonflux.public.v1.DialogueService Cancel .dungeonflux.public.v1.Cance
 method dungeonflux.public.v1.DialogueService Confirm .dungeonflux.public.v1.ConfirmDialogueRequest .dungeonflux.public.v1.SubmitActionResponse client-stream=false server-stream=false
 method dungeonflux.public.v1.DialogueService Submit .dungeonflux.public.v1.RawDialogueRequest .dungeonflux.public.v1.DialogueResponse client-stream=false server-stream=false
 service dungeonflux.public.v1.DialogueService
+enum dungeonflux.public.v1.TempoPhase
+enum-value dungeonflux.public.v1.TempoPhase 0 TEMPO_PHASE_UNSPECIFIED
+enum-value dungeonflux.public.v1.TempoPhase 1 TEMPO_PHASE_CALM
+enum-value dungeonflux.public.v1.TempoPhase 2 TEMPO_PHASE_BUILD
+enum-value dungeonflux.public.v1.TempoPhase 3 TEMPO_PHASE_ANTICIPATION
+enum-value dungeonflux.public.v1.TempoPhase 4 TEMPO_PHASE_PEAK
+enum-value dungeonflux.public.v1.TempoPhase 5 TEMPO_PHASE_RELEASE
+message dungeonflux.public.v1.TempoCue
+field dungeonflux.public.v1.TempoCue 1 intensity_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TempoCue 2 phase type=14 label=1 presence=false target=.dungeonflux.public.v1.TempoPhase oneof=-
+field dungeonflux.public.v1.TempoCue 3 sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TempoCue 4 hold_millis type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 11 tempo type=11 label=1 presence=false target=.dungeonflux.public.v1.TempoCue oneof=-
+field dungeonflux.public.v1.GameplayScene 4 speaker_portrait type=9 label=1 presence=false target=- oneof=-

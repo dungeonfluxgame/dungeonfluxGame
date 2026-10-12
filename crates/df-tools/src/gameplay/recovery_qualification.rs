@@ -159,6 +159,7 @@ impl RunningActor {
         let table_log = super::table_log::TableLog::disabled();
         let actor = actor::Actor {
             table_log: table_log.clone(),
+            tempo: None,
             dialogue: super::dialogue::DialogueState::default(),
             owner,
             bootstrap_credential: [0x81; 32],
