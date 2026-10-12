@@ -1,0 +1,99 @@
+{
+  "schema": "df-npc-tables/1",
+  "file": "npc-background",
+  "description": "NPC dossier background: where a person came from, what they used to do, one event that shaped them and a talent. Origin text is a participle phrase used as 'I was <text>.'; goblinoid entries carry speakers=[goblinoid]. Original prose; generic heroic fantasy.",
+  "tables": {
+    "origins": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "river-barge", "speakers": ["person"], "text": "raised on a river barge that never stayed anywhere long"},
+        {"faces": [2, 2], "id": "lighthouse-cottage", "speakers": ["person"], "text": "born in a lighthouse keeper's cottage on a windy headland"},
+        {"faces": [3, 3], "id": "puppet-troupe", "speakers": ["person"], "text": "fostered by a travelling puppet troupe"},
+        {"faces": [4, 4], "id": "mill-town", "speakers": ["person"], "text": "brought up in a mill town where everyone knew everyone's business"},
+        {"faces": [5, 5], "id": "shepherd-hut", "speakers": ["person"], "text": "raised in a shepherd's hut high above the snowline"},
+        {"faces": [6, 6], "id": "great-kitchen", "speakers": ["person"], "text": "born below stairs in a noble house, underfoot in a great kitchen"},
+        {"faces": [7, 7], "id": "shrine-gate", "speakers": ["person"], "text": "left at a shrine gate as an infant and raised by its keepers"},
+        {"faces": [8, 8], "id": "market-stall", "speakers": ["person"], "text": "raised under a market stall, learning to haggle before learning to read"},
+        {"faces": [9, 9], "id": "fen-village", "speakers": ["person"], "text": "born in a fen village where the roads are boats"},
+        {"faces": [10, 10], "id": "trade-caravan", "speakers": ["person"], "text": "grown up in a trade caravan, never sleeping twice in the same bed"},
+        {"faces": [11, 11], "id": "quarry-camp", "speakers": ["person"], "text": "raised in a quarry camp where the quiet was the strange part"},
+        {"faces": [12, 12], "id": "ruined-estate", "speakers": ["person"], "text": "raised on a ruined estate, in the last household left standing"},
+        {"faces": [13, 13], "id": "salt-flats", "speakers": ["person"], "text": "grown up on the salt flats, boiling brine with the whole family"},
+        {"faces": [14, 14], "id": "copyists-house", "speakers": ["person"], "text": "brought up in a house of copyists, with ink on every finger"},
+        {"faces": [15, 15], "id": "mill-warren", "speakers": ["goblinoid"], "text": "born in a crowded warren beneath an old mill"},
+        {"faces": [16, 16], "id": "hill-clan", "speakers": ["goblinoid"], "text": "raised in a hill-cave clan that moved with every season"},
+        {"faces": [17, 17], "id": "watchtower-ruin", "speakers": ["goblinoid"], "text": "brought up in the crumbling lower floors of a ruined watchtower"},
+        {"faces": [18, 18], "id": "drain-tunnels", "speakers": ["goblinoid"], "text": "born in the old drain tunnels beneath a town, learning every way out"},
+        {"faces": [19, 19], "id": "bridge-camp", "speakers": ["goblinoid"], "text": "raised in a squatters' camp under a stone bridge"},
+        {"faces": [20, 20], "id": "mine-adit", "speakers": ["goblinoid"], "text": "born in an abandoned mine, where every echo was a friend or a foe"}
+      ]
+    },
+    "past_trades": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "ship-cook", "speakers": ["person"], "text": "a ship's cook", "speak": "I fed a ship's crew for six years. A galley hears everything, and I heard plenty."},
+        {"faces": [2, 2], "id": "mule-driver", "speakers": ["person"], "text": "a mule driver on the high roads", "speak": "I drove mules over the high roads. You learn which stretches are safe and which only look it."},
+        {"faces": [3, 3], "id": "bell-founder", "speakers": ["person"], "except": ["bell-ringer"], "text": "an apprentice bell-founder", "speak": "I spent four years pouring bronze for bells. I can still hear a flat note across a street."},
+        {"faces": [4, 4], "id": "grain-courier", "speakers": ["person"], "text": "a courier for a grain merchant", "speak": "I carried letters for a grain merchant. I know most of the lanes between the towns around here."},
+        {"faces": [5, 5], "id": "journeyman-tailor", "speakers": ["person"], "text": "a journeyman tailor", "speak": "I stitched coats for a living. I can tell a person's trade from how their sleeves wear."},
+        {"faces": [6, 6], "id": "quartermaster-clerk", "speakers": ["person"], "except": ["veteran", "watch-sergeant"], "text": "a quartermaster's clerk", "speak": "I counted boots and bread for an army that has since gone home. Count anything long enough and you learn who is fibbing."},
+        {"faces": [7, 7], "id": "rope-walker", "speakers": ["person"], "text": "a rope-walker with a travelling fair", "speak": "I walked ropes with a travelling fair until my knee told me to stop."},
+        {"faces": [8, 8], "id": "bee-keeper", "speakers": ["person"], "except": ["herbwife"], "text": "a beekeeper's hand", "speak": "I kept bees. Patience, smoke and no sudden movements. It works on people too."},
+        {"faces": [9, 9], "id": "counting-house-copyist", "speakers": ["person"], "except": ["archivist", "old-mapmaker"], "text": "a copyist in a counting house", "speak": "I copied ledgers for a counting house. Numbers lie less than people do, though not by much."},
+        {"faces": [10, 10], "id": "ferry-hand", "speakers": ["person"], "except": ["ferry-clerk"], "text": "a ferry hand on the wide river", "speak": "I poled a ferry for years. A river teaches you to wait and to watch."},
+        {"faces": [11, 11], "id": "mason-apprentice", "speakers": ["person"], "text": "a stonemason's apprentice", "speak": "I cut stone for a hall I never saw finished. I still look at walls to see who built them."},
+        {"faces": [12, 12], "id": "lamplighter", "speakers": ["person"], "except": ["lamp-warden"], "text": "a lamplighter", "speak": "I lit the lamps of a whole district every dusk. Nobody looks at the lamplighter, so I saw a great deal."},
+        {"faces": [13, 13], "id": "net-mender", "speakers": ["person"], "text": "a net-mender on the harbor", "speak": "I mended nets on the harbor. You learn to tell a clean tear from a cut."},
+        {"faces": [14, 14], "id": "healers-aide", "speakers": ["person"], "except": ["herbwife", "river-healer"], "text": "a healer's aide", "speak": "I carried bandages for a healer through a fever year. Little frightens me now."},
+        {"faces": [15, 15], "id": "street-singer", "speakers": ["person"], "text": "a street singer", "speak": "I sang for coins on street corners. A crowd will tell you what it thinks without saying a word."},
+        {"faces": [16, 16], "id": "stable-hand", "speakers": ["person"], "except": ["innkeeper"], "text": "a stable hand at a coaching inn", "speak": "I mucked out a coaching inn for years. Every traveller leaves a story with the horse."},
+        {"faces": [17, 17], "id": "midden-scavenger", "speakers": ["goblinoid"], "text": "a scavenger of the town middens", "speak": "I picked through the town's leavings for years. You would be amazed what people throw away."},
+        {"faces": [18, 18], "id": "band-lookout", "speakers": ["goblinoid"], "text": "a lookout for a larger band", "speak": "I watched roads for a bigger band. Sit still long enough and the whole world walks past."},
+        {"faces": [19, 19], "id": "tunnel-digger", "speakers": ["goblinoid"], "text": "a tunnel digger", "speak": "I dug tunnels. I can tell you the sound of a floor that is about to give way."},
+        {"faces": [20, 20], "id": "bright-things-collector", "speakers": ["goblinoid"], "text": "a collector of bright things for the chief", "speak": "I collected shiny things for the chief. I can spot a coin across a crowded room."}
+      ]
+    },
+    "formative_events": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "spring-flood", "speakers": ["person"], "text": "survived the spring flood that took the family home", "speak": "The spring flood took our house when I was nine. We rebuilt higher up, and I have never trusted a calm river since."},
+        {"faces": [2, 2], "id": "stern-master", "speakers": ["person"], "text": "was apprenticed away at twelve to a stern master", "speak": "They sent me off at twelve to a master who taught everything but kindness. I learned the rest myself."},
+        {"faces": [3, 3], "id": "purse-returned", "speakers": ["person"], "text": "found a purse of silver as a child and returned it", "speak": "I found a purse of silver on a road when I was small and carried it all the way back to its owner. Their thanks set the course of my life."},
+        {"faces": [4, 4], "id": "fever-winter", "speakers": ["person"], "text": "lived through a fever winter that emptied half the street", "speak": "There was a fever winter when half our street was lost. I learned that year who comes to the door and who does not."},
+        {"faces": [5, 5], "id": "street-raised", "speakers": ["person"], "text": "lost a parent young and was raised by the neighbours", "speak": "My mother was gone before I was ten, and the whole street raised me after. I owe every one of them."},
+        {"faces": [6, 6], "id": "long-walk", "speakers": ["person"], "text": "walked alone to a distant city at fifteen", "speak": "I walked alone to the nearest great city at fifteen. It took eleven days and one very lucky ride on a hay cart."},
+        {"faces": [7, 7], "id": "harvest-footrace", "speakers": ["person"], "text": "won a harvest footrace and was told it would lead somewhere", "speak": "I won the harvest footrace one autumn and was told it would lead somewhere. It led here, which is not nowhere."},
+        {"faces": [8, 8], "id": "guildhall-fire", "speakers": ["person"], "text": "helped save the records when the guildhall burned", "speak": "I helped carry the records out when the guildhall burned. I smelled smoke in my sleep for a year."},
+        {"faces": [9, 9], "id": "storm-shelter", "speakers": ["person"], "text": "was sheltered by a stranger during a storm", "speak": "A stranger took me in once, during a storm, and asked for nothing. I have been trying to repay it ever since."},
+        {"faces": [10, 10], "id": "old-friends-parted", "speakers": ["person"], "text": "watched an argument end a forty-year friendship", "speak": "I watched two old friends part over a trivial thing after forty years. I decided never to let a small quarrel grow."},
+        {"faces": [11, 11], "id": "widows-lessons", "speakers": ["person"], "text": "learned to read from a widow who asked only that they teach another", "speak": "A widow taught me my letters and asked only that I teach someone else. I have kept to that bargain."},
+        {"faces": [12, 12], "id": "border-skirmish", "speakers": ["person"], "text": "was caught at the edge of a border skirmish and walked away unharmed", "speak": "I was caught at the edge of a border skirmish once and walked away without a scratch. I do not take that for granted."},
+        {"faces": [13, 13], "id": "pilgrim-road", "speakers": ["person"], "text": "walked a long pilgrim road and came home changed", "speak": "I walked a long pilgrim road when I was young. I came home quieter and, I hope, kinder."},
+        {"faces": [14, 14], "id": "ringing-night", "speakers": ["person"], "text": "stood watch the night every bell in town rang unaccountably", "speak": "I stood watch the night every bell in town rang for no reason anyone could find. We never did learn why."},
+        {"faces": [15, 15], "id": "feast-from-nothing", "speakers": ["person"], "text": "once cooked a feast for a hundred from almost nothing", "speak": "I once cooked a feast for a hundred people from nearly nothing. I have been proud of it for twenty years."},
+        {"faces": [16, 16], "id": "lean-winter", "speakers": ["goblinoid"], "text": "was driven from a warren in a lean winter and found a new band", "speak": "A lean winter drove me out of my first warren. I found a new band, and I have not gone hungry since, mostly."},
+        {"faces": [17, 17], "id": "farmhouse-supper", "speakers": ["goblinoid"], "text": "carried off a whole farmhouse supper and was celebrated for a month", "speak": "I once carried off a whole farmhouse supper. They sang about it for a month, and the farmers did not."},
+        {"faces": [18, 18], "id": "left-behind", "speakers": ["goblinoid"], "text": "was left behind in a hasty move and walked three days to catch up", "speak": "They left me behind in a hasty move once. I walked three days to catch up, and I have never let anyone forget it."},
+        {"faces": [19, 19], "id": "famous-brawl", "speakers": ["goblinoid"], "text": "lost a tooth in a famous brawl and tells it differently every time", "speak": "I lost a tooth in a famous brawl. The story gets better every time I tell it."},
+        {"faces": [20, 20], "id": "chiefs-hat", "speakers": ["goblinoid"], "text": "built a first trap that caught nothing but the chief's hat", "speak": "The first trap I ever built caught nothing but the chief's hat. I was not popular that week."}
+      ]
+    },
+    "talents": {
+      "die": 12,
+      "entries": [
+        {"faces": [1, 1], "id": "reads-hands", "text": "can tell a lie from a mistake by watching the hands"},
+        {"faces": [2, 2], "id": "faces-and-coats", "text": "remembers every face and what it was wearing"},
+        {"faces": [3, 3], "id": "bird-calls", "text": "can imitate any bird call"},
+        {"faces": [4, 4], "id": "remembers-debts", "text": "never forgets a debt, owed or owing"},
+        {"faces": [5, 5], "id": "twine-and-patience", "text": "can mend almost anything with twine and patience"},
+        {"faces": [6, 6], "id": "straight-face", "text": "keeps a straight face through anything"},
+        {"faces": [7, 7], "id": "hushing-voice", "text": "sings well enough to hush a room"},
+        {"faces": [8, 8], "id": "weather-nose", "text": "reads the weather in the smell of the air"},
+        {"faces": [9, 9], "id": "knows-the-lanes", "text": "knows every lane within a day's walk"},
+        {"faces": [10, 10], "id": "puts-at-ease", "text": "puts strangers at ease within a minute"},
+        {"faces": [11, 11], "id": "counts-at-a-glance", "text": "counts anything at a glance"},
+        {"faces": [12, 12], "id": "sleeps-anywhere", "text": "sleeps anywhere, instantly"}
+      ]
+    }
+  }
+}

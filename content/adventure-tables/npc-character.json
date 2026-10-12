@@ -1,0 +1,124 @@
+{
+  "schema": "df-npc-tables/1",
+  "file": "npc-character",
+  "description": "NPC dossier personality in the classic tradition: ideals, bonds, flaws, what they want now and what they fear. 'speak' is a first-person line anyone may hear; flaws carry a 'shame' line that is never spoken, with shame_terms that must not surface in any spoken tier; fears carry a 'confide' line for the trust-gated tier. Original prose; family-suitable.",
+  "tables": {
+    "ideals": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "charity", "text": "Charity: help anyone who cannot repay you", "speak": "If someone needs a hand and I have one to give, I give it. Repayment is not the point."},
+        {"faces": [2, 2], "id": "community", "text": "Community: a town is only as strong as its quietest neighbour", "speak": "A place is only as strong as the quietest person in it, so I make a point of knowing them."},
+        {"faces": [3, 3], "id": "duty", "text": "Duty: a job accepted is a job finished", "speak": "I said I would do it, so I will do it. That is the whole of my reasoning."},
+        {"faces": [4, 4], "id": "fairness", "text": "Fairness: everyone gets the same measure", "speak": "I keep one set of scales for everyone, the poor and the powerful alike."},
+        {"faces": [5, 5], "id": "freedom", "text": "Freedom: no one should be bound to a thing they never chose", "speak": "Nobody should be tied to a thing they never chose. I have seen what that does to a person."},
+        {"faces": [6, 6], "id": "honor", "text": "Honor: a person's word is the one coin that cannot be forged", "speak": "My word is the one coin I carry that cannot be forged. I spend it carefully."},
+        {"faces": [7, 7], "id": "knowledge", "text": "Knowledge: every question deserves an honest attempt at an answer", "speak": "Every question deserves an honest attempt at an answer, even a foolish one. Especially a foolish one."},
+        {"faces": [8, 8], "id": "tradition", "text": "Tradition: the old ways exist because they worked", "speak": "The old ways are old because they worked. I do not throw away what I do not yet understand."},
+        {"faces": [9, 9], "id": "redemption", "text": "Redemption: everyone is owed a second chance", "speak": "I believe in second chances. I have needed a few myself."},
+        {"faces": [10, 10], "id": "beauty", "text": "Beauty: leave every place a little lovelier than you found it", "speak": "I try to leave every place a little lovelier than I found it. A swept step, a mended fence."},
+        {"faces": [11, 11], "id": "mercy", "text": "Mercy: a fight avoided is a victory", "speak": "A fight avoided is a victory, whatever the bards say."},
+        {"faces": [12, 12], "id": "curiosity", "text": "Curiosity: the world is too interesting to stay home", "speak": "The world is far too interesting to sit still in. I would rather see a thing than be told of it."},
+        {"faces": [13, 13], "id": "prudence", "text": "Prudence: plan the retreat before the advance", "speak": "I plan the way back before I plan the way forward. It has saved me more than once."},
+        {"faces": [14, 14], "id": "ambition", "roles": ["antagonist", "villain", "lieutenant"], "text": "Ambition: aim higher than anyone expects", "speak": "Aim higher than anyone expects. Nobody remembers the ones who aimed low."},
+        {"faces": [15, 15], "id": "loyalty", "text": "Loyalty: stand by your own", "speak": "I stand by my own, in good weather and bad. That is not up for argument."},
+        {"faces": [16, 16], "id": "hospitality", "roles": ["patron", "contact"], "text": "Hospitality: no traveller should leave hungry", "speak": "No traveller leaves my door hungry. It is the oldest rule I know, and the best."},
+        {"faces": [17, 17], "id": "craft", "text": "Craft: do the small job as well as the great one", "speak": "I do the small job as well as the great one. Nobody can tell the difference until it matters."},
+        {"faces": [18, 18], "id": "independence", "text": "Independence: trust no one with what you can do yourself", "speak": "I like to do for myself what I can. It spares everyone a great deal of disappointment."},
+        {"faces": [19, 19], "id": "joy", "text": "Joy: a laugh in a dark hour is worth a shield", "speak": "A laugh in a dark hour is worth a shield. I carry a good supply."},
+        {"faces": [20, 20], "id": "vigilance", "text": "Vigilance: trouble plans in the quiet hours", "speak": "Trouble does its planning in the quiet hours. So I keep an eye on the quiet."}
+      ]
+    },
+    "bonds": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "younger-sister", "speakers": ["person"], "text": "protective of a younger sister", "speak": "My little sister is the reason I do half of what I do."},
+        {"faces": [2, 2], "id": "late-teacher", "text": "owes everything to a late teacher", "speak": "Everything I know came from someone who is gone now. I try to deserve it."},
+        {"faces": [3, 3], "id": "home-town", "speakers": ["person"], "text": "would defend the home town to the last", "speak": "I would defend my home town to the last, and I have said so to its face."},
+        {"faces": [4, 4], "id": "parents-tool", "text": "carries a worn tool that was a parent's", "speak": "This was my mother's. It has outlasted three of my plans, and I will not part with it."},
+        {"faces": [5, 5], "id": "letter-friend", "speakers": ["person"], "text": "has one old friend who writes twice a year", "speak": "I have one old friend, and the letters come twice a year. They are the best part of my winter."},
+        {"faces": [6, 6], "id": "foster-child", "speakers": ["person"], "text": "looks after a child who is not theirs by blood", "speak": "There is a child I look after who is not mine by blood. I would walk through fire for that little one."},
+        {"faces": [7, 7], "id": "roadside-shrine", "speakers": ["person"], "text": "tends a roadside shrine out of habit and love", "speak": "I tend a little roadside shrine, rain or shine. Nobody ever asked me to."},
+        {"faces": [8, 8], "id": "friendly-rival", "speakers": ["person"], "text": "has a lifelong friendly rivalry with a neighbour", "speak": "I have a neighbour I have been competing with for thirty years. I would be lost without them."},
+        {"faces": [9, 9], "id": "kept-promise", "text": "promised a dying friend to see one thing done", "speak": "I promised someone dear that I would see a particular thing done. I mean to keep my word."},
+        {"faces": [10, 10], "id": "dawn-garden", "speakers": ["person"], "text": "has a garden that needs watering at dawn, wherever else life leads", "speak": "My garden needs me at dawn, wherever else I am. It is the one thing that always does."},
+        {"faces": [11, 11], "id": "supper-circle", "speakers": ["person"], "text": "belongs to a small circle who share supper each month", "speak": "I have a circle of friends who share supper once a month. I have not missed one in years."},
+        {"faces": [12, 12], "id": "old-dog", "speakers": ["person"], "text": "is devoted to an old dog waiting at home", "speak": "My old dog is waiting at home. He has opinions about how late I am getting back."},
+        {"faces": [13, 13], "id": "aging-parent", "speakers": ["person"], "text": "looks after an aging parent", "speak": "I look after my father, who is not as young as he was. He would tell you he looks after me."},
+        {"faces": [14, 14], "id": "apprentice", "speakers": ["person"], "text": "is training an apprentice who may outdo them", "speak": "I am training someone who may well do better than I did. That is exactly as it should be."},
+        {"faces": [15, 15], "id": "naming-song", "text": "keeps a song that was sung at their naming", "speak": "There is a song they sang at my naming. I hum it when I am afraid."},
+        {"faces": [16, 16], "id": "paying-it-forward", "text": "was helped once and tries to pay it forward", "speak": "Someone helped me once, when I had nothing. I try to do the same for whoever turns up."},
+        {"faces": [17, 17], "id": "old-tree", "speakers": ["person"], "text": "treats an old tree as a living friend", "speak": "There is an old tree near here that I talk to. Do not laugh. It listens better than most."},
+        {"faces": [18, 18], "id": "first-guild", "speakers": ["person"], "text": "believes in the guild that gave them a start", "speak": "The guild gave me a start when nobody else would. I will not hear a word against it."},
+        {"faces": [19, 19], "id": "taken-in-by-band", "speakers": ["goblinoid"], "text": "is loyal to the band that took them in", "speak": "The band took me in when I had nobody. I would do a great deal for them."},
+        {"faces": [20, 20], "id": "bright-buttons", "speakers": ["goblinoid"], "text": "treasures a collection of bright buttons", "speak": "I have a collection of bright buttons. Forty-one. Do not touch them."}
+      ]
+    },
+    "flaws": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "gambler", "text": "cannot walk past a game of chance", "shame": "I lost a whole season's earnings at dice and told everyone it had been stolen.", "shame_terms": ["dice", "told everyone it had been stolen"]},
+        {"faces": [2, 2], "id": "boaster", "text": "boasts of deeds that were mostly someone else's", "shame": "Half of my best stories happened to my brother. I took them for my own, and he knows it.", "shame_terms": ["took them for my own", "happened to my brother"]},
+        {"faces": [3, 3], "id": "grudge-keeper", "text": "never forgives a slight", "shame": "I let a friendship die over a joke, and I never apologised. I think of it every night.", "shame_terms": ["let a friendship die", "never apologised"]},
+        {"faces": [4, 4], "id": "never-wrong", "text": "will not admit a mistake", "shame": "I made a mistake once that cost someone dearly, and I have never said so aloud.", "shame_terms": ["cost someone dearly", "never said so aloud"]},
+        {"faces": [5, 5], "id": "fibber", "text": "tells small lies to seem more interesting", "shame": "I have never met the famous traveller I say I know. I made the whole acquaintance up.", "shame_terms": ["famous traveller", "made the whole acquaintance up"]},
+        {"faces": [6, 6], "id": "freezes", "text": "freezes when voices are raised", "shame": "I ran from a fight once and left a friend behind. I told people I had gone for help.", "shame_terms": ["left a friend behind", "gone for help"]},
+        {"faces": [7, 7], "id": "pilferer", "text": "pockets small things from the common purse", "shame": "I have been taking from the common purse for years, a little at a time.", "shame_terms": ["common purse", "a little at a time"]},
+        {"faces": [8, 8], "id": "envious", "text": "envies anyone more respected", "shame": "I spread a rumour about a rival once that cost them their post.", "shame_terms": ["spread a rumour", "cost them their post"]},
+        {"faces": [9, 9], "id": "meddler", "text": "cannot leave a secret alone", "shame": "I opened a letter that was not mine, and what I read has stayed with me.", "shame_terms": ["opened a letter", "was not mine"]},
+        {"faces": [10, 10], "id": "vain", "text": "preoccupied with how others see them", "shame": "I am terrified that I am ordinary and that everyone can see it.", "shame_terms": ["terrified that i am ordinary", "i am ordinary"]},
+        {"faces": [11, 11], "id": "hot-tempered", "text": "has a short temper when hurried", "shame": "I shouted at a colleague so cruelly that they left town.", "shame_terms": ["left town", "shouted at a colleague"]},
+        {"faces": [12, 12], "id": "procrastinator", "text": "puts off hard tasks until they are urgent", "shame": "A thing I put off for a season became a disaster for someone I love.", "shame_terms": ["put off for a season", "disaster for someone"]},
+        {"faces": [13, 13], "id": "gossip", "text": "tells strangers too much", "shame": "I have said too much to the wrong ear this month, and I am afraid to learn what came of it.", "shame_terms": ["wrong ear", "said too much"]},
+        {"faces": [14, 14], "id": "distrustful", "text": "trusts no one with a plan", "shame": "I was cheated once by someone I loved. I never told anyone.", "shame_terms": ["cheated once", "someone i loved"]},
+        {"faces": [15, 15], "id": "proud", "text": "cannot accept help", "shame": "I turned away help once, and someone else paid for my pride.", "shame_terms": ["turned away help", "paid for my pride"]},
+        {"faces": [16, 16], "id": "omen-reader", "text": "reads omens into everything", "shame": "I sent a friend away because of a bad dream, and I have not seen them since.", "shame_terms": ["bad dream", "sent a friend away"]},
+        {"faces": [17, 17], "id": "forgetful", "text": "forgets names and appointments", "shame": "I forgot a promise to the one person who mattered most.", "shame_terms": ["forgot a promise", "mattered most"]},
+        {"faces": [18, 18], "id": "flatterer", "text": "tells people what they want to hear", "shame": "I have never told a hard truth in my life, and it has cost me every friend who needed one.", "shame_terms": ["never told a hard truth", "hard truth"]},
+        {"faces": [19, 19], "id": "hoarder", "text": "cannot throw anything away", "shame": "My back room is so full that I have not let anyone in for years.", "shame_terms": ["back room", "so full"]},
+        {"faces": [20, 20], "id": "defensive", "text": "takes questions as accusations", "shame": "I was accused rightly once, and I have flinched at questions ever since.", "shame_terms": ["accused rightly", "flinched at questions"]}
+      ]
+    },
+    "wants": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "errand-done", "roles": ["patron", "contact"], "text": "wants the errand finished and a whole day of sleep after", "speak": "I want this errand finished and a whole day of sleep after. In that order, if luck allows."},
+        {"faces": [2, 2], "id": "thanked-once", "roles": ["patron", "contact"], "text": "wants to be thanked in front of the neighbours, just once", "speak": "I would like to be thanked, once, in front of the neighbours. I am not proud of wanting it."},
+        {"faces": [3, 3], "id": "family-stall", "roles": ["patron", "contact"], "text": "wants to buy back the family stall", "speak": "I am saving to buy back the family stall. Every coin has a name on it."},
+        {"faces": [4, 4], "id": "word-of-sibling", "roles": ["patron", "contact"], "text": "wants word of a missing brother", "speak": "I want word of my brother. Any word at all, even a rude one."},
+        {"faces": [5, 5], "id": "quiet-festival", "roles": ["patron", "contact"], "text": "wants the next festival to pass without trouble", "speak": "I want the next festival to pass without trouble. Is that so much to ask of a town?"},
+        {"faces": [6, 6], "id": "taken-seriously", "roles": ["patron", "contact"], "text": "wants the guild council to take them seriously", "speak": "I want the council to take me seriously, just once. Just to see their faces."},
+        {"faces": [7, 7], "id": "small-garden", "roles": ["patron", "contact", "lieutenant"], "text": "wants to retire to a small garden", "speak": "I want a small garden and a quiet chair. I have wanted them for years."},
+        {"faces": [8, 8], "id": "false-rumour", "roles": ["patron", "contact"], "text": "wants to prove an old rumour about {location} false", "speak": "I want to prove the old rumour about {location} false. People repeat it far too easily."},
+        {"faces": [9, 9], "id": "thriving-destination", "roles": ["patron", "contact"], "text": "wants to see {destination} thrive again", "speak": "I want {destination} thriving again, the way it was when I was young."},
+        {"faces": [10, 10], "id": "wedding-gift", "roles": ["patron", "contact"], "text": "wants the right gift for a wedding next month", "speak": "I want to find a worthy gift for a wedding next month. It is harder than it sounds."},
+        {"faces": [11, 11], "id": "neighbours-safe", "roles": ["patron", "contact"], "text": "wants the neighbours safe from {antagonist_the}", "speak": "I want my neighbours safe from {antagonist_the}. Everything else can wait."},
+        {"faces": [12, 12], "id": "old-truth", "roles": ["patron", "contact"], "text": "wants to learn what truly happened at {location} long ago", "speak": "I want to learn what truly happened at {location} long ago. I have wondered all my life."},
+        {"faces": [13, 13], "id": "hot-meal", "roles": ["antagonist", "lieutenant"], "text": "wants a hot meal and a dry bed", "speak": "A hot meal and a dry bed. That is what I want. The rest is just how I get them."},
+        {"faces": [14, 14], "id": "free-of-debt", "roles": ["antagonist", "lieutenant"], "text": "wants to be rid of a debt", "speak": "I want to be free of what I owe. Nothing else matters until I am."},
+        {"faces": [15, 15], "id": "stop-running", "roles": ["antagonist"], "text": "wants to stop running", "speak": "I am tired of running. I would like very much to stop."},
+        {"faces": [16, 16], "id": "be-noticed", "roles": ["antagonist", "lieutenant"], "text": "wants to be noticed by those above them, for something good", "speak": "I want the ones above me to notice me, just once, for something good."},
+        {"faces": [17, 17], "id": "go-home", "roles": ["antagonist", "lieutenant"], "text": "wants to go home", "speak": "I want to go home. I cannot until this is done."},
+        {"faces": [18, 18], "id": "be-remembered", "roles": ["villain"], "text": "wants to be remembered when the others are forgotten", "speak": "I want to be remembered after the others are forgotten. Is that so strange?"},
+        {"faces": [19, 19], "id": "rival-humbled", "roles": ["villain", "lieutenant"], "text": "wants to see a rival humbled", "speak": "I want to see someone humbled who has never been. It will not take long."},
+        {"faces": [20, 20], "id": "proven-right", "roles": ["villain", "antagonist"], "text": "wants to be proven right at last", "speak": "I want to be proven right. After all these years, I would like that."}
+      ]
+    },
+    "fears": {
+      "die": 12,
+      "entries": [
+        {"faces": [1, 1], "id": "deep-water", "text": "deep water", "confide": "I never learned to swim. I think about it every time I cross a bridge."},
+        {"faces": [2, 2], "id": "forgotten", "text": "being forgotten", "confide": "I am afraid of being forgotten. Not famous, just remembered by someone."},
+        {"faces": [3, 3], "id": "night-fire", "text": "fire in the night", "confide": "I wake some nights smelling smoke that is not there."},
+        {"faces": [4, 4], "id": "failing-others", "text": "failing the people who rely on them", "confide": "More than anything, I fear letting down the people who count on me."},
+        {"faces": [5, 5], "id": "heights", "text": "high places", "confide": "I cannot look down from a height. Do not ask me to cross the cliff path."},
+        {"faces": [6, 6], "id": "the-dark", "text": "the dark", "confide": "I keep a lamp lit all night, and I would rather you did not mention it."},
+        {"faces": [7, 7], "id": "growing-old-alone", "text": "growing old alone", "confide": "I fear growing old with nobody to notice."},
+        {"faces": [8, 8], "id": "changing-nothing", "text": "a life that changed nothing", "confide": "I fear that I will have changed nothing at all, when all is said and done."},
+        {"faces": [9, 9], "id": "one-bell", "text": "the sound of one particular bell", "confide": "One particular bell, from a bad night long ago, still makes my hands shake."},
+        {"faces": [10, 10], "id": "crowds", "text": "crowds", "confide": "Crowds frighten me more than any blade."},
+        {"faces": [11, 11], "id": "being-a-burden", "text": "being a burden", "confide": "I could not bear to be a burden on anyone."},
+        {"faces": [12, 12], "id": "the-new-ways", "text": "that the new ways are a mistake", "confide": "I fear we are throwing away things we will miss."}
+      ]
+    }
+  }
+}
