@@ -159,6 +159,17 @@ pub fn ordinal(number: u32) -> String {
     format!("{number}{suffix}")
 }
 
+/// The phone's header line for a player's own initiative roll, for example
+/// `Initiative 14 + 1 = 15 \u{2014} you act 2nd`.
+pub fn initiative_line(die: u32, modifier: i32, total: i32, order: u32) -> String {
+    let sign = if modifier >= 0 { '+' } else { '\u{2212}' };
+    format!(
+        "Initiative {die} {sign} {} = {total} \u{2014} you act {}",
+        modifier.unsigned_abs(),
+        ordinal(order)
+    )
+}
+
 /// A die above a figure during the initiative roll. It tumbles for `tumble_s` seconds after it
 /// appears (0 under reduced motion) and then shows its total.
 #[derive(Clone, Debug, PartialEq)]
@@ -261,4 +272,24 @@ pub struct CameraCommand {
     pub shot: ShotName,
     pub focus: CameraFocus,
     pub dolly: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordinals_follow_english_including_the_teens() {
+        let words: Vec<String> = [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map(ordinal).into();
+        assert_eq!(
+            words,
+            ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "101st", "111th"]
+        );
+    }
+
+    #[test]
+    fn the_phone_line_reads_like_the_example() {
+        assert_eq!(initiative_line(14, 1, 15, 2), "Initiative 14 + 1 = 15 \u{2014} you act 2nd");
+        assert_eq!(initiative_line(9, -1, 8, 3), "Initiative 9 \u{2212} 1 = 8 \u{2014} you act 3rd");
+    }
 }

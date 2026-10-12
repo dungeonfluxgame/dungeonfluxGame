@@ -40,7 +40,7 @@ pub use grid::{Cell, Grid, GridError};
 pub use layout::{Cover, Layout, LayoutError, Obstacle, choose as choose_layout};
 pub use math::{Mat4, Quat, Vec3};
 pub use model::{
-    AttackResult, AttackStyle, BadgeView, Beat, DieView, InitiativeRoll, InitiativeShow, ordinal, CameraCommand, CameraFocus, FinishingBlow, FloatTone, FloatingText,
+    AttackResult, AttackStyle, BadgeView, Beat, DieView, InitiativeRoll, InitiativeShow, initiative_line, ordinal, CameraCommand, CameraFocus, FinishingBlow, FloatTone, FloatingText,
     Highlight, HighlightKind, HitPoints, HudState, RollCard, Side, Token, TokenId,
 };
 pub use scene_file::{

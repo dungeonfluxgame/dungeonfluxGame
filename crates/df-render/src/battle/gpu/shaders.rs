@@ -98,11 +98,11 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // Sharper close up: an unsharp mask against a blurrier mip, plus a fine mottling that fades
     // with distance, so the planks and stones keep detail when the camera is low and near.
     let base = textureSample(tex, samp, uv).rgb;
-    let soft = textureSampleLevel(tex, samp, uv, 2.2).rgb;
-    var colour = max(base + (base - soft) * 0.9, vec3<f32>(0.0));
+    let soft = textureSampleLevel(tex, samp, uv, 1.6).rgb;
+    var colour = max(base + (base - soft) * 0.42, vec3<f32>(0.0));
     let near = 1.0 - smoothstep(4.0, 15.0, distance(in.world_xz, frame.eye.xz));
     let fine = vnoise(in.world_xz * 7.0) * 0.55 + vnoise(in.world_xz * 19.0) * 0.45;
-    colour = colour * (1.0 + (fine - 0.5) * 0.3 * near);
+    colour = colour * (1.0 + (fine - 0.5) * 0.14 * near);
     let offset = abs(in.world_xz - frame.ground.xy);
     let edge = frame.ground.z - max(offset.x, offset.y);
     let sides = smoothstep(0.0, max(frame.ground.w, 0.01), edge);

@@ -62,6 +62,8 @@ enum PreviewMode {
     Fight,
     Statuses,
     Sheet(usize),
+    /// The heroes and the goblin standing on the layout under the wide shot, for layout review.
+    Still,
 }
 
 struct PreviewRequest {
@@ -102,6 +104,7 @@ fn preview_request() -> Option<PreviewRequest> {
             "reduced" => request.reduced_motion = true,
             "restrained" => request.restrained = true,
             "statuses" => request.mode = PreviewMode::Statuses,
+            "still" => request.mode = PreviewMode::Still,
             "sheet" => request.mode = PreviewMode::Sheet(0),
             other if other.starts_with("sheet=") => {
                 if let Ok(page) = other[6..].parse::<usize>() {
@@ -348,7 +351,9 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             }
             let layout = stage.layout().cloned();
             let tokens = match request.mode {
-                PreviewMode::Fight | PreviewMode::Statuses => preview_tokens(stage.grid(), layout.as_ref()),
+                PreviewMode::Fight | PreviewMode::Statuses | PreviewMode::Still => {
+                    preview_tokens(stage.grid(), layout.as_ref())
+                }
                 PreviewMode::Sheet(page) => sheet_tokens(stage.grid(), layout.as_ref(), page),
             };
             tokens.map(|tokens| {
@@ -435,6 +440,11 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                     }
                     TimeoutFuture::new(3500).await;
                 }
+            }
+            PreviewMode::Still => {
+                with_preview(|stage| stage.show_tactical());
+                mark(&host, "data-battlefield-phase", "still");
+                TimeoutFuture::new(60_000).await;
             }
             PreviewMode::Sheet(_) => {
                 with_preview(|stage| stage.show_tactical());
@@ -689,8 +699,9 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
         .enumerate()
         .map(|(index, member)| {
             let hero = index < party;
-            // The hero art cycles through the three heroes by seat (the third is the archer).
-            let hero_art = (index % 3) + 1;
+            // Seats wear the hero art in this order: the dwarf fighter, then the archer (the
+            // owner asked for a female long-range player in the party), then the second fighter.
+            let hero_art = [1, 3, 2][index % 3];
             let figure = if hero {
                 format!("figure-hero-{hero_art}")
             } else {

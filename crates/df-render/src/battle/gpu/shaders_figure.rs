@@ -136,6 +136,12 @@ fn vs(
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let aa = max(fwidth(length(in.uv * 2.0 - vec2<f32>(1.0))), 0.01);
+    // Pick the mip from the screen-space derivatives while the control flow is still uniform, so
+    // a sprite shrunk far below its 1024 pixels (and one squashed to the ground) stays smooth.
+    let dims = vec2<f32>(textureDimensions(tex));
+    let ddx = dpdx(in.uv * dims);
+    let ddy = dpdy(in.uv * dims);
+    let lod = max(0.5 * log2(max(dot(ddx, ddx), dot(ddy, ddy))) - 0.35, 0.0);
     let reduced = in.fx3.x > 0.5;
     let tt = select(frame.eye.w, 1.7, reduced);
     let restrained = frame.light.w > 0.5;
@@ -167,7 +173,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     if (invisible) {
         uv.x = uv.x + sin(tt * 3.0 + uv.y * 30.0) * 0.006;
     }
-    let sample = textureSampleLevel(tex, samp, uv, 0.0);
+    let sample = textureSampleLevel(tex, samp, uv, lod);
     var rgb = sample.rgb;
     var a = sample.a;
     if (in.look.w > 0.5) {
@@ -258,10 +264,10 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     var rim_out = 0.0;
     if ((edge_lo + edge_hi) > 0.0) {
         let r = 0.011;
-        let a1 = textureSampleLevel(tex, samp, uv + vec2<f32>(r, 0.0), 0.0).a;
-        let a2 = textureSampleLevel(tex, samp, uv - vec2<f32>(r, 0.0), 0.0).a;
-        let a3 = textureSampleLevel(tex, samp, uv + vec2<f32>(0.0, r), 0.0).a;
-        let a4 = textureSampleLevel(tex, samp, uv - vec2<f32>(0.0, r), 0.0).a;
+        let a1 = textureSampleLevel(tex, samp, uv + vec2<f32>(r, 0.0), lod).a;
+        let a2 = textureSampleLevel(tex, samp, uv - vec2<f32>(r, 0.0), lod).a;
+        let a3 = textureSampleLevel(tex, samp, uv + vec2<f32>(0.0, r), lod).a;
+        let a4 = textureSampleLevel(tex, samp, uv - vec2<f32>(0.0, r), lod).a;
         rim_out = (1.0 - a) * max(max(a1, a2), max(a3, a4));
         let rim_in = a * (1.0 - min(min(a1, a2), min(a3, a4)));
         rim = clamp(rim_out + rim_in, 0.0, 1.0);

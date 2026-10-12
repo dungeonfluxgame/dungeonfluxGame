@@ -80,11 +80,12 @@
 .bf-plate[data-bloodied=true] .bf-hp-tick{background:#ff5a4a;box-shadow:0 0 calc(var(--u)*.5) #ff5a4a}
 .bf-chip[data-pop]{animation:bf-pop .45s cubic-bezier(.2,1.6,.4,1) both}
 @keyframes bf-pop{from{transform:scale(.2);opacity:0}to{transform:scale(1);opacity:.78}}
-.bf-banner{position:absolute;left:50%;top:30%;transform:translate(-50%,-50%) scale(.9);font-size:calc(var(--u)*7);letter-spacing:.14em;text-transform:uppercase;color:var(--gold);text-shadow:0 4px 40px #000,0 0 calc(var(--u)*2) #000;white-space:nowrap;opacity:0;transition:opacity .25s ease,transform .3s cubic-bezier(.2,1.4,.4,1)}
+.bf-hud[data-initiative] .bf-party,.bf-hud[data-initiative] .bf-enemies{opacity:0}
+.bf-banner{position:absolute;left:50%;top:27%;transform:translate(-50%,-50%) scale(.9);font-size:calc(var(--u)*5.2);letter-spacing:.14em;text-transform:uppercase;color:var(--gold);text-shadow:0 4px 40px #000,0 0 calc(var(--u)*2) #000;white-space:nowrap;opacity:0;transition:opacity .25s ease,transform .3s cubic-bezier(.2,1.4,.4,1)}
 .bf-banner[data-open]{opacity:1;transform:translate(-50%,-50%) scale(1)}
-.bf-die{position:absolute;transform:translate(-50%,-50%) rotate(var(--spin,0deg));min-width:calc(var(--u)*5.2);padding:calc(var(--u)*.7) calc(var(--u)*1.2);text-align:center;font-size:calc(var(--u)*3.2);font-weight:700;color:var(--gold);background:linear-gradient(135deg,#0f1a29,#070d16);border:max(2px,calc(var(--u)*.16)) solid #cba466;border-radius:calc(var(--u)*1);white-space:nowrap;text-shadow:none;box-shadow:0 6px 24px #000a}
+.bf-die{position:absolute;transform:translate(-50%,-50%) rotate(var(--spin,0deg));min-width:calc(var(--u)*4.4);padding:calc(var(--u)*.5) calc(var(--u)*.9);text-align:center;font-size:calc(var(--u)*2.6);font-weight:700;color:var(--gold);background:linear-gradient(135deg,#0f1a29,#070d16);border:max(2px,calc(var(--u)*.16)) solid #cba466;border-radius:calc(var(--u)*1);white-space:nowrap;text-shadow:none;box-shadow:0 6px 24px #000a}
 .bf-die[data-side=enemy]{border-color:#b6544c;color:#ffb4a8}
-.bf-die[data-landed=true]{transform:translate(-50%,-50%);font-size:calc(var(--u)*2.4);animation:bf-land .3s ease-out}
+.bf-die[data-landed=true]{transform:translate(-50%,-50%);font-size:calc(var(--u)*1.9);animation:bf-land .3s ease-out}
 @keyframes bf-land{from{transform:translate(-50%,-50%) scale(1.35)}to{transform:translate(-50%,-50%) scale(1)}}
 .bf-badge{position:absolute;transform:translate(calc(var(--u)*2.6),-50%);display:flex;flex-direction:column;align-items:flex-start;padding:calc(var(--u)*.6) calc(var(--u)*1.6);background:linear-gradient(135deg,#0b1623f2,#050b13f5);border:max(2px,calc(var(--u)*.14)) solid #f2c773;border-radius:calc(var(--u)*.7);animation:bf-slam .38s cubic-bezier(.2,1.5,.4,1) both;box-shadow:0 8px 30px #000b}
 .bf-badge[data-side=enemy]{border-color:#d0675c}

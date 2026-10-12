@@ -530,6 +530,11 @@ impl Hud {
         }
         // The initiative moment.
         let show = &frame.hud.roll_for_initiative;
+        if show.banner.is_some() || !show.dice.is_empty() || !show.badges.is_empty() {
+            self.root.set_attribute("data-initiative", "")?;
+        } else {
+            self.root.remove_attribute("data-initiative")?;
+        }
         match &show.banner {
             Some(text) => {
                 if self.banner.text_content().as_deref() != Some(text.as_str()) {

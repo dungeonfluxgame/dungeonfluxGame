@@ -606,6 +606,7 @@ impl Stage {
         for badge in &mut self.hud.roll_for_initiative.badges {
             badge.age_s += dt;
         }
+        self.update_facing();
         for projectile in &mut self.projectiles {
             projectile.age_s += dt;
         }
@@ -643,6 +644,32 @@ impl Stage {
             && let Some(tokens) = self.pending_tokens.take()
         {
             self.set_tokens(tokens);
+        }
+    }
+
+    /// An archer's art is drawn aiming to the right of the picture. She is mirrored when her
+    /// target is on the left of the screen as the camera sees it now, with a little hysteresis so
+    /// she does not flicker while the target is straight ahead.
+    fn update_facing(&mut self) {
+        let pose = self.rig.pose();
+        let look = pose.target - pose.eye();
+        let right = Vec3::new(-look.z, 0.0, look.x).normalized();
+        for index in 0..self.tokens.len() {
+            if self.tokens[index].token.attack != crate::battle::model::AttackStyle::Ranged {
+                continue;
+            }
+            let aim = match &self.tokens[index].anim {
+                Some(active) if matches!(active.anim, Anim::Draw { .. }) => Some(active.direction),
+                _ => self
+                    .nearest_opponent(&self.tokens[index])
+                    .map(|point| flat_direction(self.tokens[index].position, point)),
+            };
+            if let Some(aim) = aim {
+                let side = aim.x * right.x + aim.z * right.z;
+                if side.abs() > 0.2 {
+                    self.tokens[index].facing_left = side < 0.0;
+                }
+            }
         }
     }
 
@@ -808,11 +835,15 @@ impl Stage {
                     }
                 }
             }
+            Step::ClearDice => self.hud.roll_for_initiative.dice.clear(),
             Step::InitiativeBadge {
                 token,
                 order,
                 total,
             } => {
+                // Only the current stop's badge stands; the tracker keeps the record. The badges
+                // of one sweep arrive together and stay together.
+                self.hud.roll_for_initiative.badges.retain(|badge| badge.age_s < 0.2);
                 let name = self
                     .token_index(&token)
                     .map(|index| self.tokens[index].token.name.clone())
@@ -948,9 +979,6 @@ impl Stage {
             (Anim::Recoil { .. } | Anim::Dodge { .. }, Some(other)) => flat_direction(other, here),
             _ => Vec3::new(0.0, 0.0, -1.0),
         };
-        if matches!(anim, Anim::Draw { .. }) && direction.x.abs() > 0.05 {
-            self.tokens[index].facing_left = direction.x < 0.0;
-        }
         self.tokens[index].anim = Some(ActiveAnim {
             anim,
             elapsed_s: 0.0,
@@ -2226,5 +2254,27 @@ mod tests {
         feed.apply(&mut stage, &feed_snapshot(true, 1, 1)).unwrap();
         assert!(!stage.is_rolling_initiative());
         assert!(stage.hud().roll_for_initiative.badges.is_empty());
+    }
+
+    #[test]
+    fn the_archer_is_mirrored_when_her_target_is_on_the_left_of_the_screen() {
+        let mut stage = stage(false);
+        let mut archer = token("hero", Side::Hero, Cell::new(3, 4), 12);
+        archer.attack = crate::battle::model::AttackStyle::Ranged;
+        stage.set_tokens(vec![
+            archer.clone(),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(6, 1), 5),
+        ]);
+        run(&mut stage, 0.2);
+        assert!(!figure(&stage, "hero").mirror, "target to the right: her art as drawn");
+        stage.set_tokens(vec![
+            archer,
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(0, 1), 5),
+        ]);
+        run(&mut stage, 0.2);
+        assert!(figure(&stage, "hero").mirror, "target to the left: mirrored");
+        assert!(!figure(&stage, "ally").mirror, "only archers mirror");
     }
 }

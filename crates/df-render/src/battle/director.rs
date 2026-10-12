@@ -158,6 +158,8 @@ pub enum Step {
     InitiativeLand {
         token: TokenId,
     },
+    /// Takes the dice down once the roll-call begins.
+    ClearDice,
     /// The order badge slams in beside the figure.
     InitiativeBadge {
         token: TokenId,
@@ -411,6 +413,7 @@ fn plan_initiative(
     // The roll-call, in the server's order.
     let roll_call = all_landed + DICE_READ;
     builder.at(roll_call, Step::Banner(None));
+    builder.at(roll_call, Step::ClearDice);
     let individual = rolls.len().min(MAX_INDIVIDUAL_STOPS);
     let grouped = &rolls[individual..];
     let stops = individual + usize::from(!grouped.is_empty());
@@ -432,7 +435,7 @@ fn plan_initiative(
         builder.at(
             at,
             Step::Whip {
-                command: camera(ShotName::Victory, CameraFocus::Token(roll.token.clone()), 0.8),
+                command: camera(ShotName::Victory, CameraFocus::Token(roll.token.clone()), 1.15),
                 travel,
             },
         );
@@ -1074,6 +1077,7 @@ mod tests {
                 Step::InitiativeStart => "init-start",
                 Step::InitiativeDie { .. } => "die",
                 Step::InitiativeLand { .. } => "die-land",
+                Step::ClearDice => "clear-dice",
                 Step::InitiativeBadge { .. } => "badge",
                 Step::TrackerReveal(_) => "tracker",
                 Step::InitiativeEnd => "init-end",
