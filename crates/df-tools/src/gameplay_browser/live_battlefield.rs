@@ -1307,6 +1307,10 @@ struct Live {
     /// Outcomes of accepted views whose cues have not yet been staged: while any wait, the label
     /// stays with the attacker being shown.
     pending_cues: usize,
+    /// Where the newest accepted view puts everyone, which the display's view lags behind while
+    /// the blows of earlier views are shown: unheld figures stand there, not where an older
+    /// view had them.
+    accepted_cells: std::collections::HashMap<String, GridCell>,
     /// A reaction the server waits on: who moves and who decides, as the latest view says.
     reaction: Option<(String, String)>,
     /// The prompt now shown for it.
@@ -1330,6 +1334,7 @@ thread_local! {
         targets: Vec::new(),
         held_moves: Vec::new(),
         pending_cues: 0,
+        accepted_cells: std::collections::HashMap::new(),
         reaction: None,
         shown_prompt: None,
         pending_at: 0.0,
@@ -1844,7 +1849,19 @@ fn sync() {
         if now - live.pending_at > HOLD_PATIENCE_MS {
             live.pending_cues = 0;
         }
-        // A mover that has not had its turn yet still stands where it did.
+        // A diagnostic for harnesses: who is held where, and how many outcomes still wait.
+        if let Some(host) = &live.host {
+            let held: Vec<String> = live
+                .held_moves
+                .iter()
+                .map(|(name, cell, _)| format!("{name}@{},{}", cell.col, cell.row))
+                .collect();
+            let _ = host.set_attribute("data-battlefield-held", &held.join(";"));
+            let _ = host.set_attribute("data-battlefield-pending", &live.pending_cues.to_string());
+        }
+        // While the blows of accepted views are being shown, everyone stands where the newest
+        // accepted view puts them, except a mover that has not had its turn yet.
+        let outstanding = live.pending_cues > 0 || !live.held_moves.is_empty();
         for member in &mut shown.members {
             if let Some((_, from, _)) = live
                 .held_moves
@@ -1852,6 +1869,14 @@ fn sync() {
                 .find(|(name, ..)| *name == member.name)
             {
                 member.cell = Some(*from);
+            } else if outstanding
+                && let Some(cell) = live
+                    .accepted_cells
+                    .get(&member.name)
+                    .copied()
+                    .and_then(cell_of)
+            {
+                member.cell = Some(cell);
             }
         }
         if live.begun_live {
@@ -2107,6 +2132,19 @@ fn splat_streaming(live: &Live) -> bool {
     })
 }
 
+/// Whether the battlefield is still showing beats (or its effects): the next blow's dice wait.
+pub(super) fn is_busy() -> bool {
+    LIVE.with(|live| {
+        let live = live.borrow();
+        matches!(live.phase, Phase::Active)
+            && live
+                .stage
+                .as_ref()
+                .and_then(|stage| stage.with_stage(|stage| stage.is_busy()))
+                .unwrap_or(false)
+    })
+}
+
 /// A mover of an accepted view that has outcomes still to be shown stays on `from` until the cue
 /// stream reaches its turn. The first hold of a mover stands (a newer view carries the same walk).
 pub(super) fn hold_move(name: &str, from: GridCell) {
@@ -2119,6 +2157,11 @@ pub(super) fn hold_move(name: &str, from: GridCell) {
             live.held_moves.push((name.to_owned(), from, now_ms()));
         }
     });
+}
+
+/// Where the newest accepted view stands everyone (see `Live::accepted_cells`).
+pub(super) fn accept_cells(cells: &std::collections::HashMap<String, GridCell>) {
+    LIVE.with(|live| live.borrow_mut().accepted_cells.clone_from(cells));
 }
 
 /// `count` outcomes of an accepted view are waiting to be shown one after another.
@@ -2200,6 +2243,7 @@ pub(super) fn end_speech(line_id: u64) {
 }
 
 fn reset_fight(live: &mut Live) {
+    live.accepted_cells.clear();
     live.reaction = None;
     live.shown_prompt = None;
     live.held_moves.clear();

@@ -547,6 +547,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                     }
                 }
             }
+            super::live_battlefield::accept_cells(&standing);
             super::live_battlefield::expect_cues(turns);
         }
         let diff = ViewDiff {
@@ -596,6 +597,9 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         }
         motion.conductor.set_sound(sound_on);
         motion.conductor.set_battlefield_expected(gpu_expected());
+        motion
+            .conductor
+            .set_battlefield_busy(super::live_battlefield::is_busy());
         let blow_plan = |roll: &RollDetail| ViewPlan {
             diff: ViewDiff {
                 roll: Some(Detail::Roll(Box::new(roll.clone()))),
@@ -1320,6 +1324,9 @@ fn frame(timestamp: f64) {
 /// Advances the conductor to `now` and applies what it commands.
 fn tick(now: u64) {
     let commands = with_motion(|motion| {
+        motion
+            .conductor
+            .set_battlefield_busy(super::live_battlefield::is_busy());
         let mut commands = motion.conductor.on_tick(now);
         // A fight's entrance waits for the battlefield; ask how far it is.
         if motion.conductor.wants_battlefield() {
