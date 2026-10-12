@@ -41,7 +41,7 @@ impl SpeechBubble {
         bubble.append_child(&name)?;
         bubble.append_child(&text)?;
         let svg = document.create_element_ns(Some(SVG_NS), "svg")?;
-        svg.set_class_name("bf-speech-tail");
+        svg.set_attribute("class", "bf-speech-tail")?;
         svg.set_attribute("viewBox", "0 0 100 100")?;
         svg.set_attribute("preserveAspectRatio", "none")?;
         let tail = document.create_element_ns(Some(SVG_NS), "polygon")?;
