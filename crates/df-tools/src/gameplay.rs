@@ -447,10 +447,12 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if interactive {
         timing::install(timing::Timing::from_environment()?);
         let timing = timing::active();
+        df_persistence::local_demo_scope::set_lease_seconds(timing.lease.as_secs());
         println!(
-            "TIMING commit={}s reply={}s browser={}s",
+            "TIMING commit={}s reply={}s lease={}s browser={}s",
             timing.commit.as_secs(),
             timing.reply.as_secs(),
+            timing.lease.as_secs(),
             timing.browser_request().as_secs()
         );
     }
@@ -1479,6 +1481,23 @@ async fn join_grant_driver(
     }
 }
 
+/// The local demonstration database. `DF_GAMEPLAY_DATABASE_PORT` (1024 to 65535) selects another
+/// PostgreSQL instance than the launcher's, so tests and harness runs use their own.
 fn database_config() -> Result<tokio_postgres::Config, io::Error> {
-    startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))
+    let mut configuration =
+        startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))?;
+    match std::env::var("DF_GAMEPLAY_DATABASE_PORT") {
+        Ok(port) => {
+            let port = port
+                .trim()
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port >= 1024)
+                .ok_or_else(|| io::Error::other("DF_GAMEPLAY_DATABASE_PORT refused"))?;
+            configuration.port(port);
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(_) => return Err(io::Error::other("DF_GAMEPLAY_DATABASE_PORT refused")),
+    }
+    Ok(configuration)
 }

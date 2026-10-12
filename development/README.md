@@ -102,6 +102,17 @@ server; the launcher also stops PostgreSQL when it started it. To resume a saved
 game, use `development/run-gameplay.sh --no-build --database <name>` with the
 database name printed by the launcher.
 
+Each run has its own room code, derived from its database name so a restart of the same
+game keeps it. The `READY` line prints it (`player=...?room=<code>`), the display's join
+panel shows it, and the join form and the `?room=` link accept it.
+`DF_GAMEPLAY_ROOM_CODE=<1-32 letters or digits>` pins a code, for tests. Slow machines:
+`DF_GAMEPLAY_COMMIT_SECONDS` (default 12) bounds a database commit and
+`DF_GAMEPLAY_REPLY_SECONDS` (default 20, must exceed it) bounds a request's wait for the game
+owner; the browser's request timeout is served from the latter. If a commit's outcome is
+unknown the server prints `SESSION fenced ...`, retries by itself and prints
+`SESSION recovered`; `SESSION lost` means the saved state needs a server restart.
+Browser checks for these live in `development/browser-checks/`.
+
 Edit `content/harbor-journey/tuning.json` to tune hero AC, proficiency, base HP,
 ability arrays/background bonuses, Second Wind and weapon dice; bandit stats,
 attack/damage and weapon dice; critical threshold, round ticks, combat log depth,

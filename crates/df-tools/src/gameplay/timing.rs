@@ -8,11 +8,15 @@
 //! * `DF_GAMEPLAY_COMMIT_SECONDS` (1 to 120, default 12): the longest a database commit may run.
 //! * `DF_GAMEPLAY_REPLY_SECONDS` (1 to 300, default 20): the longest a request waits for the
 //!   game owner. It must exceed the commit bound.
+//! * `DF_GAMEPLAY_LEASE_SECONDS` (10 to 3600, default 300): how long the session's owner lease
+//!   and access grants last. The owner renews them every fifth of that, so an idle table never
+//!   loses its game; a short value exists to test exactly that.
 
 use std::{env::VarError, io, sync::OnceLock, time::Duration};
 
 const DEFAULT_COMMIT_SECONDS: u64 = 12;
 const DEFAULT_REPLY_SECONDS: u64 = 20;
+const DEFAULT_LEASE_SECONDS: u64 = 300;
 /// The browser waits this much longer than the server, so the server's answer arrives first.
 const BROWSER_MARGIN: Duration = Duration::from_secs(5);
 
@@ -22,6 +26,8 @@ pub(super) struct Timing {
     pub(super) commit: Duration,
     /// The longest a handler waits for the game owner.
     pub(super) reply: Duration,
+    /// How long the owner lease and access grants last before they are renewed.
+    pub(super) lease: Duration,
 }
 
 impl Default for Timing {
@@ -29,6 +35,7 @@ impl Default for Timing {
         Self {
             commit: Duration::from_secs(DEFAULT_COMMIT_SECONDS),
             reply: Duration::from_secs(DEFAULT_REPLY_SECONDS),
+            lease: Duration::from_secs(DEFAULT_LEASE_SECONDS),
         }
     }
 }
@@ -63,8 +70,19 @@ impl Timing {
     pub(super) fn from_inputs(
         commit: Result<String, VarError>,
         reply: Result<String, VarError>,
+        lease: Result<String, VarError>,
     ) -> Result<Self, io::Error> {
+        let lease = seconds(
+            lease,
+            "DF_GAMEPLAY_LEASE_SECONDS",
+            3600,
+            DEFAULT_LEASE_SECONDS,
+        )?;
+        if lease < Duration::from_secs(10) {
+            return Err(refused("DF_GAMEPLAY_LEASE_SECONDS"));
+        }
         let timing = Self {
+            lease,
             commit: seconds(
                 commit,
                 "DF_GAMEPLAY_COMMIT_SECONDS",
@@ -90,6 +108,7 @@ impl Timing {
         Self::from_inputs(
             std::env::var("DF_GAMEPLAY_COMMIT_SECONDS"),
             std::env::var("DF_GAMEPLAY_REPLY_SECONDS"),
+            std::env::var("DF_GAMEPLAY_LEASE_SECONDS"),
         )
     }
 
@@ -126,13 +145,22 @@ mod tests {
     use super::*;
 
     fn ok(commit: &str, reply: &str) -> Result<Timing, io::Error> {
-        Timing::from_inputs(Ok(commit.to_owned()), Ok(reply.to_owned()))
+        Timing::from_inputs(
+            Ok(commit.to_owned()),
+            Ok(reply.to_owned()),
+            Err(VarError::NotPresent),
+        )
     }
 
     #[test]
     fn the_defaults_are_the_generous_bounds() {
-        let timing =
-            Timing::from_inputs(Err(VarError::NotPresent), Err(VarError::NotPresent)).unwrap();
+        let timing = Timing::from_inputs(
+            Err(VarError::NotPresent),
+            Err(VarError::NotPresent),
+            Err(VarError::NotPresent),
+        )
+        .unwrap();
+        assert_eq!(timing.lease, Duration::from_secs(300));
         assert_eq!(timing, Timing::default());
         assert_eq!(timing.commit, Duration::from_secs(12));
         assert_eq!(timing.reply, Duration::from_secs(20));
@@ -149,6 +177,21 @@ mod tests {
         assert_eq!(timing.browser_request(), Duration::from_secs(14));
         let bounds = timing.transaction_bounds();
         assert!(bounds.rollback < bounds.transaction && bounds.driver_join < timing.reply);
+    }
+
+    #[test]
+    fn the_lease_length_is_validated() {
+        let with = |lease: &str| {
+            Timing::from_inputs(
+                Err(VarError::NotPresent),
+                Err(VarError::NotPresent),
+                Ok(lease.to_owned()),
+            )
+        };
+        assert_eq!(with("20").unwrap().lease, Duration::from_secs(20));
+        for bad in ["9", "0", "3601", "soon", ""] {
+            assert!(with(bad).is_err(), "{bad:?} was accepted");
+        }
     }
 
     #[test]

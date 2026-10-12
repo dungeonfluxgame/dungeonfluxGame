@@ -93,6 +93,53 @@ where
     }
 }
 
+/// How the owner keeps its session lease alive while nobody is acting.
+///
+/// The lease (and the access grants that ride on it) lasts a fixed time; an owner that renews
+/// only when something is committed loses an idle table's game once the lease lapses. The owner
+/// therefore renews on a timer, at a fifth of the lease, and again before serving any call that
+/// arrives after a long pause (the timer is a deadline, so a pause makes it overdue).
+pub(super) struct Heartbeat {
+    period: Duration,
+    next: Option<Instant>,
+    failing: bool,
+}
+
+/// The wait before renewing again after a failed renewal.
+const RENEWAL_RETRY: Duration = Duration::from_secs(5);
+
+impl Heartbeat {
+    /// A heartbeat for a lease of `lease_seconds`: every fifth of it, at least every second.
+    pub(super) fn for_lease(lease_seconds: u64) -> Self {
+        Self {
+            period: Duration::from_secs((lease_seconds / 5).max(1)),
+            next: None,
+            failing: false,
+        }
+    }
+
+    /// When the next renewal is due; before the first one, now.
+    pub(super) fn next_due(&self, now: Instant) -> Instant {
+        self.next.unwrap_or(now)
+    }
+
+    pub(super) fn due(&self, now: Instant) -> bool {
+        self.next.is_none_or(|due| now >= due)
+    }
+
+    /// Records a renewal; returns whether renewals had been failing until now.
+    pub(super) fn renewed(&mut self, now: Instant) -> bool {
+        self.next = Some(now + self.period);
+        std::mem::take(&mut self.failing)
+    }
+
+    /// Records a failed renewal; returns whether this is the first of a streak.
+    pub(super) fn failed(&mut self, now: Instant) -> bool {
+        self.next = Some(now + RENEWAL_RETRY);
+        !std::mem::replace(&mut self.failing, true)
+    }
+}
+
 /// What the owner remembers about the session while it is fenced.
 pub(super) struct Health {
     since: Instant,
@@ -119,6 +166,14 @@ impl Health {
             "SESSION fenced (commit outcome unknown after {} ms)",
             self.commit_millis
         )
+    }
+
+    /// A session whose ownership is already known to be gone.
+    pub(super) fn lost(now: Instant) -> Self {
+        Self {
+            lost: true,
+            ..Self::fenced(now, 0)
+        }
     }
 
     pub(super) fn is_lost(&self) -> bool {
@@ -202,5 +257,137 @@ mod tests {
             health.down_for(start + Duration::from_secs(3)),
             Duration::from_secs(3)
         );
+    }
+
+    /// A model of the database's lease: it lapses `LEASE` after the last renewal, a call is
+    /// refused ("Outcome unknown", a permission error) once it has lapsed, and only the owner
+    /// holding the current fence may renew it.
+    struct Lease {
+        until: Instant,
+        fence: u8,
+    }
+    const LEASE: Duration = Duration::from_secs(300);
+    impl Lease {
+        fn renew(&mut self, now: Instant, fence: u8) -> Result<(), RepositoryError> {
+            if fence != self.fence {
+                return Err(RepositoryError::RevisionConflict);
+            }
+            self.until = now + LEASE;
+            Ok(())
+        }
+        fn serve(&self, now: Instant) -> Result<(), RepositoryError> {
+            if now >= self.until {
+                Err(RepositoryError::ExpiredOwner)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// One owner over a controlled clock: it renews when its heartbeat is due, before any call
+    /// and at each wake, exactly as the actor does.
+    fn serve_with_heartbeat(
+        lease: &mut Lease,
+        heartbeat: &mut Heartbeat,
+        now: Instant,
+    ) -> Result<(), RepositoryError> {
+        if heartbeat.due(now) {
+            match lease.renew(now, 1) {
+                Ok(()) => {
+                    heartbeat.renewed(now);
+                }
+                Err(error) => {
+                    heartbeat.failed(now);
+                    return Err(error);
+                }
+            }
+        }
+        lease.serve(now)
+    }
+
+    #[test]
+    fn an_idle_table_keeps_its_session_for_hours() {
+        let start = Instant::now();
+        let mut lease = Lease {
+            until: start + LEASE,
+            fence: 1,
+        };
+        let mut heartbeat = Heartbeat::for_lease(LEASE.as_secs());
+        serve_with_heartbeat(&mut lease, &mut heartbeat, start).unwrap();
+        // No player does anything for three hours; the owner only wakes at its own deadlines.
+        let mut now = start;
+        let end = start + Duration::from_secs(3 * 3600);
+        while now < end {
+            now = heartbeat.next_due(now);
+            serve_with_heartbeat(&mut lease, &mut heartbeat, now).unwrap();
+            assert!(lease.until > now, "the lease lapsed at {:?}", now - start);
+        }
+        // Then a choice, a typed line and a watch re-open all find a live session.
+        for _ in 0..3 {
+            serve_with_heartbeat(&mut lease, &mut heartbeat, end + Duration::from_secs(1)).unwrap();
+        }
+    }
+
+    #[test]
+    fn without_a_heartbeat_the_lease_lapses_and_every_call_is_refused() {
+        let start = Instant::now();
+        let lease = Lease {
+            until: start + LEASE,
+            fence: 1,
+        };
+        assert!(lease.serve(start + Duration::from_secs(299)).is_ok());
+        assert_eq!(
+            lease.serve(start + Duration::from_secs(301)),
+            Err(RepositoryError::ExpiredOwner)
+        );
+    }
+
+    #[test]
+    fn a_lapsed_lease_is_renewed_before_the_first_call_after_a_long_pause() {
+        let start = Instant::now();
+        let mut lease = Lease {
+            until: start + LEASE,
+            fence: 1,
+        };
+        let mut heartbeat = Heartbeat::for_lease(LEASE.as_secs());
+        serve_with_heartbeat(&mut lease, &mut heartbeat, start).unwrap();
+        // The machine was suspended for ten minutes: the lease lapsed and the timer is overdue.
+        let resumed = start + Duration::from_secs(600);
+        assert!(lease.serve(resumed).is_err());
+        assert!(heartbeat.due(resumed));
+        assert_eq!(
+            serve_with_heartbeat(&mut lease, &mut heartbeat, resumed),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_renewal_that_fails_is_retried_soon_and_a_taken_over_session_is_lost() {
+        let start = Instant::now();
+        let mut heartbeat = Heartbeat::for_lease(300);
+        assert!(
+            heartbeat.failed(start),
+            "the first failure of a streak is reported"
+        );
+        assert!(!heartbeat.failed(start), "later ones are not");
+        assert_eq!(heartbeat.next_due(start), start + Duration::from_secs(5));
+        assert!(
+            heartbeat.renewed(start + Duration::from_secs(5)),
+            "the streak ended"
+        );
+        assert_eq!(
+            heartbeat.next_due(start),
+            start + Duration::from_secs(5) + Duration::from_secs(60)
+        );
+        let mut lease = Lease {
+            until: start + LEASE,
+            fence: 2,
+        };
+        let error = lease.renew(start, 1).unwrap_err();
+        assert_eq!(classify(error), Resolution::Retry(error));
+        // Another owner holds the fence: the database says so as a revision conflict, which the
+        // owner treats as lost ownership (see `Actor::heartbeat_if_due`).
+        assert_eq!(error, RepositoryError::RevisionConflict);
+        assert_eq!(Heartbeat::for_lease(0).period, Duration::from_secs(1));
     }
 }

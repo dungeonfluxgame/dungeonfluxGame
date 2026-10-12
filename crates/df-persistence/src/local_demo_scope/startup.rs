@@ -227,7 +227,7 @@ async fn restore(
             RepositoryError::Unauthorized,
         ));
     }
-    let count = tx.execute("UPDATE df_game.sessions SET owner_fence=$3::bytea, lease_until=clock_timestamp()+interval '300 seconds' WHERE tenant_id=$1::bytea AND session_id=$2::bytea AND owner_fence=$4::bytea AND lease_until<=clock_timestamp()", &[&TENANT.as_slice(), &session.as_bytes().as_slice(), &fence.as_slice(), &old_fence]).await.map_err(|_| error("owner_claim", RepositoryError::Unavailable))?;
+    let count = tx.execute(&format!("UPDATE df_game.sessions SET owner_fence=$3::bytea, lease_until=clock_timestamp()+interval '{} seconds' WHERE tenant_id=$1::bytea AND session_id=$2::bytea AND owner_fence=$4::bytea AND lease_until<=clock_timestamp()", super::lease_seconds()), &[&TENANT.as_slice(), &session.as_bytes().as_slice(), &fence.as_slice(), &old_fence]).await.map_err(|_| error("owner_claim", RepositoryError::Unavailable))?;
     if count != 1 {
         return Err(error("owner_claim", RepositoryError::RevisionConflict));
     }

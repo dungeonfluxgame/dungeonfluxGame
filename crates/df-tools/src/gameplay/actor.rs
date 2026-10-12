@@ -311,13 +311,27 @@ pub(super) enum Attempt {
 }
 
 /// What the owner knows about the health of the session (see `session_recovery`).
-#[derive(Default)]
 pub(super) struct SessionState {
     pub(super) attempt: Option<Attempt>,
     /// How long the last commit ran, in milliseconds.
     pub(super) commit_millis: u64,
     /// Set while the session is fenced.
     pub(super) fence: Option<super::session_recovery::Health>,
+    /// Keeps the owner lease and access grants alive while nobody is acting.
+    pub(super) heartbeat: super::session_recovery::Heartbeat,
+}
+
+impl Default for SessionState {
+    fn default() -> Self {
+        Self {
+            attempt: None,
+            commit_millis: 0,
+            fence: None,
+            heartbeat: super::session_recovery::Heartbeat::for_lease(
+                df_persistence::local_demo_scope::lease_seconds(),
+            ),
+        }
+    }
 }
 
 pub(super) struct Actor {
@@ -406,13 +420,62 @@ impl Actor {
         } else {
             None
         };
-        match (completion, recovery) {
-            (Some(left), Some(right)) => Some(left.min(right)),
-            (left, right) => left.or(right),
+        let heartbeat = Some(self.session.heartbeat.next_due(Instant::now()));
+        [completion, recovery, heartbeat]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// Renews the session lease and grants when the heartbeat is due. Called at every wake and
+    /// before every call, so a call after a long pause (a suspended machine) renews first.
+    /// Ownership taken over by another process is the one failure that cannot heal.
+    fn heartbeat_if_due(&mut self) {
+        let now = Instant::now();
+        if !self.session.heartbeat.due(now) {
+            return;
+        }
+        match self.issuer.renew_owner() {
+            Ok(()) => {
+                if self.session.heartbeat.renewed(now) {
+                    self.session_event("SESSION lease renewed", "session.lease_renewed");
+                }
+            }
+            Err(error) => match super::session_recovery::classify(error) {
+                super::session_recovery::Resolution::Lost(_)
+                | super::session_recovery::Resolution::Retry(RepositoryError::RevisionConflict) => {
+                    self.mark_lost(error);
+                }
+                _ => {
+                    if self.session.heartbeat.failed(now) {
+                        self.session_event(
+                            &format!("SESSION lease renewal failing ({error:?}); retrying"),
+                            "session.lease_failing",
+                        );
+                    }
+                }
+            },
+        }
+    }
+
+    /// The saved state is gone for good: fence the session, say so, and tell the watchers.
+    fn mark_lost(&mut self, error: RepositoryError) {
+        self.fenced = true;
+        if !self.session_lost() {
+            self.session.fence = Some(super::session_recovery::Health::lost(Instant::now()));
+            self.session_event(
+                &format!(
+                    "SESSION lost ({error:?}): the saved state cannot be recovered; restart the server"
+                ),
+                "session.lost",
+            );
+            self.recovery_wakeup
+                .send_replace(self.owner.checkpoint().clone());
         }
     }
 
     pub(super) fn wake_completion(&mut self) {
+        self.heartbeat_if_due();
         self.heal_session();
         if self
             .completion_retry
@@ -507,6 +570,14 @@ impl Actor {
         if let Err(error) = self.issuer.reconnect_if_closed() {
             return classify(error);
         }
+        // An expired lease or grant is repaired first: it is what a fence after a long idle is.
+        if let Err(error) = self.issuer.renew_owner() {
+            return match classify(error) {
+                Resolution::Retry(RepositoryError::RevisionConflict) => Resolution::Lost(error),
+                other => other,
+            };
+        }
+        self.session.heartbeat.renewed(Instant::now());
         match self.session.attempt.clone() {
             Some(Attempt::Input {
                 credential,
@@ -1079,6 +1150,7 @@ impl Reducer<Call> for Actor {
         // Dialogue admission must not dispatch previously committed work.
         // Accepted jobs retain their ordinary non-dialogue dispatch/poll path.
         let dispatch_committed_jobs = !matches!(&call, Call::Dialogue { .. });
+        self.heartbeat_if_due();
         if dispatch_committed_jobs {
             self.run_committed_intents();
         }
