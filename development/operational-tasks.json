@@ -2161,6 +2161,270 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T00:07:35+00:00",
       "updated_at": "2026-10-12T00:07:35+00:00"
+    },
+    {
+      "id": "PLAY-E01",
+      "feature_id": "F06",
+      "title": "Drive scene flow from a data-defined state machine per adventure",
+      "objective": "Replace the hard-coded journey phases with a beat script carried by the adventure record: scenes, offers and transitions are data validated against a closed set of handlers (narrate, converse, check, investigate, fight, rest, travel, conclude), and the server interprets it. The shipped harbor chapter and today's generated chapters become beat scripts that play identically.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/journey.rs",
+        "crates/df-tools/src/gameplay/model.rs",
+        "crates/df-tools/src/gameplay/pack.rs",
+        "crates/df-tools/src/gameplay/adventure/",
+        "content/harbor-journey/pack.json",
+        "planning/adventure-generator.md"
+      ],
+      "acceptance_json": [
+        "The harbor chapter and three generated seeds, expressed as beat scripts, play end to end with the same outcomes, text and saved state as before.",
+        "A script with a third approach, one with no fight and one with a branch each load and play.",
+        "A script naming an unknown handler, a dead end or an unreachable scene is refused at load with a message naming the scene.",
+        "Reload mid-script resumes at the same beat; a checkpoint from a different script is refused.",
+        "Rules outcomes still come only from the rules code; scripts cannot set a roll, DC or damage outside the validated tuning bounds.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for load validation, interpretation, resume and equivalence with the fixed flow.",
+        "Real browser play of the harbor chapter and one branching script."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M5",
+        "milestone_goal": "Varied chapters: scene flow is data, so adventures can branch, investigate and skip the fight.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner suggestion 2026-10-11 (\"dynamic state machines so scenes transition properly\") and design roadmap item 2 in planning/adventure-generator.md section 17: every run plays one fixed shape (hook, two-approach talk, one fight, aftermath), so chapters cannot branch, investigate or end without a fight.",
+        "objective": "Replace the hard-coded journey phases with a beat script carried by the adventure record: scenes, offers and transitions are data validated against a closed set of handlers (narrate, converse, check, investigate, fight, rest, travel, conclude), and the server interprets it. The shipped harbor chapter and today's generated chapters become beat scripts that play identically.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Drive scene flow from a data-defined state machine per adventure",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-B02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "b9e2c70f95e5465d8195342133f7acece54662bccb78363ed474a7e84c7c513f"
+          },
+          {
+            "path": "planning/narrative-engine.md",
+            "sha256": "370ca7352aa195467baeca921c0d016284b16619f6f3e65087d6be8831e93d47"
+          },
+          {
+            "path": "planning/runtime-reliability.md",
+            "sha256": "176e5a8fb04e1d9cb2402225c9eb1bb4ffd110abf353f226a302e10e780acf05"
+          }
+        ],
+        "input_revision": "a641dcc01dba6a61243358173778debab4de4448",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "Equivalence first: convert the existing flow before adding any new handler."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T00:10:22+00:00",
+      "updated_at": "2026-10-12T00:10:22+00:00"
+    },
+    {
+      "id": "PLAY-P01",
+      "feature_id": "F04",
+      "title": "Put a player's own face on their hero from a phone or laptop photo",
+      "objective": "During character creation a player may take a photo with the phone or laptop camera. With their explicit consent the server generates a painted hero portrait and stage cut-out in the game's art style that carries their likeness, shows it for approval, and uses it for that hero on the display and phones. Declining or any failure keeps the standard hero art.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-tools/src/gameplay/",
+        "crates/df-protocol/proto/gameplay.proto",
+        "development/run-gameplay.sh",
+        "planning/asset-engine.md"
+      ],
+      "acceptance_json": [
+        "A player takes a photo on the phone and on a laptop, approves the generated portrait, and sees it on their hero card, on the display stage and in combat.",
+        "Before the camera opens the player sees what the photo is used for and where it is sent, and must agree; refusing leaves creation fully usable.",
+        "The original photo is held only in memory for the generation call, is never written to disk, logs or the database, and is discarded after the portrait is approved or rejected.",
+        "The player can retake, reject or remove their likeness at any time, which restores standard art and deletes the generated images for that hero.",
+        "Camera refusal, no camera, an unusable photo, provider refusal or failure and an exhausted spend cap each show a clear message and fall back to standard art without blocking the game.",
+        "The generated portrait matches the house art style and the hero's species and gear; the result is family-suitable; a photo with no single clear face is refused.",
+        "Other players' photos and likeness images are never sent to a client that should not have them beyond the public portrait the table already sees.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests with a faithful fake image provider for consent, discard, failure and budget paths.",
+        "Real browser observation with a real or virtual camera on a phone-sized and a laptop viewport.",
+        "A bounded live-provider run (spend-capped) judged against the concept art."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M6",
+        "milestone_goal": "Personal and immersive visuals: the players' own faces, and rooms they can look around.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11: allow the phone or laptop clients to take a photo of the players to import their face into the character creation scenes.",
+        "objective": "During character creation a player may take a photo with the phone or laptop camera. With their explicit consent the server generates a painted hero portrait and stage cut-out in the game's art style that carries their likeness, shows it for approval, and uses it for that hero on the display and phones. Declining or any failure keeps the standard hero art.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Put a player's own face on their hero from a phone or laptop photo",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "89b3d692353ee82210cbe9f501f62b6d12bde89ec35b17ba57a0df3711ab8342"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/g12-d01-consented-observation-policy.md",
+            "sha256": "ce82e9b4115fa73625aff25145a21e504868fde75c52ee52a8cc110e08142679"
+          }
+        ],
+        "input_revision": "a641dcc01dba6a61243358173778debab4de4448",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "Browsers only grant the camera on localhost or HTTPS.",
+          "A face photo is sensitive personal data, possibly of a minor: consent first, send only to the one image provider, keep nothing but the approved painted result.",
+          "Choose and verify the image provider and its data-retention terms before any live call."
+        ],
+        "out_of_scope": [
+          "Saving likeness across campaigns or accounts",
+          "Video or live face tracking"
+        ],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 90,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T00:10:22+00:00",
+      "updated_at": "2026-10-12T00:10:22+00:00"
+    },
+    {
+      "id": "PLAY-X01",
+      "feature_id": "F44",
+      "title": "Pre-render investigation rooms so looking around is instant",
+      "objective": "In an investigation scene players can pan around the room. Decide by a short measured spike between one wide panorama per room and a set of consistent views at fixed angles, then generate the room views ahead of the scene and preload them on the display and phones so a pan never waits on the network. Clue hotspots are placed by the server per view.",
+      "stage": "design",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-tools/src/gameplay/",
+        "content/adventure-tables/art-manifest.json",
+        "assets/ui/generated/",
+        "planning/asset-engine.md"
+      ],
+      "acceptance_json": [
+        "The spike records, for both approaches, visual consistency between views, generation cost and time, bytes per room and pan smoothness on a TV and a phone, and names the chosen approach.",
+        "Panning a prepared room on the display and on a phone shows the next view with no visible load on a warmed scene, and a labelled placeholder (never a blank) on a cold one.",
+        "All views of a room are requested before the scene's narration ends; preloading is bounded in bytes and never delays controls or voice.",
+        "Views of one room agree on layout, lighting and props closely enough that a pan reads as one place.",
+        "The server decides which clue hotspots exist in which view; a client never receives a hidden clue it must conceal.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Measured preload and pan timings in a real browser at TV and phone sizes.",
+        "Side-by-side frames of every view of two rooms judged for consistency."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M6",
+        "milestone_goal": "Personal and immersive visuals: the players' own faces, and rooms they can look around.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11: in an investigation, pre-render the room for different angles so that if the users pan the room the images are loaded quickly or are preloaded.",
+        "objective": "In an investigation scene players can pan around the room. Decide by a short measured spike between one wide panorama per room and a set of consistent views at fixed angles, then generate the room views ahead of the scene and preload them on the display and phones so a pan never waits on the network. Clue hotspots are placed by the server per view.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Pre-render investigation rooms so looking around is instant",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "89b3d692353ee82210cbe9f501f62b6d12bde89ec35b17ba57a0df3711ab8342"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "b9e2c70f95e5465d8195342133f7acece54662bccb78363ed474a7e84c7c513f"
+          }
+        ],
+        "input_revision": "a641dcc01dba6a61243358173778debab4de4448",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "Separately generated angles drift; a single wide painting cannot drift but limits the pan range. Measure before choosing."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 88,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T00:10:22+00:00",
+      "updated_at": "2026-10-12T00:10:22+00:00"
     }
   ],
   "dependencies": [
@@ -2255,6 +2519,10 @@
     {
       "task_id": "PLAY-N03",
       "prerequisite_task_id": "PLAY-N02"
+    },
+    {
+      "task_id": "PLAY-X01",
+      "prerequisite_task_id": "PLAY-E01"
     }
   ]
 }
