@@ -696,6 +696,10 @@ pub(super) fn project_journey(
             active_participant_id: encounter
                 .active_turn
                 .map_or_else(Vec::new, |who| who.as_bytes().to_vec()),
+            initiative: journey::initiative_rolls(current).map_err(|error| match error {
+                journey::CombatRoundError::Capacity => RepositoryError::Capacity,
+                _ => RepositoryError::InvalidCandidate,
+            })?,
         });
     }
     use super::pack::{self, SceneKey};
@@ -805,6 +809,7 @@ pub(super) fn project_journey(
             cast: Vec::new(),
             rules_note: String::new(),
             place: String::new(),
+            location_id: String::new(),
         }
     };
     scene.cast = scene_cast(&authored);
@@ -813,6 +818,12 @@ pub(super) fn project_journey(
         .setting
         .as_ref()
         .map(|setting| setting.name.clone())
+        .unwrap_or_default();
+    // The confrontation setting's id is the adventure's location, which keys the battlefield.
+    scene.location_id = authored
+        .setting
+        .as_ref()
+        .map(|setting| setting.place_id.clone())
         .unwrap_or_default();
 
     let audience = match role {

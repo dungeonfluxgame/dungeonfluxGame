@@ -241,6 +241,12 @@ pub(super) fn observe(client: &Rc<RefCell<Client>>) {
     }
 }
 
+/// Creates the shared sound control on `root` without any view, for the battlefield preview:
+/// the same unlock gesture and mute toggle then govern the effects there too.
+pub(super) fn attach(document: &Document, root: &Element) -> Result<(), JsValue> {
+    director(document, root).map(|_| ())
+}
+
 fn director(document: &Document, root: &Element) -> Result<Shared, JsValue> {
     let existing = DIRECTOR.with(|slot| slot.borrow().clone());
     let shared = match existing {
