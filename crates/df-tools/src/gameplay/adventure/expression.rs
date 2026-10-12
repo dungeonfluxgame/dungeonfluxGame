@@ -78,14 +78,8 @@ const FORBIDDEN_RULES_WORDS: &[&str] = &[
 ];
 
 /// Real-world and modern words, refused in either rating.
-const FORBIDDEN_MODERN_WORDS: &[&str] = &[
-    "okay",
-    "guys",
-    "awesome",
-    "smartphone",
-    "internet",
-    "email",
-];
+const FORBIDDEN_MODERN_WORDS: &[&str] =
+    &["okay", "guys", "awesome", "smartphone", "internet", "email"];
 
 /// Every word a slot may not use for `rating`. A restrained table also refuses gore and strong
 /// language (section 7, validators 4); a mature one allows both.

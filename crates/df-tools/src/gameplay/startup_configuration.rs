@@ -982,7 +982,15 @@ mod tests {
 
     #[test]
     fn any_other_content_rating_refuses_startup_without_echoing_it() {
-        for value in ["", "Mature", "RESTRAINED", " mature", "family", "off", "mature "] {
+        for value in [
+            "",
+            "Mature",
+            "RESTRAINED",
+            " mature",
+            "family",
+            "off",
+            "mature ",
+        ] {
             let error = content_rating_setting(Ok(value.to_owned())).unwrap_err();
             assert_eq!(error.to_string(), "DF_GAMEPLAY_CONTENT_RATING invalid");
             assert!(value.is_empty() || !error.to_string().contains(value));

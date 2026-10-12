@@ -156,15 +156,7 @@ pub(super) const RESTRAINED_GORE: [&str; 7] = [
 /// Strong language a restrained table refuses in any text, as whole words. A mature table
 /// allows it wherever the character would say it.
 pub(super) const RESTRAINED_PROFANITY: [&str; 9] = [
-    "damn",
-    "damned",
-    "goddamn",
-    "hell",
-    "shit",
-    "fuck",
-    "fucking",
-    "bastard",
-    "bitch",
+    "damn", "damned", "goddamn", "hell", "shit", "fuck", "fucking", "bastard", "bitch",
 ];
 
 /// One output string of an expression.

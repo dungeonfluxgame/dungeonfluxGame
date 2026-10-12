@@ -77,8 +77,8 @@ impl Overlay {
         if bytes.len() as u64 > MAX_FILE {
             return Err(invalid(".", "file exceeds one MiB"));
         }
-        let document: Document = serde_json::from_slice(&bytes)
-            .map_err(|error| invalid(".", &error.to_string()))?;
+        let document: Document =
+            serde_json::from_slice(&bytes).map_err(|error| invalid(".", &error.to_string()))?;
         if document.schema != SCHEMA
             || document.file != OVERLAY_FILE.trim_end_matches(".json")
             || document.description.trim().is_empty()
@@ -96,8 +96,12 @@ impl Overlay {
     /// not name come back unchanged.
     pub(super) fn merged(&self, file: &str, original: &[u8]) -> Result<Vec<u8>, TablesError> {
         let replaced = match file {
-            "prose-patterns.json" => self.replace_tables(file, original, &self.document.replaces.prose),
-            "npc-social.json" => self.replace_tables(file, original, &self.document.replaces.social),
+            "prose-patterns.json" => {
+                self.replace_tables(file, original, &self.document.replaces.prose)
+            }
+            "npc-social.json" => {
+                self.replace_tables(file, original, &self.document.replaces.social)
+            }
             "antagonists.json" => self.replace_antagonist_lines(file, original),
             _ => return Ok(original.to_vec()),
         }?;
@@ -116,9 +120,12 @@ impl Overlay {
             .and_then(Value::as_object_mut)
             .ok_or_else(|| invalid(file, "tables"))?;
         for (name, replacement) in replacements {
-            let slot = tables
-                .get_mut(name)
-                .ok_or_else(|| invalid(&format!("{file}.{name}"), "replaces a table that does not exist"))?;
+            let slot = tables.get_mut(name).ok_or_else(|| {
+                invalid(
+                    &format!("{file}.{name}"),
+                    "replaces a table that does not exist",
+                )
+            })?;
             *slot = replacement.clone();
         }
         Ok(document)
@@ -137,12 +144,17 @@ impl Overlay {
                 .find(|entry| entry.get("id").and_then(Value::as_str) == Some(id.as_str()))
                 .and_then(Value::as_object_mut)
                 .ok_or_else(|| invalid(&path, "replaces an antagonist that does not exist"))?;
-            for (field, replacement) in [("arrivals", &lines.arrivals), ("warnings", &lines.warnings)] {
+            for (field, replacement) in
+                [("arrivals", &lines.arrivals), ("warnings", &lines.warnings)]
+            {
                 let Some(replacement) = replacement else {
                     continue;
                 };
                 if entry.get(field).is_none_or(Value::is_null) {
-                    return Err(invalid(&path, "replaces lines the antagonist does not have"));
+                    return Err(invalid(
+                        &path,
+                        "replaces lines the antagonist does not have",
+                    ));
                 }
                 entry.insert(field.into(), replacement.clone());
             }
@@ -157,4 +169,81 @@ fn parse(file: &str, bytes: &[u8]) -> Result<Value, TablesError> {
         path: ".".into(),
         reason: error.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn overlay(replaces: Value) -> Overlay {
+        let document = json!({
+            "schema": SCHEMA,
+            "file": "mature-overlay",
+            "description": "test",
+            "replaces": replaces,
+        });
+        let bytes = serde_json::to_vec(&document).unwrap();
+        Overlay {
+            document: serde_json::from_slice(&bytes).unwrap(),
+            bytes,
+        }
+    }
+
+    fn none() -> Value {
+        json!({"prose-patterns.json": {}, "antagonists.json": {}, "npc-social.json": {}})
+    }
+
+    #[test]
+    fn a_replacement_names_an_existing_table_or_antagonist_or_the_load_is_refused() {
+        let prose = br#"{"tables": {"clue": {"die": 1, "variants": []}}}"#;
+        let mut replaces = none();
+        replaces["prose-patterns.json"] = json!({"no_such_table": {"die": 1}});
+        let error = overlay(replaces)
+            .merged("prose-patterns.json", prose)
+            .unwrap_err();
+        assert!(error.to_string().contains("does not exist"), "{error}");
+
+        let antagonists =
+            br#"{"tables": {"antagonists": {"entries": [{"id": "wolf", "warnings": null}]}}}"#;
+        let mut replaces = none();
+        replaces["antagonists.json"] = json!({"no-such-creature": {"arrivals": {"die": 4}}});
+        assert!(
+            overlay(replaces)
+                .merged("antagonists.json", antagonists)
+                .is_err()
+        );
+        let mut replaces = none();
+        replaces["antagonists.json"] = json!({"wolf": {"warnings": {"die": 4}}});
+        let error = overlay(replaces)
+            .merged("antagonists.json", antagonists)
+            .unwrap_err();
+        assert!(error.to_string().contains("does not have"), "{error}");
+    }
+
+    #[test]
+    fn a_replacement_swaps_exactly_the_named_table_and_other_files_pass_through() {
+        let prose = br#"{"tables": {"clue": {"die": 4}, "keep": {"die": 6}}}"#;
+        let mut replaces = none();
+        replaces["prose-patterns.json"] = json!({"clue": {"die": 8}});
+        let overlay = overlay(replaces);
+
+        let merged: Value =
+            serde_json::from_slice(&overlay.merged("prose-patterns.json", prose).unwrap()).unwrap();
+
+        assert_eq!(merged["tables"]["clue"], json!({"die": 8}));
+        assert_eq!(merged["tables"]["keep"], json!({"die": 6}));
+        assert_eq!(
+            overlay.merged("hooks.json", b"not json").unwrap(),
+            b"not json"
+        );
+    }
+
+    #[test]
+    fn the_shipped_overlay_loads() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/adventure-tables");
+        let overlay = Overlay::read(&directory).unwrap();
+        assert!(!overlay.bytes().is_empty());
+    }
 }

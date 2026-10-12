@@ -1,6 +1,5 @@
 use super::{
-    super::startup_configuration::ContentRating, GenerateError, mature_overlay::Overlay,
-    schema::*,
+    super::startup_configuration::ContentRating, GenerateError, mature_overlay::Overlay, schema::*,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};

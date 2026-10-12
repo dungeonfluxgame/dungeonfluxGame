@@ -10,8 +10,8 @@
 )]
 use super::{
     TablesError,
-    mature_overlay::Overlay,
     dossier::{Attitude, Binding, Effect, Group, Length, NpcRole, Topic, sentence_count},
+    mature_overlay::Overlay,
     schema::Table,
 };
 use serde::{Deserialize, de::DeserializeOwned};

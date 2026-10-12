@@ -86,7 +86,8 @@ fn character_limits(profile: Option<&SpeakerProfile>) -> Value {
 
 /// Adds [`character_limits`] to the `npc` object of the reply facts.
 fn add_character_limits(facts: &mut Value, profile: Option<&SpeakerProfile>) {
-    if let (Some(npc), Value::Object(limits)) = (facts["npc"].as_object_mut(), character_limits(profile))
+    if let (Some(npc), Value::Object(limits)) =
+        (facts["npc"].as_object_mut(), character_limits(profile))
     {
         npc.extend(limits);
     }

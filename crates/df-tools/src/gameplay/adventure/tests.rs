@@ -1127,3 +1127,169 @@ fn dossiers_are_stored_with_the_adventure_and_an_adventure_saved_without_them_st
     documents.record = serde_json::to_vec_pretty(&tampered).unwrap();
     assert!(record::reload(&documents).is_err());
 }
+
+fn options(rating: ContentRating) -> GenerateOptions {
+    GenerateOptions {
+        rating,
+        ..GenerateOptions::default()
+    }
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// The SHA-256 of pack, tuning and record of three fixed seeds as the generator wrote them
+/// before the content rating existed (with `GenerateOptions::default()`).
+const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
+    (
+        0x3c6ef378dd81de97,
+        [
+            "c66703fe82d16ef4d211ca0c15dc1be354ed4460569524d75ae10a632df92f9f",
+            "fd318025d2d7b016708169b59777687fe1f7b630a3b70eb2715dad37af962933",
+            "7aa4e1ed62990b067b161c635331d169e3dc0033af964005bea10eefabb45860",
+        ],
+    ),
+    (
+        0xdaa66d325ccc5aac,
+        [
+            "6a6d465a592cd8710db0f13c48a34c20b3d7a16c271a170578a7581f3eb88e65",
+            "6e122920b8921cd08441ec5c13360ac3898742e2d143a16e0c8a8d678d367ace",
+            "4f62311fb8d2c74d12c098719369e927addbd7cd459a54bb4912866878cf8d66",
+        ],
+    ),
+    (
+        0x11a25cdccc7d808f,
+        [
+            "3cbdd7622c4ed4d93286a9ae69f1561e7c3b5aeb752ca11fd0739e4293ff8e94",
+            "d29e661273c6de6896f5723c824099989ad0b023d8f9085a5f9bc73cbb5450d7",
+            "d7c6a339b73cf276b7ad815b8853bb74fbd22d637d3e2a05aa2ee4aee358f487",
+        ],
+    ),
+];
+
+#[test]
+fn restrained_generation_is_byte_identical_to_the_tables_before_the_content_rating() {
+    let tables = tables();
+    for (seed, [pack, tuning, record]) in RESTRAINED_GOLDEN {
+        let documents = generate(
+            &tables,
+            seed,
+            options(ContentRating::Restrained),
+            &ForcedEntries::new(),
+        )
+        .unwrap()
+        .documents(true)
+        .unwrap();
+        assert_eq!(sha256(&documents.pack), pack, "{seed:#x} pack");
+        assert_eq!(sha256(&documents.tuning), tuning, "{seed:#x} tuning");
+        assert_eq!(sha256(&documents.record), record, "{seed:#x} record");
+    }
+}
+
+#[test]
+fn mature_generation_is_deterministic_differs_from_restrained_and_reloads() {
+    let tables = tables();
+    for (seed, _) in RESTRAINED_GOLDEN {
+        let mature = |tables: &Tables| {
+            generate(
+                tables,
+                seed,
+                options(ContentRating::Mature),
+                &ForcedEntries::new(),
+            )
+            .unwrap()
+        };
+        let (first, second) = (mature(&tables), mature(&tables));
+        let (a, b) = (
+            first.documents(true).unwrap(),
+            second.documents(true).unwrap(),
+        );
+        assert_eq!(
+            (&a.pack, &a.tuning, &a.record),
+            (&b.pack, &b.tuning, &b.record)
+        );
+        assert_eq!(first.dossiers, second.dossiers);
+
+        let restrained = generate(
+            &tables,
+            seed,
+            options(ContentRating::Restrained),
+            &ForcedEntries::new(),
+        )
+        .unwrap();
+        assert_ne!(
+            first.pack, restrained.pack,
+            "{seed:#x}: the fight reads differently"
+        );
+        assert_ne!(
+            first.tables_revision, restrained.tables_revision,
+            "a mature adventure records the overlay in its revision"
+        );
+        assert_ne!(
+            first.dossiers[0].tables_revision,
+            restrained.dossiers[0].tables_revision
+        );
+        assert_eq!(
+            first.facts["loc.id"], restrained.facts["loc.id"],
+            "the same story"
+        );
+        assert_eq!(first.facts["ant.id"], restrained.facts["ant.id"]);
+        assert_eq!(first.tuning, restrained.tuning, "mechanics are never rated");
+        let (loaded, record) = record::reload(&a).unwrap();
+        assert_eq!(loaded.pack, first.pack);
+        assert_eq!(record.tables_revision(), first.tables_revision);
+    }
+}
+
+#[test]
+fn a_thousand_mature_seeds_validate_within_every_bound() {
+    let tables = tables();
+    for seed in 0..1000 {
+        let adventure = generate(
+            &tables,
+            seed,
+            options(ContentRating::Mature),
+            &ForcedEntries::new(),
+        )
+        .unwrap_or_else(|error| panic!("seed {seed}: {error}"));
+        record::reload(&adventure.documents(true).unwrap())
+            .unwrap_or_else(|error| panic!("seed {seed}: {error}"));
+    }
+}
+
+#[test]
+fn the_fight_and_its_aftermath_are_darker_when_mature_and_still_nonlethal() {
+    let tables = tables();
+    let scene_text = |rating| {
+        let mut text = String::new();
+        for seed in 0..300 {
+            let adventure =
+                generate(&tables, seed, options(rating), &ForcedEntries::new()).unwrap();
+            for scene in &adventure.pack.scenes {
+                text.push_str(&format!(
+                    "{} {} {}\n",
+                    scene.title, scene.narration, scene.dialogue
+                ));
+            }
+        }
+        text.to_lowercase()
+    };
+    let (mature, restrained) = (
+        scene_text(ContentRating::Mature),
+        scene_text(ContentRating::Restrained),
+    );
+    for word in ["blood", "bleed", "damn", "gnaw", "split lip"] {
+        assert!(mature.contains(word), "mature text has {word}");
+        assert!(!restrained.contains(word), "restrained text has no {word}");
+    }
+    // The rules decide the fight: nobody dies in either rating's narration of it.
+    let words: std::collections::BTreeSet<&str> = mature
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    for word in ["dies", "die", "slain", "killed", "kills", "dead", "corpse"] {
+        assert!(!words.contains(word), "{word}");
+    }
+}

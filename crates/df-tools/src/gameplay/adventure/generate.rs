@@ -206,7 +206,9 @@ fn npc(
 pub(super) fn tone_of(rating: ContentRating) -> &'static str {
     match rating {
         ContentRating::Restrained => "heroic fantasy for a living-room table",
-        ContentRating::Mature => "heroic fantasy for an adult table, dark where the story calls for it",
+        ContentRating::Mature => {
+            "heroic fantasy for an adult table, dark where the story calls for it"
+        }
     }
 }
 /// Generate a complete adventure using the shipped pattern expression source.

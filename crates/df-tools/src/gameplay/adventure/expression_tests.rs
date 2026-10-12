@@ -485,3 +485,308 @@ fn narration_and_rules_notes_are_separate_end_to_end() {
         assert!(!sheet.baseline.contains("Short Rest"));
     }
 }
+
+fn rated(rating: ContentRating) -> GenerateOptions {
+    GenerateOptions {
+        rating,
+        ..GenerateOptions::default()
+    }
+}
+
+/// Answers every slot with its draft, except `target`, which gets `extra` and then its
+/// must-mention terms so the slot's own checks pass.
+fn model_with_line(target: &'static str, extra: &'static str) -> Reply {
+    Reply::Compute(Arc::new(move |prompt| {
+        let (_, facts) = parse(prompt);
+        let slots: Vec<Value> = serde_json::from_str(
+            prompt
+                .lines()
+                .find_map(|line| line.strip_prefix("SLOTS: "))
+                .unwrap(),
+        )
+        .unwrap();
+        let answers: serde_json::Map<String, Value> = slots
+            .iter()
+            .map(|slot| {
+                let name = slot["name"].as_str().unwrap();
+                let text = if name == target {
+                    let terms: Vec<&str> = slot["must_mention"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect();
+                    format!("{extra} {}.", terms.join(" and "))
+                } else {
+                    facts["drafts"][name].as_str().unwrap().to_owned()
+                };
+                (name.to_owned(), Value::String(text))
+            })
+            .collect();
+        Value::Object(answers)
+    }))
+}
+
+async fn express_rated(
+    rating: ContentRating,
+    script: impl Fn() -> Reply,
+    cache_name: &str,
+) -> (
+    GeneratedAdventure,
+    Result<(GeneratedAdventure, ModelExpression), Declined>,
+    Vec<Value>,
+) {
+    let endpoint = FakeEndpoint::start((0..8).map(|_| script()).collect());
+    let cache = cache_directory(cache_name);
+    let tables = tables();
+    let baseline = generate(&tables, SEED, rated(rating), &ForcedEntries::new()).unwrap();
+    let storyteller = teller(endpoint.address, 200_000, Duration::from_secs(5), &cache);
+    let outcome = express(
+        &tables,
+        SEED,
+        rated(rating),
+        &ForcedEntries::new(),
+        &baseline,
+        &storyteller,
+    )
+    .await;
+    let bodies = endpoint.bodies();
+    let _ = std::fs::remove_dir_all(cache);
+    (baseline, outcome, bodies)
+}
+
+fn opening_line(adventure: &GeneratedAdventure) -> String {
+    adventure
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == super::super::super::pack::SceneKey::Opening)
+        .unwrap()
+        .dialogue
+        .clone()
+}
+
+#[test]
+fn the_craft_guidance_differs_between_ratings_only_in_the_rating_sentence() {
+    let (restrained, mature) = (
+        guidance(ContentRating::Restrained),
+        guidance(ContentRating::Mature),
+    );
+    let (before, after) = (craft_before_rating!(), craft_after_rating!());
+    for text in [restrained, mature] {
+        assert!(text.starts_with(before) && text.ends_with(after));
+    }
+    let middle = |text: &str| text[before.len()..text.len() - after.len()].to_owned();
+    assert_eq!(
+        middle(restrained),
+        "Heroic fantasy for a living-room table: tense, never gory."
+    );
+    assert!(middle(mature).starts_with(mature_themes!()));
+    assert!(mature.contains("mature themes are allowed"));
+    assert!(!mature.contains("never gory") && !mature.contains("living-room"));
+    // Line by line, exactly the continuity line changes; every craft rule and the secret rule
+    // are the same words.
+    let differing: Vec<&str> = restrained
+        .lines()
+        .zip(mature.lines())
+        .filter(|(restrained, mature)| restrained != mature)
+        .map(|(restrained, _)| restrained.split(':').next().unwrap())
+        .collect();
+    assert_eq!(restrained.lines().count(), mature.lines().count());
+    assert_eq!(differing, ["CONTINUITY"]);
+    for text in [restrained, mature] {
+        assert!(text.contains("SECRET: never write a slot's forbidden terms or hint at them."));
+        assert!(text.contains("STORY, NOT RULES: narration is pure story."));
+    }
+}
+
+#[test]
+fn the_word_lists_drop_gore_and_strong_language_when_mature_and_keep_every_rules_word() {
+    let (restrained, mature) = (
+        forbidden_words(ContentRating::Restrained),
+        forbidden_words(ContentRating::Mature),
+    );
+    for word in RESTRAINED_GORE.iter().chain(&RESTRAINED_PROFANITY) {
+        assert!(restrained.contains(word), "restrained refuses {word}");
+        assert!(!mature.contains(word), "mature allows {word}");
+    }
+    for word in [
+        "damage",
+        "hit points",
+        "d20",
+        "dc",
+        "killed",
+        "dies",
+        "okay",
+        "internet",
+    ] {
+        assert!(
+            restrained.contains(&word) && mature.contains(&word),
+            "{word}"
+        );
+    }
+    let shared: Vec<&&str> = restrained
+        .iter()
+        .filter(|word| mature.contains(word))
+        .collect();
+    assert_eq!(
+        shared.len(),
+        mature.len(),
+        "mature is restrained minus the two groups"
+    );
+    // The restrained list keeps today's words and order, with the strong language appended.
+    assert_eq!(
+        &restrained[..FORBIDDEN_RULES_WORDS.len()],
+        FORBIDDEN_RULES_WORDS
+    );
+}
+
+#[test]
+fn the_model_is_told_the_rating_tone_and_the_always_on_limits_in_both_ratings() {
+    let facts_of = |rating| {
+        let baseline = generate(&tables(), SEED, rated(rating), &ForcedEntries::new()).unwrap();
+        let planned = plan(&baseline).unwrap();
+        group_facts(&baseline, &planned, true, None)
+    };
+    let (restrained, mature) = (
+        facts_of(ContentRating::Restrained),
+        facts_of(ContentRating::Mature),
+    );
+    assert_eq!(restrained["tone"], "heroic fantasy for a living-room table");
+    assert!(mature["tone"].as_str().unwrap().contains("adult table"));
+    assert!(restrained["forbidden"].to_string().contains("entrails"));
+    assert!(!mature["forbidden"].to_string().contains("entrails"));
+    for facts in [&restrained, &mature] {
+        for person in ["patron", "contact", "enemy"] {
+            let person = &facts["cast"][person];
+            assert_eq!(person["based_on_real_person"], false);
+            assert_ne!(person["age_group"], "child");
+            assert_ne!(person["age_group"], "teen");
+        }
+    }
+    let prompt = build_prompt(&mature);
+    assert!(prompt.contains("never write sexual content involving a minor"));
+}
+
+fn build_prompt(facts: &Value) -> String {
+    super::super::super::storyteller::build_prompt(
+        &super::super::super::storyteller::Expression {
+            purpose: "adventure",
+            facts,
+            slots: &[Slot::new("room_title", 32)],
+            style: "style",
+            profile: super::super::super::storyteller::CallProfile::short_reply(
+                ContentRating::Restrained,
+            ),
+        },
+        None,
+    )
+}
+
+#[test]
+fn a_young_cast_member_is_named_a_young_adult_in_the_facts() {
+    let tables = tables();
+    let mut young = 0;
+    for seed in 0..200 {
+        let baseline = generate(
+            &tables,
+            seed,
+            rated(ContentRating::Mature),
+            &ForcedEntries::new(),
+        )
+        .unwrap();
+        let planned = plan(&baseline).unwrap();
+        let facts = group_facts(&baseline, &planned, false, None);
+        for (key, person) in [
+            ("patron", "patron"),
+            ("contact", "contact"),
+            ("enemy", "ant"),
+        ] {
+            let age = &baseline.facts[&format!("{person}.age")];
+            let told = &facts["cast"][key];
+            let expected = match age.as_str() {
+                "young" => "young adult",
+                other => other,
+            };
+            assert_eq!(told["age_group"], expected, "seed {seed} {key}");
+            assert_eq!(told["sexual_content_allowed"], true);
+            young += usize::from(age == "young");
+        }
+    }
+    assert!(young > 0, "some cast member is young");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_gory_and_profane_line_is_kept_when_mature_and_refused_when_restrained() {
+    let crude = "I will spill your entrails, damn you.";
+    let (_, mature, _) = express_rated(
+        ContentRating::Mature,
+        || model_with_line("opening_line", crude),
+        "rating-crude-mature",
+    )
+    .await;
+    let (generated, model) = mature.unwrap();
+    assert!(model.model_slots.contains(&"opening_line".to_owned()));
+    assert!(opening_line(&generated).contains(crude));
+
+    let (_, restrained, _) = express_rated(
+        ContentRating::Restrained,
+        || model_with_line("opening_line", crude),
+        "rating-crude-restrained",
+    )
+    .await;
+    let (generated, model) = restrained.unwrap();
+    assert!(model.pattern_slots.contains(&"opening_line".to_owned()));
+    assert!(
+        model
+            .refused
+            .contains(&"opening_line: forbidden_term".to_owned()),
+        "{:?}",
+        model.refused
+    );
+    assert!(!opening_line(&generated).contains("entrails"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_slot_that_gives_away_the_secret_is_refused_the_same_way_in_both_ratings() {
+    let tables = tables();
+    let secret = generate(
+        &tables,
+        SEED,
+        rated(ContentRating::Mature),
+        &ForcedEntries::new(),
+    )
+    .unwrap()
+    .pack
+    .secret_terms[0]
+        .clone();
+    let leak: &'static str = Box::leak(format!("It is all about the {secret}.").into_boxed_str());
+    for rating in [ContentRating::Mature, ContentRating::Restrained] {
+        let (_, outcome, bodies) = express_rated(
+            rating,
+            || model_with_line("opening_line", leak),
+            &format!("rating-secret-{rating:?}"),
+        )
+        .await;
+        let (generated, model) = outcome.unwrap();
+        assert!(
+            model
+                .refused
+                .contains(&"opening_line: forbidden_term".to_owned()),
+            "{rating:?}: {:?}",
+            model.refused
+        );
+        assert!(!opening_line(&generated).contains(&secret), "{rating:?}");
+        // Refused once, asked once more with the same rules, never reworded to get around it.
+        let asks = bodies
+            .iter()
+            .filter(|body| {
+                body["input"]
+                    .as_str()
+                    .unwrap()
+                    .contains("\"name\":\"opening_line\"")
+            })
+            .count();
+        assert_eq!(asks, 2, "{rating:?}");
+    }
+}
