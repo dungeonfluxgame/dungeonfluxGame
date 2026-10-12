@@ -289,7 +289,12 @@ fn canonical_script_reproduces_states_receipts_offers_and_scenes_for_harbor_and_
         ] {
             let legacy = pack::with_test_pack(loaded.clone(), || snapshots(approach, defeat));
             let mut scripted = loaded.pack.clone();
-            scripted.beat_script = Some(canonical().clone());
+            let mut script = canonical().clone();
+            // Labels are presentation: the generated chapter words its ending steps itself.
+            if let Some(own) = &loaded.pack.beat_script {
+                script.labels = own.labels.clone();
+            }
+            scripted.beat_script = Some(script);
             let scripted = pack::load_from_bytes(
                 &serde_json::to_vec(&scripted).unwrap(),
                 &serde_json::to_vec(&loaded.tuning).unwrap(),
@@ -568,7 +573,18 @@ fn impossible_outcome_only_fights_rest_without_action_duplicate_effects_and_wron
             8 => script.beats[9].state.rested = Some(false),
             9 => script.beats[9].state.victory = Some(false),
             10 => script.terminal.clear(),
-            11 => script.terminal.retain(|id| id != "harbor-inn"),
+            // The inn concludes the chapter only by leading on to its ending steps.
+            11 => {
+                script.beats[9]
+                    .offers
+                    .retain(|o| o.effect != BeatEffect::Resolve);
+                script.beats[9].transitions.retain(|t| {
+                    t.trigger
+                        != BeatTrigger::Offer {
+                            offer: "resolve-errand".into(),
+                        }
+                });
+            }
             _ => script.beats[6].state.rested = Some(false),
         }
         content.beat_script = Some(script);

@@ -6,9 +6,13 @@
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -278,6 +282,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -286,6 +295,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -303,6 +319,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -311,6 +332,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -326,6 +354,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -334,20 +367,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "escort": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -617,6 +746,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -625,6 +759,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -642,6 +783,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -650,6 +796,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -665,6 +818,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -673,20 +831,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "warning": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -956,6 +1210,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -964,6 +1223,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -981,6 +1247,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -989,6 +1260,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -1004,6 +1282,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -1012,20 +1295,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "retrieval": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -1295,6 +1674,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -1303,6 +1687,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -1320,6 +1711,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -1328,6 +1724,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -1343,6 +1746,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -1351,12 +1759,104 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "mystery": {
       "script": {
@@ -1763,9 +2263,13 @@
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -2035,6 +2539,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -2043,6 +2552,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -2060,6 +2576,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -2068,6 +2589,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -2083,6 +2611,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -2091,20 +2624,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "defence": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -2374,6 +3003,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -2382,6 +3016,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -2399,6 +3040,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -2407,6 +3053,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -2422,6 +3075,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -2430,20 +3088,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "heist": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -2713,6 +3467,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -2721,6 +3480,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -2738,6 +3504,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -2746,6 +3517,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -2761,6 +3539,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -2769,20 +3552,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "hunt": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -3052,6 +3931,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -3060,6 +3944,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -3077,6 +3968,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -3085,6 +3981,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -3100,6 +4003,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -3108,12 +4016,104 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "parley": {
       "script": {
@@ -3387,9 +4387,13 @@
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -3659,6 +4663,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -3667,6 +4676,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -3684,6 +4700,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -3692,6 +4713,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -3707,6 +4735,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -3715,20 +4748,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "rescue": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -3998,6 +5127,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -4006,6 +5140,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -4023,6 +5164,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -4031,6 +5177,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -4046,6 +5199,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -4054,20 +5212,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "escape": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -4337,6 +5591,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -4345,6 +5604,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -4362,6 +5628,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -4370,6 +5641,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -4385,6 +5663,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -4393,20 +5676,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "lieutenant": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -4676,6 +6055,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -4684,6 +6068,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -4701,6 +6092,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -4709,6 +6105,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -4724,6 +6127,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -4732,20 +6140,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "finale": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -5015,6 +6519,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -5023,6 +6532,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -5040,6 +6556,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -5048,6 +6569,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -5063,6 +6591,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -5071,20 +6604,116 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     },
     "rest-interlude": {
       "script": {
         "entry": "room",
         "terminal": [
-          "harbor-inn",
-          "defeat-rested"
+          "the-end"
         ],
+        "labels": {
+          "resolve-label": "Settle things with {contact.first}",
+          "close-defeat-label": "Face what comes next",
+          "close-label": "Close the chapter"
+        },
         "beats": [
           {
             "id": "room",
@@ -5354,6 +6983,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -5362,6 +6996,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -5379,6 +7020,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "close-defeat",
+                "label_slot": "close-defeat-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -5387,6 +7033,13 @@
                   "on": "rest-complete"
                 },
                 "target": "defeat-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-defeat"
+                },
+                "target": "epilogue"
               }
             ]
           },
@@ -5402,6 +7055,11 @@
                 "id": "short-rest",
                 "label_slot": "short-rest",
                 "effect": "short-rest"
+              },
+              {
+                "id": "resolve-errand",
+                "label_slot": "resolve-label",
+                "effect": "resolve"
               }
             ],
             "transitions": [
@@ -5410,12 +7068,104 @@
                   "on": "rest-complete"
                 },
                 "target": "harbor-inn"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "resolve-errand"
+                },
+                "target": "epilogue"
               }
             ]
+          },
+          {
+            "id": "epilogue",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "epilogue"
+            },
+            "offers": [
+              {
+                "id": "close-epilogue",
+                "label_slot": "close-label",
+                "effect": "resolve"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "close-epilogue"
+                },
+                "target": "the-end"
+              }
+            ],
+            "scene_variant": "epilogue-won"
+          },
+          {
+            "id": "the-end",
+            "kind": "ending",
+            "scene": "inn",
+            "state": {
+              "durable": "the-end"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "the-end-won"
           }
         ]
       },
-      "scenes": {}
+      "scenes": {
+        "epilogue-won": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "line": "You came through on your own feet. That is worth more than I can say."
+        },
+        "epilogue-won-costly": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "line": "It is done, and it cost you. I will not forget what you paid."
+        },
+        "epilogue-lost": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "The fight was lost. The survivors reach {dest.name}, where {contact.first} hears that {stake.short} was lost on the road.",
+          "line": "You are alive, and that is something. We will find what comes next."
+        },
+        "epilogue-lost-all": {
+          "scene": "inn",
+          "title": "Epilogue",
+          "narration": "Word reaches {dest.name} that no one came back from the road. {contact.first} waits, and {stake.short} never arrives.",
+          "line": "I should have sent more help. I should have gone myself."
+        },
+        "the-end-won": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "line": "Rest well. The next road can wait for morning."
+        },
+        "the-end-won-costly": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "line": "What you saved was worth saving. Remember those it cost."
+        },
+        "the-end-lost": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "line": "Not every errand ends well. This one is over."
+        },
+        "the-end-lost-all": {
+          "scene": "inn",
+          "title": "The End",
+          "narration": "The road keeps its dead and its secrets. No one carried {stake.short} to {dest.name}, and the tale ends here.",
+          "line": "No one is left to tell it. The road remembers."
+        }
+      }
     }
   }
 }

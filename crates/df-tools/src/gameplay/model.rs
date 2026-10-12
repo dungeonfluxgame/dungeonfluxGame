@@ -64,6 +64,12 @@ pub(super) fn contents() -> Result<Vec<ContentReference>, RepositoryError> {
             .into_iter()
             .map(content),
     )
+    .chain(
+        super::beat_script_runtime::ENDING_ENTRIES
+            .iter()
+            .copied()
+            .map(content),
+    )
     .collect::<Result<Vec<_>, _>>()?;
     for entry in super::beat_script_runtime::contents() {
         let reference = content(&entry)?;

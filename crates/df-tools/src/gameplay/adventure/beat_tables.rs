@@ -2,6 +2,7 @@
 //! introduce checks, combat statistics or other mechanical authority.
 use super::super::{
     beat_script::{BeatEffect, BeatKind, BeatScript, BeatTrigger, ScriptError, ScriptErrorReason},
+    journey::tactical::FightOutcome,
     pack::{self, PackFile, SceneKey},
 };
 use super::{
@@ -157,17 +158,27 @@ impl BeatTemplate {
                 "scene templates inherit generated settings/art/cast; use scene patterns",
             ));
         }
-        let referenced = self
+        let mut referenced = self
             .script
             .beats
             .iter()
-            .filter_map(|beat| beat.scene_variant.as_deref())
+            .filter_map(|beat| beat.scene_variant.clone())
             .collect::<BTreeSet<_>>();
-        let authored = self
-            .scenes
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
+        // A fight's closing scenes come in one variant per way the fight can end.
+        if self.script.uses_encounter() {
+            for beat in &self.script.beats {
+                if let (BeatKind::Ending, Some(variant)) = (beat.kind, &beat.scene_variant)
+                    && let Some(stem) = variant.strip_suffix(FightOutcome::Won.slug())
+                {
+                    referenced.extend(
+                        FightOutcome::ALL
+                            .iter()
+                            .map(|outcome| format!("{stem}{}", outcome.slug())),
+                    );
+                }
+            }
+        }
+        let authored = self.scenes.keys().cloned().collect::<BTreeSet<_>>();
         if referenced != authored {
             return Err(invalid(
                 FILE,
