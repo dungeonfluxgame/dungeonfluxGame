@@ -273,6 +273,11 @@ pub enum CameraFocus {
     /// The shot's own authored target.
     Scene,
     Token(TokenId),
+    /// The resting shot, solved from everyone on the field and the cells that matter this turn
+    /// (see `rest_shot`): wide, raised, holding both sides clear of the HUD cards.
+    Wide,
+    /// The resting shot leaned toward one figure (a short ease at the start of its turn).
+    Lean(TokenId),
     Between(TokenId, TokenId),
     /// The shot for an action: the actor alone (a self action) or the actor and its target, both
     /// kept fully in frame for the whole beat, from the side of the line the camera already holds,

@@ -94,6 +94,8 @@ struct Pipelines {
     grid_behind: GpuRenderPipeline,
     decal: GpuRenderPipeline,
     figure: GpuRenderPipeline,
+    /// The figure again, faint, where scan geometry in front of it hides it.
+    figure_ghost: GpuRenderPipeline,
     effects: GpuRenderPipeline,
     bolt: GpuRenderPipeline,
     particle: GpuRenderPipeline,
@@ -479,6 +481,18 @@ impl Renderer {
                     buffers: vec![instance_layout(FIGURE_STRIDE, FIGURE_ATTRIBUTES)],
                     topology: "triangle-list",
                     depth: Some((false, "less-equal")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
+            ),
+            figure_ghost: pipeline(
+                &core,
+                PipelineSpec {
+                    wgsl: &shaders_figure::figure_ghost(),
+                    layout: &texture_layout,
+                    buffers: vec![instance_layout(FIGURE_STRIDE, FIGURE_ATTRIBUTES)],
+                    topology: "triangle-list",
+                    depth: Some((false, "greater")),
                     target_format: COLOUR_FORMAT,
                     blend: true,
                 },
@@ -1027,8 +1041,17 @@ impl Renderer {
             grade.highlight[2],
             0.0,
         ]);
-        // The tilt-shift blur grows while focus is pulled to a new subject.
-        data.extend_from_slice(&[0.52, 0.5, 0.4, 3.2 * frame.feel.focus_blur_factor]);
+        // The tilt-shift blur belongs to a focus pull to a new subject only: at rest the picture is
+        // sharp edge to edge (a scan is already soft; nothing is stacked on top of it).
+        let pull = ((frame.feel.focus_blur_factor - 1.0)
+            / (crate::battle::feel::FOCUS_PULL_BLUR_FACTOR - 1.0))
+            .clamp(0.0, 1.0);
+        data.extend_from_slice(&[
+            0.52,
+            0.5,
+            0.4,
+            3.2 * crate::battle::feel::FOCUS_PULL_BLUR_FACTOR * pull,
+        ]);
         data.extend_from_slice(&[
             0.62,
             flash_strength,
@@ -1617,12 +1640,18 @@ impl Renderer {
             pass.draw(DECAL_VERTICES, decal_count as u32, 0, 0);
         }
         let stride = (FIGURE_STRIDE * 4) as f64;
+        let has_scan = scene.splat.is_some() && !self.splat_unusable();
         pass.set_bind_group(0, &self.frame_group);
         for (index, billboard) in billboards.iter().enumerate() {
             pass.set_pipeline(&self.pipelines.figure);
             pass.set_bind_group(1, &billboard.texture.bind_group);
             pass.set_vertex_buffer(0, &self.figure_buffer, index as f64 * stride, stride);
             pass.draw(6, 1, 0, 0);
+            if has_scan {
+                pass.set_pipeline(&self.pipelines.figure_ghost);
+                pass.set_vertex_buffer(0, &self.figure_buffer, index as f64 * stride, stride);
+                pass.draw(6, 1, 0, 0);
+            }
             if billboard.effects {
                 pass.set_pipeline(&self.pipelines.effects);
                 pass.set_vertex_buffer(0, &self.figure_buffer, index as f64 * stride, stride);
@@ -1756,6 +1785,21 @@ impl Renderer {
                 [height, radius * radius, centre.x, centre.z]
             }),
             full_size: (size.0 as f32, size.1 as f32),
+            figures: frame
+                .figures
+                .iter()
+                .filter(|figure| figure.alpha > 0.05)
+                .filter_map(|figure| {
+                    crate::battle::figure_clear::figure_box(
+                        &view,
+                        &view_proj,
+                        figure.position,
+                        figure.height_m,
+                    )
+                })
+                .take(crate::battle::figure_clear::MAX_FIGURES)
+                .map(|figure| figure.words())
+                .collect(),
         };
         let turn = crate::battle::splat::SplatTransform {
             scale: layer.scale,

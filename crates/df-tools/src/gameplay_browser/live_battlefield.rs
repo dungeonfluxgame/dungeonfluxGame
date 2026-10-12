@@ -110,6 +110,9 @@ struct PreviewRequest {
     /// up to what the layout seats.
     heroes: usize,
     enemies: usize,
+    /// `&reach`: the first hero's full reach (every walkable cell within six, 30 ft) and every foe
+    /// are shown as the server's reachable and target cells, as on a hero's turn.
+    reach: bool,
 }
 
 fn free_camera(text: &str) -> Option<battle::CameraPose> {
@@ -161,6 +164,7 @@ fn preview_request() -> Option<PreviewRequest> {
         splat_lod: DEFAULT_SPLAT_LOD,
         heroes: DEFAULT_PREVIEW_HEROES,
         enemies: DEFAULT_PREVIEW_ENEMIES,
+        reach: false,
         demo: None,
         slow: None,
     };
@@ -256,6 +260,7 @@ fn preview_request() -> Option<PreviewRequest> {
                     .unwrap_or_default();
             }
             "restrained" => request.restrained = true,
+            "reach" => request.reach = true,
             "statuses" => request.mode = PreviewMode::Statuses,
             "still" => request.mode = PreviewMode::Still,
             "close" => request.close = true,
@@ -710,6 +715,31 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                 for (id, cell) in &request.places {
                     stage.place_token(&TokenId::new(id.clone()), *cell);
                 }
+                if request.reach {
+                    let heroes: Vec<_> = stage
+                        .tokens()
+                        .filter(|token| token.side == Side::Hero)
+                        .map(|token| token.cell)
+                        .collect();
+                    let foes: Vec<_> = stage
+                        .tokens()
+                        .filter(|token| token.side == Side::Enemy)
+                        .map(|token| token.cell)
+                        .collect();
+                    if let Some(actor) = heroes.first() {
+                        let reachable: Vec<_> = stage
+                            .grid()
+                            .walkable_cells()
+                            .filter(|cell| {
+                                (cell.col - actor.col)
+                                    .abs()
+                                    .max((cell.row - actor.row).abs())
+                                    <= 6
+                            })
+                            .collect();
+                        stage.set_tactical_highlights(reachable, foes);
+                    }
+                }
             })
         });
         match prepared {
@@ -735,6 +765,18 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             ) {
                 mark(&host, "data-battlefield-demo", &kind);
                 run_extra_demo(&host, &kind).await;
+                return;
+            }
+            if kind == "rest" {
+                // A hero's turn begins: the lean toward it, then the resting shot.
+                let actor = preview_ids().0.first().cloned();
+                with_preview(|stage| {
+                    if let Some(actor) = actor {
+                        let _ = stage.stage(Beat::TurnStart { actor });
+                    }
+                });
+                mark(&host, "data-battlefield-demo", &kind);
+                hold_preview().await;
                 return;
             }
             if kind == "selfheal" {
