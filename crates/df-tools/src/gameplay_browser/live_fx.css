@@ -10,12 +10,12 @@
 @keyframes df-drift{from{transform:scale(1.02)}to{transform:scale(1.07) translate3d(-1.2%,-.8%,0)}}
 .tv-stage[data-art-swap=a] .tv-art-previous{animation:df-art-out-a .8s ease both}
 .tv-stage[data-art-swap=a] .tv-art{animation:df-art-in-a .8s ease backwards,df-drift 70s ease-in-out infinite alternate}
-akeyframes df-art-out-a{from{opacity:1;transform:scale(1.04)}to{opacity:0;transform:scale(1.1)}}
-akeyframes df-art-in-a{from{opacity:0}to{opacity:1}}
+@keyframes df-art-out-a{from{opacity:1;transform:scale(1.04)}to{opacity:0;transform:scale(1.1)}}
+@keyframes df-art-in-a{from{opacity:0}to{opacity:1}}
 .tv-stage[data-art-swap=b] .tv-art-previous{animation:df-art-out-b .8s ease both}
 .tv-stage[data-art-swap=b] .tv-art{animation:df-art-in-b .8s ease backwards,df-drift 70s ease-in-out infinite alternate}
-bkeyframes df-art-out-b{from{opacity:1;transform:scale(1.04)}to{opacity:0;transform:scale(1.1)}}
-bkeyframes df-art-in-b{from{opacity:0}to{opacity:1}}
+@keyframes df-art-out-b{from{opacity:1;transform:scale(1.04)}to{opacity:0;transform:scale(1.1)}}
+@keyframes df-art-in-b{from{opacity:0}to{opacity:1}}
 .tv-panel{position:relative}
 .tv-panel::after{content:'';position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 calc(var(--u)*2) #e0b87766;opacity:.45;animation:df-flicker 5.3s ease-in-out infinite}
 @keyframes df-flicker{0%,100%{opacity:.35}30%{opacity:.55}55%{opacity:.4}80%{opacity:.6}}
@@ -31,26 +31,21 @@ bkeyframes df-art-in-b{from{opacity:0}to{opacity:1}}
 .tv-stage[data-tv-mode=scene] .tv-top,.tv-stage[data-tv-mode=combat] .tv-top{visibility:hidden}
 
 /* ---------- scene states: leave, interstitial, enter ---------- */
-.tv-safe,.tv-figures,.tv-stage .live-screen{transition:opacity .4s ease}
-.tv-stage[data-stage=leaving] :is(.tv-safe,.tv-figures,.live-screen,.tv-final-roll),.tv-stage[data-stage=interstitial] :is(.tv-safe,.tv-figures,.live-screen,.tv-final-roll){opacity:0}
-.tv-stage[data-stage=leaving] .tv-figures,.tv-stage[data-stage=interstitial] .tv-figures{transition-duration:.3s}
-.tv-stage[data-scene-swap=a] .tv-title{animation:df-rise-a .7s ease .12s backwards}
-.tv-stage[data-scene-swap=a] .tv-headline .tv-divider{animation:df-draw-a .8s ease .35s backwards}
+.tv-safe,.tv-figures,.tv-choices,.tv-stage .live-screen{transition:opacity .4s ease}
+.tv-stage:is([data-stage=leaving],[data-stage=interstitial],[data-stage=title],[data-stage=closing]) :is(.tv-safe,.tv-figures,.live-screen,.tv-final-roll,.tv-choices){opacity:0}
+.tv-stage:is([data-stage=leaving],[data-stage=interstitial]) .tv-figures{transition-duration:.3s}
 .tv-stage[data-scene-swap=a] .tv-dm{animation:df-rise-a .7s ease .5s backwards}
 .tv-stage[data-scene-swap=a] .tv-stagebox .tv-divider{animation:df-draw-a .8s ease .6s backwards}
 .tv-stage[data-scene-swap=a] .tv-fig[data-present=true]{animation:df-fig-in-a .8s ease var(--enter-delay,.2s) backwards}
-akeyframes df-rise-a{from{opacity:0;transform:translateY(calc(var(--u)*1.2))}to{opacity:1;transform:none}}
-akeyframes df-draw-a{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
-akeyframes df-fig-in-a{from{opacity:0;transform:translateX(var(--from-x,0))}to{opacity:1;transform:none}}
-.tv-stage[data-scene-swap=b] .tv-title{animation:df-rise-b .7s ease .12s backwards}
-.tv-stage[data-scene-swap=b] .tv-headline .tv-divider{animation:df-draw-b .8s ease .35s backwards}
+@keyframes df-rise-a{from{opacity:0;transform:translateY(calc(var(--u)*1.2))}to{opacity:1;transform:none}}
+@keyframes df-draw-a{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+@keyframes df-fig-in-a{from{opacity:0;transform:translateX(var(--from-x,0))}to{opacity:1;transform:none}}
 .tv-stage[data-scene-swap=b] .tv-dm{animation:df-rise-b .7s ease .5s backwards}
 .tv-stage[data-scene-swap=b] .tv-stagebox .tv-divider{animation:df-draw-b .8s ease .6s backwards}
 .tv-stage[data-scene-swap=b] .tv-fig[data-present=true]{animation:df-fig-in-b .8s ease var(--enter-delay,.2s) backwards}
-bkeyframes df-rise-b{from{opacity:0;transform:translateY(calc(var(--u)*1.2))}to{opacity:1;transform:none}}
-bkeyframes df-draw-b{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
-bkeyframes df-fig-in-b{from{opacity:0;transform:translateX(var(--from-x,0))}to{opacity:1;transform:none}}
-.tv-stage:not([data-scene-swap]) .tv-title{animation:df-rise-a .7s ease .12s backwards}
+@keyframes df-rise-b{from{opacity:0;transform:translateY(calc(var(--u)*1.2))}to{opacity:1;transform:none}}
+@keyframes df-draw-b{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+@keyframes df-fig-in-b{from{opacity:0;transform:translateX(var(--from-x,0))}to{opacity:1;transform:none}}
 .tv-stage:not([data-scene-swap]) .tv-dm{animation:df-rise-a .7s ease .5s backwards}
 
 /* ---------- lobby seats ---------- */
@@ -77,44 +72,6 @@ bkeyframes df-fig-in-b{from{opacity:0;transform:translateX(var(--from-x,0))}to{o
 .tv-gathered{margin:0}
 .tv-roster[data-gathered]::before{content:'';position:absolute;inset:0;pointer-events:none;box-shadow:0 0 calc(var(--u)*3) calc(var(--u)*.6) #f0cf8e;animation:df-gold-flash 1.8s ease-out both}
 
-/* ---------- the characters standing in the scene ---------- */
-.tv-stage{--fig-h:calc(var(--u)*30);--fs-bubble:clamp(26px,calc(var(--u)*1.45),80px)}
-.tv-figures{position:absolute;inset:0;pointer-events:none;--grade:brightness(1)}
-.tv-stage[data-tv-mode=lobby] .tv-figures{display:none}
-.tv-stage[data-tv-mode=scene] .tv-partybar{display:none}
-.tv-figures[data-grade=interior]{--grade:sepia(.16) saturate(1.05) brightness(1.02) contrast(1.02)}
-.tv-figures[data-grade=exterior]{--grade:saturate(.9) hue-rotate(-6deg) brightness(.93) contrast(1.05)}
-.tv-fig{position:absolute;bottom:4.5vh;width:calc(var(--fig-h)*.6667);display:flex;flex-direction:column;align-items:center;margin:0;opacity:1;transition:opacity .4s ease,visibility 0s}
-.tv-fig[data-present=false]{opacity:0;visibility:hidden;transition:opacity .4s ease,visibility 0s .4s}
-.tv-fig[data-slot=hero-1]{left:calc(var(--u)*3.5);--toward:1;--from-x:calc(var(--u)*-6);--enter-delay:.2s}
-.tv-fig[data-slot=hero-2]{right:calc(var(--u)*3.5);--toward:-1;--from-x:calc(var(--u)*6);--enter-delay:.3s}
-.tv-fig[data-slot=npc]{left:calc(var(--u)*58);--toward:-1;--from-x:calc(var(--u)*4);--enter-delay:.45s}
-.tv-figures[data-lit] .tv-fig:not([data-speaking]){opacity:.85}
-.tv-fig-body{position:relative;width:100%;height:var(--fig-h);transition:transform .45s ease,opacity .9s ease,filter .9s ease}
-.tv-fig[data-speaking] .tv-fig-body{transform:translateX(calc(var(--toward)*var(--u)*1.2)) scale(1.03)}
-.tv-fig-sprite{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:50% 100%;transform-origin:50% 100%;will-change:transform;filter:var(--grade);animation:df-breathe 4.6s ease-in-out infinite;-webkit-mask-image:linear-gradient(180deg,#000 84%,transparent 100%);mask-image:linear-gradient(180deg,#000 84%,transparent 100%);transition:filter .4s ease}
-.tv-fig[data-slot=hero-2] .tv-fig-sprite{animation-delay:-1.9s}
-.tv-fig[data-slot=npc] .tv-fig-sprite{animation-delay:-3.1s;animation-duration:5s}
-@keyframes df-breathe{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.012)}}
-.tv-fig[data-low] .tv-fig-sprite{animation-duration:6.4s}
-.tv-fig[data-low] .tv-fig-body::after{content:'';position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 55%,transparent 42%,#a8231a55 100%)}
-.tv-fig-shadow{position:absolute;left:10%;right:10%;bottom:-1.5%;height:7%;border-radius:50%;background:radial-gradient(ellipse at center,#000c 0,#0000 70%)}
-.tv-fig[data-art=portrait] .tv-fig-sprite{object-fit:cover;object-position:50% 20%;-webkit-mask-image:radial-gradient(ellipse 62% 56% at 50% 46%,#000 52%,transparent 100%);mask-image:radial-gradient(ellipse 62% 56% at 50% 46%,#000 52%,transparent 100%)}
-.tv-fig[data-art=card] .tv-fig-sprite{inset:auto 15% 4% 15%;width:70%;height:auto;aspect-ratio:1;object-fit:cover;object-position:50% 20%;border:.2vw solid #cba466b3;border-radius:10%;-webkit-mask-image:none;mask-image:none}
-.tv-fig[data-art=none] .tv-fig-sprite{display:none}
-.tv-fig[data-speaking] .tv-fig-sprite{filter:var(--grade) drop-shadow(0 0 calc(var(--u)*.35) #f6d894) drop-shadow(0 0 calc(var(--u)*1.4) #e0b877aa)}
-.tv-fig:has(.tv-bubble.speaking) .tv-fig-sprite{animation:df-breathe 4.6s ease-in-out infinite,df-rim 1s ease-in-out infinite}
-@keyframes df-rim{0%,100%{opacity:1}50%{opacity:.82}}
-.tv-fig[data-down] .tv-fig-body{transform:translateY(calc(var(--u)*2)) rotate(calc(var(--toward)*-78deg));transform-origin:50% 92%;opacity:.7;filter:saturate(.3)}
-.tv-fig-plate{width:calc(100% - var(--u)*2);margin-top:calc(var(--u)*.3);padding:calc(var(--u)*.25) calc(var(--u)*.8);text-align:center;background:linear-gradient(#0a121cd9,#060b12e6);border:1px solid #c9a35f99;border-radius:calc(var(--u)*.5);text-shadow:none}
-.tv-fig[data-speaking] .tv-fig-plate{border-color:#f6d894;box-shadow:0 0 calc(var(--u)*1) #e0b877aa}
-.tv-fig-name{font-size:var(--fs-name);line-height:1.15;color:#f7efdc}
-.tv-fig-role{font:italic var(--fs-label)/1.2 var(--serif);color:#c9bb9b}
-.tv-fig-role:empty,.tv-fig-hp[hidden]{display:none}
-.tv-fig-hp{position:relative;height:calc(var(--u)*1.7);margin-top:calc(var(--u)*.2);border:1px solid #d9b77a59;border-radius:calc(var(--u)*.85);background:#0a0e0b;overflow:hidden}
-.tv-fig-hp-fill{position:absolute;inset:0 auto 0 0;width:var(--hp,0%);background:linear-gradient(90deg,#3f8553,#8fd18d);transition:width .8s ease-out 1.15s}
-.tv-fig[data-low] .tv-fig-hp-fill{background:linear-gradient(90deg,#92392a,#e0784f)}
-.tv-fig-hp-text{position:relative;display:block;font:700 var(--fs-label)/calc(var(--u)*1.7) system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px #000}
 
 /* effects started by the director */
 .tv-fig-fx{position:absolute;inset:0;pointer-events:none}
@@ -123,63 +80,27 @@ bkeyframes df-fig-in-b{from{opacity:0;transform:translateX(var(--from-x,0))}to{o
 .tv-fig[data-fx=lunge][data-fx-tick=a] .tv-fig-body{animation:df-lunge-a .6s ease var(--fx-delay,0ms) backwards}
 .tv-fig[data-fx=dodge][data-fx-tick=a] .tv-fig-body{animation:df-dodge-a .7s ease var(--fx-delay,0ms) backwards}
 .tv-fig[data-fx=heal][data-fx-tick=a] .tv-fig-body::before{content:'';position:absolute;inset:4% 10%;border-radius:50%;pointer-events:none;background:radial-gradient(ellipse,#d6efa099,#e8cb9433 55%,transparent 72%);animation:df-heal-a 1.3s ease-out both}
-akeyframes df-hit-a{0%{transform:none}15%{transform:translateX(calc(var(--toward)*var(--u)*-1.3))}35%{transform:translateX(calc(var(--toward)*var(--u)*.9))}55%{transform:translateX(calc(var(--toward)*var(--u)*-.6))}80%{transform:translateX(calc(var(--toward)*var(--u)*.3))}100%{transform:none}}
-akeyframes df-flash-a{0%{filter:var(--grade)}12%{filter:var(--grade) brightness(2) sepia(1) hue-rotate(-40deg) saturate(5)}100%{filter:var(--grade)}}
-akeyframes df-lunge-a{0%{transform:none}40%{transform:translateX(calc(var(--fx-dir)*var(--u)*3.2)) scale(1.05)}100%{transform:none}}
-akeyframes df-dodge-a{0%{transform:none}35%{transform:translateX(calc(var(--fx-dir)*var(--u)*1.8)) rotate(calc(var(--fx-dir)*4deg))}100%{transform:none}}
-akeyframes df-heal-a{0%{opacity:0;transform:scale(.7)}30%{opacity:1}100%{opacity:0;transform:scale(1.15)}}
+@keyframes df-hit-a{0%{transform:none}15%{transform:translateX(calc(var(--toward)*var(--u)*-1.3))}35%{transform:translateX(calc(var(--toward)*var(--u)*.9))}55%{transform:translateX(calc(var(--toward)*var(--u)*-.6))}80%{transform:translateX(calc(var(--toward)*var(--u)*.3))}100%{transform:none}}
+@keyframes df-flash-a{0%{filter:var(--grade)}12%{filter:var(--grade) brightness(2) sepia(1) hue-rotate(-40deg) saturate(5)}100%{filter:var(--grade)}}
+@keyframes df-lunge-a{0%{transform:none}40%{transform:translateX(calc(var(--fx-dir)*var(--u)*3.2)) scale(1.05)}100%{transform:none}}
+@keyframes df-dodge-a{0%{transform:none}35%{transform:translateX(calc(var(--fx-dir)*var(--u)*1.8)) rotate(calc(var(--fx-dir)*4deg))}100%{transform:none}}
+@keyframes df-heal-a{0%{opacity:0;transform:scale(.7)}30%{opacity:1}100%{opacity:0;transform:scale(1.15)}}
 .tv-fig[data-fx=hit][data-fx-tick=b] .tv-fig-body{animation:df-hit-b .6s ease var(--fx-delay,0ms) backwards}
 .tv-fig[data-fx=hit][data-fx-tick=b] .tv-fig-sprite{animation:df-flash-b .6s ease var(--fx-delay,0ms) backwards,df-breathe 4.6s ease-in-out infinite}
 .tv-fig[data-fx=lunge][data-fx-tick=b] .tv-fig-body{animation:df-lunge-b .6s ease var(--fx-delay,0ms) backwards}
 .tv-fig[data-fx=dodge][data-fx-tick=b] .tv-fig-body{animation:df-dodge-b .7s ease var(--fx-delay,0ms) backwards}
 .tv-fig[data-fx=heal][data-fx-tick=b] .tv-fig-body::before{content:'';position:absolute;inset:4% 10%;border-radius:50%;pointer-events:none;background:radial-gradient(ellipse,#d6efa099,#e8cb9433 55%,transparent 72%);animation:df-heal-b 1.3s ease-out both}
-bkeyframes df-hit-b{0%{transform:none}15%{transform:translateX(calc(var(--toward)*var(--u)*-1.3))}35%{transform:translateX(calc(var(--toward)*var(--u)*.9))}55%{transform:translateX(calc(var(--toward)*var(--u)*-.6))}80%{transform:translateX(calc(var(--toward)*var(--u)*.3))}100%{transform:none}}
-bkeyframes df-flash-b{0%{filter:var(--grade)}12%{filter:var(--grade) brightness(2) sepia(1) hue-rotate(-40deg) saturate(5)}100%{filter:var(--grade)}}
-bkeyframes df-lunge-b{0%{transform:none}40%{transform:translateX(calc(var(--fx-dir)*var(--u)*3.2)) scale(1.05)}100%{transform:none}}
-bkeyframes df-dodge-b{0%{transform:none}35%{transform:translateX(calc(var(--fx-dir)*var(--u)*1.8)) rotate(calc(var(--fx-dir)*4deg))}100%{transform:none}}
-bkeyframes df-heal-b{0%{opacity:0;transform:scale(.7)}30%{opacity:1}100%{opacity:0;transform:scale(1.15)}}
+@keyframes df-hit-b{0%{transform:none}15%{transform:translateX(calc(var(--toward)*var(--u)*-1.3))}35%{transform:translateX(calc(var(--toward)*var(--u)*.9))}55%{transform:translateX(calc(var(--toward)*var(--u)*-.6))}80%{transform:translateX(calc(var(--toward)*var(--u)*.3))}100%{transform:none}}
+@keyframes df-flash-b{0%{filter:var(--grade)}12%{filter:var(--grade) brightness(2) sepia(1) hue-rotate(-40deg) saturate(5)}100%{filter:var(--grade)}}
+@keyframes df-lunge-b{0%{transform:none}40%{transform:translateX(calc(var(--fx-dir)*var(--u)*3.2)) scale(1.05)}100%{transform:none}}
+@keyframes df-dodge-b{0%{transform:none}35%{transform:translateX(calc(var(--fx-dir)*var(--u)*1.8)) rotate(calc(var(--fx-dir)*4deg))}100%{transform:none}}
+@keyframes df-heal-b{0%{opacity:0;transform:scale(.7)}30%{opacity:1}100%{opacity:0;transform:scale(1.15)}}
 .tv-float{position:absolute;left:50%;top:22%;font:700 calc(var(--u)*3.4)/1 var(--serif);white-space:nowrap;color:#ffd0c4;text-shadow:0 0 .6vw #7a1a10,0 3px 10px #000;animation:df-float-up 1.3s ease-out var(--fx-delay,0ms) both}
 .tv-float[data-kind=critical]{font-size:calc(var(--u)*4.6);color:#ffe29a}
 .tv-float[data-kind=miss]{color:#d9d4c4;font-size:calc(var(--u)*2.6);font-style:italic}
 .tv-float[data-kind=heal]{color:#cdf2a0;text-shadow:0 0 .8vw #4f8a2a,0 3px 10px #000}
 @keyframes df-float-up{0%{opacity:0;transform:translate(-50%,0) scale(.6)}15%{opacity:1;transform:translate(-50%,-.5vw) scale(1.15)}100%{opacity:0;transform:translate(-50%,-5vw) scale(1)}}
 
-/* ---------- speech bubbles: attached to the figure, named, tailed ---------- */
-.tv-fig-bubbles{position:absolute;top:1%;z-index:3;width:calc(var(--u)*22)}
-.tv-fig[data-slot=hero-1] .tv-fig-bubbles{left:80%}
-.tv-fig[data-slot=hero-2] .tv-fig-bubbles{right:80%}
-.tv-fig[data-slot=npc] .tv-fig-bubbles{right:72%}
-.tv-bubble{position:relative;padding:calc(var(--u)*.5) calc(var(--u)*.9) calc(var(--u)*.7);border-radius:calc(var(--u)*1.1);background:#f6efdc;color:#1c160e;border:calc(var(--u)*.18) solid #c9a35f;box-shadow:0 calc(var(--u)*.5) calc(var(--u)*1.6) #000a;text-shadow:none;transform-origin:100% 50%;animation:df-bubble-in .2s ease-out var(--appear,0ms) backwards}
-.tv-fig[data-slot=hero-1] .tv-bubble{transform-origin:0 50%}
-.tv-bubble::after{content:'';position:absolute;top:46%;border:calc(var(--u)*.9) solid transparent}
-.tv-fig[data-slot=hero-1] .tv-bubble::after{left:calc(var(--u)*-1.7);border-right-color:#c9a35f}
-.tv-fig[data-slot=hero-2] .tv-bubble::after,.tv-fig[data-slot=npc] .tv-bubble::after{right:calc(var(--u)*-1.7);border-left-color:#c9a35f}
-.tv-bubble[data-kind=action]{background:#0e151fec;color:#f3ead6;font-style:italic;animation:df-bubble-in .2s ease-out var(--appear,0ms) backwards,df-bubble-out var(--fade,500ms) ease-in var(--hold,6s) forwards}
-.tv-bubble-head{display:flex;align-items:center;gap:calc(var(--u)*.5)}
-.tv-bubble-name{font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.06em;color:#7a4b13}
-.tv-bubble[data-kind=action] .tv-bubble-name{color:#e8cb94}
-.tv-bubble-text{margin:calc(var(--u)*.15) 0 0;font-size:var(--fs-bubble);line-height:1.22;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.tv-bubble[data-kind=action] .tv-bubble-text::before{content:'';display:inline-block;width:1em;height:1em;margin-right:.3em;vertical-align:-.12em;background:url(/assets/ui/generated/icon-sword) center/contain no-repeat}
-.tv-wave{display:none;gap:calc(var(--u)*.25);align-items:center;height:calc(var(--u)*1.2)}
-.tv-wave b{display:block;width:calc(var(--u)*.25);height:100%;border-radius:2px;background:#b3741f;transform-origin:50% 50%;animation:df-wave .8s ease-in-out infinite}
-.tv-wave b:nth-child(2){animation-delay:-.27s}.tv-wave b:nth-child(3){animation-delay:-.54s}
-.tv-bubble.speaking .tv-wave{display:inline-flex}
-.tv-bubble.speaking::before{content:'';position:absolute;inset:calc(var(--u)*-.35);border:calc(var(--u)*.22) solid #f0c985;border-radius:calc(var(--u)*1.4);animation:df-speak-pulse 1s ease-in-out infinite}
-@keyframes df-bubble-in{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:none}}
-@keyframes df-bubble-out{from{opacity:1}to{opacity:0}}
-@keyframes df-wave{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}
-@keyframes df-speak-pulse{0%,100%{opacity:.35}50%{opacity:1}}
-
-/* ---------- the Dungeon Master's caption: a ribbon, no tail, no character lit ---------- */
-.tv-speaker{display:none!important}
-.tv-stage:has(.tv-fig[data-slot=npc][data-present=true]) .tv-stagebox{width:calc(var(--u)*44);justify-self:start;margin-left:calc(var(--u)*22)}
-.tv-dm{width:100%;padding:calc(var(--u)*.6) calc(var(--u)*1.6) calc(var(--u)*.8);text-align:center;background:linear-gradient(180deg,#2b2214f0,#17110ae8);border-top:calc(var(--u)*.12) solid #d9b77a;border-bottom:calc(var(--u)*.12) solid #d9b77a;box-shadow:0 calc(var(--u)*.6) calc(var(--u)*2) #000a}
-.tv-dm-head{display:flex;align-items:center;justify-content:center;gap:calc(var(--u)*.7);margin-bottom:calc(var(--u)*.2)}
-.tv-dm-avatar{width:calc(var(--u)*3);height:calc(var(--u)*3);border-radius:50%;object-fit:cover;border:calc(var(--u)*.12) solid #d9b77a}
-.tv-dm-label{font:700 var(--fs-label)/1 var(--serif);letter-spacing:.22em;text-transform:uppercase;color:#e8cb94;text-shadow:none}
-.tv-dm .tv-narration{margin-inline:auto;text-shadow:0 2px 10px #000}
-.tv-dm:has(.tv-narration.speaking){box-shadow:0 0 0 calc(var(--u)*.2) #f0c985,0 0 calc(var(--u)*2) #e0b87799;animation:df-speak-pulse-box 1.2s ease-in-out infinite}
-@keyframes df-speak-pulse-box{0%,100%{filter:brightness(1)}50%{filter:brightness(1.12)}}
 
 /* ---------- combat on the composited stage ---------- */
 .tv-stage[data-tv-mode=combat]>div.tv-art{display:block}
@@ -205,19 +126,19 @@ bkeyframes df-heal-b{0%{opacity:0;transform:scale(.7)}30%{opacity:1}100%{opacity
 .live-screen[data-roll-tick=a] .combat-roll:first-child .combat-roll-verdict{animation:df-snap-a .35s cubic-bezier(.2,1.6,.4,1) 1.05s backwards}
 .live-screen[data-roll-tick=a] .combat-roll:first-child .combat-roll-source{animation:df-fade-a .4s ease 1.3s backwards}
 .live-screen[data-roll-tick=a][data-roll-verdict=critical] .combat-roll-panel{animation:df-crit-a .9s ease 1.05s backwards}
-akeyframes df-tumble-a{0%{transform:translate(0,-30%) rotate(0) scale(.55);color:transparent;text-shadow:none}18%{transform:translate(12%,4%) rotate(220deg) scale(1.1)}36%{transform:translate(-8%,-10%) rotate(470deg) scale(.9)}54%{transform:translate(6%,0) rotate(640deg) scale(1.05)}72%{transform:rotate(720deg) scale(1.12);color:transparent;text-shadow:none}80%{transform:rotate(720deg) scale(.95)}100%{transform:none}}
-akeyframes df-fade-a{from{opacity:0;transform:translateY(25%)}to{opacity:1;transform:none}}
-akeyframes df-snap-a{from{opacity:0;transform:scale(.3)}to{opacity:1;transform:none}}
-akeyframes df-crit-a{0%,100%{filter:none}30%{filter:brightness(1.5) saturate(1.3)}}
+@keyframes df-tumble-a{0%{transform:translate(0,-30%) rotate(0) scale(.55);color:transparent;text-shadow:none}18%{transform:translate(12%,4%) rotate(220deg) scale(1.1)}36%{transform:translate(-8%,-10%) rotate(470deg) scale(.9)}54%{transform:translate(6%,0) rotate(640deg) scale(1.05)}72%{transform:rotate(720deg) scale(1.12);color:transparent;text-shadow:none}80%{transform:rotate(720deg) scale(.95)}100%{transform:none}}
+@keyframes df-fade-a{from{opacity:0;transform:translateY(25%)}to{opacity:1;transform:none}}
+@keyframes df-snap-a{from{opacity:0;transform:scale(.3)}to{opacity:1;transform:none}}
+@keyframes df-crit-a{0%,100%{filter:none}30%{filter:brightness(1.5) saturate(1.3)}}
 .live-screen[data-roll-tick=b] .combat-roll:first-child .combat-roll-value{animation:df-tumble-b 1.25s cubic-bezier(.25,.7,.3,1) backwards}
 .live-screen[data-roll-tick=b] .combat-roll:first-child .combat-roll-explanation{animation:df-fade-b .4s ease 1s backwards}
 .live-screen[data-roll-tick=b] .combat-roll:first-child .combat-roll-verdict{animation:df-snap-b .35s cubic-bezier(.2,1.6,.4,1) 1.05s backwards}
 .live-screen[data-roll-tick=b] .combat-roll:first-child .combat-roll-source{animation:df-fade-b .4s ease 1.3s backwards}
 .live-screen[data-roll-tick=b][data-roll-verdict=critical] .combat-roll-panel{animation:df-crit-b .9s ease 1.05s backwards}
-bkeyframes df-tumble-b{0%{transform:translate(0,-30%) rotate(0) scale(.55);color:transparent;text-shadow:none}18%{transform:translate(12%,4%) rotate(220deg) scale(1.1)}36%{transform:translate(-8%,-10%) rotate(470deg) scale(.9)}54%{transform:translate(6%,0) rotate(640deg) scale(1.05)}72%{transform:rotate(720deg) scale(1.12);color:transparent;text-shadow:none}80%{transform:rotate(720deg) scale(.95)}100%{transform:none}}
-bkeyframes df-fade-b{from{opacity:0;transform:translateY(25%)}to{opacity:1;transform:none}}
-bkeyframes df-snap-b{from{opacity:0;transform:scale(.3)}to{opacity:1;transform:none}}
-bkeyframes df-crit-b{0%,100%{filter:none}30%{filter:brightness(1.5) saturate(1.3)}}
+@keyframes df-tumble-b{0%{transform:translate(0,-30%) rotate(0) scale(.55);color:transparent;text-shadow:none}18%{transform:translate(12%,4%) rotate(220deg) scale(1.1)}36%{transform:translate(-8%,-10%) rotate(470deg) scale(.9)}54%{transform:translate(6%,0) rotate(640deg) scale(1.05)}72%{transform:rotate(720deg) scale(1.12);color:transparent;text-shadow:none}80%{transform:rotate(720deg) scale(.95)}100%{transform:none}}
+@keyframes df-fade-b{from{opacity:0;transform:translateY(25%)}to{opacity:1;transform:none}}
+@keyframes df-snap-b{from{opacity:0;transform:scale(.3)}to{opacity:1;transform:none}}
+@keyframes df-crit-b{0%,100%{filter:none}30%{filter:brightness(1.5) saturate(1.3)}}
 .live-screen[data-role] .combat-actor[data-active=true]{animation:df-turn-pulse 1.2s ease-out 1 backwards}
 @keyframes df-turn-pulse{0%{transform:scale(1.06)}100%{transform:none}}
 
@@ -241,9 +162,9 @@ bkeyframes df-crit-b{0%,100%{filter:none}30%{filter:brightness(1.5) saturate(1.3
 
 /* ---------- phone: a quick fade, and the table log ---------- */
 .client.player .view[data-swap=a]{animation:df-phone-in-a .25s ease-out}
-akeyframes df-phone-in-a{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes df-phone-in-a{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .client.player .view[data-swap=b]{animation:df-phone-in-b .25s ease-out}
-bkeyframes df-phone-in-b{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes df-phone-in-b{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .live-screen[data-role=player][data-roll-tick] .combat-roll:first-child{--die:128px}
 .table-log{display:grid;gap:6px;margin:10px 0 12px;padding:10px 12px;background:linear-gradient(135deg,#142133e6,#080f19ee);border:1px solid #c9a35f66;border-radius:8px;font-family:var(--serif)}
 .table-line{display:flex;align-items:center;gap:8px;margin:0;font:15px/1.35 var(--serif);color:#efe6ce}
@@ -252,30 +173,4 @@ bkeyframes df-phone-in-b{from{opacity:0;transform:translateY(8px)}to{opacity:1;t
 .table-line[data-kind=action] .table-text{font-style:italic}
 
 /* ---------- reduced motion: fades and colour only ---------- */
-@media (prefers-reduced-motion:reduce){
-.tv-art,.tv-fig-sprite,.tv-panel::after,.tv-card[data-state=empty],.tv-card[data-state=creating]::after,.tv-card[data-state=creating] .tv-portrait-img,.tv-card[data-state=creating] .tv-portrait::before,.tv-card[data-state=creating] .tv-member-name::after,.tv-splash-mark::after,.tv-wave b,.tv-bubble.speaking::before,.tv-dm:has(.tv-narration.speaking),.live-screen[data-role] .combat-actor[data-active=true]{animation:none!important}
-.tv-card[data-state=creating] .tv-member-name::after{clip-path:none}
-.tv-stage[data-art-swap] .tv-art,.tv-stage[data-art-swap] .tv-art-previous{animation-name:df-fade-only!important;transform:none!important}
-.tv-stage .tv-title,.tv-stage .tv-dm,.tv-stage .tv-headline .tv-divider,.tv-stage .tv-stagebox .tv-divider,.tv-stage .tv-fig[data-present=true]{animation:df-fade-only .5s ease backwards!important}
-.tv-fig-body,.tv-fig[data-speaking] .tv-fig-body{transform:none!important}
-.tv-fig[data-fx] .tv-fig-body{animation:none!important}
-.tv-fig[data-fx=hit] .tv-fig-sprite{animation:df-flash-only .6s ease var(--fx-delay,0ms) backwards!important}
-.tv-fig[data-fx=heal] .tv-fig-body::before{animation:df-fade-only 1s ease both!important;transform:none!important}
-.tv-fig[data-down] .tv-fig-body{opacity:.45;filter:grayscale(1)}
-.live-screen[data-roll-tick] .combat-roll:first-child .combat-roll-value,.tv-final-die,.live-screen[data-roll-tick] .combat-roll:first-child .combat-roll-verdict,.tv-final-ribbon{animation:df-fade-only .6s ease backwards!important}
-.tv-float{animation:df-fade-only 1.2s ease both!important}
-.tv-bubble,.tv-bubble[data-kind=action]{animation-name:df-fade-only,df-bubble-out!important}
-.tv-stage[data-stage=aftermath] .live-screen[data-screen=aftermath] .aftermath-chapter{animation:df-fade-only .6s ease backwards!important}
-.client.player .view[data-swap]{animation:df-fade-only .25s ease!important}
-.tv-splash-mark::after{display:none}
-@keyframes df-fade-only{from{opacity:0}to{opacity:1}}
-@keyframes df-flash-only{0%{filter:var(--grade)}15%{filter:var(--grade) brightness(1.8) sepia(1) hue-rotate(-40deg) saturate(5)}100%{filter:var(--grade)}}
-}
 
-/* ---------- a dark, soft backdrop so the cast stands out (checkpoint treatment) ---------- */
-.tv-stage:not([data-tv-mode=lobby])>.tv-art{filter:brightness(.62) saturate(.85) blur(2px)}
-.tv-stage[data-tv-mode=scene]>.tv-scrim{background:radial-gradient(ellipse at 50% 42%,transparent 40%,#02040ad9 125%),linear-gradient(0deg,#03060ef5 0%,#03060edb 26%,#03060e00 58%),linear-gradient(180deg,#03060eb3 0%,#03060e00 28%)}
-.tv-stage[data-tv-mode=scene] .tv-fig[data-slot=npc]{--fig-h:calc(var(--u)*37);left:calc(var(--u)*53)}
-.tv-stage[data-tv-mode=scene] .tv-fig[data-slot=npc] .tv-fig-bubbles{right:60%}
-.tv-final-panel{min-height:calc(var(--u)*19.4)}
-.tv-figures[data-mode=aftermath] .tv-fig[data-slot=npc] .tv-fig-plate{visibility:hidden}

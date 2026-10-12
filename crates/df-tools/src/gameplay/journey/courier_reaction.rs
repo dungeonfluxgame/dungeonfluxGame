@@ -278,13 +278,20 @@ impl df_engine::relationship_staging::RelationshipApplicationOwner for AuthoredC
         else {
             return Err(RepositoryError::InvalidCandidate);
         };
+        super::super::beat_script_runtime::select(
+            current,
+            df_protocol::common::GameplayActionKind::DefendCourier,
+            choices,
+        )?;
         if current != self.current
             || command.basis != current.basis()
             || command.observed_revision != current.basis().revision
             || *actor != super::player_entity(command.member, current)?
             || *action != model::content("defend-courier")?
             || !targets.is_empty()
-            || !choices.is_empty()
+            || choices
+                .iter()
+                .any(|(group, _)| group.as_str() != super::super::beat_script_runtime::CHOICE_GROUP)
             || super::phase(current)? != df_protocol::common::JourneyPhase::Dialogue
             || !super::offered(current, command.member)?
                 .iter()

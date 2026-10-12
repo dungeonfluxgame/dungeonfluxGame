@@ -102,6 +102,17 @@ server; the launcher also stops PostgreSQL when it started it. To resume a saved
 game, use `development/run-gameplay.sh --no-build --database <name>` with the
 database name printed by the launcher.
 
+Each run has its own room code, derived from its database name so a restart of the same
+game keeps it. The `READY` line prints it (`player=...?room=<code>`), the display's join
+panel shows it, and the join form and the `?room=` link accept it.
+`DF_GAMEPLAY_ROOM_CODE=<1-32 letters or digits>` pins a code, for tests. Slow machines:
+`DF_GAMEPLAY_COMMIT_SECONDS` (default 12) bounds a database commit and
+`DF_GAMEPLAY_REPLY_SECONDS` (default 20, must exceed it) bounds a request's wait for the game
+owner; the browser's request timeout is served from the latter. If a commit's outcome is
+unknown the server prints `SESSION fenced ...`, retries by itself and prints
+`SESSION recovered`; `SESSION lost` means the saved state needs a server restart.
+Browser checks for these live in `development/browser-checks/`.
+
 Edit `content/harbor-journey/tuning.json` to tune hero AC, proficiency, base HP,
 ability arrays/background bonuses, Second Wind and weapon dice; bandit stats,
 attack/damage and weapon dice; critical threshold, round ticks, combat log depth,
@@ -119,6 +130,37 @@ and allowed origin to your machine's IP:
 ```sh
 DF_GAMEPLAY_LISTEN=0.0.0.0:63309 DF_GAMEPLAY_ALLOWED_ORIGINS=http://<this-machine-ip>:63309 development/run-gameplay.sh
 ```
+
+### Content rating (mature by default)
+
+This is an adult game, so the written and spoken content is `mature` unless you switch it:
+`DF_GAMEPLAY_CONTENT_RATING=mature` (the default when unset) or `restrained`. Any other value
+refuses startup. The startup line reads `CONTENT rating=mature` or `CONTENT rating=restrained`.
+`run-gameplay.sh` passes the variable through when you set it; it sets nothing itself.
+
+```sh
+DF_GAMEPLAY_CONTENT_RATING=restrained development/run-gameplay.sh
+```
+
+- `mature`: the Dungeon Master runs a table of adults. Violence can be bloody and its
+  consequences described, horror can be horrifying, villains can be cruel, interrogation and
+  torture may appear as dark fiction, characters may swear when it fits them, and romance and
+  seduction are played as adult scenes (an NPC still answers by its own temperament: a devout or
+  uninterested one declines, an amused one plays along, an interested one reciprocates). The
+  fight, victory and defeat prose, the speaking antagonists' lines, and the NPC flirting, threat
+  and curt reactions come from the mature tables (`content/adventure-tables/mature-overlay.json`).
+- `restrained`: the earlier behaviour, unchanged. Tense heroic fantasy, no gore, no strong
+  language, nothing explicit; the shipped tables are used as written and a seed produces the same
+  bytes it always did.
+
+What neither mode changes: no sexual content involving minors or any character presented as
+underage (the tables' `young` characters are young adults, and the model is told so); no sexual
+content about real people (a character flagged as based on a real person's likeness is excluded);
+what players say is untrusted input in both modes; all secret-safety rules (a model reply that
+names a secret term is refused in both); the game rules and mechanics; and the text model's own
+policy. A refusal or empty reply falls back to the prepared in-character line and is never
+retried with reworded instructions to get around it. The setting is read once at startup. A saved
+adventure keeps the text it was generated with.
 
 ### Speech input (hold to talk)
 

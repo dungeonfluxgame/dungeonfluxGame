@@ -1,119 +1,233 @@
 {
-  "schema": 1,
+  "schema": 2,
   "location_id": "lamplit-market",
   "title": "The Lamplit Market",
   "theme": {
     "name": "tavern"
   },
+  "surface": "stone",
   "ground": {
     "stem": "ground-lamplit-market",
     "size_m": 24.0,
-    "centre": [
-      0.0,
-      0.0
-    ],
-    "falloff_m": 6.0
+    "centre": [0.0, 0.0],
+    "falloff_m": 4.1
   },
   "backdrop": {
     "stem": "scene-lamplit-market-arrival",
-    "distance_m": 9.0,
+    "distance_m": 9.82,
     "width_m": 34.0,
     "base_m": -6.4,
     "height_m": 19.125
   },
   "grid": {
-    "origin": [
-      -6.0,
-      -4.5
-    ],
-    "cell_m": 1.5,
-    "cols": 8,
-    "rows": 6,
-    "blocked": [
-      [
-        0,
-        0
-      ],
-      [
-        7,
-        0
-      ],
-      [
-        3,
-        3
-      ],
-      [
-        7,
-        5
-      ]
-    ]
+    "origin": [-7.5, -5.625],
+    "cell_m": 1.25,
+    "cols": 12,
+    "rows": 9
   },
   "cameras": {
     "tactical": {
-      "target": [
-        0,
-        0.8,
-        0
-      ],
+      "target": [0, 0.8, 0],
       "distance": 15.0,
       "yaw_deg": 0,
       "pitch_deg": 26,
       "fov_deg": 40
     },
     "combat_est": {
-      "target": [
-        0,
-        0.8,
-        0
-      ],
+      "target": [0, 0.8, 0],
       "distance": 10.0,
       "yaw_deg": 0,
       "pitch_deg": 16,
       "fov_deg": 40
     },
     "turn_focus": {
-      "target": [
-        0,
-        0.9,
-        0
-      ],
+      "target": [0, 0.9, 0],
       "distance": 8.0,
       "yaw_deg": 32,
       "pitch_deg": 13,
       "fov_deg": 38
     },
     "impact": {
-      "target": [
-        0,
-        0.9,
-        0
-      ],
+      "target": [0, 0.9, 0],
       "distance": 7.0,
       "yaw_deg": -48,
       "pitch_deg": 11,
       "fov_deg": 36
     },
     "ko": {
-      "target": [
-        0,
-        0.5,
-        0
-      ],
+      "target": [0, 0.5, 0],
       "distance": 8.0,
       "yaw_deg": 28,
       "pitch_deg": 22,
       "fov_deg": 40
     },
     "victory": {
-      "target": [
-        0,
-        1.0,
-        0
-      ],
+      "target": [0, 1.0, 0],
       "distance": 6.0,
       "yaw_deg": -30,
       "pitch_deg": 8,
       "fov_deg": 34
     }
-  }
+  },
+  "layouts": [
+    {
+      "id": "market-square",
+      "label": "The market square",
+      "obstacles": [
+        {
+          "id": "market-stall-s1",
+          "kind": "market-stall",
+          "cells": [[0, 0]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-market-stall",
+          "height_m": 2.2
+        },
+        {
+          "id": "market-stall-s2",
+          "kind": "market-stall",
+          "cells": [[11, 0]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-market-stall",
+          "height_m": 2.2
+        },
+        {
+          "id": "crate-x1",
+          "kind": "crate",
+          "cells": [[0, 8]],
+          "blocks_movement": true,
+          "cover": "half",
+          "sprite": "prop-crates",
+          "height_m": 1.0
+        },
+        {
+          "id": "crate-x2",
+          "kind": "crate",
+          "cells": [[11, 8]],
+          "blocks_movement": true,
+          "cover": "half",
+          "sprite": "prop-crates",
+          "height_m": 1.0
+        }
+      ],
+      "difficult": [],
+      "spawns": {
+        "heroes": [[5, 7], [6, 7], [3, 7], [8, 7]],
+        "enemies": [[5, 2], [6, 2], [3, 2], [8, 2]]
+      }
+    },
+    {
+      "id": "stall-row",
+      "label": "The bazaar lane",
+      "obstacles": [
+        {
+          "id": "market-stall-s1",
+          "kind": "market-stall",
+          "cells": [[0, 3], [1, 3], [2, 3], [3, 3], [4, 3]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-market-stall",
+          "height_m": 2.2
+        },
+        {
+          "id": "market-stall-s2",
+          "kind": "market-stall",
+          "cells": [[7, 3], [8, 3], [9, 3], [10, 3], [11, 3]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-market-stall",
+          "height_m": 2.2
+        }
+      ],
+      "difficult": [],
+      "spawns": {
+        "heroes": [[5, 7], [6, 7], [3, 7], [8, 7]],
+        "enemies": [[5, 1], [6, 1], [3, 1], [8, 1]]
+      }
+    },
+    {
+      "id": "stalls-and-cart",
+      "label": "Stalls and a cart",
+      "obstacles": [
+        {
+          "id": "barrel-b1",
+          "kind": "barrel",
+          "cells": [[9, 3]],
+          "blocks_movement": true,
+          "cover": "half",
+          "sprite": "prop-barrels",
+          "height_m": 1.0
+        },
+        {
+          "id": "barrel-b2",
+          "kind": "barrel",
+          "cells": [[6, 6]],
+          "blocks_movement": true,
+          "cover": "half",
+          "sprite": "prop-barrels",
+          "height_m": 1.0
+        },
+        {
+          "id": "cart-k1",
+          "kind": "cart",
+          "cells": [[4, 4], [5, 4]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-cart",
+          "height_m": 1.5
+        },
+        {
+          "id": "market-stall-s1",
+          "kind": "market-stall",
+          "cells": [[2, 0]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-market-stall",
+          "height_m": 2.2
+        },
+        {
+          "id": "market-stall-s2",
+          "kind": "market-stall",
+          "cells": [[9, 0]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-market-stall",
+          "height_m": 2.2
+        },
+        {
+          "id": "market-stall-s3",
+          "kind": "market-stall",
+          "cells": [[1, 5]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-market-stall",
+          "height_m": 2.2
+        },
+        {
+          "id": "market-stall-s4",
+          "kind": "market-stall",
+          "cells": [[10, 5]],
+          "blocks_movement": true,
+          "cover": "three-quarters",
+          "sprite": "prop-market-stall",
+          "height_m": 2.2
+        },
+        {
+          "id": "crate-x1",
+          "kind": "crate",
+          "cells": [[1, 3]],
+          "blocks_movement": true,
+          "cover": "half",
+          "sprite": "prop-crates",
+          "height_m": 1.0
+        }
+      ],
+      "difficult": [],
+      "spawns": {
+        "heroes": [[5, 7], [6, 7], [3, 7], [8, 7]],
+        "enemies": [[5, 2], [6, 2], [3, 2], [8, 2]]
+      }
+    }
+  ]
 }

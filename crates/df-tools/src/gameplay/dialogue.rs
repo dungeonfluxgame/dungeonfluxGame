@@ -90,7 +90,7 @@ impl Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("dialogue actor queue full"))?;
-        tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+        tokio::time::timeout(super::timing::active().reply, wait)
             .await
             .map_err(|_| Status::deadline_exceeded("retain the confirmed operation for lookup"))?
             .map_err(|_| Status::unavailable("dialogue actor stopped"))?
@@ -117,10 +117,13 @@ impl rpc::dialogue_service_server::DialogueService for Service {
             DialogueReply::Raw(mut response, npc) => {
                 // The model call runs here, off the actor thread; on any failure the
                 // response is exactly the classification the actor produced.
-                if let Some(context) = npc
-                    && let Some(reply) = self.npc_voice.converse(context, &self.table_log).await
-                {
-                    response.npc_reply = reply;
+                if let Some(context) = npc {
+                    // Every screen shows the speaker thinking until the reply (or the lack of
+                    // one) is in; the mark clears when this scope ends.
+                    let _thinking = self.table_log.reply_pending(&context.speaker);
+                    if let Some(reply) = self.npc_voice.converse(context, &self.table_log).await {
+                        response.npc_reply = reply;
+                    }
                 }
                 Ok(Response::new(response))
             }
@@ -316,11 +319,11 @@ impl actor::Actor {
             && finality == InputFinality::Final
             && !request.offer_id.is_empty()
         {
-            let kind = journey::offered(current, member)
+            let kind = super::beat_script_runtime::view_offers(current, member)
                 .map_err(actor::unavailable)?
                 .into_iter()
-                .map(|(kind, _)| kind)
-                .find(|kind| journey::offer_id(current, *kind) == request.offer_id)
+                .find(|(_, _, id)| *id == request.offer_id)
+                .map(|(kind, _, _)| kind)
                 .ok_or_else(|| Status::failed_precondition("current offered choice required"))?;
             let charge = current
                 .retained_bytes()
@@ -459,7 +462,8 @@ impl actor::Actor {
                 .map_err(actor::unavailable)?
                 .iter()
                 .any(|(kind, _)| *kind == pending.kind)
-                || journey::offer_id(current, pending.kind) != pending.offer
+                || !super::beat_script_runtime::matches_id(current, pending.kind, &pending.offer)
+                    .map_err(actor::unavailable)?
             {
                 return Err(Status::failed_precondition("confirmed offer changed"));
             }

@@ -80,15 +80,28 @@ fn join_lookup_error(
 }
 
 pub(super) fn matches_room_code(code: &str) -> bool {
-    code == super::journey::room_code()
+    super::room_code::matches(&super::journey::room_code(), code)
 }
 
-/// The shell remains shared with qualification. Only its validated ASCII room binding changes.
-pub(super) async fn player_page() -> axum::response::Html<String> {
+/// The shell remains shared with qualification. Only its validated ASCII room binding and the
+/// run's public identity change.
+pub(super) async fn player_page(
+    axum::extract::State(state): axum::extract::State<super::PageState>,
+) -> axum::response::Html<String> {
+    player_page_for(&state.run_identity).await
+}
+
+/// The player shell for the run named `run_identity` (empty when the run publishes none).
+pub(super) async fn player_page_for(run_identity: &str) -> axum::response::Html<String> {
     let axum::response::Html(body) = super::player().await;
+    let run = if run_identity.is_empty() {
+        String::new()
+    } else {
+        format!(" data-run=\"{run_identity}\"")
+    };
     axum::response::Html(body.replace(
         &format!("data-room=\"{}\"", super::journey::ROOM_CODE),
-        &format!("data-room=\"{}\"", super::journey::room_code()),
+        &format!("data-room=\"{}\"{run}", super::journey::room_code()),
     ))
 }
 
@@ -100,6 +113,9 @@ impl actor::Actor {
         &mut self,
         request: rpc::JoinRoomRequest,
     ) -> Result<rpc::JoinRoomResponse, Status> {
+        if self.session_lost() {
+            return Err(actor::session_lost_status());
+        }
         if request.room_code.len() > 32
             || request.join_secret.len() != 32
             || request.join_secret.iter().all(|byte| *byte == 0)
@@ -136,6 +152,13 @@ impl actor::Actor {
             trace_parent: String::new(),
             build: crate::BUILD_ID.to_owned(),
         };
+        if !self.fenced {
+            self.session.attempt = Some(actor::Attempt::Input {
+                credential: self.bootstrap_credential,
+                fingerprint,
+                input: Box::new(input.clone()),
+            });
+        }
         let recovering = self.fenced;
         let replaying_uncertain = recovering && self.owner.has_uncertain_operation();
         if recovering {
@@ -189,7 +212,10 @@ impl actor::Actor {
         }
         let prior = self.owner.checkpoint().basis().revision;
         let (item, receiver) = OwnedInput::new(context, scope, input.clone());
+        let commit_started = std::time::Instant::now();
         self.owner.reduce(AdmissionSequence(0), item);
+        self.session.commit_millis =
+            u64::try_from(commit_started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let receipt = match admit_join_outcome(
             self.owner.is_current(),
             receiver.try_recv(),
@@ -308,7 +334,7 @@ impl rpc::room_service_server::RoomService for Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("room actor queue full"))?;
-        let response = tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+        let response = tokio::time::timeout(super::timing::active().reply, wait)
             .await
             .map_err(|_| Status::deadline_exceeded("retain your original room join proof"))?
             .map_err(|_| Status::unavailable("room owner stopped"))??;

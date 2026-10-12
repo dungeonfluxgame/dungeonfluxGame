@@ -1,7 +1,7 @@
 //! Campaign-to-chapter startup binding. Database bytes stay immutable on resume.
 use super::super::{
     model,
-    startup_configuration::{AdventureSettings, adventure_seed},
+    startup_configuration::{AdventureSettings, adventure_seed, content_rating},
 };
 use super::{
     GenerateOptions,
@@ -134,6 +134,7 @@ pub(crate) fn select_campaign(
             seed,
             GenerateOptions {
                 rules_mode: settings.rules_mode,
+                rating: content_rating(),
             },
         )?;
         let store = CampaignStore::new(root, &id)?;

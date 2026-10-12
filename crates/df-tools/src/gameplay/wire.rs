@@ -65,6 +65,7 @@ pub(super) fn observation(code: rpc::RejectionCode) -> rpc::SubmitActionResponse
 }
 pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
     Some(match entry {
+        "script-choice" => rpc::GameplayActionKind::ExamineHarborSeal,
         "create-character" => rpc::GameplayActionKind::CreateCharacter,
         "begin-story" => rpc::GameplayActionKind::BeginStory,
         "ask-courier" => rpc::GameplayActionKind::AskCourier,
@@ -80,6 +81,7 @@ pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
 }
 pub(super) fn action_entry(kind: rpc::GameplayActionKind) -> Option<&'static str> {
     Some(match kind {
+        rpc::GameplayActionKind::ExamineHarborSeal => "script-choice",
         rpc::GameplayActionKind::CreateCharacter => "create-character",
         rpc::GameplayActionKind::BeginStory => "begin-story",
         rpc::GameplayActionKind::AskCourier => "ask-courier",
@@ -124,6 +126,12 @@ pub(super) fn journey_input(
         return Err(tonic::Status::invalid_argument("offer exceeds bound"));
     }
     let mut choices = Vec::new();
+    if let Some(id) = super::beat_script_runtime::submitted_id(&request.offer_id) {
+        choices.push((
+            model::label(super::beat_script_runtime::CHOICE_GROUP).map_err(|_| invalid())?,
+            model::label(id).map_err(|_| invalid())?,
+        ));
+    }
     if kind == rpc::GameplayActionKind::ChooseHarborScene {
         let selected = match rpc::HarborDestination::try_from(request.destination) {
             Ok(rpc::HarborDestination::HarborInn) => "harbor-inn",
@@ -488,6 +496,7 @@ pub(super) fn scene_cast(scene: &super::pack::Scene) -> Vec<rpc::SceneActor> {
             sprite: actor.sprite.clone(),
             portrait: actor.portrait.clone(),
             speaking: !scene.dialogue.is_empty() && actor.name == scene.speaker,
+            live_sprite: String::new(),
         })
         .collect()
 }
@@ -505,6 +514,46 @@ pub(super) fn journey_view(
     principal: df_types::MemberId,
 ) -> Result<rpc::ViewMessage, RepositoryError> {
     project_journey(current, role, principal).map(|projection| projection.view)
+}
+
+/// What the players can choose right now, as labels only, for the shared display: every ready
+/// hero's current offers merged in offer order without repeats. It carries no offer id and
+/// nothing private. A fight's turn belongs to the one hero acting, so it is left empty there.
+/// In a conversation the one choice is the public next step of the story: the members' offers
+/// there also depend on a private note's audience, which the shared display must not reflect.
+fn table_choices(
+    current: &Checkpoint,
+    phase: rpc::JourneyPhase,
+) -> Result<Vec<String>, RepositoryError> {
+    match phase {
+        rpc::JourneyPhase::Combat => return Ok(Vec::new()),
+        rpc::JourneyPhase::Dialogue => {
+            return Ok(vec![super::pack::offer_label(
+                rpc::GameplayActionKind::DefendCourier,
+            )]);
+        }
+        _ => {}
+    }
+    let state = current.state();
+    let mut labels: Vec<String> = Vec::new();
+    for link in super::journey::participants(current) {
+        let Some(hero) = link.character else {
+            continue;
+        };
+        if !state
+            .characters
+            .iter()
+            .any(|character| character.entity == hero)
+        {
+            continue;
+        }
+        for (kind, label) in super::journey::offered(current, link.member)? {
+            if kind != rpc::GameplayActionKind::CreateCharacter && !labels.contains(&label) {
+                labels.push(label);
+            }
+        }
+    }
+    Ok(labels)
 }
 
 pub(super) fn project_journey(
@@ -572,9 +621,10 @@ pub(super) fn project_journey(
         } else {
             creation = Some(creation_offer());
         }
-        for (kind, label) in journey::offered(current, principal)? {
+        for (kind, label, offer_id) in super::beat_script_runtime::view_offers(current, principal)?
+        {
             offers.push(rpc::GameplayActionOffer {
-                offer_id: journey::offer_id(current, kind),
+                offer_id,
                 action_kind: kind as i32,
                 label: label.to_owned(),
                 destinations: if kind == rpc::GameplayActionKind::ChooseHarborScene {
@@ -656,29 +706,15 @@ pub(super) fn project_journey(
             active_participant_id: encounter
                 .active_turn
                 .map_or_else(Vec::new, |who| who.as_bytes().to_vec()),
+            initiative: journey::initiative_rolls(current).map_err(|error| match error {
+                journey::CombatRoundError::Capacity => RepositoryError::Capacity,
+                _ => RepositoryError::InvalidCandidate,
+            })?,
         });
     }
     use super::pack::{self, SceneKey};
-    let key = match phase {
-        rpc::JourneyPhase::Room => SceneKey::Room,
-        rpc::JourneyPhase::Opening => SceneKey::Opening,
-        rpc::JourneyPhase::Dialogue
-            if state.narrative.active_beats[0].entry.as_str() == "courier-answer-seal" =>
-        {
-            SceneKey::DialogueSeal
-        }
-        rpc::JourneyPhase::Dialogue => SceneKey::DialogueEscort,
-        rpc::JourneyPhase::Combat => SceneKey::Combat,
-        rpc::JourneyPhase::Complete
-            if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] =>
-        {
-            SceneKey::Inn
-        }
-        rpc::JourneyPhase::Complete if journey::combat_victory(state)? => SceneKey::Victory,
-        rpc::JourneyPhase::Complete => SceneKey::Defeat,
-        _ => return Err(RepositoryError::InvalidCandidate),
-    };
-    let authored = pack::scene(key);
+    let authored = super::beat_script_runtime::scene(state)?;
+    let key = authored.key;
     let rested = state
         .narrative
         .completed_beats
@@ -691,14 +727,8 @@ pub(super) fn project_journey(
     } else {
         &authored.narration
     };
-    // The story text and the rules wording are separate strings in the pack; this is the one
-    // place the server joins them for display.
-    let narration = if rested || authored.rules_note.is_empty() {
-        narration.to_owned()
-    } else {
-        format!("{narration} {}", authored.rules_note)
-    };
-    let narration = narration.as_str();
+    // The story text and the rules wording are separate strings in the pack and stay separate
+    // on the wire: the story is narrated and spoken, the rules note is only read.
     let narration = match witnessed_courier_support(current, observer, perceived.facts(), &party)? {
         Some(name) => pack::with_content(|content| {
             format!(
@@ -726,6 +756,20 @@ pub(super) fn project_journey(
         }
         narration
     });
+    // A rested scene and an epilogue replace the story text whole, and the rules wording
+    // belonged to the text they replace.
+    let epilogue_replaces =
+        key == SceneKey::Inn && pack::with_content(|content| content.campaign_epilogue.is_some());
+    let rules_note = if rested || epilogue_replaces {
+        String::new()
+    } else {
+        authored.rules_note.clone()
+    };
+    let table_choices = if role == LocalDemoRole::Display {
+        table_choices(current, phase)?
+    } else {
+        Vec::new()
+    };
     let journey = rpc::JourneyView {
         phase: if creation.is_some() {
             rpc::JourneyPhase::CharacterCreation as i32
@@ -743,9 +787,12 @@ pub(super) fn project_journey(
         table_log: Vec::new(),
         tempo: None,
         standing: Vec::new(),
+        table_choices,
+        presentation_sequence: 0,
+        reply_speaker: String::new(),
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
-    let mut scene = if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] {
+    let mut scene = if super::beat_script_runtime::native_inn(state)? {
         journey::inn_scene()
     } else {
         rpc::GameplayScene {
@@ -754,9 +801,25 @@ pub(super) fn project_journey(
             scene_asset: authored.asset.clone(),
             speaker_portrait: authored.speaker_portrait.clone(),
             cast: Vec::new(),
+            rules_note: String::new(),
+            place: String::new(),
+            location_id: String::new(),
+            live_backdrop: String::new(),
         }
     };
     scene.cast = scene_cast(&authored);
+    scene.rules_note = rules_note;
+    scene.place = authored
+        .setting
+        .as_ref()
+        .map(|setting| setting.name.clone())
+        .unwrap_or_default();
+    // The confrontation setting's id is the adventure's location, which keys the battlefield.
+    scene.location_id = authored
+        .setting
+        .as_ref()
+        .map(|setting| setting.place_id.clone())
+        .unwrap_or_default();
 
     let audience = match role {
         LocalDemoRole::Display => rpc::view_message::Audience::Display(rpc::DisplayGameplayView {

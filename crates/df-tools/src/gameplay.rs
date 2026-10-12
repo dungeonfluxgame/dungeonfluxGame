@@ -2,14 +2,26 @@
 //! membership, not production bootstrap. The action and its outcome use generated RPC.
 mod actor;
 mod adventure;
+mod beat_script;
+mod beat_script_runtime;
+#[cfg(test)]
+mod beat_script_tests;
+#[cfg(test)]
+mod beat_script_variety_tests;
+#[cfg(test)]
+mod connection_tests;
+#[cfg(test)]
+mod content_rating_live_tests;
 mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
 mod dialogue;
 #[cfg(test)]
 mod dialogue_tests;
+mod imagery;
 mod inn_qualification;
 mod journey;
+mod living_scenes;
 mod model;
 mod music_assets;
 mod npc_dossier;
@@ -28,6 +40,9 @@ mod recovery_qualification;
 mod rest_qualification;
 mod restart_qualification;
 mod room;
+mod room_code;
+mod scene_mood;
+mod session_recovery;
 mod social;
 mod speech_input;
 mod splat_assets;
@@ -38,6 +53,7 @@ mod storyteller;
 mod table_log;
 #[cfg(test)]
 mod tempo_clock;
+mod timing;
 mod voice;
 mod wire;
 
@@ -50,9 +66,7 @@ use axum::{
 };
 use df_observe::OperationContext;
 use df_persistence::local_demo_scope::{LocalDemoAuthority, LocalDemoRole, LocalDemoScopeIssuer};
-use df_persistence::{
-    NativeCodecLimits, NativeRepositoryOptions, NativeTransactionBounds, PostgresRepository,
-};
+use df_persistence::{NativeCodecLimits, NativeRepositoryOptions, PostgresRepository};
 use df_protocol::common as rpc;
 use df_rpc_bridge::{
     CONCURRENT_STREAMS, FRAME_BYTES, MESSAGE_BYTES, NativeAdmission, NativeIncoming,
@@ -74,6 +88,8 @@ struct Service {
     npc_voice: Arc<npc_reply::NpcVoice>,
     /// The public feed of who said and did what; a new line publishes a fresh view.
     table_log: Arc<table_log::TableLog>,
+    /// Follows the story's mood with generated scene art; presentation only.
+    living: living_scenes::LivingScenes,
 }
 fn credential<T>(request: &Request<T>) -> Result<[u8; 32], Status> {
     let value = request
@@ -113,7 +129,7 @@ impl Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
-        let viewed = tokio::time::timeout(Duration::from_secs(5), wait)
+        let viewed = tokio::time::timeout(timing::active().reply, wait)
             .await
             .map_err(|_| Status::deadline_exceeded("gameplay view deadline"))?
             .map_err(|_| Status::unavailable("gameplay actor stopped"))?;
@@ -122,7 +138,13 @@ impl Service {
         if let Ok((_, message)) = &viewed {
             self.voice.register_view(message);
         }
-        viewed
+        // Living scenes watch the display's view and then add their published art to it; the
+        // art is presentation only and nothing else in the view changes.
+        viewed.map(|(role, mut message)| {
+            self.living.observe(&message);
+            self.living.apply(&mut message);
+            (role, message)
+        })
     }
 }
 #[tonic::async_trait]
@@ -153,7 +175,7 @@ impl rpc::action_service_server::ActionService for Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
-        let outcome = tokio::time::timeout(Duration::from_secs(5), wait)
+        let outcome = tokio::time::timeout(timing::active().reply, wait)
             .await
             .map_err(|_| Status::deadline_exceeded("retain your gameplay operation for lookup"))?
             .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
@@ -179,26 +201,47 @@ impl rpc::session_service_server::SessionService for Service {
         updates.borrow_and_update();
         let mut table_lines = self.table_log.subscribe();
         table_lines.borrow_and_update();
-        let (_, first) = self.view(credential, request.clone()).await?;
+        // A published scene image wakes a watcher the way a new table line does.
+        let mut art = self.living.subscribe();
+        if let Some(art) = art.as_mut() {
+            art.borrow_and_update();
+        }
+        let (role, first) = self.view(credential, request.clone()).await?;
+        // Only the shared display shows generated art: a phone's stream is never rebuilt for it.
+        if !matches!(role, LocalDemoRole::Display) {
+            art = None;
+        }
         let service = self.clone();
         let stream = futures::stream::unfold(
             (
                 Some(first),
                 updates,
                 table_lines,
+                art,
                 service,
                 request,
                 credential,
                 permit,
             ),
-            |(first, mut updates, mut table_lines, service, request, credential, permit)| async move {
+            |(
+                first,
+                mut updates,
+                mut table_lines,
+                mut art,
+                service,
+                request,
+                credential,
+                permit,
+            )| async move {
                 let next = if let Some(first) = first {
                     Ok(first)
                 } else {
-                    // A checkpoint change or a new table line each publish a fresh view.
+                    // A checkpoint change, a new table line or a newly published scene image each
+                    // publish a fresh view.
                     let ended = tokio::select! {
                         changed = updates.changed() => changed.is_err(),
                         changed = table_lines.changed() => changed.is_err(),
+                        () = scene_art_changed(&mut art) => false,
                     };
                     if ended {
                         return None;
@@ -220,6 +263,7 @@ impl rpc::session_service_server::SessionService for Service {
                             updates
                         },
                         table_lines,
+                        art,
                         service,
                         request,
                         credential,
@@ -231,8 +275,19 @@ impl rpc::session_service_server::SessionService for Service {
         Ok(Response::new(Box::pin(stream)))
     }
 }
+/// Completes when the published scene art changes; a service without living scenes (or whose
+/// channel has closed) never completes.
+async fn scene_art_changed(art: &mut Option<watch::Receiver<u64>>) {
+    if let Some(receiver) = art
+        && receiver.changed().await.is_ok()
+    {
+        return;
+    }
+    std::future::pending::<()>().await
+}
 #[derive(Clone)]
 struct PageState {
+    run_identity: Arc<str>,
     incoming: NativeAdmission,
     connections: Arc<Semaphore>,
     allowed_origins: Arc<[String]>,
@@ -365,13 +420,16 @@ async fn display(State(state): State<PageState>) -> Html<String> {
     page(false, Some(state.display), state.battle_scene.as_deref())
 }
 fn page(player: bool, display: Option<[u8; 32]>, battle_scene: Option<&str>) -> Html<String> {
+    // The browser waits a little longer than the server for any one request; both come from the
+    // same setting (see `timing`).
+    let wait = timing::active().browser_request().as_millis();
     let roots = if player {
         format!(
-            "<section class=\"client player\" id=\"player\" data-room=\"{}\"><div class=\"view\"></div></section>",
+            "<section class=\"client player\" id=\"player\" data-room=\"{}\" data-request-timeout-ms=\"{wait}\"><div class=\"view\"></div></section>",
             journey::ROOM_CODE
         )
     } else {
-        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\"{}><div class=\"view\"></div></section>",hex(&credential),battle_scene.map(|scene|format!(" data-battle-scene=\"{scene}\"")).unwrap_or_default())).unwrap_or_default()
+        display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\" data-request-timeout-ms=\"{wait}\"{}><div class=\"view\"></div></section>",hex(&credential),battle_scene.map(|scene|format!(" data-battle-scene=\"{scene}\"")).unwrap_or_default())).unwrap_or_default()
     };
     Html(HTML.replace("__ROOTS__", &roots).replace(
         "__LAYOUT__",
@@ -432,6 +490,8 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let mut generated_adventure: Option<adventure::startup::PreparedAdventure> = None;
+    // Names the server run for pages that keep a seat; empty (no check) in qualification.
+    let mut run_identity = String::new();
     let web_root = std::env::args()
         .nth(2)
         .ok_or("generated gameplay web directory required")?;
@@ -457,6 +517,18 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let battle_scene =
         startup_configuration::battle_scene(std::env::var("DF_GAMEPLAY_BATTLE_SCENE"))?;
+    if interactive {
+        timing::install(timing::Timing::from_environment()?);
+        let timing = timing::active();
+        df_persistence::local_demo_scope::set_lease_seconds(timing.lease.as_secs());
+        println!(
+            "TIMING commit={}s reply={}s lease={}s browser={}s",
+            timing.commit.as_secs(),
+            timing.reply.as_secs(),
+            timing.lease.as_secs(),
+            timing.browser_request().as_secs()
+        );
+    }
     let settings = if interactive {
         startup_configuration::session_settings(
             startup_configuration::SessionInputs::from_environment(),
@@ -464,6 +536,13 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         startup_configuration::SessionSettings::qualification()
     };
+    if interactive {
+        let rating = startup_configuration::content_rating_setting(std::env::var(
+            "DF_GAMEPLAY_CONTENT_RATING",
+        ))?;
+        startup_configuration::install_content_rating(rating)?;
+        println!("{}", rating.startup_line());
+    }
     let storyteller = std::sync::Arc::new(if interactive {
         let mode = startup_configuration::storyteller_mode(
             startup_configuration::StorytellerInputs::from_environment(),
@@ -603,6 +682,18 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         span.finish_unmeasured("loaded");
+        // Every run has its own room code, derived from its database so a restart keeps it.
+        let mut loaded = loaded;
+        let run = database_config()?
+            .get_dbname()
+            .unwrap_or_default()
+            .to_owned();
+        loaded.pack.room_code = room_code::select(
+            room_code::pinned(std::env::var("DF_GAMEPLAY_ROOM_CODE"))?,
+            &run,
+        );
+        run_identity = room_code::run_identity(&run, &loaded.pack_revision.to_hex());
+        println!("ROOM {}", loaded.pack.room_code);
         pack::install(loaded)?;
     }
     let voice = voice::Voice::start(
@@ -850,11 +941,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         build: crate::BUILD_ID.to_owned(),
     };
     let repository_options = NativeRepositoryOptions {
-        transaction_bounds: NativeTransactionBounds {
-            transaction: Duration::from_secs(2),
-            rollback: Duration::from_millis(250),
-            driver_join: Duration::from_secs(2),
-        },
+        // Generous by default so a commit that is slow on a busy machine finishes instead of
+        // leaving its outcome unknown and the session fenced (see `timing`).
+        transaction_bounds: timing::active().transaction_bounds(),
         codec_limits: codec,
         maximum_receipt_bytes: 4096,
         verifier: Some(df_persistence::local_demo_scope::verifier()),
@@ -1008,6 +1097,37 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => social::SocialLedger::none(),
     };
+    // Living scenes: server-generated scene art that follows the story's mood, under the
+    // server's one content rating.
+    let rating = startup_configuration::content_rating();
+    let imagery_settings = if interactive {
+        startup_configuration::imagery_settings(
+            startup_configuration::ImageryInputs::from_environment(),
+            &std::env::current_dir()?,
+            rating,
+        )?
+    } else {
+        startup_configuration::ImagerySettings::Off(
+            startup_configuration::ImageryOff::Qualification,
+        )
+    };
+    let living_interval = match &imagery_settings {
+        startup_configuration::ImagerySettings::On(configuration) => configuration.interval,
+        startup_configuration::ImagerySettings::Off(_) => Duration::from_secs(30),
+    };
+    let imagery = imagery::Imagery::start(
+        imagery_settings,
+        generated_adventure
+            .as_ref()
+            .map(|prepared| prepared.directory.as_path()),
+    )?;
+    let living = living_scenes::LivingScenes::start(
+        imagery.clone(),
+        imagery::ReferenceStore::new(std::path::Path::new(&asset_root).join("generated")),
+        social.clone(),
+        rating,
+        living_scenes::Timing::from_interval(living_interval),
+    );
     let tempo = if std::env::args().nth(4).is_some() {
         None
     } else {
@@ -1052,6 +1172,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             None
         },
         completion_retry: None,
+        session: Default::default(),
         #[cfg(test)]
         completion_observer: None,
         qualification_inputs: if npc_phase.is_some()
@@ -1143,6 +1264,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         voice: voice.clone(),
         npc_voice: Arc::new(npc_reply::NpcVoice::new(storyteller)),
         table_log,
+        living,
     };
     let (incoming_sender, incoming) =
         NativeIncoming::bounded(NonZeroUsize::new(4).ok_or("invalid native incoming bound")?)?;
@@ -1174,6 +1296,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         )
         .serve_with_incoming(incoming);
     let state = PageState {
+        run_identity: run_identity.into(),
         incoming: incoming_sender,
         connections: Arc::new(Semaphore::new(settings.max_connections)),
         allowed_origins: settings.allowed_origins.clone().into(),
@@ -1206,6 +1329,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         )?)
         .merge(splat_assets::router(&splat_directory)?)
         .merge(voice::router(voice.clone()))
+        .merge(imagery::router(imagery.clone()))
         .merge(speech_input::router(
             speech.clone(),
             speech_input::actor_identity(sender.clone()),
@@ -1278,8 +1402,13 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if interactive {
         let origin = &settings.allowed_origins[0];
         println!("{}", voice.startup_line());
+        println!("{}", imagery.startup_line());
         println!("{}", speech.startup_line());
-        println!("READY display={origin}/gameplay/display player={origin}/gameplay/player");
+        println!(
+            "READY display={origin}/gameplay/display player={origin}/gameplay/player?room={} room={}",
+            journey::room_code(),
+            journey::room_code()
+        );
     }
     let outcome: Result<(), Box<dyn std::error::Error>> = {
         tokio::select! {
@@ -1458,6 +1587,29 @@ async fn join_grant_driver(
     }
 }
 
+/// The local demonstration database. `DF_GAMEPLAY_DATABASE_PORT` (1024 to 65535) selects another
+/// PostgreSQL instance than the launcher's, so tests and harness runs use their own.
 fn database_config() -> Result<tokio_postgres::Config, io::Error> {
-    startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))
+    let launcher =
+        startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))?;
+    let port = match std::env::var("DF_GAMEPLAY_DATABASE_PORT") {
+        Ok(port) => port
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port >= 1024)
+            .ok_or_else(|| io::Error::other("DF_GAMEPLAY_DATABASE_PORT refused"))?,
+        Err(std::env::VarError::NotPresent) => return Ok(launcher),
+        Err(_) => return Err(io::Error::other("DF_GAMEPLAY_DATABASE_PORT refused")),
+    };
+    // A configuration's port list only grows, so the instance's own is built afresh.
+    let mut configuration = tokio_postgres::Config::new();
+    configuration.host("127.0.0.1").port(port);
+    if let Some(user) = launcher.get_user() {
+        configuration.user(user);
+    }
+    if let Some(name) = launcher.get_dbname() {
+        configuration.dbname(name);
+    }
+    Ok(configuration)
 }

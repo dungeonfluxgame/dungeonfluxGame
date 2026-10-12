@@ -20,6 +20,46 @@ pub(crate) fn terminal_outcome(
         return Ok(None);
     }
     let state = current.state();
+    if let Some(outcome) = super::super::beat_script::with_script(|script| {
+        if script.uses_encounter() {
+            return None;
+        }
+        Some((|| {
+            let beat = script.current(state)?;
+            if !script.terminal.contains(&beat.id) {
+                return Ok(None);
+            }
+            // Preserve the actual member-private disclosure even if another member
+            // observed the room before the conversation. It owns the campaign lead.
+            let (effect, member) = super::super::beat_script_runtime::private_action(current)?
+                .or(super::super::beat_script_runtime::first_action(current)?)
+                .ok_or(df_session::submission::RepositoryError::InvalidCandidate)?;
+            let accepted = state
+                .decisions
+                .iter()
+                .filter(|decision| decision.source_policy.as_str() == journey::THREAD_POLICY)
+                .map(journey::accepted)
+                .collect::<Result<Vec<_>, _>>()?;
+            let approach = match effect {
+                super::super::beat_script::BeatEffect::AskCourier => Approach::Asked,
+                super::super::beat_script::BeatEffect::EscortCourier => Approach::Escorted,
+                super::super::beat_script::BeatEffect::ThirdApproach => Approach::Third,
+                super::super::beat_script::BeatEffect::Observe => Approach::Investigated,
+                _ => Approach::Continued,
+            };
+            Ok(Some(ChapterOutcome {
+                result: ChapterResult::Completed,
+                approach,
+                member: journey::hex(member.as_bytes()),
+                rested: false,
+                destination_reached: accepted.iter().any(|action| action.scene.is_some()),
+                antagonist_spared: false,
+                campaign_time: state.logical_time.ticks,
+            }))
+        })())
+    }) {
+        return outcome;
+    }
     let victory = journey::combat_victory(state)?;
     let rested = state
         .narrative
@@ -40,32 +80,36 @@ pub(crate) fn terminal_outcome(
             }
             _ => None,
         });
-    let (approach, member) = if let Some(member) = private {
-        (Approach::Asked, member)
-    } else {
-        let actor = state
-            .facts
-            .iter()
-            .find_map(|fact| match &fact.value {
-                FactValue::ContentEvent {
-                    definition,
-                    subjects,
-                } if definition.entry.as_str() == "courier-escort-contact"
-                    && subjects.len() == 1 =>
-                {
-                    subjects.first().copied()
-                }
-                _ => None,
-            })
-            .ok_or(df_session::submission::RepositoryError::InvalidCandidate)?;
-        let member = state
-            .members
-            .iter()
-            .find(|link| link.character == Some(actor))
-            .map(|link| link.member)
-            .ok_or(df_session::submission::RepositoryError::InvalidCandidate)?;
-        (Approach::Escorted, member)
-    };
+    let scripted = super::super::beat_script_runtime::first_action(current)?;
+    let (approach, member) =
+        if let Some((super::super::beat_script::BeatEffect::ThirdApproach, member)) = scripted {
+            (Approach::Third, member)
+        } else if let Some(member) = private {
+            (Approach::Asked, member)
+        } else {
+            let actor = state
+                .facts
+                .iter()
+                .find_map(|fact| match &fact.value {
+                    FactValue::ContentEvent {
+                        definition,
+                        subjects,
+                    } if definition.entry.as_str() == "courier-escort-contact"
+                        && subjects.len() == 1 =>
+                    {
+                        subjects.first().copied()
+                    }
+                    _ => None,
+                })
+                .ok_or(df_session::submission::RepositoryError::InvalidCandidate)?;
+            let member = state
+                .members
+                .iter()
+                .find(|link| link.character == Some(actor))
+                .map(|link| link.member)
+                .ok_or(df_session::submission::RepositoryError::InvalidCandidate)?;
+            (Approach::Escorted, member)
+        };
     let spared=victory && state.facts.iter().any(|fact|matches!(&fact.value,FactValue::ResourceChanged{entity,resource,before:0,after:1,..}if entity.as_bytes()==&[0x65;16] && resource.as_str()=="unconscious"));
     Ok(Some(ChapterOutcome {
         result: if victory {

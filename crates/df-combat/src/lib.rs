@@ -5,3 +5,5 @@ pub mod movement;
 pub mod movement_staging;
 pub mod ranking;
 pub mod registered_candidates;
+
+pub mod tactical;

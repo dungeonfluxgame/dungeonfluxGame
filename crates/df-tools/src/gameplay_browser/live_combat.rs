@@ -14,8 +14,8 @@ pub(super) mod sheet;
 mod style;
 
 use super::{
-    Client, button, dialogue_recovery, live_battlefield, live_screens, live_stage, live_tv,
-    live_tv::TvStage, node, recovery_needs, recovery_prompt, replay,
+    Client, button, dialogue_recovery, live_battlefield, live_rules, live_screens, live_stage,
+    live_tv, live_tv::TvStage, node, recovery_needs, recovery_prompt, replay,
 };
 use df_protocol::common as rpc;
 use df_types::{RecoveryEpoch, SessionRevision};
@@ -401,6 +401,8 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     }
     mount_chrome(client, &host, view)?;
     mount_rules_badge(client, &host, custom_rules)?;
+    // PLAY-F03: the scene's rules note on its own line under the narration (see live_rules).
+    live_rules::mount(&client.borrow().document, &host, &view.scene.rules_note)?;
     // PLAY-F02 dispatch point: on the shared display the 3D battlefield overlays this flat view
     // when it can run; otherwise today's view above is what the table sees.
     if !player {
@@ -425,12 +427,15 @@ fn present_stage(
     let Some(stage) = state.live.tv.as_ref() else {
         return Ok(());
     };
+    // PLAY-F03: the table's choices row follows the view (empty during a fight).
+    stage.set_choices(&view.journey.table_choices)?;
     let art = live_screens::asset_url(&view.scene.scene_asset)
         .unwrap_or_else(|| style::COMBAT_ART_URL.to_owned());
     stage.set_art(&live_tv::image_layers(&art, style::COMBAT_ART_URL))?;
     stage.figures().update(
         &cast,
         &view.scene.title,
+        &view.scene.scene_asset,
         crate::presentation::scene_family(&view.scene.scene_asset),
         if screen == Screen::Combat {
             live_stage::StageMode::Combat

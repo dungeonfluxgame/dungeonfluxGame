@@ -11,8 +11,9 @@ use std::collections::BTreeMap;
 
 use super::{
     formation,
-    model::{AttackResult, Beat, HitPoints, Side, Token, TokenId},
+    model::{AttackResult, AttackStyle, Beat, HitPoints, InitiativeRoll, Side, Token, TokenId},
     stage::Stage,
+    status::Status,
 };
 
 /// Who stages a reported outcome.
@@ -37,6 +38,15 @@ pub struct Member {
     pub height_m: f32,
     pub figure: Option<String>,
     pub portrait: Option<String>,
+    /// How the figure attacks on screen. Switch point: the server's weapon replaces the adapter's
+    /// figure-based guess.
+    pub attack: AttackStyle,
+    /// The cell the server placed the combatant on. `None` stages it on the layout's spawn
+    /// cells (or the derived formation); when the server supplies cells the renderer is unchanged.
+    pub cell: Option<super::grid::Cell>,
+    /// Conditions and states the server reports, plus any the adapter derives from the server's
+    /// own knockout state. Hit-point based states (bloodied) are derived at display time.
+    pub statuses: Vec<Status>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +60,15 @@ pub struct Outcome {
     pub downed: bool,
 }
 
+/// One recorded initiative roll as the server reports it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitiativeEntry {
+    pub id: String,
+    pub die: u32,
+    pub modifier: i32,
+    pub total: i32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CombatSnapshot {
     /// Party members in seat order, then enemies.
@@ -57,6 +76,11 @@ pub struct CombatSnapshot {
     pub active: Option<String>,
     pub round: u32,
     pub outcomes: Vec<Outcome>,
+    /// The server's recorded initiative rolls, first to act first. Empty when none are carried.
+    pub initiative: Vec<InitiativeEntry>,
+    /// The display watched this fight begin (it showed a non-combat view just before), rather than
+    /// loading into a fight already under way. Only then is the initiative moment staged.
+    pub begun_live: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -89,7 +113,8 @@ fn token_for(member: &Member, cell: super::grid::Cell) -> Token {
             current: member.hit_points,
             maximum: member.maximum_hit_points,
         }),
-        statuses: Vec::new(),
+        statuses: member.statuses.clone(),
+        attack: member.attack,
     }
 }
 
@@ -111,18 +136,22 @@ impl CombatFeed {
             .filter(|m| m.side == Side::Hero)
             .count();
         let enemies = snapshot.members.len() - heroes;
-        let layout = formation::derive(stage.grid(), heroes, enemies).ok()?;
+        let seats = match stage.layout() {
+            Some(layout) => formation::from_layout(layout, stage.grid(), heroes, enemies),
+            None => formation::derive(stage.grid(), heroes, enemies),
+        }
+        .ok()?;
         let (mut hero_cells, mut enemy_cells) =
-            (layout.heroes.into_iter(), layout.enemies.into_iter());
+            (seats.heroes.into_iter(), seats.enemies.into_iter());
         let tokens: Vec<Token> = snapshot
             .members
             .iter()
             .filter_map(|member| {
-                let cell = match member.side {
+                let seat = match member.side {
                     Side::Hero => hero_cells.next(),
                     Side::Enemy => enemy_cells.next(),
-                }?;
-                Some(token_for(member, cell))
+                };
+                Some(token_for(member, member.cell.or(seat)?))
             })
             .collect();
         let roster_changed = roster != self.roster;
@@ -141,7 +170,31 @@ impl CombatFeed {
                 .iter()
                 .map(|member| (member.id.clone(), member.hit_points))
                 .collect();
+            let opening = snapshot.begun_live
+                && snapshot.outcomes.is_empty()
+                && snapshot.round <= 1
+                && !snapshot.initiative.is_empty();
+            if opening {
+                let rolls: Vec<InitiativeRoll> = snapshot
+                    .initiative
+                    .iter()
+                    .map(|entry| InitiativeRoll {
+                        token: TokenId::new(entry.id.clone()),
+                        die: entry.die,
+                        modifier: entry.modifier,
+                        total: entry.total,
+                    })
+                    .collect();
+                match stage.stage(Beat::Initiative { rolls }) {
+                    Ok(()) => report.staged += 1,
+                    Err(_) => report.dropped += 1,
+                }
+            }
         } else {
+            if !snapshot.outcomes.is_empty() || snapshot.round > 1 {
+                // Someone already acted: the initiative moment is history.
+                stage.skip_initiative();
+            }
             let fresh: Vec<&Outcome> = snapshot.outcomes.iter().skip(self.seen_outcomes).collect();
             self.seen_outcomes = snapshot.outcomes.len();
             let targets: Vec<TokenId> = fresh
@@ -194,13 +247,20 @@ impl CombatFeed {
         }
         stage.set_round(snapshot.round);
         stage.set_active(snapshot.active.clone().map(TokenId::new));
-        stage.set_initiative(
+        let order: Vec<TokenId> = if snapshot.initiative.is_empty() {
             snapshot
                 .members
                 .iter()
                 .map(|m| TokenId::new(m.id.clone()))
-                .collect(),
-        );
+                .collect()
+        } else {
+            snapshot
+                .initiative
+                .iter()
+                .map(|entry| TokenId::new(entry.id.clone()))
+                .collect()
+        };
+        stage.set_initiative(order);
         Some(report)
     }
 }
@@ -238,6 +298,9 @@ mod tests {
             height_m: 1.5,
             figure: None,
             portrait: None,
+            attack: AttackStyle::Melee,
+            cell: None,
+            statuses: Vec::new(),
         }
     }
 
@@ -251,6 +314,8 @@ mod tests {
             active: Some("a".to_owned()),
             round: 1,
             outcomes,
+            initiative: vec![],
+            begun_live: false,
         }
     }
 
@@ -315,7 +380,7 @@ mod tests {
         assert!(saw_card && stage.hud().finishing_blow.is_none());
         let frame = stage.frame();
         let enemy = frame.figures.iter().find(|f| f.id.0 == "e").unwrap();
-        assert!(enemy.alpha < 0.5);
+        assert!(enemy.downed && enemy.slump > 0.99);
     }
 
     #[test]
@@ -388,12 +453,17 @@ mod hold_tests {
             height_m: 1.5,
             figure: None,
             portrait: None,
+            attack: AttackStyle::Melee,
+            cell: None,
+            statuses: Vec::new(),
         };
         let snapshot = |hp, outcomes| CombatSnapshot {
             members: vec![member("a", Side::Hero, 12), member("e", Side::Enemy, hp)],
             active: Some("a".to_owned()),
             round: 1,
             outcomes,
+            initiative: vec![],
+            begun_live: false,
         };
         feed.apply(&mut stage, &snapshot(12, vec![])).unwrap();
         let hit = Outcome {

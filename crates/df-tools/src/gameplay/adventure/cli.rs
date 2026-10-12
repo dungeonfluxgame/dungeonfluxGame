@@ -21,6 +21,9 @@ pub(crate) fn run(arguments: &[OsString]) -> Result<(), Box<dyn std::error::Erro
             rules_mode: startup_configuration::adventure_creature_mode(std::env::var(
                 "DF_GAMEPLAY_ADVENTURE_CREATURES",
             ))?,
+            rating: startup_configuration::content_rating_setting(std::env::var(
+                "DF_GAMEPLAY_CONTENT_RATING",
+            ))?,
         },
         &ForcedEntries::new(),
     )?;
@@ -125,12 +128,18 @@ pub(crate) fn campaign(
         None => u64::from_le_bytes(model::random::<8>().map_err(|_| "OS seed unavailable")?),
     };
     let tables = CampaignTables::load(Path::new(directory))?;
+    startup_configuration::install_content_rating(startup_configuration::content_rating_setting(
+        std::env::var("DF_GAMEPLAY_CONTENT_RATING"),
+    )?)?;
     let frame = generate_frame(
         &tables,
         seed,
         GenerateOptions {
             rules_mode: startup_configuration::adventure_creature_mode(std::env::var(
                 "DF_GAMEPLAY_ADVENTURE_CREATURES",
+            ))?,
+            rating: startup_configuration::content_rating_setting(std::env::var(
+                "DF_GAMEPLAY_CONTENT_RATING",
             ))?,
         },
     )?;

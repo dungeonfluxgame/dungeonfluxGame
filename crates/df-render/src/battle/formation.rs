@@ -5,7 +5,10 @@
 //! and head count and is never read back as game state. Server-supplied cells replace it by
 //! building [`Token`](super::Token)s with those cells directly; the renderer does not change.
 
-use super::grid::{Cell, Grid};
+use super::{
+    grid::{Cell, Grid},
+    layout::Layout,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Formation {
@@ -16,6 +19,29 @@ pub struct Formation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FormationError {
     NoRoom,
+}
+
+/// Seats from a layout's spawn cells: the first `heroes` and `enemies` spawns, ordered left to
+/// right as the camera sees them. A party or enemy group larger than the spawn lists falls back
+/// to the derived formation for the whole field. Server-supplied cells replace both.
+pub fn from_layout(
+    layout: &Layout,
+    grid: &Grid,
+    heroes: usize,
+    enemies: usize,
+) -> Result<Formation, FormationError> {
+    if heroes > layout.heroes.len() || enemies > layout.enemies.len() {
+        return derive(grid, heroes, enemies);
+    }
+    let seat = |spawns: &[Cell], count: usize| {
+        let mut cells: Vec<Cell> = spawns.iter().take(count).copied().collect();
+        cells.sort_by_key(|cell| (cell.col, cell.row));
+        cells
+    };
+    Ok(Formation {
+        heroes: seat(&layout.heroes, heroes),
+        enemies: seat(&layout.enemies, enemies),
+    })
 }
 
 /// Lays out `heroes` and `enemies` seats. Seat order is left to right as seen from the camera.

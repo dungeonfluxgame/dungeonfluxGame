@@ -149,11 +149,14 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
                         "{sentence:?} for {key:?}"
                     );
                 }
+                // The story and the rules note travel separately: the narration is only
+                // the story, and the note is its own field of the scene.
                 assert!(
                     actual.narration.starts_with(&shipped_scene.narration)
-                        && actual.narration.contains(&shipped_scene.rules_note),
-                    "story then rules note for {key:?}"
+                        && !actual.narration.contains(&shipped_scene.rules_note),
+                    "story without the rules note for {key:?}"
                 );
+                assert_eq!(scene.rules_note, shipped_scene.rules_note, "{key:?}");
                 continue;
             }
             assert_eq!(actual.narration, expected, "captured narration for {key:?}");
@@ -302,8 +305,9 @@ fn edited_text_options_equipment_and_room_drive_complete_journey() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        let axum::response::Html(body) = runtime.block_on(crate::gameplay::room::player_page());
-        assert!(body.contains("data-room=\"TUNED\""));
+        let axum::response::Html(body) =
+            runtime.block_on(crate::gameplay::room::player_page_for("0123456789abcdef"));
+        assert!(body.contains("data-room=\"TUNED\" data-run=\"0123456789abcdef\""));
         assert!(!body.contains("data-room=\"LANTERN\""));
     });
 }
@@ -343,5 +347,110 @@ fn custom_rules_remain_visible_to_both_roles_before_and_after_creation() {
                 );
             }
         }
+    });
+}
+
+fn display_view(current: &Checkpoint) -> rpc::DisplayGameplayView {
+    let view = wire::journey_view(
+        current,
+        LocalDemoRole::Display,
+        MemberId::from_bytes(&df_persistence::local_demo_scope::DISPLAY).unwrap(),
+    )
+    .unwrap();
+    let Some(rpc::view_message::Audience::Display(display)) = view.audience else {
+        panic!("display projection");
+    };
+    display
+}
+
+#[test]
+fn the_display_lists_the_pack_offer_labels_and_nothing_private() {
+    use prost::Message;
+    let shipped = pack::load_from_bytes(
+        include_bytes!("../../../../../content/harbor-journey/pack.json"),
+        TUNING,
+    )
+    .unwrap();
+    pack::with_test_pack(shipped, || {
+        let labels = [
+            rpc::GameplayActionKind::AskCourier,
+            rpc::GameplayActionKind::EscortCourier,
+            rpc::GameplayActionKind::DefendCourier,
+            rpc::GameplayActionKind::ShortRest,
+            rpc::GameplayActionKind::ChooseHarborScene,
+        ]
+        .map(pack::offer_label);
+        let mut listed = 0;
+        for (key, _, checkpoint) in scenes() {
+            let display = display_view(&checkpoint);
+            let shown = display.journey.as_ref().unwrap().table_choices.clone();
+            let encoded = display.encode_to_vec();
+            let text = String::from_utf8_lossy(&encoded);
+            let player = player(&checkpoint);
+            for offer in &player.offers {
+                assert!(
+                    !text.contains(&offer.offer_id),
+                    "no offer id on the display for {key:?}"
+                );
+            }
+            if !player.private_clue.is_empty() {
+                assert!(!text.contains(&player.private_clue), "{key:?}");
+            }
+            for label in &shown {
+                assert!(
+                    labels.contains(label),
+                    "{label:?} is a pack offer label for {key:?}"
+                );
+            }
+            let mut unique = shown.clone();
+            unique.dedup();
+            assert_eq!(unique, shown, "no repeated label for {key:?}");
+            match key {
+                SceneKey::Opening => assert_eq!(
+                    shown,
+                    [
+                        pack::offer_label(rpc::GameplayActionKind::AskCourier),
+                        pack::offer_label(rpc::GameplayActionKind::EscortCourier)
+                    ]
+                ),
+                SceneKey::Combat => assert!(shown.is_empty(), "a fight turn is one hero's"),
+                _ => {}
+            }
+            listed += shown.len();
+            // The player's own view never carries the display's list.
+            assert!(player.journey.unwrap().table_choices.is_empty());
+        }
+        assert!(listed > 0, "some scene lists choices");
+    });
+}
+
+#[test]
+fn the_rules_note_is_a_separate_field_and_never_part_of_the_narration() {
+    let shipped = pack::load_from_bytes(
+        include_bytes!("../../../../../content/harbor-journey/pack.json"),
+        TUNING,
+    )
+    .unwrap();
+    let authored = shipped.pack.scenes.clone();
+    pack::with_test_pack(shipped, || {
+        let mut with_note = 0;
+        for (key, rested, checkpoint) in scenes() {
+            if rested {
+                continue;
+            }
+            let display = display_view(&checkpoint);
+            let scene = display.scene.as_ref().unwrap();
+            let note = &authored
+                .iter()
+                .find(|candidate| candidate.key == key)
+                .unwrap()
+                .rules_note;
+            assert_eq!(&scene.rules_note, note, "{key:?}");
+            if !note.is_empty() {
+                with_note += 1;
+                assert!(!display.narration.contains(note.as_str()), "{key:?}");
+            }
+        }
+        assert!(with_note > 0, "the shipped pack has rules notes");
     });
 }

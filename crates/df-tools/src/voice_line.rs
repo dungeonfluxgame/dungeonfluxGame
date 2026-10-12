@@ -44,7 +44,8 @@ impl VoiceLine {
     }
 }
 
-/// The scene narration first, then the current speaker line; empty text is not spoken.
+/// The scene narration first, then the current speaker line; empty text is not spoken. The
+/// scene's rules note is a separate field and is never read here: it is shown, not voiced.
 pub(crate) fn display_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine> {
     let mut lines = Vec::with_capacity(2);
     if !display.narration.trim().is_empty() {
@@ -66,7 +67,23 @@ pub(crate) fn display_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine
             text: journey.dialogue.clone(),
         });
     }
+    lines.extend(conversation_reply(display));
     lines
+}
+
+/// The speaker's reply to a hero's typed words, while it is still the last thing said at the
+/// table. Any accepted action (and so any change of beat) logs a later line, which ends it, so
+/// an old reply is never spoken again in a later beat. It is voiced as that speaker, the same
+/// cast voice as the speaker's scripted line.
+fn conversation_reply(display: &rpc::DisplayGameplayView) -> Option<VoiceLine> {
+    let last = display.journey.as_ref()?.table_log.last()?;
+    let spoken_by_npc = rpc::TableRole::try_from(last.role) == Ok(rpc::TableRole::Npc)
+        && rpc::TableKind::try_from(last.kind) == Ok(rpc::TableKind::Speech);
+    let (speaker, text) = (last.speaker.trim(), last.text.trim());
+    (spoken_by_npc && !speaker.is_empty() && !text.is_empty()).then(|| VoiceLine {
+        role: format!("{NPC_ROLE_PREFIX}{speaker}"),
+        text: text.to_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -134,6 +151,25 @@ mod tests {
     }
 
     #[test]
+    fn the_rules_note_is_never_voiced() {
+        let mut view = display("Rain falls.", "", "");
+        view.scene = Some(rpc::GameplayScene {
+            rules_note: "Positions are measured in feet.".to_owned(),
+            ..Default::default()
+        });
+
+        let lines = display_lines(&view);
+
+        assert_eq!(
+            lines,
+            vec![VoiceLine {
+                role: "narrator".to_owned(),
+                text: "Rain falls.".to_owned()
+            }]
+        );
+    }
+
+    #[test]
     fn unnamed_dialogue_is_narrated_and_blank_text_is_skipped() {
         let lines = display_lines(&display("  ", "", "A bell tolls."));
 
@@ -144,5 +180,66 @@ mod tests {
                 text: "A bell tolls.".to_owned()
             }]
         );
+    }
+
+    fn replied(last: rpc::TableLine) -> rpc::DisplayGameplayView {
+        let mut view = display("Rain falls.", "Courier", "You are late.");
+        if let Some(journey) = view.journey.as_mut() {
+            journey.table_log = vec![last];
+        }
+        view
+    }
+
+    fn line(
+        role: rpc::TableRole,
+        kind: rpc::TableKind,
+        speaker: &str,
+        text: &str,
+    ) -> rpc::TableLine {
+        rpc::TableLine {
+            sequence: 1,
+            speaker: speaker.to_owned(),
+            role: role as i32,
+            hero_index: 0,
+            kind: kind as i32,
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_reply_that_is_the_last_thing_said_is_voiced_as_its_speaker() {
+        let lines = display_lines(&replied(line(
+            rpc::TableRole::Npc,
+            rpc::TableKind::Speech,
+            "Courier",
+            "Keep your voice down.",
+        )));
+
+        assert_eq!(
+            lines.last(),
+            Some(&VoiceLine {
+                role: "npc:Courier".to_owned(),
+                text: "Keep your voice down.".to_owned()
+            })
+        );
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn a_reply_followed_by_anything_else_is_not_spoken_again() {
+        let lines = display_lines(&replied(line(
+            rpc::TableRole::Hero,
+            rpc::TableKind::Action,
+            "Brakka",
+            "enters the Lantern Wharf",
+        )));
+        assert_eq!(lines.len(), 2);
+        let lines = display_lines(&replied(line(
+            rpc::TableRole::Hero,
+            rpc::TableKind::Speech,
+            "Brakka",
+            "Who sent you?",
+        )));
+        assert_eq!(lines.len(), 2);
     }
 }

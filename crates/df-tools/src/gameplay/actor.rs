@@ -297,7 +297,45 @@ impl CompletionRetry {
         }
     }
 }
+/// The operation a fence was last at risk from, kept so the owner can retry it by itself.
+#[derive(Clone)]
+pub(super) enum Attempt {
+    /// A player's (or the room's) input, with the envelope it was issued under.
+    Input {
+        credential: [u8; 32],
+        fingerprint: [u8; 32],
+        input: Box<GameInput>,
+    },
+    /// The committed courier job's completion, which rebuilds its own scope.
+    Completion,
+}
+
+/// What the owner knows about the health of the session (see `session_recovery`).
+pub(super) struct SessionState {
+    pub(super) attempt: Option<Attempt>,
+    /// How long the last commit ran, in milliseconds.
+    pub(super) commit_millis: u64,
+    /// Set while the session is fenced.
+    pub(super) fence: Option<super::session_recovery::Health>,
+    /// Keeps the owner lease and access grants alive while nobody is acting.
+    pub(super) heartbeat: super::session_recovery::Heartbeat,
+}
+
+impl Default for SessionState {
+    fn default() -> Self {
+        Self {
+            attempt: None,
+            commit_millis: 0,
+            fence: None,
+            heartbeat: super::session_recovery::Heartbeat::for_lease(
+                df_persistence::local_demo_scope::lease_seconds(),
+            ),
+        }
+    }
+}
+
 pub(super) struct Actor {
+    pub session: SessionState,
     pub owner: Owner,
     /// The public table log; an accepted action and a typed line are appended here.
     pub table_log: std::sync::Arc<super::table_log::TableLog>,
@@ -347,6 +385,15 @@ pub(super) fn fence_checkpoint(
     recovery_wakeup.send_replace(checkpoint.clone());
 }
 
+/// What every screen is told when the saved state cannot be recovered. The browser shows this
+/// text (see `SERVER_LOST` in the client).
+pub(super) const SESSION_LOST_MESSAGE: &str =
+    "The game server lost its saved state and must be restarted";
+
+pub(super) fn session_lost_status() -> tonic::Status {
+    tonic::Status::data_loss(SESSION_LOST_MESSAGE)
+}
+
 pub(super) fn require_readable(fenced: bool) -> Result<(), tonic::Status> {
     if fenced {
         return Err(tonic::Status::unavailable(
@@ -362,17 +409,211 @@ impl Actor {
             observer.observe(self.owner.checkpoint());
         }
     }
+    /// The next time the owner has work of its own: a completion retry or a recovery attempt.
     pub(super) fn next_completion_wake(&self) -> Option<Instant> {
-        self.completion_retry.as_ref().and_then(|retry| retry.next)
+        let completion = self.completion_retry.as_ref().and_then(|retry| retry.next);
+        let recovery = if self.fenced {
+            match &self.session.fence {
+                Some(fence) => fence.next_attempt(),
+                None => Some(Instant::now()),
+            }
+        } else {
+            None
+        };
+        let heartbeat = Some(self.session.heartbeat.next_due(Instant::now()));
+        [completion, recovery, heartbeat]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// Renews the session lease and grants when the heartbeat is due. Called at every wake and
+    /// before every call, so a call after a long pause (a suspended machine) renews first.
+    /// Ownership taken over by another process is the one failure that cannot heal.
+    fn heartbeat_if_due(&mut self) {
+        let now = Instant::now();
+        if !self.session.heartbeat.due(now) {
+            return;
+        }
+        match self.issuer.renew_owner() {
+            Ok(()) => {
+                if self.session.heartbeat.renewed(now) {
+                    self.session_event("SESSION lease renewed", "session.lease_renewed");
+                }
+            }
+            Err(error) => match super::session_recovery::classify(error) {
+                super::session_recovery::Resolution::Lost(_)
+                | super::session_recovery::Resolution::Retry(RepositoryError::RevisionConflict) => {
+                    self.mark_lost(error);
+                }
+                _ => {
+                    if self.session.heartbeat.failed(now) {
+                        self.session_event(
+                            &format!("SESSION lease renewal failing ({error:?}); retrying"),
+                            "session.lease_failing",
+                        );
+                    }
+                }
+            },
+        }
+    }
+
+    /// The saved state is gone for good: fence the session, say so, and tell the watchers.
+    fn mark_lost(&mut self, error: RepositoryError) {
+        self.fenced = true;
+        if !self.session_lost() {
+            self.session.fence = Some(super::session_recovery::Health::lost(Instant::now()));
+            self.session_event(
+                &format!(
+                    "SESSION lost ({error:?}): the saved state cannot be recovered; restart the server"
+                ),
+                "session.lost",
+            );
+            self.recovery_wakeup
+                .send_replace(self.owner.checkpoint().clone());
+        }
     }
 
     pub(super) fn wake_completion(&mut self) {
+        self.heartbeat_if_due();
+        self.heal_session();
         if self
-            .next_completion_wake()
+            .completion_retry
+            .as_ref()
+            .and_then(|retry| retry.next)
             .is_some_and(|due| Instant::now() >= due)
         {
             self.run_committed_intents();
         }
+    }
+
+    /// Whether the saved state was lost and only a restart can help.
+    pub(super) fn session_lost(&self) -> bool {
+        self.session
+            .fence
+            .as_ref()
+            .is_some_and(super::session_recovery::Health::is_lost)
+    }
+
+    /// While fenced, retries the retained operation when it is due, with a backoff and for as
+    /// long as the process lives, and says so when the session fences, recovers or is lost.
+    fn heal_session(&mut self) {
+        if !self.fenced {
+            if self.session.fence.take().is_some() {
+                self.session_event("SESSION recovered", "session.recovered");
+            }
+            return;
+        }
+        let now = Instant::now();
+        if self.session.fence.is_none() {
+            let health = super::session_recovery::Health::fenced(now, self.session.commit_millis);
+            let line = health.fenced_line();
+            self.session.fence = Some(health);
+            self.session_event(&line, "session.fenced");
+        }
+        let due = self
+            .session
+            .fence
+            .as_ref()
+            .and_then(super::session_recovery::Health::next_attempt)
+            .is_some_and(|due| now >= due);
+        if !due {
+            return;
+        }
+        let resolution = self.attempt_recovery();
+        let now = Instant::now();
+        if let Some(fence) = self.session.fence.as_mut() {
+            fence.attempted(now, &resolution);
+        }
+        match resolution {
+            super::session_recovery::Resolution::Recovered => {
+                let (down, attempts) = self
+                    .session
+                    .fence
+                    .take()
+                    .map_or((Duration::ZERO, 0), |fence| {
+                        (fence.down_for(now), fence.attempts())
+                    });
+                self.fenced = false;
+                self.observe_campaign();
+                self.recovery_wakeup
+                    .send_replace(self.owner.checkpoint().clone());
+                self.session_event(
+                    &format!(
+                        "SESSION recovered (after {} ms, {attempts} attempts)",
+                        down.as_millis()
+                    ),
+                    "session.recovered",
+                );
+            }
+            super::session_recovery::Resolution::Lost(error) => {
+                self.session_event(
+                    &format!(
+                        "SESSION lost ({error:?}): the saved state cannot be recovered; restart the server"
+                    ),
+                    "session.lost",
+                );
+                // Wake the watchers so they are told, instead of waiting on a stream.
+                self.recovery_wakeup
+                    .send_replace(self.owner.checkpoint().clone());
+            }
+            super::session_recovery::Resolution::Retry(_) => {}
+        }
+    }
+
+    fn attempt_recovery(&mut self) -> super::session_recovery::Resolution {
+        use super::session_recovery::{Resolution, classify, recover};
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        if let Err(error) = self.issuer.reconnect_if_closed() {
+            return classify(error);
+        }
+        // An expired lease or grant is repaired first: it is what a fence after a long idle is.
+        if let Err(error) = self.issuer.renew_owner() {
+            return match classify(error) {
+                Resolution::Retry(RepositoryError::RevisionConflict) => Resolution::Lost(error),
+                other => other,
+            };
+        }
+        self.session.heartbeat.renewed(Instant::now());
+        match self.session.attempt.clone() {
+            Some(Attempt::Input {
+                credential,
+                fingerprint,
+                input,
+            }) => {
+                let scope = match model::random().and_then(|random| {
+                    model::pins().and_then(|pins| {
+                        self.issuer
+                            .issue(&credential, random, fingerprint, (*input).clone(), pins)
+                    })
+                }) {
+                    Ok(scope) => scope,
+                    Err(error) => return classify(error),
+                };
+                recover(&mut self.owner, scope, &input, &context)
+            }
+            Some(Attempt::Completion) => match self.complete_courier(&context) {
+                Ok(()) if self.owner.is_current() => Resolution::Recovered,
+                Ok(()) => Resolution::Retry(RepositoryError::UnresolvedCommit),
+                Err(error) => classify(error),
+            },
+            None => Resolution::Retry(RepositoryError::Unavailable),
+        }
+    }
+
+    /// One `SESSION` line on stdout and the same fact on the shared observability path.
+    fn session_event(&self, line: &str, event: &'static str) {
+        println!("{line}");
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        let mut span = df_observe::begin(&context, "gameplay.session");
+        span.event(event, &[("session.detail", line.to_owned())]);
+        span.finish_unmeasured(event);
     }
     /// Called on startup and at input boundaries by this same serialization owner.
     /// Notification loss cannot erase the backlog: work comes from a validated
@@ -472,6 +713,9 @@ impl Actor {
             .map_err(|_| RepositoryError::InvalidCandidate)?;
         let fingerprint = super::courier_ai::completion_fingerprint(&completion)
             .map_err(|_| RepositoryError::InvalidCandidate)?;
+        if !self.fenced {
+            self.session.attempt = Some(Attempt::Completion);
+        }
         self.issuer.reconnect_if_closed()?;
         let scope = self.issuer.issue_completion(
             self.owner.checkpoint(),
@@ -551,6 +795,9 @@ impl Actor {
         credential: [u8; 32],
         request: rpc::SubmitActionRequest,
     ) -> Result<rpc::SubmitActionResponse, tonic::Status> {
+        if self.session_lost() {
+            return Err(session_lost_status());
+        }
         if self.issuer.authenticate(&credential).map_err(unavailable)? != LocalDemoRole::Player {
             return Err(tonic::Status::permission_denied(
                 "display bindings cannot submit player actions",
@@ -591,6 +838,14 @@ impl Actor {
             trace_parent: String::new(),
             build: crate::BUILD_ID.to_owned(),
         };
+        // Kept so that, if this commit's outcome becomes unknown, the owner can retry it itself.
+        if !self.fenced {
+            self.session.attempt = Some(Attempt::Input {
+                credential,
+                fingerprint,
+                input: Box::new(input.clone()),
+            });
+        }
         let recovering = self.fenced;
         let replaying_uncertain = recovering && self.owner.has_uncertain_operation();
         if recovering {
@@ -675,7 +930,12 @@ impl Actor {
                             )
                     {
                         Some(rpc::RejectionCode::WrongTurn)
-                    } else if request.offer_id != super::journey::offer_id(checkpoint, kind)
+                    } else if !super::beat_script_runtime::matches_id(
+                        checkpoint,
+                        kind,
+                        &request.offer_id,
+                    )
+                    .map_err(unavailable)?
                         || !super::journey::offered(checkpoint, member)
                             .map_err(unavailable)?
                             .iter()
@@ -716,7 +976,10 @@ impl Actor {
         }
         let prior_revision = self.owner.checkpoint().basis().revision;
         let (item, receipt) = OwnedInput::new(context, scope, input);
+        let commit_started = Instant::now();
         self.owner.reduce(AdmissionSequence(0), item);
+        self.session.commit_millis =
+            u64::try_from(commit_started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let outcome = receipt
             .try_recv()
             .map_err(|_| tonic::Status::internal("actor did not produce its outcome"))?;
@@ -809,7 +1072,10 @@ impl Actor {
         };
         let weapon = super::pack::hero_weapon_item().replace('-', " ");
         let destination = super::pack::destination_label();
-        let label = super::pack::offer_label(kind);
+        let label = match super::beat_script_runtime::action_label(&request.offer_id, kind) {
+            Ok(label) => label,
+            Err(_) => return,
+        };
         for line in super::table_log::action_lines(
             kind,
             &hero,
@@ -837,6 +1103,9 @@ impl Actor {
         credential: [u8; 32],
         request: rpc::WatchViewRequest,
     ) -> Result<(LocalDemoRole, rpc::ViewMessage), tonic::Status> {
+        if self.session_lost() {
+            return Err(session_lost_status());
+        }
         require_readable(self.fenced)?;
         let role = self.issuer.authenticate(&credential).map_err(unavailable)?;
         let session = df_api::session_id(request.session_id.as_ref())
@@ -889,6 +1158,7 @@ impl Reducer<Call> for Actor {
         // Dialogue admission must not dispatch previously committed work.
         // Accepted jobs retain their ordinary non-dialogue dispatch/poll path.
         let dispatch_committed_jobs = !matches!(&call, Call::Dialogue { .. });
+        self.heartbeat_if_due();
         if dispatch_committed_jobs {
             self.run_committed_intents();
         }

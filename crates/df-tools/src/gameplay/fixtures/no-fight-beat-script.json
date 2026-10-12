@@ -1,0 +1,165 @@
+{
+  "entry": "room",
+  "terminal": [
+    "peaceful-destination"
+  ],
+  "labels": {
+    "continue-label": "Continue the conversation"
+  },
+  "beats": [
+    {
+      "id": "room",
+      "kind": "gather",
+      "scene": "room",
+      "state": {
+        "durable": "room"
+      },
+      "offers": [
+        {
+          "id": "create-character",
+          "label_slot": "create-character",
+          "effect": "create-character"
+        },
+        {
+          "id": "begin-story",
+          "label_slot": "begin-story",
+          "effect": "begin-story"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "create-character"
+          },
+          "target": "room"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "begin-story"
+          },
+          "target": "opening"
+        }
+      ]
+    },
+    {
+      "id": "opening",
+      "kind": "converse",
+      "scene": "opening",
+      "state": {
+        "durable": "opening"
+      },
+      "offers": [
+        {
+          "id": "ask-courier",
+          "label_slot": "ask-courier",
+          "effect": "ask-courier"
+        },
+        {
+          "id": "escort-courier",
+          "label_slot": "escort-courier",
+          "effect": "escort-courier"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "ask-courier"
+          },
+          "target": "courier-answer-seal"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "escort-courier"
+          },
+          "target": "courier-answer-escort"
+        }
+      ]
+    },
+    {
+      "id": "courier-answer-seal",
+      "kind": "narrate",
+      "scene": "dialogue-seal",
+      "state": {
+        "durable": "courier-answer-seal"
+      },
+      "offers": [
+        {
+          "id": "continue-conversation",
+          "effect": "continue",
+          "label_slot": "continue-label"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "continue-conversation"
+          },
+          "target": "peaceful-travel"
+        }
+      ]
+    },
+    {
+      "id": "courier-answer-escort",
+      "kind": "narrate",
+      "scene": "dialogue-escort",
+      "state": {
+        "durable": "courier-answer-escort"
+      },
+      "offers": [
+        {
+          "id": "continue-conversation",
+          "effect": "continue",
+          "label_slot": "continue-label"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "continue-conversation"
+          },
+          "target": "peaceful-travel"
+        }
+      ]
+    },
+    {
+      "id": "peaceful-travel",
+      "kind": "travel",
+      "scene": "dialogue-escort",
+      "state": {
+        "durable": "peaceful-travel"
+      },
+      "offers": [
+        {
+          "id": "choose-harbor-scene",
+          "effect": "choose-harbor-scene",
+          "label_slot": "choose-harbor-scene"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "choose-harbor-scene"
+          },
+          "target": "peaceful-destination"
+        }
+      ]
+    },
+    {
+      "id": "peaceful-destination",
+      "kind": "conclude",
+      "scene": "inn",
+      "state": {
+        "durable": "peaceful-destination"
+      },
+      "offers": [],
+      "transitions": []
+    }
+  ]
+}

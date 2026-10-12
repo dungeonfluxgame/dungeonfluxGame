@@ -17,8 +17,9 @@ pub(crate) const BEAT_SECONDS: f64 = 60.0 / BPM;
 /// 16 bars of 4/4: exactly 2 016 000 samples at 44.1 kHz (45.714 s).
 pub(crate) const LOOP_SECONDS: f64 = 64.0 * BEAT_SECONDS;
 
-/// How long a Release keeps the resolving motif before the mix settles to the calm bed.
-/// Replaced by the server cue's `hold_millis` once the tempo engine supplies one.
+/// How long a Release keeps the resolving motif before the mix settles to the calm bed when
+/// the tempo is derived from the view, or a cue arrives without a `hold_millis`. A server
+/// Release cue carries the tuned hold in its `hold_millis`.
 pub(crate) const RELEASE_HOLD_MILLIS: f64 = 14_000.0;
 /// Narration ducking: depth and the attack/release of the ramp.
 pub(crate) const DUCK_DECIBELS: f32 = -9.0;
@@ -48,11 +49,46 @@ impl Phase {
 }
 
 /// A continuous intensity (0..=1000) with its phase and the view sequence it came from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Tempo {
     pub(crate) phase: Phase,
     pub(crate) intensity: u16,
     pub(crate) sequence: u64,
+    /// The server cue's own sequence; `None` when the tempo was derived from the view.
+    pub(crate) cue: Option<u64>,
+    /// How long a Release lasts before the mix settles to calm.
+    pub(crate) release_hold_millis: f64,
+}
+
+/// The newest server cue sequence already consumed on this watch connection.
+///
+/// A cue is consumed by its own sequence, whatever gameplay revision the view that carries it
+/// has: the same cue arrives with many views and must not restart the release hold, and a cue
+/// older than one already consumed is stale. The server resets its sequence on a new
+/// authenticated watch connection, so the memory is reset with it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CueMemory {
+    newest: Option<u64>,
+}
+
+impl CueMemory {
+    /// Forgets the consumed sequence: a new watch connection starts a new sequence.
+    pub(crate) fn reset(&mut self) {
+        self.newest = None;
+    }
+
+    /// Whether `tempo` is news. A tempo derived from the view always is; a cue is news only
+    /// when its sequence is newer than every one consumed so far.
+    pub(crate) fn consume(&mut self, tempo: &Tempo) -> bool {
+        let Some(cue) = tempo.cue else {
+            return true;
+        };
+        if self.newest.is_some_and(|newest| cue <= newest) {
+            return false;
+        }
+        self.newest = Some(cue);
+        true
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,22 +300,28 @@ pub(crate) fn next_beat(now: f64, started_at: Option<f64>) -> f64 {
 
 /// A Release settles to the calm bed once its hold has passed.
 pub(crate) fn effective_phase(tempo: Tempo, release_held_millis: f64) -> Phase {
-    if tempo.phase == Phase::Release && release_held_millis >= RELEASE_HOLD_MILLIS {
+    if tempo.phase == Phase::Release && release_held_millis >= tempo.release_hold_millis {
         Phase::Calm
     } else {
         tempo.phase
     }
 }
 
-/// THE SINGLE PLACE THE TEMPO COMES FROM. Today it is derived from what the display view
-/// already carries. When the server sends its `TempoCue { intensity_permille, phase, sequence,
-/// hold_millis }`, replace this function body to return that cue (and feed `hold_millis` to
-/// `RELEASE_HOLD_MILLIS`); nothing else in the music code needs to change.
+/// THE SINGLE PLACE THE TEMPO COMES FROM. The server's `TempoCue { intensity_permille, phase,
+/// sequence, hold_millis }` when the view carries one; only when the cue is absent (or names
+/// no phase) is it derived from what the display view already shows.
 pub(crate) fn tempo_of(
     scene: &rpc::GameplayScene,
     journey: &rpc::JourneyView,
     sequence: u64,
 ) -> Tempo {
+    if let Some(cue) = journey
+        .tempo
+        .as_ref()
+        .and_then(|cue| tempo_from_cue(cue, sequence))
+    {
+        return cue;
+    }
     let facts = facts_of(scene, journey, "");
     let (phase, intensity) = match rpc::JourneyPhase::try_from(journey.phase) {
         Ok(rpc::JourneyPhase::Opening) => (Phase::Build, 350),
@@ -293,7 +335,32 @@ pub(crate) fn tempo_of(
         phase,
         intensity,
         sequence,
+        cue: None,
+        release_hold_millis: RELEASE_HOLD_MILLIS,
     }
+}
+
+fn tempo_from_cue(cue: &rpc::TempoCue, sequence: u64) -> Option<Tempo> {
+    let phase = match rpc::TempoPhase::try_from(cue.phase).ok()? {
+        rpc::TempoPhase::Calm => Phase::Calm,
+        rpc::TempoPhase::Build => Phase::Build,
+        rpc::TempoPhase::Anticipation => Phase::Anticipation,
+        rpc::TempoPhase::Peak => Phase::Peak,
+        rpc::TempoPhase::Release => Phase::Release,
+        rpc::TempoPhase::Unspecified => return None,
+    };
+    Some(Tempo {
+        phase,
+        intensity: u16::try_from(cue.intensity_permille.min(1_000)).unwrap_or(1_000),
+        sequence,
+        cue: Some(cue.sequence),
+        // The server sends the hold with a Release cue only; no hold means the standard one.
+        release_hold_millis: if cue.hold_millis == 0 {
+            RELEASE_HOLD_MILLIS
+        } else {
+            f64::from(cue.hold_millis)
+        },
+    })
 }
 
 /// 750 to 1000: starts high and climbs as the most hurt hero's health fraction falls and as
@@ -657,6 +724,8 @@ mod tests {
             phase: Phase::Release,
             intensity: 450,
             sequence: 1,
+            cue: None,
+            release_hold_millis: RELEASE_HOLD_MILLIS,
         };
         assert_eq!(
             effective_phase(release, RELEASE_HOLD_MILLIS - 1.0),
@@ -668,5 +737,87 @@ mod tests {
             ..release
         };
         assert_eq!(effective_phase(peak, 1.0e9), Phase::Peak);
+    }
+
+    fn cue(phase: rpc::TempoPhase, intensity: u32, sequence: u64, hold: u32) -> rpc::TempoCue {
+        rpc::TempoCue {
+            intensity_permille: intensity,
+            phase: phase as i32,
+            sequence,
+            hold_millis: hold,
+        }
+    }
+
+    #[test]
+    fn a_server_cue_is_the_tempo_and_the_view_is_only_the_fallback() {
+        let quiet = scene("");
+        let mut cued = journey(rpc::JourneyPhase::Opening);
+        cued.tempo = Some(cue(rpc::TempoPhase::Peak, 880, 9, 400));
+        let from_cue = tempo(&quiet, &cued);
+        assert_eq!(from_cue.phase, Phase::Peak);
+        assert_eq!(from_cue.intensity, 880);
+        assert_eq!(from_cue.cue, Some(9));
+        assert_eq!(from_cue.sequence, 7, "the view sequence stays the view's");
+        assert_eq!(from_cue.release_hold_millis, 400.0);
+
+        cued.tempo = None;
+        let derived = tempo(&quiet, &cued);
+        assert_eq!(derived.phase, Phase::Build);
+        assert_eq!(derived.cue, None);
+        assert_eq!(derived.release_hold_millis, RELEASE_HOLD_MILLIS);
+
+        cued.tempo = Some(cue(rpc::TempoPhase::Unspecified, 900, 3, 100));
+        assert_eq!(tempo(&quiet, &cued).phase, Phase::Build);
+        cued.tempo = Some(cue(rpc::TempoPhase::Calm, 5_000, 4, 100));
+        assert_eq!(tempo(&quiet, &cued).intensity, 1_000);
+    }
+
+    #[test]
+    fn a_cue_is_consumed_once_by_its_own_sequence_and_a_reconnect_resets_it() {
+        let quiet = scene("");
+        let mut memory = CueMemory::default();
+        let mut view = journey(rpc::JourneyPhase::Combat);
+        view.tempo = Some(cue(rpc::TempoPhase::Peak, 800, 5, 250));
+        assert!(memory.consume(&tempo_of(&quiet, &view, 10)));
+        // The same cue on a later gameplay revision is not news.
+        assert!(!memory.consume(&tempo_of(&quiet, &view, 11)));
+        // An older cue arriving late is stale.
+        view.tempo = Some(cue(rpc::TempoPhase::Calm, 100, 4, 250));
+        assert!(!memory.consume(&tempo_of(&quiet, &view, 12)));
+        view.tempo = Some(cue(rpc::TempoPhase::Release, 400, 6, 250));
+        assert!(memory.consume(&tempo_of(&quiet, &view, 13)));
+        // A derived tempo never touches the memory.
+        view.tempo = None;
+        assert!(memory.consume(&tempo_of(&quiet, &view, 14)));
+        view.tempo = Some(cue(rpc::TempoPhase::Release, 400, 6, 250));
+        assert!(!memory.consume(&tempo_of(&quiet, &view, 15)));
+        // The server restarts its sequence on a new watch connection.
+        memory.reset();
+        view.tempo = Some(cue(rpc::TempoPhase::Build, 300, 1, 250));
+        assert!(memory.consume(&tempo_of(&quiet, &view, 1)));
+    }
+
+    #[test]
+    fn a_cue_without_a_hold_uses_the_standard_release_hold() {
+        let quiet = scene("");
+        let mut view = journey(rpc::JourneyPhase::Complete);
+        view.tempo = Some(cue(rpc::TempoPhase::Release, 450, 2, 0));
+        let release = tempo(&quiet, &view);
+        assert_eq!(release.release_hold_millis, RELEASE_HOLD_MILLIS);
+        assert_eq!(
+            effective_phase(release, RELEASE_HOLD_MILLIS - 1.0),
+            Phase::Release,
+            "a release is not cut to the server's minimum cue gap"
+        );
+    }
+
+    #[test]
+    fn a_cue_hold_decides_when_a_release_settles() {
+        let quiet = scene("");
+        let mut view = journey(rpc::JourneyPhase::Complete);
+        view.tempo = Some(cue(rpc::TempoPhase::Release, 450, 2, 3_000));
+        let release = tempo(&quiet, &view);
+        assert_eq!(effective_phase(release, 2_999.0), Phase::Release);
+        assert_eq!(effective_phase(release, 3_000.0), Phase::Calm);
     }
 }

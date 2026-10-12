@@ -22,14 +22,23 @@ mod qualification_verdict;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod music_score;
+#[cfg(any(target_arch = "wasm32", test))]
+mod reconnect;
+#[cfg(any(target_arch = "wasm32", test))]
+mod sound_switch;
 mod speech_clip;
 mod voice_line;
 
+// PLAY-L01: when a same-revision display view may replace the shown one (generated art only).
+#[cfg(any(target_arch = "wasm32", test))]
+mod live_art;
 #[cfg(any(target_arch = "wasm32", test))]
 mod presentation;
 #[cfg(any(target_arch = "wasm32", test))]
 mod speech_capture;
 mod stage_art;
+#[cfg(any(target_arch = "wasm32", test))]
+mod stage_depth;
 #[cfg(any(target_arch = "wasm32", test))]
 mod stage_director;
 

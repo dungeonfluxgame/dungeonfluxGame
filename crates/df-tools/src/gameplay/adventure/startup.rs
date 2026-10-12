@@ -1,6 +1,9 @@
 //! Local-demo startup adapter; all random selection remains in the pure generator.
 use super::super::{
-    model, pack::LoadedPack, startup_configuration::AdventureSettings, storyteller::Storyteller,
+    model,
+    pack::LoadedPack,
+    startup_configuration::{AdventureSettings, content_rating},
+    storyteller::Storyteller,
 };
 use super::{
     ForcedEntries, GenerateError, GenerateOptions, GeneratedAdventure, Tables, TablesError,
@@ -112,6 +115,7 @@ async fn fresh_adventure(
     let (tables, seed, baseline) = pattern_adventure(settings)?;
     let options = GenerateOptions {
         rules_mode: settings.rules_mode,
+        rating: content_rating(),
     };
     let outcome = expression::express(
         &tables,
@@ -148,6 +152,7 @@ fn pattern_adventure(
         seed,
         GenerateOptions {
             rules_mode: settings.rules_mode,
+            rating: content_rating(),
         },
         &ForcedEntries::new(),
     )
@@ -281,6 +286,30 @@ pub(crate) fn substitute_missing_art(
                 art_key,
                 fallback: fallback_key.clone(),
             });
+        }
+    }
+    // A painting is presentation, not a new authored outcome. Keep script source
+    // scenes/receipts immutable when asset availability changes across a resume.
+    loaded.script_scene_assets.clear();
+    if let Some(script) = &loaded.pack.beat_script {
+        for (id, scene) in &script.scenes {
+            if scene.asset.starts_with("assets/ui/generated/")
+                && !painting_present(asset_root, &scene.asset)
+            {
+                let art_key = scene
+                    .setting
+                    .as_ref()
+                    .map(|setting| setting.art_key.clone())
+                    .unwrap_or_else(|| scene.asset.clone());
+                loaded
+                    .script_scene_assets
+                    .insert(id.clone(), fallback_asset.clone());
+                println!("ADVENTURE art missing {art_key} -> {fallback_key}");
+                substitutions.push(ArtSubstitution {
+                    art_key,
+                    fallback: fallback_key.clone(),
+                });
+            }
         }
     }
     substitutions

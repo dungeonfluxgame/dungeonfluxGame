@@ -20,6 +20,7 @@ use super::{
     },
     hud::Hud,
     scene_file::{BackdropLayer, BattleScene, GroundLayer, SplatFormat, SplatGrade, SplatLayer},
+    sound::SoundEvent,
     splat::{
         ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, SplatFileLoader, SplatLoader,
         SplatTransform, pack_records,
@@ -81,6 +82,8 @@ struct Inner {
     stats_every: u64,
     fallback: Option<(GroundLayer, BackdropLayer)>,
     fallback_applied: bool,
+    /// Where the stage's sounds go, at the frame they happen. Without one they are dropped.
+    sound_sink: Option<Rc<dyn Fn(SoundEvent)>>,
 }
 
 /// The animation-frame closure, shared so the loop can reschedule itself and `dispose` can drop it.
@@ -89,28 +92,6 @@ type FrameCallback = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 pub struct BattleStage {
     inner: Rc<RefCell<Inner>>,
     frame_callback: FrameCallback,
-}
-
-/// Whether the user asked the system for reduced motion.
-pub fn prefers_reduced_motion() -> bool {
-    let Some(window) = web_sys::window() else {
-        return false;
-    };
-    let Ok(query) = js_sys::Reflect::get(&window, &JsValue::from_str("matchMedia")) else {
-        return false;
-    };
-    let Ok(function) = query.dyn_into::<js_sys::Function>() else {
-        return false;
-    };
-    function
-        .call1(
-            &window,
-            &JsValue::from_str("(prefers-reduced-motion: reduce)"),
-        )
-        .ok()
-        .and_then(|list| js_sys::Reflect::get(&list, &JsValue::from_str("matches")).ok())
-        .and_then(|matches| matches.as_bool())
-        .unwrap_or(false)
 }
 
 fn mark(host: &Element, value: &str) {
@@ -140,6 +121,7 @@ impl BattleStage {
                 stats_every: 60,
                 fallback: None,
                 fallback_applied: false,
+                sound_sink: None,
             })),
             frame_callback: Rc::new(RefCell::new(None)),
         }
@@ -255,6 +237,7 @@ impl BattleStage {
             stats_every: 30,
             fallback: options.fallback_layers,
             fallback_applied: false,
+            sound_sink: None,
         }));
         let callback: FrameCallback = Rc::new(RefCell::new(None));
         {
@@ -283,6 +266,12 @@ impl BattleStage {
             Availability::Available => Some(operation(&mut inner.stage)),
             Availability::Unavailable(_) => None,
         }
+    }
+
+    /// Sends the stage's combat sounds to `sink` the moment their timeline steps happen. The sink
+    /// runs inside the frame callback and must not call back into the stage.
+    pub fn set_sound_sink(&self, sink: Rc<dyn Fn(SoundEvent)>) {
+        self.inner.borrow_mut().sound_sink = Some(sink);
     }
 
     /// Stops the loop and removes everything the stage added. Safe to call more than once.
@@ -354,6 +343,11 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     state
         .stage
         .update(Duration::from_secs_f64(delta_ms / 1000.0));
+    for event in state.stage.take_sounds() {
+        if let Some(sink) = &state.sound_sink {
+            sink(event);
+        }
+    }
 
     let (Some(canvas), Some(renderer)) = (&state.canvas, &mut state.renderer) else {
         return;

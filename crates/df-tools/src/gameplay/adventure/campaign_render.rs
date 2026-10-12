@@ -1,7 +1,10 @@
 //! Pattern campaign overlays and audience-safe continuity projections.
-use super::super::pack::{self, SceneKey};
+use super::super::{
+    pack::{self, SceneKey},
+    startup_configuration::content_rating,
+};
 use super::campaign::{
-    Audience, CampaignError, CampaignFrame, CampaignRecord, ChapterPlan, ChapterResult, StorySoFar,
+    Audience, CampaignError, CampaignFrame, CampaignRecord, ChapterPlan, StorySoFar,
 };
 use super::campaign_tables::CampaignTables;
 use super::{GenerateOptions, GeneratedAdventure, generate};
@@ -151,17 +154,9 @@ pub(super) fn story_so_far(record: &CampaignRecord) -> StorySoFar {
         .iter()
         .rev()
         .filter_map(|c| {
-            c.outcome.as_ref().map(|o| {
-                format!(
-                    "{}: {}",
-                    c.plan.title,
-                    if o.result == ChapterResult::Victory {
-                        "won"
-                    } else {
-                        "lost"
-                    }
-                )
-            })
+            c.outcome
+                .as_ref()
+                .map(|o| format!("{}: {}", c.plan.title, o.result.phrase()))
         })
         .take(3)
         .collect();
@@ -228,11 +223,16 @@ pub(crate) fn generate_chapter(
     frame: &CampaignFrame,
     plan: &mut ChapterPlan,
 ) -> Result<GeneratedAdventure, CampaignError> {
+    plan.forced.insert(
+        super::beat_tables::CHAPTER_TYPE.into(),
+        plan.chapter_type.clone(),
+    );
     let mut generated = generate(
         &tables.chapter,
         plan.seed,
         GenerateOptions {
             rules_mode: frame.rules_mode,
+            rating: content_rating(),
         },
         &plan.forced,
     )?;
@@ -528,6 +528,7 @@ pub(crate) fn generate_chapter(
             _ => {}
         }
     }
+    script_continuity(&mut generated)?;
     for scene in &generated.pack.scenes {
         check(&scene.title, 32, "scene title")?;
         check(&scene.dialogue, 160, "spoken line")?;
@@ -693,7 +694,10 @@ pub(super) fn epilogue(
             "With {}, you offer the {} mercy",
             frame.artifact.name, frame.villain.title
         ),
-        super::campaign::Approach::Escorted => format!(
+        super::campaign::Approach::Third
+        | super::campaign::Approach::Investigated
+        | super::campaign::Approach::Continued
+        | super::campaign::Approach::Escorted => format!(
             "Your allies secure {} and end the {}'s reign",
             frame.artifact.name, frame.villain.title
         ),
@@ -706,4 +710,73 @@ pub(super) fn epilogue(
             "The region can begin to heal, and your deeds will be remembered."
         }
     )
+}
+
+/// Carry current campaign public sources through peaceful variants. Optional looks
+/// retain their authored discoveries; required handlers deliver continuity on either path.
+pub(super) fn script_continuity(generated: &mut GeneratedAdventure) -> Result<(), CampaignError> {
+    let base_scenes = &generated.pack.scenes;
+    if let Some(script) = &mut generated.pack.beat_script
+        && !script.uses_encounter()
+    {
+        let roles = super::beat_tables::scene_roles(script)
+            .map_err(|error| CampaignError::Invalid(error.to_string()))?;
+        for (id, scene) in &mut script.scenes {
+            let base = base_scenes
+                .iter()
+                .find(|base| base.key == scene.key)
+                .ok_or_else(|| CampaignError::Missing(format!("script scene {id}")))?;
+            use super::beat_tables::SceneRole;
+            let role = roles
+                .get(id)
+                .ok_or_else(|| CampaignError::Missing(format!("script role {id}")))?;
+            let source_key = match role {
+                SceneRole::Room => SceneKey::Room,
+                SceneRole::Opening => SceneKey::Opening,
+                SceneRole::Followup => scene.key,
+                SceneRole::Observation => scene.key,
+                SceneRole::Contact => SceneKey::Inn,
+            };
+            let carrier = base_scenes
+                .iter()
+                .find(|base| base.key == source_key)
+                .ok_or_else(|| CampaignError::Missing(format!("script continuity {id}")))?;
+            match role {
+                SceneRole::Room | SceneRole::Opening | SceneRole::Followup => {
+                    scene.narration = carrier.narration.clone();
+                    scene.dialogue = carrier.dialogue.clone();
+                }
+                SceneRole::Contact => scene.dialogue = carrier.dialogue.clone(),
+                SceneRole::Observation => {}
+            }
+            scene.speaker = base.speaker.clone();
+            scene.asset = base.asset.clone();
+            scene.speaker_portrait = base.speaker_portrait.clone();
+            scene.cast = base.cast.clone();
+            scene.setting = base.setting.clone();
+            scene.rules_note.clear();
+            scene.narration_rested = None;
+        }
+        let start = 6 + base_scenes.len() * 3 + script.labels.len();
+        for (index, scene) in script.scenes.values().enumerate() {
+            for (offset, text) in [
+                scene.title.clone(),
+                scene.narration.clone(),
+                scene.dialogue.clone(),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let sheet = generated
+                    .fact_sheet
+                    .get_mut(start + index * 3 + offset)
+                    .ok_or_else(|| CampaignError::Invalid("script fact sheet".into()))?;
+                sheet.baseline = text;
+                if sheet.slot == "line" {
+                    sheet.speaker = scene.speaker.clone();
+                }
+            }
+        }
+    }
+    Ok(())
 }

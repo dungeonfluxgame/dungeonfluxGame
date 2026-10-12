@@ -11,6 +11,92 @@ use std::{
 const QUALIFICATION_PORT: u16 = 63309;
 const MAXIMUM_SESSION_SECONDS: u64 = 365 * 24 * 60 * 60;
 
+/// How freely the game's written and spoken content treats violence, horror, strong language
+/// and adult themes. `Mature` is the default because this is an adult game; `Restrained`
+/// switches the censorship back on. The limits that hold in both modes (no sexual content
+/// involving minors or real people, untrusted player words) are not part of this setting.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ContentRating {
+    #[default]
+    Mature,
+    Restrained,
+}
+
+impl ContentRating {
+    /// The value `DF_GAMEPLAY_CONTENT_RATING` spells for this rating.
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Mature => "mature",
+            Self::Restrained => "restrained",
+        }
+    }
+
+    /// The startup status line, `CONTENT rating=<label>`.
+    pub(super) fn startup_line(self) -> String {
+        format!("CONTENT rating={}", self.label())
+    }
+}
+
+/// Unset means `mature`; exactly `mature` or `restrained` selects a rating; anything else
+/// refuses startup without echoing it.
+pub(super) fn content_rating_setting(
+    input: Result<String, VarError>,
+) -> Result<ContentRating, io::Error> {
+    match optional(input)?.as_deref() {
+        None | Some("mature") => Ok(ContentRating::Mature),
+        Some("restrained") => Ok(ContentRating::Restrained),
+        Some(_) => Err(refused("DF_GAMEPLAY_CONTENT_RATING")),
+    }
+}
+
+static CONTENT_RATING: std::sync::OnceLock<ContentRating> = std::sync::OnceLock::new();
+
+/// Fixes the rating for the whole process, once, before any content is generated.
+pub(super) fn install_content_rating(rating: ContentRating) -> Result<(), io::Error> {
+    CONTENT_RATING
+        .set(rating)
+        .map_err(|_| io::Error::other("content rating already installed"))
+}
+
+/// The process-wide rating: the installed one, or `Mature` before startup installs it.
+pub(super) fn content_rating() -> ContentRating {
+    #[cfg(test)]
+    if let Some(rating) = TEST_RATING.with(|slot| slot.get()) {
+        return rating;
+    }
+    CONTENT_RATING.get().copied().unwrap_or_default()
+}
+
+#[cfg(test)]
+thread_local! { static TEST_RATING: std::cell::Cell<Option<ContentRating>> = const { std::cell::Cell::new(None) }; }
+
+/// While alive, [`content_rating`] answers `rating` on this thread only, so tests of the two
+/// modes never leak into each other. It restores the previous answer when dropped, also across
+/// the `await`s of a single-threaded test runtime.
+#[cfg(test)]
+pub(super) struct TestRating(Option<ContentRating>);
+
+#[cfg(test)]
+impl TestRating {
+    pub(super) fn set(rating: ContentRating) -> Self {
+        Self(TEST_RATING.with(|slot| slot.replace(Some(rating))))
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestRating {
+    fn drop(&mut self) {
+        TEST_RATING.with(|slot| slot.set(self.0));
+    }
+}
+
+/// Runs `run` with [`content_rating`] answering `rating`.
+#[cfg(test)]
+pub(super) fn with_test_rating<T>(rating: ContentRating, run: impl FnOnce() -> T) -> T {
+    let _rating = TestRating::set(rating);
+    run()
+}
+
 /// Raw `DF_GAMEPLAY_*` inputs in the order of [`SessionSettings`] fields.
 pub(super) struct SessionInputs {
     pub(super) listen: Result<String, VarError>,
@@ -417,6 +503,7 @@ const GENERATED_STEMS: &[&str] = &[
     "icon-book",
     "portrait-hero-1",
     "portrait-hero-2",
+    "portrait-hero-3",
     "portrait-bandit",
     "portrait-courier",
     "scene-lobby-harbor",
@@ -439,6 +526,7 @@ const GENERATED_STEMS: &[&str] = &[
     "icon-players",
     "portrait-hero-1-full",
     "portrait-hero-2-full",
+    "portrait-hero-3-full",
     "portrait-bandit-full",
     "portrait-courier-full",
 ];
@@ -455,6 +543,50 @@ const BATTLEFIELD_STEMS: &[&str] = &[
     "ground-orrery-library",
     "figure-hero-1",
     "figure-hero-2",
+    "figure-hero-3",
+    "prop-crates",
+    "prop-barrels",
+    "prop-rope-nets",
+    "prop-boulder",
+    "prop-fallen-log",
+    "prop-tree-stump",
+    "prop-gravestone",
+    "prop-stone-pillar",
+    "prop-cart",
+    "prop-hay-bales",
+    "prop-well",
+    "prop-market-stall",
+    "prop-bookshelf",
+    "prop-brazier",
+    "prop-fence",
+    "prop-snow-rocks",
+    "status-blinded",
+    "status-charmed",
+    "status-deafened",
+    "status-exhaustion",
+    "status-frightened",
+    "status-grappled",
+    "status-incapacitated",
+    "status-invisible",
+    "status-paralyzed",
+    "status-petrified",
+    "status-poisoned",
+    "status-prone",
+    "status-restrained",
+    "status-stunned",
+    "status-unconscious",
+    "status-bloodied",
+    "status-burning",
+    "status-blessed",
+    "status-cursed",
+    "status-concentrating",
+    "status-dodging",
+    "status-hidden",
+    "status-inspired",
+    "status-raging",
+    "status-marked",
+    "status-dying",
+    "status-cover",
     "figure-bandit",
     "figure-ant-bandit",
     "figure-ant-cultist",
@@ -486,6 +618,44 @@ const SFX_NAMES: &[&str] = &[
     "defeat-toll",
     "bubble-pop",
     "heal-chime",
+    "step-wood-1",
+    "step-wood-2",
+    "step-dirt-1",
+    "step-dirt-2",
+    "step-stone-1",
+    "step-stone-2",
+    "sword-swing-1",
+    "sword-swing-2",
+    "blade-hit-1",
+    "blade-hit-2",
+    "weapon-parry",
+    "bow-draw",
+    "bow-release",
+    "arrow-flight",
+    "arrow-impact",
+    "arrow-miss",
+    "voice-male-effort",
+    "voice-male-effort-2",
+    "voice-male-pain",
+    "voice-male-down",
+    "voice-female-effort",
+    "voice-female-effort-2",
+    "voice-female-pain",
+    "voice-female-down",
+    "voice-small-effort",
+    "voice-small-pain",
+    "voice-small-down",
+    "voice-beast-effort",
+    "voice-beast-pain",
+    "voice-beast-down",
+    "voice-undead-effort",
+    "voice-undead-pain",
+    "voice-undead-down",
+    "voice-humanoid-effort",
+    "voice-humanoid-pain",
+    "voice-humanoid-down",
+    "body-fall",
+    "heal-breath",
 ];
 const GENERATED_EXTENSIONS: [(&str, &str); 3] = [
     ("webp", "image/webp"),
@@ -602,10 +772,25 @@ pub(super) fn database_config(
     let mut configuration = tokio_postgres::Config::new();
     configuration
         .host("127.0.0.1")
-        .port(55517)
+        .port(database_port()?)
         .user("df_gameplay_demo_admin_20261004")
         .dbname(&name);
     Ok(configuration)
+}
+
+/// The launcher's PostgreSQL port. PLAY-L01 harness knob: `DF_GAMEPLAY_DEMO_DATABASE_PORT` names a
+/// private instance's port (evaluation runs must not share the launcher's); an invalid value is
+/// refused without echoing it.
+fn database_port() -> Result<u16, io::Error> {
+    match std::env::var("DF_GAMEPLAY_DEMO_DATABASE_PORT") {
+        Err(VarError::NotPresent) => Ok(55517),
+        Ok(value) => value
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port >= 1024)
+            .ok_or_else(|| refused("DF_GAMEPLAY_DEMO_DATABASE_PORT")),
+        Err(_) => Err(refused("DF_GAMEPLAY_DEMO_DATABASE_PORT")),
+    }
 }
 
 /// Resolve once at startup; missing files are diagnosed by the typed pack loader.
@@ -785,6 +970,198 @@ pub(super) fn storyteller_mode(
     }))
 }
 
+// ---- PLAY-L01: runtime image generation settings (the content rating is the shared one above) ----
+
+/// Raw `DF_GAMEPLAY_IMAGERY*` inputs.
+pub(super) struct ImageryInputs {
+    pub(super) credential: Result<String, VarError>,
+    pub(super) mode: Result<String, VarError>,
+    pub(super) model: Result<String, VarError>,
+    pub(super) quality: Result<String, VarError>,
+    pub(super) budget: Result<String, VarError>,
+    pub(super) interval_seconds: Result<String, VarError>,
+    pub(super) deadline_seconds: Result<String, VarError>,
+    pub(super) cache: Result<String, VarError>,
+}
+
+impl ImageryInputs {
+    pub(super) fn from_environment() -> Self {
+        Self {
+            credential: std::env::var("OPENAI_API_KEY"),
+            mode: std::env::var("DF_GAMEPLAY_IMAGERY"),
+            model: std::env::var("DF_GAMEPLAY_IMAGERY_MODEL"),
+            quality: std::env::var("DF_GAMEPLAY_IMAGERY_QUALITY"),
+            budget: std::env::var("DF_GAMEPLAY_IMAGERY_BUDGET"),
+            interval_seconds: std::env::var("DF_GAMEPLAY_IMAGERY_INTERVAL_SECONDS"),
+            deadline_seconds: std::env::var("DF_GAMEPLAY_IMAGERY_DEADLINE_SECONDS"),
+            cache: std::env::var("DF_GAMEPLAY_IMAGERY_CACHE"),
+        }
+    }
+}
+
+const DEFAULT_IMAGERY_BUDGET: u32 = 40;
+const MAXIMUM_IMAGERY_BUDGET: u32 = 10_000;
+/// Scene refreshes are at least this far apart: a repaint every few seconds would cost more
+/// than it adds and would never settle.
+pub(super) const MINIMUM_IMAGERY_INTERVAL_SECONDS: u64 = 20;
+const DEFAULT_IMAGERY_INTERVAL_SECONDS: u64 = 30;
+const MAXIMUM_IMAGERY_INTERVAL_SECONDS: u64 = 3_600;
+const DEFAULT_IMAGERY_DEADLINE_SECONDS: u64 = 45;
+const MAXIMUM_IMAGERY_DEADLINE_SECONDS: u64 = 170;
+const DEFAULT_IMAGERY_MODEL: &str = "gpt-image-2.5-flare";
+const DEFAULT_IMAGERY_CACHE: &str = "artifacts/tmp/play/imagery-cache";
+
+/// The OpenAI credential used for image edits; it never appears in `Debug` output.
+pub(super) struct ImageryCredential(String);
+
+impl ImageryCredential {
+    pub(super) fn expose(&self) -> &str {
+        &self.0
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+impl std::fmt::Debug for ImageryCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ImageryCredential([REDACTED])")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ImageryOff {
+    Qualification,
+    Disabled,
+    NoCredential,
+}
+
+impl ImageryOff {
+    pub(super) fn reason(self) -> &'static str {
+        match self {
+            Self::Qualification => "qualification run",
+            Self::Disabled => "DF_GAMEPLAY_IMAGERY=off",
+            Self::NoCredential => "OPENAI_API_KEY not set",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ImageryConfiguration {
+    pub(super) credential: ImageryCredential,
+    pub(super) model: df_providers::ImageEditModel,
+    pub(super) quality: df_providers::ImageQuality,
+    /// Provider calls (images) per server run, charged before each call.
+    pub(super) budget: u32,
+    /// The least time between two scene refreshes.
+    pub(super) interval: Duration,
+    /// How long one provider call may take.
+    pub(super) deadline: Duration,
+    pub(super) cache_dir: std::path::PathBuf,
+    pub(super) rating: ContentRating,
+}
+
+#[derive(Debug)]
+pub(super) enum ImagerySettings {
+    Off(ImageryOff),
+    On(ImageryConfiguration),
+}
+
+fn bounded_seconds(
+    input: Result<String, VarError>,
+    default: u64,
+    range: std::ops::RangeInclusive<u64>,
+    name: &str,
+) -> Result<u64, io::Error> {
+    match optional(input)?.filter(|value| !value.is_empty()) {
+        Some(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|seconds| range.contains(seconds))
+            .ok_or_else(|| refused(name)),
+        None => Ok(default),
+    }
+}
+
+/// Imagery is on when a credential is present and `DF_GAMEPLAY_IMAGERY` is not `off`. Invalid
+/// values are refused without echoing them; empty values count as unset. `rating` is the
+/// server's already-installed content rating.
+pub(super) fn imagery_settings(
+    inputs: ImageryInputs,
+    current: &Path,
+    rating: ContentRating,
+) -> Result<ImagerySettings, io::Error> {
+    let disabled = match optional(inputs.mode)?.as_deref() {
+        None | Some("" | "on") => false,
+        Some("off") => true,
+        Some(_) => return Err(refused("DF_GAMEPLAY_IMAGERY")),
+    };
+    let model = df_providers::ImageEditModel::from_model_id(
+        optional(inputs.model)?
+            .filter(|value| !value.is_empty())
+            .as_deref()
+            .unwrap_or(DEFAULT_IMAGERY_MODEL),
+    )
+    .ok_or_else(|| refused("DF_GAMEPLAY_IMAGERY_MODEL"))?;
+    let quality = match optional(inputs.quality)?.as_deref() {
+        None | Some("" | "medium") => df_providers::ImageQuality::Medium,
+        Some("low") => df_providers::ImageQuality::Low,
+        Some("high") => df_providers::ImageQuality::High,
+        Some(_) => return Err(refused("DF_GAMEPLAY_IMAGERY_QUALITY")),
+    };
+    let budget = match optional(inputs.budget)?.filter(|value| !value.is_empty()) {
+        Some(value) => value
+            .parse::<u32>()
+            .ok()
+            .filter(|budget| *budget <= MAXIMUM_IMAGERY_BUDGET)
+            .ok_or_else(|| refused("DF_GAMEPLAY_IMAGERY_BUDGET"))?,
+        None => DEFAULT_IMAGERY_BUDGET,
+    };
+    let interval = bounded_seconds(
+        inputs.interval_seconds,
+        DEFAULT_IMAGERY_INTERVAL_SECONDS,
+        MINIMUM_IMAGERY_INTERVAL_SECONDS..=MAXIMUM_IMAGERY_INTERVAL_SECONDS,
+        "DF_GAMEPLAY_IMAGERY_INTERVAL_SECONDS",
+    )?;
+    let deadline = bounded_seconds(
+        inputs.deadline_seconds,
+        DEFAULT_IMAGERY_DEADLINE_SECONDS,
+        5..=MAXIMUM_IMAGERY_DEADLINE_SECONDS,
+        "DF_GAMEPLAY_IMAGERY_DEADLINE_SECONDS",
+    )?;
+    let cache = optional(inputs.cache)?
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_IMAGERY_CACHE.to_owned());
+    if disabled {
+        return Ok(ImagerySettings::Off(ImageryOff::Disabled));
+    }
+    let Some(credential) = optional(inputs.credential)?
+        .filter(|value| !value.is_empty())
+        .filter(|value| {
+            value.len() <= 8192 && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+        })
+    else {
+        return Ok(ImagerySettings::Off(ImageryOff::NoCredential));
+    };
+    let cache = std::path::PathBuf::from(cache);
+    Ok(ImagerySettings::On(ImageryConfiguration {
+        credential: ImageryCredential(credential),
+        model,
+        quality,
+        budget,
+        interval: Duration::from_secs(interval),
+        deadline: Duration::from_secs(deadline),
+        cache_dir: if cache.is_absolute() {
+            cache
+        } else {
+            current.join(cache)
+        },
+        rating,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -915,6 +1292,68 @@ mod tests {
                 assert!(!error.to_string().contains(value));
             }
         }
+    }
+
+    #[test]
+    fn an_unset_content_rating_is_mature_and_exactly_two_values_are_accepted() {
+        assert_eq!(
+            content_rating_setting(Err(VarError::NotPresent)).unwrap(),
+            ContentRating::Mature
+        );
+        assert_eq!(
+            content_rating_setting(Ok("mature".to_owned())).unwrap(),
+            ContentRating::Mature
+        );
+        assert_eq!(
+            content_rating_setting(Ok("restrained".to_owned())).unwrap(),
+            ContentRating::Restrained
+        );
+        assert_eq!(ContentRating::default(), ContentRating::Mature);
+    }
+
+    #[test]
+    fn any_other_content_rating_refuses_startup_without_echoing_it() {
+        for value in [
+            "",
+            "Mature",
+            "RESTRAINED",
+            " mature",
+            "family",
+            "off",
+            "mature ",
+        ] {
+            let error = content_rating_setting(Ok(value.to_owned())).unwrap_err();
+            assert_eq!(error.to_string(), "DF_GAMEPLAY_CONTENT_RATING invalid");
+            assert!(value.is_empty() || !error.to_string().contains(value));
+        }
+        assert!(content_rating_setting(Err(VarError::NotUnicode("x".into()))).is_err());
+    }
+
+    #[test]
+    fn the_startup_line_names_the_rating() {
+        assert_eq!(
+            ContentRating::Mature.startup_line(),
+            "CONTENT rating=mature"
+        );
+        assert_eq!(
+            ContentRating::Restrained.startup_line(),
+            "CONTENT rating=restrained"
+        );
+    }
+
+    #[test]
+    fn a_test_rating_is_per_thread_nests_and_never_leaks() {
+        assert_eq!(content_rating(), ContentRating::Mature);
+        with_test_rating(ContentRating::Restrained, || {
+            assert_eq!(content_rating(), ContentRating::Restrained);
+            with_test_rating(ContentRating::Mature, || {
+                assert_eq!(content_rating(), ContentRating::Mature);
+            });
+            assert_eq!(content_rating(), ContentRating::Restrained);
+            let other = std::thread::spawn(content_rating).join().unwrap();
+            assert_eq!(other, ContentRating::Mature, "another thread is unaffected");
+        });
+        assert_eq!(content_rating(), ContentRating::Mature);
     }
 
     fn inputs(values: [Option<&str>; 6]) -> SessionInputs {

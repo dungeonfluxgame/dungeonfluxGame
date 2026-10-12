@@ -16,6 +16,8 @@ pub(super) struct DialogueRecovery {
     restore_focus: bool,
     selection: Option<(u32, u32)>,
     exchange: Option<Exchange>,
+    /// What this player just sent while the speaker's reply is still being written.
+    awaiting: Option<String>,
     /// Hold-to-talk speech input for this text box.
     pub(super) talk: super::talk_control::Talk,
 }
@@ -237,6 +239,7 @@ pub(super) fn mount(
             node(&document, &body, "p", "npc-bubble-reply", &exchange.reply)?;
         }
     }
+    thinking_row(client, &document, &panel)?;
     panel.append_child(&editor)?;
     super::talk_control::mount(client, &panel)?;
     panel.append_child(&context)?;
@@ -362,6 +365,55 @@ pub(super) fn mount(
         if let Some((start, end)) = selection {
             editor.set_selection_range(start, end)?;
         }
+    }
+    Ok(())
+}
+
+/// While a speaker writes a reply the phone shows who is thinking, with animated dots beside
+/// their name, and this player's own words above it. Presentation only.
+fn thinking_row(
+    client: &Rc<RefCell<Client>>,
+    document: &Document,
+    panel: &Element,
+) -> Result<(), JsValue> {
+    let state = client.borrow();
+    let replying = state
+        .views
+        .as_ref()
+        .and_then(|views| views.current())
+        .and_then(crate::presentation::replying_speaker);
+    let Some(speaker) = replying.or_else(|| {
+        state
+            .dialogue
+            .awaiting
+            .as_ref()
+            .map(|_| current_speaker(&state))
+    }) else {
+        return Ok(());
+    };
+    let thread = node(document, panel, "div", "npc-exchange", "")?;
+    if let Some(you) = &state.dialogue.awaiting {
+        let you: String = you.chars().take(300).collect();
+        node(document, &thread, "p", "npc-you", &format!("You: {you}"))?;
+    }
+    let bubble = node(document, &thread, "div", "npc-bubble npc-thinking", "")?;
+    bubble.set_attribute("data-thinking", "")?;
+    let portrait = node(document, &bubble, "img", "npc-bubble-portrait", "")?;
+    portrait.set_attribute("src", portrait_url(&speaker))?;
+    portrait.set_attribute("alt", "")?;
+    let body = node(document, &bubble, "div", "npc-bubble-body", "")?;
+    let name = if speaker.is_empty() {
+        "Narrator"
+    } else {
+        &speaker
+    };
+    let heading = node(document, &body, "p", "npc-bubble-name", name)?;
+    heading.set_attribute("role", "status")?;
+    heading.set_attribute("aria-label", &format!("{name} is thinking"))?;
+    let dots = node(document, &heading, "span", "npc-dots", "")?;
+    dots.set_attribute("aria-hidden", "true")?;
+    for _ in 0..3 {
+        node(document, &dots, "i", "", "")?;
     }
     Ok(())
 }
@@ -518,9 +570,10 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
             .ok_or("Reconnect before sending dialogue.")?;
         let credential = state.credential.clone();
         let generation = state.generation;
-        if matches!(&call, Call::Raw(_)) {
+        if let Call::Raw(body) = &call {
             state.dialogue.ticket = None;
             state.dialogue.exchange = None;
+            state.dialogue.awaiting = Some(body.text.clone());
         }
         if let Call::Confirm(body) = &call {
             let action = body.action.clone().ok_or("Separate typed action absent")?;
@@ -595,6 +648,7 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                 return;
             }
             state.dialogue.active.take();
+            state.dialogue.awaiting = None;
             state.busy = false;
             let message = match outcome {
                 Ok(Ok((Some(reply), None))) => match &call {

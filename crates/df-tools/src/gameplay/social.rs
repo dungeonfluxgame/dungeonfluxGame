@@ -32,6 +32,7 @@ use std::{
 use df_protocol::common as rpc;
 use df_types::MemberId;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
 use super::{
     adventure::dossier::{Attitude, Dossier, Effect, Topic},
@@ -132,6 +133,11 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "you will regret",
         "you'll regret",
         "make you talk",
+        "gut you",
+        "cut your throat",
+        "slit your throat",
+        "torture you",
+        "make you bleed",
         "threaten",
         "talk or",
         "i will end you",
@@ -163,6 +169,9 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "your eyes",
         "your smile",
         "fancy you",
+        "sexy",
+        "bed with me",
+        "come to bed",
         "wink",
     ]) {
         Approach::Flirting
@@ -482,6 +491,19 @@ fn member_from_hex(text: &str) -> Option<MemberId> {
     MemberId::from_bytes(&bytes).ok()
 }
 
+/// How the latest exchange landed, for presentation that follows the story's mood. It carries no
+/// words: only who, what kind of approach, and where the NPC stands afterwards.
+#[derive(Clone, Debug)]
+pub(super) struct ExchangeRecord {
+    /// Grows with every recorded exchange.
+    pub(super) sequence: u64,
+    pub(super) npc_id: String,
+    pub(super) approach: Approach,
+    pub(super) effect: Effect,
+    pub(super) attitude: Attitude,
+    pub(super) opposes: bool,
+}
+
 /// The standings and conversations of one run, and the dossiers that start them.
 pub(super) struct SocialLedger {
     dossiers: Vec<Dossier>,
@@ -490,6 +512,10 @@ pub(super) struct SocialLedger {
     file: Option<PathBuf>,
     /// Serialises saves so the newest snapshot is always the last one written.
     writing: Mutex<()>,
+    /// The most recent exchange of the run (not saved: presentation only).
+    latest: Mutex<Option<ExchangeRecord>>,
+    /// Carries the latest exchange sequence so presentation can follow without polling.
+    exchanges: watch::Sender<u64>,
 }
 
 impl SocialLedger {
@@ -502,6 +528,8 @@ impl SocialLedger {
             relationships: Mutex::new(BTreeMap::new()),
             file: None,
             writing: Mutex::new(()),
+            latest: Mutex::new(None),
+            exchanges: watch::channel(0).0,
         })
     }
 
@@ -549,6 +577,8 @@ impl SocialLedger {
             relationships: Mutex::new(relationships),
             file,
             writing: Mutex::new(()),
+            latest: Mutex::new(None),
+            exchanges: watch::channel(0).0,
         }))
     }
 
@@ -632,7 +662,32 @@ impl SocialLedger {
         }
         let excess = relationship.recent.len().saturating_sub(RECENT_LINES);
         relationship.recent.drain(..excess);
+        let attitude = relationship.attitude;
+        drop(relationships);
+        let sequence = self.exchanges.borrow().saturating_add(1);
+        *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(ExchangeRecord {
+            sequence,
+            npc_id: dossier.npc_id.clone(),
+            approach,
+            effect: effect_of(dossier, approach),
+            attitude,
+            opposes: dossier.role.opposes_party(),
+        });
+        self.exchanges.send_replace(sequence);
         Recorded { shift }
+    }
+
+    /// The latest exchange of the run, if any.
+    pub(super) fn latest_exchange(&self) -> Option<ExchangeRecord> {
+        self.latest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Wakes when an exchange has been recorded.
+    pub(super) fn subscribe_exchanges(&self) -> watch::Receiver<u64> {
+        self.exchanges.subscribe()
     }
 
     /// Saves every standing and conversation, replacing the file atomically. A ledger without a

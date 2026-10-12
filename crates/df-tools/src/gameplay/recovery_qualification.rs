@@ -175,6 +175,7 @@ impl RunningActor {
             qualification_inputs: Some(Vec::new()),
             qualification_joins: Some(Vec::new()),
             completion_retry: None,
+            session: Default::default(),
             completion_observer,
         };
         let (handoff, receive) = std::sync::mpsc::sync_channel::<actor::Actor>(1);
@@ -232,6 +233,7 @@ impl RunningActor {
             ),
             npc_voice: Arc::new(super::npc_reply::NpcVoice::silent()),
             table_log,
+            living: super::living_scenes::LivingScenes::disabled(),
         };
         Ok(Self {
             service,

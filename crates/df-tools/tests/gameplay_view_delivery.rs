@@ -288,3 +288,153 @@ fn replacing_authorized_scope_starts_with_no_previous_private_view() {
         Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
     );
 }
+
+fn talking(sequence: u64, presentation_sequence: u64, replying: &str) -> rpc::ViewMessage {
+    let mut message = frame(1, sequence, "The courier waits.");
+    if let Some(rpc::view_message::Audience::Player(player)) = message.audience.as_mut()
+        && let Some(journey) = player.journey.as_mut()
+    {
+        journey.presentation_sequence = presentation_sequence;
+        journey.reply_speaker = replying.to_owned();
+    }
+    message
+}
+
+fn current_reply_speaker(views: &GameplayViews) -> String {
+    match views.current().and_then(|view| view.audience.as_ref()) {
+        Some(rpc::view_message::Audience::Player(player)) => player
+            .journey
+            .as_ref()
+            .map(|journey| journey.reply_speaker.clone())
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+#[test]
+fn table_talk_reaches_the_screen_without_a_new_game_revision() {
+    let scope = scope(1, 2, 3, ViewRole::Player);
+    let connection = RpcConnection::new(());
+    let generation = connection.generation();
+    let mut views = GameplayViews::new(scope, generation.clone());
+
+    assert_eq!(
+        views.accept(&generation, scope, talking(7, 3, "")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+    );
+    // The same revision again, nothing said: still a duplicate.
+    assert!(matches!(
+        views.accept(&generation, scope, talking(7, 3, "")),
+        Ok(ConnectionViewAcceptance::View(
+            ViewAcceptance::Duplicate { .. }
+        ))
+    ));
+    // A hero speaks and a reply starts: the revision is the same but the room must see it.
+    assert_eq!(
+        views.accept(&generation, scope, talking(7, 4, "Courier")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+    );
+    assert_eq!(current_reply_speaker(&views), "Courier");
+    // The reply lands, still the same revision.
+    assert_eq!(
+        views.accept(&generation, scope, talking(7, 5, "")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+    );
+    assert_eq!(current_reply_speaker(&views), "");
+    // An older revision is still stale, and a newer one still supersedes the talk.
+    assert!(matches!(
+        views.accept(&generation, scope, talking(6, 9, "Courier")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Stale { .. }))
+    ));
+    assert_eq!(
+        views.accept(&generation, scope, talking(8, 0, "")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+    );
+    assert_eq!(
+        views.current_revision(),
+        Some(revision(1, 8)),
+        "the newer revision is the current one"
+    );
+}
+
+fn display_frame(sequence: u64, narration: &str, backdrop: &str) -> rpc::ViewMessage {
+    let mut view = frame(1, sequence, narration);
+    view.audience = Some(rpc::view_message::Audience::Display(
+        rpc::DisplayGameplayView {
+            narration: narration.to_owned(),
+            scene: Some(rpc::GameplayScene {
+                live_backdrop: backdrop.to_owned(),
+                ..Default::default()
+            }),
+            journey: Some(rpc::JourneyView::default()),
+            ..Default::default()
+        },
+    ));
+    view
+}
+
+/// Copies the backdrop only, as the display's real merge does for the art fields.
+fn merge_backdrop(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) -> bool {
+    let (
+        Some(rpc::view_message::Audience::Display(shown)),
+        Some(rpc::view_message::Audience::Display(new)),
+    ) = (shown.audience.as_mut(), new.audience.as_ref())
+    else {
+        return false;
+    };
+    let (Some(shown), Some(new)) = (shown.scene.as_mut(), new.scene.as_ref()) else {
+        return false;
+    };
+    let changed = shown.live_backdrop != new.live_backdrop;
+    shown.live_backdrop.clone_from(&new.live_backdrop);
+    changed
+}
+
+#[test]
+fn an_equal_revision_changes_the_shown_view_only_through_the_art_merge() {
+    let display = scope(1, 2, 3, ViewRole::Display);
+    let owner = RpcConnection::new(());
+    let generation = owner.generation();
+    let mut views = GameplayViews::new(display, generation.clone());
+    assert_eq!(
+        views.accept(&generation, display, display_frame(5, "shown", "")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+    );
+    // The same revision with other content stays a duplicate and is not shown.
+    let newer_content = display_frame(5, "different narration", "/gameplay/imagery/x");
+    assert_eq!(
+        views.accept(&generation, display, newer_content.clone()),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Duplicate {
+            current: revision(1, 5)
+        }))
+    );
+    // Its art alone is merged into the view on screen; the narration is not.
+    assert!(views.accept_art_update(&generation, display, &newer_content, merge_backdrop));
+    assert_eq!(
+        views.current(),
+        Some(&display_frame(5, "shown", "/gameplay/imagery/x"))
+    );
+    assert_eq!(views.current_revision(), Some(revision(1, 5)));
+    assert!(!views.accept_art_update(&generation, display, &newer_content, merge_backdrop));
+    // Another revision, another scope role and a retired connection are refused.
+    assert!(!views.accept_art_update(
+        &generation,
+        display,
+        &display_frame(6, "later", "/gameplay/imagery/y"),
+        merge_backdrop
+    ));
+    let player = scope(1, 2, 3, ViewRole::Player);
+    assert!(!views.accept_art_update(
+        &generation,
+        player,
+        &display_frame(5, "shown", "/gameplay/imagery/z"),
+        merge_backdrop
+    ));
+    drop(owner);
+    assert!(!views.accept_art_update(
+        &generation,
+        display,
+        &display_frame(5, "shown", "/gameplay/imagery/z"),
+        merge_backdrop
+    ));
+}
