@@ -499,6 +499,35 @@ mod tests {
     }
 
     #[test]
+    fn nothing_but_a_deliberate_press_asks_for_the_microphone() {
+        let mut capture = Capture::new();
+        assert_eq!(capture.tick(at(10_000)), None);
+        assert_eq!(capture.release(at(10), true), None);
+        assert_eq!(capture.cancel(), None);
+        assert_eq!(capture.recorder_failed(), None);
+        assert_eq!(capture.phase(), Phase::Idle);
+        assert_eq!(capture.press(SECURE), Some(Command::OpenMicrophone));
+    }
+
+    /// The browser module is not compiled for native tests, so its one rule is checked in the
+    /// source: the only call that can raise a permission prompt sits in `open_microphone`, and
+    /// that function starts only from the press command.
+    #[test]
+    fn the_prompting_browser_call_is_only_reachable_from_a_press() {
+        let source = include_str!("gameplay_browser/talk_control.rs");
+        assert_eq!(source.matches("get_user_media").count(), 1);
+        assert_eq!(source.matches("enumerate_devices").count(), 0);
+        assert_eq!(source.matches("permissions()").count(), 0);
+        assert_eq!(source.matches("open_microphone(").count(), 2);
+        let start = source.find("Some(Command::OpenMicrophone) =>").unwrap();
+        assert!(source[start..start + 200].contains("open_microphone(weak)"));
+        let call = source.find("get_user_media").unwrap();
+        let function = source.find("async fn open_microphone").unwrap();
+        let next_function = source[function + 1..].find("\nfn ").unwrap() + function;
+        assert!((function..next_function).contains(&call));
+    }
+
+    #[test]
     fn a_microphone_nobody_is_waiting_for_is_released() {
         let mut capture = Capture::new();
 
