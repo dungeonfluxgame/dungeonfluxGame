@@ -148,7 +148,8 @@ pub(super) fn phase_of(beat: &Beat) -> rpc::JourneyPhase {
 pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
     beat_script::with_script(|script| {
         let beat = script.current(state)?;
-        let mut scene = match &beat.scene_variant {
+        let variant = shown_variant(script, beat, state)?;
+        let mut scene = match &variant {
             Some(variant) => {
                 let mut authored = script
                     .scenes
@@ -169,7 +170,7 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
             }
             None => pack::scene(beat.scene),
         };
-        if let Some(variant) = &beat.scene_variant
+        if let Some(variant) = &variant
             && let Some(asset) =
                 pack::active().and_then(|loaded| loaded.script_scene_assets.get(variant).cloned())
         {
@@ -177,6 +178,44 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
         }
         Ok(scene)
     })
+}
+/// How the heroes' fight ended, from the tactical snapshot (or, in a legacy knock-out fight, from
+/// which heroes are down).
+pub(super) fn fight_outcome(
+    state: &GameState,
+) -> Result<journey::tactical::FightOutcome, RepositoryError> {
+    use journey::tactical::FightOutcome as O;
+    if journey::tactical::present(state) {
+        return journey::tactical::outcome(state);
+    }
+    let won = journey::combat_victory(state)?;
+    let mut down = false;
+    for character in &state.characters {
+        down |= journey::value(state, character.entity, "unconscious")? != 0;
+    }
+    Ok(match (won, down) {
+        (true, false) => O::Won,
+        (true, true) => O::WonCostly,
+        (false, _) => O::Lost,
+    })
+}
+/// The scene variant a beat shows. A fight's closing steps name their victory variant; the one
+/// shown is the variant of the way the fight actually ended.
+fn shown_variant(
+    script: &BeatScript,
+    beat: &Beat,
+    state: &GameState,
+) -> Result<Option<String>, RepositoryError> {
+    let Some(variant) = &beat.scene_variant else {
+        return Ok(None);
+    };
+    if !(script.uses_encounter() && beat.kind == BeatKind::Ending) {
+        return Ok(Some(variant.clone()));
+    }
+    let stem = variant
+        .strip_suffix(journey::tactical::FightOutcome::Won.slug())
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    Ok(Some(format!("{stem}{}", fight_outcome(state)?.slug())))
 }
 pub(super) fn native_inn(state: &GameState) -> Result<bool, RepositoryError> {
     beat_script::with_script(|script| {
@@ -220,15 +259,20 @@ pub(super) fn pure_target(
     selected: &BeatOffer,
 ) -> Result<Option<Beat>, RepositoryError> {
     beat_script::with_script(|script| {
-        if script.uses_encounter()
-            || !matches!(
+        // A fight's native handlers own everything up to its ending; only the ending's own
+        // steps are pure.
+        let pure = if script.uses_encounter() {
+            selected.effect == BeatEffect::Resolve
+        } else {
+            matches!(
                 selected.effect,
                 BeatEffect::Continue
                     | BeatEffect::Observe
                     | BeatEffect::Resolve
                     | BeatEffect::ChooseHarborScene
             )
-        {
+        };
+        if !pure {
             return Ok(None);
         }
         let beat = script.current(current.state())?;
@@ -244,6 +288,8 @@ pub(super) fn pure_target(
         Ok(Some(next.clone()))
     })
 }
+/// Content entries the ending steps of every script (compiled or authored) use.
+pub(super) const ENDING_ENTRIES: &[&str] = &[STEP, RESOLVE_ACTION, "epilogue", "the-end"];
 pub(super) fn contents() -> Vec<String> {
     beat_script::with_script(|script| {
         if script.is_canonical() {
@@ -456,6 +502,34 @@ pub(super) fn validate(
     Ok(phase_of(beat))
 }
 pub(super) const CHOICE_GROUP: &str = "beat-script-offer";
+const RESOLVE_ID_PREFIX: &str = "journey-resolve-";
+/// The opaque id of a fight ending's step, which names its authored offer and the revision it was
+/// offered at. Authored (marker) scripts use their own ids.
+pub(super) fn resolve_id(current: &Checkpoint) -> Option<String> {
+    beat_script::with_script(|script| {
+        if !script.is_canonical() {
+            return None;
+        }
+        let offer = script
+            .current(current.state())
+            .ok()?
+            .offers
+            .iter()
+            .find(|offer| offer.effect == BeatEffect::Resolve)?;
+        Some(format!(
+            "{RESOLVE_ID_PREFIX}{}-{}-{}",
+            offer.id,
+            current.basis().revision.epoch().get(),
+            current.basis().revision.sequence()
+        ))
+    })
+}
+fn resolve_offer_id(id: &str) -> Option<&str> {
+    let rest = id.strip_prefix(RESOLVE_ID_PREFIX)?;
+    let mut parts = rest.rsplitn(3, '-');
+    let (_sequence, _epoch, offer) = (parts.next()?, parts.next()?, parts.next()?);
+    Some(offer)
+}
 pub(super) fn submitted_id(text: &str) -> Option<&str> {
     text.strip_prefix("beat-")?
         .split_once(':')
@@ -548,15 +622,29 @@ pub(super) fn view_offers(
 ) -> Result<Vec<(rpc::GameplayActionKind, String, String)>, RepositoryError> {
     let available = journey::offered(current, member)?;
     beat_script::with_script(|script| {
+        let dying = journey::tactical::present(current.state())
+            && journey::tactical::dying(current.state())?;
         if script.is_canonical()
             || (journey::tactical::present(current.state())
-                && (journey::phase(current)? == rpc::JourneyPhase::Combat
-                    || journey::tactical::dying(current.state())?))
+                && (journey::phase(current)? == rpc::JourneyPhase::Combat || dying))
         {
-            return Ok(available
+            let mut result = available
                 .into_iter()
                 .map(|(kind, label)| (kind, label, journey::offer_id(current, kind)))
-                .collect());
+                .collect::<Vec<_>>();
+            // The ending steps of a fight are the script's own, offered once nobody is dying.
+            if script.is_canonical() && !dying {
+                for offer in &script.current(current.state())?.offers {
+                    if offer.effect == BeatEffect::Resolve {
+                        result.push((
+                            offer.effect.action(),
+                            script.label(offer)?,
+                            journey::offer_id(current, offer.effect.action()),
+                        ));
+                    }
+                }
+            }
+            return Ok(result);
         }
         let mut result = Vec::new();
         for offer in &script.current(current.state())?.offers {
@@ -607,10 +695,10 @@ pub(super) fn adventure_title(state: &GameState) -> Result<String, RepositoryErr
 /// The adventure's end card: an authored ending beat that offers nothing more.
 pub(super) fn ended(state: &GameState) -> Result<bool, RepositoryError> {
     beat_script::with_script(|script| {
-        if script.is_canonical() {
+        // A script without an ending beat in its current state is not at an end card.
+        let Ok(beat) = script.current(state) else {
             return Ok(false);
-        }
-        let beat = script.current(state)?;
+        };
         Ok(beat.kind == BeatKind::Ending && beat.offers.is_empty())
     })
 }
@@ -637,6 +725,20 @@ pub(super) fn action_label(
     }
     beat_script::with_script(|script| {
         if script.is_canonical() {
+            if kind == rpc::GameplayActionKind::ResolveErrand {
+                let offer = resolve_offer_id(id)
+                    .and_then(|offer_id| {
+                        script
+                            .beats
+                            .iter()
+                            .flat_map(|beat| &beat.offers)
+                            .find(|offer| {
+                                offer.id == offer_id && offer.effect == BeatEffect::Resolve
+                            })
+                    })
+                    .ok_or(RepositoryError::InvalidCandidate)?;
+                return script.label(offer);
+            }
             return Ok(pack::offer_label(kind));
         }
         let submitted = submitted_id(id).ok_or(RepositoryError::InvalidCandidate)?;

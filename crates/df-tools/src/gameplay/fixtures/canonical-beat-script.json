@@ -1,8 +1,7 @@
 {
   "entry": "room",
   "terminal": [
-    "harbor-inn",
-    "defeat-rested"
+    "the-end"
   ],
   "beats": [
     {
@@ -273,6 +272,11 @@
           "id": "short-rest",
           "label_slot": "short-rest",
           "effect": "short-rest"
+        },
+        {
+          "id": "close-defeat",
+          "label_slot": "close-defeat-label",
+          "effect": "resolve"
         }
       ],
       "transitions": [
@@ -281,6 +285,13 @@
             "on": "rest-complete"
           },
           "target": "defeat-rested"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "close-defeat"
+          },
+          "target": "epilogue"
         }
       ]
     },
@@ -298,6 +309,11 @@
           "id": "short-rest",
           "label_slot": "short-rest",
           "effect": "short-rest"
+        },
+        {
+          "id": "close-defeat",
+          "label_slot": "close-defeat-label",
+          "effect": "resolve"
         }
       ],
       "transitions": [
@@ -306,6 +322,13 @@
             "on": "rest-complete"
           },
           "target": "defeat-rested"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "close-defeat"
+          },
+          "target": "epilogue"
         }
       ]
     },
@@ -321,6 +344,11 @@
           "id": "short-rest",
           "label_slot": "short-rest",
           "effect": "short-rest"
+        },
+        {
+          "id": "resolve-errand",
+          "label_slot": "resolve-label",
+          "effect": "resolve"
         }
       ],
       "transitions": [
@@ -329,8 +357,49 @@
             "on": "rest-complete"
           },
           "target": "harbor-inn"
+        },
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "resolve-errand"
+          },
+          "target": "epilogue"
         }
       ]
+    },
+    {
+      "id": "epilogue",
+      "kind": "ending",
+      "scene": "inn",
+      "state": {
+        "durable": "epilogue"
+      },
+      "offers": [
+        {
+          "id": "close-epilogue",
+          "label_slot": "close-label",
+          "effect": "resolve"
+        }
+      ],
+      "transitions": [
+        {
+          "trigger": {
+            "on": "offer",
+            "offer": "close-epilogue"
+          },
+          "target": "the-end"
+        }
+      ]
+    },
+    {
+      "id": "the-end",
+      "kind": "ending",
+      "scene": "inn",
+      "state": {
+        "durable": "the-end"
+      },
+      "offers": [],
+      "transitions": []
     }
   ]
 }
