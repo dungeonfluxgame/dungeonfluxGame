@@ -29,6 +29,10 @@ pub const OVER_ATTACKER_DEG: f32 = 125.0;
 pub const ATTACKER_SHOULDER_PENALTY_DEG: f32 = 20.0;
 /// The most the camera turns (degrees of heading) for one turn before it cuts instead.
 pub const MAX_SWING_DEG: f32 = 60.0;
+/// How far the camera's heading may stray from the scene's own tactical heading, in degrees: a
+/// scene is built to be seen from its front (a scan has a fence, a hut or a slope behind the
+/// arena), so the action shots stay on that side and never swing round to the back of the set.
+pub const MAX_HOME_DEVIATION_DEG: f32 = 100.0;
 /// The closest and farthest the action shot may be, in metres.
 pub const MIN_DISTANCE_M: f32 = 3.6;
 pub const MAX_DISTANCE_M: f32 = 28.0;
@@ -226,6 +230,24 @@ pub fn action_shot(
     bystanders: &[Body],
     aspect: f32,
 ) -> ActionShot {
+    action_shot_from(
+        style, current, actor, target, also, bystanders, aspect, None,
+    )
+}
+
+/// As [`action_shot`], keeping the camera within [`MAX_HOME_DEVIATION_DEG`] of `home_yaw` (the
+/// scene's tactical heading) when given.
+#[allow(clippy::too_many_arguments)]
+pub fn action_shot_from(
+    style: &CameraPose,
+    current: &CameraPose,
+    actor: &Body,
+    target: Option<&Body>,
+    also: &[Body],
+    bystanders: &[Body],
+    aspect: f32,
+    home_yaw: Option<f32>,
+) -> ActionShot {
     let chest = |body: &Body| body.feet + Vec3::new(0.0, body.height_m * 0.5, 0.0);
     let other = target.copied().unwrap_or(*actor);
     // A little toward the target, so the frame leans over its shoulder.
@@ -254,6 +276,15 @@ pub fn action_shot(
         .map(|swing| (swing, 0.0))
         .collect()
     };
+    // An angle behind the set is a last resort: it costs more than any swing.
+    if let Some(home) = home_yaw {
+        for (swing, penalty) in &mut candidates {
+            let deviation = wrap_deg(current.yaw_deg + *swing - home).abs();
+            if deviation > MAX_HOME_DEVIATION_DEG {
+                *penalty += 1000.0 + deviation;
+            }
+        }
+    }
     candidates.sort_by(|a, b| (a.0.abs() + a.1).total_cmp(&(b.0.abs() + b.1)));
     let mut bodies = vec![*actor, other];
     bodies.extend_from_slice(also);
@@ -782,5 +813,34 @@ mod tests {
             &[body(0.0, 0.0)],
             FRAMED_ASPECT
         ));
+    }
+
+    /// The scan's fence stands behind the foe: a line along z must be shot from the front side,
+    /// never from the far side of the set.
+    #[test]
+    fn the_camera_stays_in_front_of_the_set_even_when_the_line_points_away() {
+        let attacker = body(-0.7, 2.1);
+        let target = body(-0.7, -2.1);
+        for current_yaw in [-170.0, -100.0, 0.0, 60.0, 170.0] {
+            let current = CameraPose {
+                yaw_deg: current_yaw,
+                ..style()
+            };
+            let shot = action_shot_from(
+                &style(),
+                &current,
+                &attacker,
+                Some(&target),
+                &[],
+                &[],
+                FRAMED_ASPECT,
+                Some(0.0),
+            );
+            let heading = wrap_deg(shot.pose.yaw_deg);
+            assert!(
+                heading.abs() <= MAX_HOME_DEVIATION_DEG + 1e-3,
+                "from {current_yaw}: {heading}"
+            );
+        }
     }
 }
