@@ -149,6 +149,36 @@ impl Director {
     }
 }
 
+/// What the sound-effects engine may do right now.
+pub(super) struct EffectsGate {
+    /// A narration clip is speaking, so effects play quieter.
+    pub(super) narrating: bool,
+}
+
+fn with_director<T>(read: impl FnOnce(&Director) -> T) -> Option<T> {
+    DIRECTOR.with(|slot| {
+        let shared = slot.borrow().clone()?;
+        // A mutable borrow in progress means a state change is mid-flight: skip, not panic.
+        let state = shared.try_borrow().ok()?;
+        Some(read(&state))
+    })
+}
+
+/// `Some` only while audio is unlocked and unmuted: the one sound control governs effects too.
+pub(super) fn effects_gate() -> Option<EffectsGate> {
+    with_director(|state| {
+        (state.sound() == Sound::On).then(|| EffectsGate {
+            narrating: state.current.is_some() && !state.audio.paused(),
+        })
+    })
+    .flatten()
+}
+
+/// `None` while audio is still locked, otherwise whether the viewer muted sound.
+pub(super) fn effects_muted() -> Option<bool> {
+    with_director(|state| state.unlocked.then_some(state.muted)).flatten()
+}
+
 /// Called once per newly applied view. Voice is best effort: a failure here marks the
 /// display root and never affects rendering.
 pub(super) fn observe(client: &Rc<RefCell<Client>>) {
@@ -293,6 +323,7 @@ fn unlock(shared: &Shared) {
         }
         state.refill();
     }
+    live_sfx::sync();
     pump(shared);
 }
 
@@ -311,6 +342,7 @@ fn set_muted(shared: &Shared, muted: bool) {
         state.render_control();
         state.current.take()
     };
+    live_sfx::sync();
     if let Some(playing) = stopped {
         playing.release();
     }
