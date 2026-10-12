@@ -477,6 +477,13 @@ pub(super) struct TempoTuning {
     pub(super) fatigue_attenuation_permille: u16,
     pub(super) phase_thresholds_permille: [u16; 3],
     pub(super) hysteresis_permille: u16,
+    /// How long the display's music holds a release (the win or the rest after a fight)
+    /// before it settles to the calm bed. Sent in a Release cue's `hold_millis`.
+    #[serde(default = "default_release_hold_millis")]
+    pub(super) release_hold_millis: u32,
+}
+const fn default_release_hold_millis() -> u32 {
+    14_000
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -545,6 +552,7 @@ impl Default for TempoTuning {
             fatigue_attenuation_permille: 500,
             phase_thresholds_permille: [200, 450, 650],
             hysteresis_permille: 20,
+            release_hold_millis: default_release_hold_millis(),
         }
     }
 }
@@ -2412,6 +2420,13 @@ fn validate_tempo(tempo: TempoTuning) -> Result<(), PackError> {
     ] {
         range(file, &format!("tempo.{name}"), i64::from(value), 1, 300000)?;
     }
+    range(
+        file,
+        "tempo.release_hold_millis",
+        i64::from(tempo.release_hold_millis),
+        1_000,
+        120_000,
+    )?;
     tempo.policy().validate().map_err(|_| {
         malformed(
             file,

@@ -1507,6 +1507,8 @@ fn invalid_tempo_is_refused_with_a_typed_tuning_error() {
         ("/tempo/phase_thresholds_permille", json!([500, 200, 600])),
         ("/tempo/fatigue_charge_permille", json!(1001)),
         ("/tempo/hysteresis_permille", json!(300)),
+        ("/tempo/release_hold_millis", json!(999)),
+        ("/tempo/release_hold_millis", json!(120_001)),
     ] {
         let changed = set(&shipped_tuning(), pointer, value);
         assert!(matches!(
