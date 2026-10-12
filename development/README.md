@@ -250,6 +250,11 @@ and stop), `&shot=<tactical|combat_est|turn_focus|impact|ko|victory>`, `&orbit`,
 `&budget=<splats>`, `&minc=<min contribution>`, `&sscale=<0.25-1>` and `&rscale=<0.25-1>`; `&fps=<24|30>` sets the
 presentation rate, and `&dbg=<bits>` (with `&fixed`) turns on debugging views: 1 draws the scan without writing
 its depth (shows what occlusion hides), 2 skips the scan, 4 skips the post pass, 8 shows the scan's depth as grey, 16 turns off the figures' ground margin.
+Battle feel (camera shake, hit-stop, slow motion, handheld sway, blur, particles; all constants in
+`crates/df-render/src/battle/feel.rs` and `particles.rs`, the attack framing rules in `framing.rs`) can be
+reviewed with `&beat=graze|heavy|critical|miss|finish|selfheal|enemyhit` (stages one blow after the camera has
+idled), `&slow=0.4` (the stage clock at that share of real time, for frame strips), `&tempo=0..1000` (the tempo
+intensity the sway follows) and `&feel=off` (everything off, for measurements).
 
 Fitting a new scan or area is done with the native authoring tool, which reads the finest
 on-disk level, estimates the ground height field from the splats and marks cells a figure cannot
