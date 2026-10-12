@@ -118,7 +118,10 @@ impl rpc::dialogue_service_server::DialogueService for Service {
                 // The model call runs here, off the actor thread; on any failure the
                 // response is exactly the classification the actor produced.
                 if let Some(context) = npc
-                    && let Some(reply) = self.npc_voice.reply(context).await
+                    && let Some(reply) = self
+                        .npc_voice
+                        .reply_in_public(context, &self.table_log)
+                        .await
                 {
                     response.npc_reply = reply;
                 }
@@ -364,6 +367,10 @@ impl actor::Actor {
             ))
         .then(|| self.npc_reply_context(member, &request.text))
         .flatten();
+        // Typed words to the scene's speaker are table talk, answered or not.
+        if let Some(context) = &npc {
+            context.publish_typed_line(&self.table_log);
+        }
         Ok((
             rpc::DialogueResponse {
                 input_id: request.input_id,
