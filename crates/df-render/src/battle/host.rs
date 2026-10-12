@@ -397,12 +397,13 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     // the cap's period. Without GPU timing, only an interval well over the period shows a miss.
     let period_ms = state.pacer.target().period_ms() as f32;
     let gpu_ms = renderer.stats().gpu_ms;
+    let cpu_ms = (now_ms() - tick_started_ms) as f32;
     let cost_ms = if gpu_ms > 0.0 {
-        gpu_ms.max((now_ms() - tick_started_ms) as f32)
+        gpu_ms.max(cpu_ms)
     } else if delta_ms as f32 > period_ms * 1.25 {
         delta_ms as f32
     } else {
-        period_ms * 0.7
+        cpu_ms
     };
     renderer.observe_frame_cost(cost_ms, period_ms);
     state.frames += 1;
