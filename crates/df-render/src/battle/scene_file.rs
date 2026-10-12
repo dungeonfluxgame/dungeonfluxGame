@@ -983,11 +983,16 @@ mod tests {
         assert!(up.y > 0.999, "{up:?}");
         assert_eq!(scene.distribution, Distribution::PrivateTestOnly);
         assert_eq!(scene.attribution.as_ref().unwrap().author, "A");
-        // The grid stands on the terrain: heights follow the stored field.
-        let centre = scene.grid.cell_centre(Cell::new(0, 0));
-        assert!(centre.y.is_finite());
-        assert_eq!(scene.grid.ground_height(-1.0, 1.0), 2.0);
-        assert_eq!(scene.grid.ground_height(-0.5, -0.5), 1.5);
+        // The grid and the figures stand on one flat play plane, whatever the stored field does.
+        let plane = scene.grid.play_plane_y();
+        assert!((0.0..=3.0).contains(&plane), "plane {plane}");
+        for cell in [Cell::new(0, 0), Cell::new(3, 2)] {
+            assert_eq!(scene.grid.cell_centre(cell).y, plane);
+        }
+        assert_eq!(scene.grid.ground_height(-1.0, 1.0), plane);
+        assert_eq!(scene.grid.ground_height(-0.5, -0.5), plane);
+        assert!(scene.grid.plane_deviation_m() > 0.0);
+        assert!(scene.grid.terrain().is_some());
     }
 
     #[test]
@@ -1059,7 +1064,23 @@ mod tests {
                 scene.grid.terrain().is_some(),
                 "{id} follows measured ground"
             );
-            assert!(scene.grid.walkable_cells().count() >= 40, "{id}");
+            // The grid is one flat plane, so no open cell may float or sink more than the limit.
+            let limit = super::super::terrain::WalkSettings::default().maximum_deviation_m;
+            let deviation = scene.grid.plane_deviation_m();
+            eprintln!(
+                "{id}: plane {:.2} m, deviation {deviation:.2} m, {} open cells",
+                scene.grid.play_plane_y(),
+                scene.grid.walkable_cells().count()
+            );
+            assert!(deviation <= limit + 1e-3, "{id}: deviation {deviation}");
+            // Heroes and enemies need room: a connected open area, not scattered cells.
+            let largest = scene
+                .grid
+                .walkable_cells()
+                .map(|cell| scene.grid.reachable_from(cell).len())
+                .max()
+                .unwrap_or(0);
+            assert!(largest >= 16, "{id}: largest open area {largest}");
         }
         assert_eq!(private, 3, "three unlicensed scans");
         // No location of the adventure tables is a scan: the default rotation never reaches one.

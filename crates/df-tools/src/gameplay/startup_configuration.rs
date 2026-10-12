@@ -850,6 +850,22 @@ pub(super) fn battle_scene(input: Result<String, VarError>) -> Result<Option<Str
     Ok(Some(value))
 }
 
+/// `DF_GAMEPLAY_BATTLE_FPS`: the battlefield's fixed presentation rate, 24 or 30 (default 30).
+/// Anything else is refused at startup rather than silently replaced.
+pub(super) fn battle_fps(input: Result<String, VarError>) -> Result<u32, io::Error> {
+    let Some(value) = optional(input)? else {
+        return Ok(df_render::battle::BattleFps::DEFAULT.hz());
+    };
+    value
+        .parse::<u32>()
+        .ok()
+        .and_then(df_render::battle::BattleFps::from_hz)
+        .map(df_render::battle::BattleFps::hz)
+        .ok_or_else(|| {
+            io::Error::other("DF_GAMEPLAY_BATTLE_FPS invalid: use 24 or 30 (default 30)")
+        })
+}
+
 const DEFAULT_TEXT_MODEL: &str = "gpt-6-luna";
 const DEFAULT_TEXT_TOKEN_BUDGET: u64 = 150_000;
 const MAXIMUM_TEXT_TOKEN_BUDGET: u64 = 100_000_000;
@@ -1747,5 +1763,19 @@ mod adventure_settings_tests {
         for bad in ["", "nowhere", "../salt-quay", "SALT-QUAY"] {
             assert!(battle_scene(set(bad)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_battle_frame_rate_is_30_by_default_and_only_24_or_30_are_accepted() {
+        let set = |value: &str| Ok::<_, VarError>(value.to_owned());
+        assert_eq!(battle_fps(Err(VarError::NotPresent)).unwrap(), 30);
+        assert_eq!(battle_fps(set("30")).unwrap(), 30);
+        assert_eq!(battle_fps(set("24")).unwrap(), 24);
+        for bad in [
+            "", "60", "25", "0", "-30", "30.0", "thirty", "24 ", "1000000",
+        ] {
+            assert!(battle_fps(set(bad)).is_err(), "{bad:?}");
+        }
+        assert!(battle_fps(Err(VarError::NotUnicode("x".into()))).is_err());
     }
 }

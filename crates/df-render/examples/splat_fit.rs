@@ -9,7 +9,7 @@
 //! ```text
 //! cargo run -p df-render --example splat_fit -- <scan-dir> <out.json> \
 //!     --orient 180,0,0 --scale 1 --offset-y 0.27 --yaw 0 --translate 0,0,0 \
-//!     --grid -9,-6.75,1.5,12,9 --finest 1 [--step 0.5]
+//!     --grid -7,-4.9,1.4,10,7 --finest 1 [--step 0.5] [--blockers N] [--relief M] [--deviation M]
 //! ```
 
 #[cfg(target_arch = "wasm32")]
@@ -86,6 +86,9 @@ mod native {
                 "--search" => search = Some(numbers(&value, 5)?),
                 "--blockers" => walk.blockers_per_m2 = value.parse().map_err(|_| "blockers")?,
                 "--relief" => walk.maximum_relief_m = value.parse().map_err(|_| "relief")?,
+                "--deviation" => {
+                    walk.maximum_deviation_m = value.parse().map_err(|_| "deviation")?;
+                }
                 other => return Err(format!("unknown flag {other}")),
             }
         }
@@ -293,7 +296,7 @@ mod native {
                 .or_default()
                 .push(position);
         }
-        let mut results: Vec<(f32, f32, f32, usize, usize, f32, f32)> = Vec::new();
+        let mut results: Vec<Window> = Vec::new();
         let mut wz = z0;
         while wz <= z1 {
             let mut wx = x0;
@@ -358,18 +361,37 @@ mod native {
                     let score = blocked.len() as f32 - open as f32 * 0.5
                         + (high - low) * 4.0
                         + overhead * 0.02;
-                    results.push((score, wx, wz, blocked.len(), open, mean, overhead));
+                    results.push(Window {
+                        score,
+                        wx,
+                        wz,
+                        blocked: blocked.len(),
+                        open,
+                        mean,
+                        overhead,
+                        range: high - low,
+                    });
                 }
                 wx += step;
             }
             wz += step;
         }
-        results.sort_by(|a, b| a.0.total_cmp(&b.0));
+        results.sort_by(|a, b| a.score.total_cmp(&b.score));
         eprintln!(
             "best windows (score, window origin, centre, blocked cells, largest open region, ground):"
         );
         let mut shown: Vec<(f32, f32)> = Vec::new();
-        for (score, wx, wz, blocked, open, mean, overhead) in results {
+        for Window {
+            score,
+            wx,
+            wz,
+            blocked,
+            open,
+            mean,
+            overhead,
+            range,
+        } in results
+        {
             if shown
                 .iter()
                 .any(|(x, z)| (x - wx).abs() < 6.0 && (z - wz).abs() < 6.0)
@@ -378,7 +400,7 @@ mod native {
             }
             shown.push((wx, wz));
             eprintln!(
-                "{score:7.1} origin ({wx:7.2},{wz:7.2}) centre ({:7.2},{:7.2}) blocked {blocked:3} open {open:3} ground {mean:5.2} overhead {overhead:6.0}/m2",
+                "{score:7.1} origin ({wx:7.2},{wz:7.2}) centre ({:7.2},{:7.2}) blocked {blocked:3} open {open:3} ground {mean:5.2} range {range:4.2} overhead {overhead:6.0}/m2",
                 wx + width * 0.5,
                 wz + depth * 0.5
             );
@@ -387,6 +409,18 @@ mod native {
             }
         }
         Ok(())
+    }
+
+    /// One candidate arena position and how it scored.
+    struct Window {
+        score: f32,
+        wx: f32,
+        wz: f32,
+        blocked: usize,
+        open: usize,
+        mean: f32,
+        overhead: f32,
+        range: f32,
     }
 
     fn largest_open_region(blocked: &[[i32; 2]], cols: i32, rows: i32) -> usize {

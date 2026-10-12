@@ -302,6 +302,9 @@ pub struct WalkSettings {
     pub minimum_opacity: f32,
     /// This many blocking splats per square metre of cell blocks it.
     pub blockers_per_m2: f32,
+    /// The grid is flat, so a cell whose ground is further than this from the play plane (the
+    /// median ground height of the open cells) is blocked: a figure there would float or sink.
+    pub maximum_deviation_m: f32,
 }
 
 impl Default for WalkSettings {
@@ -312,6 +315,7 @@ impl Default for WalkSettings {
             head_m: 1.6,
             minimum_opacity: 0.5,
             blockers_per_m2: 250.0,
+            maximum_deviation_m: 0.45,
         }
     }
 }
@@ -375,7 +379,54 @@ pub fn blocked_cells(
             }
         }
     }
+    block_uneven_cells(field, origin, cell_m, cols, rows, settings, &mut blocked);
+    blocked.sort_unstable();
     blocked
+}
+
+/// Blocks cells whose ground is too far from the play plane. The plane is the median ground height
+/// under the open cell centres (as [`Grid::with_terrain`](super::Grid::with_terrain) computes it),
+/// so blocking the outliers can move it; the rule is repeated until no cell is added.
+fn block_uneven_cells(
+    field: &HeightField,
+    origin: [f32; 2],
+    cell_m: f32,
+    cols: u32,
+    rows: u32,
+    settings: &WalkSettings,
+    blocked: &mut Vec<[i32; 2]>,
+) {
+    let centre_height = |col: i32, row: i32| {
+        field.height_at(
+            origin[0] + (col as f32 + 0.5) * cell_m,
+            origin[1] + (row as f32 + 0.5) * cell_m,
+        )
+    };
+    for _ in 0..8 {
+        let mut open: Vec<f32> = (0..rows as i32)
+            .flat_map(|row| (0..cols as i32).map(move |col| [col, row]))
+            .filter(|cell| !blocked.contains(cell))
+            .map(|[col, row]| centre_height(col, row))
+            .collect();
+        if open.is_empty() {
+            return;
+        }
+        open.sort_by(f32::total_cmp);
+        let plane = open[open.len() / 2];
+        let mut added = false;
+        for row in 0..rows as i32 {
+            for col in 0..cols as i32 {
+                let uneven = (centre_height(col, row) - plane).abs() > settings.maximum_deviation_m;
+                if uneven && !blocked.contains(&[col, row]) {
+                    blocked.push([col, row]);
+                    added = true;
+                }
+            }
+        }
+        if !added {
+            return;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -510,6 +561,46 @@ mod tests {
     }
 
     #[test]
+    fn cells_too_far_from_the_flat_play_plane_are_blocked_until_the_rest_fits_it() {
+        // A steady 0.25 m per metre ramp: no cell is steep, but a flat plane cannot serve all of it.
+        let heights: Vec<f32> = (0..11)
+            .flat_map(|_| (0..11).map(|col| col as f32 * 0.25))
+            .collect();
+        let field = HeightField::new([0.0, 0.0], 1.0, 11, 11, heights).unwrap();
+        let blocked = blocked_cells(
+            &field,
+            &[],
+            [0.0, 0.0],
+            1.0,
+            10,
+            10,
+            &WalkSettings::default(),
+        );
+        assert!(
+            blocked.contains(&[0, 4]) && blocked.contains(&[9, 4]),
+            "{blocked:?}"
+        );
+        assert!(!blocked.contains(&[4, 4]) && !blocked.contains(&[5, 4]));
+        let limit = WalkSettings::default().maximum_deviation_m;
+        let open: Vec<f32> = (0..10)
+            .filter(|col| !blocked.contains(&[*col, 4]))
+            .map(|col| field.height_at(col as f32 + 0.5, 4.5))
+            .collect();
+        let (low, high) = open
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
+        assert!(
+            high - low <= 2.0 * limit + 1e-4,
+            "the open cells fit one plane: {open:?}"
+        );
+        let relaxed = WalkSettings {
+            maximum_deviation_m: 10.0,
+            ..WalkSettings::default()
+        };
+        assert!(blocked_cells(&field, &[], [0.0, 0.0], 1.0, 10, 10, &relaxed).is_empty());
+    }
+
+    #[test]
     fn a_step_in_the_ground_blocks_the_cell_it_crosses() {
         let mut heights = vec![0.0; 9 * 9];
         for row in 0..9 {
@@ -518,7 +609,12 @@ mod tests {
             }
         }
         let field = HeightField::new([0.0, 0.0], 1.0, 9, 9, heights).unwrap();
-        let blocked = blocked_cells(&field, &[], [0.0, 0.0], 2.0, 4, 4, &WalkSettings::default());
+        // Only the relief rule is under test here, not how far each side is from one plane.
+        let settings = WalkSettings {
+            maximum_deviation_m: 10.0,
+            ..WalkSettings::default()
+        };
+        let blocked = blocked_cells(&field, &[], [0.0, 0.0], 2.0, 4, 4, &settings);
         assert!(blocked.contains(&[2, 0]), "the cliff cell: {blocked:?}");
         assert!(!blocked.contains(&[0, 0]));
         assert!(!blocked.contains(&[3, 3]));

@@ -88,6 +88,8 @@ struct PreviewRequest {
     shot: Option<battle::ShotName>,
     /// `&cam=tx,ty,tz,distance,yaw,pitch,fov`: cut to a free camera.
     free_camera: Option<battle::CameraPose>,
+    /// `&fps=24|30`: the presentation rate (30 when absent or invalid).
+    fps: battle::BattleFps,
 }
 
 fn free_camera(text: &str) -> Option<battle::CameraPose> {
@@ -133,6 +135,7 @@ fn preview_request() -> Option<PreviewRequest> {
         orbit: false,
         shot: None,
         free_camera: None,
+        fps: battle::BattleFps::DEFAULT,
     };
     for part in rest.split('&') {
         match part.strip_prefix('=').unwrap_or(part) {
@@ -203,6 +206,13 @@ fn preview_request() -> Option<PreviewRequest> {
                 request.shot = battle::ShotName::from_key(&other[5..]);
             }
             other if other.starts_with("cam=") => request.free_camera = free_camera(&other[4..]),
+            other if other.starts_with("fps=") => {
+                request.fps = other[4..]
+                    .parse::<u32>()
+                    .ok()
+                    .and_then(battle::BattleFps::from_hz)
+                    .unwrap_or_default();
+            }
             "restrained" => request.restrained = true,
             "statuses" => request.mode = PreviewMode::Statuses,
             "still" => request.mode = PreviewMode::Still,
@@ -485,6 +495,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             reduced_motion: false,
             procedural_splats: request.procedural_splats,
             fixed_quality: request.fixed,
+            fps: request.fps,
             ..StageOptions::default()
         },
     )
@@ -556,6 +567,35 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                     show_unavailable(&host, reason.key());
                 }
                 return;
+            }
+        }
+        if request.hold {
+            // Stills: the figures stand and the stage stays as it is (or orbits, when asked).
+            with_preview(|stage| {
+                stage.establish();
+                let named = request
+                    .shot
+                    .and_then(|shot| stage.scene().cameras.get(&shot).copied());
+                if let Some(pose) = request.free_camera.or(named) {
+                    stage.set_camera_pose(pose);
+                }
+            });
+            TimeoutFuture::new(3000).await;
+            let base = with_preview(|stage| stage.camera_pose());
+            let mut turned_deg = 0.0;
+            loop {
+                TimeoutFuture::new(if request.orbit { 16 } else { 1000 }).await;
+                if PREVIEW.with(|slot| slot.borrow().is_none()) {
+                    return;
+                }
+                if let (true, Some(base)) = (request.orbit, base) {
+                    turned_deg += 0.35;
+                    let pose = battle::CameraPose {
+                        yaw_deg: base.yaw_deg + turned_deg,
+                        ..base
+                    };
+                    with_preview(|stage| stage.set_camera_pose(pose));
+                }
             }
         }
         match request.mode {
@@ -1116,6 +1156,13 @@ fn start_mount(
             None => scene.backdrop.stem = stem,
         }
     }
+    // `DF_GAMEPLAY_BATTLE_FPS` reaches the page as `data-battle-fps` (the server refuses anything
+    // but 24 or 30 at startup; a missing or odd value here means the default).
+    let fps = host
+        .get_attribute("data-battle-fps")
+        .and_then(|value| value.parse::<u32>().ok())
+        .and_then(battle::BattleFps::from_hz)
+        .unwrap_or_default();
     let layout = chosen_layout_id(&scene, key);
     let _ = host.set_attribute(
         "data-battlefield-layout",
@@ -1139,6 +1186,7 @@ fn start_mount(
                 procedural_splats: false,
                 fallback_layers,
                 fixed_quality: None,
+                fps,
             },
         )
         .await;

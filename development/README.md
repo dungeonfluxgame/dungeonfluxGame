@@ -214,6 +214,17 @@ downloaded) and point the server at it.
   reached this way (or by the `#battle-preview` address below), never from the default
   rotation. If the scan cannot be drawn (files missing, decode failure, a frame budget that
   cannot be met) the location's own painted ground and backdrop are shown instead.
+- `DF_GAMEPLAY_BATTLE_FPS=<24|30>`: the battlefield's fixed presentation rate; default 30, never
+  higher. Any other value refuses startup. The page asks for a frame at the display's refresh
+  rate and the battlefield presents only on the ticks an even-interval accumulator selects, so a
+  skipped tick does no update and no GPU work. Simulation time stays real seconds (walks, camera
+  moves, dice, projectiles and sound timing are unchanged); only the rate of presentation is
+  capped. On a 60 Hz display 30 fps is every second tick exactly and 24 fps alternates two and
+  three ticks (the 3:2 pattern a 60 Hz display forces); on 120 Hz both are exact; on 144 Hz 24
+  fps is exact and 30 fps mixes four and five ticks. If the page cannot keep the cadence it drops
+  to the next even divisor (15, 10, 7.5 fps for the 30 setting) and tries the faster rate again
+  later. `data-battlefield-stats` reports `fps_target`, `fps_presented`, `fps_divisor`,
+  `display_hz` and `cost_ms`. The `#battle-preview` address takes `&fps=24` or `&fps=30`.
 
 Run a real fight on a scan (the scans listed in `artifacts/tmp/splat-dl/README.txt`):
 
@@ -222,13 +233,23 @@ DF_GAMEPLAY_SPLAT_DIR=artifacts/tmp/splat-dl DF_GAMEPLAY_BATTLE_SCENE=scan-villa
   development/run-gameplay.sh
 ```
 
+The grid on every scene (scans and painted grounds alike) is drawn as straight, glowing lines on one
+flat play plane: a bright core with a soft additive halo, warm gold when neutral, cool blue on hero
+cells and red on enemy cells, brighter on reachable and targeted cells. Where scan geometry stands
+well in front of a line the line dims instead of breaking. The look is tuned in one place,
+`crates/df-render/src/battle/grid_lines.rs`. A scan's plane sits at the median ground height under the
+open cells and figures stand on it; cells whose ground is more than 0.45 m from the plane are
+blocked at fitting time (`--deviation`), so nobody floats or sinks further than that.
+
 The scenes are `scan-riverbed`, `scan-valley-bridges` and `scan-summit` (private test only, no
 licence: do not publish, record or ship them) and `scan-village` (CC BY 4.0, attribution in
 `THIRD_PARTY_NOTICES.md`). To look at one without playing, open
 `/gameplay/display#battle-preview=scan-village`; useful additions are `&hold` (stage the figures
 and stop), `&shot=<tactical|combat_est|turn_focus|impact|ko|victory>`, `&orbit`, a free camera
 `&cam=<target x,y,z>,<distance>,<yaw>,<pitch>,<fov>` and, for benchmarks, `&fixed` with
-`&budget=<splats>`, `&minc=<min contribution>`, `&sscale=<0.25-1>` and `&rscale=<0.25-1>`.
+`&budget=<splats>`, `&minc=<min contribution>`, `&sscale=<0.25-1>` and `&rscale=<0.25-1>`; `&fps=<24|30>` sets the
+presentation rate, and `&dbg=<bits>` (with `&fixed`) turns on debugging views: 1 draws the scan without writing
+its depth (shows what occlusion hides), 2 skips the scan, 4 skips the post pass, 8 shows the scan's depth as grey.
 
 Fitting a new scan or area is done with the native authoring tool, which reads the finest
 on-disk level, estimates the ground height field from the splats and marks cells a figure cannot
@@ -236,8 +257,8 @@ stand in (it decodes WebP with macOS `sips`):
 
 ```sh
 cargo run --release -p df-render --example splat_fit -- <scan>/v1 out.json \
-  --orient 180,0,0 --scale 1 --offset-y 0 --translate 0,0,0 --grid -9,-6.75,1.5,12,9 \
-  --finest 1 [--search -45,45,-45,45,3]
+  --orient 180,0,0 --scale 1 --offset-y 0 --translate 0,0,0 --grid -7,-4.9,1.4,10,7 \
+  --finest 1 [--deviation 0.45] [--search -45,45,-45,45,3]
 ```
 
 `--search` slides the grid over a region and ranks open, flat windows; the printed `terrain` and

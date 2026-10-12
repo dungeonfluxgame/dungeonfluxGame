@@ -294,7 +294,10 @@ fn fs(in: VOut) -> FOut {
     // The same blend accumulates depth weighted by coverage; the resolve pass divides it out.
     // The fourth component is the blend's source alpha (the target has no alpha channel to store
     // it): without it the accumulation would add up instead of compositing front over back.
-    out.depth = vec4<f32>(in.depth * alpha, alpha, 0.0, alpha);
+    // Only the solid core of a splat counts toward depth: its edges and the faint haze of floaters
+    // are far from the depth the splat's centre gives, and would put surfaces in mid air.
+    let solid = smoothstep(0.25, 0.7, alpha);
+    out.depth = vec4<f32>(in.depth * solid, solid, 0.0, solid);
     return out;
 }
 "#;
@@ -328,6 +331,13 @@ fn fs(@builtin(position) p: vec4<f32>) -> FOut {
     out.colour = vec4<f32>(lo.rgb + u.sky.rgb * (1.0 - lo.a), 1.0);
     let size = vec2<f32>(textureDimensions(accum));
     let t = textureLoad(accum, vec2<i32>(min(uv * size, size - vec2<f32>(1.0))), 0);
+    if (u.depth.w > 2.5) {
+        // Debug view: the scan's depth, black to white over 0 to 40 m, dark where nothing is drawn.
+        let shown = t.r / max(t.g, 0.0001) / 40.0;
+        out.colour = vec4<f32>(vec3<f32>(clamp(shown, 0.0, 1.0)) * clamp(t.g * 4.0, 0.0, 1.0), 1.0);
+        out.depth = 1.0;
+        return out;
+    }
     if (t.g < u.depth.w) {
         out.depth = 1.0;
     } else {

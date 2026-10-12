@@ -19,10 +19,12 @@ mod director;
 mod figure_art;
 mod formation;
 mod grid;
+pub mod grid_lines;
 mod layout;
 mod lod;
 mod math;
 mod model;
+mod pacing;
 mod scene_file;
 mod sound;
 mod splat;
@@ -52,6 +54,7 @@ pub use model::{
     FloatTone, FloatingText, Highlight, HighlightKind, HitPoints, HudState, InitiativeRoll,
     InitiativeShow, RollCard, Side, Token, TokenId, initiative_line, ordinal,
 };
+pub use pacing::{BattleFps, FramePacer, Pace};
 pub use scene_file::{
     Attribution, BackdropLayer, BattleScene, DEFAULT_SCENE_ID, Distribution, GroundLayer,
     SceneChoice, SceneFileError, SplatFormat, SplatGrade, SplatLayer, embedded_ids, load_embedded,

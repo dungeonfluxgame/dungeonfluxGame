@@ -20,6 +20,7 @@ use super::{
 use crate::battle::{
     director::FlashTone,
     grid::Grid,
+    grid_lines,
     layout::Cover,
     math::Vec3,
     model::{HighlightKind, Side},
@@ -32,14 +33,13 @@ const GENERATED: &str = "/assets/ui/generated";
 const DEPTH_FORMAT: &str = "depth32float";
 const COLOUR_FORMAT: &str = "rgba8unorm";
 const DECAL_STRIDE: usize = 12;
-/// Vertices per decal: a 6 by 6 patch of quads (see the decal shader).
-const DECAL_VERTICES: u32 = 216;
-/// How far toward the camera, along the line of sight, tiles on a scan are lifted for the depth test.
-const DECAL_LIFT_M: f32 = 2.0;
+/// Vertices per decal: one quad on the flat play plane.
+const DECAL_VERTICES: u32 = 6;
 /// Eight vec4 attributes per billboard: place, pose, tint, kind, bounds and three effect vectors.
 const FIGURE_STRIDE: usize = 32;
 const FIGURE_ATTRIBUTES: usize = 8;
 const MAX_DECALS: usize = 768;
+const MAX_GRID_SIDE: u32 = crate::battle::grid::MAX_GRID_SIDE;
 /// Figures, their afterimages and every obstacle prop cell in one frame.
 const MAX_BILLBOARDS: usize = 112;
 const BOLT_STRIDE: usize = 12;
@@ -53,15 +53,16 @@ const MIN_SPLAT_SCALE: f32 = 0.5;
 /// Projected splats whose opacity times area (pixels) is below this are skipped.
 const BASE_MIN_CONTRIBUTION: f32 = 0.45;
 const MAX_MIN_CONTRIBUTION: f32 = 6.0;
-/// Frame time above which the ladder steps down, and below which it steps back up.
-const SLOW_FRAME_MS: f32 = 21.0;
-const FAST_FRAME_MS: f32 = 15.6;
+/// What a frame costs, as a share of the frame period the cadence lock allows (33 ms at 30 fps):
+/// above the first the ladder steps down, below the second it steps back up.
+const SLOW_COST_SHARE: f32 = 0.8;
+const FAST_COST_SHARE: f32 = 0.55;
 /// Frames of evidence before the ladder moves: down is quick, up is patient.
 const STEP_DOWN_FRAMES: u32 = 24;
 const STEP_UP_FRAMES: u32 = 240;
 /// Splats are given up for the painted ground when the ladder is at its floor and frames still
-/// take this long for this many frames.
-const GIVE_UP_FRAME_MS: f32 = 45.0;
+/// cost this share of the period for this many frames.
+const GIVE_UP_COST_SHARE: f32 = 1.35;
 const GIVE_UP_FRAMES: u32 = 240;
 
 enum Slot {
@@ -81,6 +82,9 @@ pub struct SplatSetup {
 struct Pipelines {
     backdrop: GpuRenderPipeline,
     ground: GpuRenderPipeline,
+    /// The grid where it is in front of the scan, and again, dimmed, where the scan hides it.
+    grid_front: GpuRenderPipeline,
+    grid_behind: GpuRenderPipeline,
     decal: GpuRenderPipeline,
     figure: GpuRenderPipeline,
     effects: GpuRenderPipeline,
@@ -161,8 +165,8 @@ pub struct Renderer {
     pipelines: Pipelines,
     frame_buffer: GpuBuffer,
     frame_group: GpuBindGroup,
-    terrain_buffer: GpuBuffer,
-    terrain_group: GpuBindGroup,
+    grid_buffer: GpuBuffer,
+    grid_group: GpuBindGroup,
     post_buffer: GpuBuffer,
     decal_buffer: GpuBuffer,
     figure_buffer: GpuBuffer,
@@ -301,28 +305,6 @@ fn pipeline(core: &GpuCore, spec: PipelineSpec<'_>) -> GpuRenderPipeline {
     core.device.create_render_pipeline(&descriptor.build())
 }
 
-/// The ground height field as the decal shader reads it; a flat two-by-two field when the scene
-/// has no terrain.
-fn terrain_words(scene: &BattleScene) -> Vec<f32> {
-    match scene.grid.terrain() {
-        Some(field) => {
-            let mut words = vec![
-                field.origin()[0],
-                field.origin()[1],
-                field.step_m(),
-                field.cols() as f32,
-                field.rows() as f32,
-                0.0,
-                0.0,
-                0.0,
-            ];
-            words.extend_from_slice(field.heights());
-            words
-        }
-        None => vec![0.0, 0.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    }
-}
-
 fn instance_layout(stride_floats: usize, attributes: usize) -> JsValue {
     let attributes = (0..attributes).map(|index| {
         Descriptor::new()
@@ -377,13 +359,16 @@ impl Renderer {
         core.device.push_error_scope("validation");
         let frame_layout = core.pipeline_layout(&[&core.layout_frame]);
         let texture_layout = core.pipeline_layout(&[&core.layout_frame, &core.layout_texture]);
-        let terrain_layout = core.device.create_bind_group_layout(
+        let grid_layout = core.device.create_bind_group_layout(
             &Descriptor::new()
                 .with(
                     "entries",
                     array([Descriptor::new()
                         .with("binding", 0)
-                        .with("visibility", super::sys::SHADER_VERTEX)
+                        .with(
+                            "visibility",
+                            super::sys::SHADER_VERTEX | super::sys::SHADER_FRAGMENT,
+                        )
                         .with(
                             "buffer",
                             Descriptor::new().with("type", "read-only-storage").build(),
@@ -392,9 +377,8 @@ impl Renderer {
                 )
                 .build(),
         );
-        let decal_layout = core.pipeline_layout(&[&core.layout_frame, &terrain_layout]);
+        let grid_pipeline_layout = core.pipeline_layout(&[&core.layout_frame, &grid_layout]);
         let post_layout = core.pipeline_layout(&[&core.layout_post]);
-        let _ = &frame_layout;
         let pipelines = Pipelines {
             backdrop: pipeline(
                 &core,
@@ -420,11 +404,35 @@ impl Renderer {
                     blend: true,
                 },
             ),
+            grid_front: pipeline(
+                &core,
+                PipelineSpec {
+                    wgsl: &shaders::grid(),
+                    layout: &grid_pipeline_layout,
+                    buffers: vec![],
+                    topology: "triangle-list",
+                    depth: Some((false, "less-equal")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
+            ),
+            grid_behind: pipeline(
+                &core,
+                PipelineSpec {
+                    wgsl: &shaders::grid(),
+                    layout: &grid_pipeline_layout,
+                    buffers: vec![],
+                    topology: "triangle-list",
+                    depth: Some((false, "greater")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
+            ),
             decal: pipeline(
                 &core,
                 PipelineSpec {
                     wgsl: &shaders::decal(),
-                    layout: &decal_layout,
+                    layout: &frame_layout,
                     buffers: vec![instance_layout(DECAL_STRIDE, 3)],
                     topology: "triangle-list",
                     depth: Some((false, "less-equal")),
@@ -498,19 +506,12 @@ impl Renderer {
             MAX_BOLTS * BOLT_STRIDE * 4,
             BUFFER_VERTEX | BUFFER_COPY_DST,
         );
-        let terrain_data = terrain_words(scene);
-        let terrain_buffer = buffer(
+        let grid_buffer = buffer(
             &core,
-            terrain_data.len() * 4,
+            (grid_lines::HEADER_WORDS + (MAX_GRID_SIDE * MAX_GRID_SIDE) as usize) * 4,
             BUFFER_STORAGE | BUFFER_COPY_DST,
         );
-        core.queue
-            .write_buffer(&terrain_buffer, 0.0, &float_array(&terrain_data));
-        let terrain_group = bind_group(
-            &core,
-            &terrain_layout,
-            vec![entry_buffer(0, &terrain_buffer)],
-        );
+        let grid_group = bind_group(&core, &grid_layout, vec![entry_buffer(0, &grid_buffer)]);
         let frame_group = bind_group(
             &core,
             &core.layout_frame,
@@ -564,8 +565,8 @@ impl Renderer {
             pipelines,
             frame_buffer,
             frame_group,
-            terrain_buffer,
-            terrain_group,
+            grid_buffer,
+            grid_group,
             post_buffer,
             decal_buffer,
             figure_buffer,
@@ -743,17 +744,20 @@ impl Renderer {
             .map_or(DEFAULT_SPLAT_CAPACITY, |scene| scene.engine.capacity())
     }
 
-    pub fn observe_frame_ms(&mut self, milliseconds: f32) {
+    /// Feeds the quality ladder what the last presented frame cost, in milliseconds, against the
+    /// frame period the cadence lock allows.
+    pub fn observe_frame_cost(&mut self, cost_ms: f32, period_ms: f32) {
         if self.ladder_frozen {
             return;
         }
-        self.frame_ms_average += (milliseconds.clamp(0.0, 200.0) - self.frame_ms_average) * 0.1;
+        let (slow_ms, fast_ms) = (period_ms * SLOW_COST_SHARE, period_ms * FAST_COST_SHARE);
+        self.frame_ms_average += (cost_ms.clamp(0.0, 200.0) - self.frame_ms_average) * 0.1;
         self.frames_seen += 1;
         let has_splats = self.splat.as_ref().is_some_and(|scene| !scene.given_up);
-        if self.frame_ms_average > SLOW_FRAME_MS {
+        if self.frame_ms_average > slow_ms {
             self.slow_frames += 1;
             self.fast_frames = 0;
-        } else if self.frame_ms_average < FAST_FRAME_MS {
+        } else if self.frame_ms_average < fast_ms {
             self.fast_frames += 1;
             self.slow_frames = 0;
         } else {
@@ -773,7 +777,7 @@ impl Renderer {
         }
         if has_splats
             && self.floor_frames >= GIVE_UP_FRAMES
-            && self.frame_ms_average > GIVE_UP_FRAME_MS
+            && self.frame_ms_average > period_ms * GIVE_UP_COST_SHARE
             && let Some(scene) = &mut self.splat
         {
             scene.given_up = true;
@@ -907,7 +911,7 @@ impl Renderer {
         // Tiles are lifted along the line of sight, which leaves their place on screen unchanged
         // and only keeps nearby grass and rubble from hiding them.
         let decal_lift = if scene.splat.is_some() {
-            DECAL_LIFT_M
+            grid_lines::OCCLUSION_MARGIN_M
         } else {
             0.0
         };
@@ -931,6 +935,7 @@ impl Renderer {
             scene.backdrop.height_m,
         ]);
         data.extend_from_slice(&[spot.0, spot.1, 3.4, spot.2]);
+        data.extend_from_slice(&[scene.grid.play_plane_y(), 0.0, 0.0, 0.0]);
         self.core
             .queue
             .write_buffer(&self.frame_buffer, 0.0, &float_array(&data));
@@ -985,7 +990,6 @@ impl Renderer {
     fn decals(&self, frame: &FrameView<'_>, grid: &Grid) -> Vec<f32> {
         let mut out = Vec::new();
         let half = grid.cell_m() * 0.5;
-        let centre = grid.centre();
         let reduced = if frame.reduced_motion { 1.0 } else { 0.0 };
         let mut push = |shape: [f32; 4], colour: [f32; 4], params: [f32; 3]| {
             if out.len() / DECAL_STRIDE < MAX_DECALS {
@@ -1022,11 +1026,10 @@ impl Renderer {
                 }
             }
         }
-        // Blocked tiles are never in `walkable_cells`, so they carry no grid line glow.
+        // The grid lines themselves are the grid pass's; this is the fill of highlighted tiles and
+        // the hatch of difficult ground.
         for cell in grid.walkable_cells() {
             let at = grid.cell_centre(cell);
-            let distance = ((at.x - centre.x).powi(2) + (at.z - centre.z).powi(2)).sqrt();
-            let fade = 1.0 - 0.7 * ((distance - 3.0) / 6.0).clamp(0.0, 1.0);
             let shape = [at.x, at.z, half, half];
             match highlighted(cell) {
                 Some(HighlightKind::Move) => {
@@ -1035,7 +1038,7 @@ impl Renderer {
                 Some(HighlightKind::Attack) => {
                     push(shape, [1.0, 0.3, 0.25, 1.0], [2.0, 0.0, 0.0]);
                 }
-                None => push(shape, [0.96, 0.78, 0.42, 0.62 * fade], [0.0, 0.0, 0.0]),
+                None => {}
             }
             if grid.is_difficult(cell) {
                 push(shape, [0.82, 0.62, 0.34, 0.5], [5.0, 0.0, 0.0]);
@@ -1165,7 +1168,7 @@ impl Renderer {
                             let aspect = texture.width as f32 / texture.height as f32;
                             list.push(Billboard {
                                 data: instance(
-                                    [at.x, 0.0, at.z, height],
+                                    [at.x, at.y, at.z, height],
                                     [0.0, 1.0, 0.0, 0.0],
                                     [1.0, 1.0, 1.0, 1.0],
                                     [aspect, 0.0, 1.0, side],
@@ -1186,7 +1189,7 @@ impl Renderer {
                         }
                         Some(None) => list.push(Billboard {
                             data: instance(
-                                [at.x, 0.0, at.z, height],
+                                [at.x, at.y, at.z, height],
                                 [0.0, 1.0, 0.0, 0.0],
                                 [1.0, 1.0, 1.0, 1.0],
                                 [cell_m * 0.42, 2.0, 0.0, 0.0],
@@ -1328,6 +1331,27 @@ impl Renderer {
         }
         self.write_frame(self.spot, frame, scene, size, forward);
         self.write_post(frame, scene, size);
+        let standing: Vec<(crate::battle::Cell, Side)> = frame
+            .figures
+            .iter()
+            .filter(|figure| !figure.downed)
+            .filter_map(|figure| {
+                frame
+                    .grid
+                    .cell_at(figure.position)
+                    .map(|cell| (cell, figure.side))
+            })
+            .collect();
+        let grid_data = grid_lines::grid_words(
+            frame.grid,
+            &standing,
+            frame
+                .highlight
+                .map(|highlight| (highlight.kind, highlight.cells.as_slice())),
+        );
+        self.core
+            .queue
+            .write_buffer(&self.grid_buffer, 0.0, &float_array(&grid_data));
         let decals = self.decals(frame, frame.grid);
         let decal_count = decals.len() / DECAL_STRIDE;
         if decal_count > 0 {
@@ -1421,10 +1445,16 @@ impl Renderer {
             pass.draw(6, 1, 0, 0);
             pass
         };
+        // The grid: where the scan is not in front of it, then dimmed where it is.
+        pass.set_bind_group(0, &self.frame_group);
+        pass.set_bind_group(1, &self.grid_group);
+        pass.set_pipeline(&self.pipelines.grid_front);
+        pass.draw(6, 1, 0, 0);
+        pass.set_pipeline(&self.pipelines.grid_behind);
+        pass.draw(6, 1, 0, 1);
         if decal_count > 0 {
             pass.set_pipeline(&self.pipelines.decal);
             pass.set_bind_group(0, &self.frame_group);
-            pass.set_bind_group(1, &self.terrain_group);
             pass.set_vertex_buffer(0, &self.decal_buffer, 0.0, (decals.len() * 4) as f64);
             pass.draw(DECAL_VERTICES, decal_count as u32, 0, 0);
         }
@@ -1506,6 +1536,7 @@ impl Renderer {
         let quality = self.quality;
         let stamps = measuring.then(|| self.stamps(0));
         let depth_off = self.debug_switches & 1 != 0;
+        let depth_view = self.debug_switches & 8 != 0;
         let Some(splats) = &mut self.splat else {
             return false;
         };
@@ -1570,7 +1601,14 @@ impl Renderer {
             shift.z,
             layer.scale,
         ];
-        splats.engine.depth_threshold = if depth_off { 2.0 } else { 0.4 };
+        // Debug: bit 1 writes no scan depth, bit 8 shows the scan's depth as grey instead of colour.
+        splats.engine.depth_threshold = if depth_view {
+            3.0
+        } else if depth_off {
+            2.0
+        } else {
+            0.4
+        };
         splats.engine.prepare(encoder, &params, placement, stamps)
     }
 
@@ -1723,7 +1761,7 @@ impl Drop for Renderer {
             targets.scene.destroy_texture();
             targets.depth.destroy_texture();
         }
-        self.terrain_buffer.destroy_buffer();
+        self.grid_buffer.destroy_buffer();
         self.count_readback.destroy_buffer();
         self.splat.take();
     }

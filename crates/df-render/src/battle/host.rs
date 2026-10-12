@@ -19,6 +19,7 @@ use super::{
         textures,
     },
     hud::Hud,
+    pacing::{BattleFps, FramePacer, Pace},
     scene_file::{BackdropLayer, BattleScene, GroundLayer, SplatFormat, SplatGrade, SplatLayer},
     sound::SoundEvent,
     splat::{
@@ -54,6 +55,8 @@ pub struct StageOptions {
     pub fallback_layers: Option<(GroundLayer, BackdropLayer)>,
     /// Measurement overrides: freeze the frame ladder at these values.
     pub fixed_quality: Option<FixedQuality>,
+    /// The presentation rate: the battlefield never draws faster than this.
+    pub fps: BattleFps,
 }
 
 /// Quality held constant for benchmarks (`#battle-preview=...&fixed&budget=..&minc=..&rscale=..`).
@@ -74,7 +77,8 @@ struct Inner {
     stage: Stage,
     renderer: Option<Renderer>,
     availability: Availability,
-    last_timestamp: Option<f64>,
+    /// Decides which animation-frame calls present a frame (the fixed 30 or 24 fps cadence).
+    pacer: FramePacer,
     frame_handle: Option<i32>,
     disposed: bool,
     revealed: bool,
@@ -113,7 +117,7 @@ impl BattleStage {
                 stage: Stage::new(scene, true),
                 renderer: None,
                 availability: Availability::Unavailable(reason),
-                last_timestamp: None,
+                pacer: FramePacer::new(BattleFps::DEFAULT),
                 frame_handle: None,
                 disposed: false,
                 revealed: false,
@@ -229,7 +233,7 @@ impl BattleStage {
             stage,
             renderer: Some(renderer),
             availability: Availability::Available,
-            last_timestamp: None,
+            pacer: FramePacer::new(options.fps),
             frame_handle: None,
             disposed: false,
             revealed: false,
@@ -324,6 +328,13 @@ fn fail(inner: &mut Inner, reason: UnavailableReason) {
     mark(&inner.host, &format!("unavailable:{}", reason.key()));
 }
 
+/// Milliseconds on the page's high-resolution clock; zero when there is no `performance`.
+fn now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map_or(0.0, |performance| performance.now())
+}
+
 fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     let mut guard = inner.borrow_mut();
     let state = &mut *guard;
@@ -336,10 +347,14 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
         fail(state, UnavailableReason::DeviceLost);
         return;
     }
-    let delta_ms = state
-        .last_timestamp
-        .map_or(16.0, |last| (timestamp - last).clamp(0.0, 100.0));
-    state.last_timestamp = Some(timestamp);
+    // Ticks between presented frames do no work at all: no update, no GPU submission.
+    let Pace::Present { elapsed_ms } = state.pacer.tick(timestamp) else {
+        return;
+    };
+    let tick_started_ms = now_ms();
+    // The simulation advances by real time since the previous presented frame, so speeds are
+    // unchanged by the cap.
+    let delta_ms = elapsed_ms.clamp(0.0, 100.0);
     state
         .stage
         .update(Duration::from_secs_f64(delta_ms / 1000.0));
@@ -378,7 +393,18 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
         Vec::new()
     };
     renderer.render(&frame, state.stage.scene(), (width, height));
-    renderer.observe_frame_ms(delta_ms as f32);
+    // What the frame cost, not how long the cap lets it take: the quality ladder compares it with
+    // the cap's period. Without GPU timing, only an interval well over the period shows a miss.
+    let period_ms = state.pacer.target().period_ms() as f32;
+    let gpu_ms = renderer.stats().gpu_ms;
+    let cost_ms = if gpu_ms > 0.0 {
+        gpu_ms.max((now_ms() - tick_started_ms) as f32)
+    } else if delta_ms as f32 > period_ms * 1.25 {
+        delta_ms as f32
+    } else {
+        period_ms * 0.7
+    };
+    renderer.observe_frame_cost(cost_ms, period_ms);
     state.frames += 1;
     // Show the battlefield once its art has arrived (or after a moment regardless), so the table
     // does not watch placeholder discs turn into figures.
@@ -415,7 +441,11 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
             .set_attribute("data-battlefield-figures", &figures.join(";"));
         let stats = renderer.stats();
         let summary = format!(
-            "ms={delta_ms:.1} gpu_ms={:.1} sort_ms={:.2} splat_ms={:.2} overlay_ms={:.2} post_ms={:.2} visible={} planned={} budget={} min_contribution={:.2} scale={:.2} splat_scale={:.2} frames={}",
+            "ms={delta_ms:.1} fps_target={} fps_presented={:.1} fps_divisor={} display_hz={:.0} cost_ms={cost_ms:.1} gpu_ms={:.1} sort_ms={:.2} splat_ms={:.2} overlay_ms={:.2} post_ms={:.2} visible={} planned={} budget={} min_contribution={:.2} scale={:.2} splat_scale={:.2} frames={}",
+            state.pacer.target().hz(),
+            state.pacer.presented_fps(),
+            state.pacer.divisor(),
+            1000.0 / state.pacer.display_interval_ms(),
             stats.gpu_ms,
             stats.sort_ms,
             stats.splat_ms,

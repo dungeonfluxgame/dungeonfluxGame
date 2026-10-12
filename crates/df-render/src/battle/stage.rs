@@ -1434,7 +1434,7 @@ mod tests {
     }
 
     #[test]
-    fn figures_stand_on_the_scanned_ground_under_their_cell() {
+    fn figures_stand_on_the_flat_play_plane_fitted_to_the_scanned_ground() {
         let mut scene = load_embedded("salt-quay").unwrap().unwrap();
         // A gently sloping field, 10 cm per metre along x, covering the grid.
         let origin = [scene.grid.origin()[0] - 1.0, scene.grid.origin()[1] - 1.0];
@@ -1455,13 +1455,15 @@ mod tests {
             .map(|figure| (figure.position.x, figure.position.y))
             .collect();
         assert_eq!(heights.len(), 2);
-        for (x, y) in heights {
-            let expected = (x - origin[0]) * 0.1;
+        let plane = stage.scene().grid.play_plane_y();
+        for (_, y) in heights {
             assert!(
-                (y - expected).abs() < 0.02,
-                "feet at {y} on ground {expected}"
+                (y - plane).abs() < 1e-5,
+                "feet at {y} on the flat play plane {plane}"
             );
         }
+        // The sloping field is only measured against the plane, never followed.
+        assert!(stage.scene().grid.plane_deviation_m() > 0.3);
     }
 
     #[test]
