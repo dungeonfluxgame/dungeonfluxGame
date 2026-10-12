@@ -30,7 +30,7 @@ use crate::battle::{
 
 const BINS: usize = 1 << 16;
 const WORKGROUP: u32 = 256;
-const UNIFORM_BYTES: usize = 256;
+const UNIFORM_BYTES: usize = 320;
 const CHUNK_PARAM_BYTES: usize = 64;
 pub const ACCUM_FORMAT: &str = "rg16float";
 
@@ -122,6 +122,11 @@ pub struct FrameParams {
     pub projection_m10: f32,
     pub projection_m14: f32,
     pub depth_bias_m: f32,
+    pub sky: [f32; 3],
+    /// Ceiling cut: `[height, radius squared, centre x, centre z]`, radius 0 for none.
+    pub clip: [f32; 4],
+    /// The full-resolution scene target the scan is composited into.
+    pub full_size: (f32, f32),
 }
 
 struct Layouts {
@@ -139,6 +144,15 @@ struct Pipelines {
     decode: GpuComputePipeline,
     draw: GpuRenderPipeline,
     resolve: GpuRenderPipeline,
+}
+
+/// The scan's own render targets, at the splat resolution (which may be below the scene's).
+struct SplatTargets {
+    accum: GpuTexture,
+    colour: GpuTexture,
+    group: GpuBindGroup,
+    width: u32,
+    height: u32,
 }
 
 pub struct SplatEngine {
@@ -160,7 +174,7 @@ pub struct SplatEngine {
     sort_group: GpuBindGroup,
     draw_group: GpuBindGroup,
     decode_group: GpuBindGroup,
-    accum: Option<(GpuTexture, GpuBindGroup, u32, u32)>,
+    targets: Option<SplatTargets>,
     active: u32,
 }
 
@@ -300,6 +314,18 @@ impl SplatEngine {
                 vec![
                     uniform_entry(0, SHADER_FRAGMENT),
                     data_texture(1, SHADER_FRAGMENT),
+                    entry(
+                        2,
+                        SHADER_FRAGMENT,
+                        "texture",
+                        Descriptor::new().with("sampleType", "float").build(),
+                    ),
+                    entry(
+                        3,
+                        SHADER_FRAGMENT,
+                        "sampler",
+                        Descriptor::new().with("type", "filtering").build(),
+                    ),
                 ],
             ),
             decode_chunk: layout(
@@ -330,7 +356,7 @@ impl SplatEngine {
             .create_shader_module(&Descriptor::new().with("code", splat_shaders::draw().as_str()).build());
         let resolve_module = core.device.create_shader_module(
             &Descriptor::new()
-                .with("code", splat_shaders::resolve().as_str())
+                .with("code", splat_shaders::composite().as_str())
                 .build(),
         );
         let render = |module: &JsValue, layout: &JsValue, targets: Vec<JsValue>, depth: bool| {
@@ -380,12 +406,7 @@ impl SplatEngine {
                 .with("blend", blend())
                 .build(),
         ];
-        let resolve_targets = vec![
-            Descriptor::new()
-                .with("format", scene_format)
-                .with("writeMask", 0)
-                .build(),
-        ];
+        let resolve_targets = vec![Descriptor::new().with("format", scene_format).build()];
         let pipelines = Pipelines {
             project: compute_pipeline(&core, &project_source, "project", &sort_layout),
             scan: compute_pipeline(&core, &project_source, "scan", &sort_layout),
@@ -475,7 +496,7 @@ impl SplatEngine {
             sort_group,
             draw_group,
             decode_group,
-            accum: None,
+            targets: None,
             active: 0,
         })
     }
@@ -498,46 +519,66 @@ impl SplatEngine {
         &self.layouts.decode_chunk
     }
 
-    /// The depth-accumulation target, recreated when the scene target changes size.
-    pub fn ensure_accum(&mut self, width: u32, height: u32) {
+    /// The scan's colour and depth-accumulation targets, recreated when their size changes.
+    pub fn ensure_targets(&mut self, width: u32, height: u32) {
         if self
-            .accum
+            .targets
             .as_ref()
-            .is_some_and(|(_, _, w, h)| *w == width && *h == height)
+            .is_some_and(|t| t.width == width && t.height == height)
         {
             return;
         }
-        if let Some((old, ..)) = self.accum.take() {
-            old.destroy_texture();
+        if let Some(old) = self.targets.take() {
+            old.accum.destroy_texture();
+            old.colour.destroy_texture();
         }
-        let texture = self.core.create_texture(
-            width,
-            height,
-            ACCUM_FORMAT,
-            super::core::COLOUR_TARGET_USAGE,
-            1,
-        );
-        let resolve_group = group(
+        let usage = super::core::COLOUR_TARGET_USAGE;
+        let accum = self.core.create_texture(width, height, ACCUM_FORMAT, usage, 1);
+        let colour = self.core.create_texture(width, height, "rgba8unorm", usage, 1);
+        let group = group(
             &self.core,
             &self.layouts.resolve,
             vec![
                 buffer_entry(0, &self.uniform),
                 Descriptor::new()
                     .with("binding", 1)
-                    .with("resource", texture.create_view())
+                    .with("resource", accum.create_view())
+                    .build(),
+                Descriptor::new()
+                    .with("binding", 2)
+                    .with("resource", colour.create_view())
+                    .build(),
+                Descriptor::new()
+                    .with("binding", 3)
+                    .with("resource", self.core.sampler_clamp.clone())
                     .build(),
             ],
         );
-        self.accum = Some((texture, resolve_group, width, height));
+        self.targets = Some(SplatTargets {
+            accum,
+            colour,
+            group,
+            width,
+            height,
+        });
     }
 
-    pub fn accum_view(&self) -> Option<JsValue> {
-        self.accum.as_ref().map(|(texture, ..)| texture.create_view().into())
+    /// Views of the scan's colour and accumulation targets, in that order.
+    pub fn target_views(&self) -> Option<(JsValue, JsValue)> {
+        self.targets
+            .as_ref()
+            .map(|t| (t.colour.create_view().into(), t.accum.create_view().into()))
     }
 
     /// Takes any waiting plan or records, writes the frame's uniforms and encodes the decode,
     /// project, sort passes. Returns whether there is anything to draw.
-    pub fn prepare(&mut self, encoder: &GpuCommandEncoder, frame: &FrameParams, placement: [f32; 8]) -> bool {
+    pub fn prepare(
+        &mut self,
+        encoder: &GpuCommandEncoder,
+        frame: &FrameParams,
+        placement: [f32; 8],
+        stamps: Option<JsValue>,
+    ) -> bool {
         let (plan, records) = {
             let mut shared = self.shared.borrow_mut();
             (shared.plan.take(), shared.records.take())
@@ -563,7 +604,11 @@ impl SplatEngine {
         self.write_uniforms(frame);
         encoder.clear_buffer(&self.hist);
         encoder.clear_buffer(&self.counter);
-        let pass = encoder.begin_compute_pass();
+        let pass_descriptor = match stamps {
+            Some(stamps) => Descriptor::new().with("timestampWrites", stamps).build(),
+            None => Descriptor::new().build(),
+        };
+        let pass = encoder.begin_compute_pass(&pass_descriptor);
         let groups = self.active.div_ceil(WORKGROUP);
         pass.set_compute_bind_group(0, &self.sort_group);
         pass.set_compute_pipeline(&self.pipelines.project);
@@ -587,7 +632,7 @@ impl SplatEngine {
                 .write_buffer(&self.ranges, 0.0, &js_sys::Uint32Array::from(words.as_slice()));
         }
         let shared = self.shared.borrow();
-        let pass = encoder.begin_compute_pass();
+        let pass = encoder.begin_compute_pass(&Descriptor::new().build());
         pass.set_compute_pipeline(&self.pipelines.decode);
         pass.set_compute_bind_group(1, &self.decode_group);
         for job in &plan.jobs {
@@ -621,13 +666,20 @@ impl SplatEngine {
         ]);
         data.extend_from_slice(&[frame.exposure_gain, frame.saturation, frame.ambient, frame.pool_m]);
         data.extend_from_slice(&[frame.tint[0], frame.tint[1], frame.tint[2], 0.0]);
-        data.extend_from_slice(&[frame.pool_centre.0, frame.pool_centre.1, 0.0, 0.0]);
+        data.extend_from_slice(&[
+            frame.pool_centre.0,
+            frame.pool_centre.1,
+            1.0 / frame.full_size.0,
+            1.0 / frame.full_size.1,
+        ]);
         data.extend_from_slice(&[
             frame.projection_m10,
             frame.projection_m14,
             frame.depth_bias_m,
             0.4,
         ]);
+        data.extend_from_slice(&[frame.sky[0], frame.sky[1], frame.sky[2], 0.0]);
+        data.extend_from_slice(&frame.clip);
         self.core
             .queue
             .write_buffer(&self.uniform, 0.0, &float_array(&data));
@@ -646,13 +698,14 @@ impl SplatEngine {
         pass.draw_indirect(&self.args, 0.0);
     }
 
-    /// Writes the scan's depth into the depth attachment of `pass`.
+    /// Composites the scan into the scene colour of `pass` and writes its depth into the depth
+    /// attachment.
     pub fn resolve(&self, pass: &GpuRenderPass) {
-        let Some((_, resolve_group, ..)) = &self.accum else {
+        let Some(targets) = &self.targets else {
             return;
         };
         pass.set_pipeline(&self.pipelines.resolve);
-        pass.set_bind_group(0, resolve_group);
+        pass.set_bind_group(0, &targets.group);
         pass.draw(3, 1, 0, 0);
     }
 }
@@ -673,8 +726,9 @@ impl Drop for SplatEngine {
         ] {
             buffer.destroy_buffer();
         }
-        if let Some((texture, ..)) = self.accum.take() {
-            texture.destroy_texture();
+        if let Some(targets) = self.targets.take() {
+            targets.accum.destroy_texture();
+            targets.colour.destroy_texture();
         }
         self.shared.borrow_mut().chunks.clear();
     }

@@ -11,9 +11,10 @@ use super::{
     shaders,
     splat_engine::{FrameParams, LoadState, SharedSplats, SplatEngine},
     sys::{
-        BUFFER_COPY_DST, BUFFER_UNIFORM, BUFFER_VERTEX,
-        BUFFER_MAP_READ, Descriptor, GpuBindGroup, GpuBuffer, GpuRenderPass, GpuRenderPipeline,
-        GpuTexture, array, float_array,
+        BUFFER_COPY_DST, BUFFER_MAP_READ, BUFFER_QUERY_RESOLVE, BUFFER_STORAGE, BUFFER_UNIFORM,
+        BUFFER_VERTEX,
+        BUFFER_COPY_SRC, Descriptor, GpuBindGroup, GpuBuffer, GpuQuerySet, GpuRenderPass,
+        GpuRenderPipeline, GpuTexture, array, float_array,
     },
     textures::{self, ImageTexture},
 };
@@ -30,6 +31,8 @@ const GENERATED: &str = "/assets/ui/generated";
 const DEPTH_FORMAT: &str = "depth32float";
 const COLOUR_FORMAT: &str = "rgba8unorm";
 const DECAL_STRIDE: usize = 12;
+/// Vertices per decal: a 6 by 6 patch of quads (see the decal shader).
+const DECAL_VERTICES: u32 = 216;
 const FIGURE_STRIDE: usize = 20;
 const MAX_DECALS: usize = 768;
 const MAX_FIGURES: usize = 16;
@@ -38,6 +41,7 @@ const FAR: f32 = 150.0;
 /// Splats a scene may hold when its file does not say.
 pub const DEFAULT_SPLAT_CAPACITY: u32 = 2_500_000;
 const MIN_SPLAT_BUDGET: u32 = 250_000;
+const MIN_SPLAT_SCALE: f32 = 0.5;
 /// Projected splats whose opacity times area (pixels) is below this are skipped.
 const BASE_MIN_CONTRIBUTION: f32 = 0.45;
 const MAX_MIN_CONTRIBUTION: f32 = 6.0;
@@ -92,6 +96,9 @@ struct SplatScene {
 /// Cost knobs the frame-time ladder turns down on weak devices and back up with headroom.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quality {
+    /// Resolution the scan is drawn at, as a share of the scene's: splat fill rate is what costs
+    /// time, and a scan is soft enough to be drawn smaller and filtered up.
+    pub splat_scale: f32,
     /// Splats the streamed scan may plan (the level-of-detail budget).
     pub splat_budget: u32,
     /// Skips projected splats whose opacity times area in pixels is below this.
@@ -109,8 +116,12 @@ pub struct RenderStats {
     pub budget: u32,
     pub min_contribution: f32,
     pub scale: f32,
+    pub splat_scale: f32,
     /// Project, sort and decode time on the GPU, and the whole frame's submit-to-done time.
     pub sort_ms: f32,
+    pub splat_ms: f32,
+    pub overlay_ms: f32,
+    pub post_ms: f32,
     pub gpu_ms: f32,
     pub splat_state: Option<LoadState>,
     pub given_up: bool,
@@ -119,9 +130,20 @@ pub struct RenderStats {
 /// Results of the periodic GPU timing, written by completion callbacks.
 #[derive(Default)]
 struct Measured {
+    /// Decode excluded: project, scan and scatter of the sort.
     sort_ms: f32,
+    splat_ms: f32,
+    overlay_ms: f32,
+    post_ms: f32,
     gpu_ms: f32,
     visible: u32,
+}
+
+/// Pass timing through timestamp queries: eight stamps, two per measured pass.
+struct Timing {
+    set: GpuQuerySet,
+    resolve: GpuBuffer,
+    read: GpuBuffer,
 }
 
 pub struct Renderer {
@@ -129,6 +151,8 @@ pub struct Renderer {
     pipelines: Pipelines,
     frame_buffer: GpuBuffer,
     frame_group: GpuBindGroup,
+    terrain_buffer: GpuBuffer,
+    terrain_group: GpuBindGroup,
     post_buffer: GpuBuffer,
     decal_buffer: GpuBuffer,
     figure_buffer: GpuBuffer,
@@ -140,6 +164,7 @@ pub struct Renderer {
     clear_pixel: Rc<ImageTexture>,
     splat: Option<SplatScene>,
     measured: Rc<RefCell<Measured>>,
+    timing: Option<Timing>,
     count_readback: GpuBuffer,
     readback_busy: Rc<std::cell::Cell<bool>>,
     pub quality: Quality,
@@ -147,6 +172,9 @@ pub struct Renderer {
     slow_frames: u32,
     fast_frames: u32,
     floor_frames: u32,
+    ladder_frozen: bool,
+    /// TEMPORARY profiling switches: 1 no resolve, 2 no splat draw, 4 no post, 8 no accum.
+    pub debug_switches: u32,
     spot: (f32, f32, f32),
     last_clock_s: f32,
     frames_seen: u32,
@@ -232,6 +260,28 @@ fn pipeline(core: &GpuCore, spec: PipelineSpec<'_>) -> GpuRenderPipeline {
     core.device.create_render_pipeline(&descriptor.build())
 }
 
+/// The ground height field as the decal shader reads it; a flat two-by-two field when the scene
+/// has no terrain.
+fn terrain_words(scene: &BattleScene) -> Vec<f32> {
+    match scene.grid.terrain() {
+        Some(field) => {
+            let mut words = vec![
+                field.origin()[0],
+                field.origin()[1],
+                field.step_m(),
+                field.cols() as f32,
+                field.rows() as f32,
+                0.0,
+                0.0,
+                0.0,
+            ];
+            words.extend_from_slice(field.heights());
+            words
+        }
+        None => vec![0.0, 0.0, 1.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    }
+}
+
 fn instance_layout(stride_floats: usize, attributes: usize) -> JsValue {
     let attributes = (0..attributes).map(|index| {
         Descriptor::new()
@@ -286,6 +336,22 @@ impl Renderer {
         core.device.push_error_scope("validation");
         let frame_layout = core.pipeline_layout(&[&core.layout_frame]);
         let texture_layout = core.pipeline_layout(&[&core.layout_frame, &core.layout_texture]);
+        let terrain_layout = core.device.create_bind_group_layout(
+            &Descriptor::new()
+                .with(
+                    "entries",
+                    array([Descriptor::new()
+                        .with("binding", 0)
+                        .with("visibility", super::sys::SHADER_VERTEX)
+                        .with(
+                            "buffer",
+                            Descriptor::new().with("type", "read-only-storage").build(),
+                        )
+                        .build()]),
+                )
+                .build(),
+        );
+        let decal_layout = core.pipeline_layout(&[&core.layout_frame, &terrain_layout]);
         let post_layout = core.pipeline_layout(&[&core.layout_post]);
         let _ = &frame_layout;
         let pipelines = Pipelines {
@@ -317,7 +383,7 @@ impl Renderer {
                 &core,
                 PipelineSpec {
                     wgsl: &shaders::decal(),
-                    layout: &frame_layout,
+                    layout: &decal_layout,
                     buffers: vec![instance_layout(DECAL_STRIDE, 3)],
                     topology: "triangle-list",
                     depth: Some((false, "less-equal")),
@@ -362,6 +428,15 @@ impl Renderer {
             MAX_FIGURES * FIGURE_STRIDE * 4,
             BUFFER_VERTEX | BUFFER_COPY_DST,
         );
+        let terrain_data = terrain_words(scene);
+        let terrain_buffer = buffer(
+            &core,
+            terrain_data.len() * 4,
+            BUFFER_STORAGE | BUFFER_COPY_DST,
+        );
+        core.queue
+            .write_buffer(&terrain_buffer, 0.0, &float_array(&terrain_data));
+        let terrain_group = bind_group(&core, &terrain_layout, vec![entry_buffer(0, &terrain_buffer)]);
         let frame_group = bind_group(
             &core,
             &core.layout_frame,
@@ -400,11 +475,23 @@ impl Renderer {
             scene.engine.capacity()
         });
         let count_readback = buffer(&core, 16, BUFFER_COPY_DST | BUFFER_MAP_READ);
+        let timing = core.timestamps.then(|| Timing {
+            set: core.device.create_query_set(
+                &Descriptor::new()
+                    .with("type", "timestamp")
+                    .with("count", 8)
+                    .build(),
+            ),
+            resolve: buffer(&core, 64, BUFFER_QUERY_RESOLVE | BUFFER_COPY_SRC),
+            read: buffer(&core, 64, BUFFER_COPY_DST | BUFFER_MAP_READ),
+        });
         let renderer = Self {
             core,
             pipelines,
             frame_buffer,
             frame_group,
+            terrain_buffer,
+            terrain_group,
             post_buffer,
             decal_buffer,
             figure_buffer,
@@ -416,9 +503,11 @@ impl Renderer {
             clear_pixel,
             splat,
             measured: Rc::new(RefCell::new(Measured::default())),
+            timing,
             count_readback,
             readback_busy: Rc::new(std::cell::Cell::new(false)),
             quality: Quality {
+                splat_scale: 1.0,
                 splat_budget: initial_budget,
                 min_contribution: BASE_MIN_CONTRIBUTION,
                 render_scale: 1.0,
@@ -428,6 +517,8 @@ impl Renderer {
             slow_frames: 0,
             fast_frames: 0,
             floor_frames: 0,
+            ladder_frozen: false,
+            debug_switches: 0,
             spot: (0.0, 0.0, 0.0),
             last_clock_s: 0.0,
             frames_seen: 0,
@@ -446,8 +537,12 @@ impl Renderer {
         let mut stats = self.stats;
         let measured = self.measured.borrow();
         stats.sort_ms = measured.sort_ms;
+        stats.splat_ms = measured.splat_ms;
+        stats.overlay_ms = measured.overlay_ms;
+        stats.post_ms = measured.post_ms;
         stats.gpu_ms = measured.gpu_ms;
         stats.splats_visible = measured.visible;
+        stats.splat_scale = self.quality.splat_scale;
         stats
     }
 
@@ -542,7 +637,39 @@ impl Renderer {
     /// the splat budget, then the render scale, then drops the tilt-shift blur; with sustained
     /// headroom it climbs back up in the reverse order, one step at a time. A scan that is still
     /// slow with everything at its floor is given up for the painted ground.
+    /// Holds the quality at the given values and stops the ladder (benchmarks).
+    pub fn freeze_quality(
+        &mut self,
+        budget: Option<u32>,
+        min_contribution: Option<f32>,
+        render_scale: Option<f32>,
+        splat_scale: Option<f32>,
+    ) {
+        self.ladder_frozen = true;
+        if let Some(value) = splat_scale {
+            self.quality.splat_scale = value.clamp(0.25, 1.0);
+        }
+        if let Some(budget) = budget {
+            self.set_budget(budget.min(self.quality_capacity()));
+        }
+        if let Some(value) = min_contribution {
+            self.quality.min_contribution = value;
+        }
+        if let Some(value) = render_scale {
+            self.quality.render_scale = value.clamp(0.25, 1.0);
+        }
+    }
+
+    fn quality_capacity(&self) -> u32 {
+        self.splat
+            .as_ref()
+            .map_or(DEFAULT_SPLAT_CAPACITY, |scene| scene.engine.capacity())
+    }
+
     pub fn observe_frame_ms(&mut self, milliseconds: f32) {
+        if self.ladder_frozen {
+            return;
+        }
         self.frame_ms_average += (milliseconds.clamp(0.0, 200.0) - self.frame_ms_average) * 0.1;
         self.frames_seen += 1;
         let has_splats = self.splat.as_ref().is_some_and(|scene| !scene.given_up);
@@ -585,13 +712,16 @@ impl Renderer {
         }
     }
 
-    /// One step toward cheaper frames; false when nothing is left to give.
+    /// One step toward cheaper frames; false when nothing is left to give. Splat fill rate is
+    /// what costs time, so the scan's own resolution goes first, then how many splats are drawn.
     fn step_down(&mut self, has_splats: bool) -> bool {
-        if has_splats && self.quality.min_contribution < MAX_MIN_CONTRIBUTION {
-            self.quality.min_contribution =
-                (self.quality.min_contribution * 1.7).min(MAX_MIN_CONTRIBUTION);
+        if has_splats && self.quality.splat_scale > MIN_SPLAT_SCALE + 0.01 {
+            self.quality.splat_scale = (self.quality.splat_scale - 0.12).max(MIN_SPLAT_SCALE);
         } else if has_splats && self.quality.splat_budget > MIN_SPLAT_BUDGET {
             self.set_budget(((self.quality.splat_budget as f32 * 0.75) as u32).max(MIN_SPLAT_BUDGET));
+        } else if has_splats && self.quality.min_contribution < MAX_MIN_CONTRIBUTION {
+            self.quality.min_contribution =
+                (self.quality.min_contribution * 1.7).min(MAX_MIN_CONTRIBUTION);
         } else if self.quality.render_scale > 0.55 {
             self.quality.render_scale -= 0.15;
         } else if self.quality.tilt_shift {
@@ -603,25 +733,31 @@ impl Renderer {
     }
 
     fn step_up(&mut self, has_splats: bool) {
-        let capacity = self
-            .splat
-            .as_ref()
-            .map_or(DEFAULT_SPLAT_CAPACITY, |scene| scene.engine.capacity());
+        let capacity = self.quality_capacity();
         if !self.quality.tilt_shift {
             self.quality.tilt_shift = true;
         } else if self.quality.render_scale < 1.0 {
             self.quality.render_scale = (self.quality.render_scale + 0.15).min(1.0);
-        } else if has_splats && self.quality.splat_budget < capacity {
-            self.set_budget(((self.quality.splat_budget as f32 * 1.25) as u32).min(capacity));
         } else if has_splats && self.quality.min_contribution > BASE_MIN_CONTRIBUTION {
             self.quality.min_contribution =
                 (self.quality.min_contribution / 1.7).max(BASE_MIN_CONTRIBUTION);
+        } else if has_splats && self.quality.splat_budget < capacity {
+            self.set_budget(((self.quality.splat_budget as f32 * 1.25) as u32).min(capacity));
+        } else if has_splats && self.quality.splat_scale < 1.0 {
+            self.quality.splat_scale = (self.quality.splat_scale + 0.12).min(1.0);
         }
     }
 
     fn ensure_targets(&mut self, canvas: (u32, u32)) {
         let width = ((canvas.0 as f32 * self.quality.render_scale) as u32).max(320);
         let height = ((canvas.1 as f32 * self.quality.render_scale) as u32).max(180);
+        let splat_scale = self.quality.splat_scale;
+        if let Some(scene) = &mut self.splat {
+            scene.engine.ensure_targets(
+                ((width as f32 * splat_scale) as u32).max(160),
+                ((height as f32 * splat_scale) as u32).max(90),
+            );
+        }
         if let Some(targets) = &self.targets
             && targets.width == width
             && targets.height == height
@@ -638,9 +774,6 @@ impl Renderer {
         let depth = self
             .core
             .create_texture(width, height, DEPTH_FORMAT, COLOUR_TARGET_USAGE, 1);
-        if let Some(scene) = &mut self.splat {
-            scene.engine.ensure_accum(width, height);
-        }
         let post_group = bind_group(
             &self.core,
             &self.core.layout_post,
@@ -930,9 +1063,14 @@ impl Renderer {
         };
         let compute_encoder = self.core.device.create_command_encoder();
         let encoder = self.core.device.create_command_encoder();
-        let drawing = self.prepare_splats(&compute_encoder, frame, scene, size);
+        let measuring = self.timing.is_some()
+            && self.splat.is_some()
+            && self.frames_seen.is_multiple_of(20)
+            && !self.readback_busy.get();
+        let drawing = self.prepare_splats(&compute_encoder, frame, scene, size, measuring);
+        let measuring = measuring && drawing;
         let pass = if drawing {
-            self.splat_passes(&encoder, &scene_view, &depth_view)
+            self.splat_passes(&encoder, &scene_view, &depth_view, measuring)
         } else {
             let pass = encoder.begin_render_pass(
                 &Descriptor::new()
@@ -982,8 +1120,9 @@ impl Renderer {
         if decal_count > 0 {
             pass.set_pipeline(&self.pipelines.decal);
             pass.set_bind_group(0, &self.frame_group);
+            pass.set_bind_group(1, &self.terrain_group);
             pass.set_vertex_buffer(0, &self.decal_buffer, 0.0, (decals.len() * 4) as f64);
-            pass.draw(6, decal_count as u32, 0, 0);
+            pass.draw(DECAL_VERTICES, decal_count as u32, 0, 0);
         }
         pass.set_pipeline(&self.pipelines.figure);
         pass.set_bind_group(0, &self.frame_group);
@@ -996,8 +1135,12 @@ impl Renderer {
         pass.end();
 
         let output = self.core.context.current_texture();
+        let mut post_descriptor = Descriptor::new();
+        if measuring {
+            post_descriptor = post_descriptor.with("timestampWrites", self.stamps(6));
+        }
         let post = encoder.begin_render_pass(
-            &Descriptor::new()
+            &post_descriptor
                 .with(
                     "colorAttachments",
                     array([Descriptor::new()
@@ -1017,11 +1160,13 @@ impl Renderer {
                 )
                 .build(),
         );
-        post.set_pipeline(&self.pipelines.post);
-        post.set_bind_group(0, &post_group);
-        post.draw(3, 1, 0, 0);
+        if self.debug_switches & 4 == 0 {
+            post.set_pipeline(&self.pipelines.post);
+            post.set_bind_group(0, &post_group);
+            post.draw(3, 1, 0, 0);
+        }
         post.end();
-        self.submit_frame(compute_encoder, encoder, drawing);
+        self.submit_frame(compute_encoder, encoder, drawing, measuring);
         self.stats.scale = self.quality.render_scale;
         self.stats.budget = self.quality.splat_budget;
         self.stats.min_contribution = self.quality.min_contribution;
@@ -1041,8 +1186,10 @@ impl Renderer {
         frame: &FrameView<'_>,
         scene: &BattleScene,
         size: (u32, u32),
+        measuring: bool,
     ) -> bool {
         let quality = self.quality;
+        let stamps = measuring.then(|| self.stamps(0));
         let Some(splats) = &mut self.splat else {
             return false;
         };
@@ -1058,13 +1205,17 @@ impl Renderer {
         let layer = &splats.layer;
         let grade = layer.grade;
         let centre = scene.grid.centre();
-        let focal_px = 0.5 * size.1 as f32 / (pose.fov_deg.to_radians() * 0.5).tan();
+        let lo = (
+            ((size.0 as f32 * quality.splat_scale) as u32).max(160),
+            ((size.1 as f32 * quality.splat_scale) as u32).max(90),
+        );
+        let focal_px = 0.5 * lo.1 as f32 / (pose.fov_deg.to_radians() * 0.5).tan();
         let params = FrameParams {
             view: view.0,
             view_proj: view_proj.0,
             eye: [eye.x, eye.y, eye.z],
             sort_range_m: 900.0,
-            viewport: (size.0 as f32, size.1 as f32),
+            viewport: (lo.0 as f32, lo.1 as f32),
             focal_px,
             near_cull_m: 0.2,
             min_extent_px: 1.0,
@@ -1078,6 +1229,11 @@ impl Renderer {
             projection_m10: projection.0[10],
             projection_m14: projection.0[14],
             depth_bias_m: layer.depth_bias_m,
+            sky: grade.sky,
+            clip: layer.clip.map_or([0.0; 4], |(height, radius)| {
+                [height, radius * radius, centre.x, centre.z]
+            }),
+            full_size: (size.0 as f32, size.1 as f32),
         };
         let turn = crate::battle::splat::SplatTransform {
             scale: layer.scale,
@@ -1091,22 +1247,32 @@ impl Renderer {
         let placement = [
             turn.x, turn.y, turn.z, turn.w, shift.x, shift.y, shift.z, layer.scale,
         ];
-        splats.engine.prepare(encoder, &params, placement)
+        splats.engine.prepare(encoder, &params, placement, stamps)
     }
 
     /// The two passes of a splat frame: the scan into colour plus accumulated depth, then a pass
     /// that resolves that depth into the depth buffer and stays open for tiles and figures.
+    /// A `timestampWrites` descriptor writing stamps `first` and `first + 1`.
+    fn stamps(&self, first: u32) -> JsValue {
+        let set = self.timing.as_ref().map(|timing| timing.set.clone());
+        Descriptor::new()
+            .with("querySet", set.map_or(JsValue::NULL, JsValue::from))
+            .with("beginningOfPassWriteIndex", first)
+            .with("endOfPassWriteIndex", first + 1)
+            .build()
+    }
+
     fn splat_passes(
         &self,
         encoder: &super::sys::GpuCommandEncoder,
         scene_view: &super::sys::GpuTextureView,
         depth_view: &super::sys::GpuTextureView,
+        measuring: bool,
     ) -> GpuRenderPass {
         let Some(splats) = &self.splat else {
             return encoder.begin_render_pass(&Descriptor::new().build());
         };
-        let sky = splats.layer.grade.sky;
-        let accum_view = splats.engine.accum_view();
+        let views = splats.engine.target_views();
         let clear = |r: f32, g: f32, b: f32, a: f32| {
             Descriptor::new()
                 .with("r", r)
@@ -1115,38 +1281,41 @@ impl Renderer {
                 .with("a", a)
                 .build()
         };
-        let mut attachments = vec![
-            Descriptor::new()
-                .with("view", scene_view.clone())
-                .with("clearValue", clear(sky[0], sky[1], sky[2], 1.0))
-                .with("loadOp", "clear")
-                .with("storeOp", "store")
-                .build(),
-        ];
-        if let Some(view) = accum_view {
-            attachments.push(
-                Descriptor::new()
-                    .with("view", view)
-                    .with("clearValue", clear(0.0, 0.0, 0.0, 0.0))
-                    .with("loadOp", "clear")
-                    .with("storeOp", "store")
-                    .build(),
-            );
+        let attachments: Vec<JsValue> = match views {
+            Some((colour_view, accum_view)) => [colour_view, accum_view]
+                .into_iter()
+                .map(|view| {
+                    Descriptor::new()
+                        .with("view", view)
+                        .with("clearValue", clear(0.0, 0.0, 0.0, 0.0))
+                        .with("loadOp", "clear")
+                        .with("storeOp", "store")
+                        .build()
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let mut scan_descriptor = Descriptor::new().with("colorAttachments", array(attachments));
+        if measuring {
+            scan_descriptor = scan_descriptor.with("timestampWrites", self.stamps(2));
         }
-        let scan = encoder.begin_render_pass(
-            &Descriptor::new()
-                .with("colorAttachments", array(attachments))
-                .build(),
-        );
-        splats.engine.draw(&scan);
+        let scan = encoder.begin_render_pass(&scan_descriptor.build());
+        if self.debug_switches & 2 == 0 {
+            splats.engine.draw(&scan);
+        }
         scan.end();
+        let mut overlay_descriptor = Descriptor::new();
+        if measuring {
+            overlay_descriptor = overlay_descriptor.with("timestampWrites", self.stamps(4));
+        }
         let pass = encoder.begin_render_pass(
-            &Descriptor::new()
+            &overlay_descriptor
                 .with(
                     "colorAttachments",
                     array([Descriptor::new()
                         .with("view", scene_view.clone())
-                        .with("loadOp", "load")
+                        .with("clearValue", clear(0.0, 0.0, 0.0, 1.0))
+                        .with("loadOp", "clear")
                         .with("storeOp", "store")
                         .build()]),
                 )
@@ -1161,65 +1330,65 @@ impl Renderer {
                 )
                 .build(),
         );
-        splats.engine.resolve(&pass);
+        if self.debug_switches & 1 == 0 {
+            splats.engine.resolve(&pass);
+        }
         pass
     }
 
-    /// Submits the frame. Every so often the compute work goes in alone first so its
-    /// completion time can be measured, and the surviving splat count is read back.
+    /// Submits the frame. On a measured frame the pass timestamps are resolved and the number of
+    /// splats that survived culling is copied out; both are read back without blocking.
     fn submit_frame(
         &mut self,
         compute: super::sys::GpuCommandEncoder,
         render: super::sys::GpuCommandEncoder,
         drawing: bool,
+        measuring: bool,
     ) {
-        let measure = drawing && self.frames_seen.is_multiple_of(20) && !self.readback_busy.get();
-        if !measure {
+        let (Some(timing), true) = (&self.timing, measuring) else {
             self.core
                 .queue
                 .submit(&array([compute.finish().into(), render.finish().into()]));
             return;
-        }
-        if let Some(scene) = &self.splat {
-            scene
-                .engine
-                .copy_visible_count(&compute, &self.count_readback);
-        }
-        let now = || {
-            web_sys::window()
-                .and_then(|window| window.performance())
-                .map_or(0.0, |performance| performance.now())
         };
-        let start = now();
-        self.core.queue.submit(&array([compute.finish().into()]));
-        let sort_done = self.core.queue.on_submitted_work_done();
+        if let Some(scene) = &self.splat {
+            scene.engine.copy_visible_count(&compute, &self.count_readback);
+        }
+        render.resolve_query_set(&timing.set, 0, 8, &timing.resolve, 0.0);
+        render.copy_buffer_to_buffer(&timing.resolve, 0.0, &timing.read, 0.0, 64.0);
+        let _ = drawing;
+        self.core
+            .queue
+            .submit(&array([compute.finish().into(), render.finish().into()]));
         let measured = self.measured.clone();
         let busy = self.readback_busy.clone();
         busy.set(true);
-        let readback = self.count_readback.clone();
+        let read = timing.read.clone();
+        let count = self.count_readback.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = wasm_bindgen_futures::JsFuture::from(sort_done).await;
-            let sort_ms = (now() - start) as f32;
-            let mapped = wasm_bindgen_futures::JsFuture::from(readback.map_async(BUFFER_MAP_READ)).await;
-            if mapped.is_ok() {
-                let words = js_sys::Uint32Array::new(&readback.get_mapped_range());
-                measured.borrow_mut().visible = words.get_index(0);
-                readback.unmap();
+            let stamps = wasm_bindgen_futures::JsFuture::from(read.map_async(BUFFER_MAP_READ)).await;
+            if stamps.is_ok() {
+                let values = js_sys::BigUint64Array::new(&read.get_mapped_range());
+                let at = |index: u32| u64::from(values.get_index(index)) as f64;
+                let ms = |first: u32| ((at(first + 1) - at(first)) / 1.0e6).max(0.0) as f32;
+                let begin = (0..8).step_by(2).map(&at).fold(f64::MAX, f64::min);
+                let end = (1..8).step_by(2).map(&at).fold(0.0, f64::max);
+                let mut value = measured.borrow_mut();
+                let blend = |old: &mut f32, new: f32| *old += (new - *old) * 0.3;
+                blend(&mut value.sort_ms, ms(0));
+                blend(&mut value.splat_ms, ms(2));
+                blend(&mut value.overlay_ms, ms(4));
+                blend(&mut value.post_ms, ms(6));
+                blend(&mut value.gpu_ms, ((end - begin) / 1.0e6).max(0.0) as f32);
             }
-            let mut value = measured.borrow_mut();
-            value.sort_ms += (sort_ms - value.sort_ms) * 0.3;
-            drop(value);
+            read.unmap();
+            let counted = wasm_bindgen_futures::JsFuture::from(count.map_async(BUFFER_MAP_READ)).await;
+            if counted.is_ok() {
+                let words = js_sys::Uint32Array::new(&count.get_mapped_range());
+                measured.borrow_mut().visible = words.get_index(0);
+            }
+            count.unmap();
             busy.set(false);
-        });
-        let frame_start = now();
-        self.core.queue.submit(&array([render.finish().into()]));
-        let render_done = self.core.queue.on_submitted_work_done();
-        let measured = self.measured.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let _ = wasm_bindgen_futures::JsFuture::from(render_done).await;
-            let gpu_ms = (now() - frame_start) as f32;
-            let mut value = measured.borrow_mut();
-            value.gpu_ms += (gpu_ms - value.gpu_ms) * 0.3;
         });
     }
 }
@@ -1230,6 +1399,7 @@ impl Drop for Renderer {
             targets.scene.destroy_texture();
             targets.depth.destroy_texture();
         }
+        self.terrain_buffer.destroy_buffer();
         self.count_readback.destroy_buffer();
         self.splat.take();
     }

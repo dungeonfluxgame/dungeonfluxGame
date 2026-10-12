@@ -54,6 +54,34 @@ struct PreviewRequest {
     reduced_motion: bool,
     /// A splat scene served from `/assets/splat/` to use instead of the painted ground.
     splat_file: Option<(String, battle::SplatFormat)>,
+    /// `&hold`: stage the figures and stop (no scripted fight), for stills and fitting.
+    hold: bool,
+    /// `&fixed[&budget=N][&minc=X][&rscale=S]`: hold the frame ladder for benchmarks.
+    fixed: Option<battle::FixedQuality>,
+    /// `&orbit` (with `hold`): turn the camera slowly about its target, for checking sort stability.
+    orbit: bool,
+    /// `&shot=<camera name>`: cut to one of the scene's named cameras.
+    shot: Option<battle::ShotName>,
+    /// `&cam=tx,ty,tz,distance,yaw,pitch,fov`: cut to a free camera.
+    free_camera: Option<battle::CameraPose>,
+}
+
+fn free_camera(text: &str) -> Option<battle::CameraPose> {
+    let values: Vec<f32> = text
+        .split(',')
+        .map(|part| part.parse::<f32>().ok())
+        .collect::<Option<_>>()?;
+    let [tx, ty, tz, distance, yaw_deg, pitch_deg, fov_deg] = values[..] else {
+        return None;
+    };
+    let pose = battle::CameraPose {
+        target: battle::Vec3::new(tx, ty, tz),
+        distance,
+        yaw_deg,
+        pitch_deg,
+        fov_deg,
+    };
+    pose.validate().ok().map(|()| pose)
 }
 
 fn plain_name(name: &str) -> bool {
@@ -73,12 +101,82 @@ fn preview_request() -> Option<PreviewRequest> {
         procedural_splats: false,
         reduced_motion: battle::prefers_reduced_motion(),
         splat_file: None,
+        hold: false,
+        fixed: None,
+        orbit: false,
+        shot: None,
+        free_camera: None,
     };
     for part in rest.split('&') {
         match part.strip_prefix('=').unwrap_or(part) {
             "" => {}
             "splat" => request.procedural_splats = true,
             "reduced" => request.reduced_motion = true,
+            "hold" => request.hold = true,
+            "orbit" => request.orbit = true,
+            "fixed" => {
+                request.fixed.get_or_insert(battle::FixedQuality {
+                    splat_budget: None,
+                    min_contribution: None,
+                    render_scale: None,
+                    splat_scale: None,
+                    debug_switches: 0,
+                });
+            }
+            other if other.starts_with("budget=") => {
+                let fixed = request.fixed.get_or_insert(battle::FixedQuality {
+                    splat_budget: None,
+                    min_contribution: None,
+                    render_scale: None,
+                    splat_scale: None,
+                    debug_switches: 0,
+                });
+                fixed.splat_budget = other[7..].parse().ok();
+            }
+            other if other.starts_with("minc=") => {
+                let fixed = request.fixed.get_or_insert(battle::FixedQuality {
+                    splat_budget: None,
+                    min_contribution: None,
+                    render_scale: None,
+                    splat_scale: None,
+                    debug_switches: 0,
+                });
+                fixed.min_contribution = other[5..].parse().ok();
+            }
+            other if other.starts_with("dbg=") => {
+                let fixed = request.fixed.get_or_insert(battle::FixedQuality {
+                    splat_budget: None,
+                    min_contribution: None,
+                    render_scale: None,
+                    splat_scale: None,
+                    debug_switches: 0,
+                });
+                fixed.debug_switches = other[4..].parse().unwrap_or(0);
+            }
+            other if other.starts_with("sscale=") => {
+                let fixed = request.fixed.get_or_insert(battle::FixedQuality {
+                    splat_budget: None,
+                    min_contribution: None,
+                    render_scale: None,
+                    splat_scale: None,
+                    debug_switches: 0,
+                });
+                fixed.splat_scale = other[7..].parse().ok();
+            }
+            other if other.starts_with("rscale=") => {
+                let fixed = request.fixed.get_or_insert(battle::FixedQuality {
+                    splat_budget: None,
+                    min_contribution: None,
+                    render_scale: None,
+                    splat_scale: None,
+                    debug_switches: 0,
+                });
+                fixed.render_scale = other[7..].parse().ok();
+            }
+            other if other.starts_with("shot=") => {
+                request.shot = battle::ShotName::from_key(&other[5..]);
+            }
+            other if other.starts_with("cam=") => request.free_camera = free_camera(&other[4..]),
             other if other.starts_with("sog=") && plain_name(&other[4..]) => {
                 request.splat_file = Some((
                     format!("/assets/splat/{}/meta.json", &other[4..]),
@@ -206,6 +304,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             detail_radius_m: None,
             grade: battle::SplatGrade::NEUTRAL,
             depth_bias_m: 0.15,
+            clip: None,
         });
     }
     let tokens = match preview_tokens(&scene) {
@@ -218,6 +317,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
         StageOptions {
             reduced_motion: request.reduced_motion,
             procedural_splats: request.procedural_splats,
+            fixed_quality: request.fixed,
             ..StageOptions::default()
         },
     )
@@ -241,6 +341,12 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                     ]);
                     stage.set_round(1);
                     stage.establish();
+                    let named = request
+                        .shot
+                        .and_then(|shot| stage.scene().cameras.get(&shot).copied());
+                    if let Some(pose) = request.free_camera.or(named) {
+                        stage.set_camera_pose(pose);
+                    }
                 })
             })
         });
@@ -254,6 +360,33 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             return;
         }
         TimeoutFuture::new(3000).await;
+        if request.hold {
+            // Stills: the figures stand and the stage stays as it is (or orbits, when asked).
+            let base = PREVIEW.with(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .and_then(|stage| stage.with_stage(|stage| stage.camera_pose()))
+            });
+            let mut turned_deg = 0.0;
+            loop {
+                TimeoutFuture::new(if request.orbit { 16 } else { 1000 }).await;
+                if PREVIEW.with(|slot| slot.borrow().is_none()) {
+                    return;
+                }
+                if let (true, Some(base)) = (request.orbit, base) {
+                    turned_deg += 0.35;
+                    let pose = battle::CameraPose {
+                        yaw_deg: base.yaw_deg + turned_deg,
+                        ..base
+                    };
+                    PREVIEW.with(|slot| {
+                        if let Some(stage) = slot.borrow().as_ref() {
+                            stage.with_stage(|stage| stage.set_camera_pose(pose));
+                        }
+                    });
+                }
+            }
+        }
         for (round, beat) in preview_script() {
             let queued = PREVIEW.with(|slot| {
                 slot.borrow().as_ref().and_then(|stage| {
@@ -596,6 +729,7 @@ fn start_mount(client: &Rc<RefCell<Client>>, scene_id: &str) {
                 reduced_motion: battle::prefers_reduced_motion(),
                 procedural_splats: false,
                 fallback_layers,
+                fixed_quality: None,
             },
         )
         .await;

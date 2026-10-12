@@ -27,6 +27,8 @@ struct U {
     tint: vec4<f32>,      // rgb tint
     pool: vec4<f32>,      // lit pool centre x, z
     depth: vec4<f32>,     // projection m10, m14, depth bias metres, resolve alpha threshold
+    sky: vec4<f32>,       // sky colour behind the scan (rgb)
+    clip: vec4<f32>,      // cut height, cut radius squared, centre x, centre z (radius 0: no cut)
 }
 "#;
 
@@ -50,6 +52,12 @@ fn project_splat(i: u32, out: ptr<function, array<u32, 8>>, key: ptr<function, u
     let vc = (u.view * vec4<f32>(pos, 1.0)).xyz;
     if (vc.z > -u.viewport.w) {
         return false;
+    }
+    if (u.clip.y > 0.0 && pos.y > u.clip.x) {
+        let from_centre = pos.xz - u.clip.zw;
+        if (dot(from_centre, from_centre) < u.clip.y) {
+            return false;
+        }
     }
     let rgba = unpack4x8unorm(records[b + 3u]);
     let opacity = rgba.a;
@@ -111,8 +119,11 @@ fn project_splat(i: u32, out: ptr<function, array<u32, 8>>, key: ptr<function, u
     let radius = length(vec2<f32>(0.5 * (a - c), bb));
     let l1 = mid + radius;
     let l2 = max(mid - radius, 0.1);
-    let e1 = 2.0 * sqrt(2.0 * l1);
-    let e2 = 2.0 * sqrt(2.0 * l2);
+    // Quad half-extent in standard deviations: where opacity times the Gaussian falls below one
+    // 8-bit step (at most 2.83, PlayCanvas's fixed cutoff). Faint splats get smaller quads.
+    let k = clamp(sqrt(2.0 * log(max(255.0 * opacity, 1.001))), 1.0, 2.8284271);
+    let e1 = k * sqrt(l1);
+    let e2 = k * sqrt(l2);
     if (max(e1, e2) < u.limits.x) {
         return false;
     }
@@ -145,7 +156,7 @@ fn project_splat(i: u32, out: ptr<function, array<u32, 8>>, key: ptr<function, u
     (*out)[4] = pack2x16float(v2);
     (*out)[5] = pack2x16float(col.rg);
     (*out)[6] = pack2x16float(vec2<f32>(col.b, opacity * aa));
-    (*out)[7] = 0u;
+    (*out)[7] = bitcast<u32>(0.5 * k * k);
     // Far splats get small keys, so ascending key order is back to front. The square root gives
     // the finest steps near the camera (PlayCanvas weights its sort bins the same way).
     let t = clamp(depth / u.eye.w, 0.0, 1.0);
@@ -236,6 +247,7 @@ struct VOut {
     @location(0) uv: vec2<f32>,
     @location(1) colour: vec4<f32>,
     @location(2) @interpolate(flat) depth: f32,
+    @location(3) @interpolate(flat) falloff: f32,
 }
 
 @vertex
@@ -255,6 +267,7 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
     out.uv = corner;
     out.colour = vec4<f32>(rg, ba);
     out.depth = bitcast<f32>(cache[b + 2u]);
+    out.falloff = bitcast<f32>(cache[b + 7u]);
     return out;
 }
 
@@ -263,16 +276,16 @@ struct FOut {
     @location(1) depth: vec4<f32>,
 }
 
-const EXP4: f32 = 0.018315639;
-
 @fragment
 fn fs(in: VOut) -> FOut {
     let a = dot(in.uv, in.uv);
     if (a > 1.0) {
         discard;
     }
-    // Falloff that reaches exactly zero at the quad's edge (PlayCanvas normExp).
-    let alpha = (exp(-4.0 * a) - EXP4) / (1.0 - EXP4) * in.colour.a;
+    // Falloff that reaches exactly zero at the quad's edge (PlayCanvas normExp, with this splat's
+    // own cutoff in place of their fixed one).
+    let edge = exp(-in.falloff);
+    let alpha = (exp(-in.falloff * a) - edge) / (1.0 - edge) * in.colour.a;
     if (alpha < 0.0039) {
         discard;
     }
@@ -284,9 +297,11 @@ fn fs(in: VOut) -> FOut {
 }
 "#;
 
-const RESOLVE: &str = r#"
+const COMPOSITE: &str = r#"
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var accum: texture_2d<f32>;
+@group(0) @binding(2) var splat_colour: texture_2d<f32>;
+@group(0) @binding(3) var smp: sampler;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -295,20 +310,28 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
 }
 
 struct FOut {
+    @location(0) colour: vec4<f32>,
     @builtin(frag_depth) depth: f32,
 }
 
-// Writes the scan's own depth into the depth buffer where the splats are opaque enough to be a
-// surface, pushed back by the scene's bias so figures standing in grass are not shaved off.
+// Puts the scan into the full-resolution scene: its colour over the sky (the scan may have been
+// drawn at a lower resolution), and its own depth into the depth buffer where the splats are
+// opaque enough to be a surface, pushed back by the scene's bias so figures standing in grass
+// are not shaved off.
 @fragment
 fn fs(@builtin(position) p: vec4<f32>) -> FOut {
-    let t = textureLoad(accum, vec2<i32>(p.xy), 0);
-    if (t.g < u.depth.w) {
-        discard;
-    }
-    let d = max(t.r / t.g - u.depth.z, u.viewport.w);
+    let uv = p.xy * u.pool.zw;
+    let lo = textureSampleLevel(splat_colour, smp, uv, 0.0);
     var out: FOut;
-    out.depth = clamp(-u.depth.x + u.depth.y / d, 0.0, 1.0);
+    out.colour = vec4<f32>(lo.rgb + u.sky.rgb * (1.0 - lo.a), 1.0);
+    let size = vec2<f32>(textureDimensions(accum));
+    let t = textureLoad(accum, vec2<i32>(min(uv * size, size - vec2<f32>(1.0))), 0);
+    if (t.g < u.depth.w) {
+        out.depth = 1.0;
+    } else {
+        let d = max(t.r / t.g - u.depth.z, u.viewport.w);
+        out.depth = clamp(-u.depth.x + u.depth.y / d, 0.0, 1.0);
+    }
     return out;
 }
 "#;
@@ -431,8 +454,8 @@ pub fn draw() -> String {
     format!("{COMMON}{DRAW}")
 }
 
-pub fn resolve() -> String {
-    format!("{COMMON}{RESOLVE}")
+pub fn composite() -> String {
+    format!("{COMMON}{COMPOSITE}")
 }
 
 pub fn decode() -> String {

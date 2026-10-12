@@ -189,7 +189,9 @@ fn quantiser(
     version: u32,
 ) -> Result<(Quantiser, Vec<String>), SplatError> {
     let quantiser = match (version, source.codebook, source.mins, source.maxs) {
-        (2.., Some(codebook), _, _) if codebook.len() == 256 => Quantiser::Codebook(codebook),
+        (2.., Some(codebook), _, _) if (1..=256).contains(&codebook.len()) => {
+            Quantiser::Codebook(codebook)
+        }
         (_, None, Some(mins), Some(maxs)) => Quantiser::Range(mins, maxs),
         _ => return Err(SplatError::MetaInvalid("quantiser")),
     };
@@ -202,11 +204,16 @@ impl SogMeta {
         self.means
     }
 
-    /// The 256-entry scale and colour codebooks of a version 2 file; `None` for version 1, whose
+    /// The scale and colour codebooks of a version 2 file, padded to 256 entries; `None` for version 1, whose
     /// min/max quantisation the GPU decoder does not implement.
     pub fn codebooks(&self) -> Option<([f32; 256], [f32; 256])> {
+        // A small chunk may have fewer than 256 distinct values; the rest of the table is unused.
         let table = |quantiser: &Quantiser| match quantiser {
-            Quantiser::Codebook(values) => <[f32; 256]>::try_from(values.as_slice()).ok(),
+            Quantiser::Codebook(values) => {
+                let mut padded = [0.0f32; 256];
+                padded.get_mut(..values.len())?.copy_from_slice(values);
+                Some(padded)
+            }
             Quantiser::Range(..) => None,
         };
         Some((table(&self.scales)?, table(&self.colours)?))

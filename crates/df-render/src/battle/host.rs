@@ -53,6 +53,18 @@ pub struct StageOptions {
     /// (files missing, decode failure, or a frame budget that cannot be met). Without it the
     /// scene's own painted layers stay.
     pub fallback_layers: Option<(GroundLayer, BackdropLayer)>,
+    /// Measurement overrides: freeze the frame ladder at these values.
+    pub fixed_quality: Option<FixedQuality>,
+}
+
+/// Quality held constant for benchmarks (`#battle-preview=...&fixed&budget=..&minc=..&rscale=..`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FixedQuality {
+    pub splat_budget: Option<u32>,
+    pub min_contribution: Option<f32>,
+    pub render_scale: Option<f32>,
+    pub splat_scale: Option<f32>,
+    pub debug_switches: u32,
 }
 
 struct Inner {
@@ -177,6 +189,7 @@ impl BattleStage {
                 detail_radius_m: None,
                 grade: SplatGrade::NEUTRAL,
                 depth_bias_m: 0.15,
+                clip: None,
             })
         } else {
             scene.splat.clone()
@@ -197,6 +210,16 @@ impl BattleStage {
                 return stage;
             }
         };
+        let mut renderer = renderer;
+        if let Some(fixed) = options.fixed_quality {
+            renderer.debug_switches = fixed.debug_switches;
+            renderer.freeze_quality(
+                fixed.splat_budget,
+                fixed.min_contribution,
+                fixed.render_scale,
+                fixed.splat_scale,
+            );
+        }
         let hud = match Hud::mount(&document, &container, &scene.title) {
             Ok(hud) => hud,
             Err(_) => {
@@ -380,14 +403,18 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     if state.frames.is_multiple_of(state.stats_every) {
         let stats = renderer.stats();
         let summary = format!(
-            "ms={delta_ms:.1} gpu_ms={:.1} sort_ms={:.1} visible={} planned={} budget={} min_contribution={:.2} scale={:.2} frames={}",
+            "ms={delta_ms:.1} gpu_ms={:.1} sort_ms={:.2} splat_ms={:.2} overlay_ms={:.2} post_ms={:.2} visible={} planned={} budget={} min_contribution={:.2} scale={:.2} splat_scale={:.2} frames={}",
             stats.gpu_ms,
             stats.sort_ms,
+            stats.splat_ms,
+            stats.overlay_ms,
+            stats.post_ms,
             stats.splats_visible,
             stats.splats_planned,
             stats.budget,
             stats.min_contribution,
             stats.scale,
+            stats.splat_scale,
             state.frames
         );
         let _ = state.host.set_attribute("data-battlefield-stats", &summary);

@@ -169,6 +169,20 @@ pub fn estimate_height_field(
     rows: u32,
     settings: &GroundSettings,
 ) -> Result<HeightField, TerrainError> {
+    estimate_height_field_covered(points, origin, step_m, cols, rows, settings).map(|(field, _)| field)
+}
+
+/// As [`estimate_height_field`], also returning the share of lattice points (0..1) whose height
+/// was measured from splats rather than filled in from neighbours: a window with little coverage
+/// is not a place the scan actually shows.
+pub fn estimate_height_field_covered(
+    points: &[GroundPoint],
+    origin: [f32; 2],
+    step_m: f32,
+    cols: u32,
+    rows: u32,
+    settings: &GroundSettings,
+) -> Result<(HeightField, f32), TerrainError> {
     let blank = HeightField::new(origin, step_m, cols, rows, vec![0.0; cols as usize * rows as usize])?;
     let (cols, rows) = (cols as usize, rows as usize);
     let mut windows: Vec<Vec<f32>> = vec![Vec::new(); cols * rows];
@@ -191,12 +205,14 @@ pub fn estimate_height_field(
     if field.iter().all(Option::is_none) {
         return Err(TerrainError::NoGround);
     }
+    let coverage = field.iter().filter(|h| h.is_some()).count() as f32 / field.len() as f32;
     fill_holes(&mut field, cols, rows);
     let mut heights: Vec<f32> = field.into_iter().map(|h| h.unwrap_or(0.0)).collect();
     for _ in 0..settings.smoothing {
         heights = smoothed(&heights, cols, rows);
     }
     HeightField::new(blank.origin, step_m, cols as u32, rows as u32, heights)
+        .map(|field| (field, coverage))
 }
 
 fn fill_holes(field: &mut [Option<f32>], cols: usize, rows: usize) {
@@ -275,9 +291,36 @@ impl Default for WalkSettings {
             knee_m: 0.5,
             head_m: 1.6,
             minimum_opacity: 0.5,
-            blockers_per_m2: 40.0,
+            blockers_per_m2: 250.0,
         }
     }
+}
+
+/// Opaque splats standing between knee and head height, per square metre, for every cell of a
+/// grid (row by row): what [`blocked_cells`] compares with its threshold.
+pub fn blocker_density(
+    field: &HeightField,
+    points: &[GroundPoint],
+    origin: [f32; 2],
+    cell_m: f32,
+    cols: u32,
+    rows: u32,
+    settings: &WalkSettings,
+) -> Vec<f32> {
+    let mut counts = vec![0u32; cols as usize * rows as usize];
+    for point in points.iter().filter(|p| p.opacity >= settings.minimum_opacity) {
+        let col = ((point.position.x - origin[0]) / cell_m).floor();
+        let row = ((point.position.z - origin[1]) / cell_m).floor();
+        if col < 0.0 || row < 0.0 || col >= cols as f32 || row >= rows as f32 {
+            continue;
+        }
+        let above = point.position.y - field.height_at(point.position.x, point.position.z);
+        if above > settings.knee_m && above < settings.head_m {
+            counts[row as usize * cols as usize + col as usize] += 1;
+        }
+    }
+    let area = cell_m * cell_m;
+    counts.into_iter().map(|count| count as f32 / area).collect()
 }
 
 /// Cells (`[col, row]`) of a grid that a figure cannot stand in, judged from the ground height
@@ -291,26 +334,14 @@ pub fn blocked_cells(
     rows: u32,
     settings: &WalkSettings,
 ) -> Vec<[i32; 2]> {
-    let mut blockers = vec![0u32; cols as usize * rows as usize];
-    for point in points.iter().filter(|p| p.opacity >= settings.minimum_opacity) {
-        let col = ((point.position.x - origin[0]) / cell_m).floor();
-        let row = ((point.position.z - origin[1]) / cell_m).floor();
-        if col < 0.0 || row < 0.0 || col >= cols as f32 || row >= rows as f32 {
-            continue;
-        }
-        let above = point.position.y - field.height_at(point.position.x, point.position.z);
-        if above > settings.knee_m && above < settings.head_m {
-            blockers[row as usize * cols as usize + col as usize] += 1;
-        }
-    }
-    let threshold = settings.blockers_per_m2 * cell_m * cell_m;
+    let density = blocker_density(field, points, origin, cell_m, cols, rows, settings);
     let mut blocked = Vec::new();
     for row in 0..rows as i32 {
         for col in 0..cols as i32 {
             let min = [origin[0] + col as f32 * cell_m, origin[1] + row as f32 * cell_m];
             let relief = field.relief_in(min, [min[0] + cell_m, min[1] + cell_m]);
-            let count = blockers[row as usize * cols as usize + col as usize];
-            if relief > settings.maximum_relief_m || count as f32 >= threshold {
+            let per_m2 = density[row as usize * cols as usize + col as usize];
+            if relief > settings.maximum_relief_m || per_m2 >= settings.blockers_per_m2 {
                 blocked.push([col, row]);
             }
         }
@@ -430,5 +461,26 @@ mod tests {
         assert!(blocked.contains(&[2, 0]), "the cliff cell: {blocked:?}");
         assert!(!blocked.contains(&[0, 0]));
         assert!(!blocked.contains(&[3, 3]));
+    }
+
+    #[test]
+    fn coverage_reports_how_much_of_the_field_was_measured() {
+        let points: Vec<_> = (0..4000)
+            .map(|i| point((i % 40) as f32 * 0.05, 1.0, (i / 40) as f32 * 0.02))
+            .collect();
+        let (_, covered) =
+            estimate_height_field_covered(&points, [0.0, 0.0], 0.5, 12, 12, &GroundSettings::default())
+                .unwrap();
+        assert!(covered > 0.05 && covered < 0.4, "only the corner has splats: {covered}");
+        let (_, full) = estimate_height_field_covered(
+            &scene(),
+            [0.0, 0.0],
+            0.5,
+            21,
+            21,
+            &GroundSettings::default(),
+        )
+        .unwrap();
+        assert!(full > 0.9, "dense ground is measured everywhere: {full}");
     }
 }

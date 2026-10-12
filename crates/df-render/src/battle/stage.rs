@@ -227,6 +227,11 @@ impl Stage {
     }
 
     /// Opens on the wide tactical shot and eases to the combat establishing shot.
+    /// Cuts straight to `pose` (used by the preview to look at a scene from any angle).
+    pub fn set_camera_pose(&mut self, pose: CameraPose) {
+        self.rig.cut_to(pose);
+    }
+
     pub fn establish(&mut self) {
         if let Some(wide) = self.scene.cameras.get(&ShotName::Tactical) {
             self.rig.cut_to(*wide);

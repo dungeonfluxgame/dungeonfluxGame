@@ -54,12 +54,13 @@ pub use splat::{
 };
 pub use stage::{FigureView, FlashView, FrameView, Stage, StageError};
 pub use terrain::{
-    GroundPoint, GroundSettings, HeightField, TerrainError, WalkSettings, blocked_cells,
-    estimate_height_field,
+    GroundPoint, GroundSettings, HeightField, TerrainError, WalkSettings, blocked_cells, blocker_density,
+    estimate_height_field, estimate_height_field_covered,
 };
 pub use theme::{ColorGrade, Theme};
 
 #[cfg(target_arch = "wasm32")]
 pub use host::{
-    Availability, BattleStage, StageOptions, UnavailableReason, prefers_reduced_motion,
+    Availability, BattleStage, FixedQuality, StageOptions, UnavailableReason,
+    prefers_reduced_motion,
 };

@@ -188,6 +188,19 @@ struct FileSplat {
     /// How far behind the splat surface figures and grid tiles may sink before being hidden.
     #[serde(default)]
     depth_bias_m: Option<f32>,
+    /// Cuts the scan above a height near the fight, like a ceiling cut-away, so a forest canopy
+    /// does not fill the view of the arena.
+    #[serde(default)]
+    clip: Option<FileClip>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileClip {
+    /// World height above which splats are not drawn.
+    above_m: f32,
+    /// Only within this horizontal distance of the grid centre (distant hills stay).
+    radius_m: f32,
 }
 
 fn one() -> f32 {
@@ -287,6 +300,8 @@ pub struct SplatLayer {
     pub detail_radius_m: Option<f32>,
     pub grade: SplatGrade,
     pub depth_bias_m: f32,
+    /// `(height, radius)`: splats above `height` within `radius` of the grid centre are not drawn.
+    pub clip: Option<(f32, f32)>,
 }
 
 /// Where a scene may be shown from: `PrivateTestOnly` scans have no licence and are used only
@@ -508,6 +523,13 @@ fn validate_splat(splat: FileSplat) -> Result<SplatLayer, SceneFileError> {
     {
         return Err(SceneFileError::Splat("detail radius or depth bias"));
     }
+    let clip = match splat.clip {
+        Some(clip) if clip.above_m.is_finite() && positive(clip.radius_m, 500.0) => {
+            Some((clip.above_m, clip.radius_m))
+        }
+        Some(_) => return Err(SceneFileError::Splat("clip")),
+        None => None,
+    };
     let grade = splat
         .grade
         .map(resolve_grade)
@@ -526,6 +548,7 @@ fn validate_splat(splat: FileSplat) -> Result<SplatLayer, SceneFileError> {
         detail_radius_m: splat.detail_radius_m,
         grade,
         depth_bias_m: splat.depth_bias_m.unwrap_or(0.15),
+        clip,
     })
 }
 
@@ -574,6 +597,10 @@ embedded!(
     "thistledown-farm",
     "orrery-library",
     "harbor-journey",
+    "scan-riverbed",
+    "scan-village",
+    "scan-valley-bridges",
+    "scan-summit",
 );
 
 /// The scene a display shows when a location has no description of its own.
@@ -617,7 +644,7 @@ mod tests {
             assert!(scene.grid.walkable_cells().count() >= 12, "{id}");
             assert!(scene.ground.stem.starts_with("ground-"));
         }
-        assert_eq!(embedded_ids().count(), 9);
+        assert_eq!(embedded_ids().count(), 13);
     }
 
     #[test]

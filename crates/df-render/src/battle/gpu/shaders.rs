@@ -97,6 +97,26 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 "#;
 
 const DECAL: &str = r#"
+// Ground height under the grid: [origin x, origin z, step, columns, rows, 0, 0, 0, heights...].
+@group(1) @binding(0) var<storage, read> terrain: array<f32>;
+
+fn ground_y(x: f32, z: f32) -> f32 {
+    let step = terrain[2];
+    let cols = i32(terrain[3]);
+    let rows = i32(terrain[4]);
+    let u = clamp((x - terrain[0]) / step, 0.0, f32(cols - 1));
+    let v = clamp((z - terrain[1]) / step, 0.0, f32(rows - 1));
+    let c = min(i32(floor(u)), cols - 2);
+    let r = min(i32(floor(v)), rows - 2);
+    let fx = u - f32(c);
+    let fz = v - f32(r);
+    let base = 8 + r * cols + c;
+    return mix(
+        mix(terrain[base], terrain[base + 1], fx),
+        mix(terrain[base + cols], terrain[base + cols + 1], fx),
+        fz);
+}
+
 struct VOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) c: vec2<f32>,
@@ -111,12 +131,17 @@ fn vs(
     @location(1) col: vec4<f32>,
     @location(2) params: vec4<f32>,  // kind, glow, active, unused
 ) -> VOut {
+    // Each decal is a 6 by 6 patch of quads so it follows uneven ground.
     var corners = array<vec2<f32>, 6>(
-        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
-        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0));
-    let c = corners[i];
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
+    let quad = i / 6u;
+    let cell = vec2<f32>(f32(quad % 6u), f32(quad / 6u));
+    let c = (cell + corners[i % 6u]) / 3.0 - vec2<f32>(1.0);
+    let x = shape.x + c.x * shape.z;
+    let z = shape.y + c.y * shape.w;
     var out: VOut;
-    out.pos = frame.view_proj * vec4<f32>(shape.x + c.x * shape.z, 0.012, shape.y + c.y * shape.w, 1.0);
+    out.pos = frame.view_proj * vec4<f32>(x, ground_y(x, z) + 0.012, z, 1.0);
     out.c = c;
     out.col = col;
     out.params = params;

@@ -45,13 +45,22 @@ pub fn decode_webp(path: &Path) -> Option<(Vec<u8>, usize, usize)> {
     let width = word(18)? as i32;
     let height = word(22)? as i32;
     let (width, rows, top_down) = (width as usize, height.unsigned_abs() as usize, height < 0);
-    let pixels = bytes.get(offset..offset + width * rows * 4)?;
-    let mut rgba = Vec::with_capacity(pixels.len());
+    // Planes without an alpha channel come out as 24-bit BMP, rows padded to four bytes.
+    let bits = u16::from_le_bytes(bytes.get(28..30)?.try_into().ok()?);
+    let bytes_per_pixel = match bits {
+        32 => 4,
+        24 => 3,
+        _ => return None,
+    };
+    let stride = (width * bytes_per_pixel).next_multiple_of(4);
+    let pixels = bytes.get(offset..offset + stride * rows)?;
+    let mut rgba = Vec::with_capacity(width * rows * 4);
     for row in 0..rows {
         let source = if top_down { row } else { rows - 1 - row };
-        for pixel in pixels[source * width * 4..(source + 1) * width * 4].chunks_exact(4) {
-            // BMP stores BGRA.
-            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        for pixel in pixels[source * stride..source * stride + width * bytes_per_pixel].chunks_exact(bytes_per_pixel) {
+            // BMP stores BGR(A).
+            let alpha = if bytes_per_pixel == 4 { pixel[3] } else { 255 };
+            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], alpha]);
         }
     }
     Some((rgba, width, rows))
