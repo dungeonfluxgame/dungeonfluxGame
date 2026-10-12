@@ -1070,3 +1070,59 @@ fn generated_packs_carry_secret_terms_and_a_profile_for_every_shown_speaker() {
     assert!(record.contains("\"secret_terms\""));
     assert!(record.contains("\"speakers\""));
 }
+
+#[test]
+fn dossiers_are_stored_with_the_adventure_and_an_adventure_saved_without_them_still_loads() {
+    use sha2::{Digest, Sha256};
+    let generated = generate(
+        &tables(),
+        42,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+    assert!(
+        generated
+            .rolls
+            .iter()
+            .all(|roll| !roll.table.starts_with("dossier.")),
+        "dossier rolls never enter the adventure's own record of dice"
+    );
+    assert_eq!(
+        generated
+            .dossiers
+            .iter()
+            .map(|d| d.npc_id.split(':').next().unwrap())
+            .collect::<Vec<_>>()[..2],
+        ["patron", "contact"]
+    );
+    let mut documents = generated.documents(true).unwrap();
+    let (_, stored) = record::reload(&documents).unwrap();
+    assert_eq!(stored.dossiers, generated.dossiers);
+
+    let mut value: serde_json::Value = serde_json::from_slice(&documents.record).unwrap();
+    value.as_object_mut().unwrap().remove("dossiers");
+    documents.record = serde_json::to_vec_pretty(&value).unwrap();
+    let (loaded, old) = record::reload(&documents).unwrap();
+    assert!(old.dossiers.is_empty());
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&documents.pack)),
+        format!(
+            "{:x}",
+            Sha256::digest(&generated.documents(true).unwrap().pack)
+        ),
+        "the pack bytes do not depend on dossiers"
+    );
+    assert!(!loaded.pack.scenes.is_empty());
+
+    // A tampered dossier that would say a secret is refused like any tampered document.
+    let mut tampered: serde_json::Value = serde_json::from_slice(&documents.record).unwrap();
+    let mut dossier = serde_json::to_value(&generated.dossiers[0]).unwrap();
+    dossier["knowledge"]["says_freely"][0]["text"] = generated.dossiers[0].knowledge.never_says[0]
+        .terms[0]
+        .clone()
+        .into();
+    tampered["dossiers"] = serde_json::json!([dossier]);
+    documents.record = serde_json::to_vec_pretty(&tampered).unwrap();
+    assert!(record::reload(&documents).is_err());
+}

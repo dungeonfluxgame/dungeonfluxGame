@@ -16,7 +16,7 @@ use tokio::sync::watch;
 /// How many of the latest lines a view carries.
 pub(super) const RING_LINES: usize = 24;
 /// Longest text of one line, in characters.
-pub(super) const LINE_CHARACTERS: usize = 160;
+pub(super) const LINE_CHARACTERS: usize = 420;
 
 struct Ring {
     next_sequence: u64,
@@ -254,7 +254,7 @@ mod tests {
         let log = TableLog::new();
 
         speech(&log, "  hello\u{0}\nthere\t friend ");
-        speech(&log, &"x".repeat(400));
+        speech(&log, &"x".repeat(LINE_CHARACTERS + 40));
         speech(&log, " \n ");
 
         let lines = log.lines();

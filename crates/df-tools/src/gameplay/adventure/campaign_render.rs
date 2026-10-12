@@ -657,6 +657,18 @@ pub(crate) fn generate_chapter(
             }
         }
     }
+    // The chapter generator rolled dossiers before this overlay renamed the antagonist and
+    // replaced the secret; roll them again from the facts the party will actually play, naming
+    // only what the campaign already makes public.
+    generated.dossiers = super::dossier_cast::roll_for(
+        &tables.chapter,
+        &generated,
+        &super::dossier_cast::PublicStory {
+            villain: Some(format!("the {}", frame.villain.title)),
+            faction: frame.factions.first().map(|f| f.faction.name.clone()),
+            extra_secret_terms: vec![private.text.clone(), frame.villain.name.clone()],
+        },
+    )?;
     let pack = serde_json::to_vec(&generated.pack).map_err(|_| CampaignError::Serialization)?;
     let tuning = serde_json::to_vec(&generated.tuning).map_err(|_| CampaignError::Serialization)?;
     pack::load_from_bytes(&pack, &tuning)

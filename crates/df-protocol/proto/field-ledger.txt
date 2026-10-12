@@ -378,3 +378,8 @@ field dungeonflux.public.v1.TempoCue 3 sequence type=4 label=1 presence=false ta
 field dungeonflux.public.v1.TempoCue 4 hold_millis type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 11 tempo type=11 label=1 presence=false target=.dungeonflux.public.v1.TempoCue oneof=-
 field dungeonflux.public.v1.GameplayScene 4 speaker_portrait type=9 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.NpcStanding
+field dungeonflux.public.v1.NpcStanding 1 npc_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NpcStanding 2 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NpcStanding 3 attitude type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 13 standing type=11 label=3 presence=false target=.dungeonflux.public.v1.NpcStanding oneof=-

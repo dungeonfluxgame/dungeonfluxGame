@@ -15,7 +15,9 @@
 //! To keep something from a listener, put the words in `facts.forbidden`, an array of strings
 //! (for example the destination of a secret packet for a player who has not been told it). The
 //! model is told never to write or hint at them, and a result containing any of them as a
-//! whole word is rejected, retried once, and then refused. Dice such as `d20`, `DC 15` and
+//! whole word is rejected, retried once, and then refused. A term that must not even reach the
+//! prompt goes in a slot's `withheld` list instead ([`Slot::withholding`]): it is checked in the
+//! answer the same way but is never shown to the model. Dice such as `d20`, `DC 15` and
 //! `hit points` are likewise rejected unless that exact text appears in the facts.
 //!
 //! The adventure generator calls [`Storyteller::express_adventure`] with its dice-derived
@@ -61,6 +63,8 @@ const MAXIMUM_SLOTS: usize = 32;
 const MAXIMUM_SLOT_CHARACTERS: usize = 4000;
 const MAXIMUM_MUST_MENTION: usize = 8;
 const MAXIMUM_SLOT_FORBIDDEN: usize = 24;
+const MAXIMUM_WITHHELD: usize = 160;
+const MAXIMUM_WITHHELD_CHARACTERS: usize = 240;
 const MAXIMUM_TERM_CHARACTERS: usize = 64;
 const MAXIMUM_STYLE_CHARACTERS: usize = 600;
 const MAXIMUM_GUIDANCE_CHARACTERS: usize = 4000;
@@ -106,6 +110,9 @@ pub(super) struct Slot {
     pub(super) must_mention: Vec<String>,
     /// Terms this slot alone must not use, as whole words, on top of `facts.forbidden`.
     pub(super) forbidden: Vec<String>,
+    /// Terms the text must not use that are never shown to the model: they are checked after
+    /// generation only, so they cannot be echoed back by a prompt that never contained them.
+    pub(super) withheld: Vec<String>,
 }
 
 impl Slot {
@@ -115,6 +122,7 @@ impl Slot {
             max_chars,
             must_mention: Vec::new(),
             forbidden: Vec::new(),
+            withheld: Vec::new(),
         }
     }
 
@@ -125,6 +133,12 @@ impl Slot {
 
     pub(super) fn forbidding(mut self, terms: Vec<String>) -> Self {
         self.forbidden = terms;
+        self
+    }
+
+    /// Adds terms that stay out of the prompt and are refused in the answer.
+    pub(super) fn withholding(mut self, terms: Vec<String>) -> Self {
+        self.withheld = terms;
         self
     }
 }
@@ -1030,6 +1044,13 @@ fn check_request(request: &Expression<'_>) -> Result<(), StorytellerError> {
         {
             return Err(invalid("slot forbidden"));
         }
+        if slot.withheld.len() > MAXIMUM_WITHHELD
+            || slot.withheld.iter().any(|term| {
+                term.trim().is_empty() || term.chars().count() > MAXIMUM_WITHHELD_CHARACTERS
+            })
+        {
+            return Err(invalid("slot withheld"));
+        }
     }
     if request.style.chars().count() > MAXIMUM_STYLE_CHARACTERS
         || request.profile.guidance.chars().count() > MAXIMUM_GUIDANCE_CHARACTERS
@@ -1093,7 +1114,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn build_prompt(request: &Expression<'_>, complaint: Option<&str>) -> String {
+pub(super) fn build_prompt(request: &Expression<'_>, complaint: Option<&str>) -> String {
     let slots: Vec<Value> = request
         .slots
         .iter()
@@ -1223,6 +1244,7 @@ fn validate_slot(
         .iter()
         .map(String::as_str)
         .chain(slot.forbidden.iter().map(|term| term.trim()))
+        .chain(slot.withheld.iter().map(|term| term.trim()))
         .any(|term| contains_whole_word(&lowered, &term.to_lowercase()))
     {
         return Err(ValidationFailure::ForbiddenTerm {

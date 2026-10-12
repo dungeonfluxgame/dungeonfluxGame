@@ -301,6 +301,8 @@ pub(super) struct Actor {
     pub owner: Owner,
     /// The public table log; an accepted action and a typed line are appended here.
     pub table_log: std::sync::Arc<super::table_log::TableLog>,
+    /// Each NPC's backstory and attitude toward each hero.
+    pub social: std::sync::Arc<super::social::SocialLedger>,
     pub dialogue: super::dialogue::DialogueState,
     pub tempo: Option<tempo::TempoOwner>,
     pub bootstrap_credential: [u8; 32],
@@ -875,6 +877,7 @@ impl Actor {
             .map_err(|_| tonic::Status::permission_denied("binding invalid"))?;
         let mut view = wire::journey_view(current, role, member).map_err(unavailable)?;
         self.table_log.attach(&mut view);
+        self.social.attach(&mut view, member);
         if let Some(tempo) = self.tempo.as_mut() {
             tempo::observe(tempo.decorate(&mut view, current, Instant::now()));
         }

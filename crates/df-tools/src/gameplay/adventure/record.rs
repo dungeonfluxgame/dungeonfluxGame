@@ -1,6 +1,6 @@
 //! Exact immutable bytes are authority on resume; changed tables are never consulted.
 use super::super::pack::{self, CastRole, LoadedPack, SpeakerProfile};
-use super::{GenerateError, GeneratedAdventure, Roll, RollStatus, RulesMode};
+use super::{GenerateError, GeneratedAdventure, Roll, RollStatus, RulesMode, dossier::Dossier};
 use df_persistence::local_demo_scope::DemoAdventure;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -38,6 +38,10 @@ pub(crate) struct AdventureRecord {
     /// Who is on stage in each scene, copied from the pack.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     scene_cast: Vec<SceneCastRecord>,
+    /// Backstories of the speaking cast (section 19). Absent in adventures saved before they
+    /// existed, which keep playing without them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) dossiers: Vec<Dossier>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -163,6 +167,7 @@ impl GeneratedAdventure {
                 })
                 .collect(),
             settings: Some(self.settings.clone()),
+            dossiers: self.dossiers.clone(),
         };
         let record =
             serde_json::to_vec_pretty(&record).map_err(|_| GenerateError::Serialization)?;
@@ -230,6 +235,17 @@ pub(crate) fn reload(
             return Err(RecordError::Invalid("record scene settings binding"));
         }
         _ => {}
+    }
+    // Stored backstories are spoken from, so a repeated id or a leak in their public tiers
+    // refuses the record like any other tampered document.
+    let mut npc_ids = BTreeSet::new();
+    if record.dossiers.len() > 20
+        || record
+            .dossiers
+            .iter()
+            .any(|dossier| !npc_ids.insert(dossier.npc_id.as_str()) || dossier.leak().is_some())
+    {
+        return Err(RecordError::Invalid("dossiers"));
     }
     let mut story = BTreeSet::new();
     for (index, roll) in record.rolls.iter().enumerate() {

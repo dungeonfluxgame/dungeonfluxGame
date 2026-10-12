@@ -150,6 +150,8 @@ pub(crate) struct Tables {
     pub(super) art: BTreeMap<String, String>,
     pub(super) depicts: BTreeMap<String, Vec<super::setting::SettingKind>>,
     pub(super) places: super::setting::Places,
+    /// NPC dossier tables; not part of `revision` (see `dossier_tables`).
+    pub(super) dossiers: super::dossier_tables::DossierTables,
 }
 fn document<T: DeserializeOwned + Serialize>(
     bytes: &BTreeMap<String, Vec<u8>>,
@@ -349,6 +351,7 @@ impl Tables {
                     .get("places.json")
                     .ok_or_else(|| invalid("places.json", ".", "not indexed"))?,
             )?,
+            dossiers: super::dossier_tables::DossierTables::load(directory)?,
         };
         lint_tree(
             "places.json",
