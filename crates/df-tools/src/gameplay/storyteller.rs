@@ -367,6 +367,9 @@ struct Online {
     deadline: Duration,
     /// Tokens not yet spent or reserved by calls in flight.
     remaining_tokens: Mutex<u64>,
+    /// Supplier-reported counters of every answered attempt, for live transcript costing.
+    #[cfg(test)]
+    usage_log: Mutex<Vec<df_providers::TextTokenUsage>>,
     #[cfg(test)]
     loopback: Option<SocketAddr>,
 }
@@ -415,6 +418,8 @@ impl Storyteller {
                 deadline: settings.deadline,
                 remaining_tokens: Mutex::new(settings.token_budget),
                 #[cfg(test)]
+                usage_log: Mutex::new(Vec::new()),
+                #[cfg(test)]
                 loopback: None,
             }),
         }
@@ -444,6 +449,18 @@ impl Storyteller {
                 .remaining_tokens
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
+        })
+    }
+
+    /// The supplier-reported token counters of every answered attempt so far.
+    #[cfg(test)]
+    pub(super) fn usage_log(&self) -> Vec<df_providers::TextTokenUsage> {
+        self.online.as_ref().map_or_else(Vec::new, |online| {
+            online
+                .usage_log
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
         })
     }
 
@@ -843,6 +860,11 @@ impl Online {
             Ok(Ok(response)) => response,
         };
         let tokens = response.supplier_usage().total_tokens;
+        #[cfg(test)]
+        self.usage_log
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(response.supplier_usage());
         self.reconcile(reserved, tokens);
         let events = response
             .complete(owner())

@@ -35,6 +35,8 @@ mod npc_dossier_live_tests;
 #[cfg(test)]
 mod npc_dossier_tests;
 mod npc_reply;
+#[cfg(test)]
+mod npc_talk_live_tests;
 mod pack;
 #[cfg(test)]
 mod pack_tests;
