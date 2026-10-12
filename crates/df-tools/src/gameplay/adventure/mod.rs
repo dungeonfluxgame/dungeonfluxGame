@@ -11,6 +11,11 @@ pub(crate) mod campaign_tables;
 #[cfg(test)]
 mod campaign_tests;
 pub(crate) mod cli;
+pub(crate) mod dossier;
+pub(crate) mod dossier_render;
+pub(crate) mod dossier_tables;
+#[cfg(test)]
+mod dossier_tests;
 mod expression;
 mod generate;
 mod listener;

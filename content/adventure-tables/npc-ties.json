@@ -1,0 +1,154 @@
+{
+  "schema": "df-npc-tables/1",
+  "file": "npc-ties",
+  "description": "Story ties bind an NPC personally to THIS adventure's facts: the stake, the antagonist, the villain, a faction, the location, the destination or another cast member. 'text' is the DM-facing truth, 'speak' what the NPC says in the first person: freely when public is true, only once trusted when it is false. Each role has its own table; 'others' lists the cast roles {other} may name. Motives (why an opposing NPC acts) and stand-downs (what would make them back off or bargain) are separate tables. Original prose.",
+  "tables": {
+    "patron": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "patron-made-it", "binds": "stake", "public": false, "text": "{name} made {stake} with {pos} own hands and never told anyone whose crest is hidden in the work.", "speak": "I made {stake} myself, years ago. There is a crest worked into it, and I have never told a soul whose."},
+        {"faces": [2, 2], "id": "patron-carried-before", "binds": "stake", "public": true, "text": "{name} carried {stake} once before, as a child, beside a grandparent now gone.", "speak": "I carried {stake} once before, as a child, walking beside my grandmother. I was too small to know what it meant."},
+        {"faces": [3, 3], "id": "patron-deathbed-oath", "binds": "stake", "public": false, "text": "{name} swore at a deathbed to keep {stake} from the wrong hands and fears the oath is slipping.", "speak": "I swore to someone who was dying that I would keep {stake} safe. Tonight I am not sure I can."},
+        {"faces": [4, 4], "id": "patron-dear-bought", "binds": "stake", "public": true, "text": "{name} spent a year's savings on {stake} and cannot afford to lose it.", "speak": "{stake|cap} cost me a year of saving. I could not bear to see it lost."},
+        {"faces": [5, 5], "id": "patron-grateful-to-foe", "binds": "antagonist", "public": false, "foes": ["person", "goblinoid"], "text": "{name} owes {antagonist} a debt of gratitude and is ashamed to stand on the other side.", "speak": "I owe {antagonist} more than I can say. It was long ago. Now we stand on opposite sides of this."},
+        {"faces": [6, 6], "id": "patron-lost-brother", "binds": "antagonist", "public": true, "text": "{name} lost a brother on the road to {destination}, and {antagonist_the} was there.", "speak": "I lost a brother on the road to {destination}, and {antagonist_the} was there. I do not say it lightly."},
+        {"faces": [7, 7], "id": "patron-saw-the-face", "binds": "antagonist", "public": true, "foes": ["person", "goblinoid"], "text": "{name} has seen {antagonist} before, in a crowd, and wishes {sub} had spoken up.", "speak": "I have seen {antagonist} before, in a crowd. I should have spoken up then."},
+        {"faces": [8, 8], "id": "patron-called-a-worrier", "binds": "antagonist", "public": true, "text": "{name} warned the neighbours about {antagonist_the} months ago and has been called a worrier since.", "speak": "I told everyone about {antagonist_the} months ago. They called me a worrier. I would very much like to be wrong tonight."},
+        {"faces": [9, 9], "id": "patron-lifelong-neighbour", "binds": "location", "public": true, "text": "{name} has lived in sight of {location} all {pos} life and knows what it looks like when something is wrong.", "speak": "I have lived in sight of {location} all my life. I know what it looks like when something is wrong, and tonight it does."},
+        {"faces": [10, 10], "id": "patron-dismissed", "binds": "location", "public": false, "text": "{name} was dismissed from a post at {location} for something that was not {pos} doing.", "speak": "They let me go from {location} years ago for something that was not my doing. I still walk past it every day."},
+        {"faces": [11, 11], "id": "patron-spare-key", "binds": "location", "public": false, "text": "{name} keeps a key to a locked room at {location} that no one else remembers.", "speak": "I hold the key to a room at {location} that nobody else remembers. I have never dared to open it."},
+        {"faces": [12, 12], "id": "patron-unanswered-letter", "binds": "destination", "public": true, "text": "{name} wrote to someone at {destination} a season ago and has had no answer.", "speak": "I wrote to someone at {destination} a season ago. There has been no answer. I would rather you were the answer than a letter."},
+        {"faces": [13, 13], "id": "patron-left-in-a-temper", "binds": "destination", "public": false, "text": "{name} once worked at {destination} and left in a temper, which {sub} regrets.", "speak": "I worked at {destination} once. I left in a temper, and I have regretted the manner of it ever since."},
+        {"faces": [14, 14], "id": "patron-drifted-apart", "binds": "cast", "public": true, "others": ["contact"], "text": "{name} and {other} were close once and have not spoken in years.", "speak": "{other} and I were close once. We have not spoken in years, and I do not entirely know why."},
+        {"faces": [15, 15], "id": "patron-former-student", "binds": "cast", "public": true, "others": ["contact"], "text": "{name} was once {other}'s student and still hears {other}'s corrections.", "speak": "{other} taught me, years ago. I still hear the corrections in my head whenever I make a mistake."},
+        {"faces": [16, 16], "id": "patron-confidant", "binds": "cast", "public": false, "others": ["contact"], "text": "{name} trusts {other} with a confidence told to no one else.", "speak": "There is one person I would trust with anything, and that is {other}. I have told {other} things I have told nobody else."},
+        {"faces": [17, 17], "id": "patron-pays-dues", "binds": "faction", "public": true, "text": "{name} pays dues to {faction} and has begun to doubt they are worth the cost.", "speak": "I pay my dues to {faction}, like everyone. Lately I wonder what they buy."},
+        {"faces": [18, 18], "id": "patron-refused-a-favour", "binds": "faction", "public": false, "text": "{name} refused {faction} a favour once and has felt watched ever since.", "speak": "I turned down {faction} once. Since then I keep finding that someone is watching me."},
+        {"faces": [19, 19], "id": "patron-small-favour", "binds": "villain", "public": false, "text": "{name} once did a small favour for {villain} and has since realised what it served.", "speak": "I did a small favour for {villain} once. I did not know what it was for. I do now."},
+        {"faces": [20, 20], "id": "patron-heard-whispers", "binds": "villain", "public": true, "text": "{name} has heard whispers of {villain} and told no one, fearing disbelief.", "speak": "People are whispering about {villain}. I have said nothing. Who would listen to someone like me?"}
+      ]
+    },
+    "contact": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "contact-long-wait", "binds": "stake", "public": true, "text": "{name} has waited months for {stake} and told no one how much it matters.", "speak": "I have waited a long time for {stake}. I would be glad if you made no fuss about it."},
+        {"faces": [2, 2], "id": "contact-held-it-once", "binds": "stake", "public": false, "text": "{name} held {stake} for a single night long ago and was sworn never to speak of it.", "speak": "I held {stake} once, for a single night, long ago. I was told never to speak of it, and I haven't."},
+        {"faces": [3, 3], "id": "contact-wishes-it-stayed", "binds": "stake", "public": false, "text": "{name} half-wishes {stake} would simply stay here and knows it is not {pos} place to wish.", "speak": "Part of me wishes {stake} would simply stay here. I know that is not my place."},
+        {"faces": [4, 4], "id": "contact-turned-it-away", "binds": "antagonist", "public": true, "text": "{name} has turned {antagonist_the} away from the door twice this month.", "speak": "I have turned {antagonist_the} away from my door twice this month. A third time worries me."},
+        {"faces": [5, 5], "id": "contact-knew-before", "binds": "antagonist", "public": false, "foes": ["person", "goblinoid"], "text": "{name} knew {antagonist} before the trouble and lies awake wondering what changed.", "speak": "I knew {antagonist} before all this. I keep wondering what changed."},
+        {"faces": [6, 6], "id": "contact-lamp-in-window", "binds": "antagonist", "public": true, "text": "{name} was frightened once by {antagonist_the} and has kept a lamp in the window since.", "speak": "{antagonist_the|cap} frightened me badly once. I have kept a lamp in the window ever since."},
+        {"faces": [7, 7], "id": "contact-reads-boots", "binds": "location", "public": true, "text": "{name} has watched travellers pass through {location} for years and reads their news in the dust on their boots.", "speak": "I have watched people pass through {location} for years. You can read their news in the dust on their boots."},
+        {"faces": [8, 8], "id": "contact-left-for-a-year", "binds": "location", "public": false, "text": "{name} left {location} for a year long ago, came back without a word of explanation and has been asked ever since.", "speak": "I left {location} for a year once and came back without a word of explanation. People still ask, and I still do not say."},
+        {"faces": [9, 9], "id": "contact-kept-it-open", "binds": "destination", "public": true, "text": "{name} has kept {destination} open through bad winters out of stubbornness and love.", "speak": "I have kept {destination} open through some very bad winters. Stubbornness, mostly. And love, a little."},
+        {"faces": [10, 10], "id": "contact-owes-the-owner", "binds": "destination", "public": false, "text": "{name} owes {destination}'s owner more than {sub} will ever earn.", "speak": "I owe more on {destination} than I will ever earn. I keep smiling and keep sweeping."},
+        {"faces": [11, 11], "id": "contact-hidden-promise", "binds": "destination", "public": false, "text": "{name} hid something in the rafters of {destination} and checks on it every night.", "speak": "There is something hidden in {destination} that I check every night. It is not mine, and it is not dangerous. It is only a promise."},
+        {"faces": [12, 12], "id": "contact-like-family", "binds": "cast", "public": true, "others": ["patron"], "text": "{name} has known {other} since they were young and thinks of {other} as family.", "speak": "{other} and I go back a long way. I think of {other} as family, whatever the paperwork says."},
+        {"faces": [13, 13], "id": "contact-wary-of-trouble", "binds": "cast", "public": false, "others": ["patron"], "text": "{name} has grown wary of {other}'s habit of drawing others into trouble.", "speak": "I am fond of {other}, but trouble follows {other} like a stray dog. I worry about it."},
+        {"faces": [14, 14], "id": "contact-kept-letters", "binds": "cast", "public": false, "others": ["patron"], "text": "{name} keeps every letter {other} ever sent, in a box under the bed.", "speak": "I have kept every letter {other} ever sent me. They are in a box under my bed. Do not tell {other}."},
+        {"faces": [15, 15], "id": "contact-passes-news", "binds": "faction", "public": false, "text": "{name} passes small news to {faction} in exchange for protection and has begun to resent it.", "speak": "I pass small news to {faction}, and they leave me be. I am beginning to resent the arrangement."},
+        {"faces": [16, 16], "id": "contact-shelters-travellers", "binds": "faction", "public": true, "text": "{name} shelters travellers for {faction} and asks no questions.", "speak": "I shelter travellers for {faction}, and I do not ask questions. It makes for restful evenings."},
+        {"faces": [17, 17], "id": "contact-left-the-faction", "binds": "faction", "public": false, "text": "{name} left {faction} on poor terms and still receives visits.", "speak": "I left {faction} on poor terms. Every so often someone calls to remind me."},
+        {"faces": [18, 18], "id": "contact-old-tales", "binds": "villain", "public": true, "text": "{name} has heard the old tales of {villain} and half believes them.", "speak": "I have heard the old tales about {villain}. I would like to say I do not believe them."},
+        {"faces": [19, 19], "id": "contact-saw-agents", "binds": "villain", "public": false, "text": "{name} once saw {villain}'s agents at {destination} and said nothing.", "speak": "I once saw some of {villain}'s people here at {destination}. I said nothing, then or after."},
+        {"faces": [20, 20], "id": "contact-distant-kin", "binds": "villain", "public": false, "text": "{name} is distantly related to someone in {villain}'s household and keeps it quiet.", "speak": "I have a cousin in {villain}'s household. I do not speak of it, and I do not write."}
+      ]
+    },
+    "antagonist": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "ant-ruined-family", "binds": "stake", "public": false, "text": "{name} blames {stake} for a ruin in {pos} family and wants it gone.", "speak": "{stake|cap}? It ruined people I love. I want it gone, and I do not much care how."},
+        {"faces": [2, 2], "id": "ant-promised-it", "binds": "stake", "public": false, "text": "{name} believes {stake} was promised to {obj} and that {sub} was cheated of it.", "speak": "{stake|cap} was promised to me. I was cheated, and you are helping the cheat."},
+        {"faces": [3, 3], "id": "ant-followed-it", "binds": "stake", "public": true, "text": "{name} saw {stake} change hands once and has followed it since.", "speak": "I saw {stake} pass between two pairs of hands once. I have been following it ever since."},
+        {"faces": [4, 4], "id": "ant-debt-clock", "binds": "stake", "public": false, "text": "{name} was told {stake} would clear a debt that grows every day.", "speak": "I was told {stake} would clear what I owe. The debt grows by the day, so forgive my hurry."},
+        {"faces": [5, 5], "id": "ant-grew-up-nearby", "binds": "location", "public": true, "text": "{name} grew up in sight of {location} and resents how it turned its back.", "speak": "I grew up near {location}. It never did a thing for me, and I am done waiting for it to start."},
+        {"faces": [6, 6], "id": "ant-run-out", "binds": "location", "public": false, "text": "{name} was run out of {location} for a wrong far smaller than the rumour.", "speak": "They ran me out of {location} for something much smaller than they tell. One day I would like to say it plainly."},
+        {"faces": [7, 7], "id": "ant-watching-rhythms", "binds": "location", "public": true, "text": "{name} has watched {location} for a week and learned its rhythms.", "speak": "I know the rhythms of {location}. When the lamps go up, when the watch changes. Do not take me for a stranger."},
+        {"faces": [8, 8], "id": "ant-turned-away", "binds": "destination", "public": false, "text": "{name} was promised a welcome at {destination} and turned away at the door.", "speak": "I was promised a welcome at {destination}, and I was turned away at the door. I remember it well."},
+        {"faces": [9, 9], "id": "ant-knows-the-lanes", "binds": "destination", "public": true, "text": "{name} knows the lanes around {destination} better than any traveller.", "speak": "I know the lanes around {destination} better than any traveller. I have had time to learn them."},
+        {"faces": [10, 10], "id": "ant-blames-patron", "binds": "cast", "public": false, "others": ["patron"], "text": "{name} blames {other} for a loss that never stopped hurting.", "speak": "{other} knows what was done. I have had years to practise what I would say."},
+        {"faces": [11, 11], "id": "ant-once-friends", "binds": "cast", "public": true, "others": ["patron", "contact"], "text": "{name} was friendly with {other} before trouble came between them.", "speak": "{other} and I were friends once, before things went wrong."},
+        {"faces": [12, 12], "id": "ant-told-to-ask", "binds": "cast", "public": false, "others": ["contact"], "text": "{name} was told by someone feared that {other} can end this trouble for good.", "speak": "I was told that {other} can end this for good. I did not want to come."},
+        {"faces": [13, 13], "id": "ant-reluctant", "binds": "cast", "public": false, "others": ["patron", "contact"], "text": "{name} would rather not harm {other} and keeps that quiet.", "speak": "I have no wish to hurt {other}. Please do not repeat that."},
+        {"faces": [14, 14], "id": "ant-takes-coin", "binds": "faction", "public": false, "text": "{name} takes coin from {faction} and dislikes the work.", "speak": "I take coin from {faction}, and I do not like the work. Nobody asked what I liked."},
+        {"faces": [15, 15], "id": "ant-cast-out", "binds": "faction", "public": false, "text": "{name} was cast out by {faction} and wants to prove them wrong.", "speak": "{faction|cap} cast me out. I mean to show them what they threw away."},
+        {"faces": [16, 16], "id": "ant-knows-faction", "binds": "faction", "public": true, "text": "{name} knows {faction} well and talks about it freely.", "speak": "Everyone knows {faction}. They look after their own, and only their own."},
+        {"faces": [17, 17], "id": "ant-hired-blind", "binds": "villain", "public": false, "text": "{name} was hired by {villain}'s people and has never met {villain}.", "speak": "I have never met {villain}. I take my orders from a note under a stone, and I do not ask questions."},
+        {"faces": [18, 18], "id": "ant-afraid-of-villain", "binds": "villain", "public": false, "text": "{name} fears {villain} far more than any hero.", "speak": "You think I am the dangerous one? Wait until you meet {villain}."},
+        {"faces": [19, 19], "id": "ant-betrayed", "binds": "villain", "public": false, "text": "{name} was betrayed by {villain}'s people and wants them to pay.", "speak": "{villain}'s people betrayed me once. I have not forgotten."},
+        {"faces": [20, 20], "id": "ant-brags", "binds": "villain", "public": true, "text": "{name} brags of knowing {villain}'s plans, though {sub} knows little.", "speak": "I know all of {villain}'s plans. Well. Most of them. Some."}
+      ]
+    },
+    "villain": {
+      "die": 12,
+      "entries": [
+        {"faces": [1, 1], "id": "vil-last-piece", "binds": "stake", "public": false, "text": "{name} believes {stake} is the last piece of something {sub} has spent a lifetime gathering.", "speak": "{stake|cap} is the last piece. Do you know how long I have waited for a last piece?"},
+        {"faces": [2, 2], "id": "vil-lost-it", "binds": "stake", "public": false, "text": "{name} once held {stake} and lost it through a moment of misplaced trust.", "speak": "I held {stake} once. I lost it through a single moment of trust. I do not trust now."},
+        {"faces": [3, 3], "id": "vil-fair-offer", "binds": "stake", "public": true, "text": "{name} offered fair coin for {stake} three times and finds refusal baffling.", "speak": "I offered a fair price for {stake} three times. Refusal baffles me."},
+        {"faces": [4, 4], "id": "vil-old-claim", "binds": "location", "public": true, "text": "{name} holds an old claim to {location}.", "speak": "I hold an old claim to {location}. There are papers. There are always papers."},
+        {"faces": [5, 5], "id": "vil-humbled-here", "binds": "location", "public": false, "text": "{name} was humiliated at {location} long ago, before everyone who mattered.", "speak": "I was humiliated at {location} once, in front of everyone who mattered. I remember each face."},
+        {"faces": [6, 6], "id": "vil-plan-depends", "binds": "destination", "public": false, "text": "{name} has a plan that depends on what waits at {destination}.", "speak": "What waits at {destination} is not what you think it is. It matters a great deal to me."},
+        {"faces": [7, 7], "id": "vil-remembers", "binds": "cast", "public": false, "others": ["patron", "contact"], "text": "{name} remembers {other} from long ago and was kinder then.", "speak": "I remember {other}, from long ago. I was kinder then."},
+        {"faces": [8, 8], "id": "vil-has-them-watched", "binds": "cast", "public": true, "others": ["patron", "contact"], "text": "{name} has had {other} watched for months.", "speak": "I know {other}'s habits better than {other} does. I mean no insult by it."},
+        {"faces": [9, 9], "id": "vil-wrong-tool", "binds": "antagonist", "public": true, "text": "{name} sent {antagonist} to do the rough work and regrets the choice of tool.", "speak": "I sent {antagonist} for this. I may have chosen the wrong tool."},
+        {"faces": [10, 10], "id": "vil-only-rival", "binds": "faction", "public": true, "text": "{name} considers {faction} the only rival worth the name.", "speak": "{faction|cap} is the only rival I take seriously. I tell them so, and they do not enjoy it."},
+        {"faces": [11, 11], "id": "vil-debt-note", "binds": "faction", "public": false, "text": "{name} holds a private debt note from someone high in {faction}.", "speak": "Someone high in {faction} is in my debt. They would very much like me to forget it."},
+        {"faces": [12, 12], "id": "vil-soft-spot", "binds": "antagonist", "public": false, "text": "{name} has a soft spot for {antagonist}, who reminds {obj} of who {sub} used to be.", "speak": "{antagonist} reminds me of myself, once. I try not to dwell on it."}
+      ]
+    },
+    "lieutenant": {
+      "die": 8,
+      "entries": [
+        {"faces": [1, 1], "id": "lt-sworn", "binds": "villain", "public": true, "text": "{name} swore service to {villain} in a hard winter and was never released.", "speak": "I swore service to {villain} in a hard winter. Nobody ever released me from it."},
+        {"faces": [2, 2], "id": "lt-doubts", "binds": "villain", "public": false, "text": "{name} no longer believes in {villain}'s cause and cannot see how to leave.", "speak": "I no longer believe what {villain} believes. I cannot see how to leave."},
+        {"faces": [3, 3], "id": "lt-orders", "binds": "stake", "public": true, "text": "{name} was told to bring back {stake} and nothing more.", "speak": "I was told to bring back {stake}, nothing more. I follow orders."},
+        {"faces": [4, 4], "id": "lt-patrol", "binds": "location", "public": true, "text": "{name} has walked the roads around {location} for years on orders.", "speak": "I have walked the roads around {location} for years. I know the faces there, and they know mine."},
+        {"faces": [5, 5], "id": "lt-respects", "binds": "cast", "public": false, "others": ["patron", "contact"], "text": "{name} respects {other} and is uncomfortable about it.", "speak": "I respect {other}, which is awkward given the circumstances."},
+        {"faces": [6, 6], "id": "lt-double-dealer", "binds": "faction", "public": false, "text": "{name} passes word to {faction} as well and tells no one.", "speak": "I send word to {faction} now and then. Do not repeat that."},
+        {"faces": [7, 7], "id": "lt-sibling", "binds": "destination", "public": false, "text": "{name} has a sibling near {destination} who believes {name} is a clerk.", "speak": "I have a sibling near {destination} who thinks I am a clerk. I would like to keep it that way."},
+        {"faces": [8, 8], "id": "lt-rival", "binds": "antagonist", "public": true, "text": "{name} competes with {antagonist} for notice and resents the competition.", "speak": "{antagonist} and I compete for notice. It does neither of us any good."}
+      ]
+    },
+    "motives": {
+      "die": 20,
+      "entries": [
+        {"faces": [1, 1], "id": "hungry", "roles": ["antagonist", "lieutenant"], "text": "has gone hungry too long and is out of other options", "speak": "I have not eaten properly in days. Tell me you would not do the same."},
+        {"faces": [2, 2], "id": "deadline", "roles": ["antagonist", "lieutenant"], "text": "faces a creditor's deadline", "speak": "There is a debt and a deadline. I have run out of the one and nearly out of the other."},
+        {"faces": [3, 3], "id": "sick-relative", "roles": ["antagonist", "lieutenant"], "text": "needs coin for a sick relative's care", "speak": "Someone I love is ill, and care costs coin. That is all this is."},
+        {"faces": [4, 4], "id": "old-wrong", "text": "is driven by an old wrong never put right", "speak": "An old wrong was done to me and never put right. I mean to see it put right."},
+        {"faces": [5, 5], "id": "fears-the-sender", "roles": ["antagonist", "lieutenant"], "text": "is more afraid of whoever sent them than of the party", "speak": "You think I am the frightening one here? Wait until you meet whoever sent me."},
+        {"faces": [6, 6], "id": "prove-worth", "roles": ["antagonist", "lieutenant", "villain"], "text": "needs to prove they are more than a nobody", "speak": "All my life I have been told I am nobody. Today I mean to be somebody."},
+        {"faces": [7, 7], "id": "sincere-belief", "text": "sincerely believes this is the right thing to do", "speak": "I am not the villain in this. I am the only one here who sees clearly."},
+        {"faces": [8, 8], "id": "plain-work", "roles": ["antagonist", "lieutenant"], "text": "treats it as plain work and nothing personal", "speak": "It is work. Nothing personal. I would rather have been given something easier."},
+        {"faces": [9, 9], "id": "protecting-their-own", "text": "is protecting their own people from something worse", "speak": "Everything I do is to keep my own people safe. You would do the same."},
+        {"faces": [10, 10], "id": "homesick", "roles": ["antagonist", "lieutenant"], "text": "cannot go home until this is done", "speak": "I want to go home. I cannot until this is finished."},
+        {"faces": [11, 11], "id": "belonging", "roles": ["antagonist", "lieutenant"], "text": "wants to be accepted by a group that keeps them at arm's length", "speak": "I want to belong somewhere. They have told me this is the price."},
+        {"faces": [12, 12], "id": "taking-it-back", "roles": ["antagonist", "lieutenant", "villain"], "text": "believes something was taken from them and is taking it back", "speak": "That was taken from me. I am only taking back what is mine."},
+        {"faces": [13, 13], "id": "needs-to-know", "roles": ["villain", "lieutenant"], "text": "needs to know what it is, whatever the cost", "speak": "I need to know what it is. Don't you? Truly?"},
+        {"faces": [14, 14], "id": "stop-the-change", "text": "wants to stop something from changing", "speak": "Things were good before. I only want them back the way they were."},
+        {"faces": [15, 15], "id": "one-more-win", "roles": ["antagonist", "lieutenant", "villain"], "text": "needs one success to keep a position", "speak": "I need this one win to keep my place. After this I will leave you alone."},
+        {"faces": [16, 16], "id": "starving-band", "roles": ["antagonist", "lieutenant"], "speakers": ["goblinoid"], "text": "leads a band that went hungry through a lean winter", "speak": "The band went hungry all winter. I will do what I must to fill their bowls."},
+        {"faces": [17, 17], "id": "chiefs-favour", "roles": ["antagonist", "lieutenant"], "speakers": ["goblinoid"], "text": "wants a prize to win the chief's favour", "speak": "A great prize will make the chief notice me. I want it. I want it so much."},
+        {"faces": [18, 18], "id": "past-hoping", "roles": ["antagonist", "villain"], "text": "has stopped hoping and wants an ending", "speak": "I am past caring how this ends. I only want it to end."},
+        {"faces": [19, 19], "id": "calls-it-order", "roles": ["villain", "lieutenant"], "text": "calls a hunger for authority a love of order", "speak": "People need order. Someone must provide it, and it may as well be me."},
+        {"faces": [20, 20], "id": "to-be-remembered", "roles": ["villain"], "text": "wants a place in the memory of the region", "speak": "In a hundred years they will remember my name. That is worth more than comfort."}
+      ]
+    },
+    "stand_downs": {
+      "die": 12,
+      "entries": [
+        {"faces": [1, 1], "id": "fed-and-rested", "roles": ["antagonist", "lieutenant"], "text": "backs off if offered a hot meal and a night by a fire", "speak": "Give me a hot meal and a night out of the rain, and I might remember I am a person."},
+        {"faces": [2, 2], "id": "debt-eased", "roles": ["antagonist", "lieutenant"], "text": "bargains if part of the debt is covered", "speak": "Cover some of what I owe, and I will take it from there."},
+        {"faces": [3, 3], "id": "shown-respect", "text": "stands down when addressed with genuine respect", "speak": "Say my name as though it matters, and not as though it were a charge."},
+        {"faces": [4, 4], "id": "sender-wont-help", "roles": ["antagonist", "lieutenant"], "text": "yields if shown that whoever sent them will not stand behind them", "speak": "Show me that whoever sent me will not stand behind me, and I will think again."},
+        {"faces": [5, 5], "id": "safe-passage", "roles": ["antagonist", "lieutenant"], "text": "withdraws if promised a safe road out of the district", "speak": "A safe road out of here, no questions asked. Promise me that and I walk."},
+        {"faces": [6, 6], "id": "grievance-heard", "text": "yields once allowed to state their grievance aloud", "speak": "Let me say it once, aloud, to someone who will listen. That is all I ever wanted."},
+        {"faces": [7, 7], "id": "dependants-looked-after", "roles": ["antagonist", "lieutenant"], "text": "backs off if someone will look after those who depend on them", "speak": "If someone will look after the ones who depend on me, I will stand aside."},
+        {"faces": [8, 8], "id": "equally-shiny", "roles": ["antagonist", "lieutenant"], "speakers": ["goblinoid"], "text": "bargains for something equally bright", "speak": "Give me something just as shiny and we can be friends. Very good friends."},
+        {"faces": [9, 9], "id": "dignified-exit", "text": "retreats if given a dignified way out", "speak": "Let me leave with my head up, and nobody has to be hurt."},
+        {"faces": [10, 10], "id": "proved-mistaken", "text": "yields if shown their cause rests on a mistake", "speak": "Prove me wrong and I will go quietly. I would honestly prefer it."},
+        {"faces": [11, 11], "id": "only-you-can-offer", "roles": ["villain", "lieutenant"], "text": "parleys only for something they cannot get alone", "speak": "Offer me something I cannot take for myself, and we can talk."},
+        {"faces": [12, 12], "id": "reminded-of-home", "text": "stands down when reminded of someone they care about", "speak": "Do not remind me who is waiting for me. Give me a moment, and I will listen."}
+      ]
+    }
+  }
+}

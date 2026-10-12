@@ -598,6 +598,95 @@ Chapter seed `0xa2a2671963a4e9d7` (campaign seed, chapter 1, outcome digest 0). 
 
 Ledger after chapter 1 if the party wins, asks, reaches the destination: omens 2/3 clues, villain 1/3; clock step 1; facts: the party carried the steady lantern; Dessa and Rudd friendly. If the party loses: omens 1/3 (private only, if asked), villain 0/3 (the recap never appears), clock step 2, Rudd wounded.
 
+## 19. NPC dossiers (PLAY-N01)
+
+Status: implemented as a pure module plus authored tables; nothing in the chapter generator calls it yet (the adapter is a coordinator task). Governing documents: AGENTS.md; [Interaction engine](interaction-engine.md) ("Persistent social and epistemic model", "Grounded creative speech and listener-safe generation"); [Rules support](rules-support.md); [Coding style](coding-style.md). Appended after the appendices; sections 1-18 are unchanged.
+
+### 19.1 Purpose
+
+Until now an NPC in a generated adventure was a name, a role, a mannerism, a speech direction and (for the patron) one secret. That gives a reply writer nothing deeper to draw on when a player asks "who are you?", "why do you care?", flatters, flirts, threatens or offers a bribe. The dossier gives every speaking cast member a Dungeon Master's working sketch: where they come from, what they used to do, what they want and fear, why they are personally tied to THIS adventure, what they will say freely, what only after trust, what never, and how they react to the usual social pressures. Like everything else here it is rolled from named dice on original tables, recorded, and needs no model.
+
+Non-goals: no rules. A dossier changes no number, grants no benefit and decides no outcome. No model call is made (the reply task, 19.9, uses the dossier as context). Silent creatures (beasts, undead) have no dossier.
+
+### 19.2 Files and loading
+
+`crates/df-tools/src/gameplay/adventure/`: `dossier.rs` (types and roll), `dossier_tables.rs` (typed serde loading with `deny_unknown_fields` and validation), `dossier_render.rs` (plain-text DM sheet), `dossier_tests.rs`.
+
+Tables are five files in `content/adventure-tables/`: `npc-background.json`, `npc-character.json`, `npc-ties.json`, `npc-knowledge.json`, `npc-social.json` (schema `df-npc-tables/1`). They are deliberately NOT listed in `tables.json`: that list is hashed into the chapter tables revision, and adding to it would change the recorded revision of every existing adventure. The dossier tables carry their own revision (SHA-256 over their bytes in a fixed order), stored in each dossier as `tables_revision`. If the owner later wants one revision, the index entries and the loader can be merged in a single coordinated change.
+
+Validation at load: standard dice only (d4, d6, d8, d10, d12, d20); entries at most the die; face ranges tile 1..die with no gap or overlap; unique kebab-case ids; template length 1-240 characters; every `{slot}` known and every tie naming the fact it binds; tags known; each tone-tagged table has an untagged entry (an agreement fallback); and a coverage lint that proves, for every role and speaker group and every kind of antagonist, that at least one entry needs only facts a one-chapter adventure always has. A rare combination therefore cannot fail an adventure at run time.
+
+### 19.3 The dossier
+
+`Dossier` (serde, stable field names, persisted with the adventure record): `npc_id`, `name`, `role` (`patron`, `contact`, `antagonist`, `villain`, `lieutenant`), `role_label`, `tables_revision`; `given` (the generator's own mannerism, speech direction, voice tag, the tone tags read from them and a DM note when they already disagree); `origin`, `past_trade`, `formative_event`, `ideal`, `bond`, `flaw`, `want`, `fear`, `talent`; `story_tie` (id, what it binds to, the bound fact, bound cast member id, public or private, DM text, first-person line); `motive` and `stand_down` (antagonist, villain and lieutenant only); `knowledge` (three tiers, 19.5); `temperament`; `starting_attitude`; `speech_style`; `prepared_answers`; `rolls`.
+
+### 19.4 Tables and dice
+
+| File | Table | Die | Entries | Notes |
+|---|---|---|---|---|
+| background | origins | d20 | 20 | 14 for people, 6 for goblinoids; a participle phrase used as "I was ..." |
+| background | past_trades | d20 | 20 | 16 / 4; each has a first-person line; `except` keeps a trade from equalling the job |
+| background | formative_events | d20 | 20 | 15 / 5; public-safe first-person line |
+| background | talents | d12 | 12 | DM only |
+| character | ideals, bonds | d20 | 20 each | classic personality tradition; some role- or speaker-filtered |
+| character | flaws | d20 | 20 | each has a never-spoken `shame` line and `shame_terms` |
+| character | wants | d20 | 20 | role-filtered: 12 for patron and contact, 6 each for antagonist and lieutenant, 3 for villain |
+| character | fears | d12 | 12 | each has a `confide` line for the trusted tier |
+| ties | patron, contact, antagonist | d20 | 20 each | bindings: stake, antagonist, location, destination, another cast member, faction, villain |
+| ties | villain | d12 | 12 | |
+| ties | lieutenant | d8 | 8 | |
+| ties | motives | d20 | 20 | human reasons; some goblinoid-only, some villain-only |
+| ties | stand_downs | d12 | 12 | what would make them back off or bargain |
+| knowledge | place_specific | 8 x d4 | 32 | four local-colour lines per location id |
+| knowledge | place_generic | d12 | 12 | uses the location and the destination |
+| knowledge | rumours | d12 | 12 | about the antagonist, filtered by creature group |
+| knowledge | hints | d12 | 12 | the single useful, mechanically neutral pointer (trusted tier) |
+| knowledge | world | d8 | 8 | four about a faction, four about the villain |
+| knowledge | secret_keywords | by secret id | 12 | phrases no public line may contain, on top of the rendered secret text |
+| social | attitudes | 5 x d20 | weighted ranges | patron 13/6/1 friendly/indifferent/hostile; contact 10/8/2; antagonist 1/5/14; villain 2/6/12; lieutenant 1/7/12 |
+| social | styles | d20 | 20 | sentence length, vocabulary, a tic, an opener and a closer |
+| social | flattery, flirting, threats, lies, bribes | d8 | 8 each | a DM description and a first-person line |
+| social | deflections | d12 | 12 | the "what are you hiding" answers; reveal nothing |
+| social | frames | d4 / d6 | 22 | assemble prepared answers (19.7) |
+| social | tag_vocabulary, incompatible, trait_tags | | 10 tags, 8 pairs, 51 keyword rules | the agreement rule (19.6) |
+
+Templates use `{name}`, `{role}`, `{role_a}` (with article), `{sub}`, `{obj}`, `{pos}`, `{stake}`, `{stake_full}`, `{location}`, `{destination}`, `{antagonist}`, `{antagonist_the}`, `{villain}`, `{faction}`, `{other}`, `{other_role}` and the `|cap` filter. A template using a slot the adventure does not have (no villain, no faction, no other eligible cast member) is "incompatible" and is rolled again, exactly as in section 3. Slots naming the NPC itself stay unavailable (an antagonist's tie never says "owes the antagonist"). Antagonist ties and motives are human: debts, hunger, pride, a sick relative, an old wrong; each antagonist also has a stand-down so a conversation is worth having.
+
+### 19.5 Three knowledge tiers
+
+- `says_freely`: local colour, rumours, public facts about location, destination and faction, and the NPC's self-description (origin, trade, event, ideal, bond, want, a public tie, the stated motive of an opposing NPC). Each line carries a topic.
+- `says_when_trusted`: a private tie, one hint about the antagonist or the road that changes nothing mechanically, the confided fear, and (opposing NPCs) the stand-down.
+- `never_says`: the NPC's shame (with its terms) and, by reference, the adventure's secret terms (the rendered secret and confirmation text plus the keywords for that secret id).
+
+Safety rule, enforced in code (`Dossier::leak`) and tests: no `never_says` term and no secret term may appear, as a case-insensitive whole-word (whole-phrase) match, in any `says_freely` line, any prepared answer, or a story tie marked public; the NPC's shame terms appear nowhere that is spoken. During rolling, a candidate whose public text would break the rule is rejected and re-rolled; a tie that would have to mention a secret term is simply private (it lives in the trusted tier, where secret terms are allowed). `roll_dossiers` fails closed with `DossierError::Leak` if a leak survives. The check is a heuristic backstop: the tables themselves avoid asserting anything about ownership, contents or routes, which the secrets own. Summaries never replace canonical truth; the dossier never states a fact the pack contradicts.
+
+### 19.6 Temperament, attitude and agreement
+
+Starting attitude uses the standard 2024 Friendly / Indifferent / Hostile scale, weighted by role (19.4). It is where the NPC starts, nothing more; the live value is owned and saved by the server.
+
+Temperament gives, for flattery, flirting, threats, lies and bribes, a DM description and a first-person line. Every entry is family-suitable warmth, wit and banter (flustered, teasing, spoken for, cool and unimpressed, playing along to learn something), never explicit and never a mechanical benefit.
+
+Agreement rule. The chapter generator already gave each NPC a mannerism, a speech direction and a voice tag, and the review found clashes such as "brisk" beside "tugging nervously". Keyword rules (`trait_tags`) read tone tags from those three texts; a speech style and each temperament entry must not carry a tag that the incompatible-pair list (nervous/calm, nervous/brisk, hurried/slow, brisk/slow, calm/hurried, warm/cold, playful/gruff, playful/formal) forbids against the given tags or against anything already chosen. A clashing entry is rejected and rolled again; untagged entries guarantee an answer. If the given traits themselves already clash, the dossier records a note telling the DM to play it as strain showing through. The dossier never edits the given traits.
+
+### 19.7 Speech style and prepared answers
+
+A speech style records sentence length, a vocabulary note, a verbal tic and a short opener and closer. `prepared_answers` holds one in-character answer (one to three sentences, first person) for each fixed topic: who are you, your past, why this matters to you, the antagonist (for opposing NPCs, their stated motive), the place, a compliment or flirt, a threat, a bribe, what are you hiding. The first five are assembled from a rolled frame and lines the NPC may say freely; the other four use that NPC's temperament line or deflection, which reveal nothing. The tic is added as an opener or closer when the answer still fits. Prepared answers are the fallback when no text model is on and the style anchor when one is.
+
+### 19.8 Determinism and the per-NPC stream
+
+A dossier is a pure function of `(adventure seed, NPC id, facts, tables)`. Each NPC rolls on its own SplitMix64 stream, `Dice::new(seed ^ 0x4e504344_4f535331 ^ fnv1a64(npc_id))`, using the existing generator; the adventure's main stream is never read or advanced, so every existing seed still produces byte-identical adventures and a new NPC never shifts another's rolls. Every roll is recorded like the DM's rolls (`n`, `table`, `die`, `natural`, `entry_id`, `status`), with table names prefixed `dossier.`; rejections re-roll the same die and after 64 the first fitting entry is taken and recorded as a fallback. Roll order: attitude, flaw (first, so its shame terms guard every later public line), origin, past trade, formative event, ideal, bond, want, fear, talent, speech style, the five temperament entries, deflection, story tie (and which other cast member), motive and stand-down (opposing roles), place lines, rumour, hint and world line (patron and contact), then the five frames. No two cast members of one adventure share a story-tie template. NPC ids must be unique and stable; the suggested form is `<role>:<archetype id>`.
+
+### 19.9 What PLAY-N02 does with it
+
+Reply context for a player's spoken or typed question = the dossier's public tier (`says_freely`, the public tie, the speech style, the temperament line for the kind of pressure applied, `given` traits) plus the trust-gated tier only when the server-owned attitude allows it (Friendly, or Indifferent after a successful interaction); never `never_says`, and the secret terms are passed as a forbidden list the generated reply is checked against, with the prepared answer as the fallback and the style anchor. The attitude lives on the server, is saved with the run, and starts at `starting_attitude`. A change of attitude that matters mechanically must use the standard Influence action (an ability check) once ability checks exist; until then the server may move attitude by narrative events only and must record that it did. Deceit is attributed: a lie told by a player or an NPC is a recorded statement by that speaker, not a fact of the world. Dossier text is flavour; mechanical outcomes, rewards and secrets are never decided by it.
+
+### 19.10 Standard and custom
+
+Standard: the Friendly / Indifferent / Hostile attitude scale; the Influence action as the future mechanical hook; no change to any rule or number. Custom (and so marked wherever shown): everything else in this section is original table content and a presentation aid, not a rules feature, in particular tone tags, temperament, story ties, prepared answers and the trust gate. Names and lore stay generic heroic fantasy; nothing is copied from non-SRD sources.
+
+### 19.11 Facts the adapter must supply
+
+`DossierFacts`: `cast` (one `CastMember` per speaking NPC: stable `id`, the name the party hears, `role`, article-free `role_label`, `archetype` id, `gender`, `group` person or goblinoid, and the generator's existing `mannerism`, `delivery` and `voice` strings), `stake` (short and full text), `location_id`, `location` (with article), `destination`, `antagonist` (display name, "the ..." form, creature group), optional `villain` and `faction` (names the party may already hear), `secret_id` and `secret_terms` (the rendered secret and confirmation). Silent antagonists are left out of the cast. The campaign layer later adds the villain, faction and lieutenants without changing the contract.
 
 ## 20. Scene settings
 
