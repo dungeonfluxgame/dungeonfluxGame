@@ -123,7 +123,7 @@ fn fresh_ids(jobs: &[Job]) -> Vec<String> {
     jobs.iter()
         .filter_map(|job| match job {
             Job::Fresh { id, .. } => Some(id.clone()),
-            Job::Edit { .. } => None,
+            Job::Edit { .. } | Job::Locate { .. } => None,
         })
         .collect()
 }
@@ -300,6 +300,54 @@ async fn a_ready_plate_reaches_the_display_and_the_phones_with_its_layout() {
         assert_eq!(layout.heroes[0].bubble_side, rpc::PlateSide::Left as i32);
     }
     assert!(locked(&shared.inner.state).plate_covers);
+}
+
+#[tokio::test]
+async fn a_plate_is_shown_with_its_predicted_layout_and_the_measured_heads_replace_it_later() {
+    let (shared, mut queue) = shared(16);
+    let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+    observe(&shared, &current, &[], &[1]);
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    ready(&shared, &id, 'a');
+    let mut before = display_message(&current);
+    apply(&shared, &mut before);
+    assert_eq!(
+        shown_scene(&before).plate_state,
+        rpc::PlateState::Ready as i32,
+        "the plate does not wait for the vision model to find the heads"
+    );
+    shared.finish(Done::Located {
+        id: id.clone(),
+        key: key('a'),
+        elapsed: Duration::from_secs(20),
+        placement: PlatePlacement {
+            speaker: shot::measured_layout(0.30, 0.20, 0.40, 0.36),
+            heroes: Vec::new(),
+        },
+    });
+    let mut after = display_message(&current);
+    apply(&shared, &mut after);
+    let layout = shown_scene(&after).plate_layout.as_ref().unwrap();
+    assert_ne!(
+        layout.head_x_permille, 640,
+        "the measured heads replaced the prediction"
+    );
+    // Heads found for a plate that has since been replaced change nothing.
+    shared.finish(Done::Located {
+        id,
+        key: key('b'),
+        elapsed: Duration::from_secs(20),
+        placement: PlatePlacement {
+            speaker: shot::measured_layout(0.80, 0.20, 0.90, 0.36),
+            heroes: Vec::new(),
+        },
+    });
+    let mut again = display_message(&current);
+    apply(&shared, &mut again);
+    assert_eq!(
+        shown_scene(&again).plate_layout,
+        shown_scene(&after).plate_layout
+    );
 }
 
 #[tokio::test]
