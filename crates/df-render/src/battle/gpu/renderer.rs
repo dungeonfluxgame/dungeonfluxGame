@@ -94,6 +94,7 @@ struct Pipelines {
     figure: GpuRenderPipeline,
     effects: GpuRenderPipeline,
     bolt: GpuRenderPipeline,
+    particle: GpuRenderPipeline,
     post: GpuRenderPipeline,
 }
 
@@ -176,6 +177,7 @@ pub struct Renderer {
     decal_buffer: GpuBuffer,
     figure_buffer: GpuBuffer,
     bolt_buffer: GpuBuffer,
+    particle_buffer: GpuBuffer,
     targets: Option<Targets>,
     cache: Cache,
     backdrop_stem: String,
@@ -469,6 +471,21 @@ impl Renderer {
                     blend: true,
                 },
             ),
+            particle: pipeline(
+                &core,
+                PipelineSpec {
+                    wgsl: &shaders::particle(),
+                    layout: &frame_layout,
+                    buffers: vec![instance_layout(
+                        crate::battle::particles::INSTANCE_FLOATS,
+                        2,
+                    )],
+                    topology: "triangle-list",
+                    depth: Some((false, "less-equal")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
+            ),
             bolt: pipeline(
                 &core,
                 PipelineSpec {
@@ -495,7 +512,7 @@ impl Renderer {
             ),
         };
         let frame_buffer = buffer(&core, 256, BUFFER_UNIFORM | BUFFER_COPY_DST);
-        let post_buffer = buffer(&core, 128, BUFFER_UNIFORM | BUFFER_COPY_DST);
+        let post_buffer = buffer(&core, 192, BUFFER_UNIFORM | BUFFER_COPY_DST);
         let decal_buffer = buffer(
             &core,
             MAX_DECALS * DECAL_STRIDE * 4,
@@ -504,6 +521,11 @@ impl Renderer {
         let figure_buffer = buffer(
             &core,
             MAX_BILLBOARDS * FIGURE_STRIDE * 4,
+            BUFFER_VERTEX | BUFFER_COPY_DST,
+        );
+        let particle_buffer = buffer(
+            &core,
+            crate::battle::particles::MAX_PARTICLES * crate::battle::particles::INSTANCE_FLOATS * 4,
             BUFFER_VERTEX | BUFFER_COPY_DST,
         );
         let bolt_buffer = buffer(
@@ -576,6 +598,7 @@ impl Renderer {
             decal_buffer,
             figure_buffer,
             bolt_buffer,
+            particle_buffer,
             targets: None,
             cache: Rc::new(RefCell::new(HashMap::new())),
             backdrop_stem: scene.backdrop.stem.clone(),
@@ -979,7 +1002,8 @@ impl Renderer {
             grade.highlight[2],
             0.0,
         ]);
-        data.extend_from_slice(&[0.52, 0.5, 0.4, 3.2]);
+        // The tilt-shift blur grows while focus is pulled to a new subject.
+        data.extend_from_slice(&[0.52, 0.5, 0.4, 3.2 * frame.feel.focus_blur_factor]);
         data.extend_from_slice(&[
             0.62,
             flash_strength,
@@ -987,11 +1011,26 @@ impl Renderer {
             if self.quality.tilt_shift { 1.0 } else { 0.0 },
         ]);
         data.extend_from_slice(&[flash_rgb[0], flash_rgb[1], flash_rgb[2], 0.0]);
+        // Screen units are 1080p pixels: scale to this canvas so the feel looks the same at any
+        // size.
+        let scale = size.1 as f32 / 1080.0;
         data.extend_from_slice(&[
-            frame.shake_px.0,
-            frame.shake_px.1,
+            frame.shake_px.0 * scale,
+            frame.shake_px.1 * scale,
             1.0 / size.0 as f32,
             1.0 / size.1 as f32,
+        ]);
+        data.extend_from_slice(&[
+            frame.feel.motion_blur_dir.0,
+            frame.feel.motion_blur_dir.1,
+            frame.feel.motion_blur_px * scale,
+            frame.feel.radial_blur,
+        ]);
+        data.extend_from_slice(&[
+            frame.feel.chromatic_px * scale,
+            frame.roll_deg.to_radians(),
+            frame.feel.vignette_pulse,
+            0.0,
         ]);
         self.core
             .queue
@@ -1489,6 +1528,23 @@ impl Renderer {
             pass.set_bind_group(0, &self.frame_group);
             pass.set_vertex_buffer(0, &self.bolt_buffer, 0.0, (bolt_data.len() * 4) as f64);
             pass.draw(12, bolt_count as u32, 0, 0);
+        }
+        let particle_count = frame.particles.len() / crate::battle::particles::INSTANCE_FLOATS;
+        if particle_count > 0 {
+            self.core.queue.write_buffer(
+                &self.particle_buffer,
+                0.0,
+                &float_array(&frame.particles),
+            );
+            pass.set_pipeline(&self.pipelines.particle);
+            pass.set_bind_group(0, &self.frame_group);
+            pass.set_vertex_buffer(
+                0,
+                &self.particle_buffer,
+                0.0,
+                (frame.particles.len() * 4) as f64,
+            );
+            pass.draw(6, particle_count as u32, 0, 0);
         }
         pass.end();
 

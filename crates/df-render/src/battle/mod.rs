@@ -16,8 +16,10 @@ mod hud;
 mod camera;
 mod combat_feed;
 mod director;
+pub mod feel;
 mod figure_art;
 mod formation;
+pub mod framing;
 mod grid;
 pub mod grid_lines;
 mod layout;
@@ -25,6 +27,7 @@ mod lod;
 mod math;
 mod model;
 mod pacing;
+pub mod particles;
 mod scene_file;
 mod sound;
 mod splat;
@@ -68,7 +71,9 @@ pub use splat::{
     SplatError, SplatFileLoader, SplatLoader, SplatSorter, SplatTransform, counting_order,
     depth_sort_key, encode_splat_file, orientation_from_euler_deg, pack_record, pack_records,
 };
-pub use stage::{CoverPip, FigureView, FlashView, FrameView, ProjectileView, Stage, StageError};
+pub use stage::{
+    CoverPip, FigureView, FlashView, FrameView, ImpactEvent, ProjectileView, Stage, StageError,
+};
 pub use status::{
     Resolved, Status, StatusPose, StatusSet, derived_from_view, icon_statuses, pose_for, resolve,
 };

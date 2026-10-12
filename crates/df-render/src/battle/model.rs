@@ -265,6 +265,15 @@ pub enum CameraFocus {
     Scene,
     Token(TokenId),
     Between(TokenId, TokenId),
+    /// The shot for an action: the actor alone (a self action) or the actor and its target, both
+    /// kept fully in frame for the whole beat, from the side of the line the camera already holds,
+    /// clear of every other figure. `stand` is where the actor will stand to act, if not where it
+    /// stands now. The stage solves it from where everyone actually is (see `framing`).
+    Action {
+        actor: TokenId,
+        target: Option<TokenId>,
+        stand: Option<Cell>,
+    },
 }
 
 /// A camera request, as in the earlier `CameraCommand`. `dolly` scales the shot's distance.
