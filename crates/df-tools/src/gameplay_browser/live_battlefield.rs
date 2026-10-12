@@ -90,6 +90,16 @@ struct PreviewRequest {
     free_camera: Option<battle::CameraPose>,
     /// `&fps=24|30`: the presentation rate (30 when absent or invalid).
     fps: battle::BattleFps,
+    /// `&beat=graze|heavy|critical|miss|finish`: stage one attack of that kind after the camera
+    /// has idled a moment, then hold (review frames of the feel).
+    demo: Option<String>,
+    /// `&slow=0.1`: the stage clock at that share of real time, for slow-motion review strips.
+    slow: Option<f32>,
+    /// `&feel=off`: battle feel (shake, hit-stop, sway, blur, particles) off, for measurements.
+    feel_off: bool,
+    /// `&tempo=0..1000`: the tempo intensity the camera sway follows (the live game reads the
+    /// server's tempo cue).
+    tempo: Option<u16>,
 }
 
 fn free_camera(text: &str) -> Option<battle::CameraPose> {
@@ -136,6 +146,10 @@ fn preview_request() -> Option<PreviewRequest> {
         shot: None,
         free_camera: None,
         fps: battle::BattleFps::DEFAULT,
+        feel_off: false,
+        tempo: None,
+        demo: None,
+        slow: None,
     };
     for part in rest.split('&') {
         match part.strip_prefix('=').unwrap_or(part) {
@@ -206,6 +220,12 @@ fn preview_request() -> Option<PreviewRequest> {
                 request.shot = battle::ShotName::from_key(&other[5..]);
             }
             other if other.starts_with("cam=") => request.free_camera = free_camera(&other[4..]),
+            "feel=off" => request.feel_off = true,
+            other if other.starts_with("beat=") && plain_name(&other[5..]) => {
+                request.demo = Some(other[5..].to_owned());
+            }
+            other if other.starts_with("slow=") => request.slow = other[5..].parse().ok(),
+            other if other.starts_with("tempo=") => request.tempo = other[6..].parse().ok(),
             other if other.starts_with("fps=") => {
                 request.fps = other[4..]
                     .parse::<u32>()
@@ -496,6 +516,8 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             procedural_splats: request.procedural_splats,
             fixed_quality: request.fixed,
             fps: request.fps,
+            feel_off: request.feel_off,
+            slow: request.slow,
             ..StageOptions::default()
         },
     )
@@ -513,6 +535,9 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             request.restrained || content_rating() == battle::ContentRating::Restrained,
         )
     });
+    if let Some(tempo) = request.tempo {
+        with_preview(|stage| stage.set_tempo_intensity(tempo));
+    }
     live_sfx::set_battlefield_owns_combat(true);
     // The shared sound control lets a harness (or a viewer) unlock audio with one click.
     if let Some(document) = host.owner_document() {
@@ -567,6 +592,61 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                     show_unavailable(&host, reason.key());
                 }
                 return;
+            }
+        }
+        if let Some(kind) = request.demo.clone() {
+            // One attack of the asked kind on a camera that has idled a moment, then hold.
+            with_preview(|stage| stage.establish());
+            TimeoutFuture::new(2500).await;
+            let (result, after) = match kind.as_str() {
+                "graze" => (
+                    AttackResult::Hit {
+                        damage: 1,
+                        critical: false,
+                        downed: false,
+                    },
+                    Some(6),
+                ),
+                "heavy" => (
+                    AttackResult::Hit {
+                        damage: 7,
+                        critical: false,
+                        downed: false,
+                    },
+                    Some(2),
+                ),
+                "critical" => (
+                    AttackResult::Hit {
+                        damage: 5,
+                        critical: true,
+                        downed: false,
+                    },
+                    Some(3),
+                ),
+                "finish" => (
+                    AttackResult::Hit {
+                        damage: 9,
+                        critical: false,
+                        downed: true,
+                    },
+                    Some(0),
+                ),
+                _ => (AttackResult::Miss, None),
+            };
+            with_preview(|stage| {
+                let _ = stage.stage(Beat::Attack {
+                    attacker: TokenId::new("tobin"),
+                    target: TokenId::new("goblin"),
+                    result,
+                    target_hit_points_after: after,
+                });
+            });
+            mark(&host, "data-battlefield-demo", &kind);
+            loop {
+                TimeoutFuture::new(1000).await;
+                if PREVIEW.with(|slot| slot.borrow().is_none()) {
+                    return;
+                }
             }
         }
         if request.hold {
@@ -1141,6 +1221,9 @@ fn start_mount(
         .get_attribute("data-battle-scene")
         .and_then(|id| battle::load_embedded(&id))
         .and_then(Result::ok);
+    // The fight's title is the story place, never the scan's source name (that belongs in the
+    // credits with its attribution).
+    let place_title = location_scene.title.clone();
     let (mut scene, mut fallback_layers) = match forced {
         Some(forced) => (
             forced,
@@ -1148,6 +1231,7 @@ fn start_mount(
         ),
         None => (location_scene, None),
     };
+    scene.title = place_title;
     // Best-effort diagnostic attribute; a failure here changes nothing about the fight.
     let _ = host.set_attribute("data-battlefield-scene", &marker);
     if let Some(stem) = backdrop {
@@ -1187,6 +1271,8 @@ fn start_mount(
                 fallback_layers,
                 fixed_quality: None,
                 fps,
+                feel_off: false,
+                slow: None,
             },
         )
         .await;
@@ -1256,6 +1342,17 @@ fn sync() {
     });
 }
 
+/// The tempo cue's intensity (0 to 1000) for the camera's sway: calm is slow and small, peak
+/// quicker and tighter. Called with every accepted display view, from the same tempo the music
+/// follows, so there is one intensity signal.
+pub(super) fn set_tempo(intensity: u16) {
+    LIVE.with(|live| {
+        if let Some(stage) = &live.borrow().stage {
+            stage.set_tempo_intensity(intensity);
+        }
+    });
+}
+
 /// The cue director entered a state: stage the matching half of the attack.
 pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
     let Some(roll) = roll else {
@@ -1290,11 +1387,12 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
             };
             match state {
                 "rolling" => {
+                    // Dropped, not fatal: the queue is bounded and the view sync still lands.
+                    let _ = stage.stage(Beat::Approach { attacker, target });
+                    // The card waits for the camera to arrive on the two fighters.
                     if let Some(card) = roll.card.clone() {
                         stage.show_roll_card(card);
                     }
-                    // Dropped, not fatal: the queue is bounded and the view sync still lands.
-                    let _ = stage.stage(Beat::Approach { attacker, target });
                 }
                 "impact" => {
                     let result = if roll.hit || roll.grazed {

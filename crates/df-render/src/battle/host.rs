@@ -26,7 +26,7 @@ use super::{
         ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, SplatFileLoader, SplatLoader,
         SplatTransform, pack_records,
     },
-    stage::Stage,
+    stage::{ImpactEvent, Stage},
 };
 
 pub use super::gpu::core::UnavailableReason;
@@ -57,6 +57,11 @@ pub struct StageOptions {
     pub fixed_quality: Option<FixedQuality>,
     /// The presentation rate: the battlefield never draws faster than this.
     pub fps: BattleFps,
+    /// Battle feel (shake, hit-stop, sway, blur, particles); off only for measurements.
+    pub feel_off: bool,
+    /// Runs the stage's clock at this share of real time (a review harness captures slow motion
+    /// strips with it); `None` is real time.
+    pub slow: Option<f32>,
 }
 
 /// Quality held constant for benchmarks (`#battle-preview=...&fixed&budget=..&minc=..&rscale=..`).
@@ -79,6 +84,8 @@ struct Inner {
     availability: Availability,
     /// Decides which animation-frame calls present a frame (the fixed 30 or 24 fps cadence).
     pacer: FramePacer,
+    /// Share of real time the stage clock runs at (1 in play).
+    time_scale: f64,
     frame_handle: Option<i32>,
     disposed: bool,
     revealed: bool,
@@ -88,6 +95,9 @@ struct Inner {
     fallback_applied: bool,
     /// Where the stage's sounds go, at the frame they happen. Without one they are dropped.
     sound_sink: Option<Rc<dyn Fn(SoundEvent)>>,
+    /// Where blows that landed go, with their intensity: the one hook the HUD's own hit-shake
+    /// subscribes to. Without one they are dropped.
+    impact_sink: Option<Rc<dyn Fn(ImpactEvent)>>,
 }
 
 /// The animation-frame closure, shared so the loop can reschedule itself and `dispose` can drop it.
@@ -118,6 +128,7 @@ impl BattleStage {
                 renderer: None,
                 availability: Availability::Unavailable(reason),
                 pacer: FramePacer::new(BattleFps::DEFAULT),
+                time_scale: 1.0,
                 frame_handle: None,
                 disposed: false,
                 revealed: false,
@@ -126,6 +137,7 @@ impl BattleStage {
                 fallback: None,
                 fallback_applied: false,
                 sound_sink: None,
+                impact_sink: None,
             })),
             frame_callback: Rc::new(RefCell::new(None)),
         }
@@ -224,7 +236,10 @@ impl BattleStage {
         }
         mark(host, "active");
         let _ = host.set_attribute("data-battlefield-adapter", &gpu.adapter_description);
-        let stage = Stage::new(scene, options.reduced_motion);
+        let mut stage = Stage::new(scene, options.reduced_motion);
+        if options.feel_off {
+            stage.set_feel_enabled(false);
+        }
         let inner = Rc::new(RefCell::new(Inner {
             host: host.clone(),
             container: Some(container),
@@ -234,6 +249,9 @@ impl BattleStage {
             renderer: Some(renderer),
             availability: Availability::Available,
             pacer: FramePacer::new(options.fps),
+            time_scale: options
+                .slow
+                .map_or(1.0, |share| f64::from(share.clamp(0.02, 1.0))),
             frame_handle: None,
             disposed: false,
             revealed: false,
@@ -242,6 +260,7 @@ impl BattleStage {
             fallback: options.fallback_layers,
             fallback_applied: false,
             sound_sink: None,
+            impact_sink: None,
         }));
         let callback: FrameCallback = Rc::new(RefCell::new(None));
         {
@@ -276,6 +295,18 @@ impl BattleStage {
     /// runs inside the frame callback and must not call back into the stage.
     pub fn set_sound_sink(&self, sink: Rc<dyn Fn(SoundEvent)>) {
         self.inner.borrow_mut().sound_sink = Some(sink);
+    }
+
+    /// Subscribes to blows landing: each [`ImpactEvent`] says who was hit and how heavily (0 to 1),
+    /// at the frame it happens. The HUD's own hit-shake hangs off this; the camera shake is
+    /// already done by the stage.
+    pub fn set_impact_sink(&self, sink: Rc<dyn Fn(ImpactEvent)>) {
+        self.inner.borrow_mut().impact_sink = Some(sink);
+    }
+
+    /// Sets the tempo cue's intensity (0 calm to 1000 peak) that the camera's sway follows.
+    pub fn set_tempo_intensity(&self, permille: u16) {
+        self.inner.borrow_mut().stage.set_tempo_intensity(permille);
     }
 
     /// Stops the loop and removes everything the stage added. Safe to call more than once.
@@ -354,12 +385,17 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     let tick_started_ms = now_ms();
     // The simulation advances by real time since the previous presented frame, so speeds are
     // unchanged by the cap.
-    let delta_ms = elapsed_ms.clamp(0.0, 100.0);
+    let delta_ms = elapsed_ms.clamp(0.0, 100.0) * state.time_scale;
     state
         .stage
         .update(Duration::from_secs_f64(delta_ms / 1000.0));
     for event in state.stage.take_sounds() {
         if let Some(sink) = &state.sound_sink {
+            sink(event);
+        }
+    }
+    for event in state.stage.take_impacts() {
+        if let Some(sink) = &state.impact_sink {
             sink(event);
         }
     }
