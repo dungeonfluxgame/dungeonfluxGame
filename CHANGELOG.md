@@ -18,6 +18,13 @@ Integration history through 2026-10-11T15:25:07.071270-04:00, reconstructed from
 
 Integration history from 2026-10-11T15:24:05-04:00 through 2026-10-12T04:33:02-04:00 on the integration branch `claude/playable-20261011`, generated from Git by revision range: six-hour blocks by first-parent commit time, each newly reachable commit listed once. The last block is open and shorter than six hours; the work session is still running.
 
+## 2026-10-12T12:08:54-04:00 to 2026-10-12T18:31:22-04:00
+
+Range: 2994d1bff06b11de6863b77cd1e5851e91cffbcd..558654d38a308ef898da618ce1dbe9731a8bcafc
+
+- de32f94cce016b7d3e5a7a1512cb5632056aa573 — Record the closing block: leftover tooling merges and the bug notes
+- 558654d38a308ef898da618ce1dbe9731a8bcafc — WIP (compiles, not verified): Windows port, dialogue, fight sync, dice video, music, victory screen, dev control CLI
+
 ## 2026-10-12T11:28:38-04:00 to 2026-10-12T12:08:54-04:00
 
 Range: 22ba05f61230a46765695aee52b6b800d49718e7..2994d1bff06b11de6863b77cd1e5851e91cffbcd
