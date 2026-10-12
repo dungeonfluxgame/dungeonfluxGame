@@ -260,12 +260,16 @@ pub(super) fn third_person(label: &str) -> String {
     let label = label.trim();
     let (verb, rest) = label.split_once(' ').unwrap_or((label, ""));
     let verb = verb.to_lowercase();
-    let conjugated =
-        if verb.ends_with(['s', 'x', 'z', 'o']) || verb.ends_with("ch") || verb.ends_with("sh") {
-            format!("{verb}es")
-        } else {
-            format!("{verb}s")
-        };
+    let consonant_y = verb.len() > 1
+        && verb.ends_with('y')
+        && !verb[..verb.len() - 1].ends_with(['a', 'e', 'i', 'o', 'u']);
+    let conjugated = if consonant_y {
+        format!("{}ies", &verb[..verb.len() - 1])
+    } else if verb.ends_with(['s', 'x', 'z', 'o']) || verb.ends_with("ch") || verb.ends_with("sh") {
+        format!("{verb}es")
+    } else {
+        format!("{verb}s")
+    };
     if rest.is_empty() {
         conjugated
     } else {
@@ -518,5 +522,79 @@ mod tests {
             "vows to see Ilsa through"
         );
         assert_eq!(third_person("Go"), "goes");
+    }
+
+    /// Every label the tables can produce, read from the same files the server loads.
+    fn table_labels() -> Vec<String> {
+        let scripts: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../content/adventure-tables/beat-scripts.json"
+        ))
+        .unwrap();
+        let types: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../content/adventure-tables/chapter-types.json"
+        ))
+        .unwrap();
+        let mut labels = Vec::new();
+        for template in scripts["chapter_types"].as_object().unwrap().values() {
+            // `labels` is optional in a template; a template without them has none to check.
+            for label in template["script"]["labels"]
+                .as_object()
+                .into_iter()
+                .flat_map(|map| map.values())
+            {
+                labels.push(label.as_str().unwrap().to_owned());
+            }
+        }
+        fn choices(value: &serde_json::Value, out: &mut Vec<String>) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (key, item) in map {
+                        if matches!(key.as_str(), "asks" | "helps" | "stands") {
+                            if let Some(list) = item.as_array() {
+                                out.extend(
+                                    list.iter().filter_map(|l| l.as_str().map(str::to_owned)),
+                                );
+                            }
+                        }
+                        choices(item, out);
+                    }
+                }
+                serde_json::Value::Array(list) => list.iter().for_each(|item| choices(item, out)),
+                _ => {}
+            }
+        }
+        choices(&types, &mut labels);
+        labels
+    }
+
+    #[test]
+    fn every_table_label_conjugates_to_its_correct_third_person_form() {
+        let labels = table_labels();
+        assert!(labels.len() > 50, "the tables supply the labels under test");
+        for label in &labels {
+            let verb = label.split(' ').next().unwrap().to_lowercase();
+            let third = third_person(label);
+            let form = third.split(' ').next().unwrap();
+            let expected = if verb.ends_with("y")
+                && !verb[..verb.len() - 1].ends_with(['a', 'e', 'i', 'o', 'u'])
+            {
+                format!("{}ies", &verb[..verb.len() - 1])
+            } else if verb.ends_with(['s', 'x', 'z', 'o'])
+                || verb.ends_with("ch")
+                || verb.ends_with("sh")
+            {
+                format!("{verb}es")
+            } else {
+                format!("{verb}s")
+            };
+            assert_eq!(form, expected, "label {label:?}");
+        }
+        assert_eq!(
+            third_person("Carry the clue onward"),
+            "carries the clue onward"
+        );
+        assert_eq!(third_person("Study the markings"), "studies the markings");
+        assert_eq!(third_person("Buy the ticket"), "buys the ticket");
+        assert_eq!(third_person("Rally the crowd"), "rallies the crowd");
     }
 }

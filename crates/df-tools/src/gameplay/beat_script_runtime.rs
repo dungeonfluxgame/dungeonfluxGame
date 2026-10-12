@@ -149,11 +149,24 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
     beat_script::with_script(|script| {
         let beat = script.current(state)?;
         let mut scene = match &beat.scene_variant {
-            Some(variant) => script
-                .scenes
-                .get(variant)
-                .cloned()
-                .ok_or(RepositoryError::InvalidCandidate)?,
+            Some(variant) => {
+                let mut authored = script
+                    .scenes
+                    .get(variant)
+                    .cloned()
+                    .ok_or(RepositoryError::InvalidCandidate)?;
+                // Who stands on stage is the adventure's own cast, never the static base's.
+                authored.cast = pack::scene(beat.scene).cast;
+                if beat.kind == BeatKind::Ending {
+                    // The closing scenes keep the patron on stage beside the contact.
+                    for actor in pack::scene(pack::SceneKey::Opening).cast {
+                        if !authored.cast.iter().any(|present| present.id == actor.id) {
+                            authored.cast.push(actor);
+                        }
+                    }
+                }
+                authored
+            }
             None => pack::scene(beat.scene),
         };
         if let Some(variant) = &beat.scene_variant

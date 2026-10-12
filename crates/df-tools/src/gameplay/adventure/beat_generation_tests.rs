@@ -335,6 +335,32 @@ fn peaceful_ending_resolves_once_closes_on_the_end_card_and_shows_the_same_label
                     .clone()),
                 "epilogue"
             );
+            // The closing scene has the contact and the patron on stage, each with art, and the
+            // speaker of its line is among them.
+            let stage = super::super::beat_script_runtime::scene(current.state()).unwrap();
+            assert!(
+                stage
+                    .cast
+                    .iter()
+                    .any(|actor| actor.role == super::super::pack::CastRole::Contact)
+            );
+            assert!(
+                stage
+                    .cast
+                    .iter()
+                    .any(|actor| actor.role == super::super::pack::CastRole::Patron)
+            );
+            assert!(
+                stage
+                    .cast
+                    .iter()
+                    .all(|actor| !actor.sprite.is_empty() && !actor.portrait.is_empty()),
+                "{kind} cast needs art"
+            );
+            assert!(
+                stage.cast.iter().any(|actor| actor.name == stage.speaker),
+                "{kind} speaker on stage"
+            );
             // The consumed resolution id no longer matches any offer: a repeat is refused.
             assert!(
                 !super::super::beat_script_runtime::matches_id(
