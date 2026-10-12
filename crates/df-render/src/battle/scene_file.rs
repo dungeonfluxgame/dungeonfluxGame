@@ -14,11 +14,19 @@ use serde::Deserialize;
 use super::{
     camera::{CameraPose, PoseError, ShotName},
     grid::{Cell, Grid, GridError},
+    layout::{Cover, Layout, LayoutError, Obstacle},
     math::Vec3,
+    sound::Surface,
     theme::Theme,
 };
 
-pub const SCHEMA_VERSION: u32 = 1;
+/// The current schema. Version 1 files (no layouts, no surface) still load.
+pub const SCHEMA_VERSION: u32 = 2;
+const OLDEST_SCHEMA_VERSION: u32 = 1;
+/// The grid extent the authored `tactical` and `combat_est` cameras frame without being moved
+/// back; larger grids push those two shots back in proportion.
+const FRAMED_WIDTH_M: f32 = 12.0;
+const FRAMED_DEPTH_M: f32 = 9.0;
 /// The only place a splat scene may be fetched from.
 pub const SPLAT_ROUTE_PREFIX: &str = "/assets/splat/";
 
@@ -34,6 +42,10 @@ pub enum SceneFileError {
     CameraUnknown(String),
     Layer(&'static str),
     Splat(&'static str),
+    Surface(String),
+    /// Layouts or a surface in a version 1 file.
+    NeedsSchemaTwo(&'static str),
+    Layout(LayoutError),
 }
 
 #[derive(Deserialize)]
@@ -49,6 +61,42 @@ struct FileScene {
     cameras: BTreeMap<String, FilePose>,
     #[serde(default)]
     splat: Option<FileSplat>,
+    /// What the ground is made of, for footsteps: `wood`, `dirt` or `stone`.
+    #[serde(default)]
+    surface: Option<String>,
+    #[serde(default)]
+    layouts: Vec<FileLayout>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileLayout {
+    id: String,
+    label: String,
+    #[serde(default)]
+    obstacles: Vec<FileObstacle>,
+    #[serde(default)]
+    difficult: Vec<[i32; 2]>,
+    spawns: FileSpawns,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileObstacle {
+    id: String,
+    kind: String,
+    cells: Vec<[i32; 2]>,
+    blocks_movement: bool,
+    cover: String,
+    sprite: String,
+    height_m: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileSpawns {
+    heroes: Vec<[i32; 2]>,
+    enemies: Vec<[i32; 2]>,
 }
 
 #[derive(Deserialize)]
@@ -170,6 +218,9 @@ pub struct BattleScene {
     pub grid: Grid,
     pub cameras: BTreeMap<ShotName, CameraPose>,
     pub splat: Option<SplatLayer>,
+    pub surface: Surface,
+    /// Empty for a version 1 file, in which case figures stand on the derived formation.
+    pub layouts: Vec<Layout>,
 }
 
 fn stem_ok(stem: &str) -> bool {
@@ -188,8 +239,14 @@ fn positive(value: f32, maximum: f32) -> bool {
 pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
     let file: FileScene =
         serde_json::from_str(json).map_err(|error| SceneFileError::Json(error.to_string()))?;
-    if file.schema != SCHEMA_VERSION {
+    if !(OLDEST_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&file.schema) {
         return Err(SceneFileError::Schema(file.schema));
+    }
+    if file.schema < 2 && !file.layouts.is_empty() {
+        return Err(SceneFileError::NeedsSchemaTwo("layouts"));
+    }
+    if file.schema < 2 && file.surface.is_some() {
+        return Err(SceneFileError::NeedsSchemaTwo("surface"));
     }
     if !stem_ok(&file.location_id) {
         return Err(SceneFileError::Identifier("location_id"));
@@ -251,6 +308,12 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         }
     }
     let splat = file.splat.map(validate_splat).transpose()?;
+    let surface = match file.surface.as_deref() {
+        None => Surface::default(),
+        Some(key) => Surface::from_key(key).ok_or_else(|| SceneFileError::Surface(key.to_owned()))?,
+    };
+    let layouts = convert_layouts(file.layouts, &grid)?;
+    frame_for_grid(&mut cameras, &grid);
     Ok(BattleScene {
         location_id: file.location_id,
         title: file.title,
@@ -272,7 +335,67 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         grid,
         cameras,
         splat,
+        surface,
+        layouts,
     })
+}
+
+/// Pushes the wide shots back when the grid is bigger than the authored framing covers, so a
+/// 14 by 10 field fits the frame the way an 8 by 6 one does.
+fn frame_for_grid(cameras: &mut BTreeMap<ShotName, CameraPose>, grid: &Grid) {
+    let width = grid.cols() as f32 * grid.cell_m();
+    let depth = grid.rows() as f32 * grid.cell_m();
+    let scale = (width / FRAMED_WIDTH_M).max(depth / FRAMED_DEPTH_M).max(1.0);
+    for shot in [ShotName::Tactical, ShotName::CombatEst] {
+        if let Some(pose) = cameras.get_mut(&shot) {
+            pose.distance *= scale;
+        }
+    }
+}
+
+fn convert_layouts(files: Vec<FileLayout>, grid: &Grid) -> Result<Vec<Layout>, SceneFileError> {
+    let cell = |[col, row]: &[i32; 2]| Cell::new(*col, *row);
+    let mut layouts: Vec<Layout> = Vec::with_capacity(files.len());
+    for file in files {
+        if !stem_ok(&file.id) {
+            return Err(SceneFileError::Layout(LayoutError::Identifier(file.id)));
+        }
+        if file.label.trim().is_empty() || file.label.len() > 60 {
+            return Err(SceneFileError::Layout(LayoutError::Identifier(file.label)));
+        }
+        if layouts.iter().any(|known| known.id == file.id) {
+            return Err(SceneFileError::Layout(LayoutError::DuplicateLayout(file.id)));
+        }
+        let mut obstacles = Vec::with_capacity(file.obstacles.len());
+        for obstacle in file.obstacles {
+            if !stem_ok(&obstacle.id) || !stem_ok(&obstacle.kind) || !stem_ok(&obstacle.sprite) {
+                return Err(SceneFileError::Layout(LayoutError::Identifier(obstacle.id)));
+            }
+            let cover = Cover::from_key(&obstacle.cover).ok_or_else(|| {
+                SceneFileError::Layout(LayoutError::Identifier(obstacle.cover.clone()))
+            })?;
+            obstacles.push(Obstacle {
+                id: obstacle.id,
+                kind: obstacle.kind,
+                cells: obstacle.cells.iter().map(cell).collect(),
+                blocks_movement: obstacle.blocks_movement,
+                cover,
+                sprite: obstacle.sprite,
+                height_m: obstacle.height_m,
+            });
+        }
+        let layout = Layout {
+            id: file.id,
+            label: file.label,
+            obstacles,
+            difficult: file.difficult.iter().map(cell).collect(),
+            heroes: file.spawns.heroes.iter().map(cell).collect(),
+            enemies: file.spawns.enemies.iter().map(cell).collect(),
+        };
+        layout.validate(grid).map_err(SceneFileError::Layout)?;
+        layouts.push(layout);
+    }
+    Ok(layouts)
 }
 
 fn validate_splat(splat: FileSplat) -> Result<SplatLayer, SceneFileError> {
@@ -393,8 +516,8 @@ mod tests {
     #[test]
     fn unknown_schema_versions_and_fields_are_rejected() {
         assert_eq!(
-            rejects(|v| v["schema"] = 2.into()),
-            SceneFileError::Schema(2)
+            rejects(|v| v["schema"] = 3.into()),
+            SceneFileError::Schema(3)
         );
         assert!(matches!(
             rejects(|v| v["surprise"] = true.into()),

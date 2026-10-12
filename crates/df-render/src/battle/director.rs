@@ -12,9 +12,10 @@ use super::{
     camera::ShotName,
     grid::{Cell, Grid},
     model::{
-        AttackResult, Beat, CameraCommand, CameraFocus, FloatTone, Highlight, HighlightKind, Side,
-        Token, TokenId,
+        AttackResult, AttackStyle, Beat, CameraCommand, CameraFocus, FloatTone, Highlight,
+        HighlightKind, Side, Token, TokenId,
     },
+    sound::SoundKind,
 };
 
 const FOCUS_PAN: Duration = Duration::from_millis(650);
@@ -30,6 +31,16 @@ pub const LUNGE_CONTACT: Duration = Duration::from_millis(170);
 pub const RECOIL: Duration = Duration::from_millis(420);
 pub const FALL: Duration = Duration::from_millis(900);
 pub const HEAL: Duration = Duration::from_millis(1300);
+/// The bow is drawn back for this long, then released; the figure settles over `DRAW`.
+pub const DRAW_RELEASE: Duration = Duration::from_millis(450);
+pub const DRAW: Duration = Duration::from_millis(600);
+/// How long the arrow takes from the bow to the target.
+pub const FLIGHT: Duration = Duration::from_millis(400);
+/// The slowest a long walk is staged, so a far approach does not stall the fight.
+const MAX_APPROACH: Duration = Duration::from_millis(1800);
+const MIN_STEP: Duration = Duration::from_millis(150);
+/// The fall's body lands on the ground this far into the fall animation.
+pub const FALL_LANDS: Duration = Duration::from_millis(560);
 const FALL_DELAY: Duration = Duration::from_millis(380);
 const FINISHING_DELAY: Duration = Duration::from_millis(560);
 
@@ -40,6 +51,8 @@ pub enum Anim {
     Dodge { from: TokenId },
     Fall,
     Heal,
+    /// Lean back drawing a bow toward the target, then snap forward on release.
+    Draw { toward: TokenId },
 }
 
 impl Anim {
@@ -49,6 +62,7 @@ impl Anim {
             Self::Recoil { .. } | Self::Dodge { .. } => RECOIL,
             Self::Fall => FALL,
             Self::Heal => HEAL,
+            Self::Draw { .. } => DRAW,
         }
     }
 }
@@ -101,6 +115,20 @@ pub enum Step {
         enemy: TokenId,
     },
     EndFinishingBlow,
+    /// A sound at this exact moment; the stage resolves the voice and surface.
+    Sound {
+        kind: SoundKind,
+        token: TokenId,
+    },
+    /// Rings the token being aimed at, with its name tag (or clears it).
+    Target(Option<TokenId>),
+    /// An arrow in flight from one token to another. A miss flies past the target.
+    Projectile {
+        from: TokenId,
+        to: TokenId,
+        hits: bool,
+        flight: Duration,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -171,7 +199,7 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
             let mut builder = Builder { steps: Vec::new() };
             builder.at(Duration::ZERO, Step::SetActive(Some(attacker.id.clone())));
-            let beside = fighting_cell(grid, tokens, attacker, target);
+            let beside = standing_cell(grid, tokens, attacker, target);
             builder.at(
                 Duration::ZERO,
                 Step::MoveTo {
@@ -182,8 +210,10 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
             );
             let end = strike(
                 &mut builder,
+                grid,
                 attacker,
                 target,
+                beside,
                 *result,
                 *target_hit_points_after,
                 Duration::ZERO,
@@ -199,10 +229,13 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
             let mut builder = Builder { steps: Vec::new() };
             let ready = approach(&mut builder, grid, tokens, attacker, target, Duration::ZERO);
+            let beside = standing_cell(grid, tokens, attacker, target);
             let end = strike(
                 &mut builder,
+                grid,
                 attacker,
                 target,
+                beside,
                 *result,
                 *target_hit_points_after,
                 ready + FOCUS_HOLD,
@@ -254,6 +287,15 @@ fn fighting_cell(grid: &Grid, tokens: &[Token], attacker: &Token, target: &Token
         .unwrap_or(attacker.cell)
 }
 
+/// Where the attacker stands while it strikes: its own cell for a ranged attacker, otherwise
+/// the fighting cell beside the target.
+fn standing_cell(grid: &Grid, tokens: &[Token], attacker: &Token, target: &Token) -> Cell {
+    match attacker.attack {
+        AttackStyle::Ranged => attacker.cell,
+        AttackStyle::Melee => fighting_cell(grid, tokens, attacker, target),
+    }
+}
+
 /// Turn-focus shot on the attacker while it steps next to the target. Returns when it is set.
 fn approach(
     builder: &mut Builder,
@@ -275,35 +317,62 @@ fn approach(
             pan: FOCUS_PAN,
         },
     );
+    builder.at(base, Step::Target(Some(target.id.clone())));
     let mut end = base + FOCUS_PAN;
+    if attacker.attack == AttackStyle::Ranged {
+        return end;
+    }
     let beside = fighting_cell(grid, tokens, attacker, target);
     if beside != attacker.cell {
         let steps = grid
             .path(attacker.cell, beside)
             .map_or(0, |path| path.len().saturating_sub(1)) as u32;
+        let per_step = walk_pace(steps);
         builder.at(
             base + WALK_START,
             Step::MoveTo {
                 token: attacker.id.clone(),
                 cell: beside,
-                per_step: STEP,
+                per_step,
             },
         );
-        end = end.max(base + WALK_START + STEP * steps);
+        end = end.max(base + WALK_START + per_step * steps);
     }
     end
 }
 
-/// Lunge, contact (impact shot, shake, flash, number, recoil) and then either the fall and the
-/// finishing cue, or everyone settling back to formation. Returns when it is over.
+/// Time per cell for a walk of `steps` cells: the usual pace, quickened (to a floor) so that a
+/// long approach across a big field stays under [`MAX_APPROACH`].
+fn walk_pace(steps: u32) -> Duration {
+    if steps == 0 || STEP * steps <= MAX_APPROACH {
+        return STEP;
+    }
+    (MAX_APPROACH / steps).max(MIN_STEP)
+}
+
+/// Lunge or bow, contact (impact shot, shake, flash, number, recoil) and then either the fall
+/// and the finishing cue, or everyone settling back to formation. Returns when it is over.
+/// `beside` is where a melee attacker stands to strike; it walks back from there afterwards.
+#[allow(clippy::too_many_arguments)]
 fn strike(
     builder: &mut Builder,
+    grid: &Grid,
     attacker: &Token,
     target: &Token,
+    beside: Cell,
     result: AttackResult,
     hit_points_after: Option<u32>,
     base: Duration,
 ) -> Duration {
+    let sound = |builder: &mut Builder, at, kind, token: &Token| {
+        builder.at(
+            at,
+            Step::Sound {
+                kind,
+                token: token.id.clone(),
+            },
+        );
+    };
     builder.at(
         base,
         Step::Highlight(Some(Highlight {
@@ -311,16 +380,59 @@ fn strike(
             cells: vec![target.cell],
         })),
     );
-    builder.at(
-        base,
-        Step::Animate {
-            token: attacker.id.clone(),
-            anim: Anim::Lunge {
-                toward: target.id.clone(),
+    let ranged = attacker.attack == AttackStyle::Ranged;
+    let hits = matches!(result, AttackResult::Hit { .. });
+    let (contact, mut end) = if ranged {
+        let release = base + DRAW_RELEASE;
+        builder.at(
+            base,
+            Step::Animate {
+                token: attacker.id.clone(),
+                anim: Anim::Draw {
+                    toward: target.id.clone(),
+                },
             },
-        },
-    );
-    let contact = base + LUNGE_CONTACT;
+        );
+        sound(builder, base, SoundKind::BowDraw, attacker);
+        sound(builder, release, SoundKind::BowRelease, attacker);
+        sound(builder, release, SoundKind::Effort, attacker);
+        sound(
+            builder,
+            release + Duration::from_millis(40),
+            SoundKind::ArrowFlight,
+            attacker,
+        );
+        builder.at(
+            release,
+            Step::Projectile {
+                from: attacker.id.clone(),
+                to: target.id.clone(),
+                hits,
+                flight: FLIGHT,
+            },
+        );
+        let contact = release + FLIGHT;
+        (contact, contact + (LUNGE - LUNGE_CONTACT))
+    } else {
+        builder.at(
+            base,
+            Step::Animate {
+                token: attacker.id.clone(),
+                anim: Anim::Lunge {
+                    toward: target.id.clone(),
+                },
+            },
+        );
+        sound(builder, base, SoundKind::SwordSwing, attacker);
+        sound(
+            builder,
+            base + Duration::from_millis(30),
+            SoundKind::Effort,
+            attacker,
+        );
+        (base + LUNGE_CONTACT, base + LUNGE)
+    };
+    builder.at(contact, Step::Target(None));
     let impact_camera = Step::Camera {
         command: camera(
             ShotName::Impact,
@@ -329,7 +441,6 @@ fn strike(
         ),
         pan: IMPACT_PAN,
     };
-    let mut end = base + LUNGE;
     match result {
         AttackResult::Miss => {
             builder.at(contact, impact_camera);
@@ -350,6 +461,12 @@ fn strike(
                     tone: FloatTone::Miss,
                 },
             );
+            let miss_sound = if ranged {
+                SoundKind::ArrowMiss
+            } else {
+                SoundKind::Parry
+            };
+            sound(builder, contact, miss_sound, target);
         }
         AttackResult::Hit {
             damage,
@@ -396,6 +513,18 @@ fn strike(
                     },
                 },
             );
+            let impact_sound = if ranged {
+                SoundKind::ArrowImpact
+            } else {
+                SoundKind::BladeHit
+            };
+            sound(builder, contact, impact_sound, target);
+            sound(
+                builder,
+                contact + Duration::from_millis(60),
+                SoundKind::Pain,
+                target,
+            );
             if let Some(current) = hit_points_after {
                 builder.at(
                     contact,
@@ -414,6 +543,8 @@ fn strike(
                         anim: Anim::Fall,
                     },
                 );
+                sound(builder, fall, SoundKind::Down, target);
+                sound(builder, fall + FALL_LANDS, SoundKind::BodyFall, target);
                 if target.side == Side::Enemy && attacker.side == Side::Hero {
                     let cue = fall + FINISHING_DELAY;
                     builder.at(
@@ -453,12 +584,20 @@ fn strike(
     // Settle: everyone returns to formation and the camera widens.
     end += Duration::from_millis(220);
     builder.at(end, Step::Highlight(None));
+    let home = attacker.cell;
+    let back_steps = if home == beside {
+        0
+    } else {
+        grid.path(beside, home)
+            .map_or(0, |path| path.len().saturating_sub(1)) as u32
+    };
+    let back_pace = walk_pace(back_steps);
     builder.at(
         end,
         Step::MoveTo {
             token: attacker.id.clone(),
-            cell: attacker.cell,
-            per_step: STEP,
+            cell: home,
+            per_step: back_pace,
         },
     );
     builder.at(
@@ -468,7 +607,7 @@ fn strike(
             pan: SETTLE_PAN,
         },
     );
-    end + SETTLE_PAN + Duration::from_millis(200)
+    (end + SETTLE_PAN + Duration::from_millis(200)).max(end + back_pace * back_steps)
 }
 
 fn plan_heal(
@@ -499,6 +638,13 @@ fn plan_heal(
         Step::Animate {
             token: target_id.clone(),
             anim: Anim::Heal,
+        },
+    );
+    builder.at(
+        now,
+        Step::Sound {
+            kind: SoundKind::HealBreath,
+            token: target_id.clone(),
         },
     );
     builder.at(
@@ -551,6 +697,7 @@ mod tests {
             portrait: None,
             hit_points: None,
             statuses: Vec::new(),
+            attack: AttackStyle::Melee,
         }
     }
 
@@ -596,6 +743,7 @@ mod tests {
                     Anim::Dodge { .. } => "dodge",
                     Anim::Fall => "fall",
                     Anim::Heal => "heal",
+                    Anim::Draw { .. } => "draw",
                 },
                 Step::Shake { .. } => "shake",
                 Step::Flash { .. } => "flash",
@@ -603,6 +751,25 @@ mod tests {
                 Step::ShowHitPoints { .. } => "hp",
                 Step::FinishingBlow { .. } => "finishing",
                 Step::EndFinishingBlow => "finishing-end",
+                Step::Sound { kind, .. } => match kind {
+                    SoundKind::SwordSwing => "snd-swing",
+                    SoundKind::BladeHit => "snd-hit",
+                    SoundKind::Parry => "snd-parry",
+                    SoundKind::BowDraw => "snd-bow-draw",
+                    SoundKind::BowRelease => "snd-bow-release",
+                    SoundKind::ArrowFlight => "snd-arrow-flight",
+                    SoundKind::ArrowImpact => "snd-arrow-impact",
+                    SoundKind::ArrowMiss => "snd-arrow-miss",
+                    SoundKind::Effort => "snd-effort",
+                    SoundKind::Pain => "snd-pain",
+                    SoundKind::Down => "snd-down",
+                    SoundKind::BodyFall => "snd-body-fall",
+                    SoundKind::HealBreath => "snd-heal",
+                    SoundKind::Footstep => "snd-step",
+                },
+                Step::Target(Some(_)) => "target",
+                Step::Target(None) => "untarget",
+                Step::Projectile { .. } => "arrow",
             })
             .collect()
     }
@@ -726,7 +893,7 @@ mod tests {
         )
         .unwrap();
         let first = names(&approach_only);
-        assert_eq!(first, vec!["active", "focus", "walk"]);
+        assert_eq!(first, vec!["active", "focus", "target", "walk"]);
         assert!(!first.contains(&"lunge"));
         let second = names(&strike_only);
         assert!(position(&second, "lunge") < position(&second, "impact-shot"));
@@ -827,5 +994,164 @@ mod tests {
             downed: false,
         });
         assert_eq!(plan(&grid, &tokens, &beat), plan(&grid, &tokens, &beat));
+    }
+
+    fn ranged_field() -> (Grid, Vec<Token>) {
+        let (grid, mut tokens) = field();
+        tokens[0].attack = AttackStyle::Ranged;
+        (grid, tokens)
+    }
+
+    fn times_of(timeline: &Timeline, wanted: &str) -> Vec<Duration> {
+        let labels = names(timeline);
+        timeline
+            .steps
+            .iter()
+            .zip(labels)
+            .filter(|(_, label)| *label == wanted)
+            .map(|(timed, _)| timed.at)
+            .collect()
+    }
+
+    #[test]
+    fn a_ranged_attacker_draws_releases_flies_and_only_then_lands_the_blow() {
+        let (grid, tokens) = ranged_field();
+        let timeline = plan(
+            &grid,
+            &tokens,
+            &attack(AttackResult::Hit {
+                damage: 4,
+                critical: false,
+                downed: false,
+            }),
+        )
+        .unwrap();
+        let labels = names(&timeline);
+        assert!(!labels.contains(&"walk") || moves(&timeline).iter().all(|(cell, _)| *cell == Cell::new(3, 4)));
+        let draw = times_of(&timeline, "draw")[0];
+        let release = times_of(&timeline, "snd-bow-release")[0];
+        let flight = times_of(&timeline, "arrow")[0];
+        let impact = times_of(&timeline, "snd-arrow-impact")[0];
+        let number = times_of(&timeline, "float")[0];
+        assert!(draw < release && release == flight && flight < impact);
+        assert_eq!(impact - release, FLIGHT, "the blow lands when the arrow arrives");
+        assert_eq!(number, impact);
+        assert_eq!(times_of(&timeline, "snd-bow-draw")[0], draw);
+        assert!(times_of(&timeline, "snd-arrow-flight")[0] >= release);
+        assert!(times_of(&timeline, "snd-pain")[0] > impact);
+        assert!(times_of(&timeline, "snd-swing").is_empty());
+        let flight_ms = FLIGHT.as_millis();
+        assert!((350..=450).contains(&flight_ms), "{flight_ms}");
+    }
+
+    #[test]
+    fn a_ranged_miss_sends_the_arrow_past_and_sticks_it() {
+        let (grid, tokens) = ranged_field();
+        let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
+        let labels = names(&timeline);
+        assert!(labels.contains(&"snd-arrow-miss") && labels.contains(&"dodge"));
+        for absent in ["snd-arrow-impact", "snd-hit", "recoil", "snd-pain"] {
+            assert!(!labels.contains(&absent), "{absent} in {labels:?}");
+        }
+        let arrow = timeline
+            .steps
+            .iter()
+            .find_map(|timed| match &timed.step {
+                Step::Projectile { hits, .. } => Some(*hits),
+                _ => None,
+            })
+            .unwrap();
+        assert!(!arrow);
+    }
+
+    #[test]
+    fn a_ranged_attacker_never_walks_up_even_from_far_away() {
+        let (grid, mut tokens) = ranged_field();
+        tokens[0].cell = Cell::new(0, 5);
+        let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
+        assert!(moves(&timeline).iter().all(|(cell, _)| *cell == Cell::new(0, 5)));
+    }
+
+    #[test]
+    fn a_melee_blow_sounds_swing_effort_then_impact_and_pain_in_order() {
+        let (grid, tokens) = field();
+        let timeline = plan(
+            &grid,
+            &tokens,
+            &attack(AttackResult::Hit {
+                damage: 9,
+                critical: false,
+                downed: true,
+            }),
+        )
+        .unwrap();
+        let labels = names(&timeline);
+        let order = [
+            "snd-swing",
+            "snd-effort",
+            "snd-hit",
+            "snd-pain",
+            "snd-down",
+            "snd-body-fall",
+        ];
+        let positions: Vec<usize> = order.iter().map(|name| position(&labels, name)).collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{labels:?}");
+        let swing = times_of(&timeline, "snd-swing")[0];
+        let hit = times_of(&timeline, "snd-hit")[0];
+        assert_eq!(hit - swing, LUNGE_CONTACT, "the impact sounds at contact");
+    }
+
+    #[test]
+    fn a_melee_miss_swings_then_parries_without_flesh_sounds() {
+        let (grid, tokens) = field();
+        let labels = names(&plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap());
+        assert!(position(&labels, "snd-swing") < position(&labels, "snd-parry"));
+        assert!(!labels.contains(&"snd-hit") && !labels.contains(&"snd-pain"));
+    }
+
+    #[test]
+    fn the_target_is_ringed_during_the_focus_shot_and_released_at_contact() {
+        let (grid, tokens) = field();
+        let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
+        let labels = names(&timeline);
+        assert!(position(&labels, "target") < position(&labels, "lunge"));
+        assert!(position(&labels, "lunge") < position(&labels, "untarget"));
+        assert_eq!(times_of(&timeline, "target")[0], Duration::ZERO);
+    }
+
+    #[test]
+    fn a_heal_breathes_at_the_moment_of_the_shimmer() {
+        let (grid, tokens) = field();
+        let beat = Beat::Heal {
+            source: TokenId::new("hero"),
+            target: TokenId::new("ally"),
+            amount: 3,
+            target_hit_points_after: None,
+        };
+        let timeline = plan(&grid, &tokens, &beat).unwrap();
+        assert_eq!(times_of(&timeline, "snd-heal"), times_of(&timeline, "heal"));
+    }
+
+    #[test]
+    fn a_long_walk_is_quickened_so_the_fight_does_not_stall() {
+        assert_eq!(walk_pace(2), STEP);
+        let steps = 12;
+        let pace = walk_pace(steps);
+        assert!(pace < STEP && pace >= MIN_STEP);
+        assert!(pace * steps <= MAX_APPROACH + Duration::from_millis(12));
+    }
+
+    #[test]
+    fn the_approach_goes_around_an_obstacle_not_through_it() {
+        let (grid, tokens) = field();
+        let wall: Vec<Cell> = (1..7).map(|col| Cell::new(col, 3)).collect();
+        let blocked = Grid::open_except([0.0, 0.0], 1.5, 8, 6, &wall).unwrap();
+        let timeline = plan(&blocked, &tokens, &attack(AttackResult::Miss)).unwrap();
+        let beside = moves(&timeline)[0].0;
+        let path = blocked.path(Cell::new(3, 4), beside).unwrap();
+        assert!(path.iter().all(|cell| blocked.is_walkable(*cell)));
+        assert!(path.len() > 4, "detours around the wall: {path:?}");
+        assert!(blocked.is_walkable(beside));
+        let _ = grid;
     }
 }

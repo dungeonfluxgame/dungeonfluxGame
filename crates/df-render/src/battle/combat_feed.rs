@@ -11,8 +11,9 @@ use std::collections::BTreeMap;
 
 use super::{
     formation,
-    model::{AttackResult, Beat, HitPoints, Side, Token, TokenId},
+    model::{AttackResult, AttackStyle, Beat, HitPoints, Side, Token, TokenId},
     stage::Stage,
+    status::Status,
 };
 
 /// Who stages a reported outcome.
@@ -37,6 +38,15 @@ pub struct Member {
     pub height_m: f32,
     pub figure: Option<String>,
     pub portrait: Option<String>,
+    /// How the figure attacks on screen. Switch point: the server's weapon replaces the adapter's
+    /// figure-based guess.
+    pub attack: AttackStyle,
+    /// The cell the server placed the combatant on. `None` stages it on the layout's spawn
+    /// cells (or the derived formation); when the server supplies cells the renderer is unchanged.
+    pub cell: Option<super::grid::Cell>,
+    /// Conditions and states the server reports, plus any the adapter derives from the server's
+    /// own knockout state. Hit-point based states (bloodied) are derived at display time.
+    pub statuses: Vec<Status>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -89,7 +99,8 @@ fn token_for(member: &Member, cell: super::grid::Cell) -> Token {
             current: member.hit_points,
             maximum: member.maximum_hit_points,
         }),
-        statuses: Vec::new(),
+        statuses: member.statuses.clone(),
+        attack: member.attack,
     }
 }
 
@@ -111,18 +122,22 @@ impl CombatFeed {
             .filter(|m| m.side == Side::Hero)
             .count();
         let enemies = snapshot.members.len() - heroes;
-        let layout = formation::derive(stage.grid(), heroes, enemies).ok()?;
+        let seats = match stage.layout() {
+            Some(layout) => formation::from_layout(layout, stage.grid(), heroes, enemies),
+            None => formation::derive(stage.grid(), heroes, enemies),
+        }
+        .ok()?;
         let (mut hero_cells, mut enemy_cells) =
-            (layout.heroes.into_iter(), layout.enemies.into_iter());
+            (seats.heroes.into_iter(), seats.enemies.into_iter());
         let tokens: Vec<Token> = snapshot
             .members
             .iter()
             .filter_map(|member| {
-                let cell = match member.side {
+                let seat = match member.side {
                     Side::Hero => hero_cells.next(),
                     Side::Enemy => enemy_cells.next(),
-                }?;
-                Some(token_for(member, cell))
+                };
+                Some(token_for(member, member.cell.or(seat)?))
             })
             .collect();
         let roster_changed = roster != self.roster;
@@ -238,6 +253,9 @@ mod tests {
             height_m: 1.5,
             figure: None,
             portrait: None,
+            attack: AttackStyle::Melee,
+            cell: None,
+            statuses: Vec::new(),
         }
     }
 
@@ -315,7 +333,7 @@ mod tests {
         assert!(saw_card && stage.hud().finishing_blow.is_none());
         let frame = stage.frame();
         let enemy = frame.figures.iter().find(|f| f.id.0 == "e").unwrap();
-        assert!(enemy.alpha < 0.5);
+        assert!(enemy.downed && enemy.slump > 0.99);
     }
 
     #[test]
@@ -388,6 +406,9 @@ mod hold_tests {
             height_m: 1.5,
             figure: None,
             portrait: None,
+            attack: AttackStyle::Melee,
+            cell: None,
+            statuses: Vec::new(),
         };
         let snapshot = |hp, outcomes| CombatSnapshot {
             members: vec![member("a", Side::Hero, 12), member("e", Side::Enemy, hp)],

@@ -3,9 +3,10 @@
 //! columns grow along +X and rows along +Z. The grid is staging only: the rules engine has no
 //! positions, so nothing here decides range, reach or movement outcomes.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::cmp::Reverse;
 
-use super::math::Vec3;
+use super::{layout::{Cover, Layout}, math::Vec3};
 
 pub const MAX_GRID_SIDE: u32 = 64;
 
@@ -44,6 +45,10 @@ pub struct Grid {
     cols: u32,
     rows: u32,
     walkable: Vec<bool>,
+    /// Passable but not a place to stop (a low obstacle a figure can step over).
+    no_stand: Vec<bool>,
+    difficult: Vec<bool>,
+    cover: Vec<Cover>,
 }
 
 impl Grid {
@@ -74,12 +79,16 @@ impl Grid {
                 .ok_or(GridError::WalkableIndexOutOfRange)?;
             *slot = true;
         }
+        let cells = walkable.len();
         Ok(Self {
             origin,
             cell_m,
             cols,
             rows,
             walkable,
+            no_stand: vec![false; cells],
+            difficult: vec![false; cells],
+            cover: vec![Cover::None; cells],
         })
     }
 
@@ -99,6 +108,94 @@ impl Grid {
             }
         }
         Ok(grid)
+    }
+
+    /// This grid with a layout's obstacles applied: blocking obstacles remove cells from
+    /// movement, every obstacle gives its cover to the cell it stands on, and difficult ground is
+    /// marked. A low non-blocking obstacle can be crossed but not stopped on.
+    pub fn with_layout(&self, layout: &Layout) -> Self {
+        let mut grid = self.clone();
+        for obstacle in &layout.obstacles {
+            for cell in &obstacle.cells {
+                let Some(index) = grid.index(*cell) else {
+                    continue;
+                };
+                if obstacle.blocks_movement {
+                    grid.walkable[index] = false;
+                } else {
+                    grid.no_stand[index] = true;
+                }
+                grid.cover[index] = obstacle.cover;
+            }
+        }
+        for cell in &layout.difficult {
+            if let Some(index) = grid.index(*cell) {
+                grid.difficult[index] = true;
+            }
+        }
+        grid
+    }
+
+    /// Whether a figure may end a move here.
+    pub fn is_standable(&self, cell: Cell) -> bool {
+        self.index(cell)
+            .is_some_and(|index| self.walkable[index] && !self.no_stand[index])
+    }
+
+    pub fn is_difficult(&self, cell: Cell) -> bool {
+        self.index(cell).is_some_and(|index| self.difficult[index])
+    }
+
+    pub fn cover_at(&self, cell: Cell) -> Cover {
+        self.index(cell).map_or(Cover::None, |index| self.cover[index])
+    }
+
+    /// The best cover next to `cell` (eight-way) and the neighbouring cell that gives it; ties
+    /// break toward the lower row then column so the answer is stable.
+    pub fn cover_beside(&self, cell: Cell) -> Option<(Cell, Cover)> {
+        NEIGHBOURS
+            .iter()
+            .map(|(delta_col, delta_row)| Cell::new(cell.col + delta_col, cell.row + delta_row))
+            .filter(|neighbour| self.cover_at(*neighbour) != Cover::None)
+            .map(|neighbour| (self.cover_at(neighbour), neighbour))
+            .max_by_key(|(cover, neighbour)| {
+                // Strongest cover first, then a straight-on neighbour over a diagonal one.
+                let diagonal = neighbour.col != cell.col && neighbour.row != cell.row;
+                (*cover, Reverse(diagonal), Reverse(neighbour.row), Reverse(neighbour.col))
+            })
+            .map(|(cover, neighbour)| (neighbour, cover))
+    }
+
+    /// Every cell reachable from `from` over walkable cells by the same moves as [`Grid::path`].
+    pub fn reachable_from(&self, from: Cell) -> BTreeSet<Cell> {
+        let mut seen = BTreeSet::new();
+        if !self.is_walkable(from) {
+            return seen;
+        }
+        let mut stack = vec![from];
+        seen.insert(from);
+        while let Some(current) = stack.pop() {
+            for next in self.steps_from(current) {
+                if seen.insert(next) {
+                    stack.push(next);
+                }
+            }
+        }
+        seen
+    }
+
+    /// The walkable cells one move from `current`; a diagonal may not cut a blocked corner.
+    fn steps_from(&self, current: Cell) -> impl Iterator<Item = Cell> + '_ {
+        NEIGHBOURS.iter().filter_map(move |(delta_col, delta_row)| {
+            let next = Cell::new(current.col + delta_col, current.row + delta_row);
+            if !self.is_walkable(next) {
+                return None;
+            }
+            let diagonal = *delta_col != 0 && *delta_row != 0;
+            let corners_open = self.is_walkable(Cell::new(current.col + delta_col, current.row))
+                && self.is_walkable(Cell::new(current.col, current.row + delta_row));
+            (!diagonal || corners_open).then_some(next)
+        })
     }
 
     pub fn origin(&self) -> [f32; 2] {
@@ -170,32 +267,36 @@ impl Grid {
         )
     }
 
-    /// Shortest eight-way path between two walkable cells, both ends included. Diagonal steps
-    /// may not cut a blocked corner.
+    /// Shortest eight-way path between two walkable cells, both ends included, found with A*
+    /// (straight moves cost 10, diagonal 14, so routes look natural rather than staircase-like).
+    /// Diagonal steps may not cut a blocked corner. Ties resolve by cell order, so the same grid
+    /// always gives the same route.
     pub fn path(&self, from: Cell, to: Cell) -> Option<Vec<Cell>> {
         if !self.is_walkable(from) || !self.is_walkable(to) {
             return None;
         }
-        let mut queue = VecDeque::from([from]);
+        let heuristic = |cell: Cell| {
+            let (dc, dr) = (cell.col.abs_diff(to.col), cell.row.abs_diff(to.row));
+            10 * dc.max(dr) + 4 * dc.min(dr)
+        };
+        let mut open = BinaryHeap::from([Reverse((heuristic(from), 0u32, from))]);
+        let mut cost = BTreeMap::from([(from, 0u32)]);
         let mut parents = BTreeMap::from([(from, from)]);
-        while let Some(current) = queue.pop_front() {
+        while let Some(Reverse((_, spent, current))) = open.pop() {
             if current == to {
                 return Some(unwind(&parents, from, to));
             }
-            for (delta_col, delta_row) in NEIGHBOURS {
-                let next = Cell::new(current.col + delta_col, current.row + delta_row);
-                if !self.is_walkable(next) || parents.contains_key(&next) {
-                    continue;
+            if cost.get(&current).is_some_and(|best| *best < spent) {
+                continue;
+            }
+            for next in self.steps_from(current) {
+                let diagonal = next.col != current.col && next.row != current.row;
+                let total = spent + if diagonal { 14 } else { 10 };
+                if cost.get(&next).is_none_or(|best| total < *best) {
+                    cost.insert(next, total);
+                    parents.insert(next, current);
+                    open.push(Reverse((total + heuristic(next), total, next)));
                 }
-                let diagonal = delta_col != 0 && delta_row != 0;
-                if diagonal
-                    && !(self.is_walkable(Cell::new(current.col + delta_col, current.row))
-                        && self.is_walkable(Cell::new(current.col, current.row + delta_row)))
-                {
-                    continue;
-                }
-                parents.insert(next, current);
-                queue.push_back(next);
             }
         }
         None
@@ -207,7 +308,7 @@ impl Grid {
         NEIGHBOURS
             .iter()
             .map(|(delta_col, delta_row)| Cell::new(target.col + delta_col, target.row + delta_row))
-            .filter(|cell| self.is_walkable(*cell) && !occupied.contains(cell))
+            .filter(|cell| self.is_standable(*cell) && !occupied.contains(cell))
             .filter_map(|cell| {
                 let length = if cell == from {
                     0

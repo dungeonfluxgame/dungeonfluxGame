@@ -19,33 +19,41 @@ mod director;
 mod figure_art;
 mod formation;
 mod grid;
+mod layout;
 mod math;
 mod model;
 mod scene_file;
+mod sound;
 mod splat;
 mod stage;
+mod status;
 mod theme;
 
 pub use camera::{CameraPose, CameraRig, PoseError, ShotName};
 pub use combat_feed::{CombatFeed, CombatSnapshot, FeedMode, FeedReport, Member, Outcome};
 pub use director::{Anim, FlashTone, PlanError, Step, TimedStep, Timeline, plan};
 pub use figure_art::{VisibleBounds, visible_bounds};
-pub use formation::{Formation, FormationError, derive as derive_formation};
+pub use formation::{Formation, FormationError, derive as derive_formation, from_layout};
 pub use grid::{Cell, Grid, GridError};
+pub use layout::{Cover, Layout, LayoutError, Obstacle, choose as choose_layout};
 pub use math::{Mat4, Quat, Vec3};
 pub use model::{
-    AttackResult, Beat, CameraCommand, CameraFocus, FinishingBlow, FloatTone, FloatingText,
-    Highlight, HighlightKind, HitPoints, HudState, RollCard, Side, Status, Token, TokenId,
+    AttackResult, AttackStyle, Beat, CameraCommand, CameraFocus, FinishingBlow, FloatTone, FloatingText,
+    Highlight, HighlightKind, HitPoints, HudState, RollCard, Side, Token, TokenId,
 };
 pub use scene_file::{
     BackdropLayer, BattleScene, DEFAULT_SCENE_ID, GroundLayer, SceneFileError, SplatFormat,
     SplatLayer, embedded_ids, load_embedded, parse as parse_scene,
 };
+pub use sound::{
+    ALL_CLIPS, SoundEvent, SoundKind, Surface, VariationPicker, VoiceSet, voice_for,
+};
+pub use status::{Resolved, Status, StatusPose, StatusSet, icon_statuses, pose_for, resolve};
 pub use splat::{
     ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, Splat, SplatCloud, SplatError,
     SplatFileLoader, SplatLoader, SplatSorter, SplatTransform, encode_splat_file,
 };
-pub use stage::{FigureView, FlashView, FrameView, Stage, StageError};
+pub use stage::{CoverPip, FigureView, FlashView, FrameView, ProjectileView, Stage, StageError};
 pub use theme::{ColorGrade, Theme};
 
 #[cfg(target_arch = "wasm32")]

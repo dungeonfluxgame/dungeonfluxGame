@@ -3,7 +3,7 @@
 //! is staging. The server owns every outcome; a client builds these values from the server's
 //! audience-safe combat view and never decides a hit, a miss or damage itself.
 
-use super::{camera::ShotName, grid::Cell};
+use super::{camera::ShotName, grid::Cell, status::Status};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TokenId(pub String);
@@ -20,37 +20,14 @@ pub enum Side {
     Enemy,
 }
 
-/// A condition tint shown on the figure. Cosmetic only.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Status {
-    Poisoned,
-    Burning,
-    Frozen,
-    Blessed,
-    Stunned,
-}
-
-impl Status {
-    pub fn from_key(key: &str) -> Option<Self> {
-        Some(match key {
-            "poisoned" => Self::Poisoned,
-            "burning" => Self::Burning,
-            "frozen" => Self::Frozen,
-            "blessed" => Self::Blessed,
-            "stunned" => Self::Stunned,
-            _ => return None,
-        })
-    }
-
-    pub fn tint(self) -> [f32; 3] {
-        match self {
-            Self::Poisoned => [0.55, 1.0, 0.45],
-            Self::Burning => [1.0, 0.62, 0.35],
-            Self::Frozen => [0.6, 0.85, 1.0],
-            Self::Blessed => [1.0, 0.92, 0.6],
-            Self::Stunned => [0.85, 0.85, 0.6],
-        }
-    }
+/// How a combatant delivers an attack on screen. Staging only: the server decides the outcome.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AttackStyle {
+    /// Steps up beside the target and strikes.
+    #[default]
+    Melee,
+    /// Stays put, draws and looses an arrow that flies to the target.
+    Ranged,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +59,7 @@ pub struct Token {
     pub portrait: Option<String>,
     pub hit_points: Option<HitPoints>,
     pub statuses: Vec<Status>,
+    pub attack: AttackStyle,
 }
 
 pub const MIN_HEIGHT_M: f32 = 0.6;
