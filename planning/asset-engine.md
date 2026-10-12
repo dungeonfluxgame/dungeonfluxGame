@@ -237,6 +237,13 @@ hit). Combat and the lobby never get one.
   the image budget) with the speaker's fixed description, and the measured head box becomes the
   layout; when the call fails the director's prediction stands (asked head 70/30% across and 56% down,
   corrected by the measured drift: 14 to 18% of the frame height higher, 6% toward the middle).
+- Heroes and identity (follow-up): the same vision call also finds the heroes' heads (`PlateLayout.heroes`,
+  proto `PlateHead`), so a hero's typed line stands beside that hero in the plate (the hero's party card
+  is the fallback when the hero is not found). The speaker's reference is both the full-length portrait and
+  a close portrait of the face, and the speaker is named by role only (no clothes): a description that
+  disagreed with the art (a plain tunic where the art has a kerchief) was the likely reason the same
+  person drifted between two scenes' plates. A measured placement is kept in `<key>.layout.json` beside
+  the cached plate and read back by a later run. Phones draw the plate as the scene picture.
 - Recipe (PLAY-V09 tuning, `artifacts/tmp/play-v09/tune`): a wide shot on a 28mm lens from far back,
   heroes no wider than a quarter of the frame with their heads about 55% down, all heads below the top
   30% (the display's title block sits top right), photographic capture terms rather than a style.

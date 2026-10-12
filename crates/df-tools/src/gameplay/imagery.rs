@@ -42,9 +42,10 @@ use axum::{
 use bytes::Bytes;
 use df_observe::OperationContext;
 use df_providers::{
-    HeadBox, HeadLocateConfig, ImageBackground, ImageEdit, ImageEditConfig, ImageEditError,
-    ImageEditModel, ImageFormat, ImageModeration, ImageQuality, ImageUsage, NativeHeadLocator,
-    NativeHttpRefusal, NativeImageEditProvider, ReferenceImage as ProviderReference,
+    HeadLocateConfig, ImageBackground, ImageEdit, ImageEditConfig, ImageEditError, ImageEditModel,
+    ImageFormat, ImageModeration, ImageQuality, ImageUsage, LocateTarget, LocatedHead,
+    NativeHeadLocator, NativeHttpRefusal, NativeImageEditProvider,
+    ReferenceImage as ProviderReference,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -65,8 +66,9 @@ pub(super) use prompt::{
 )]
 pub(super) use prompt::{PromptRefusal, VettedFact};
 // PLAY-V09: the scene plate's party sheet and prompts.
+use party_sheet::SheetError;
 pub(super) use party_sheet::{party_sheet, vision_picture};
-pub(super) use plate_prompt::{PlateReferences, plate_moment, scene_plate};
+pub(super) use plate_prompt::{PlateReferences, hero_locator_phrase, plate_moment, scene_plate};
 pub(super) use references::{ReferenceImage, ReferenceStore};
 
 use super::startup_configuration::{
@@ -397,15 +399,17 @@ impl Imagery {
         Ok(imagery)
     }
 
-    /// PLAY-V09: where the head of the person `description` names is in the finished image `key`,
-    /// as fractions of the picture. The description is a fixed phrase of the closed vocabulary.
-    /// Costs a fraction of a cent, never charges the image budget, and every failure is
-    /// typed: the caller keeps the layout it predicted.
-    pub(super) async fn locate_head(
+    /// PLAY-V09: where the heads of `targets` (`id`, fixed description) are in the finished image
+    /// `key`, as fractions of the picture. `face` is a picture of the first target's face (any
+    /// image the server holds), which tells the right person from the many in the scene. Costs a
+    /// fraction of a cent, never charges the image budget, and every failure is typed: the caller
+    /// keeps the layout it predicted.
+    pub(super) async fn locate_heads(
         &self,
         key: &ImageKey,
-        description: &str,
-    ) -> Result<HeadBox, ImageFailure> {
+        face: Option<&ReferenceImage>,
+        targets: &[(&str, &str)],
+    ) -> Result<Vec<LocatedHead>, ImageFailure> {
         let Mode::On { engine, .. } = &self.inner.mode else {
             return Err(ImageFailure::Off);
         };
@@ -421,12 +425,23 @@ impl Imagery {
             .read_cached(key.as_str(), format)
             .await
             .ok_or(ImageFailure::InvalidRequest)?;
-        let picture = tokio::task::spawn_blocking(move || vision_picture(&bytes, stored))
-            .await
-            .map_err(|_| ImageFailure::Interrupted)?
-            .map_err(|_| ImageFailure::BadOutput)?;
+        let face = face.map(|face| (face.bytes.clone(), face.format));
+        let (picture, face) = tokio::task::spawn_blocking(move || {
+            let picture = vision_picture(&bytes, stored, 1024)?;
+            let face = face
+                .map(|(bytes, format)| vision_picture(&bytes, format, 384))
+                .transpose()?;
+            Ok::<_, SheetError>((picture, face))
+        })
+        .await
+        .map_err(|_| ImageFailure::Interrupted)?
+        .map_err(|_| ImageFailure::BadOutput)?;
+        let targets: Vec<LocateTarget<'_>> = targets
+            .iter()
+            .map(|(id, description)| LocateTarget { id, description })
+            .collect();
         locator
-            .locate(&picture, description, HEAD_LOCATE_DEADLINE)
+            .locate(&picture, face.as_deref(), &targets, HEAD_LOCATE_DEADLINE)
             .await
             .map_err(|error| match error {
                 df_providers::HeadLocateError::InvalidRequest => ImageFailure::InvalidRequest,
@@ -438,6 +453,38 @@ impl Imagery {
                 | df_providers::HeadLocateError::Provider(_)
                 | df_providers::HeadLocateError::Transport(_) => ImageFailure::Provider,
             })
+    }
+
+    /// PLAY-V09: a small note kept beside the cached image `key` (its measured layout), so a
+    /// later server run does not ask again. `None` when there is none (or imagery is off).
+    pub(super) async fn read_note(&self, key: &ImageKey) -> Option<Vec<u8>> {
+        let Mode::On { engine, .. } = &self.inner.mode else {
+            return None;
+        };
+        let path = engine
+            .cache_dir
+            .join(format!("{}.layout.json", key.as_str()));
+        tokio::task::spawn_blocking(move || read_cache_file(&path).map(|bytes| bytes.to_vec()))
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// Keeps a note beside the cached image `key`. A failed write only means it is asked again.
+    pub(super) async fn write_note(&self, key: &ImageKey, note: Vec<u8>) {
+        let Mode::On { engine, .. } = &self.inner.mode else {
+            return;
+        };
+        let target = engine
+            .cache_dir
+            .join(format!("{}.layout.json", key.as_str()));
+        let staging = engine.cache_dir.join(format!(
+            ".{}.layout.{}.tmp",
+            key.as_str(),
+            std::process::id()
+        ));
+        let _kept =
+            tokio::task::spawn_blocking(move || write_cache_file(&staging, &target, &note)).await;
     }
 
     /// Uses `provider`; tests pass one pointed at a loopback fake.

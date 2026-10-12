@@ -24,7 +24,9 @@ message GameplayScene { HarborDestination destination = 1; string title = 2; str
 enum PlateState { PLATE_STATE_UNSPECIFIED = 0; PLATE_STATE_PENDING = 1; PLATE_STATE_READY = 2; PLATE_STATE_FAILED = 3; }
 enum PlateSide { PLATE_SIDE_UNSPECIFIED = 0; PLATE_SIDE_LEFT = 1; PLATE_SIDE_RIGHT = 2; }
 // Positions are permille of the plate (0 to 1000 across and down); the head box is centred on the head position.
-message PlateLayout { PlateSide bubble_side = 1; uint32 head_x_permille = 2; uint32 head_y_permille = 3; uint32 head_width_permille = 4; uint32 head_height_permille = 5; }
+message PlateLayout { PlateSide bubble_side = 1; uint32 head_x_permille = 2; uint32 head_y_permille = 3; uint32 head_width_permille = 4; uint32 head_height_permille = 5; repeated PlateHead heroes = 6; }
+// Where one hero's head is in the plate (the party member at `hero_index`, counted from 0) and which side of it a speech bubble stands on, toward the middle of the frame. Only heroes the vision model found are listed.
+message PlateHead { uint32 hero_index = 1; PlateSide bubble_side = 2; uint32 head_x_permille = 3; uint32 head_y_permille = 4; uint32 head_width_permille = 5; uint32 head_height_permille = 6; }
 enum SceneRole { SCENE_ROLE_UNSPECIFIED = 0; PATRON = 1; ANTAGONIST = 2; CONTACT = 3; BYSTANDER = 4; }
 // live_sprite (display only): a server-generated expression variant of this character's cut-out, `/gameplay/imagery/<key>`; empty when none. Presentation only.
 message SceneActor { string id = 1; string name = 2; SceneRole role = 3; string sprite = 4; string portrait = 5; bool speaking = 6; string live_sprite = 7; }

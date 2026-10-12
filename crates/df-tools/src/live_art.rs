@@ -102,10 +102,25 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
         ) => {
             let same_scene = shown.scene.as_ref().map(|scene| &scene.title)
                 == new.scene.as_ref().map(|scene| &scene.title);
-            if !same_scene || !faces_well_formed(new.journey.as_ref()) {
+            let plate_well_formed = new
+                .scene
+                .as_ref()
+                .is_none_or(|scene| well_formed(&scene.live_plate));
+            if !same_scene || !plate_well_formed || !faces_well_formed(new.journey.as_ref()) {
                 return false;
             }
-            merge_faces(&mut shown.journey, new.journey.as_ref())
+            // PLAY-V09: the scene plate goes to phones too (their scene picture).
+            let mut changed = false;
+            if let (Some(shown_scene), Some(new_scene)) = (shown.scene.as_mut(), new.scene.as_ref())
+            {
+                changed |= shown_scene.live_plate != new_scene.live_plate
+                    || shown_scene.plate_layout != new_scene.plate_layout
+                    || shown_scene.plate_state != new_scene.plate_state;
+                shown_scene.live_plate.clone_from(&new_scene.live_plate);
+                shown_scene.plate_layout.clone_from(&new_scene.plate_layout);
+                shown_scene.plate_state = new_scene.plate_state;
+            }
+            changed | merge_faces(&mut shown.journey, new.journey.as_ref())
         }
         _ => false,
     }
@@ -179,6 +194,29 @@ mod tests {
                 },
             )),
         }
+    }
+
+    #[test]
+    fn a_phones_scene_plate_is_copied_for_the_same_scene_and_a_bad_path_is_never_taken() {
+        let mut shown = player_view(&[], &["Rowan"]);
+        let mut newer = player_view(&[], &["Rowan"]);
+        let set_plate = |view: &mut rpc::ViewMessage, path: &str| {
+            if let Some(rpc::view_message::Audience::Player(player)) = view.audience.as_mut()
+                && let Some(scene) = player.scene.as_mut()
+            {
+                scene.live_plate = path.to_owned();
+                scene.plate_state = rpc::PlateState::Ready as i32;
+            }
+        };
+        set_plate(&mut newer, &key('b'));
+        assert!(merge_art(&mut shown, &newer));
+        assert_eq!(shown, newer);
+        assert!(!merge_art(&mut shown, &newer), "nothing more to copy");
+        let before = shown.clone();
+        let mut bad = player_view(&[], &["Rowan"]);
+        set_plate(&mut bad, "/gameplay/imagery/short");
+        assert!(!merge_art(&mut shown, &bad));
+        assert_eq!(shown, before);
     }
 
     #[test]
@@ -278,6 +316,7 @@ mod tests {
                 head_y_permille: 320,
                 head_width_permille: 120,
                 head_height_permille: 180,
+                ..Default::default()
             });
         }
         assert!(merge_art(&mut shown, &newer));

@@ -100,15 +100,16 @@ pub(in crate::gameplay) fn party_sheet(
     Ok(ReferenceImage::new(ImageFormat::Jpeg, Bytes::from(encoded)))
 }
 
-/// A finished plate as the vision model is shown it: at most 1024 pixels wide, a JPEG.
+/// A picture as the vision model is shown it: at most `maximum_width` pixels wide, a JPEG.
 pub(in crate::gameplay) fn vision_picture(
     bytes: &[u8],
     format: ImageFormat,
+    maximum_width: u32,
 ) -> Result<Vec<u8>, SheetError> {
     let decoded = image::load_from_memory_with_format(bytes, container_of(format))
         .map_err(|_| SheetError::Decode)?;
     let picture = flatten(&decoded);
-    let width = picture.width().min(1024);
+    let width = picture.width().min(maximum_width);
     if width == 0 || picture.height() == 0 {
         return Err(SheetError::Decode);
     }
@@ -167,11 +168,11 @@ mod tests {
     #[test]
     fn a_plate_is_shown_to_the_vision_model_as_a_small_jpeg() {
         let big = figure(2560, 1440, 255, [30, 40, 50]);
-        let small = vision_picture(&big.bytes, ImageFormat::Png).unwrap();
+        let small = vision_picture(&big.bytes, ImageFormat::Png, 1024).unwrap();
         let decoded = image::load_from_memory_with_format(&small, Container::Jpeg).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (1024, 576));
         assert_eq!(
-            vision_picture(b"not an image", ImageFormat::Png),
+            vision_picture(b"not an image", ImageFormat::Png, 1024),
             Err(SheetError::Decode)
         );
     }

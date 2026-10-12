@@ -46,6 +46,8 @@ pub(in crate::gameplay) enum PlatePromptRefusal {
 pub(in crate::gameplay) struct PlateReferences {
     pub(in crate::gameplay) party_sheet: bool,
     pub(in crate::gameplay) speaker: bool,
+    /// A close portrait of the speaker's face, which pins identity from scene to scene.
+    pub(in crate::gameplay) speaker_face: bool,
     pub(in crate::gameplay) place: bool,
 }
 
@@ -55,6 +57,7 @@ impl PlateReferences {
         for (present, candidate) in [
             (self.party_sheet, Which::PartySheet),
             (self.speaker, Which::Speaker),
+            (self.speaker_face, Which::SpeakerFace),
             (self.place, Which::Place),
         ] {
             if candidate == which {
@@ -72,6 +75,7 @@ impl PlateReferences {
 enum Which {
     PartySheet,
     Speaker,
+    SpeakerFace,
     Place,
 }
 
@@ -85,13 +89,15 @@ const CAMERA: &str = "A wide shot on a 28mm lens from far back among the party: 
     at the edges of the picture, each no wider than a quarter of the frame, and the room \
     itself is the subject, its beams, floor and far walls all in view.";
 const PLACE_IS: &str = "The place is";
-const PLACE_REFERENCE: [&str; 4] = [
+const PLACE_REFERENCE: [&str; 5] = [
     "",
     "Image 1 is a painting of this place: keep its architecture, props and palette, but \
      repaint it as a lived-in working room from the new camera position.",
     "Image 2 is a painting of this place: keep its architecture, props and palette, but \
      repaint it as a lived-in working room from the new camera position.",
     "Image 3 is a painting of this place: keep its architecture, props and palette, but \
+     repaint it as a lived-in working room from the new camera position.",
+    "Image 4 is a painting of this place: keep its architecture, props and palette, but \
      repaint it as a lived-in working room from the new camera position.",
 ];
 const HEROES_INTRO: [&str; 4] = [
@@ -117,13 +123,20 @@ const HERO_IS: &str = "is";
 const SPEAKER_IS: &str = "The speaker is";
 const SPEAKER_REFERENCE: [&str; 5] = [
     "",
-    "Image 1 is this person: keep their exact face, hair and clothes, not that image's \
-     background.",
-    "Image 2 is this person: keep their exact face, hair and clothes, not that image's \
-     background.",
-    "Image 3 is this person: keep their exact face, hair and clothes, not that image's \
-     background.",
+    "Image 1 shows this person: keep their exact face, hair, headwear and clothes, not that \
+     image's background.",
+    "Image 2 shows this person: keep their exact face, hair, headwear and clothes, not that \
+     image's background.",
+    "Image 3 shows this person: keep their exact face, hair, headwear and clothes, not that \
+     image's background.",
     "",
+];
+const SPEAKER_FACE: [&str; 5] = [
+    "",
+    "",
+    "Image 2 is a close portrait of their face: match it exactly.",
+    "Image 3 is a close portrait of their face: match it exactly.",
+    "Image 4 is a close portrait of their face: match it exactly.",
 ];
 const SPEAKER_STAGING: &str = "They stand in the lit mid-ground, the best-lit person, in crisp focus, facing the party \
     and the camera, mid-task at their workplace:";
@@ -262,6 +275,16 @@ fn hero_description(art: u8) -> &'static str {
         1 => "red-bearded adult dwarf fighter in chainmail, greatsword)",
         2 => "red-haired adult dwarf woman fighter in a blue cloak, greatsword)",
         _ => "blonde-braided adult dwarf woman archer in a teal cloak, longbow)",
+    }
+}
+
+/// What the head locator is told about a hero seen from behind in the plate: fixed phrases that
+/// match the hero's art, so it can tell one hero's head from another's.
+pub(in crate::gameplay) fn hero_locator_phrase(art: u8) -> &'static str {
+    match art {
+        1 => "the red-bearded dwarf fighter in chainmail, seen from behind or in profile",
+        2 => "the red-haired braided dwarf woman fighter in a blue cloak, seen from behind",
+        _ => "the blonde-braided dwarf woman archer in a teal cloak, seen from behind",
     }
 }
 
@@ -409,6 +432,9 @@ fn speaker_parts(speaker: &SpeakerShot, references: PlateReferences) -> Vec<Part
     if let Some(number) = references.number(Which::Speaker) {
         parts.push(Part::Fixed(SPEAKER_REFERENCE[usize::from(number)]));
     }
+    if let Some(number) = references.number(Which::SpeakerFace) {
+        parts.push(Part::Fixed(SPEAKER_FACE[usize::from(number)]));
+    }
     parts.extend([
         Part::Fixed(SPEAKER_STAGING),
         Part::Fixed(speaker.task),
@@ -505,6 +531,7 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
     phrases.extend(HERO_NUMBER);
     phrases.extend(SHEET_POSITION);
     phrases.extend(SPEAKER_REFERENCE.iter().filter(|phrase| !phrase.is_empty()));
+    phrases.extend(SPEAKER_FACE.iter().filter(|phrase| !phrase.is_empty()));
     phrases.extend(vocabulary_lights().into_iter().filter_map(light_phrase));
     phrases.extend(Time::ALL.map(time_phrase));
     phrases.extend(
@@ -535,6 +562,7 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
         .map(expression_phrase_of),
     );
     phrases.extend([1, 2, 3].map(hero_description));
+    phrases.extend([1, 2, 3].map(hero_locator_phrase));
     phrases.extend([Some(Gender::He), Some(Gender::She), None].map(gender_phrase));
     phrases.extend([LifeStage::YoungAdult, LifeStage::Adult, LifeStage::Elder].map(stage_phrase));
     phrases.extend(

@@ -45,6 +45,9 @@ pub(super) struct ExplorationSpeaker {
 }
 
 pub(super) struct ExplorationModel {
+    /// PLAY-V09: where the speaker's head is across the scene plate, in permille, when the scene
+    /// picture is a plate; the phone's narrow crop is centred there.
+    pub(super) plate_focus: Option<u32>,
     pub(super) scene_asset: Option<String>,
     pub(super) portrait_asset: Option<String>,
     pub(super) has_whisper: bool,
@@ -180,6 +183,14 @@ fn decorate(screen: &ExplorationScreen, model: &ExplorationModel) -> Result<(), 
         &model.portrait_asset,
         portrait_fallback,
     )?;
+    if let Some(art) = root.query_selector(".scene-art")? {
+        match model.plate_focus {
+            Some(focus) => {
+                art.set_attribute("style", &format!("object-position:{}% top", focus / 10))?
+            }
+            None => art.remove_attribute("style")?,
+        }
+    }
     if model.has_whisper {
         root.set_attribute("data-whisper", "")?;
     } else {
