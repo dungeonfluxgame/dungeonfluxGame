@@ -18,6 +18,72 @@ Integration history through 2026-10-11T15:25:07.071270-04:00, reconstructed from
 
 Integration history from 2026-10-11T15:24:05-04:00 through 2026-10-12T04:33:02-04:00 on the integration branch `claude/playable-20261011`, generated from Git by revision range: six-hour blocks by first-parent commit time, each newly reachable commit listed once. The last block is open and shorter than six hours; the work session is still running.
 
+## 2026-10-12T04:33:02-04:00 to 2026-10-12T08:11:26-04:00
+
+Range: 5310dcf601c50b60ecf17c3d297d524a3bf65029..c5af1e5418d5e2ae8feb105da955d7ed381f1bd3
+
+- 6bd89b11fc7c902eeb2b7432355669e57910c151 — Record the changelog blocks for the playable integration branch through 5310dcf
+- 8af22ffcff82f734d06a35c514e7dcea0c2b7ba8 — Queue the join QR, NPC conversation, investigation and ending, scene plates, tactical live fixes, scan layouts and battlefield health cues
+- 572c48b831d92aa617c729410cf7207c84de4221 — Add just-in-time scene plates: shot director, plate prompt, party sheet and plate requests (PLAY-V09 M1)
+- 2b24277418f17f284522102dac9c6486e01409f9 — Show the scene plate on the display with bubbles beside the speaker's head (PLAY-V09 M2)
+- 43482ce4207e4245f1098dca3334a63c6bffc3ec — Tune the plate recipe, make plate edits reach the display and request the current plate first (PLAY-V09 M3)
+- 86ff52e855f0be53748fb2e09a1fcbab4ffa2939 — Merge the integration branch into the PLAY-V09 plates
+- 522d67ba51f721c93535c574b216346c8c1bbc7d — Merge composed scene plates: one photographic plate per story scene with the bubble beside the speaker's head (PLAY-V09 milestones 1 and 2)
+- 12f4debacd827a4276ea1c625c6460c385ecb376 — Measure where the speaker's head really is in each plate, and tune head and hero heights (PLAY-V09 M3)
+- 11ad86a49557ed8019f6b9467b2b7cd39f988cfb — Merge scene plates milestone 3: a tuned recipe, the speaker's head measured in each finished plate, the current plate requested first (PLAY-V09)
+- 130ff9e53f43c90d1766d9f77559aa12d543d21b — End peaceful chapters with a resolution, an epilogue and an end card
+- 82ba3e9868ef45eecca9a4cc2897c0af14607d95 — Show the end card and accept the resolution the phone lists
+- df65a3ac18c3b38acbe99d43d7e27e207746ec0f — Conjugate table labels correctly and put the contact on stage in script scenes
+- 3d4bd93ba182bcb09745e4b10b7b1f7af90f2b76 — Merge the peaceful adventure ending: resolution, epilogue and an end card for mystery and parley chapters (PLAY-E03, in progress)
+- 58c221a7eb658526389ea3cda1d74149fe2b56fc — Turn second-person labels into the third person in the table log
+- ee702920997eaae9aabbbd306956dc34fc1ef69e — Format the third-person table log change
+- 77200fdcf62420a660295b1339b9b6497bcffb36 — Draw the adventure's end card on the TV above the scene
+- 3c6abeabafeea2ad0acb180e3400a56a32c04b50 — Merge the TV end card and third-person table labels (PLAY-E03, fight endings still open)
+- a807a06998f5c91e0d1cd8258bc4a53878f6ae70 — PLAY-H01 attempt 2: health cues on the 3D battlefield (plates, variants with cross-fade, hit reaction, tremor, laid-low look), photographic house style
+- f53a77f5e98ced0dfd4d7e59dd1cba20a6c56794 — Merge integration 11ad86a: reaction composes with the stage's recoil and hit-stop, plates read the stage variant
+- 97a19e7f2824103f009be237a2abddd0a701e38a — Merge integration 3d4bd93 into PLAY-H01 battlefield
+- 64d80b6dbf650614f5b5962043f43b14a5b21752 — Battlefield plate face crop wider for slumped variants
+- 6fdc4bdcbcc74216fd589ed77f990995124ee254 — Merge health cues on the 3D battlefield: plates, figures and hit reactions follow each hero's state (PLAY-H02)
+- 90a2d1e835e92486a10f0f1b3f2e79042b3a6e58 — Show plates without an empty frame, find the heroes' heads, keep the layout beside the plate, draw plates on phones (PLAY-V09 M4)
+- 28cb2e4399edd0183006358fa5bb1b4b9443d855 — Merge scene plates milestone 4: no empty stage at handover, hero lines beside the hero, plates on phones, steadier faces (PLAY-V09)
+- 6924da0d783cbf779b6e00b9ca7ef86de3f79a0d — Fix archer creation and the acting phone's dropped fight stream (PLAY-T03)
+- 1b58ebda67480080a4976a5dfe28168bd3da387b — Merge the archer creation and fight-stream fixes: larger receipts, 64 KiB session messages, refusals logged (PLAY-T03)
+- 0535f9ebeb2e36775fdaa841424c822fef98a4e4 — PLAY-N04 M3 and M4 (server): speech-intent bubble and cleaned-up hero line
+- d68f4da8c75a7e8fae273147463f762a81d3160b — Merge branch 'claude/playable-20261011' into worktree-agent-a879d6be2836900f0
+- 88f8e856a5c412939060f0c246e9f06a6345f558 — PLAY-F06: fight entrance and exit held to the battlefield, voice clips waited for, sound click by event identity
+- 821ce584d97e1f0dc761458bf39a9869d8e0a90c — Merge the integration branch (health cues, join_url) into PLAY-F06/N04
+- 9a060645420c2e8366fd330f6648630171ccdee8 — PLAY-F06: victory card goes straight from the fight, text kept clear of figures; name/question cleanup fixes; checks
+- 47411d06317a7792099680a4e15227bf8fd81d76 — Merge the integration branch (tactical combat) into PLAY-F06/N04: the battle machine stages several outcomes in order, blows are never dropped when the display is behind, restart into a fight enters it, the session view may be as large as one RPC message
+- e5de89f4e9e25db7b04e55b0e2ab264a152793e5 — PLAY-F06: tactical fights through the battle machine (blow-only cues, outcomes never dropped, turn reopen), session views may be one RPC message, narration told once per change, chips clear of the narrator box and data-chips off, longer finish cap; first-view and tactical checks
+- caddc17dfe5a08c98183e32531de35882777f2a5 — Merge the battle machine on tactical fights: entrance, staged server turns, exit, narration told once, chips can be hidden (PLAY-F06)
+- 36c2bcd2284a2a0723138dda486baa9ee4c73713 — Tactical scan scenes: the server stages a forced scene on its own authored layouts, no cosmetic walking
+- 82d7eeb4bbc19eb989e8a4d31b1842be2fa70dc0 — Keep action shots within 75 degrees of the scene front, preview shoot demo and story-place diagnostic
+- 55d889ef3f1ca5d68d13e22193c1b15974ee6de2 — Delete the reduced-motion switch: motion is never reduced (camera, director, status, stage, figure shaders)
+- 5033316664eb5463f950dd4ac7cbe96856658ea3 — Keep a combat view inside the transport message: the attached table log drops its oldest lines until the view fits
+- 06e122b8641d4cbae6ffbbacc4c9561cdabca54a — Thinner grid lines: hairline core, narrow halo, fade toward the centre and the border, stronger reachable/target lines
+- ed67871f6543d9bf80cfa35d6877f5f6cb6a5834 — Splat level of detail: DF_GAMEPLAY_SPLAT_LOD (default 1, the second tier) and the preview &lod=
+- 63273b608121d84f08f5661b61342fd76e2c694f — Fight-loading splash: place, mark and real chunk progress hold until the scan, art and figures are resolved; the stage clock waits behind it, then one fade reveals the scene
+- f2b518728ab115a14b46635a4eedbda4ad108268 — Who is speaking: speech bubble anchored to the speaker with a tail and camera ease-in/out; damage text names the attack, holds 2.6 s at rest (3.6 s for critical or knockout) and stacks without overlap
+- 9ff5fee7f42c9bbb97970e1a7deaf15cf3cf58ae — Victory and defeat beats: the stage holds the party wide for 6 seconds from the deciding blow, with the sting and the heroes reacting, busy throughout
+- a97a8f51da4b7487b36aae6f953ee9699a914fb3 — Preview harness: &heroes=n, &enemies=n and review demos for speech, named damage text, chained turns, victory and defeat; document the full preview syntax
+- b7cfac687e78389365b36f69d5cb5034fcf744a3 — Speech bubble: set the SVG tail's class as an attribute (an SVG element's className is read-only and stopped the stage mounting)
+- e37d098fcf3697fe15fb57c6a2e209123cf69dc0 — Battlefield marks data-battlefield-busy as the stage starts and stops playing
+- ef0657033811062d92eb411d699fbb39c0b205e2 — Speech bubble beside the speaker with its tail to the body's edge; floating results stay between the side plates, attack names go in order per attacker; the party shot after a decided fight is framed tighter
+- c83c44aefc06d986e3431ef13fdba866042dcb92 — Hold the party a little closer after a decided fight
+- b2730b5e419eec424c40a60917d8e8975b02662f — Clippy: const assertions for the timing constants, scan tier applied to the layer before the load
+- 65fb9b007c9fa661ee88cc46459a5bdde62d1c7c — Merge tactical fights on the scans and battle polish: thin grid lines, splat level 1, loading splash, speech bubbles, named damage text, six-second celebration, 1-n preview scenes (PLAY-S02)
+- dbd63066426e48fc365e3a770d5068fc0756c3c3 — PLAY-N06: live NPC conversation transcript harness
+- b691fada5ced3420a44786f7d84cfe5d32387803 — PLAY-N06: NPC replies answer first, know what they told this hero, and stop padding
+- 3bbd8c41f779a79f5423900eb5080b6babf65c64 — PLAY-N06: keep names the scenes say aloud out of the private clue's terms
+- 9c8790babab73fe540dbbb07942bf9a4e8d2c550 — Merge NPC replies that answer the question: per-question facts, private clue known to its speaker, reply guards, model-free rule checks (PLAY-N06)
+- 95dda536650ac8f4e1d6be709f1efada61a18bae — Make the home screen's loop just in time from its still, served with byte ranges
+- 4ba563787e98c61132ace307b54a8e864343b374 — Fade the home loop in over the still and cross-fade it at each wrap
+- 5932d5eb051ca263863e60570c576d81e4ddb239 — Wake the home loop from the server's cache and play it on the lobby (PLAY-V10)
+- ba8e3d5ca2b33505e938207da488824a1bc042be — Merge the home-screen video loop: a clip made from the lobby still, cross-faded on the TV, with its own budget and setting (PLAY-V10)
+- c5af1e5418d5e2ae8feb105da955d7ed381f1bd3 — Re-pin the adventure record hashes after the archer copy and NPC knowledge tables
+
+Next block baseline: `c5af1e5418d5e2ae8feb105da955d7ed381f1bd3`.
+
 ## 2026-10-12T03:33:42-04:00 to 2026-10-12T04:33:02-04:00
 
 Range: 9c56992ca60d8049aaa4c230e642a877d2aba43a..5310dcf601c50b60ecf17c3d297d524a3bf65029
