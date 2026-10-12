@@ -20,6 +20,8 @@ pub(super) struct DialogueRecovery {
     awaiting: Option<String>,
     /// Hold-to-talk speech input for this text box.
     pub(super) talk: super::talk_control::Talk,
+    /// The editor's and the context control's listeners for the speech-intent signal.
+    intent_listeners: Vec<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
 /// The player's last spoken line and the scene speaker's in-character answer to it. It is
@@ -30,6 +32,10 @@ struct Exchange {
     speaker: String,
     reply: String,
 }
+
+/// How long a text box may stay unfocused (a redraw moves it and restores focus) before the
+/// player counts as having left it.
+const BLUR_GRACE_MS: u32 = 250;
 
 /// A model-voiced reply is a short line; anything longer is not shown.
 const MAXIMUM_REPLY_BYTES: usize = 1024;
@@ -65,6 +71,17 @@ fn current_speaker(client: &Client) -> String {
 impl DialogueRecovery {
     pub(super) fn editor(&self) -> Option<&HtmlTextAreaElement> {
         self.editor.as_ref()
+    }
+
+    /// The chosen input context (a `DialogueContext` number), if the control exists.
+    pub(super) fn context_value(&self) -> Option<i32> {
+        self.context.as_ref()?.value().parse().ok()
+    }
+
+    pub(super) fn channel_clone(
+        &self,
+    ) -> Option<rpc::dialogue_service_client::DialogueServiceClient<BrowserChannel>> {
+        self.channel.clone()
     }
 
     pub(super) fn capture_focus(&mut self, document: &Document) -> Result<(), JsValue> {
@@ -198,6 +215,9 @@ pub(super) fn mount(
         let selection = recovery.selection;
         (document, editor, context, selector, focused, selection)
     };
+    if client.borrow().dialogue.intent_listeners.is_empty() {
+        listen_for_intent(client, &editor, &context)?;
+    }
     if let Some(previous) = parent.query_selector(".dialogue-recovery")? {
         previous.remove();
     }
@@ -418,6 +438,90 @@ fn thinking_row(
     Ok(())
 }
 
+/// What the draft says about the player's intent: typing while there is text, otherwise nothing.
+fn draft_intent(client: &Rc<RefCell<Client>>) -> live_presence::Intent {
+    let typing = client
+        .borrow()
+        .dialogue
+        .editor
+        .as_ref()
+        .is_some_and(|editor| !editor.value().trim().is_empty());
+    if typing {
+        live_presence::Intent::Typing
+    } else {
+        live_presence::Intent::Stopped
+    }
+}
+
+/// Wires the speech-intent signal to the draft box (typing, blur) and the context control (table
+/// talk shows no bubble). Only an ephemeral state leaves the phone; never the draft.
+fn listen_for_intent(
+    client: &Rc<RefCell<Client>>,
+    editor: &HtmlTextAreaElement,
+    context: &HtmlSelectElement,
+) -> Result<(), JsValue> {
+    let mut listeners = Vec::new();
+    let mut attach =
+        |target: &web_sys::EventTarget,
+         name: &str,
+         react: fn(&Rc<RefCell<Client>>, &web_sys::Event) -> Option<live_presence::Intent>|
+         -> Result<(), JsValue> {
+            let weak = Rc::downgrade(client);
+            let callback = Closure::wrap(Box::new(move |event: web_sys::Event| {
+                if let Some(client) = weak.upgrade()
+                    && let Some(intent) = react(&client, &event)
+                {
+                    live_presence::signal(&client, intent);
+                }
+            }) as Box<dyn FnMut(web_sys::Event)>);
+            target.add_event_listener_with_callback(name, callback.as_ref().unchecked_ref())?;
+            listeners.push(callback);
+            Ok(())
+        };
+    attach(editor.as_ref(), "input", |client, _| {
+        Some(draft_intent(client))
+    })?;
+    attach(editor.as_ref(), "blur", |client, event| {
+        // Moving to the panel's own buttons (the send button) is not leaving the box.
+        let inside = js_sys::Reflect::get(event, &JsValue::from_str("relatedTarget"))
+            .ok()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+            .is_some_and(|target| {
+                target
+                    .closest(".dialogue-recovery")
+                    .is_ok_and(|panel| panel.is_some())
+            });
+        if inside {
+            return Some(draft_intent(client));
+        }
+        // A redraw moves the box and gives focus back at once; only a box that stays unfocused
+        // means the player left it.
+        let weak = Rc::downgrade(client);
+        wasm_bindgen_futures::spawn_local(async move {
+            gloo_timers::future::TimeoutFuture::new(BLUR_GRACE_MS).await;
+            let Some(client) = weak.upgrade() else {
+                return;
+            };
+            let focused = {
+                let state = client.borrow();
+                state.dialogue.editor.as_ref().is_some_and(|editor| {
+                    let element: &Element = editor.as_ref();
+                    state.document.active_element().as_ref() == Some(element)
+                })
+            };
+            if !focused {
+                live_presence::signal(&client, live_presence::Intent::Stopped);
+            }
+        });
+        None
+    })?;
+    attach(context.as_ref(), "change", |client, _| {
+        Some(draft_intent(client))
+    })?;
+    client.borrow_mut().dialogue.intent_listeners = listeners;
+    Ok(())
+}
+
 pub(super) fn submit(client: Rc<RefCell<Client>>) {
     let prepared = (|| -> Result<_, String> {
         let state = client.borrow();
@@ -472,7 +576,11 @@ pub(super) fn submit(client: Rc<RefCell<Client>>) {
         })
     })();
     match prepared {
-        Ok(body) => dispatch(client, Call::Raw(body)),
+        Ok(body) => {
+            // The loader stays on the hero while the line is cleaned and committed.
+            live_presence::signal(&client, live_presence::Intent::Submitted);
+            dispatch(client, Call::Raw(body));
+        }
         Err(message) => show(&client, &message),
     }
 }
@@ -650,6 +758,15 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
             state.dialogue.active.take();
             state.dialogue.awaiting = None;
             state.busy = false;
+            if matches!(call, Call::Raw(_)) {
+                // Whatever came back, the hero is no longer composing.
+                let weak = Rc::downgrade(&client);
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Some(client) = weak.upgrade() {
+                        live_presence::signal(&client, live_presence::Intent::Stopped);
+                    }
+                });
+            }
             let message = match outcome {
                 Ok(Ok((Some(reply), None))) => match &call {
                     Call::Raw(input)

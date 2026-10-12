@@ -109,6 +109,11 @@ pub(super) struct Talk {
 }
 
 impl Talk {
+    /// Whether the talk control is being held right now (speech intent is live).
+    pub(super) fn is_held(&self) -> bool {
+        self.held.is_some()
+    }
+
     /// Releases the microphone and every listener. Used when the page's client is dropped.
     fn dispose(&mut self) {
         self.ticker = None;
@@ -433,8 +438,12 @@ fn press(client: &Rc<RefCell<Client>>, held: Held) {
         }
         command
     };
+    let started = command.is_some();
     execute(client, command);
     show(client);
+    if started {
+        live_presence::signal(client, live_presence::Intent::Speaking);
+    }
 }
 
 fn release(client: &Rc<RefCell<Client>>, inside: bool) {
@@ -446,6 +455,7 @@ fn release(client: &Rc<RefCell<Client>>, inside: bool) {
     };
     execute(client, command);
     show(client);
+    live_presence::signal(client, live_presence::Intent::Stopped);
 }
 
 fn cancel(client: &Rc<RefCell<Client>>) {
@@ -457,6 +467,7 @@ fn cancel(client: &Rc<RefCell<Client>>) {
     };
     execute(client, command);
     show(client);
+    live_presence::signal(client, live_presence::Intent::Stopped);
 }
 
 fn tick(client: &Rc<RefCell<Client>>) {
@@ -901,4 +912,5 @@ fn clear(client: Rc<RefCell<Client>>) {
     }
     client.borrow_mut().dialogue.talk.capture.settle_draft();
     show(&client);
+    live_presence::signal(&client, live_presence::Intent::Stopped);
 }

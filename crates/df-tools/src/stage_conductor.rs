@@ -25,9 +25,9 @@ use crate::{
         ACTOR_ENTER_MS, ACTOR_EXIT_MS, ActorEvent, ActorState, BATTLE_ENTER_CAP_MS, BattleEvent,
         BattleState, CATCH_UP_TEXT_MS, CLIP_END_GRACE_MS, CLIP_READY_WAIT_MS, CLIP_START_WAIT_MS,
         ClipEvent, ClipState, FIGHT_LINE_FADE_MS, FINAL_LINGER_CAP_MS, HELD_OUTCOMES_CAP,
-        LINE_CLOSE_MS, LINE_LINGER_MS, LINE_OPEN_MS, LineEvent, LineState, SCENE_ENTER_CAP_MS,
-        SCENE_EXIT_CAP_MS, SCENE_WAIT_CAP_MS, SceneEvent, SceneState, actor_next, battle_next,
-        clip_next, line_next, scene_next,
+        INTENT_EXPIRY_MS, LINE_CLOSE_MS, LINE_LINGER_MS, LINE_OPEN_MS, LineEvent, LineState,
+        SCENE_ENTER_CAP_MS, SCENE_EXIT_CAP_MS, SCENE_WAIT_CAP_MS, SceneEvent, SceneState,
+        actor_next, battle_next, clip_next, line_next, scene_next,
     },
 };
 
@@ -47,6 +47,23 @@ pub(crate) struct ScriptLine<D> {
     /// Already on screen before the page was (reload, reconnect): it stands Lingering,
     /// silently, with no entrance.
     pub(crate) settled: bool,
+}
+
+/// What a hero is doing in the dialogue box.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IntentKind {
+    Typing,
+    Speaking,
+    Submitted,
+}
+
+/// One hero's live speech intent, from the view. The payload is opaque to the conductor.
+#[derive(Clone, Debug)]
+pub(crate) struct IntentMark<D> {
+    /// The hero's actor slot.
+    pub(crate) slot: usize,
+    pub(crate) kind: IntentKind,
+    pub(crate) detail: D,
 }
 
 /// What one accepted view contributes.
@@ -140,6 +157,10 @@ struct LineRun<D> {
     close_ms: u32,
     /// The line began with its clip playing.
     voiced: bool,
+    /// A speech-intent loader, not a line of text: it never takes a turn.
+    intent: Option<IntentKind>,
+    /// When the table last affirmed the loader (a view carrying it).
+    affirmed_ms: u64,
 }
 
 struct Pending<D> {
@@ -247,7 +268,8 @@ impl<D: Clone> Conductor<D> {
             LineState::Opening | LineState::Speaking | LineState::Lingering => 0,
             LineState::Closing => 1,
             LineState::Queued => 2,
-            LineState::Done => 3,
+            LineState::Composing | LineState::Submitted | LineState::Cancelled => 3,
+            LineState::Done => 4,
         };
         self.lines
             .iter()
@@ -648,6 +670,154 @@ impl<D: Clone> Conductor<D> {
             catch_up: false,
             close_ms: LINE_CLOSE_MS,
             voiced: false,
+            intent: None,
+            affirmed_ms: now_ms,
+        }
+    }
+
+    /// Takes the speech intents of the view being shown: a loader bubble on each hero who is
+    /// typing or holding to talk, kept while the table keeps affirming it, replaced by that
+    /// hero's line, closed through the normal exit when the hero stops, and gone after
+    /// [`INTENT_EXPIRY_MS`] without a refresh. A loader is not a line: it never delays speech.
+    pub(crate) fn on_intents(&mut self, now_ms: u64, marks: Vec<IntentMark<D>>) -> Vec<Command<D>> {
+        let mut out = Vec::new();
+        for mark in &marks {
+            let known = self.lines.iter().position(|run| {
+                run.intent.is_some()
+                    && run.line.slot == Some(mark.slot)
+                    && matches!(run.state, LineState::Composing | LineState::Submitted)
+            });
+            match known {
+                Some(index) => {
+                    let Some(run) = self.lines.get_mut(index) else {
+                        continue;
+                    };
+                    run.affirmed_ms = now_ms;
+                    let changed = run.intent != Some(mark.kind)
+                        && !(run.state == LineState::Submitted
+                            && mark.kind != IntentKind::Submitted);
+                    if changed {
+                        run.intent = Some(mark.kind);
+                        run.line.detail = mark.detail.clone();
+                        let snapshot = run.clone();
+                        self.emit_line(&snapshot, &mut out);
+                    }
+                    if mark.kind == IntentKind::Submitted {
+                        self.set_line(index, LineEvent::Submit, now_ms, &mut out);
+                    }
+                }
+                None => {
+                    let line = ScriptLine {
+                        detail: mark.detail.clone(),
+                        voiceable: false,
+                        read_ms: 0,
+                        slot: Some(mark.slot),
+                        settled: false,
+                    };
+                    let mut run = self.make_run(line, now_ms);
+                    run.state = LineState::Composing;
+                    run.intent = Some(mark.kind);
+                    self.emit_line(&run, &mut out);
+                    self.lines.push(run);
+                    if mark.kind == IntentKind::Submitted {
+                        let index = self.lines.len() - 1;
+                        self.set_line(index, LineEvent::Submit, now_ms, &mut out);
+                    }
+                }
+            }
+        }
+        // A loader the table no longer names: the hero stopped, or the line has taken its place.
+        for index in 0..self.lines.len() {
+            let Some(run) = self.lines.get(index) else {
+                continue;
+            };
+            let live = run.intent.is_some()
+                && matches!(run.state, LineState::Composing | LineState::Submitted);
+            let named = marks.iter().any(|mark| Some(mark.slot) == run.line.slot);
+            if live && !named {
+                self.retire_intent(index, now_ms, &mut out);
+            }
+        }
+        self.step(now_ms, &mut out);
+        out
+    }
+
+    /// Whether a line of text for `slot` is waiting its turn or being shown.
+    fn line_pending_for(&self, slot: Option<usize>) -> bool {
+        self.lines.iter().any(|other| {
+            other.intent.is_none()
+                && other.line.slot == slot
+                && matches!(
+                    other.state,
+                    LineState::Queued
+                        | LineState::Opening
+                        | LineState::Speaking
+                        | LineState::Lingering
+                )
+        })
+    }
+
+    /// The loader's hero stopped or submitted away: it stays while that hero's line is still
+    /// queued, is replaced at once by one already on screen, and otherwise closes normally.
+    fn retire_intent(&mut self, index: usize, now_ms: u64, out: &mut Vec<Command<D>>) {
+        let Some(run) = self.lines.get(index) else {
+            return;
+        };
+        let slot = run.line.slot;
+        let queued = self.lines.iter().any(|other| {
+            other.intent.is_none() && other.line.slot == slot && other.state == LineState::Queued
+        });
+        if queued {
+            if self
+                .lines
+                .get(index)
+                .is_some_and(|run| run.state == LineState::Composing)
+            {
+                self.set_line(index, LineEvent::Submit, now_ms, out);
+            }
+        } else if self.line_pending_for(slot) {
+            self.set_line(index, LineEvent::Replace, now_ms, out);
+        } else {
+            self.set_line(index, LineEvent::Cancel, now_ms, out);
+            self.set_line(index, LineEvent::Close, now_ms, out);
+        }
+    }
+
+    /// Ends the loaders of `slot`: its line took the place.
+    fn replace_intents(&mut self, slot: Option<usize>, now_ms: u64, out: &mut Vec<Command<D>>) {
+        for index in 0..self.lines.len() {
+            let Some(run) = self.lines.get(index) else {
+                continue;
+            };
+            if run.intent.is_some()
+                && run.line.slot == slot
+                && matches!(run.state, LineState::Composing | LineState::Submitted)
+            {
+                self.set_line(index, LineEvent::Replace, now_ms, out);
+            }
+        }
+    }
+
+    /// Loaders the table stopped affirming expire; a submitted one waits for its queued line.
+    fn expire_intents(&mut self, now_ms: u64, out: &mut Vec<Command<D>>) {
+        for index in 0..self.lines.len() {
+            let Some(run) = self.lines.get(index) else {
+                continue;
+            };
+            if run.intent.is_none()
+                || !matches!(run.state, LineState::Composing | LineState::Submitted)
+            {
+                continue;
+            }
+            let waiting_for_line = self.lines.iter().any(|other| {
+                other.intent.is_none()
+                    && other.line.slot == run.line.slot
+                    && other.state == LineState::Queued
+            });
+            let silent_for = now_ms.saturating_sub(run.affirmed_ms);
+            if !waiting_for_line && silent_for > INTENT_EXPIRY_MS {
+                self.retire_intent(index, now_ms, out);
+            }
         }
     }
 
@@ -766,6 +936,7 @@ impl<D: Clone> Conductor<D> {
     fn step(&mut self, now_ms: u64, out: &mut Vec<Command<D>>) {
         self.watch_scene(now_ms, out);
         self.advance_actors(now_ms, out);
+        self.expire_intents(now_ms, out);
         // Several quick changes, or a wait past the cap, close the line in progress.
         let catching_up = self.catching_up(now_ms);
         let overdue = self
@@ -1045,7 +1216,11 @@ impl<D: Clone> Conductor<D> {
                 run.clip = next;
             }
         }
-        self.set_line(index, LineEvent::Begin, now_ms, out);
+        let slot = self.lines.get(index).and_then(|run| run.line.slot);
+        if self.set_line(index, LineEvent::Begin, now_ms, out) {
+            // The hero's line takes the place of the hero's loader.
+            self.replace_intents(slot, now_ms, out);
+        }
     }
 
     /// Requests the clips of the next two queued voiceable lines so they are ready at their
@@ -1875,5 +2050,160 @@ mod tests {
             assert!(seen.contains(&expected), "{expected:?} in {seen:?}");
         }
         assert_eq!(harness.conductor.battle_state(), BattleState::Absent);
+    }
+
+    fn mark(slot: usize, kind: IntentKind) -> IntentMark<&'static str> {
+        IntentMark {
+            slot,
+            kind,
+            detail: match (slot, kind) {
+                (0, IntentKind::Typing) => "typing 0",
+                (0, IntentKind::Speaking) => "speaking 0",
+                (0, IntentKind::Submitted) => "submitted 0",
+                (_, IntentKind::Typing) => "typing 1",
+                (_, IntentKind::Speaking) => "speaking 1",
+                (_, IntentKind::Submitted) => "submitted 1",
+            },
+        }
+    }
+
+    impl Harness {
+        fn intents(&mut self, marks: Vec<IntentMark<&'static str>>) {
+            let commands = self.conductor.on_intents(self.now, marks);
+            self.record(commands);
+        }
+
+        /// The line states seen for a payload, in order.
+        fn line_trace(&self, detail: &'static str) -> Vec<LineState> {
+            self.log
+                .iter()
+                .filter_map(|(_, command)| match command {
+                    Command::Line {
+                        state, detail: d, ..
+                    } if *d == detail => Some(*state),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_loader_follows_typing_to_submitted_and_the_heros_line_takes_its_place_in_order() {
+        let mut harness = Harness::new(Voice::working(2_000), true, Vec::new(), vec![0, 1, 2]);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.run_to(500);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.intents(vec![mark(0, IntentKind::Submitted)]);
+        assert_eq!(harness.line_trace("typing 0"), [LineState::Composing]);
+        // The line is committed: the same view no longer carries the loader.
+        harness.view(plain(
+            vec![line("hero line", false, Some(0))],
+            vec![0, 1, 2],
+        ));
+        harness.intents(Vec::new());
+        harness.run_to(1_500);
+        let opened = harness.opened("hero line").expect("the line opens");
+        let replaced = harness
+            .line_at("submitted 0", LineState::Done)
+            .expect("the loader is replaced");
+        assert!(replaced >= opened);
+        assert!(harness.line_at("typing 0", LineState::Cancelled).is_none());
+        harness.view(plain(vec![line("npc reply", true, Some(2))], vec![0, 1, 2]));
+        harness.run_to(20_000);
+        assert!(harness.opened("npc reply").expect("reply") > opened);
+    }
+
+    #[test]
+    fn two_heroes_composing_at_once_each_get_their_own_loader_and_never_delay_speech() {
+        let mut harness = Harness::new(
+            Voice::working(3_000),
+            true,
+            vec![line("narration", true, None)],
+            vec![0, 1, 2],
+        );
+        harness.intents(vec![
+            mark(0, IntentKind::Typing),
+            mark(1, IntentKind::Speaking),
+        ]);
+        harness.run_to(1_000);
+        assert_eq!(harness.line_trace("typing 0"), [LineState::Composing]);
+        assert_eq!(harness.line_trace("speaking 1"), [LineState::Composing]);
+        let narration = harness
+            .opened("narration")
+            .expect("narration opens regardless");
+        // The narration's clip started at its own time, unaffected by the loaders (the harness
+        // also asserts that no two lines are ever active together).
+        assert!(narration <= 200, "{narration}");
+    }
+
+    #[test]
+    fn a_hero_who_stops_cancels_the_loader_through_the_normal_exit() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 1]);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.run_to(300);
+        harness.intents(Vec::new());
+        harness.run_to(1_000);
+        assert_eq!(
+            harness.line_trace("typing 0"),
+            [
+                LineState::Composing,
+                LineState::Cancelled,
+                LineState::Closing,
+                LineState::Done
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unrefreshed_loader_expires_and_a_refreshed_one_stays() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 1]);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        for _ in 0..4 {
+            harness.run_to(harness.now + 2_000);
+            harness.intents(vec![mark(0, IntentKind::Typing)]);
+        }
+        // Eight seconds of refreshes: still there.
+        assert_eq!(harness.line_trace("typing 0"), [LineState::Composing]);
+        let last = harness.now;
+        // The tab closes: no more refreshes.
+        harness.run_to(last + INTENT_EXPIRY_MS + 300);
+        let closing = harness
+            .line_at("typing 0", LineState::Closing)
+            .expect("expired");
+        assert!(closing >= last + INTENT_EXPIRY_MS);
+        assert!(closing <= last + INTENT_EXPIRY_MS + 200);
+        harness.run_to(last + INTENT_EXPIRY_MS + 1_000);
+        assert!(harness.line_at("typing 0", LineState::Done).is_some());
+    }
+
+    #[test]
+    fn a_submitted_loader_waits_for_its_line_queued_behind_speech() {
+        let mut harness = Harness::new(
+            Voice::working(6_000),
+            true,
+            vec![line("narration", true, None)],
+            vec![0, 1],
+        );
+        harness.run_to(500);
+        harness.intents(vec![mark(0, IntentKind::Submitted)]);
+        harness.view(plain(vec![line("hero line", false, Some(0))], vec![0, 1]));
+        harness.intents(Vec::new());
+        // Well past the loader's own expiry, the line is still behind the narration.
+        harness.run_to(5_900);
+        assert!(harness.opened("hero line").is_none());
+        assert!(harness.line_at("submitted 0", LineState::Done).is_none());
+        assert!(harness.line_at("submitted 0", LineState::Closing).is_none());
+        harness.run_to(15_000);
+        assert!(harness.opened("hero line").is_some());
+        assert!(harness.line_at("submitted 0", LineState::Done).is_some());
+    }
+
+    #[test]
+    fn a_loader_leaves_with_the_scene() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 1]);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.view(scene(None, Vec::new(), vec![0, 1]));
+        harness.run_to(4_000);
+        assert!(harness.line_at("typing 0", LineState::Closing).is_some());
     }
 }

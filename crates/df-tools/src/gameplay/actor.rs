@@ -78,6 +78,14 @@ pub(super) enum Call {
         request: rpc::WatchViewRequest,
         reply: oneshot::Sender<Result<(LocalDemoRole, rpc::ViewMessage), tonic::Status>>,
     },
+    /// A hero's speech intent (typing or holding to talk). Presentation only: it resolves the
+    /// caller's seat and updates the in-memory table log; it never commits, never moves a
+    /// revision and is served before any heartbeat or committed-job dispatch.
+    Presence {
+        credential: [u8; 32],
+        kind: rpc::ComposeKind,
+        reply: oneshot::Sender<Result<(), tonic::Status>>,
+    },
     /// Which current room member a player binding belongs to (speech input).
     SpeechMember {
         credential: [u8; 32],
@@ -100,7 +108,9 @@ impl ActorInput for Call {
                         .as_ref()
                         .map_or(0, |id| bytes(&id.value)),
                 ),
-            Self::QualificationInputs { .. } | Self::SpeechMember { .. } => Some(0),
+            Self::QualificationInputs { .. }
+            | Self::SpeechMember { .. }
+            | Self::Presence { .. } => Some(0),
             Self::Dialogue { request, .. } => Some(request.retained_heap_bytes()),
             Self::Submit { request, .. } => {
                 let character_bytes = if let Some(character) = &request.character {
@@ -1153,8 +1163,55 @@ impl Actor {
         Ok((role, view))
     }
 }
+impl Actor {
+    /// Which hero seat the caller holds, for a speech-intent mark.
+    fn presence(
+        &mut self,
+        credential: &[u8; 32],
+        kind: rpc::ComposeKind,
+    ) -> Result<(), tonic::Status> {
+        if self.session_lost() {
+            return Err(session_lost_status());
+        }
+        let member = self.dialogue_member(credential)?;
+        let view = wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member)
+            .map_err(unavailable)?;
+        let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+            return Err(tonic::Status::failed_precondition("player view required"));
+        };
+        let journey = player
+            .journey
+            .ok_or_else(|| tonic::Status::failed_precondition("journey required"))?;
+        let hero = journey
+            .own_character
+            .map(|character| character.name)
+            .ok_or_else(|| tonic::Status::failed_precondition("hero not created yet"))?;
+        let index = journey
+            .party
+            .iter()
+            .position(|party_member| party_member.name == hero)
+            .and_then(|position| u32::try_from(position).ok())
+            .ok_or_else(|| tonic::Status::failed_precondition("hero seat unknown"))?;
+        self.table_log.set_composing(index, kind);
+        Ok(())
+    }
+}
+
 impl Reducer<Call> for Actor {
     fn reduce(&mut self, _: AdmissionSequence, call: Call) {
+        // A speech-intent mark is served first and alone: no budget, heartbeat, grant
+        // reconnect or committed-job dispatch, so it can neither fence nor delay the session.
+        let call = match call {
+            Call::Presence {
+                credential,
+                kind,
+                reply,
+            } => {
+                let _delivered = reply.send(self.presence(&credential, kind));
+                return;
+            }
+            other => other,
+        };
         // Dialogue admission must not dispatch previously committed work.
         // Accepted jobs retain their ordinary non-dialogue dispatch/poll path.
         let dispatch_committed_jobs = !matches!(&call, Call::Dialogue { .. });
@@ -1194,6 +1251,7 @@ impl Reducer<Call> for Actor {
                         "finite demonstration call budget exhausted",
                     )));
                 }
+                Call::Presence { .. } => {}
             }
             return;
         }
@@ -1265,6 +1323,7 @@ impl Reducer<Call> for Actor {
                     self.dialogue_member(&credential)
                 }))
                 .is_ok(),
+            Call::Presence { .. } => true,
         };
         span.finish_unmeasured(if delivered {
             "actor_outcome_delivered"

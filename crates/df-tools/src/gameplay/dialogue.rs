@@ -118,8 +118,11 @@ impl rpc::dialogue_service_server::DialogueService for Service {
                 // The model call runs here, off the actor thread; on any failure the
                 // response is exactly the classification the actor produced.
                 if let Some(context) = npc {
-                    // Every screen shows the speaker thinking until the reply (or the lack of
-                    // one) is in; the mark clears when this scope ends.
+                    // The table sees the hero's line cleaned up (within its deadline), then
+                    // the speaker thinking until the reply (or the lack of one) is in; the
+                    // mark clears when this scope ends.
+                    let shown = self.npc_voice.display_line(&context).await;
+                    context.publish_typed_line(&self.table_log, &shown);
                     let _thinking = self.table_log.reply_pending(&context.speaker);
                     if let Some(reply) = self.npc_voice.converse(context, &self.table_log).await {
                         response.npc_reply = reply;
@@ -129,6 +132,30 @@ impl rpc::dialogue_service_server::DialogueService for Service {
             }
             _ => Err(Status::internal("dialogue response binding invalid")),
         }
+    }
+
+    async fn compose(
+        &self,
+        request: Request<rpc::ComposeRequest>,
+    ) -> Result<Response<rpc::ComposeResponse>, Status> {
+        let credential = credential(&request)?;
+        let kind = rpc::ComposeKind::try_from(request.into_inner().kind)
+            .ok()
+            .filter(|kind| *kind != rpc::ComposeKind::Unspecified)
+            .ok_or_else(|| Status::invalid_argument("known compose kind required"))?;
+        let (reply, wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::Presence {
+                credential,
+                kind,
+                reply,
+            })
+            .map_err(|_| Status::resource_exhausted("presence actor queue full"))?;
+        tokio::time::timeout(super::timing::active().reply, wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("presence not served in time"))?
+            .map_err(|_| Status::unavailable("presence actor stopped"))??;
+        Ok(Response::new(rpc::ComposeResponse {}))
     }
 
     async fn confirm(
@@ -367,10 +394,8 @@ impl actor::Actor {
             ))
         .then(|| self.npc_reply_context(member, &request.text))
         .flatten();
-        // Typed words to the scene's speaker are table talk, answered or not.
-        if let Some(context) = &npc {
-            context.publish_typed_line(&self.table_log);
-        }
+        // Typed words to the scene's speaker are table talk, answered or not: the service
+        // publishes their display version, cleaned off the actor thread.
         Ok((
             rpc::DialogueResponse {
                 input_id: request.input_id,

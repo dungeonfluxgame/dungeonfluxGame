@@ -49,6 +49,10 @@ pub(crate) const FIGHT_LINE_FADE_MS: u32 = 500;
 /// An actor walking on, and off.
 pub(crate) const ACTOR_ENTER_MS: u32 = 800;
 pub(crate) const ACTOR_EXIT_MS: u32 = 350;
+/// A speech-intent loader (a hero typing or holding to talk) that the table has not affirmed
+/// for this long is gone from the display, so a closed tab never leaves a stuck bubble. The
+/// server's own expiry is the same length; the phone refreshes about every 2 s.
+pub(crate) const INTENT_EXPIRY_MS: u64 = 5_000;
 /// The scene transition's own bounds: leaving, and the wordmark, title card and entrance.
 pub(crate) const SCENE_EXIT_CAP_MS: u64 = 4_000;
 pub(crate) const SCENE_ENTER_CAP_MS: u64 = 8_000;
@@ -126,6 +130,12 @@ pub(crate) fn scene_next(state: SceneState, event: SceneEvent) -> Option<SceneSt
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LineState {
+    /// A hero is typing or holding to talk: the loader bubble shows on that hero.
+    Composing,
+    /// The hero submitted; the loader stays while the line is cleaned and committed.
+    Submitted,
+    /// The hero stopped without submitting; the loader closes through the normal exit.
+    Cancelled,
     Queued,
     /// The bubble or box animates in as its clip starts.
     Opening,
@@ -139,6 +149,9 @@ pub(crate) enum LineState {
 impl LineState {
     pub(crate) fn name(self) -> &'static str {
         match self {
+            Self::Composing => "composing",
+            Self::Submitted => "submitted",
+            Self::Cancelled => "cancelled",
             Self::Queued => "queued",
             Self::Opening => "opening",
             Self::Speaking => "speaking",
@@ -156,6 +169,10 @@ impl LineState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LineEvent {
+    Submit,
+    Cancel,
+    /// The hero's own line took the loader's place (or the line was committed elsewhere).
+    Replace,
     /// The line's turn: its clip started, or it has no sound to wait for.
     Begin,
     OpenDone,
@@ -171,6 +188,10 @@ pub(crate) fn line_next(state: LineState, event: LineEvent) -> Option<LineState>
     use LineEvent::*;
     use LineState::*;
     match (state, event) {
+        (Composing, Submit) => Some(Submitted),
+        (Composing | Submitted, Cancel) => Some(Cancelled),
+        (Composing | Submitted | Cancelled, Replace) => Some(Done),
+        (Composing | Submitted | Cancelled, Close) => Some(Closing),
         (Queued, Begin) => Some(Opening),
         (Queued, Close) => Some(Done),
         (Opening, OpenDone) => Some(Speaking),
@@ -375,7 +396,10 @@ mod tests {
         SceneEvent::ExitBegin,
         SceneEvent::ExitDone,
     ];
-    const LINE_STATES: [LineState; 6] = [
+    const LINE_STATES: [LineState; 9] = [
+        LineState::Composing,
+        LineState::Submitted,
+        LineState::Cancelled,
         LineState::Queued,
         LineState::Opening,
         LineState::Speaking,
@@ -383,7 +407,10 @@ mod tests {
         LineState::Closing,
         LineState::Done,
     ];
-    const LINE_EVENTS: [LineEvent; 6] = [
+    const LINE_EVENTS: [LineEvent; 9] = [
+        LineEvent::Submit,
+        LineEvent::Cancel,
+        LineEvent::Replace,
         LineEvent::Begin,
         LineEvent::OpenDone,
         LineEvent::SpeechDone,
@@ -483,6 +510,33 @@ mod tests {
             state = line_next(state, event).expect("legal");
             assert_eq!(state, expected);
         }
+    }
+
+    #[test]
+    fn a_composed_line_follows_submit_and_is_replaced_by_its_line_or_cancels_and_closes() {
+        assert_eq!(
+            line_next(LineState::Composing, LineEvent::Submit),
+            Some(LineState::Submitted)
+        );
+        assert_eq!(
+            line_next(LineState::Submitted, LineEvent::Replace),
+            Some(LineState::Done)
+        );
+        assert_eq!(
+            line_next(LineState::Composing, LineEvent::Cancel),
+            Some(LineState::Cancelled)
+        );
+        assert_eq!(
+            line_next(LineState::Cancelled, LineEvent::Close),
+            Some(LineState::Closing)
+        );
+        // A loader never speaks: it has no turn, speech or linger.
+        for event in [LineEvent::Begin, LineEvent::OpenDone, LineEvent::SpeechDone] {
+            assert_eq!(line_next(LineState::Composing, event), None);
+            assert_eq!(line_next(LineState::Submitted, event), None);
+            assert_eq!(line_next(LineState::Cancelled, event), None);
+        }
+        assert_eq!(line_next(LineState::Cancelled, LineEvent::Submit), None);
     }
 
     #[test]

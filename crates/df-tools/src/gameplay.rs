@@ -21,6 +21,7 @@ mod dialogue_tests;
 mod imagery;
 mod inn_qualification;
 mod journey;
+mod line_cleanup;
 mod living_scenes;
 mod model;
 mod music_assets;

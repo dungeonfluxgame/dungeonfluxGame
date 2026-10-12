@@ -279,7 +279,7 @@ async fn live_conversations_with_the_real_text_model() {
                 let turn = ask.turn.as_ref().unwrap();
                 (turn.dossier.clone(), turn.standing)
             };
-            ask.publish_typed_line(&log);
+            ask.publish_typed_line(&log, &ask.typed_words);
             let exchange = voice.converse_in_character(ask, &log).await.unwrap();
             calls += 1;
             let after = ledger.standing(member(1), &npc);

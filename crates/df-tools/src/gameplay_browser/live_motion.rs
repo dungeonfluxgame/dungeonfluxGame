@@ -19,7 +19,10 @@ use crate::{
         self, ActorSlot, Card, CombatSnapshot, CombatStage, StageActor, TableKind, TableLine,
         TableRole, Transitions,
     },
-    stage_conductor::{ClipOp, ClipSignal, Command, Conductor, LineId, ScriptLine, ViewPlan},
+    stage_conductor::{
+        ClipOp, ClipSignal, Command, Conductor, IntentKind, IntentMark, LineId, ScriptLine,
+        ViewPlan,
+    },
     stage_director::{StageState, ViewDiff},
     stage_machines::{ActorState, BattleState, LineState, SceneState, reading_time_ms},
     voice_line::{VoiceLine, display_lines},
@@ -48,6 +51,11 @@ enum Detail {
     /// The title card of the story's beginning or the closing card of a fight.
     Card(Box<Card>),
     Heal,
+    /// A hero typing or holding to talk: a loader on that hero.
+    Intent {
+        kind: IntentKind,
+        hero: String,
+    },
 }
 
 #[derive(Clone)]
@@ -214,6 +222,29 @@ fn roll_detail(
     })
 }
 
+/// The heroes the table says are typing or holding to talk (an ephemeral signal of the phones).
+fn intent_marks(journey: &rpc::JourneyView) -> Vec<IntentMark<Detail>> {
+    journey
+        .composing
+        .iter()
+        .filter_map(|mark| {
+            let hero = usize::try_from(mark.hero_index).ok()?;
+            let name = journey.party.get(hero)?.name.clone();
+            let kind = match rpc::ComposeKind::try_from(mark.kind).ok()? {
+                rpc::ComposeKind::Typing => IntentKind::Typing,
+                rpc::ComposeKind::Speaking => IntentKind::Speaking,
+                rpc::ComposeKind::Submitted => IntentKind::Submitted,
+                rpc::ComposeKind::Stopped | rpc::ComposeKind::Unspecified => return None,
+            };
+            Some(IntentMark {
+                slot: super::live_stage::slot_index(ActorSlot::Hero(hero))?,
+                kind,
+                detail: Detail::Intent { kind, hero: name },
+            })
+        })
+        .collect()
+}
+
 /// The stage slot indices of the cast the view shows.
 fn cast_slots(cast: &[StageActor]) -> Vec<usize> {
     cast.iter()
@@ -327,6 +358,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         }
         _ => (String::new(), Vec::new()),
     };
+    let intents = intent_marks(journey);
     let sound_on = live_voice::effects_gate().is_some();
     let thinking = presentation::replying_speaker(&view);
     let now = now_ms();
@@ -442,11 +474,12 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         }
         motion.conductor.set_sound(sound_on);
         motion.conductor.set_battlefield_expected(gpu_expected());
-        let commands = if restart {
+        let mut commands = if restart {
             motion.conductor.restart(now, plan)
         } else {
             motion.conductor.on_view(now, plan)
         };
+        commands.extend(motion.conductor.on_intents(now, intents));
         (commands, chime)
     });
     let Some((commands, chime)) = planned else {
@@ -861,6 +894,12 @@ fn line_command(
     detail: &Detail,
     slot: Option<usize>,
 ) -> Result<(), JsValue> {
+    if let (Detail::Intent { kind, hero }, Some(position)) = (detail, slot) {
+        return match client.borrow().live.tv.as_ref() {
+            Some(stage) => stage.figures().set_intent(position, id, state, *kind, hero),
+            None => Ok(()),
+        };
+    }
     let Detail::Line(line) = detail else {
         return Ok(());
     };
