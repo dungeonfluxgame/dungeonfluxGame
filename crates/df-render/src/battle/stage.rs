@@ -113,6 +113,9 @@ const PARTY_PAN_S: f32 = 1.1;
 /// Gap between one hero's reaction and the next, in seconds.
 const REACT_STAGGER_S: f32 = 0.3;
 
+/// Attack names waiting for their blows, at most.
+const MAX_PENDING_LABELS: usize = 16;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Ending {
     Victory,
@@ -552,13 +555,13 @@ impl Stage {
     }
 
     /// Names the attack `attacker` is about to make ("Greatsword", "Bite", "Graze"): the result
-    /// shown at its target reads "Name - result". Call it before staging the blow. A name a blow
-    /// never used is dropped after a few more arrive, so an unused one cannot attach to a later blow.
+    /// shown at its target reads "Name - result". Call it before staging the blow; one attacker's
+    /// blows take their names in the order they were given. A name a blow never used is dropped
+    /// after a number more arrive, so it cannot attach to a much later blow.
     pub fn set_attack_label(&mut self, attacker: &TokenId, label: &str) {
-        self.attack_labels.retain(|(id, _)| id != attacker);
         self.attack_labels
             .push((attacker.clone(), label.to_owned()));
-        if self.attack_labels.len() > 8 {
+        if self.attack_labels.len() > MAX_PENDING_LABELS {
             self.attack_labels.remove(0);
         }
     }
@@ -1567,7 +1570,7 @@ impl Stage {
     /// The wide shot of the party on the field: every hero in frame (the fallen ones too, in a
     /// defeat), from the side the camera already holds.
     fn party_pose(&self, ending: Ending) -> Option<CameraPose> {
-        let base = *self.scene.cameras.get(&ShotName::CombatEst)?;
+        let base = *self.scene.cameras.get(&ShotName::TurnFocus)?;
         let party: Vec<Body> = self
             .tokens
             .iter()

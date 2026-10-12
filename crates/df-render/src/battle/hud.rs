@@ -39,6 +39,9 @@ struct PipRow {
 /// Most icons shown over a figure's head before the rest collapse into "+N".
 const MAX_PIPS: usize = 4;
 
+/// The share of the picture's width the side plates take (a floating result stays clear of them).
+const PLATE_EDGE: f32 = 0.23;
+
 /// A floating number never rises above this share of the picture height (the round strip is above).
 const FLOAT_TOP_LIMIT: f32 = 0.27;
 
@@ -431,8 +434,13 @@ impl Hud {
             };
             // Kept under the round strip and clear of the side cards, however high the figure
             // stands in the picture.
-            let (x, y) = (x.clamp(0.14, 0.86), y.clamp(FLOAT_TOP_LIMIT, 0.92));
             let (width, height) = float_text::estimate_size(&text.text, aspect);
+            // The party plates take the left edge and the enemy cards the right: the whole result
+            // stays between them.
+            let (x, y) = (
+                x.clamp(PLATE_EDGE + width * 0.5, 1.0 - PLATE_EDGE - width * 0.5),
+                y.clamp(FLOAT_TOP_LIMIT, 0.92),
+            );
             let wanted = Rect {
                 left: x - width * 0.5,
                 top: y - height * 0.5,

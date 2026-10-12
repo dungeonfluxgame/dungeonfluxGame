@@ -105,27 +105,45 @@ pub fn estimate_size(text: &str, aspect: f32) -> (f32, f32) {
     (width, height)
 }
 
-/// Places a bubble of `size` for a speaker whose head is at `anchor`. `avoid` is everything the
-/// bubble must stay off (the plates, the round strip, the dice card, the speaker's own body). The
-/// first position that is on screen, clear of everything and not over the speaker wins; if none is
-/// clear, the one that covers the least wins. The tail always runs from the bubble's edge to
-/// `anchor`.
-pub fn place(anchor: (f32, f32), size: (f32, f32), avoid: &[Rect]) -> Placement {
+/// Where a speaker is on the picture: the top of the head, the mouth, and how far the body
+/// reaches to either side of the head (all in screen fractions).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Speaker {
+    pub head: (f32, f32),
+    pub mouth: (f32, f32),
+    pub reach: f32,
+}
+
+/// Places a bubble of `size` for `speaker`. `avoid` is everything the bubble must stay off (the
+/// plates, the round strip, the dice card, the speaker's own body). The first position that is on
+/// screen, clear of everything and not over the speaker wins: above the head (the tail runs down to
+/// it), then beside the head (the tail runs across to the body's edge), then below; if none is clear,
+/// the one that covers the least wins. The tail always runs from the bubble's edge to the speaker.
+pub fn place(speaker: Speaker, size: (f32, f32), avoid: &[Rect]) -> Placement {
     let (w, h) = size;
+    let anchor = speaker.head;
     let clamp_x = |x: f32| x.clamp(SAFE.left, (SAFE.right - w).max(SAFE.left));
     let clamp_y = |y: f32| y.clamp(SAFE.top, (SAFE.bottom - h).max(SAFE.top));
-    // Every position worth trying, nearest and most natural first: above the head (the tail down),
-    // beside it, then below; each leaning left, centred or right (or shifted up and down for the
-    // sides) so a crowded corner still finds a gap.
+    // Every position worth trying, most natural first; each leaning left, centred or right (or
+    // shifted up and down beside the speaker) so a crowded corner still finds a gap.
     let mut candidates: Vec<(f32, f32, Side)> = Vec::new();
     let leans = [0.5, 0.2, 0.8, 0.05, 0.95];
     let shifts = [0.0, -0.08, 0.08, -0.16, 0.16, -0.26, 0.26, -0.38, 0.38];
+    let beside = speaker.reach + TAIL;
     for lean in leans {
         candidates.push((anchor.0 - w * lean, anchor.1 - TAIL - h, Side::Bottom));
     }
     for shift in shifts {
-        candidates.push((anchor.0 + TAIL, anchor.1 - h * 0.5 + shift, Side::Left));
-        candidates.push((anchor.0 - TAIL - w, anchor.1 - h * 0.5 + shift, Side::Right));
+        candidates.push((
+            speaker.mouth.0 + beside,
+            speaker.mouth.1 - h * 0.5 + shift,
+            Side::Left,
+        ));
+        candidates.push((
+            speaker.mouth.0 - beside - w,
+            speaker.mouth.1 - h * 0.5 + shift,
+            Side::Right,
+        ));
     }
     for lean in leans {
         candidates.push((anchor.0 - w * lean, anchor.1 + TAIL, Side::Top));
@@ -133,8 +151,8 @@ pub fn place(anchor: (f32, f32), size: (f32, f32), avoid: &[Rect]) -> Placement 
     let faces_speaker = |rect: &Rect, side: Side| match side {
         Side::Bottom => anchor.1 >= rect.bottom - 1e-4,
         Side::Top => anchor.1 <= rect.top + 1e-4,
-        Side::Left => anchor.0 <= rect.left + 1e-4,
-        Side::Right => anchor.0 >= rect.right - 1e-4,
+        Side::Left => speaker.mouth.0 <= rect.left + 1e-4,
+        Side::Right => speaker.mouth.0 >= rect.right - 1e-4,
     };
     let cost = |rect: &Rect| -> f32 {
         let covered: f32 = avoid
@@ -190,14 +208,15 @@ pub fn place(anchor: (f32, f32), size: (f32, f32), avoid: &[Rect]) -> Placement 
     };
     Placement {
         rect,
-        tail: tail_for(&rect, side, anchor),
+        tail: tail_for(&rect, side, speaker),
         side,
     }
 }
 
 /// The tail from the bubble's edge to the speaker: a short triangle whose base sits on the edge
-/// facing the speaker, kept off the corners.
-fn tail_for(rect: &Rect, side: Side, anchor: (f32, f32)) -> [(f32, f32); 3] {
+/// facing the speaker, kept off the corners. Above or below the head it ends at the head; beside
+/// it, at the edge of the body at the mouth's height.
+fn tail_for(rect: &Rect, side: Side, speaker: Speaker) -> [(f32, f32); 3] {
     let half = 0.012;
     match side {
         Side::Bottom | Side::Top => {
@@ -206,8 +225,8 @@ fn tail_for(rect: &Rect, side: Side, anchor: (f32, f32)) -> [(f32, f32); 3] {
             } else {
                 rect.top
             };
-            let at = anchor.0.clamp(rect.left + 0.03, rect.right - 0.03);
-            [(at - half, edge), (at + half, edge), anchor]
+            let at = speaker.head.0.clamp(rect.left + 0.03, rect.right - 0.03);
+            [(at - half, edge), (at + half, edge), speaker.head]
         }
         Side::Left | Side::Right => {
             let edge = if side == Side::Left {
@@ -215,8 +234,14 @@ fn tail_for(rect: &Rect, side: Side, anchor: (f32, f32)) -> [(f32, f32); 3] {
             } else {
                 rect.right
             };
-            let at = anchor.1.clamp(rect.top + 0.03, rect.bottom - 0.03);
-            [(edge, at - half * 1.6), (edge, at + half * 1.6), anchor]
+            let at = speaker.mouth.1.clamp(rect.top + 0.03, rect.bottom - 0.03);
+            let toward = if side == Side::Left { 1.0 } else { -1.0 };
+            // The tip stops at the body's edge: a tail that crossed the figure would hide it.
+            let tip = (
+                speaker.mouth.0 - toward * speaker.reach * 0.45,
+                speaker.mouth.1,
+            );
+            [(edge, at - half * 1.6), (edge, at + half * 1.6), tip]
         }
     }
 }
@@ -269,12 +294,20 @@ mod tests {
         }
     }
 
+    fn speaker_at(anchor: (f32, f32)) -> Speaker {
+        Speaker {
+            head: anchor,
+            mouth: (anchor.0, anchor.1 + 0.03),
+            reach: 0.045,
+        }
+    }
+
     fn check(anchor: (f32, f32), avoid: &[Rect]) -> Placement {
         let size = estimate_size(
             "Hand over the packet and nobody has to bleed tonight.",
             ASPECT,
         );
-        let placed = place(anchor, size, avoid);
+        let placed = place(speaker_at(anchor), size, avoid);
         assert!(
             placed.rect.inside(&SAFE),
             "{anchor:?}: off screen {:?}",
@@ -330,7 +363,15 @@ mod tests {
             let mut obstacles = avoid.clone();
             obstacles.push(body_below(anchor));
             let placed = check(anchor, &obstacles);
-            assert_eq!(placed.tail[2], anchor, "the tip is on the speaker");
+            let speaker = speaker_at(anchor);
+            let tip = placed.tail[2];
+            match placed.side {
+                Side::Bottom | Side::Top => assert_eq!(tip, speaker.head, "the tip is on the head"),
+                Side::Left | Side::Right => {
+                    assert_eq!(tip.1, speaker.mouth.1);
+                    assert!((tip.0 - speaker.mouth.0).abs() <= speaker.reach, "{tip:?}");
+                }
+            }
             for base in &placed.tail[..2] {
                 let on_edge = match placed.side {
                     Side::Bottom => (base.1 - placed.rect.bottom).abs() < 1e-5,
@@ -346,10 +387,10 @@ mod tests {
             }
             // The tip is on the side of the bubble the tail leaves from.
             match placed.side {
-                Side::Bottom => assert!(anchor.1 >= placed.rect.bottom),
-                Side::Top => assert!(anchor.1 <= placed.rect.top),
-                Side::Left => assert!(anchor.0 <= placed.rect.left),
-                Side::Right => assert!(anchor.0 >= placed.rect.right),
+                Side::Bottom => assert!(tip.1 >= placed.rect.bottom),
+                Side::Top => assert!(tip.1 <= placed.rect.top),
+                Side::Left => assert!(tip.0 <= placed.rect.left),
+                Side::Right => assert!(tip.0 >= placed.rect.right),
             }
         }
     }
@@ -374,7 +415,7 @@ mod tests {
         }];
         let anchor = (0.5, 0.5);
         let size = estimate_size("Short.", ASPECT);
-        let placed = place(anchor, size, &everything);
+        let placed = place(speaker_at(anchor), size, &everything);
         assert!(placed.rect.inside(&SAFE));
         assert!(!placed.rect.contains(anchor));
     }

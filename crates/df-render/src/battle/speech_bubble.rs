@@ -115,7 +115,12 @@ impl SpeechBubble {
             right: head.0 + body_half,
             bottom: feet.1.max(head.1) + 0.01,
         });
-        let placed = speech::place(head, (width, height), &avoid);
+        let speaker = speech::Speaker {
+            head,
+            mouth: (head.0, head.1 + (feet.1 - head.1).abs() * 0.12),
+            reach: body_half,
+        };
+        let placed = speech::place(speaker, (width, height), &avoid);
         let style = self.bubble.style();
         style.set_property("left", &format!("{:.2}%", placed.rect.left * 100.0))?;
         style.set_property("top", &format!("{:.2}%", placed.rect.top * 100.0))?;
