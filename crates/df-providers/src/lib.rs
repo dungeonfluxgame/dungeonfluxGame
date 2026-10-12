@@ -80,7 +80,7 @@ pub use fal_media::{
     FalMediaError, FalMediaFamily, FalMediaJob, FalMediaReason, FalReferenceFrame, FalSoundBasis,
     FalSoundJob, FalSoundProfile, FalSoundRequest, FalSoundSemantics, FalVideoBasis,
     FalVideoCompletionEvent, FalVideoJob, FalVideoProfile, FalVideoRequest, FalVideoSemantics,
-    NativeFalMediaProvider, PreparedFalMediaResponse,
+    KLING_O1_IMAGE_TO_VIDEO, NativeFalMediaProvider, PreparedFalMediaResponse,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use media_container::{EncodedMediaFacts, MediaContainerRefusal, MediaTimebase};

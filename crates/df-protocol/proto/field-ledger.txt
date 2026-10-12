@@ -582,3 +582,11 @@ field dungeonflux.public.v1.PlateLayout 3 head_y_permille type=13 label=1 presen
 field dungeonflux.public.v1.PlateLayout 4 head_width_permille type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PlateLayout 5 head_height_permille type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 45 join_url type=9 label=1 presence=false target=- oneof=-
+enum dungeonflux.public.v1.HomeVideoState
+enum-value dungeonflux.public.v1.HomeVideoState 0 HOME_VIDEO_STATE_UNSPECIFIED
+enum-value dungeonflux.public.v1.HomeVideoState 1 HOME_VIDEO_STATE_NONE
+enum-value dungeonflux.public.v1.HomeVideoState 2 HOME_VIDEO_STATE_PENDING
+enum-value dungeonflux.public.v1.HomeVideoState 3 HOME_VIDEO_STATE_READY
+enum-value dungeonflux.public.v1.HomeVideoState 4 HOME_VIDEO_STATE_FAILED
+field dungeonflux.public.v1.JourneyView 31 home_video_state type=14 label=1 presence=false target=.dungeonflux.public.v1.HomeVideoState oneof=-
+field dungeonflux.public.v1.JourneyView 32 home_video_path type=9 label=1 presence=false target=- oneof=-

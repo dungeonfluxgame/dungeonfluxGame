@@ -791,6 +791,13 @@ impl LivingScenes {
         self.inner.as_ref().map(|inner| inner.wake.subscribe())
     }
 
+    /// PLAY-V10: wakes the watchers when a generated loop lands outside this worker, as art does.
+    pub(super) fn signal_art(&self) {
+        if let Some(inner) = &self.inner {
+            inner.wake.send_modify(|count| *count += 1);
+        }
+    }
+
     /// Notes a display view the server is sending: its scene, cast, tempo, revision and the
     /// health of the party and the cast. Player views are ignored.
     pub(super) fn observe(&self, message: &rpc::ViewMessage) {
