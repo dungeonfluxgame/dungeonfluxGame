@@ -926,6 +926,8 @@ pub(super) fn project_journey(
             .then(|| super::home_theme::lobby_view(&authored.asset, authored.setting.as_ref())),
         adventure_ended: super::beat_script_runtime::ended(state)?,
         adventure_title: super::beat_script_runtime::adventure_title(state)?,
+        // PLAY-V12: the opening scene's title is the adventure's own title on every view.
+        adventure_name: pack::scene(SceneKey::Opening).title,
         composing: Vec::new(),
         // PLAY-V10: set per view for the display's lobby by `home_video::apply`; none here.
         home_video_state: rpc::HomeVideoState::None as i32,

@@ -1021,6 +1021,11 @@ fn set_scene_state(client: &Rc<RefCell<Client>>, state: SceneState) -> Result<()
             if state == SceneState::Entering {
                 stage.clear_narration()?;
             }
+            // PLAY-V12: every line of the scene has been told, so whatever the narration did, the
+            // plate may be cut to.
+            if state == SceneState::AwaitingChoice {
+                stage.narration_over()?;
+            }
             stage.root().set_attribute("data-scene-state", state.name())
         }
         None => Ok(()),
@@ -1053,6 +1058,7 @@ fn line_command(
         match slot {
             None => stage.narrator_line(id, state, &line.text)?,
             Some(position) => {
+                stage.lower_third(&line.speaker, &line.text, state)?;
                 let kind = match (line.kind, line.role) {
                     (TableKind::Action, _) => BubbleKind::Action,
                     (TableKind::Speech, TableRole::Hero(_)) => BubbleKind::Typed,

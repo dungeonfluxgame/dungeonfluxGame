@@ -1318,8 +1318,8 @@ fn receive_view(
     view: rpc::ViewMessage,
 ) -> Result<(), JsValue> {
     // PLAY-V09: the plate picture a display view names is fetched at once, usually while the
-    // scene before it is still being spoken. A refused fetch only means the scene change cannot
-    // show the plate instantly; the plate then fades in over the cut-outs as it loads.
+    // scene before it is still being spoken. A refused fetch only means the cut to the plate waits
+    // for the picture to load.
     if let Some(rpc::view_message::Audience::Display(display)) = &view.audience
         && let Some(scene) = display.scene.as_ref()
         && let Some(url) = crate::presentation::imagery_url(&scene.live_plate)

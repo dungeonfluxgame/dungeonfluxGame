@@ -89,6 +89,8 @@ const CAMERA: &str = "A wide shot on a 28mm lens from far back among the party: 
     at the edges of the picture, each no wider than a quarter of the frame, and the room \
     itself is the subject, its beams, floor and far walls all in view.";
 const PLACE_IS: &str = "The place is";
+const INTERIOR: &str = "Indoors, under a ceiling.";
+const EXTERIOR: &str = "Outdoors.";
 const PLACE_REFERENCE: [&str; 5] = [
     "",
     "Image 1 is a painting of this place: keep its architecture, props and palette, but \
@@ -350,6 +352,7 @@ fn scene_plate_with(
     }
     parts.push(Part::Fixed(spec.place_description));
     parts.push(Part::Fixed("."));
+    parts.push(Part::Fixed(if spec.exterior { EXTERIOR } else { INTERIOR }));
     if let Some(number) = references.number(Which::Place) {
         parts.push(Part::Fixed(PLACE_REFERENCE[usize::from(number)]));
     }
@@ -498,6 +501,8 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
         PHOTO,
         CAMERA,
         PLACE_IS,
+        INTERIOR,
+        EXTERIOR,
         HEROES_IDENTITY,
         HERO_IS,
         SPEAKER_IS,

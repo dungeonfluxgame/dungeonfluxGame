@@ -574,6 +574,7 @@ enum-value dungeonflux.public.v1.PlateState 0 PLATE_STATE_UNSPECIFIED
 enum-value dungeonflux.public.v1.PlateState 1 PLATE_STATE_PENDING
 enum-value dungeonflux.public.v1.PlateState 2 PLATE_STATE_READY
 enum-value dungeonflux.public.v1.PlateState 3 PLATE_STATE_FAILED
+enum-value dungeonflux.public.v1.PlateState 4 PLATE_STATE_UNAVAILABLE
 field dungeonflux.public.v1.GameplayScene 20 live_plate type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 21 plate_layout type=11 label=1 presence=false target=.dungeonflux.public.v1.PlateLayout oneof=-
 field dungeonflux.public.v1.GameplayScene 22 plate_state type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateState oneof=-
@@ -617,3 +618,5 @@ enum-value dungeonflux.public.v1.HomeVideoState 3 HOME_VIDEO_STATE_READY
 enum-value dungeonflux.public.v1.HomeVideoState 4 HOME_VIDEO_STATE_FAILED
 field dungeonflux.public.v1.JourneyView 31 home_video_state type=14 label=1 presence=false target=.dungeonflux.public.v1.HomeVideoState oneof=-
 field dungeonflux.public.v1.JourneyView 32 home_video_path type=9 label=1 presence=false target=- oneof=-
+# PLAY-V12: the adventure name on every story view (the establishing shot title card)
+field dungeonflux.public.v1.JourneyView 75 adventure_name type=9 label=1 presence=false target=- oneof=-
