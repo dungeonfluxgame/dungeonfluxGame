@@ -28,6 +28,10 @@ const STYLE_ATTRIBUTE: &str = "data-battlefield-style";
 const PREVIEW_HASH: &str = "#battle-preview";
 /// The default tier of a streamed scan: the second largest, not the largest.
 const DEFAULT_SPLAT_LOD: u32 = 1;
+const DEFAULT_PREVIEW_HEROES: usize = 3;
+const DEFAULT_PREVIEW_ENEMIES: usize = 1;
+/// The most figures per side the preview stands without a layout to seat them.
+const PREVIEW_MAX_PER_SIDE: usize = 6;
 
 thread_local! {
     static PREVIEW: RefCell<Option<BattleStage>> = const { RefCell::new(None) };
@@ -102,6 +106,10 @@ struct PreviewRequest {
     /// `&lod=0..3`: the tier of a streamed scan drawn as the finest (1 when absent, as in the
     /// live game).
     splat_lod: u32,
+    /// `&heroes=n` and `&enemies=n`: how many of each stand on the field (3 and 1 when absent),
+    /// up to what the layout seats.
+    heroes: usize,
+    enemies: usize,
 }
 
 fn free_camera(text: &str) -> Option<battle::CameraPose> {
@@ -151,6 +159,8 @@ fn preview_request() -> Option<PreviewRequest> {
         feel_off: false,
         tempo: None,
         splat_lod: DEFAULT_SPLAT_LOD,
+        heroes: DEFAULT_PREVIEW_HEROES,
+        enemies: DEFAULT_PREVIEW_ENEMIES,
         demo: None,
         slow: None,
     };
@@ -229,6 +239,12 @@ fn preview_request() -> Option<PreviewRequest> {
             }
             other if other.starts_with("slow=") => request.slow = other[5..].parse().ok(),
             other if other.starts_with("tempo=") => request.tempo = other[6..].parse().ok(),
+            other if other.starts_with("heroes=") => {
+                request.heroes = other[7..].parse().unwrap_or(DEFAULT_PREVIEW_HEROES);
+            }
+            other if other.starts_with("enemies=") => {
+                request.enemies = other[8..].parse().unwrap_or(DEFAULT_PREVIEW_ENEMIES);
+            }
             other if other.starts_with("lod=") => {
                 request.splat_lod = other[4..].parse().unwrap_or(DEFAULT_SPLAT_LOD);
             }
@@ -332,55 +348,151 @@ const GOBLIN: (&str, &str, &str) = (
     "portrait-ant-goblin-warrior",
 );
 
-/// The preview's heroes and the lone goblin on a layout's spawn cells (or the derived formation
-/// when the scene has no layouts).
+/// How many figures per side a preview can stand on `layout`: what it seats, never fewer than one.
+fn preview_limit(layout: Option<&battle::Layout>) -> usize {
+    layout
+        .map_or(PREVIEW_MAX_PER_SIDE, |layout| {
+            layout.heroes.len().min(layout.enemies.len())
+        })
+        .clamp(1, PREVIEW_MAX_PER_SIDE.max(4))
+}
+
+/// The preview's heroes (Tobin the fighter, Sylvie the archer, Nimrael, then more of the same
+/// figures) and goblins on a layout's spawn cells (or the derived formation when the scene has no
+/// layouts). `heroes` and `enemies` are clamped to what the layout seats.
 fn preview_tokens(
     grid: &battle::Grid,
     layout: Option<&battle::Layout>,
+    heroes: usize,
+    enemies: usize,
 ) -> Result<Vec<Token>, JsValue> {
+    let limit = preview_limit(layout);
+    let (heroes, enemies) = (heroes.clamp(1, limit), enemies.clamp(1, limit));
     let seats = match layout {
-        Some(layout) => battle::from_layout(layout, grid, 3, 1),
-        None => battle::derive_formation(grid, 3, 1),
+        Some(layout) => battle::from_layout(layout, grid, heroes, enemies),
+        None => battle::derive_formation(grid, heroes, enemies),
     }
     .map_err(|_| JsValue::from_str("battlefield formation has no room"))?;
-    Ok(vec![
-        combatant(
-            "tobin",
-            "Tobin",
+    const CAST: [(&str, &str, &str, &str); 3] = [
+        ("tobin", "Tobin", "figure-hero-1", "portrait-hero-1"),
+        ("sylvie", "Sylvie", "figure-hero-3", "portrait-hero-3"),
+        ("nimrael", "Nimrael", "figure-hero-2", "portrait-hero-2"),
+    ];
+    let mut tokens = Vec::new();
+    for (index, cell) in seats.heroes.iter().enumerate() {
+        let (id, name, figure, portrait) = CAST[index % CAST.len()];
+        let (id, name) = if index < CAST.len() {
+            (id.to_owned(), name.to_owned())
+        } else {
+            (
+                format!("{id}-{}", index / CAST.len() + 1),
+                format!("{name} {}", index / CAST.len() + 1),
+            )
+        };
+        tokens.push(combatant(
+            &id,
+            &name,
             Side::Hero,
-            seats.heroes[0],
-            "figure-hero-1",
-            "portrait-hero-1",
+            *cell,
+            figure,
+            portrait,
             1.35,
-        ),
-        combatant(
-            "sylvie",
-            "Sylvie",
-            Side::Hero,
-            seats.heroes[1],
-            "figure-hero-3",
-            "portrait-hero-3",
-            1.35,
-        ),
-        combatant(
-            "nimrael",
-            "Nimrael",
-            Side::Hero,
-            seats.heroes[2],
-            "figure-hero-2",
-            "portrait-hero-2",
-            1.35,
-        ),
-        combatant(
-            GOBLIN.0,
-            "Goblin Warrior",
+        ));
+    }
+    for (index, cell) in seats.enemies.iter().enumerate() {
+        let (id, name) = if index == 0 {
+            (GOBLIN.0.to_owned(), "Goblin Warrior".to_owned())
+        } else {
+            (
+                format!("{}-{}", GOBLIN.0, index + 1),
+                format!("Goblin Warrior {}", index + 1),
+            )
+        };
+        tokens.push(combatant(
+            &id,
+            &name,
             Side::Enemy,
-            seats.enemies[0],
+            *cell,
             GOBLIN.1,
             GOBLIN.2,
             1.0,
-        ),
-    ])
+        ));
+    }
+    Ok(tokens)
+}
+
+/// Whether the request uses the preview's default cast, which the recorded fight is written for.
+fn default_cast(request: &PreviewRequest) -> bool {
+    request.heroes == DEFAULT_PREVIEW_HEROES && request.enemies == DEFAULT_PREVIEW_ENEMIES
+}
+
+fn initiative_for(request: &PreviewRequest, tokens: Vec<Token>) -> Vec<battle::InitiativeRoll> {
+    if default_cast(request) {
+        preview_initiative()
+    } else {
+        generated_initiative(&tokens)
+    }
+}
+
+fn script_for(request: &PreviewRequest, tokens: &[Token]) -> Vec<(u32, Beat)> {
+    if default_cast(request) {
+        preview_script()
+    } else {
+        generated_script(tokens)
+    }
+}
+
+/// Initiative for any head count: the heroes and enemies alternate, highest first.
+fn generated_initiative(tokens: &[Token]) -> Vec<battle::InitiativeRoll> {
+    let heroes: Vec<&Token> = tokens.iter().filter(|t| t.side == Side::Hero).collect();
+    let enemies: Vec<&Token> = tokens.iter().filter(|t| t.side == Side::Enemy).collect();
+    let mut order: Vec<&Token> = Vec::new();
+    for index in 0..heroes.len().max(enemies.len()) {
+        order.extend(heroes.get(index));
+        order.extend(enemies.get(index));
+    }
+    order
+        .iter()
+        .enumerate()
+        .map(|(index, token)| {
+            let total = 20 - index as i32;
+            battle::InitiativeRoll {
+                token: token.id.clone(),
+                die: (total - 2).clamp(1, 20) as u32,
+                modifier: 2,
+                total,
+            }
+        })
+        .collect()
+}
+
+/// A fight for any head count: every enemy strikes a hero, every hero strikes an enemy, then each
+/// enemy in turn is brought down.
+fn generated_script(tokens: &[Token]) -> Vec<(u32, Beat)> {
+    let heroes: Vec<&Token> = tokens.iter().filter(|t| t.side == Side::Hero).collect();
+    let enemies: Vec<&Token> = tokens.iter().filter(|t| t.side == Side::Enemy).collect();
+    let attack =
+        |attacker: &Token, target: &Token, damage: u32, downed: bool, after: u32| Beat::Attack {
+            attacker: attacker.id.clone(),
+            target: target.id.clone(),
+            result: AttackResult::Hit {
+                damage,
+                critical: false,
+                downed,
+            },
+            target_hit_points_after: Some(after),
+        };
+    let mut script = Vec::new();
+    for (index, enemy) in enemies.iter().enumerate() {
+        script.push((1, attack(enemy, heroes[index % heroes.len()], 2, false, 10)));
+    }
+    for (index, hero) in heroes.iter().enumerate() {
+        script.push((2, attack(hero, enemies[index % enemies.len()], 3, false, 9)));
+    }
+    for (index, enemy) in enemies.iter().enumerate() {
+        script.push((3, attack(heroes[index % heroes.len()], enemy, 12, true, 0)));
+    }
+    script
 }
 
 /// The recorded rolls the preview shows, first to act first: Sylvie 20, Tobin 15, then the goblin
@@ -574,18 +686,23 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             }
             let layout = stage.layout().cloned();
             let tokens = match request.mode {
-                PreviewMode::Fight | PreviewMode::Statuses | PreviewMode::Still => {
-                    preview_tokens(stage.grid(), layout.as_ref())
-                }
+                PreviewMode::Fight | PreviewMode::Statuses | PreviewMode::Still => preview_tokens(
+                    stage.grid(),
+                    layout.as_ref(),
+                    request.heroes,
+                    request.enemies,
+                ),
                 PreviewMode::Sheet(page) => sheet_tokens(stage.grid(), layout.as_ref(), page),
             };
             tokens.map(|tokens| {
                 stage.set_tokens(tokens);
                 let order: Vec<TokenId> = match request.mode {
-                    PreviewMode::Fight => preview_initiative()
-                        .into_iter()
-                        .map(|roll| roll.token)
-                        .collect(),
+                    PreviewMode::Fight => {
+                        initiative_for(&request, stage.tokens().cloned().collect())
+                            .into_iter()
+                            .map(|roll| roll.token)
+                            .collect()
+                    }
                     _ => stage.tokens().map(|token| token.id.clone()).collect(),
                 };
                 stage.set_initiative(order);
@@ -612,6 +729,14 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             // One attack of the asked kind on a camera that has idled a moment, then hold.
             with_preview(|stage| stage.establish());
             TimeoutFuture::new(2500).await;
+            if matches!(
+                kind.as_str(),
+                "speak" | "named" | "namedmiss" | "namedcrit" | "chain" | "victory" | "defeat"
+            ) {
+                mark(&host, "data-battlefield-demo", &kind);
+                run_extra_demo(&host, &kind).await;
+                return;
+            }
             if kind == "selfheal" {
                 // A self action (Second Wind): the actor alone, clear of everyone else.
                 with_preview(|stage| {
@@ -759,19 +884,21 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                 with_preview(|stage| stage.establish());
                 TimeoutFuture::new(1500).await;
                 mark(&host, "data-battlefield-phase", "initiative");
-                let queued = with_preview(|stage| {
-                    stage
-                        .stage(Beat::Initiative {
-                            rolls: preview_initiative(),
-                        })
-                        .is_ok()
-                });
+                let rolls = with_preview(|stage| {
+                    initiative_for(&request, stage.tokens().cloned().collect())
+                })
+                .unwrap_or_default();
+                let queued = with_preview(|stage| stage.stage(Beat::Initiative { rolls }).is_ok());
                 if queued != Some(true) || !wait_idle().await {
                     return;
                 }
                 mark(&host, "data-battlefield-phase", "fight");
                 TimeoutFuture::new(700).await;
-                for (round, beat) in preview_script() {
+                let script = with_preview(|stage| {
+                    script_for(&request, &stage.tokens().cloned().collect::<Vec<_>>())
+                })
+                .unwrap_or_default();
+                for (round, beat) in script {
                     let queued = with_preview(|stage| {
                         stage.set_round(round);
                         stage.stage(beat.clone()).is_ok()
@@ -808,9 +935,12 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                     mark(&host, "data-battlefield-status", &status_name(&set));
                     mark(&host, "data-battlefield-status-index", &index.to_string());
                     let applied = with_preview(|stage| {
-                        if let Ok(mut tokens) =
-                            preview_tokens(stage.grid(), stage.layout().cloned().as_ref())
-                        {
+                        if let Ok(mut tokens) = preview_tokens(
+                            stage.grid(),
+                            stage.layout().cloned().as_ref(),
+                            request.heroes,
+                            request.enemies,
+                        ) {
                             tokens[0].statuses = set.clone();
                             // The goblin keeps the frightened figure's attention honest.
                             stage.set_tokens(tokens);
@@ -840,6 +970,136 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             }
         }
     }
+}
+
+/// The ids of the figures on the preview field: heroes, then enemies.
+fn preview_ids() -> (Vec<TokenId>, Vec<TokenId>) {
+    with_preview(|stage| {
+        let ids = |side| {
+            stage
+                .tokens()
+                .filter(|token| token.side == side)
+                .map(|token| token.id.clone())
+                .collect::<Vec<_>>()
+        };
+        (ids(Side::Hero), ids(Side::Enemy))
+    })
+    .unwrap_or_default()
+}
+
+/// A hit or miss for the demos below.
+fn demo_blow(attacker: &TokenId, target: &TokenId, label: &str, result: AttackResult) {
+    let (attacker, target) = (attacker.clone(), target.clone());
+    let label = label.to_owned();
+    with_preview(move |stage| {
+        stage.set_attack_label(&attacker, &label);
+        let after = match result {
+            AttackResult::Miss => None,
+            AttackResult::Hit { downed: true, .. } => Some(0),
+            AttackResult::Hit { damage, .. } => Some(12u32.saturating_sub(damage)),
+        };
+        let _ = stage.stage(Beat::Attack {
+            attacker,
+            target,
+            result,
+            target_hit_points_after: after,
+        });
+    });
+}
+
+/// Stays until the preview is torn down.
+async fn hold_preview() {
+    loop {
+        TimeoutFuture::new(1000).await;
+        if PREVIEW.with(|slot| slot.borrow().is_none()) {
+            return;
+        }
+    }
+}
+
+/// The review demos for speech, damage text, chained enemy turns and the victory and defeat beats
+/// (`&beat=speak|named|namedmiss|namedcrit|chain|victory|defeat`).
+async fn run_extra_demo(host: &Element, kind: &str) {
+    let (heroes, enemies) = preview_ids();
+    let (Some(hero), Some(enemy)) = (heroes.first().cloned(), enemies.first().cloned()) else {
+        return;
+    };
+    let hit = |damage, critical, downed| AttackResult::Hit {
+        damage,
+        critical,
+        downed,
+    };
+    match kind {
+        "speak" => {
+            let name_of = |id: &TokenId| {
+                with_preview(|stage| {
+                    stage
+                        .tokens()
+                        .find(|token| token.id == *id)
+                        .map(|token| token.name.clone())
+                })
+                .flatten()
+                .unwrap_or_default()
+            };
+            let lines = [
+                (
+                    name_of(&enemy),
+                    "Hand over the packet and nobody has to bleed tonight.",
+                ),
+                (
+                    name_of(&hero),
+                    "You will have to take it from me, friend. I am not going anywhere.",
+                ),
+            ];
+            for (index, (speaker, text)) in lines.iter().enumerate() {
+                let line_id = index as u64 + 1;
+                let opened = with_preview(|stage| stage.speak(speaker, text, line_id));
+                mark(host, "data-battlefield-line", &line_id.to_string());
+                mark(host, "data-battlefield-speaker", speaker);
+                if opened != Some(true) {
+                    mark(host, "data-battlefield-speaker", "not-on-field");
+                }
+                TimeoutFuture::new(6000).await;
+                with_preview(|stage| stage.end_speech(line_id));
+                mark(host, "data-battlefield-line", "ended");
+                TimeoutFuture::new(2500).await;
+            }
+        }
+        "named" => demo_blow(&hero, &enemy, "Greatsword", hit(9, false, false)),
+        "namedmiss" => {
+            let archer = heroes.get(1).cloned().unwrap_or(hero);
+            demo_blow(&archer, &enemy, "Longbow", AttackResult::Miss);
+        }
+        "namedcrit" => demo_blow(&enemy, &hero, "Bite", hit(7, true, false)),
+        "chain" => {
+            // Every enemy acts in a row on a hero: the results stack, none over another.
+            for (index, attacker) in enemies.iter().enumerate() {
+                let target = &heroes[index % heroes.len()];
+                demo_blow(
+                    attacker,
+                    target,
+                    "Scimitar",
+                    hit(3 + index as u32, false, false),
+                );
+            }
+        }
+        "victory" => {
+            // The party brings every foe down, one after another: the last blow decides the fight.
+            for (index, target) in enemies.iter().enumerate() {
+                let attacker = &heroes[index % heroes.len()];
+                demo_blow(attacker, target, "Greatsword", hit(12, false, true));
+            }
+        }
+        "defeat" => {
+            for (index, target) in heroes.iter().enumerate() {
+                let attacker = &enemies[index % enemies.len()];
+                demo_blow(attacker, target, "Scimitar", hit(14, false, true));
+            }
+        }
+        _ => {}
+    }
+    mark(host, "data-battlefield-demo-done", kind);
+    hold_preview().await;
 }
 
 /// Six figures, three heroes and three enemies, each carrying different statuses, for review.
