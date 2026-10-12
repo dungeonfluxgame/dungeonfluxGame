@@ -556,6 +556,9 @@ impl Stage {
         self.pending_tokens = None;
         self.tokens
             .retain(|runtime| tokens.iter().any(|token| token.id == runtime.token.id));
+        // Figures the server moved since the last view: they walk there, they are not teleported.
+        let mut moves: Vec<(TokenId, Cell, Cell)> = Vec::new();
+        let had_figures = !self.tokens.is_empty();
         for incoming in tokens {
             let centre = self.grid.cell_centre(incoming.cell);
             match self
@@ -565,7 +568,11 @@ impl Stage {
             {
                 Some(runtime) => {
                     if runtime.token.cell != incoming.cell {
-                        runtime.position = centre;
+                        if had_figures && !self.reduced_motion {
+                            moves.push((incoming.id.clone(), runtime.token.cell, incoming.cell));
+                        } else {
+                            runtime.position = centre;
+                        }
                     }
                     if runtime.hp_hold_s.is_some() {
                         runtime.pending_hp = incoming.hit_points;
@@ -598,6 +605,9 @@ impl Stage {
                 }
             }
         }
+        for (actor, from, to) in moves {
+            let _ = self.stage(Beat::Move { actor, from, to });
+        }
     }
 
     /// Keeps the shown hit points of these tokens until their blow is staged, so a bar never
@@ -628,6 +638,7 @@ impl Stage {
             Beat::Heal { source, target, .. } => {
                 [source, target].into_iter().find(|id| !known(id)).cloned()
             }
+            Beat::Move { actor, .. } => (!known(actor)).then(|| actor.clone()),
             Beat::Initiative { rolls } => rolls
                 .iter()
                 .map(|roll| &roll.token)
@@ -1880,39 +1891,6 @@ mod tests {
     }
 
     #[test]
-    fn an_approach_then_a_strike_land_the_blow_after_the_step_and_return_home() {
-        let mut stage = stage(false);
-        stage
-            .stage(Beat::Approach {
-                attacker: TokenId::new("hero"),
-                target: TokenId::new("enemy"),
-            })
-            .unwrap();
-        run(&mut stage, 1.3);
-        let beside = figure(&stage, "hero").position;
-        assert!(
-            (beside - stage.grid().cell_centre(Cell::new(3, 4))).length() > 1.0,
-            "stepped forward"
-        );
-        stage
-            .stage(Beat::Strike {
-                attacker: TokenId::new("hero"),
-                target: TokenId::new("enemy"),
-                result: AttackResult::Hit {
-                    damage: 2,
-                    critical: false,
-                    downed: false,
-                },
-                target_hit_points_after: Some(3),
-            })
-            .unwrap();
-        run(&mut stage, 6.0);
-        let hero = figure(&stage, "hero");
-        assert!((hero.position - stage.grid().cell_centre(Cell::new(3, 4))).length() < 0.01);
-        assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 3);
-    }
-
-    #[test]
     fn the_hit_point_bar_changes_only_at_the_moment_of_impact() {
         let mut stage = stage(false);
         stage.stage(killing_blow()).unwrap();
@@ -2046,40 +2024,6 @@ mod tests {
     }
 
     #[test]
-    fn one_footstep_sounds_per_cell_walked_there_and_back() {
-        let mut stage = stage(false);
-        stage
-            .stage(Beat::Attack {
-                attacker: TokenId::new("hero"),
-                target: TokenId::new("enemy"),
-                result: AttackResult::Miss,
-                target_hit_points_after: None,
-            })
-            .unwrap();
-        let heard = sounds_after(&mut stage, 9.0);
-        let steps = heard
-            .iter()
-            .filter(|(_, kind, who)| *kind == SoundKind::Footstep && who == "hero")
-            .count();
-        let out = stage
-            .grid()
-            .path(Cell::new(3, 4), Cell::new(3, 2))
-            .map_or(0, |path| path.len() - 1);
-        assert_eq!(steps, out * 2, "out and back, one per cell");
-        let order: Vec<SoundKind> = heard.iter().map(|(_, kind, _)| *kind).collect();
-        let first_swing = order
-            .iter()
-            .position(|kind| *kind == SoundKind::SwordSwing)
-            .unwrap();
-        let last_out_step = heard
-            .iter()
-            .take(first_swing)
-            .filter(|(_, kind, _)| *kind == SoundKind::Footstep)
-            .count();
-        assert_eq!(last_out_step, out, "the steps in come before the swing");
-    }
-
-    #[test]
     fn reduced_motion_teleports_and_so_makes_no_footsteps() {
         let mut stage = stage(true);
         stage.stage(killing_blow()).unwrap();
@@ -2110,11 +2054,11 @@ mod tests {
             .find(|event| event.kind == SoundKind::Effort)
             .unwrap();
         assert_eq!(effort.voice, crate::battle::VoiceSet::HeroMale);
-        let step = seen
+        let thud = seen
             .iter()
-            .find(|event| event.kind == SoundKind::Footstep)
+            .find(|event| event.kind == SoundKind::BodyFall)
             .unwrap();
-        assert_eq!(step.surface, stage.scene().surface);
+        assert_eq!(thud.surface, stage.scene().surface);
     }
 
     #[test]
@@ -2403,37 +2347,6 @@ mod tests {
     }
 
     #[test]
-    fn a_figure_walks_around_an_obstacle_and_never_stands_on_a_blocked_cell() {
-        let mut stage = layout_stage();
-        stage
-            .stage(Beat::Attack {
-                attacker: TokenId::new("hero"),
-                target: TokenId::new("enemy"),
-                result: AttackResult::Miss,
-                target_hit_points_after: None,
-            })
-            .unwrap();
-        let mut cells = std::collections::BTreeSet::new();
-        for _ in 0..600 {
-            stage.update(Duration::from_millis(25));
-            let hero = figure(&stage, "hero");
-            if let Some(cell) = stage.grid().cell_at(hero.position) {
-                assert!(
-                    stage.grid().is_walkable(cell),
-                    "stood in a crate at {cell:?}"
-                );
-                cells.insert(cell);
-            }
-        }
-        assert!(
-            cells.iter().any(|cell| cell.col == 0 || cell.col == 6),
-            "went round the end"
-        );
-        assert!(cells.len() > 6);
-        assert!(!stage.is_busy());
-    }
-
-    #[test]
     fn figures_beside_cover_show_a_pip_toward_it() {
         let stage = layout_stage();
         let hero = figure(&stage, "hero");
@@ -2443,6 +2356,7 @@ mod tests {
             token("hero", Side::Hero, Cell::new(3, 4), 12),
             token("enemy", Side::Enemy, Cell::new(3, 2), 5),
         ]);
+        run(&mut stage, 6.0);
         let hero = figure(&stage, "hero");
         let pip = hero.cover.expect("beside the crates");
         assert_eq!(pip.level, Cover::Half);
@@ -2812,7 +2726,7 @@ mod tests {
             token("ally", Side::Hero, Cell::new(5, 4), 12),
             token("enemy", Side::Enemy, Cell::new(0, 1), 5),
         ]);
-        run(&mut stage, 0.2);
+        run(&mut stage, 6.0);
         assert!(
             figure(&stage, "hero").mirror,
             "target to the left: mirrored"
@@ -3309,5 +3223,251 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_figure_the_server_moves_walks_around_an_obstacle_and_never_stands_on_a_blocked_cell() {
+        let mut stage = layout_stage();
+        // The server moves the hero across the field, past the row of crates.
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 1), 12),
+            token("enemy", Side::Enemy, Cell::new(3, 2), 5),
+        ]);
+        assert!(stage.is_busy(), "the move is staged, not teleported");
+        let start = figure(&stage, "hero").position;
+        let mut cells = std::collections::BTreeSet::new();
+        for _ in 0..600 {
+            stage.update(Duration::from_millis(25));
+            let hero = figure(&stage, "hero");
+            if let Some(cell) = stage.grid().cell_at(hero.position) {
+                assert!(
+                    stage.grid().is_walkable(cell),
+                    "stood in a crate at {cell:?}"
+                );
+                cells.insert(cell);
+            }
+        }
+        let end = figure(&stage, "hero").position;
+        assert!((end - stage.grid().cell_centre(Cell::new(3, 1))).length() < 0.01);
+        assert!((end - start).length() > 1.0);
+        assert!(cells.len() > 3);
+        assert!(!stage.is_busy());
+    }
+
+    #[test]
+    fn an_attack_leaves_every_figure_exactly_where_the_server_put_it() {
+        let mut stage = stage(false);
+        let home = |stage: &Stage, id: &str| {
+            let offset =
+                figure(stage, id).position - stage.grid().cell_centre(figure_cell(stage, id));
+            offset.x.hypot(offset.z)
+        };
+        stage
+            .stage(Beat::Approach {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+            })
+            .unwrap();
+        run(&mut stage, 1.6);
+        assert!(home(&stage, "hero") < 0.01, "the approach moves nobody");
+        stage
+            .stage(Beat::Strike {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Hit {
+                    damage: 2,
+                    critical: false,
+                    downed: false,
+                },
+                target_hit_points_after: Some(3),
+            })
+            .unwrap();
+        for _ in 0..240 {
+            stage.update(Duration::from_millis(25));
+            assert!(
+                home(&stage, "hero") < 0.75,
+                "at most a lunge within its own square"
+            );
+        }
+        assert!(home(&stage, "hero") < 0.01);
+        assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 3);
+    }
+
+    fn figure_cell(stage: &Stage, id: &str) -> Cell {
+        stage
+            .tokens()
+            .find(|token| token.id.0 == id)
+            .map(|token| token.cell)
+            .unwrap()
+    }
+
+    #[test]
+    fn one_footstep_sounds_per_cell_the_server_moves_a_figure() {
+        let mut stage = stage(false);
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 2), 12),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 5),
+        ]);
+        let heard = sounds_after(&mut stage, 9.0);
+        let steps = heard
+            .iter()
+            .filter(|(_, kind, who)| *kind == SoundKind::Footstep && who == "hero")
+            .count();
+        let cells = stage
+            .grid()
+            .path(Cell::new(3, 4), Cell::new(3, 2))
+            .map_or(0, |path| path.len() - 1);
+        assert_eq!(steps, cells, "one per cell walked");
+    }
+
+    fn crowded_stage() -> Stage {
+        let scene = load_embedded("scan-riverbed").unwrap().unwrap();
+        let mut stage = Stage::new(scene, false);
+        let mut archer = token("archer", Side::Hero, Cell::new(0, 5), 12);
+        archer.attack = crate::battle::model::AttackStyle::Ranged;
+        stage.set_tokens(vec![
+            archer,
+            token("dagna", Side::Hero, Cell::new(2, 5), 12),
+            token("hilde", Side::Hero, Cell::new(4, 4), 12),
+            token("brakka", Side::Hero, Cell::new(6, 5), 12),
+            token("goblin-a", Side::Enemy, Cell::new(7, 0), 5),
+            token("goblin-b", Side::Enemy, Cell::new(3, 1), 5),
+            token("goblin-c", Side::Enemy, Cell::new(5, 2), 5),
+        ]);
+        for _ in 0..30 {
+            frame_step(&mut stage);
+        }
+        stage
+    }
+
+    /// A ranged attack across the whole field with seven figures spread over the grid: attacker
+    /// and target are both in frame at rest, and the arrow is on screen the whole time it flies.
+    #[test]
+    fn a_ranged_attack_across_a_crowded_field_keeps_both_ends_and_the_arrow_in_frame() {
+        let mut stage = crowded_stage();
+        stage.stage(ordinary_hit("archer", "goblin-a", 3)).unwrap();
+        let mut frames = 0;
+        let mut arrow_frames = 0;
+        let mut settled = 0;
+        while stage.is_busy() && frames < 1200 {
+            frame_step(&mut stage);
+            frames += 1;
+            if !stage.rig.is_panning() && stage.hud().active.is_some() {
+                // Settled on the shot: both ends are in the safe area.
+                if projected_inside_safe(&stage, "archer")
+                    && projected_inside_safe(&stage, "goblin-a")
+                {
+                    settled += 1;
+                }
+            }
+            let frame = stage.frame();
+            for arrow in &frame.projectiles {
+                arrow_frames += 1;
+                let (x, y) = stage
+                    .project(arrow.head, framing::FRAMED_ASPECT)
+                    .expect("the arrow is in front of the camera");
+                assert!(
+                    (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y),
+                    "frame {frames}: the arrow is off the screen at {x:.2},{y:.2}"
+                );
+            }
+        }
+        assert!(
+            arrow_frames > 5,
+            "the arrow flew and was seen: {arrow_frames}"
+        );
+        assert!(
+            settled > 20,
+            "both fighters framed for most of the beat: {settled}"
+        );
+    }
+
+    /// Every attacker and target pair among seven spread-out figures is framed: both inside the
+    /// safe area from the one pose the camera holds.
+    #[test]
+    fn any_pair_among_seven_spread_figures_is_framed_with_both_inside_the_safe_area() {
+        let stage = crowded_stage();
+        let ids = [
+            "archer", "dagna", "hilde", "brakka", "goblin-a", "goblin-b", "goblin-c",
+        ];
+        let style = stage.scene().cameras[&ShotName::TurnFocus];
+        let home = stage.scene().cameras[&ShotName::Tactical].yaw_deg;
+        for attacker in ids {
+            for target in ids {
+                if attacker == target {
+                    continue;
+                }
+                let others: Vec<framing::Body> = ids
+                    .iter()
+                    .filter(|id| **id != attacker && **id != target)
+                    .map(|id| body_of_figure(&stage, id))
+                    .collect();
+                let (a, t) = (
+                    body_of_figure(&stage, attacker),
+                    body_of_figure(&stage, target),
+                );
+                let shot = framing::action_shot_from(
+                    &style,
+                    &stage.rig.pose(),
+                    &a,
+                    Some(&t),
+                    &[],
+                    &others,
+                    framing::FRAMED_ASPECT,
+                    Some(home),
+                );
+                for fighter in [a, t] {
+                    assert!(
+                        framing::in_safe_area(&shot.pose, framing::FRAMED_ASPECT, &fighter),
+                        "{attacker} -> {target}: {shot:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The server moves a hero across a crowded field: the mover is on the screen for the whole
+    /// move, and nobody else moves.
+    #[test]
+    fn a_server_move_keeps_the_mover_in_frame_for_its_whole_walk() {
+        let mut stage = crowded_stage();
+        let before: Vec<Vec3> = ["archer", "dagna", "goblin-b"]
+            .iter()
+            .map(|id| figure(&stage, id).position)
+            .collect();
+        let mut tokens: Vec<Token> = stage.tokens().cloned().collect();
+        let hero = tokens
+            .iter_mut()
+            .find(|token| token.id.0 == "brakka")
+            .unwrap();
+        hero.cell = Cell::new(1, 3);
+        stage.set_tokens(tokens);
+        let mut frames = 0;
+        while stage.is_busy() && frames < 900 {
+            frame_step(&mut stage);
+            frames += 1;
+            let pose = stage.rig.pose();
+            let body = body_of_figure(&stage, "brakka");
+            let centre = framing::project_body(&pose, framing::FRAMED_ASPECT, &body)
+                .map(|(l, t, r, b)| ((l + r) * 0.5, (t + b) * 0.5));
+            let Some((x, y)) = centre else {
+                panic!("frame {frames}: the mover is behind the camera");
+            };
+            assert!(
+                (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y),
+                "frame {frames}: the mover is off the screen at {x:.2},{y:.2}"
+            );
+        }
+        assert!(frames < 900);
+        let after: Vec<Vec3> = ["archer", "dagna", "goblin-b"]
+            .iter()
+            .map(|id| figure(&stage, id).position)
+            .collect();
+        for (a, b) in before.iter().zip(&after) {
+            assert!((*a - *b).length() < 0.02, "nobody else moved");
+        }
+        let arrived = figure(&stage, "brakka").position;
+        assert!((arrived - stage.grid().cell_centre(Cell::new(1, 3))).length() < 0.02);
     }
 }

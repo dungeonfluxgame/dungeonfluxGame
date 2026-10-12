@@ -26,7 +26,6 @@ const FOCUS_HOLD: Duration = Duration::from_millis(150);
 /// contact.
 const WINDUP_PUSH: Duration = Duration::from_millis(380);
 const STEP: Duration = Duration::from_millis(260);
-const WALK_START: Duration = Duration::from_millis(150);
 const SETTLE_PAN: Duration = Duration::from_millis(1300);
 const FINISHING_PUSH: Duration = Duration::from_millis(3200);
 const FINISHING_HOLD: Duration = Duration::from_millis(3600);
@@ -293,7 +292,7 @@ pub fn plan_with(
         Beat::Approach { attacker, target } => {
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
             let mut builder = Builder { steps: Vec::new() };
-            let end = approach(&mut builder, grid, tokens, attacker, target, Duration::ZERO);
+            let end = approach(&mut builder, attacker, target, Duration::ZERO);
             Ok(builder.finish(end))
         }
         Beat::Strike {
@@ -305,21 +304,10 @@ pub fn plan_with(
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
             let mut builder = Builder { steps: Vec::new() };
             builder.at(Duration::ZERO, Step::SetActive(Some(attacker.id.clone())));
-            let beside = standing_cell(grid, tokens, attacker, target);
-            builder.at(
-                Duration::ZERO,
-                Step::MoveTo {
-                    token: attacker.id.clone(),
-                    cell: beside,
-                    per_step: Duration::ZERO,
-                },
-            );
             let end = strike(
                 &mut builder,
-                grid,
                 attacker,
                 target,
-                beside,
                 *result,
                 *target_hit_points_after,
                 Duration::ZERO,
@@ -334,20 +322,18 @@ pub fn plan_with(
         } => {
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
             let mut builder = Builder { steps: Vec::new() };
-            let ready = approach(&mut builder, grid, tokens, attacker, target, Duration::ZERO);
-            let beside = standing_cell(grid, tokens, attacker, target);
+            let ready = approach(&mut builder, attacker, target, Duration::ZERO);
             let end = strike(
                 &mut builder,
-                grid,
                 attacker,
                 target,
-                beside,
                 *result,
                 *target_hit_points_after,
                 ready + FOCUS_HOLD,
             );
             Ok(builder.finish(end))
         }
+        Beat::Move { actor, from, to } => plan_move(grid, tokens, actor, *from, *to),
         Beat::Heal {
             source,
             target,
@@ -614,43 +600,12 @@ fn plan_turn(tokens: &[Token], actor: &TokenId) -> Result<Timeline, PlanError> {
     Ok(builder.finish(FOCUS_PAN))
 }
 
-/// The cell the attacker fights from: its own when already beside the target, else the free
-/// cell beside the target closest to it. Deterministic, so the approach and the strike agree.
-fn fighting_cell(grid: &Grid, tokens: &[Token], attacker: &Token, target: &Token) -> Cell {
-    if attacker.cell.steps_to(target.cell) <= 1 {
-        return attacker.cell;
-    }
-    let occupied: Vec<Cell> = tokens
-        .iter()
-        .filter(|token| token.id != attacker.id)
-        .map(|token| token.cell)
-        .collect();
-    grid.free_cell_beside(target.cell, attacker.cell, &occupied)
-        .unwrap_or(attacker.cell)
-}
-
-/// Where the attacker stands while it strikes: its own cell for a ranged attacker, otherwise
-/// the fighting cell beside the target.
-fn standing_cell(grid: &Grid, tokens: &[Token], attacker: &Token, target: &Token) -> Cell {
-    match attacker.attack {
-        AttackStyle::Ranged => attacker.cell,
-        AttackStyle::Melee => fighting_cell(grid, tokens, attacker, target),
-    }
-}
-
-/// Turn-focus shot on the attacker while it steps next to the target. Returns when it is set.
-fn approach(
-    builder: &mut Builder,
-    grid: &Grid,
-    tokens: &[Token],
-    attacker: &Token,
-    target: &Token,
-    base: Duration,
-) -> Duration {
+/// Turn-focus shot on the attacker and its target, then a slow push-in on the wind-up. Nobody
+/// walks: figures stand where the server put them and move only when the server moves them (see
+/// [`plan_move`]). Returns when the camera is set and the push-in is done.
+fn approach(builder: &mut Builder, attacker: &Token, target: &Token, base: Duration) -> Duration {
     builder.at(base, Step::SetActive(Some(attacker.id.clone())));
-    let beside = fighting_cell(grid, tokens, attacker, target);
-    let stand = (attacker.attack != AttackStyle::Ranged).then_some(beside);
-    let framing = action_focus(&attacker.id, Some(&target.id), stand);
+    let framing = action_focus(&attacker.id, Some(&target.id), None);
     builder.at(
         base,
         Step::Camera {
@@ -659,26 +614,7 @@ fn approach(
         },
     );
     builder.at(base, Step::Target(Some(target.id.clone())));
-    let mut end = base + FOCUS_PAN;
-    // The approach: the attacker walks beside the target while the camera is already settled on
-    // the frame that holds both. This step, and the walk back in `strike`, are the only cosmetic
-    // movement of figures between squares; they are removed together when positions come from the
-    // server (see `approach` and the `MoveTo` steps in `strike`).
-    if attacker.attack != AttackStyle::Ranged && beside != attacker.cell {
-        let steps = grid
-            .path(attacker.cell, beside)
-            .map_or(0, |path| path.len().saturating_sub(1)) as u32;
-        let per_step = walk_pace(steps);
-        builder.at(
-            base + WALK_START,
-            Step::MoveTo {
-                token: attacker.id.clone(),
-                cell: beside,
-                per_step,
-            },
-        );
-        end = end.max(base + WALK_START + per_step * steps);
-    }
+    let end = base + FOCUS_PAN;
     // A slow push-in on the wind-up that is finished before the blow starts.
     builder.at(
         end,
@@ -688,6 +624,54 @@ fn approach(
         },
     );
     end + WINDUP_PUSH
+}
+
+/// The server moved `actor` to `to`: the camera frames where it starts and where it ends, the
+/// figure walks the path of cells (a straight eased glide when no path is open), and the camera
+/// settles back to the wide shot after a moment. This is movement the server resolved.
+fn plan_move(
+    grid: &Grid,
+    tokens: &[Token],
+    actor: &TokenId,
+    from: Cell,
+    to: Cell,
+) -> Result<Timeline, PlanError> {
+    find(tokens, actor)?;
+    let mut builder = Builder { steps: Vec::new() };
+    builder.at(Duration::ZERO, Step::SetActive(Some(actor.clone())));
+    builder.at(
+        Duration::ZERO,
+        Step::Camera {
+            command: camera(
+                ShotName::TurnFocus,
+                action_focus(actor, None, Some(to)),
+                1.0,
+            ),
+            pan: FOCUS_PAN,
+        },
+    );
+    let steps = grid
+        .path(from, to)
+        .map_or(1, |path| path.len().saturating_sub(1)) as u32;
+    let per_step = walk_pace(steps.max(1));
+    let start = FOCUS_PAN + FOCUS_HOLD;
+    builder.at(
+        start,
+        Step::MoveTo {
+            token: actor.clone(),
+            cell: to,
+            per_step,
+        },
+    );
+    let arrived = start + per_step * steps.max(1);
+    builder.at(
+        arrived + Duration::from_millis(400),
+        Step::Camera {
+            command: camera(ShotName::CombatEst, CameraFocus::Scene, 1.0),
+            pan: SETTLE_PAN,
+        },
+    );
+    Ok(builder.finish(arrived + Duration::from_millis(400) + SETTLE_PAN))
 }
 
 /// Time per cell for a walk of `steps` cells: the usual pace, quickened (to a floor) so that a
@@ -701,14 +685,11 @@ fn walk_pace(steps: u32) -> Duration {
 
 /// Lunge or bow, contact (impact shot, shake, flash, number, recoil) and then either the fall
 /// and the finishing cue, or everyone settling back to formation. Returns when it is over.
-/// `beside` is where a melee attacker stands to strike; it walks back from there afterwards.
 #[allow(clippy::too_many_arguments)]
 fn strike(
     builder: &mut Builder,
-    grid: &Grid,
     attacker: &Token,
     target: &Token,
-    beside: Cell,
     result: AttackResult,
     hit_points_after: Option<u32>,
     base: Duration,
@@ -937,22 +918,6 @@ fn strike(
         end += IMPACT_HOLD;
     }
     builder.at(end, Step::Highlight(None));
-    let home = attacker.cell;
-    let back_steps = if home == beside {
-        0
-    } else {
-        grid.path(beside, home)
-            .map_or(0, |path| path.len().saturating_sub(1)) as u32
-    };
-    let back_pace = walk_pace(back_steps);
-    builder.at(
-        end,
-        Step::MoveTo {
-            token: attacker.id.clone(),
-            cell: home,
-            per_step: back_pace,
-        },
-    );
     builder.at(
         end + Duration::from_millis(200),
         Step::Camera {
@@ -960,7 +925,7 @@ fn strike(
             pan: SETTLE_PAN,
         },
     );
-    (end + SETTLE_PAN + Duration::from_millis(200)).max(end + back_pace * back_steps)
+    end + SETTLE_PAN + Duration::from_millis(200)
 }
 
 fn plan_heal(
@@ -1175,7 +1140,6 @@ mod tests {
         let names = names(&timeline);
         let order = [
             "focus",
-            "walk",
             "lunge",
             "impact",
             "float",
@@ -1205,39 +1169,62 @@ mod tests {
     }
 
     #[test]
-    fn the_attacker_walks_to_a_free_cell_beside_the_target_and_back() {
+    fn nobody_walks_to_attack_and_nobody_walks_back() {
+        // Figures stand where the server put them: an attack plans no movement at all, from near
+        // or far, and an attack from far away does not walk up.
+        let (grid, tokens) = field();
+        for result in [
+            AttackResult::Miss,
+            AttackResult::Hit {
+                damage: 3,
+                critical: false,
+                downed: false,
+            },
+            AttackResult::Hit {
+                damage: 9,
+                critical: false,
+                downed: true,
+            },
+        ] {
+            let timeline = plan(&grid, &tokens, &attack(result)).unwrap();
+            assert!(moves(&timeline).is_empty(), "{result:?}");
+            assert!(!names(&timeline).contains(&"walk"));
+        }
+    }
+
+    #[test]
+    fn a_server_move_plans_the_path_with_the_camera_on_both_ends_then_settles() {
         let (grid, tokens) = field();
         let timeline = plan(
             &grid,
             &tokens,
-            &attack(AttackResult::Hit {
-                damage: 3,
-                critical: false,
-                downed: false,
-            }),
+            &Beat::Move {
+                actor: TokenId::new("hero"),
+                from: Cell::new(3, 4),
+                to: Cell::new(6, 2),
+            },
         )
         .unwrap();
-        let moves = moves(&timeline);
-        assert_eq!(moves.len(), 2, "out and back");
-        let beside = moves[0].0;
-        assert_eq!(beside.steps_to(Cell::new(4, 1)), 1);
-        assert_ne!(beside, Cell::new(4, 1));
-        assert_eq!(moves[1].0, Cell::new(3, 4));
         let names = names(&timeline);
-        assert!(!names.contains(&"fall"));
-        assert_eq!(names.last(), Some(&"settle-shot"));
-    }
-
-    #[test]
-    fn an_attacker_already_beside_the_target_never_leaves_its_cell() {
-        let (grid, mut tokens) = field();
-        tokens[0].cell = Cell::new(4, 2);
-        let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
-        assert!(
-            moves(&timeline)
-                .iter()
-                .all(|(cell, _)| *cell == Cell::new(4, 2))
+        assert_eq!(
+            names,
+            vec!["active", "focus", "highlight", "walk", "settle-shot"]
+                .into_iter()
+                .filter(|name| names.contains(name))
+                .collect::<Vec<_>>()
         );
+        let moves = moves(&timeline);
+        assert_eq!(moves.len(), 1);
+        assert_eq!(moves[0].0, Cell::new(6, 2));
+        // The move starts after the camera has settled and lasts as long as the walk takes.
+        let walk_at = timeline
+            .steps
+            .iter()
+            .find(|timed| matches!(timed.step, Step::MoveTo { .. }))
+            .unwrap()
+            .at;
+        assert!(walk_at >= FOCUS_PAN);
+        assert!(timeline.duration >= walk_at + moves[0].1 * 3);
     }
 
     #[test]
@@ -1269,13 +1256,12 @@ mod tests {
         )
         .unwrap();
         let first = names(&approach_only);
-        assert_eq!(first, vec!["active", "focus", "target", "walk", "focus"]);
+        assert_eq!(first, vec!["active", "focus", "target", "focus"]);
         assert!(!first.contains(&"lunge"));
         let second = names(&strike_only);
         assert!(position(&second, "lunge") < position(&second, "impact"));
         assert!(!second.contains(&"focus"));
-        // The strike snaps the attacker beside the target first, in case the approach was skipped.
-        assert_eq!(moves(&strike_only)[0].1, Duration::ZERO);
+        assert!(moves(&strike_only).is_empty(), "the strike moves nobody");
         assert!(approach_only.duration < Duration::from_millis(1200));
     }
 
@@ -1558,20 +1544,6 @@ mod tests {
         let pace = walk_pace(steps);
         assert!(pace < STEP && pace >= MIN_STEP);
         assert!(pace * steps <= MAX_APPROACH + Duration::from_millis(12));
-    }
-
-    #[test]
-    fn the_approach_goes_around_an_obstacle_not_through_it() {
-        let (grid, tokens) = field();
-        let wall: Vec<Cell> = (1..7).map(|col| Cell::new(col, 3)).collect();
-        let blocked = Grid::open_except([0.0, 0.0], 1.5, 8, 6, &wall).unwrap();
-        let timeline = plan(&blocked, &tokens, &attack(AttackResult::Miss)).unwrap();
-        let beside = moves(&timeline)[0].0;
-        let path = blocked.path(Cell::new(3, 4), beside).unwrap();
-        assert!(path.iter().all(|cell| blocked.is_walkable(*cell)));
-        assert!(path.len() > 4, "detours around the wall: {path:?}");
-        assert!(blocked.is_walkable(beside));
-        let _ = grid;
     }
 
     fn roll(id: &str, die: u32, modifier: i32) -> InitiativeRoll {

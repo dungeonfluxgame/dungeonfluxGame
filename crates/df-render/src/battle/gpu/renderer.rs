@@ -44,6 +44,8 @@ const DECAL_VERTICES: u32 = 6;
 const FIGURE_STRIDE: usize = 32;
 const FIGURE_ATTRIBUTES: usize = 8;
 const MAX_DECALS: usize = 768;
+/// The sprite name of cover that is part of a scan (a palisade, a boulder): nothing is drawn.
+const SCAN_SPRITE: &str = "scan";
 const MAX_GRID_SIDE: u32 = crate::battle::grid::MAX_GRID_SIDE;
 /// Figures, their afterimages and every obstacle prop cell in one frame.
 const MAX_BILLBOARDS: usize = 112;
@@ -1061,6 +1063,10 @@ impl Renderer {
             for obstacle in &layout.obstacles {
                 for cell in &obstacle.cells {
                     let at = grid.cell_centre(*cell);
+                    // A cover object that is part of the scan is drawn by the scan itself.
+                    if obstacle.sprite == SCAN_SPRITE {
+                        continue;
+                    }
                     if obstacle.sprite == "none" {
                         push(
                             [at.x, at.z, half, half],
@@ -1193,7 +1199,7 @@ impl Renderer {
         if let Some(layout) = frame.layout {
             let cell_m = frame.grid.cell_m();
             for obstacle in &layout.obstacles {
-                if obstacle.sprite == "none" {
+                if obstacle.sprite == "none" || obstacle.sprite == SCAN_SPRITE {
                     continue;
                 }
                 for cell in &obstacle.cells {
@@ -1394,13 +1400,13 @@ impl Renderer {
                     .map(|cell| (cell, figure.side))
             })
             .collect();
-        let grid_data = grid_lines::grid_words(
-            frame.grid,
-            &standing,
-            frame
-                .highlight
-                .map(|highlight| (highlight.kind, highlight.cells.as_slice())),
-        );
+        let highlights: Vec<(crate::battle::HighlightKind, &[crate::battle::Cell])> = frame
+            .highlight
+            .into_iter()
+            .chain(frame.tactical_highlights.iter())
+            .map(|highlight| (highlight.kind, highlight.cells.as_slice()))
+            .collect();
+        let grid_data = grid_lines::grid_words(frame.grid, &standing, &highlights);
         self.core
             .queue
             .write_buffer(&self.grid_buffer, 0.0, &float_array(&grid_data));

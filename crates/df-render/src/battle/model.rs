@@ -126,6 +126,13 @@ pub enum Beat {
         /// The target's hit points once the blow lands, as the server reports them.
         target_hit_points_after: Option<u32>,
     },
+    /// The server moved a figure to a cell: it walks the path of cells there (a straight eased
+    /// glide when no path is open), with the camera holding its start and end in frame.
+    Move {
+        actor: TokenId,
+        from: Cell,
+        to: Cell,
+    },
     Heal {
         source: TokenId,
         target: TokenId,

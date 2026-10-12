@@ -78,7 +78,7 @@ const CODE_TARGET: f32 = 5.0;
 pub fn grid_words(
     grid: &Grid,
     standing: &[(Cell, Side)],
-    highlight: Option<(HighlightKind, &[Cell])>,
+    highlights: &[(HighlightKind, &[Cell])],
 ) -> Vec<f32> {
     let origin = grid.origin();
     let mut words = vec![0.0; HEADER_WORDS];
@@ -132,12 +132,12 @@ pub fn grid_words(
             },
         );
     }
-    if let Some((kind, cells)) = highlight {
+    for (kind, cells) in highlights {
         let code = match kind {
             HighlightKind::Move => CODE_REACHABLE,
             HighlightKind::Attack => CODE_TARGET,
         };
-        for cell in cells {
+        for cell in *cells {
             raise(*cell, code);
         }
     }
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn the_block_has_a_fixed_header_then_one_code_per_cell() {
-        let words = grid_words(&grid(), &[], None);
+        let words = grid_words(&grid(), &[], &[]);
         assert_eq!(words.len(), HEADER_WORDS + 12);
         assert_eq!(&words[0..5], &[-3.0, -2.0, 1.5, 4.0, 3.0]);
         assert!(
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn blocked_cells_keep_faint_lines_and_walkable_cells_are_neutral_gold() {
-        let words = grid_words(&grid(), &[], None);
+        let words = grid_words(&grid(), &[], &[]);
         assert_eq!(code(&words, 4, Cell::new(1, 1)), CODE_BLOCKED);
         assert_eq!(code(&words, 4, Cell::new(0, 0)), CODE_NEUTRAL);
         assert_eq!(code(&words, 4, Cell::new(3, 2)), CODE_NEUTRAL);
@@ -202,7 +202,7 @@ mod tests {
             (Cell::new(0, 0), Side::Hero),
             (Cell::new(3, 2), Side::Enemy),
         ];
-        let words = grid_words(&grid(), &standing, None);
+        let words = grid_words(&grid(), &standing, &[]);
         assert_eq!(code(&words, 4, Cell::new(0, 0)), CODE_HERO);
         assert_eq!(code(&words, 4, Cell::new(3, 2)), CODE_ENEMY);
         assert_eq!(code(&words, 4, Cell::new(2, 0)), CODE_NEUTRAL);
@@ -212,14 +212,14 @@ mod tests {
     fn highlights_outrank_figures_and_never_light_blocked_cells() {
         let standing = [(Cell::new(0, 0), Side::Hero)];
         let cells = [Cell::new(0, 0), Cell::new(1, 1), Cell::new(9, 9)];
-        let moved = grid_words(&grid(), &standing, Some((HighlightKind::Move, &cells)));
+        let moved = grid_words(&grid(), &standing, &[(HighlightKind::Move, &cells)]);
         assert_eq!(code(&moved, 4, Cell::new(0, 0)), CODE_REACHABLE);
         assert_eq!(
             code(&moved, 4, Cell::new(1, 1)),
             CODE_BLOCKED,
             "blocked stays faint"
         );
-        let attacked = grid_words(&grid(), &standing, Some((HighlightKind::Attack, &cells)));
+        let attacked = grid_words(&grid(), &standing, &[(HighlightKind::Attack, &cells)]);
         assert_eq!(code(&attacked, 4, Cell::new(0, 0)), CODE_TARGET);
     }
 

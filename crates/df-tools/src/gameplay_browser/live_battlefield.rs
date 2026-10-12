@@ -1332,6 +1332,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
                 .as_ref()
                 .map(|combat| combat.layout_id.clone())
                 .filter(|id| !id.is_empty()),
+            &view.scene.location_id,
         );
     } else {
         sync();
@@ -1344,6 +1345,7 @@ fn start_mount(
     backdrop: Option<String>,
     key: &str,
     server_layout: Option<String>,
+    story_location: &str,
 ) {
     let (document, host) = {
         let state = client.borrow();
@@ -1353,6 +1355,10 @@ fn start_mount(
         LIVE.with(|live| live.borrow_mut().phase = Phase::Unavailable);
         return;
     };
+    // The story place's own scene: its title names the fight, and its painted layers are what a
+    // scan falls back to when it cannot be drawn. (The server stages a fight on a forced scan's
+    // own grid, so the scan is the scene chosen above.)
+    let story_scene = battle::load_embedded(story_location).and_then(Result::ok);
     // The record of which scene was chosen, and why if it is not the fight's own location.
     let marker = choice
         .fallback_reason
@@ -1366,12 +1372,19 @@ fn start_mount(
         .and_then(Result::ok);
     // The fight's title is the story place, never the scan's source name (that belongs in the
     // credits with its attribution).
-    let place_title = location_scene.title.clone();
+    let place_title = story_scene
+        .as_ref()
+        .map_or_else(|| location_scene.title.clone(), |story| story.title.clone());
+    let painted = |scene: &BattleScene| Some((scene.ground.clone(), scene.backdrop.clone()));
     let (mut scene, mut fallback_layers) = match forced {
-        Some(forced) => (
-            forced,
-            Some((location_scene.ground, location_scene.backdrop)),
-        ),
+        Some(forced) => (forced, painted(&location_scene)),
+        None if location_scene.splat.is_some() => {
+            let fallback = story_scene
+                .as_ref()
+                .filter(|story| story.splat.is_none())
+                .and_then(painted);
+            (location_scene, fallback)
+        }
         None => (location_scene, None),
     };
     scene.title = place_title;

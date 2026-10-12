@@ -519,6 +519,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let battle_scene =
         startup_configuration::battle_scene(std::env::var("DF_GAMEPLAY_BATTLE_SCENE"))?;
+    journey::tactical::force_scene(battle_scene.as_deref()).map_err(std::io::Error::other)?;
     let battle_fps = startup_configuration::battle_fps(std::env::var("DF_GAMEPLAY_BATTLE_FPS"))?;
     if interactive {
         timing::install(timing::Timing::from_environment()?);
