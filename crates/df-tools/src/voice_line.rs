@@ -33,7 +33,9 @@ impl VoiceLine {
         hasher.finalize().into()
     }
 
-    /// Whether the line belongs to a named speaker rather than the narrator.
+    /// Whether the line belongs to a named speaker rather than the narrator (the server's
+    /// voice cast reads this; the browser asks for `speaker` directly).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn is_npc(&self) -> bool {
         self.speaker().is_some()
     }

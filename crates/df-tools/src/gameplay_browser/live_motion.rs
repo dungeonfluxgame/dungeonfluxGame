@@ -16,24 +16,26 @@ use super::live_stage::{BubbleKind, FloatKind, Fx};
 use super::*;
 use crate::{
     presentation::{
-        self, ActorSlot, Card, CombatSnapshot, CombatStage, TableKind, TableLine, TableRole,
-        Transitions,
+        self, ActorSlot, Card, CombatSnapshot, CombatStage, StageActor, TableKind, TableLine,
+        TableRole, Transitions,
     },
-    stage_director::{Command, CueKind, StageDirector, StageState, ViewDiff},
+    stage_conductor::{ClipOp, ClipSignal, Command, Conductor, LineId, ScriptLine, ViewPlan},
+    stage_director::{StageState, ViewDiff},
+    stage_machines::{ActorState, BattleState, LineState, SceneState, reading_time_ms},
+    voice_line::{VoiceLine, display_lines},
 };
 use std::{collections::VecDeque, rc::Weak, time::Duration};
 
 const SEEN_MEMORY: usize = 64;
 const LOG_LINES: usize = 3;
-const MINIMUM_LINE_HOLD_MS: u32 = 2_500;
-const MAXIMUM_LINE_HOLD_MS: u32 = 7_000;
-const UNVOICED_NARRATION_CAP_MS: u32 = 4_000;
 const DICE_LAND: Duration = Duration::from_millis(900);
 const ROLL_RESULT: Duration = Duration::from_millis(1_050);
 const LUNGE_AT: Duration = Duration::from_millis(700);
 const TURN_CHIME_AT: Duration = Duration::from_millis(1_900);
 const BANNER_SOUND_DELAY: Duration = Duration::from_millis(150);
 const NARRATOR_NAME: &str = "Dungeon Master";
+/// The fallback tick of a page whose animation frames are throttled.
+const TIMER_TICK_MS: i32 = 100;
 
 /// What a cue carries; the director treats it as opaque.
 #[derive(Clone)]
@@ -78,10 +80,8 @@ struct LineDetail {
     role: TableRole,
     kind: TableKind,
     text: String,
-    /// Said at the table rather than scripted for the scene: it belongs on the figure named
-    /// as its speaker and nowhere else, so a reply that outlives its beat is not shown on a
-    /// stranger.
-    conversational: bool,
+    /// The clip the server voices this line with, when it is voiced at all.
+    voice: Option<VoiceLine>,
 }
 
 impl LineDetail {
@@ -91,14 +91,16 @@ impl LineDetail {
             role: line.role,
             kind: line.kind,
             text: line.text.clone(),
-            conversational: !line.scripted,
+            voice: None,
         }
     }
 }
 
 struct Motion {
     client: Weak<RefCell<Client>>,
-    director: StageDirector<Detail>,
+    conductor: Conductor<Detail>,
+    /// The speaker the server says is writing a reply; shown once the lines before it are.
+    thinking_for: Option<String>,
     previous: Option<CombatSnapshot>,
     scene_key: Option<String>,
     party_hit_points: Vec<u32>,
@@ -108,6 +110,10 @@ struct Motion {
     overlay: Option<Element>,
     frame: Option<Closure<dyn FnMut(f64)>>,
     frame_armed: bool,
+    /// A page whose frames are throttled (a background tab) still advances: a timer ticks the
+    /// conductor too, so a watchdog never waits for a frame that does not come.
+    timer: Option<Closure<dyn FnMut()>>,
+    timer_armed: bool,
     log: VecDeque<TableLine>,
 }
 
@@ -121,11 +127,6 @@ fn now_ms() -> u64 {
     web_sys::window()
         .and_then(|window| window.performance())
         .map_or(0, |performance| performance.now() as u64)
-}
-
-fn hold_for(text: &str) -> u32 {
-    let characters = text.chars().count() as u32;
-    (1_800 + 35 * characters).clamp(MINIMUM_LINE_HOLD_MS, MAXIMUM_LINE_HOLD_MS)
 }
 
 fn journey_scene(view: &rpc::ViewMessage) -> Option<(&rpc::JourneyView, &rpc::GameplayScene)> {
@@ -146,7 +147,8 @@ fn ensure_motion(client: &Rc<RefCell<Client>>) {
         if slot.is_none() {
             *slot = Some(Motion {
                 client: Rc::downgrade(client),
-                director: StageDirector::new(),
+                conductor: Conductor::new(),
+                thinking_for: None,
                 previous: None,
                 scene_key: None,
                 party_hit_points: Vec::new(),
@@ -156,6 +158,8 @@ fn ensure_motion(client: &Rc<RefCell<Client>>) {
                 overlay: None,
                 frame: None,
                 frame_armed: false,
+                timer: None,
+                timer_armed: false,
                 log: VecDeque::new(),
             });
         }
@@ -210,6 +214,87 @@ fn roll_detail(
     })
 }
 
+/// The stage slot indices of the cast the view shows.
+fn cast_slots(cast: &[StageActor]) -> Vec<usize> {
+    cast.iter()
+        .filter_map(|actor| super::live_stage::slot_index(actor.slot))
+        .collect()
+}
+
+/// The non-player figure that carries a line: the one named like its speaker; for a scripted
+/// line also the one speaking, else the first non-player figure present.
+fn npc_slot(cast: &[StageActor], name: &str, anywhere: bool) -> Option<usize> {
+    let npc = |actor: &&StageActor| matches!(actor.slot, ActorSlot::Npc(_));
+    let named = cast.iter().filter(npc).find(|actor| actor.name == name);
+    let chosen = if anywhere {
+        named
+            .or_else(|| cast.iter().filter(npc).find(|actor| actor.speaking))
+            .or_else(|| cast.iter().find(npc))
+    } else {
+        named
+    };
+    chosen.and_then(|actor| super::live_stage::slot_index(actor.slot))
+}
+
+/// The server's voice line for `text` said by `speaker` (`None` for the narrator).
+fn voice_for(voices: &[VoiceLine], speaker: Option<&str>, text: &str) -> Option<VoiceLine> {
+    voices
+        .iter()
+        .find(|voice| voice.speaker() == speaker && voice.text.trim() == text.trim())
+        .cloned()
+}
+
+fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> ScriptLine<Detail> {
+    let voice = voice_for(voices, None, narration);
+    ScriptLine {
+        voiceable: voice.is_some(),
+        read_ms: reading_time_ms(narration),
+        slot: None,
+        settled,
+        detail: Detail::Line(LineDetail {
+            speaker: NARRATOR_NAME.to_owned(),
+            role: TableRole::Narrator,
+            kind: TableKind::Speech,
+            text: narration.to_owned(),
+            voice,
+        }),
+    }
+}
+
+/// A table line as a line of the stage script, or `None` when no figure carries it.
+fn script_line(
+    line: &TableLine,
+    cast: &[StageActor],
+    voices: &[VoiceLine],
+    settled: bool,
+) -> Option<ScriptLine<Detail>> {
+    let slot = match line.role {
+        TableRole::Hero(index) => super::live_stage::slot_index(ActorSlot::Hero(index)),
+        TableRole::Npc => npc_slot(cast, &line.speaker, line.scripted),
+        TableRole::Narrator => None,
+    };
+    if slot.is_none() && line.role != TableRole::Narrator {
+        return None;
+    }
+    let voice = match (line.kind, line.role) {
+        (TableKind::Speech, TableRole::Npc) => voice_for(voices, Some(&line.speaker), &line.text),
+        (TableKind::Speech, TableRole::Narrator) => voice_for(voices, None, &line.text),
+        _ => None,
+    };
+    let mut detail = LineDetail::of(line);
+    if line.role == TableRole::Narrator {
+        detail.speaker = NARRATOR_NAME.to_owned();
+    }
+    detail.voice = voice.clone();
+    Some(ScriptLine {
+        voiceable: voice.is_some(),
+        read_ms: reading_time_ms(&line.text),
+        slot,
+        settled,
+        detail: Detail::Line(detail),
+    })
+}
+
 /// Called for every newly accepted display view instead of an immediate redraw.
 pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     ensure_motion(client);
@@ -229,17 +314,21 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     };
     let snapshot = presentation::snapshot(journey, scene);
     let lines = presentation::table_lines(&view);
+    let cast = presentation::scene_cast(&view);
     let key = format!("{}|{}|{}", journey.phase, scene.title, scene.scene_asset);
     let hit_points: Vec<u32> = journey
         .party
         .iter()
         .map(|member| member.hit_points)
         .collect();
-    let narration = match &view.audience {
-        Some(rpc::view_message::Audience::Display(display)) => display.narration.clone(),
-        _ => String::new(),
+    let (narration, voices) = match &view.audience {
+        Some(rpc::view_message::Audience::Display(display)) => {
+            (display.narration.clone(), display_lines(display))
+        }
+        _ => (String::new(), Vec::new()),
     };
-    let voiced = live_voice::effects_gate().is_some();
+    let sound_on = live_voice::effects_gate().is_some();
+    let thinking = presentation::replying_speaker(&view);
     let now = now_ms();
     let planned = with_motion(|motion| {
         // The server restarts its table-log sequence on a new watch connection.
@@ -258,37 +347,52 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             .iter()
             .filter(|line| remember(&mut motion.seen, line.sequence))
             .collect();
-        let speech = fresh
+        let scripted = fresh
             .iter()
             .rev()
-            .find(|line| {
-                line.scripted && line.kind == TableKind::Speech && line.role == TableRole::Npc
-            })
-            .map(|line| LineDetail::of(line));
+            .find(|line| line.scripted && line.kind == TableKind::Speech)
+            .copied();
         // After a reload the line to leave on screen is the speaker's last answer to a hero
         // when that is the newest thing said, otherwise the scene's own line.
         let reply_now = lines
             .last()
-            .filter(|line| line.kind == TableKind::Speech && line.role == TableRole::Npc)
-            .map(LineDetail::of);
-        // A hero's typed line and what a hero did outside a fight are shown at once: they are
-        // table talk, so no cue waits for them and they never hold an outcome back.
+            .filter(|line| line.kind == TableKind::Speech && line.role == TableRole::Npc);
+        // A hero's typed line and what a hero did outside a fight go to the stage in order;
+        // they are table talk, so they never hold an outcome back.
         let in_fight = transitions.new_roll || snapshot.stage != CombatStage::Absent;
-        let immediate: Vec<LineDetail> = if restart || scene_changed {
-            Vec::new()
+        let mut script: Vec<ScriptLine<Detail>> = Vec::new();
+        if restart {
+            // A reload shows the current line silently, attributed to its speaker; with no
+            // speaker line, the narration stands in the box.
+            let settled = reply_now.or(scripted.filter(|line| line.role == TableRole::Npc));
+            match settled {
+                Some(line) => script.extend(script_line(line, &cast, &voices, true)),
+                None if !narration.is_empty() => {
+                    script.push(narration_line(&narration, &voices, true));
+                }
+                None => {}
+            }
+        } else if scene_changed {
+            if !narration.is_empty() {
+                script.push(narration_line(&narration, &voices, false));
+            }
+            if let Some(line) = scripted {
+                script.extend(script_line(line, &cast, &voices, false));
+            }
         } else {
-            fresh
-                .iter()
-                .filter(|line| match line.kind {
-                    TableKind::Speech => {
-                        matches!(line.role, TableRole::Hero(_))
-                            || (line.role == TableRole::Npc && !line.scripted)
-                    }
-                    TableKind::Action => !in_fight && line.role != TableRole::Narrator,
-                })
-                .map(|line| LineDetail::of(line))
-                .collect()
-        };
+            script.extend(
+                fresh
+                    .iter()
+                    .filter(|line| match line.kind {
+                        TableKind::Speech => {
+                            matches!(line.role, TableRole::Hero(_))
+                                || (line.role == TableRole::Npc && !line.scripted)
+                        }
+                        TableKind::Action => !in_fight && line.role != TableRole::Narrator,
+                    })
+                    .filter_map(|line| script_line(line, &cast, &voices, false)),
+            );
+        }
         let healed = !transitions.new_roll
             && motion.party_hit_points.len() == hit_points.len()
             && hit_points
@@ -321,83 +425,102 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                     journey, scene, &narration, victory,
                 )))
             }),
-            narration: (scene_changed && !narration.is_empty()).then(|| {
-                let hold = if voiced {
-                    hold_for(&narration)
-                } else {
-                    hold_for(&narration).min(UNVOICED_NARRATION_CAP_MS)
-                };
-                (
-                    Detail::Line(LineDetail {
-                        speaker: NARRATOR_NAME.to_owned(),
-                        role: TableRole::Narrator,
-                        kind: TableKind::Speech,
-                        text: narration.clone(),
-                        conversational: false,
-                    }),
-                    hold,
-                )
-            }),
-            speech: speech
-                .clone()
-                .map(|line| (Detail::Line(line.clone()), hold_for(&line.text))),
-            voiced,
+        };
+        let plan = ViewPlan {
+            diff,
+            script,
+            cast: cast_slots(&cast),
         };
         let chime = transitions.turn_changed && !transitions.new_roll;
         motion.previous = Some(snapshot.clone());
         motion.scene_key = Some(key.clone());
         motion.party_hit_points = hit_points.clone();
         motion.generation = generation;
+        motion.thinking_for = thinking.clone();
         if let Some(overlay) = motion.overlay.take() {
             overlay.remove();
         }
+        motion.conductor.set_sound(sound_on);
+        motion.conductor.set_battlefield_expected(gpu_expected());
         let commands = if restart {
-            motion.director.restart()
+            motion.conductor.restart(now, plan)
         } else {
-            motion.director.on_view(now, diff)
+            motion.conductor.on_view(now, plan)
         };
-        (
-            commands,
-            restart.then_some(reply_now.or(speech)).flatten(),
-            chime,
-            immediate,
-        )
+        (commands, chime)
     });
-    let Some((commands, seed, chime, immediate)) = planned else {
+    let Some((commands, chime)) = planned else {
         return Ok(());
     };
     if chime {
         live_sfx::play(Cue::TurnChime, Duration::ZERO);
     }
     let applied = apply(client, commands);
-    let thinking = show_thinking(client, &view);
-    if let Some(line) = seed {
-        // A reload shows the current line silently, attributed to its speaker, and leaves the
-        // character's words on screen rather than the narration.
-        set_speaker(client, "character")?;
-        show_line(client, &line, false)?;
-    }
-    for line in &immediate {
-        show_line(client, line, false)?;
-    }
+    let published = publish_state(client);
     ensure_frame();
-    applied.and(thinking)
+    applied.and(published)
 }
 
-/// Shows the thinking mark at the speaker the server says is writing a reply, if that speaker
-/// stands in this scene, and removes it otherwise.
-fn show_thinking(client: &Rc<RefCell<Client>>, view: &rpc::ViewMessage) -> Result<(), JsValue> {
+/// Shows the thinking mark at the speaker the server says is writing a reply, once every line
+/// before the reply has been shown, if that speaker stands in this scene; removes it otherwise.
+fn show_thinking(client: &Rc<RefCell<Client>>, speaker: Option<&str>) -> Result<(), JsValue> {
     let state = client.borrow();
     let Some(stage) = state.live.tv.as_ref() else {
         return Ok(());
     };
-    let slot = presentation::replying_speaker(view).and_then(|name| {
+    let slot = speaker.and_then(|name| {
         stage
             .figures()
-            .slot_named(&name)
+            .slot_named(name)
             .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
     });
     stage.figures().set_thinking(slot)
+}
+
+/// Publishes the machines' states on the stage element, so a browser check asserts on states
+/// instead of sleeping, and shows the thinking mark when the lines before the reply are done.
+fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+    let Some((scene, line, pending, waiting_lines, thinking, speaker, battle)) =
+        with_motion(|motion| {
+            (
+                motion.conductor.scene_state(),
+                motion.conductor.focus_line(),
+                motion.conductor.has_pending(),
+                motion.conductor.lines_waiting(),
+                motion.thinking_for.clone(),
+                motion.conductor.active_speaker(),
+                motion.conductor.battle_state(),
+            )
+        })
+    else {
+        return Ok(());
+    };
+    {
+        let state = client.borrow();
+        if let Some(stage) = state.live.tv.as_ref() {
+            let root = stage.root();
+            root.set_attribute("data-scene-state", scene.name())?;
+            match line {
+                Some((id, line_state)) => {
+                    root.set_attribute("data-line-state", line_state.name())?;
+                    root.set_attribute("data-line-id", &id.to_string())?;
+                }
+                None => {
+                    root.set_attribute("data-line-state", "idle")?;
+                    root.remove_attribute("data-line-id")?;
+                }
+            }
+            root.set_attribute("data-stage-pending", if pending { "true" } else { "false" })?;
+            root.set_attribute("data-battle-state", battle.name())?;
+            // Whose words the stage shows follows the line being heard, not the raw view.
+            stage.set_speaker(match speaker {
+                None => "",
+                Some(None) => "narrator",
+                Some(Some(_)) => "character",
+            })?;
+        }
+    }
+    show_thinking(client, thinking.as_deref().filter(|_| !waiting_lines))
 }
 
 fn redraw(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
@@ -422,6 +545,19 @@ fn apply(client: &Rc<RefCell<Client>>, commands: Vec<Command<Detail>>) -> Result
                 short,
             } => enter(client, state, detail.as_ref(), short),
             Command::Rest => set_stage(client, ""),
+            Command::Scene(state) => set_scene_state(client, state),
+            Command::Line {
+                id,
+                state,
+                detail,
+                slot,
+            } => line_command(client, id, state, &detail, slot),
+            Command::Clip { id, op, detail } => {
+                clip_command(id, op, &detail);
+                Ok(())
+            }
+            Command::Actor { slot, state } => actor_command(client, slot, state),
+            Command::Battle(state) => set_battle_state(client, state),
         };
         if let Err(error) = outcome {
             first_error.get_or_insert(error);
@@ -444,8 +580,6 @@ fn state_name(state: StageState) -> &'static str {
         StageState::Interstitial => "interstitial",
         StageState::TitleCard => "title",
         StageState::EnteringScene => "entering",
-        StageState::Narrating => "narrating",
-        StageState::Speaking => "speaking",
         StageState::Rolling => "rolling",
         StageState::Impact => "impact",
         StageState::Defeat => "defeat",
@@ -465,11 +599,7 @@ fn enter(
     set_stage(client, state_name(state))?;
     match (state, detail) {
         (StageState::LeavingScene, _) => {
-            // Nothing said in the beat being left follows into the next one.
-            if let Some(stage) = client.borrow().live.tv.as_ref() {
-                stage.figures().clear_bubbles()?;
-            }
-            set_speaker(client, "")?;
+            // The scene's exit: its bubbles are already closing through their machines.
             live_sfx::cancel_unstarted();
             live_sfx::play(Cue::SceneTransition, Duration::ZERO);
         }
@@ -486,11 +616,6 @@ fn enter(
             {
                 stage.figures().force_down(slot)?;
             }
-        }
-        (StageState::Narrating, _) => set_speaker(client, "narrator")?,
-        (StageState::Speaking, Some(Detail::Line(line))) => {
-            set_speaker(client, "character")?;
-            show_line(client, line, true)?;
         }
         (StageState::TitleCard | StageState::ClosingCard, Some(Detail::Card(card))) => {
             let state = client.borrow();
@@ -702,74 +827,108 @@ fn impact(client: &Rc<RefCell<Client>>, roll: &RollDetail) -> Result<(), JsValue
     Ok(())
 }
 
-/// A character's line at the figure that speaks it, with a soft pop when it appears: a
-/// non-player line at the character named, a hero's line at that hero.
-fn show_line(client: &Rc<RefCell<Client>>, line: &LineDetail, sound: bool) -> Result<(), JsValue> {
-    let state = client.borrow();
-    let Some(stage) = state.live.tv.as_ref() else {
-        return Ok(());
-    };
-    let slot = match line.role {
-        TableRole::Hero(index) => Some(ActorSlot::Hero(index)),
-        TableRole::Npc if line.conversational => stage
-            .figures()
-            .slot_named(&line.speaker)
-            .filter(|slot| matches!(slot, ActorSlot::Npc(_))),
-        TableRole::Npc => stage.figures().npc_slot_for(&line.speaker),
-        TableRole::Narrator => None,
-    };
-    let Some(slot) = slot else {
-        return Ok(());
-    };
-    if line.role == TableRole::Npc && line.kind == TableKind::Speech {
-        // The speaker's answer takes the place of the hero's words it answers.
-        stage.figures().clear_typed();
-        stage.set_speaker("character")?;
+/// Whether the browser offers WebGPU, so the 3D battlefield is expected to show a fight and the
+/// flat combat view must not appear before it.
+fn gpu_expected() -> bool {
+    web_sys::window().is_some_and(|window| {
+        js_sys::Reflect::get(window.navigator().as_ref(), &JsValue::from_str("gpu"))
+            .is_ok_and(|gpu| gpu.is_object())
+    })
+}
+
+fn set_battle_state(client: &Rc<RefCell<Client>>, state: BattleState) -> Result<(), JsValue> {
+    match client.borrow().live.tv.as_ref() {
+        Some(stage) => stage
+            .root()
+            .set_attribute("data-battle-state", state.name()),
+        None => Ok(()),
     }
-    let kind = match (line.kind, line.role) {
-        (TableKind::Action, _) => BubbleKind::Action,
-        (TableKind::Speech, TableRole::Hero(_)) => BubbleKind::Typed,
-        (TableKind::Speech, _) => BubbleKind::Speech,
+}
+
+fn set_scene_state(client: &Rc<RefCell<Client>>, state: SceneState) -> Result<(), JsValue> {
+    match client.borrow().live.tv.as_ref() {
+        Some(stage) => stage.root().set_attribute("data-scene-state", state.name()),
+        None => Ok(()),
+    }
+}
+
+/// Applies one line machine transition to the display: the narrator's box, or the bubble at
+/// the figure that speaks it. A character's bubble pops softly as its line opens.
+fn line_command(
+    client: &Rc<RefCell<Client>>,
+    id: LineId,
+    state: LineState,
+    detail: &Detail,
+    slot: Option<usize>,
+) -> Result<(), JsValue> {
+    let Detail::Line(line) = detail else {
+        return Ok(());
     };
-    stage.figures().say(
-        slot,
-        kind,
-        &line.speaker,
-        &line.text,
-        Duration::ZERO,
-        line.role == TableRole::Npc && line.kind == TableKind::Speech,
-    )?;
-    if sound {
+    let shown = {
+        let state_ref = client.borrow();
+        let Some(stage) = state_ref.live.tv.as_ref() else {
+            return Ok(());
+        };
+        match slot {
+            None => stage.narrator_line(state, &line.text)?,
+            Some(position) => {
+                let kind = match (line.kind, line.role) {
+                    (TableKind::Action, _) => BubbleKind::Action,
+                    (TableKind::Speech, TableRole::Hero(_)) => BubbleKind::Typed,
+                    (TableKind::Speech, _) => BubbleKind::Speech,
+                };
+                stage.figures().set_line(
+                    position,
+                    id,
+                    state,
+                    &super::live_stage::LineBubble {
+                        kind,
+                        speaker: &line.speaker,
+                        text: &line.text,
+                        voiced: line.voice.is_some() && line.role == TableRole::Npc,
+                    },
+                )?
+            }
+        }
+    };
+    if shown && state == LineState::Opening && slot.is_some() {
         live_sfx::play(Cue::BubblePop, Duration::ZERO);
     }
     Ok(())
 }
 
-/// Which speaker the stage's words belong to: `narrator` (the Dungeon Master's caption),
-/// `character` (that character's bubble) or empty before anyone has spoken in the scene.
-fn set_speaker(client: &Rc<RefCell<Client>>, speaker: &str) -> Result<(), JsValue> {
+fn clip_command(id: LineId, op: ClipOp, detail: &Detail) {
+    let Detail::Line(line) = detail else {
+        return;
+    };
+    let Some(voice) = line.voice.as_ref() else {
+        return;
+    };
+    match op {
+        ClipOp::Request => live_voice::request(id, voice),
+        ClipOp::Play => live_voice::play(id),
+        ClipOp::Cancel => live_voice::cancel(id),
+    }
+}
+
+fn actor_command(
+    client: &Rc<RefCell<Client>>,
+    slot: usize,
+    state: ActorState,
+) -> Result<(), JsValue> {
     match client.borrow().live.tv.as_ref() {
-        Some(stage) => stage.set_speaker(speaker),
+        Some(stage) => stage.figures().set_actor_state(slot, state),
         None => Ok(()),
     }
 }
 
-/// The audio of a line began: `speaker` is the character's name, or `None` for the narrator.
-/// The display follows the voice, so the Dungeon Master's caption leaves and the character's
-/// bubble appears (or the other way round) as the clip starts, whatever the timed sequence had
-/// planned. The director orders the state; showing the bubble is idempotent, so a line the
-/// director had no cue for still appears.
-pub(super) fn voice_started(speaker: Option<&str>, text: &str) {
+/// The voice player reports about the clip of line `id`; the line machine follows it.
+pub(super) fn clip_signal(id: LineId, signal: ClipSignal) {
     let now = now_ms();
-    let kind = if speaker.is_some() {
-        CueKind::Speak
-    } else {
-        CueKind::Narrate
-    };
     let planned = with_motion(|motion| {
         (
             motion.client.upgrade(),
-            motion.director.on_clip_started(now, kind),
+            motion.conductor.on_clip(now, id, signal),
         )
     });
     let Some((Some(client), commands)) = planned else {
@@ -777,53 +936,25 @@ pub(super) fn voice_started(speaker: Option<&str>, text: &str) {
     };
     // Errors of a redraw are already reported by `redraw_current`.
     let _applied = apply(&client, commands);
-    let shown = match speaker {
-        Some(name) => set_speaker(&client, "character").and_then(|()| {
-            show_line(
-                &client,
-                &LineDetail {
-                    speaker: name.to_owned(),
-                    role: TableRole::Npc,
-                    kind: TableKind::Speech,
-                    text: text.to_owned(),
-                    conversational: false,
-                },
-                false,
-            )
-        }),
-        None => set_speaker(&client, "narrator"),
-    };
-    // A refused attribute write leaves the previous caption; the next view corrects it.
-    let _shown = shown;
+    let _published = publish_state(&client);
     ensure_frame();
 }
 
-/// A voice clip ended: the line the director waits for may finish early. `character` is
-/// whether it was a character's line rather than the narration.
-pub(super) fn voice_over(character: bool) {
-    let now = now_ms();
-    let commands = with_motion(|motion| {
-        let kind = if character {
-            CueKind::Speak
-        } else {
-            CueKind::Narrate
-        };
-        (
-            motion.client.upgrade(),
-            motion.director.on_cue_finished(now, kind),
-        )
-    });
-    if let Some((Some(client), commands)) = commands {
-        // Errors of a redraw are already reported by `redraw_current`.
-        let _applied = apply(&client, commands);
-        ensure_frame();
-    }
+/// Sound was unlocked, muted or unmuted: later lines ask for a clip only while it is on.
+pub(super) fn sound_changed(on: bool) {
+    with_motion(|motion| motion.conductor.set_sound(on));
 }
 
-/// Arms one animation frame while the director is busy; it stops re-arming when idle.
+/// Arms one animation frame and one fallback timer while the conductor is busy; both stop
+/// re-arming when idle.
 fn ensure_frame() {
+    arm_frame();
+    arm_timer();
+}
+
+fn arm_frame() {
     let armed = with_motion(|motion| {
-        if motion.frame_armed || motion.director.state() == StageState::Idle {
+        if motion.frame_armed || !motion.conductor.is_busy() {
             return false;
         }
         if motion.frame.is_none() {
@@ -845,27 +976,73 @@ fn ensure_frame() {
             .is_ok()
     });
     if requested != Some(true) {
-        // Without frames the director cannot advance, so it restarts at the current view.
-        let _cleared = with_motion(|motion| {
-            motion.frame_armed = false;
-            motion.director.restart()
-        });
+        // Without frames the timer still advances the conductor.
+        let _cleared = with_motion(|motion| motion.frame_armed = false);
     }
 }
 
+fn arm_timer() {
+    let armed = with_motion(|motion| {
+        if motion.timer_armed || !motion.conductor.is_busy() {
+            return false;
+        }
+        if motion.timer.is_none() {
+            let callback = Closure::wrap(Box::new(timer_tick) as Box<dyn FnMut()>);
+            motion.timer = Some(callback);
+        }
+        motion.timer_armed = true;
+        true
+    });
+    if armed != Some(true) {
+        return;
+    }
+    let scheduled = with_motion(|motion| {
+        let (Some(window), Some(callback)) = (web_sys::window(), motion.timer.as_ref()) else {
+            return false;
+        };
+        window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                callback.as_ref().unchecked_ref(),
+                TIMER_TICK_MS,
+            )
+            .is_ok()
+    });
+    if scheduled != Some(true) {
+        let _cleared = with_motion(|motion| motion.timer_armed = false);
+    }
+}
+
+fn timer_tick() {
+    let _cleared = with_motion(|motion| motion.timer_armed = false);
+    tick(now_ms());
+    ensure_frame();
+}
+
 fn frame(timestamp: f64) {
+    let _cleared = with_motion(|motion| motion.frame_armed = false);
+    tick(timestamp as u64);
+    ensure_frame();
+}
+
+/// Advances the conductor to `now` and applies what it commands.
+fn tick(now: u64) {
     let commands = with_motion(|motion| {
-        motion.frame_armed = false;
-        (
-            motion.client.upgrade(),
-            motion.director.on_tick(timestamp as u64),
-        )
+        let mut commands = motion.conductor.on_tick(now);
+        // A fight's entrance waits for the battlefield; ask how far it is.
+        if motion.conductor.battle_state() == BattleState::Entering {
+            commands.extend(
+                motion
+                    .conductor
+                    .on_battlefield(now, super::live_battlefield::entrance()),
+            );
+        }
+        (motion.client.upgrade(), commands)
     });
     if let Some((Some(client), commands)) = commands {
         // Errors of a redraw are already reported by `redraw_current`.
         let _applied = apply(&client, commands);
+        let _published = publish_state(&client);
     }
-    ensure_frame();
 }
 
 /// Called for every newly accepted phone view: the dice tumble and the table log.

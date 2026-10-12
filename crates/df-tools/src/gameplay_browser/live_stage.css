@@ -230,3 +230,20 @@
 .tv-figures[data-arrange=combat] .tv-fig{--fig-h:calc(var(--u)*24);bottom:14vh}
 .tv-figures[data-arrange=combat] .tv-fig[data-role=back]{--fig-h:calc(var(--u)*21)}
 .tv-stage .rules-note{max-width:calc(var(--u)*30)}
+
+/* ---------- display stage machines: every state is on the DOM, every appearance follows one ---------- */
+/* narrator box: shown only while the narrator is the speaker the line machine says */
+.tv-stage[data-scene-state]:not([data-speaker=narrator]) .tv-stagebox{opacity:0;visibility:hidden;transition:opacity .4s ease,visibility 0s .4s}
+.tv-dm[data-line-state=closing]{opacity:0;transition:opacity .4s ease}
+/* choice chips are visible only once every line has been said */
+.tv-stage[data-scene-state]:not([data-scene-state=awaiting-choice]) .tv-choices{opacity:0;visibility:hidden}
+.tv-stage[data-scene-state=awaiting-choice] .tv-choices{opacity:1;visibility:visible;transition:opacity .5s ease}
+/* an actor absent from the next scene walks off before the backdrop changes */
+.tv-fig[data-actor-state=exiting]{opacity:0;transition:opacity .35s ease,visibility 0s .35s}
+/* a fight's entrance: the flat combat view never shows before the 3D battlefield; the battle
+   machine releases it only when the battlefield will not appear */
+.tv-stage[data-battle-state=entering] :is(.live-screen,.tv-figures){opacity:0;visibility:hidden}
+/* bubbles opened by a line machine close through it, not by a timer */
+.tv-bubble[data-managed]{animation:df-bubble-in .25s ease-out backwards}
+.tv-bubble[data-managed][data-instant]{animation:none}
+.tv-bubble[data-managed][data-line-state=closing]{animation:df-bubble-out .4s ease-in forwards}
