@@ -30,6 +30,12 @@ fn reference() -> ReferenceImage<'static> {
 fn a_well_formed_edit_passes_local_validation() {
     let references = [reference()];
     assert_eq!(edit(&references).validate(), Ok(()));
+    // A transparent result may be a PNG or a WebP; only a JPEG cannot carry alpha.
+    let webp = ImageEdit {
+        output: ImageFormat::Webp,
+        ..edit(&references)
+    };
+    assert_eq!(webp.validate(), Ok(()));
 }
 
 #[test]
@@ -51,11 +57,6 @@ fn malformed_edits_are_refused_before_anything_is_sent() {
     });
     cases.push(ImageEdit {
         output: ImageFormat::Jpeg,
-        ..good()
-    });
-    cases.push(ImageEdit {
-        output: ImageFormat::Webp,
-        background: ImageBackground::Opaque,
         ..good()
     });
     cases.push(ImageEdit {

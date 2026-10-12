@@ -21,8 +21,11 @@ use std::{
 use df_protocol::common as rpc;
 use tokio::{sync::watch, task::JoinSet, time::Instant};
 
+use crate::health_tier::{Vitals, tier_of};
+
 use super::{
     adventure::{dossier::Attitude, setting::SettingKind},
+    health_faces::{Book, Character, PREWARM_ORDER},
     imagery::{
         CharacterFacts, CharacterRole, ImageFailure, ImageKey, ImageKind, ImageRequest, Imagery,
         LifeStage, OutputSpec, PlaceFacts, ReferenceImage, ReferenceStore, cast_expression,
@@ -30,12 +33,18 @@ use super::{
     },
     pack::{self, SceneKey},
     scene_mood::{
-        Appearance, Beat, CastState, ExchangeSignal, Face, Hysteresis, Look, MoodInputs,
-        MoodTracker, SceneTone, TableKind, Tempo, TempoLevel,
+        Beat, CastState, ExchangeSignal, Expression, Face, HealthTier, Hysteresis, Look,
+        MoodInputs, MoodTracker, SceneTone, TableKind, Tempo, TempoLevel,
     },
     social::SocialLedger,
     startup_configuration::ContentRating,
 };
+
+/// The authored cut-out of the party's hero at this position; the health variants are made from
+/// it.
+fn hero_art(index: usize) -> String {
+    format!("assets/ui/generated/sprite-hero-{}", index + 1)
+}
 
 /// How many of the latest table lines the mood reads (kinds only).
 const RECENT_TABLE_LINES: usize = 6;
@@ -197,6 +206,9 @@ struct SceneFacts {
     tone: SceneTone,
     beat: Beat,
     members: Vec<Member>,
+    /// Named cast of the adventure's fights that is not on this stage, so a fight's foes have
+    /// their health variants ready before the fight starts.
+    fights: Vec<Member>,
 }
 
 /// What one display view says about the stage.
@@ -212,8 +224,27 @@ struct Stage {
     recent_kinds: Vec<TableKind>,
     title: String,
     cast: Vec<StageCast>,
-    /// Hit points of named combatants the view still carries: `(name, current, maximum)`.
-    hurt: Vec<(String, u32, u32)>,
+    /// What the view says about the health of the named combatants it still carries.
+    vitals: Vec<(String, Vitals)>,
+    /// The party's ready heroes, in party order.
+    heroes: Vec<StageHero>,
+}
+
+/// A ready hero of the party, from the view's party list.
+#[derive(Clone, Debug)]
+struct StageHero {
+    index: usize,
+    name: String,
+    vitals: Vitals,
+}
+
+fn vitals_of(member: &rpc::PartyMemberView) -> Vitals {
+    Vitals {
+        current: member.hit_points,
+        maximum: member.maximum_hit_points,
+        unconscious: member.unconscious,
+        dying: false,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -290,18 +321,28 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
                 sprite: actor.sprite.clone(),
             })
             .collect(),
-        hurt: journey
+        vitals: journey
             .and_then(|journey| journey.combat.as_ref())
             .map(|combat| {
                 combat
                     .participants
                     .iter()
-                    .map(|member| {
-                        (
-                            member.name.clone(),
-                            member.hit_points,
-                            member.maximum_hit_points,
-                        )
+                    .map(|member| (member.name.clone(), vitals_of(member)))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        heroes: journey
+            .map(|journey| {
+                journey
+                    .party
+                    .iter()
+                    .enumerate()
+                    .take(2)
+                    .filter(|(_, member)| member.character_ready && member.maximum_hit_points > 0)
+                    .map(|(index, member)| StageHero {
+                        index,
+                        name: member.name.clone(),
+                        vitals: vitals_of(member),
                     })
                     .collect()
             })
@@ -368,31 +409,45 @@ fn facts_of(stage: &Stage, social: &SocialLedger) -> SceneFacts {
                 tone: SceneTone::Neutral,
                 beat: Beat::Conversation,
                 members: Vec::new(),
+                fights: Vec::new(),
             };
         };
-        let members = scene
-            .cast
+        let member_of = |member: &pack::SceneCastMember| {
+            let role = match member.role {
+                pack::CastRole::Patron => rpc::SceneRole::Patron,
+                pack::CastRole::Antagonist => rpc::SceneRole::Antagonist,
+                pack::CastRole::Contact => rpc::SceneRole::Contact,
+                pack::CastRole::Bystander => rpc::SceneRole::Bystander,
+            };
+            let dossier = social.dossier_of(role, &member.id);
+            Member {
+                id: member.id.clone(),
+                role: role_of(member.role),
+                life_stage: LifeStage::from_age(member.age),
+                name: member.name.clone(),
+                sprite: member.sprite.clone(),
+                dossier_id: dossier.map(|dossier| dossier.npc_id.clone()),
+                opposes: dossier.is_some_and(|dossier| dossier.role.opposes_party()),
+                starting_attitude: dossier.map(|dossier| dossier.starting_attitude),
+            }
+        };
+        let members: Vec<Member> = scene.cast.iter().map(member_of).collect();
+        let mut fights: Vec<Member> = Vec::new();
+        for fight in content
+            .scenes
             .iter()
-            .map(|member| {
-                let role = match member.role {
-                    pack::CastRole::Patron => rpc::SceneRole::Patron,
-                    pack::CastRole::Antagonist => rpc::SceneRole::Antagonist,
-                    pack::CastRole::Contact => rpc::SceneRole::Contact,
-                    pack::CastRole::Bystander => rpc::SceneRole::Bystander,
-                };
-                let dossier = social.dossier_of(role, &member.id);
-                Member {
-                    id: member.id.clone(),
-                    role: role_of(member.role),
-                    life_stage: LifeStage::from_age(member.age),
-                    name: member.name.clone(),
-                    sprite: member.sprite.clone(),
-                    dossier_id: dossier.map(|dossier| dossier.npc_id.clone()),
-                    opposes: dossier.is_some_and(|dossier| dossier.role.opposes_party()),
-                    starting_attitude: dossier.map(|dossier| dossier.starting_attitude),
+            .filter(|other| other.key == SceneKey::Combat)
+        {
+            for member in fight.cast.iter().map(member_of) {
+                let known = members
+                    .iter()
+                    .chain(&fights)
+                    .any(|other| other.sprite == member.sprite);
+                if !known {
+                    fights.push(member);
                 }
-            })
-            .collect();
+            }
+        }
         SceneFacts {
             place: scene
                 .setting
@@ -402,6 +457,7 @@ fn facts_of(stage: &Stage, social: &SocialLedger) -> SceneFacts {
                 .setting
                 .as_ref()
                 .map_or(SceneTone::Neutral, |setting| tone_of(setting.kind)),
+            fights,
             beat: match scene.key {
                 SceneKey::Victory => Beat::Victory,
                 SceneKey::Defeat => Beat::Defeat,
@@ -451,6 +507,12 @@ struct State {
     failed_faces: BTreeSet<(String, Face)>,
     last_revision: Option<(u64, u64)>,
     budget_exhausted: bool,
+    /// The health variants known to exist in the cache, and what has been tried.
+    book: Book,
+    /// The health variant each cast member shows now, by cast id.
+    health_sprites: BTreeMap<String, SpriteOverlay>,
+    /// The health variant each hero shows now, by name.
+    hero_faces: BTreeMap<String, ImageKey>,
 }
 
 /// What the worker should start.
@@ -464,6 +526,16 @@ enum Job {
         scene_asset: String,
         look: Look,
         reason: RefreshReason,
+    },
+    /// Makes one health variant: the only job that can spend on health art, and never started in
+    /// a fight.
+    Warm {
+        character: Character,
+        tier: HealthTier,
+    },
+    /// Looks through the cache (never the provider) for a character's health variants.
+    Peek {
+        character: Character,
     },
 }
 
@@ -479,6 +551,15 @@ enum Done {
         reason: RefreshReason,
         scene_key: String,
         result: Result<ImageKey, ImageFailure>,
+    },
+    Warm {
+        id: String,
+        tier: HealthTier,
+        result: Result<ImageKey, ImageFailure>,
+    },
+    Peek {
+        id: String,
+        found: Vec<(HealthTier, ImageKey)>,
     },
 }
 
@@ -509,6 +590,133 @@ impl Drop for WorkerGuard {
 pub(super) struct LivingScenes {
     inner: Option<Arc<Inner>>,
     _worker: Option<Arc<WorkerGuard>>,
+}
+
+/// The health variants of the heroes, by name, on a view's journey.
+fn apply_hero_faces(state: &State, journey: Option<&mut rpc::JourneyView>) {
+    if let Some(journey) = journey {
+        journey.live_faces = state
+            .hero_faces
+            .iter()
+            .map(|(name, key)| rpc::LiveFace {
+                name: name.clone(),
+                sprite: key.path(),
+            })
+            .collect();
+    }
+}
+
+/// The characters whose art has health variants in this stage: the party's heroes first, then
+/// the scene's cast.
+fn characters_of(stage: &Stage, facts: &SceneFacts) -> Vec<Character> {
+    let heroes = stage.heroes.iter().map(|hero| {
+        let art = hero_art(hero.index);
+        Character {
+            id: art.clone(),
+            art,
+            facts: CharacterFacts {
+                role: CharacterRole::Hero,
+                life_stage: LifeStage::Adult,
+            },
+        }
+    });
+    let cast = facts
+        .members
+        .iter()
+        .filter(|member| stage.cast.iter().any(|cast| cast.id == member.id))
+        .map(|member| Character {
+            id: member.sprite.clone(),
+            art: member.sprite.clone(),
+            facts: CharacterFacts {
+                role: member.role,
+                life_stage: member.life_stage,
+            },
+        });
+    let fights = facts
+        .fights
+        .iter()
+        .filter(|member| {
+            !facts
+                .members
+                .iter()
+                .any(|other| other.sprite == member.sprite)
+        })
+        .map(|member| Character {
+            id: member.sprite.clone(),
+            art: member.sprite.clone(),
+            facts: CharacterFacts {
+                role: member.role,
+                life_stage: member.life_stage,
+            },
+        });
+    heroes.chain(cast).chain(fights).collect()
+}
+
+/// How hurt the named combatant of this stage is; healthy when the view carries no hit points.
+fn member_tier(stage: &Stage, member: &Member) -> HealthTier {
+    stage
+        .vitals
+        .iter()
+        .find(|(name, _)| *name == member.name)
+        .and_then(|(_, vitals)| tier_of(*vitals))
+        .unwrap_or(HealthTier::Healthy)
+}
+
+/// Recomputes which health variant every hero and cast member shows from the view's hit points
+/// and the variants known to exist: the variant of the exact tier, otherwise the nearest cached
+/// one, otherwise the authored art. Pure presentation, no provider call; returns whether
+/// anything shown changed.
+fn refresh_health(state: &mut State) -> bool {
+    let (Some(stage), Some(facts)) = (state.stage.as_ref(), state.facts.as_ref()) else {
+        return false;
+    };
+    let mut hero_faces = BTreeMap::new();
+    for hero in &stage.heroes {
+        if let Some(tier) = tier_of(hero.vitals)
+            && let Some((_, key)) = state.book.nearest(&hero_art(hero.index), tier)
+        {
+            hero_faces.insert(hero.name.clone(), key.clone());
+        }
+    }
+    let mut health_sprites = BTreeMap::new();
+    let mut superseded = Vec::new();
+    for member in &facts.members {
+        if !stage.cast.iter().any(|cast| cast.id == member.id) {
+            continue;
+        }
+        let tier = member_tier(stage, member);
+        // Bloodied or worse outranks the conversation's mood face; Hurt only fills in where no
+        // mood face is showing.
+        let health_face = tier.is_bloodied_or_worse()
+            || (tier == HealthTier::Hurt && !state.sprites.contains_key(&member.id));
+        if tier.is_bloodied_or_worse() {
+            superseded.push(member.id.clone());
+        }
+        if health_face && let Some((_, key)) = state.book.nearest(&member.sprite, tier) {
+            health_sprites.insert(
+                member.id.clone(),
+                SpriteOverlay {
+                    source_sprite: member.sprite.clone(),
+                    key: key.clone(),
+                },
+            );
+        }
+    }
+    let mut changed = false;
+    for id in superseded {
+        changed |= state.sprites.remove(&id).is_some();
+    }
+    let shown_keys = |sprites: &BTreeMap<String, SpriteOverlay>| -> Vec<(String, ImageKey)> {
+        sprites
+            .iter()
+            .map(|(id, overlay)| (id.clone(), overlay.key.clone()))
+            .collect()
+    };
+    changed |= shown_keys(&health_sprites) != shown_keys(&state.health_sprites)
+        || hero_faces != state.hero_faces;
+    state.health_sprites = health_sprites;
+    state.hero_faces = hero_faces;
+    changed
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -570,8 +778,8 @@ impl LivingScenes {
         self.inner.as_ref().map(|inner| inner.wake.subscribe())
     }
 
-    /// Notes a display view the server is sending: its scene, cast, tempo and revision. Player
-    /// views are ignored.
+    /// Notes a display view the server is sending: its scene, cast, tempo, revision and the
+    /// health of the party and the cast. Player views are ignored.
     pub(super) fn observe(&self, message: &rpc::ViewMessage) {
         let Some(inner) = &self.inner else {
             return;
@@ -582,16 +790,15 @@ impl LivingScenes {
         inner.observe(stage);
     }
 
-    /// Adds the published art to a display view about to be sent. Presentation only: no other
-    /// field of the view changes, and nothing is added in combat or for another scene.
+    /// Adds the published art to a view about to be sent. Presentation only: no other field of
+    /// the view changes. The backdrop and mood faces are never added in combat or for another
+    /// scene; the health variants of the heroes go to every audience.
     pub(super) fn apply(&self, message: &mut rpc::ViewMessage) {
         let Some(inner) = &self.inner else {
             return;
         };
-        let Some(stage) = stage_of(message) else {
-            return;
-        };
-        inner.apply(&stage, message);
+        let stage = stage_of(message);
+        inner.apply(stage.as_ref(), message);
     }
 }
 
@@ -618,6 +825,7 @@ impl Inner {
             state.pacer.begin_scene(now);
             state.backdrop = None;
             state.sprites.clear();
+            state.health_sprites.clear();
             state.ready_backdrop = None;
             state.failed_faces.clear();
             state.last_revision = stage.revision;
@@ -626,36 +834,54 @@ impl Inner {
             state.pacer.note_action(now);
         }
         state.stage = Some(stage);
+        let health_changed = refresh_health(&mut state);
         drop(state);
-        if had_overlay {
+        if had_overlay || health_changed {
             self.wake.send_modify(|count| *count += 1);
         }
     }
 
-    fn apply(&self, stage: &Stage, message: &mut rpc::ViewMessage) {
+    fn apply(&self, stage: Option<&Stage>, message: &mut rpc::ViewMessage) {
         let state = locked(&self.state);
-        let current = state
-            .stage
-            .as_ref()
-            .is_some_and(|known| known.scene_key == stage.scene_key);
-        if !current || stage.in_combat {
-            return;
-        }
-        let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
-            return;
-        };
-        let Some(scene) = display.scene.as_mut() else {
-            return;
-        };
-        if let Some(backdrop) = &state.backdrop {
-            scene.live_backdrop = backdrop.key.path();
-        }
-        for actor in &mut scene.cast {
-            if let Some(overlay) = state.sprites.get(&actor.id)
-                && overlay.source_sprite == actor.sprite
-            {
-                actor.live_sprite = overlay.key.path();
+        match message.audience.as_mut() {
+            Some(rpc::view_message::Audience::Display(display)) => {
+                let Some(stage) = stage else {
+                    return;
+                };
+                let current = state
+                    .stage
+                    .as_ref()
+                    .is_some_and(|known| known.scene_key == stage.scene_key);
+                if !current {
+                    return;
+                }
+                if let Some(scene) = display.scene.as_mut() {
+                    // The backdrop and the mood faces are never published in combat; a health
+                    // variant is, because it shows how the fight is going.
+                    if !stage.in_combat
+                        && let Some(backdrop) = &state.backdrop
+                    {
+                        scene.live_backdrop = backdrop.key.path();
+                    }
+                    for actor in &mut scene.cast {
+                        let overlay = state.health_sprites.get(&actor.id).or_else(|| {
+                            (!stage.in_combat)
+                                .then(|| state.sprites.get(&actor.id))
+                                .flatten()
+                        });
+                        if let Some(overlay) = overlay
+                            && overlay.source_sprite == actor.sprite
+                        {
+                            actor.live_sprite = overlay.key.path();
+                        }
+                    }
+                }
+                apply_hero_faces(&state, display.journey.as_mut());
             }
+            Some(rpc::view_message::Audience::Player(player)) => {
+                apply_hero_faces(&state, player.journey.as_mut());
+            }
+            None => {}
         }
     }
 
@@ -693,6 +919,38 @@ impl Inner {
                         face,
                         source_sprite: member.sprite,
                         result,
+                    }
+                });
+            }
+            Job::Warm { character, tier } => {
+                tasks.spawn(async move {
+                    let result = match inner.load_figure(&character.art).await {
+                        Ok(sprite) => inner.render_health(sprite, character.facts, tier).await,
+                        Err(failure) => Err(failure),
+                    };
+                    Done::Warm {
+                        id: character.id,
+                        tier,
+                        result,
+                    }
+                });
+            }
+            Job::Peek { character } => {
+                tasks.spawn(async move {
+                    let mut found = Vec::new();
+                    if let Ok(sprite) = inner.load_figure(&character.art).await {
+                        for tier in PREWARM_ORDER {
+                            if let Some(key) = inner
+                                .peek_health(sprite.clone(), character.facts, tier)
+                                .await
+                            {
+                                found.push((tier, key));
+                            }
+                        }
+                    }
+                    Done::Peek {
+                        id: character.id,
+                        found,
                     }
                 });
             }
@@ -755,7 +1013,7 @@ impl Inner {
                 life_stage: member.life_stage,
             },
             face.expression,
-            face.appearance,
+            face.tier,
             // No character's art derives from a real person's likeness today.
             false,
         )
@@ -768,6 +1026,53 @@ impl Inner {
                 output: OutputSpec::CUTOUT,
             })
             .await
+    }
+
+    /// The request for a character's health variant: the authored figure, the closed health
+    /// phrases, the same cut-out output as every other character art.
+    fn health_request(
+        &self,
+        sprite: ReferenceImage,
+        facts: CharacterFacts,
+        tier: HealthTier,
+    ) -> Result<ImageRequest, ImageFailure> {
+        let prompt = cast_expression(
+            self.rating,
+            facts,
+            Expression::Neutral,
+            tier,
+            // No character's art derives from a real person's likeness today.
+            false,
+        )
+        .map_err(|_| ImageFailure::InvalidRequest)?;
+        Ok(ImageRequest {
+            kind: ImageKind::CastExpression,
+            references: vec![sprite],
+            prompt,
+            output: OutputSpec::CUTOUT,
+        })
+    }
+
+    async fn render_health(
+        &self,
+        sprite: ReferenceImage,
+        facts: CharacterFacts,
+        tier: HealthTier,
+    ) -> Result<ImageKey, ImageFailure> {
+        self.imagery
+            .render(self.health_request(sprite, facts, tier)?)
+            .await
+    }
+
+    /// The key of a health variant if it is already cached. Never calls the provider.
+    async fn peek_health(
+        &self,
+        sprite: ReferenceImage,
+        facts: CharacterFacts,
+        tier: HealthTier,
+    ) -> Option<ImageKey> {
+        let request = self.health_request(sprite, facts, tier).ok()?;
+        self.imagery.peek(&request).await
     }
 
     async fn render_refresh(
@@ -789,25 +1094,49 @@ impl Inner {
 
     /// Records a finished render. A scene refresh waits for a quiet moment before it lands.
     fn finish(&self, done: Done) {
+        let label_of = |result: &Result<ImageKey, ImageFailure>| {
+            result
+                .as_ref()
+                .map_or_else(|failure| failure.label(), |_| "ready")
+                .to_owned()
+        };
         let (kind, outcome) = match &done {
-            Done::Expression { result, .. } => ("expression", result),
-            Done::Refresh { result, .. } => ("refresh", result),
+            Done::Expression { result, .. } => ("expression", label_of(result)),
+            Done::Refresh { result, .. } => ("refresh", label_of(result)),
+            Done::Warm { result, .. } => ("health", label_of(result)),
+            Done::Peek { .. } => ("health_peek", "ready".to_owned()),
         };
         record(
             "gameplay.living_scene.render_finished",
-            &[
-                ("scene.kind", kind.to_owned()),
-                (
-                    "scene.outcome",
-                    outcome
-                        .as_ref()
-                        .map_or_else(|failure| failure.label(), |_| "ready")
-                        .to_owned(),
-                ),
-            ],
+            &[("scene.kind", kind.to_owned()), ("scene.outcome", outcome)],
         );
         let mut state = locked(&self.state);
         match done {
+            Done::Warm { id, tier, result } => {
+                match result {
+                    Ok(key) => state.book.learn(&id, tier, key),
+                    Err(ImageFailure::BudgetExhausted) => {
+                        state.book.release(&id, tier);
+                        state.budget_exhausted = true;
+                    }
+                    Err(_) => state.book.fail(&id, tier),
+                }
+                let changed = refresh_health(&mut state);
+                drop(state);
+                if changed {
+                    self.wake.send_modify(|count| *count += 1);
+                }
+            }
+            Done::Peek { id, found } => {
+                for (tier, key) in found {
+                    state.book.learn(&id, tier, key);
+                }
+                let changed = refresh_health(&mut state);
+                drop(state);
+                if changed {
+                    self.wake.send_modify(|count| *count += 1);
+                }
+            }
             Done::Expression {
                 npc_id,
                 face,
@@ -908,13 +1237,7 @@ impl Inner {
                 attitude: member.starting_attitude,
                 opposes: member.opposes,
                 speaking: stage.speaking_ids.contains(&member.id),
-                appearance: stage
-                    .hurt
-                    .iter()
-                    .find(|(name, _, _)| *name == member.name)
-                    .map_or(Appearance::Unhurt, |(_, current, maximum)| {
-                        Appearance::from_hit_points(*current, *maximum)
-                    }),
+                tier: member_tier(&stage, member),
             })
             .collect();
         // The ledger names a dossier ("patron:merchant"); the cast names its member by id.
@@ -956,6 +1279,15 @@ impl Inner {
                     state.tracker.mark_face_shown(id, Face::AUTHORED);
                     continue;
                 }
+                if face.tier != HealthTier::Healthy {
+                    // A health face is made and shown by the health pipeline below, not as a
+                    // mood render; it supersedes any mood face on this character.
+                    if state.sprites.remove(id).is_some() {
+                        wake = true;
+                    }
+                    state.tracker.mark_face_shown(id, *face);
+                    continue;
+                }
                 let Some(member) = facts.members.iter().find(|member| member.id == *id) else {
                     continue;
                 };
@@ -970,7 +1302,7 @@ impl Inner {
                     "gameplay.living_scene.face_requested",
                     &[
                         ("scene.expression", face.expression.label().to_owned()),
-                        ("scene.appearance", face.appearance.label().to_owned()),
+                        ("scene.tier", face.tier.label().to_owned()),
                     ],
                 );
                 jobs.push(Job::Expression {
@@ -979,6 +1311,7 @@ impl Inner {
                 });
             }
         }
+        jobs.extend(self.health_jobs(&mut state, &stage, &facts));
         let authored = verdict.look == Look::AUTHORED;
         if authored && verdict.scene_worth_rendering && state.pacer.may_publish(now, in_combat) {
             // The mood has calmed back to the authored framing: show the authored painting.
@@ -1034,6 +1367,63 @@ impl Inner {
     }
 }
 
+impl Inner {
+    /// The health variants to look for or make now. Looking is always allowed; making is never
+    /// done in a fight, so combat shows only what is already cached.
+    fn health_jobs(&self, state: &mut State, stage: &Stage, facts: &SceneFacts) -> Vec<Job> {
+        let characters = characters_of(stage, facts);
+        let mut jobs = Vec::new();
+        for character in &characters {
+            if state.book.needs_peek(&character.id) {
+                state.book.mark_peeked(&character.id);
+                jobs.push(Job::Peek {
+                    character: character.clone(),
+                });
+            }
+        }
+        if stage.in_combat || state.budget_exhausted {
+            return jobs;
+        }
+        // What the party and the cast look like right now comes before background warming.
+        let now_needed = stage
+            .heroes
+            .iter()
+            .filter_map(|hero| Some((hero_art(hero.index), tier_of(hero.vitals)?)))
+            .chain(
+                facts
+                    .members
+                    .iter()
+                    .filter(|member| stage.cast.iter().any(|cast| cast.id == member.id))
+                    .map(|member| (member.sprite.clone(), member_tier(stage, member))),
+            )
+            .filter(|(_, tier)| *tier != HealthTier::Healthy);
+        for (art, tier) in now_needed {
+            if state.book.is_open(&art, tier)
+                && let Some(character) = characters.iter().find(|character| character.id == art)
+            {
+                state.book.start_warming(&art, tier);
+                jobs.push(Job::Warm {
+                    character: character.clone(),
+                    tier,
+                });
+            }
+        }
+        if let Some((index, tier)) =
+            state
+                .book
+                .next_warm(&characters, self.imagery.budget_remaining(), false)
+            && let Some(character) = characters.get(index)
+        {
+            state.book.start_warming(&character.id, tier);
+            jobs.push(Job::Warm {
+                character: character.clone(),
+                tier,
+            });
+        }
+        jobs
+    }
+}
+
 impl State {
     fn new(timing: Timing) -> Self {
         Self {
@@ -1049,6 +1439,9 @@ impl State {
             failed_faces: BTreeSet::new(),
             last_revision: None,
             budget_exhausted: false,
+            book: Book::default(),
+            health_sprites: BTreeMap::new(),
+            hero_faces: BTreeMap::new(),
         }
     }
 

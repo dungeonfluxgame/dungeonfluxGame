@@ -24,8 +24,10 @@
 //! The persistent elements are updated in place. Animations that must restart (a second hit,
 //! a new line) alternate between two keyframe names through a `data-fx-tick` flag, so no
 //! layout is read and no timer runs.
+use super::live_health;
 use super::live_sfx::{self, Cue};
 use super::*;
+use crate::health_cues::Blow;
 use crate::{
     presentation::{ActorSlot, MAX_NPCS, SceneFamily, StageActor},
     stage_art, stage_depth,
@@ -217,6 +219,8 @@ struct HudCard {
     hit_points: Element,
     hit_points_text: Element,
     last_hit_points: Cell<Option<u32>>,
+    // PLAY-H01: the bar's maximum, for the share of it a blow takes.
+    maximum: Cell<u32>,
 }
 
 /// What a line's bubble shows.
@@ -363,6 +367,7 @@ impl Figures {
             let role = node(document, &plate, "div", "tv-hud-role", "")?;
             let hit_points = node(document, &plate, "div", "tv-fig-hp", "")?;
             node(document, &hit_points, "span", "tv-fig-hp-fill", "")?;
+            live_health::mount_bar(document, &hit_points)?;
             let hit_points_text = node(document, &hit_points, "span", "tv-fig-hp-text", "")?;
             hud.push(HudCard {
                 root: card,
@@ -372,6 +377,7 @@ impl Figures {
                 hit_points,
                 hit_points_text,
                 last_hit_points: Cell::new(None),
+                maximum: Cell::new(0),
             });
         }
         let animation_end = Closure::wrap(Box::new(move |event: Event| {
@@ -564,6 +570,9 @@ impl Figures {
                 && current > 0
         });
         flag(root, "data-low", low)?;
+        let tier = live_health::display_tier(actor.hit_points, actor.down);
+        live_health::set_tier(root, tier)?;
+        live_health::sync_tremor(&figure.body, tier)?;
         self.choose_art(figure, actor, depth)
     }
 
@@ -582,12 +591,10 @@ impl Figures {
         flag(&card.root, "data-down", actor.down)?;
         card.name.set_text_content(Some(&actor.name));
         card.role.set_text_content(Some(&actor.role));
-        let portrait = if actor.portrait.is_empty() {
-            String::new()
-        } else {
-            format!("background-image:url({})", actor.portrait)
-        };
-        card.crest.set_attribute("style", &portrait)?;
+        let tier = live_health::display_tier(actor.hit_points, actor.down);
+        live_health::set_tier(&card.root, tier)?;
+        live_health::sync_tremor(&card.root, tier)?;
+        live_health::crest(&card.crest, &actor.portrait, actor.live_sprite.as_deref())?;
         match actor.hit_points {
             Some((current, maximum)) => {
                 let percent = u64::from(current.min(maximum)) * 100 / u64::from(maximum.max(1));
@@ -601,6 +608,12 @@ impl Figures {
                     "data-low",
                     percent < u64::from(LOW_HEALTH_PERCENT) && current > 0,
                 )?;
+                live_health::bar_changed(
+                    &card.hit_points,
+                    card.last_hit_points.get(),
+                    (current, maximum),
+                )?;
+                card.maximum.set(maximum);
                 if let Some(before) = card.last_hit_points.get()
                     && current > before
                     && matches!(actor.slot, ActorSlot::Hero(_))
@@ -719,7 +732,41 @@ impl Figures {
         if let Some(card) = card {
             card.hit_points.set_attribute("style", "--hp:0%")?;
         }
-        Ok(())
+        // PLAY-H01: the target slumps, and the whole stage gives a light shake.
+        self.health_blow(slot, 0, false, true)
+    }
+
+    /// PLAY-H01: a blow of `damage` hit points landed on the character at `slot`: the figure and
+    /// its card shake by the share of the bar it took (sharper for a critical hit, a slump for a
+    /// drop to 0), and the whole stage shakes lightly for a critical hit or a drop.
+    pub(super) fn health_blow(
+        &self,
+        slot: ActorSlot,
+        damage: u32,
+        critical: bool,
+        dropped: bool,
+    ) -> Result<(), JsValue> {
+        let Some(figure) = self.figure(slot) else {
+            return Ok(());
+        };
+        let card = match slot {
+            ActorSlot::Hero(position) => self.hud.get(position),
+            ActorSlot::Npc(_) => self.hud.get(FOE_CARD).filter(|card| {
+                card.name.text_content().as_deref() == Some(figure.name_text.borrow().as_str())
+            }),
+        };
+        let Some(stage) = self.root.parent_element() else {
+            return Ok(());
+        };
+        let blow = Blow {
+            lost: damage,
+            maximum: card.map_or(0, |card| card.maximum.get()),
+            critical,
+            dropped,
+        };
+        let mut parts = vec![&figure.body];
+        parts.extend(card.map(|card| &card.root));
+        live_health::display_blow(&stage, &parts, blow)
     }
 
     fn figure(&self, slot: ActorSlot) -> Option<&Figure> {
