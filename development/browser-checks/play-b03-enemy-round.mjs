@@ -60,11 +60,12 @@ const sampleTv = () => tv.evaluate(() => {
     floats: [...document.querySelectorAll('.bf-float')].map((f) => ({ text: text(f), id: f.getAttribute('data-id') || text(f) })),
     figures, cell: Number(host?.getAttribute('data-battlefield-cell-m')) || 0,
     busy: host?.getAttribute('data-battlefield-busy'),
+    held: host?.getAttribute('data-battlefield-held'), pending: host?.getAttribute('data-battlefield-pending'),
     aftermath: Boolean(document.querySelector('.live-screen[data-screen=aftermath]')),
   };
 });
 const samplePhone = (page) => page.evaluate(() => ({
-  yourTurn: /Your turn/.test(document.body.innerText),
+  yourTurn: /your turn/i.test(document.body.innerText),
   controls: [...document.querySelectorAll('.tactical-controls button:not([disabled])')].map((b) => b.textContent.trim().replace(/\s+/g, ' ')),
   waiting: /Waiting for/.test(document.body.innerText),
 }));
@@ -103,7 +104,10 @@ for (const m of cards) {
   if (!parsed) continue;
   const [, attacker, verb, target] = parsed;
   if (m.label !== `${attacker}’s turn`) misLabelled += 1;
-  if (order[order.length - 1] !== attacker) order.push(attacker);
+  // The server's turn order repeats each round; only a round's own cards must not interleave. The TV's
+  // round counter is the server's, so the same creature may come round again in a later round.
+  const run = `${m.round} ${attacker}`;
+  if (order[order.length - 1] !== run) order.push(run);
   const a = m.figures[attacker];
   const t = m.figures[target];
   if (verb === 'strikes' && a && t && m.cell) {

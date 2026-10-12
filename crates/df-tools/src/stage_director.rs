@@ -156,7 +156,14 @@ struct Active<D> {
 pub(crate) struct StageDirector<D> {
     queue: VecDeque<Cue<D>>,
     active: Option<Active<D>>,
+    /// The 3D battlefield is still playing the beats of an earlier blow.
+    battlefield_busy: bool,
+    /// Since when the next blow has been waiting for the battlefield.
+    waiting_since_ms: Option<u64>,
 }
+
+/// The longest a blow waits for the battlefield to finish the one before it.
+const BATTLEFIELD_WAIT_CAP_MS: u64 = 20_000;
 
 impl<D: Clone> Default for StageDirector<D> {
     fn default() -> Self {
@@ -177,7 +184,15 @@ impl<D: Clone> StageDirector<D> {
         Self {
             queue: VecDeque::new(),
             active: None,
+            battlefield_busy: false,
+            waiting_since_ms: None,
         }
+    }
+
+    /// Whether the battlefield is still showing an earlier blow. A blow's dice wait for it, so
+    /// each attack is seen in full before the next creature's begins.
+    pub(crate) fn set_battlefield_busy(&mut self, busy: bool) {
+        self.battlefield_busy = busy;
     }
 
     pub(crate) fn state(&self) -> StageState {
@@ -195,6 +210,7 @@ impl<D: Clone> StageDirector<D> {
     pub(crate) fn restart(&mut self) -> Vec<Command<D>> {
         self.queue.clear();
         self.active = None;
+        self.waiting_since_ms = None;
         vec![Command::Render]
     }
 
@@ -399,6 +415,20 @@ impl<D: Clone> StageDirector<D> {
                 }
                 ended_any = true;
             }
+            let waiting_for_battlefield = self.battlefield_busy
+                && self
+                    .queue
+                    .front()
+                    .is_some_and(|front| front.kind == CueKind::Roll)
+                && now_ms.saturating_sub(*self.waiting_since_ms.get_or_insert(now_ms))
+                    < BATTLEFIELD_WAIT_CAP_MS;
+            if waiting_for_battlefield {
+                if ended_any {
+                    commands.push(Command::Rest);
+                }
+                break;
+            }
+            self.waiting_since_ms = None;
             let Some(cue) = self.queue.pop_front() else {
                 if ended_any {
                     commands.push(Command::Rest);
@@ -498,6 +528,51 @@ mod tests {
             banner: Some("victory"),
             ..ViewDiff::default()
         }
+    }
+
+    fn blow(label: &'static str) -> ViewDiff<&'static str> {
+        ViewDiff {
+            roll: Some(label),
+            impact: Some(label),
+            blow_only: true,
+            ..ViewDiff::default()
+        }
+    }
+
+    #[test]
+    fn a_blow_waits_for_the_battlefield_to_finish_the_one_before_it() {
+        let mut director = Director::new();
+        director.set_battlefield_busy(false);
+        let mut commands = director.on_view(0, blow("first"));
+        commands.extend(director.on_view(0, blow("second")));
+        // The battlefield is busy with the first blow's beats from the first roll on.
+        director.set_battlefield_busy(true);
+        commands.extend(run(&mut director, 50, 6_000));
+        let rolls = |commands: &[Command<&'static str>]| {
+            commands
+                .iter()
+                .filter(|command| {
+                    matches!(
+                        command,
+                        Command::Enter {
+                            state: StageState::Rolling,
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        assert_eq!(rolls(&commands), 1, "the second blow is held back");
+        director.set_battlefield_busy(false);
+        let later = run(&mut director, 6_050, 9_000);
+        assert_eq!(rolls(&later), 1, "and begins once the battlefield is done");
+        // A battlefield that never finishes cannot hold the table for ever.
+        let mut stuck = Director::new();
+        stuck.on_view(0, blow("first"));
+        stuck.on_view(0, blow("second"));
+        stuck.set_battlefield_busy(true);
+        let all = run(&mut stuck, 50, 40_000);
+        assert_eq!(rolls(&all), 1);
     }
 
     #[test]

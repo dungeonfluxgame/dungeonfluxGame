@@ -254,6 +254,11 @@ impl<D: Clone> Conductor<D> {
         self.battle == BattleState::Entering || self.held_exit.is_some()
     }
 
+    /// Whether the 3D battlefield is still showing an earlier blow: the next one waits for it.
+    pub(crate) fn set_battlefield_busy(&mut self, busy: bool) {
+        self.director.set_battlefield_busy(busy);
+    }
+
     pub(crate) fn battle_state(&self) -> BattleState {
         self.battle
     }

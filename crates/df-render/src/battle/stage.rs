@@ -349,6 +349,8 @@ pub struct Stage {
     roll_card_left_s: f32,
     /// A roll card waiting for the camera to arrive, and how long it has waited.
     pending_roll_card: Option<(super::model::RollCard, f32)>,
+    /// Whether the beat now playing is a creature's walk: its attack's card waits for it.
+    playing_move: bool,
     feel: FeelState,
     particles: Particles,
     impacts: VecDeque<ImpactEvent>,
@@ -415,6 +417,7 @@ impl Stage {
             next_float_id: 0,
             roll_card_left_s: 0.0,
             pending_roll_card: None,
+            playing_move: false,
             feel: FeelState::new(),
             particles: Particles::default(),
             impacts: VecDeque::new(),
@@ -522,7 +525,7 @@ impl Stage {
     /// still moving to them the card would hang over the wrong picture. It waits at most
     /// [`ROLL_CARD_MAX_WAIT_S`].
     pub fn show_roll_card(&mut self, card: super::model::RollCard) {
-        if self.rig.is_panning() || self.camera_move_ahead() {
+        if self.rig.is_panning() || self.camera_move_ahead() || self.move_ahead() {
             self.pending_roll_card = Some((card, 0.0));
         } else {
             self.pending_roll_card = None;
@@ -949,6 +952,7 @@ impl Stage {
             match director::plan(&self.grid, &self.resting_tokens(), &beat) {
                 Ok(timeline) => {
                     self.initiative_playing = matches!(beat, Beat::Initiative { .. });
+                    self.playing_move = matches!(beat, Beat::Move { .. });
                     self.playing = Some(Playback {
                         timeline,
                         next: 0,
@@ -1068,7 +1072,10 @@ impl Stage {
             projectile.age_s < life
         });
         if let Some((card, waited)) = self.pending_roll_card.take() {
-            if (self.rig.is_panning() || self.camera_move_ahead()) && waited < ROLL_CARD_MAX_WAIT_S
+            // The card never shows while a creature is still walking to its target.
+            if self.move_ahead()
+                || ((self.rig.is_panning() || self.camera_move_ahead())
+                    && waited < ROLL_CARD_MAX_WAIT_S)
             {
                 self.pending_roll_card = Some((card, waited + real_dt));
             } else {
@@ -1185,6 +1192,15 @@ impl Stage {
                 None => chest(actor),
             },
         }
+    }
+
+    /// Whether a creature's walk is playing or queued.
+    fn move_ahead(&self) -> bool {
+        (self.playing.is_some() && self.playing_move)
+            || self
+                .queue
+                .iter()
+                .any(|beat| matches!(beat, Beat::Move { .. }))
     }
 
     /// Whether the camera is about to move: a beat is queued, or the one playing has a camera
@@ -1429,7 +1445,13 @@ impl Stage {
 
     fn apply(&mut self, step: Step) {
         match step {
-            Step::SetActive(active) => self.hud.active = active,
+            Step::SetActive(active) => {
+                // The card of an earlier creature's attack does not stay over the next turn.
+                if active != self.hud.active {
+                    self.hud.roll_card = None;
+                }
+                self.hud.active = active;
+            }
             Step::Camera { command, pan } => {
                 if let Some((pose, cut)) = self.camera_pose_for(&command) {
                     self.rest_pose = (command.focus == CameraFocus::Wide).then_some(pose);
