@@ -195,7 +195,11 @@ impl rpc::session_service_server::SessionService for Service {
         if let Some(art) = art.as_mut() {
             art.borrow_and_update();
         }
-        let (_, first) = self.view(credential, request.clone()).await?;
+        let (role, first) = self.view(credential, request.clone()).await?;
+        // Only the shared display shows generated art: a phone's stream is never rebuilt for it.
+        if !matches!(role, LocalDemoRole::Display) {
+            art = None;
+        }
         let service = self.clone();
         let stream = futures::stream::unfold(
             (
