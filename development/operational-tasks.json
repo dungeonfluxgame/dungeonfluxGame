@@ -3169,7 +3169,9 @@
         "A table plays a fight with two melee heroes and the archer against several enemies on a layout with cover, using only their phones.",
         "Positions, reachable squares and legal targets come from the server; the browser decides none.",
         "Reload mid-fight resumes with the same positions.",
-        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit.",
+        "Strict rules presentation (owner, 2026-10-12): every movement, attack, weapon, range and sound shown in a fight corresponds to an event the server resolved under the standard rules. The display never invents movement: no cosmetic approach, no walk back to a starting square, no guessed weapon or attack style. A figure moves only along a path the server granted within its remaining speed, and leaving a hostile reach without Disengage raises the opportunity attack before the move completes.",
+        "A melee attack is only offered and shown when the target is within the weapon reach from the attacker's server cell; a ranged attack uses the weapon the hero actually holds, with its range and ammunition."
       ],
       "verification_json": [
         "Native journey tests; real browser play of two fights."
