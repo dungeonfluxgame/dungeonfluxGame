@@ -292,7 +292,9 @@ fn fs(in: VOut) -> FOut {
     var out: FOut;
     out.colour = vec4<f32>(in.colour.rgb * alpha, alpha);
     // The same blend accumulates depth weighted by coverage; the resolve pass divides it out.
-    out.depth = vec4<f32>(in.depth * alpha, alpha, 0.0, 0.0);
+    // The fourth component is the blend's source alpha (the target has no alpha channel to store
+    // it): without it the accumulation would add up instead of compositing front over back.
+    out.depth = vec4<f32>(in.depth * alpha, alpha, 0.0, alpha);
     return out;
 }
 "#;
@@ -329,7 +331,7 @@ fn fs(@builtin(position) p: vec4<f32>) -> FOut {
     if (t.g < u.depth.w) {
         out.depth = 1.0;
     } else {
-        let d = max(t.r / t.g - u.depth.z, u.viewport.w);
+        let d = max(t.r / t.g + u.depth.z, u.viewport.w);
         out.depth = clamp(-u.depth.x + u.depth.y / d, 0.0, 1.0);
     }
     return out;

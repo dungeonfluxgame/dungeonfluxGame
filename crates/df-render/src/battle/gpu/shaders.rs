@@ -9,7 +9,7 @@ struct Frame {
     eye: vec4<f32>,       // xyz eye, w seconds
     right: vec4<f32>,     // xyz camera right flattened to the ground, w aspect
     viewport: vec4<f32>,  // width px, height px, focal px, unused
-    light: vec4<f32>,     // x, z of the lit centre, light radius, unused
+    light: vec4<f32>,     // x, z of the lit centre, light radius, decal lift toward the camera (m)
     ground: vec4<f32>,    // centre x, centre z, half size, fall-off
     backdrop: vec4<f32>,  // wall z, half width, base y, height
     spot: vec4<f32>,      // warm pool under the acting figure: x, z, radius, strength
@@ -141,7 +141,12 @@ fn vs(
     let x = shape.x + c.x * shape.z;
     let z = shape.y + c.y * shape.w;
     var out: VOut;
-    out.pos = frame.view_proj * vec4<f32>(x, ground_y(x, z) + 0.012, z, 1.0);
+    // On a scan the tiles are lifted toward the camera along the line of sight by `light.w`: the
+    // projected position does not change, only the depth, so grass and rubble nearer than the
+    // measured ground (the scan's own depth is resolved into the depth buffer) cannot swallow them.
+    let on_ground = vec3<f32>(x, ground_y(x, z) + 0.012, z);
+    let lifted = on_ground + normalize(frame.eye.xyz - on_ground) * frame.light.w;
+    out.pos = frame.view_proj * vec4<f32>(lifted, 1.0);
     out.c = c;
     out.col = col;
     out.params = params;

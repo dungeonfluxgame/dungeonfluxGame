@@ -32,6 +32,8 @@ const COLOUR_FORMAT: &str = "rgba8unorm";
 const DECAL_STRIDE: usize = 12;
 /// Vertices per decal: a 6 by 6 patch of quads (see the decal shader).
 const DECAL_VERTICES: u32 = 216;
+/// How far toward the camera, along the line of sight, tiles on a scan are lifted for the depth test.
+const DECAL_LIFT_M: f32 = 2.0;
 const FIGURE_STRIDE: usize = 20;
 const MAX_DECALS: usize = 768;
 const MAX_FIGURES: usize = 16;
@@ -834,7 +836,10 @@ impl Renderer {
         data.extend_from_slice(&[eye.x, eye.y, eye.z, frame.clock_s]);
         data.extend_from_slice(&[flat.x, flat.y, flat.z, aspect]);
         data.extend_from_slice(&[size.0 as f32, size.1 as f32, focal, 0.0]);
-        data.extend_from_slice(&[centre.x, centre.z, 8.5, 0.0]);
+        // Tiles are lifted along the line of sight, which leaves their place on screen unchanged
+        // and only keeps nearby grass and rubble from hiding them.
+        let decal_lift = if scene.splat.is_some() { DECAL_LIFT_M } else { 0.0 };
+        data.extend_from_slice(&[centre.x, centre.z, 8.5, decal_lift]);
         data.extend_from_slice(&[
             scene.ground.centre[0],
             scene.ground.centre[1],
@@ -1267,8 +1272,6 @@ impl Renderer {
         splats.engine.prepare(encoder, &params, placement, stamps)
     }
 
-    /// The two passes of a splat frame: the scan into colour plus accumulated depth, then a pass
-    /// that resolves that depth into the depth buffer and stays open for tiles and figures.
     /// A `timestampWrites` descriptor writing stamps `first` and `first + 1`.
     fn stamps(&self, first: u32) -> JsValue {
         let set = self.timing.as_ref().map(|timing| timing.set.clone());
@@ -1279,6 +1282,8 @@ impl Renderer {
             .build()
     }
 
+    /// The two passes of a splat frame: the scan into colour plus accumulated depth, then a pass
+    /// that resolves that depth into the depth buffer and stays open for tiles and figures.
     fn splat_passes(
         &self,
         encoder: &super::sys::GpuCommandEncoder,

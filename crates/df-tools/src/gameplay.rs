@@ -340,6 +340,21 @@ fn bounded_asset(path: std::path::PathBuf, maximum: u64) -> Result<bytes::Bytes,
     }
     Ok(bytes.into())
 }
+#[cfg(test)]
+mod battle_scene_page_tests {
+    use super::page;
+
+    #[test]
+    fn the_display_page_names_the_forced_battle_scene_and_the_player_page_never_does() {
+        let credential = Some([7u8; 32]);
+        let forced = page(false, credential, Some("scan-village")).0;
+        assert!(forced.contains("data-battle-scene=\"scan-village\""));
+        let default = page(false, credential, None).0;
+        assert!(!default.contains("data-battle-scene"));
+        let player = page(true, None, Some("scan-village")).0;
+        assert!(!player.contains("data-battle-scene"));
+    }
+}
 async fn both(State(state): State<PageState>) -> Html<String> {
     page(false, Some(state.display), state.battle_scene.as_deref())
 }
