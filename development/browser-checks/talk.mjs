@@ -88,23 +88,27 @@ for (let i = 0; i < lines.length; i += 1) {
   await pa.locator('[data-dialogue=submit]').click();
   s.note(`submitted ${i + 1}: ${lines[i]}`);
   let reply = '';
-  for (let wait = 0; wait < 90; wait += 1) {
-    await settle(500);
+  // The TV stages a bubble for a few seconds, so everything it shows is collected while we wait.
+  const tvSeen = [];
+  const sample = async () => { for (const b of (await tvState(tv)).bubbles) tvSeen.push(b.text); };
+  for (let wait = 0; wait < 180; wait += 1) {
+    await settle(250);
+    await sample();
     const now = await phoneReplies();
     if (now.join('|') !== before && now.length) { reply = now[now.length - 1]; break; }
   }
-  await settle(1500);
+  for (let wait = 0; wait < 24; wait += 1) { await settle(250); await sample(); }
   await pa.screenshot({ path: `${out}/phone-a-${i + 1}.png`, fullPage: true });
   await tv.screenshot({ path: `${out}/tv-${i + 1}.png` });
   if (!reply) { fail('no_reply', `exchange ${i + 1} got no reply on the phone`); continue; }
-  replies.push({ hero: lines[i], reply, tv: await tvState(tv) });
+  replies.push({ hero: lines[i], reply, tvSeen });
   s.note(`reply ${i + 1}: ${reply}`);
 }
 
 // --- assert -----------------------------------------------------------------------------------------
 const seen = new Map();
 let admissions = 0;
-replies.forEach(({ hero, reply, tv: shown }, index) => {
+replies.forEach(({ hero, reply, tvSeen }, index) => {
   const n = index + 1;
   const parts = sentences(reply);
   if (parts.length > 3) fail('too_many_sentences', `exchange ${n}: ${parts.length}`);
@@ -119,7 +123,7 @@ replies.forEach(({ hero, reply, tv: shown }, index) => {
   const asked = new Set(words(hero).filter((w) => w.length >= 4));
   const added = words(parts[0] || '').filter((w) => w.length >= 4 && !asked.has(w));
   if (asked.size >= 4 && added.length <= 1) fail('restates_the_question', `exchange ${n}: ${parts[0]}`);
-  const onTv = shown.bubbles.some((b) => b.text.includes(reply.slice(0, 40)));
+  const onTv = tvSeen.some((text) => text.includes(reply.slice(0, 40)));
   const private_ = clueOnly.some((t) => normal(reply).includes(normal(t)));
   if (!onTv && !private_) fail('tv_does_not_show_the_reply', `exchange ${n}`);
   if (onTv && private_) fail('tv_shows_the_private_clue', `exchange ${n}`);

@@ -248,7 +248,19 @@ impl NpcReplyContext {
             && mentions_term(&story.clue, &dossier.name);
         let told = gave_clue && !player.private_clue.is_empty();
         let released = if told {
-            released_terms(dossier, &story.secret_terms, &player.private_clue)
+            // Names the scenes say aloud are not the clue's to give: the table already hears them.
+            let clue_terms: Vec<String> = story
+                .secret_terms
+                .iter()
+                .filter(|term| {
+                    !story
+                        .public_names
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case(term))
+                })
+                .cloned()
+                .collect();
+            released_terms(dossier, &clue_terms, &player.private_clue)
         } else {
             Vec::new()
         };
