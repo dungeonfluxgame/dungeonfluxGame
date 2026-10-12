@@ -193,7 +193,7 @@ if test "$PG_ALREADY_RUNNING" -eq 0; then
     "$PG/initdb" -D "$PLAY/pgdata" -U df_gameplay_demo_admin_20261004 --auth-host=trust --auth-local=trust -E UTF8 --locale=C
   fi
   mkdir -p "$PLAY/sock"
-  "$PG/pg_ctl" -D "$PLAY/pgdata" -l "$PLAY/postgres.log" -o "-p 55517 -h 127.0.0.1 -k $PLAY/sock -c max_connections=24" -w start
+  "$PG/pg_ctl" -D "$PLAY/pgdata" -l "$PLAY/postgres.log" -o "-p 55517 -h 127.0.0.1 -k $PLAY/sock -c max_connections=120" -w start
   PG_STARTED=1
 fi
 
