@@ -41,6 +41,8 @@ const MAX_APPROACH: Duration = Duration::from_millis(1800);
 const MIN_STEP: Duration = Duration::from_millis(150);
 /// The fall's body lands on the ground this far into the fall animation.
 pub const FALL_LANDS: Duration = Duration::from_millis(560);
+/// Extra time the impact shot stays up after a hit that deals damage.
+pub const IMPACT_HOLD: Duration = Duration::from_millis(1800);
 const FALL_DELAY: Duration = Duration::from_millis(380);
 const FINISHING_DELAY: Duration = Duration::from_millis(560);
 
@@ -581,8 +583,12 @@ fn strike(
         }
     }
 
-    // Settle: everyone returns to formation and the camera widens.
+    // Settle: everyone returns to formation and the camera widens. After a hit the impact shot
+    // is held so the number and the hit-point drop are read on a TV across the room.
     end += Duration::from_millis(220);
+    if hits {
+        end += IMPACT_HOLD;
+    }
     builder.at(end, Step::Highlight(None));
     let home = attacker.cell;
     let back_steps = if home == beside {
@@ -1130,6 +1136,25 @@ mod tests {
         };
         let timeline = plan(&grid, &tokens, &beat).unwrap();
         assert_eq!(times_of(&timeline, "snd-heal"), times_of(&timeline, "heal"));
+    }
+
+    #[test]
+    fn a_hit_holds_the_impact_shot_longer_than_a_miss_before_the_camera_widens() {
+        let (grid, tokens) = field();
+        let widen = |result| {
+            let timeline = plan(&grid, &tokens, &attack(result)).unwrap();
+            let contact = times_of(&timeline, "float")[0];
+            let settle = *times_of(&timeline, "settle-shot").last().unwrap();
+            settle - contact
+        };
+        let hit = widen(AttackResult::Hit {
+            damage: 5,
+            critical: false,
+            downed: false,
+        });
+        let miss = widen(AttackResult::Miss);
+        assert!(hit >= miss + IMPACT_HOLD, "hit {hit:?} vs miss {miss:?}");
+        assert!(hit >= Duration::from_millis(2400), "the number lives 1.4 s and is read: {hit:?}");
     }
 
     #[test]
