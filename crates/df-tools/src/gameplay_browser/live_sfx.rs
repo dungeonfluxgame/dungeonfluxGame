@@ -11,9 +11,7 @@
 use super::*;
 use std::{collections::HashMap, time::Duration};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
-use web_sys::{
-    AudioBuffer, AudioBufferSourceNode, AudioContext, GainNode, Response,
-};
+use web_sys::{AudioBuffer, AudioBufferSourceNode, AudioContext, GainNode, Response};
 
 const SFX_PATH: &str = "/assets/ui/generated/sfx";
 const MAXIMUM_EFFECT_BYTES: u32 = 2 * 1024 * 1024;
@@ -151,7 +149,8 @@ impl Engine {
             if start > now {
                 // The node was started with a future time, so stopping it now cancels it.
                 // A browser that refuses leaves a short decorative cue to play out.
-                let _cancelled = source.stop();
+                let scheduled: &web_sys::AudioScheduledSourceNode = source.unchecked_ref();
+                let _cancelled = scheduled.stop_with_when(0.0);
             }
         }
     }
@@ -197,7 +196,10 @@ pub(super) fn sync() {
     });
     ENGINE.with(|slot| {
         if let Some(engine) = slot.borrow().as_ref() {
-            engine.master.gain().set_value(if muted { 0.0 } else { 1.0 });
+            engine
+                .master
+                .gain()
+                .set_value(if muted { 0.0 } else { 1.0 });
             // Resuming inside the gesture lets the browser start the clock; a refusal means
             // effects stay silent until the next gesture calls `sync` again.
             let _resumed = engine.context.resume();

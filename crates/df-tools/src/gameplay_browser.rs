@@ -4,7 +4,10 @@ mod live_chrome;
 mod live_combat;
 mod live_exploration;
 mod live_lobby;
+mod live_motion;
 mod live_screens;
+mod live_sfx;
+mod live_stage;
 mod live_theme;
 mod live_tv;
 mod live_voice;
@@ -1055,8 +1058,14 @@ fn receive_view(
         drop(state);
         // A fresh server view supersedes the last message shown in the toast.
         feedback(&client.borrow(), "");
-        redraw_current(client)?;
-        live_voice::observe(client);
+        if client.borrow().role == "display" {
+            // The display draws through the presentation director, which orders the change.
+            live_motion::on_view(client)?;
+        } else {
+            redraw_current(client)?;
+            live_voice::observe(client);
+            live_motion::on_player_view(client)?;
+        }
     }
     Ok(())
 }
@@ -1453,6 +1462,7 @@ pub(super) fn start() -> Result<(), JsValue> {
         if role == "player" {
             resume_or_join(&client)?;
         } else {
+            live_tv::mount_splash(&document, &client.borrow().root)?;
             connect(client);
         }
     }

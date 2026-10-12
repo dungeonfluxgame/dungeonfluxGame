@@ -39,10 +39,10 @@ fn condition(member: &rpc::PartyMemberView) -> &'static str {
 /// "Victory" when the server projects the courier's closing line, which only the won encounter
 /// has; otherwise "Defeat".
 fn outcome_word(view: &LiveView<'_>) -> &'static str {
-    if view.journey.dialogue.is_empty() {
-        "Defeat"
-    } else {
+    if crate::presentation::is_victory(view.journey) {
         "Victory"
+    } else {
+        "Defeat"
     }
 }
 

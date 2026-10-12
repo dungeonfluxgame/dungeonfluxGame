@@ -448,6 +448,7 @@ fn finish(shared: &Shared) {
     if let Some(playing) = over {
         playing.release();
     }
+    live_motion::voice_over();
     pump(shared);
 }
 

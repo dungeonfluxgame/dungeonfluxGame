@@ -157,6 +157,7 @@ impl<D: Clone> StageDirector<D> {
             .map_or(StageState::Idle, |active| active.state)
     }
 
+    #[cfg(test)]
     pub(crate) fn queue_len(&self) -> usize {
         self.queue.len()
     }

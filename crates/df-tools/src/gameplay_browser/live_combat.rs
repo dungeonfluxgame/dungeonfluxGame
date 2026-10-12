@@ -9,12 +9,13 @@
 
 mod aftermath;
 mod combat;
+pub(super) use combat::describe;
 pub(super) mod sheet;
 mod style;
 
 use super::{
-    Client, button, dialogue_recovery, live_screens, live_tv::TvStage, node, recovery_needs,
-    recovery_prompt, replay,
+    Client, button, dialogue_recovery, live_screens, live_stage, live_tv, live_tv::TvStage, node,
+    recovery_needs, recovery_prompt, replay,
 };
 use df_protocol::common as rpc;
 use df_types::{RecoveryEpoch, SessionRevision};
@@ -367,6 +368,9 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     };
     let host = ensure_host(client, view.surface, screen)?;
     let player = client.borrow().role == "player";
+    if !player {
+        present_stage(client, view, screen)?;
+    }
     let mut assets = String::new();
     if let Some(url) = live_screens::asset_url(&view.scene.scene_asset) {
         assets.push_str(&format!("--asset-scene-courier-road:url({url});"));
@@ -396,6 +400,33 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     mount_chrome(client, &host, view)?;
     mount_rules_badge(client, &host, custom_rules)?;
     Ok(true)
+}
+
+/// The display's composited stage behind the combat or aftermath screen: the painting and the
+/// characters standing in it. The screen's own elements sit above and carry the text.
+fn present_stage(
+    client: &Rc<RefCell<Client>>,
+    view: &LiveView<'_>,
+    screen: Screen,
+) -> Result<(), JsValue> {
+    let cast = live_screens::current_cast(client);
+    let state = client.borrow();
+    let Some(stage) = state.live.tv.as_ref() else {
+        return Ok(());
+    };
+    let art = live_screens::asset_url(&view.scene.scene_asset)
+        .unwrap_or_else(|| style::COMBAT_ART_URL.to_owned());
+    stage.set_art(&live_tv::image_layers(&art, style::COMBAT_ART_URL))?;
+    stage.figures().update(
+        &cast,
+        &view.scene.title,
+        crate::presentation::scene_family(&view.scene.scene_asset),
+        if screen == Screen::Combat {
+            live_stage::StageMode::Combat
+        } else {
+            live_stage::StageMode::Aftermath
+        },
+    )
 }
 
 /// Removes the live screen so another renderer can show the view; does nothing if none is shown.

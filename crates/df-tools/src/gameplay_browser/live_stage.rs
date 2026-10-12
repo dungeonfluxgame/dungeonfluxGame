@@ -10,8 +10,8 @@
 //! The persistent elements are updated in place. Animations that must restart (a second hit,
 //! a new line) alternate between two keyframe names through a `data-fx-tick` flag, so no
 //! layout is read and no timer runs.
-use super::*;
 use super::live_sfx::{self, Cue};
+use super::*;
 use crate::{
     presentation::{ActorSlot, SceneFamily, StageActor},
     stage_art,
@@ -213,11 +213,16 @@ impl Figures {
                 .ok()
                 .and_then(|name| name.as_string())
                 .is_some_and(|name| name == BUBBLE_OUT_ANIMATION || name == FLOAT_ANIMATION);
-            if finished && let Some(element) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) {
+            if finished
+                && let Some(element) = event.target().and_then(|t| t.dyn_into::<Element>().ok())
+            {
                 element.remove();
             }
         }) as Box<dyn FnMut(Event)>);
-        root.add_event_listener_with_callback("animationend", animation_end.as_ref().unchecked_ref())?;
+        root.add_event_listener_with_callback(
+            "animationend",
+            animation_end.as_ref().unchecked_ref(),
+        )?;
         Ok(Self {
             root,
             figures,
@@ -236,9 +241,10 @@ impl Figures {
             self.animation_end.as_ref().unchecked_ref(),
         );
         for figure in &self.figures {
-            let _removed = figure
-                .image
-                .remove_event_listener_with_callback("error", figure.error.as_ref().unchecked_ref());
+            let _removed = figure.image.remove_event_listener_with_callback(
+                "error",
+                figure.error.as_ref().unchecked_ref(),
+            );
         }
     }
 
@@ -279,7 +285,11 @@ impl Figures {
             let actor = cast
                 .iter()
                 .find(|actor| index(actor.slot) == Some(position) && actor.slot != ActorSlot::Npc)
-                .or(if position == 2 { remembered.as_ref() } else { None });
+                .or(if position == 2 {
+                    remembered.as_ref()
+                } else {
+                    None
+                });
             match actor {
                 Some(actor) => {
                     lit |= actor.speaking;
@@ -315,8 +325,14 @@ impl Figures {
                 figure
                     .hit_points
                     .set_attribute("style", &format!("--hp:{percent}%"))?;
-                figure.hit_points_text.set_text_content(Some(&format!("{current} / {maximum} HP")));
-                flag(root, "data-low", percent < u64::from(LOW_HEALTH_PERCENT) && current > 0)?;
+                figure
+                    .hit_points_text
+                    .set_text_content(Some(&format!("{current} / {maximum} HP")));
+                flag(
+                    root,
+                    "data-low",
+                    percent < u64::from(LOW_HEALTH_PERCENT) && current > 0,
+                )?;
                 if let Some(before) = figure.last_hit_points.get()
                     && current > before
                     && index(actor.slot).is_some_and(|position| position < 2)
@@ -358,13 +374,34 @@ impl Figures {
         mode: StageMode,
     ) -> Result<(), JsValue> {
         self.start_fx(figure, Fx::Heal, Duration::ZERO, 1)?;
-        self.float_on(figure, &format!("+{amount}"), FloatKind::Heal, Duration::ZERO)?;
+        self.float_on(
+            figure,
+            &format!("+{amount}"),
+            FloatKind::Heal,
+            Duration::ZERO,
+        )?;
         let text = match mode {
             StageMode::Combat => "catches a second wind",
             StageMode::Aftermath | StageMode::Scene => "rests and recovers",
         };
-        self.bubble_on(figure, BubbleKind::Action, &actor.name, text, Duration::ZERO, false)?;
+        self.bubble_on(
+            figure,
+            BubbleKind::Action,
+            &actor.name,
+            text,
+            Duration::ZERO,
+            false,
+        )?;
         live_sfx::play(Cue::HealChime, Duration::ZERO);
+        Ok(())
+    }
+
+    /// A blow that dropped its target is shown before the view that says so is drawn.
+    pub(super) fn force_down(&self, slot: ActorSlot) -> Result<(), JsValue> {
+        if let Some(figure) = self.figure(slot) {
+            figure.root.set_attribute("data-down", "")?;
+            figure.hit_points.set_attribute("style", "--hp:0%")?;
+        }
         Ok(())
     }
 
@@ -374,20 +411,17 @@ impl Figures {
 
     /// The standing place of the present character called `name`.
     pub(super) fn slot_named(&self, name: &str) -> Option<ActorSlot> {
-        self.figures.iter().enumerate().find_map(|(position, figure)| {
-            let present = figure.root.get_attribute("data-present").as_deref() == Some("true");
-            (present && *figure.name_text.borrow() == name).then_some(match position {
-                0 => ActorSlot::Hero(0),
-                1 => ActorSlot::Hero(1),
-                _ => ActorSlot::Npc,
+        self.figures
+            .iter()
+            .enumerate()
+            .find_map(|(position, figure)| {
+                let present = figure.root.get_attribute("data-present").as_deref() == Some("true");
+                (present && *figure.name_text.borrow() == name).then_some(match position {
+                    0 => ActorSlot::Hero(0),
+                    1 => ActorSlot::Hero(1),
+                    _ => ActorSlot::Npc,
+                })
             })
-        })
-    }
-
-    /// Whether `slot` has a character standing in it now.
-    pub(super) fn is_present(&self, slot: ActorSlot) -> bool {
-        self.figure(slot)
-            .is_some_and(|figure| figure.root.get_attribute("data-present").as_deref() == Some("true"))
     }
 
     /// The sign (+1 right, -1 left) from `from` towards `to` across the screen.
@@ -398,7 +432,13 @@ impl Figures {
         }
     }
 
-    fn start_fx(&self, figure: &Figure, fx: Fx, delay: Duration, direction: i32) -> Result<(), JsValue> {
+    fn start_fx(
+        &self,
+        figure: &Figure,
+        fx: Fx,
+        delay: Duration,
+        direction: i32,
+    ) -> Result<(), JsValue> {
         let tick = if figure.root.get_attribute("data-fx-tick").as_deref() == Some("a") {
             "b"
         } else {
@@ -412,14 +452,26 @@ impl Figures {
         figure.root.set_attribute("data-fx-tick", tick)
     }
 
-    pub(super) fn fx(&self, slot: ActorSlot, fx: Fx, delay: Duration, direction: i32) -> Result<(), JsValue> {
+    pub(super) fn fx(
+        &self,
+        slot: ActorSlot,
+        fx: Fx,
+        delay: Duration,
+        direction: i32,
+    ) -> Result<(), JsValue> {
         match self.figure(slot) {
             Some(figure) => self.start_fx(figure, fx, delay, direction),
             None => Ok(()),
         }
     }
 
-    fn float_on(&self, figure: &Figure, text: &str, kind: FloatKind, delay: Duration) -> Result<(), JsValue> {
+    fn float_on(
+        &self,
+        figure: &Figure,
+        text: &str,
+        kind: FloatKind,
+        delay: Duration,
+    ) -> Result<(), JsValue> {
         let element = node(&self.document, &figure.effects, "div", "tv-float", text)?;
         element.set_attribute("data-kind", kind.name())?;
         element.set_attribute("style", &format!("--fx-delay:{}ms", delay.as_millis()))
@@ -453,7 +505,11 @@ impl Figures {
         let bubble = node(&self.document, &figure.bubbles, "div", "tv-bubble", "")?;
         bubble.set_attribute(
             "data-kind",
-            if kind == BubbleKind::Speech { "speech" } else { "action" },
+            if kind == BubbleKind::Speech {
+                "speech"
+            } else {
+                "action"
+            },
         )?;
         if voiced {
             bubble.set_attribute("data-voice-role", "npc")?;
@@ -463,7 +519,10 @@ impl Figures {
         let hold = (ACTION_HOLD_MS + extra).min(MAXIMUM_ACTION_HOLD_MS);
         bubble.set_attribute(
             "style",
-            &format!("--appear:{appear_ms}ms;--hold:{}ms;--fade:{FADE_OUT_MS}ms", appear_ms + hold),
+            &format!(
+                "--appear:{appear_ms}ms;--hold:{}ms;--fade:{FADE_OUT_MS}ms",
+                appear_ms + hold
+            ),
         )?;
         let head = node(&self.document, &bubble, "div", "tv-bubble-head", "")?;
         node(&self.document, &head, "span", "tv-bubble-name", speaker)?;

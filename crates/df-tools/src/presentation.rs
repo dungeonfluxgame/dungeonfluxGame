@@ -225,9 +225,14 @@ pub(crate) fn scene_cast(view: &rpc::ViewMessage) -> Vec<StageActor> {
         }
         None => (None, None),
     };
-    let (Some(journey), Some(scene)) = (journey, scene) else {
-        return Vec::new();
-    };
+    match (journey, scene) {
+        (Some(journey), Some(scene)) => cast_of(journey, scene),
+        _ => Vec::new(),
+    }
+}
+
+/// [`scene_cast`] for a view already split into its journey and scene.
+fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageActor> {
     let fighting = matches!(
         rpc::JourneyPhase::try_from(journey.phase),
         Ok(rpc::JourneyPhase::Combat)
