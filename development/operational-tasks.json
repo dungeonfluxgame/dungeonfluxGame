@@ -4239,13 +4239,13 @@
         "The tier is one tested function with thresholds at 75, 50 and 25 percent and Down at zero.",
         "At each tier the display and the player's phone show the tier colour, a second non-colour cue and the matching face; identity of the character holds across variants.",
         "Combat never waits on image generation: only cached variants are swapped in.",
-        "Shake amplitude and duration scale with the share of maximum hit points lost, stay inside named bounds, and are replaced by colour-only cues under reduced motion.",
+        "Shake amplitude and duration scale with the share of maximum hit points lost, stay inside named bounds, and play for every player regardless of the device's reduce-motion setting.",
         "Mature shows wounds; restrained shows battered without blood.",
         "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
       ],
       "verification_json": [
         "Native tests for tiers, intensity bounds, pre-warm order and budget.",
-        "Browser frames through every tier on display and phone, including mid-shake and reduced motion."
+        "Browser frames through every tier on display and phone, including mid-shake."
       ],
       "brief_json": {
         "track": "PLAYABLE-TUNABLE-20261011",
