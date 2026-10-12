@@ -9,6 +9,8 @@ use df_session::submission::RepositoryError;
 use df_types::MemberId;
 
 pub(super) const STEP: &str = "beat-script-step";
+/// The submitted action entry of an authored investigation (`observe`) choice.
+pub(super) const CHOICE_ACTION: &str = "script-choice";
 const OFFER_PREFIX: &str = "beat-script-offer-";
 fn invalid<T>() -> Result<T, RepositoryError> {
     Err(RepositoryError::InvalidCandidate)
@@ -224,7 +226,7 @@ pub(super) fn contents() -> Vec<String> {
         if script.is_canonical() {
             return Vec::new();
         }
-        let mut entries = vec![STEP.into(), "script-choice".into()];
+        let mut entries = vec![STEP.into(), CHOICE_ACTION.into()];
         for beat in &script.beats {
             entries.push(beat.state.durable.clone());
             for offer in &beat.offers {

@@ -1040,6 +1040,7 @@ fn complete_action_response(
                                     Ok(rpc::RejectionCode::InvalidSelection)=>"The server rejected that character or action selection. Review the offered choices.",
                                     Ok(rpc::RejectionCode::WrongTurn)=>"It is another combatant's turn.",
                                     Ok(rpc::RejectionCode::StaleOffer)=>"That offer has ended. Choose from the current view.",
+                                    Ok(rpc::RejectionCode::CapabilityUnavailable)=>"That can't be done right now.",
                                     _=>"The server declined the input. Reconnect to recover.",
                                 }.to_owned(),
                                 None=>"The server returned no decision outcome.".to_owned(),

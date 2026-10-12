@@ -378,6 +378,33 @@ fn repeated_look_choices_share_a_proto_kind_but_keep_exact_ids_replay_and_member
 }
 
 #[test]
+fn investigation_after_begin_story_is_admitted_through_the_engine_entry() {
+    // The live server admits through `HarborEngine::decide_admitted`, not `act`'s direct
+    // staging call. An investigation carries the `script-choice` entry and must reach the
+    // registered journey even after decisions exist.
+    pack::with_test_pack(
+        loaded(include_bytes!("fixtures/investigate-beat-script.json")),
+        || {
+            let mut current = act(&prepared(), first(), 5, "begin-story");
+            for (operation, id, text) in [
+                (6, "look-crates", "Fresh rope binds the crates"),
+                (7, "look-desk", "shipping list"),
+            ] {
+                let raw = request(&current, first(), operation, id);
+                let input = wire::journey_input(&raw, first(), &current).unwrap();
+                let GameInput::Game(command) = &input else {
+                    panic!("game input")
+                };
+                let staged = model::HarborEngine
+                    .decide_admitted(&current, &input, command.operation)
+                    .unwrap_or_else(|error| panic!("look {id}: {error:?}"));
+                assert!(narration(&staged).contains(text));
+                current = staged;
+            }
+        },
+    );
+}
+#[test]
 fn player_choice_cycle_revisits_two_durable_beats_and_resumes_without_duplicate_completion() {
     use super::beat_script::*;
     let mut fixture: BeatScript =
