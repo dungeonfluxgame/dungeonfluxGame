@@ -1,0 +1,43 @@
+/* PLAY-V09: the scene plate. One composed film still replaces the painting and the cut-out
+   figures for a scene. `live_tv.rs` sets the flags this file reads on the stage root:
+   `data-plate-state` (none, pending, ready, failed), `data-plate-key`, `data-plate-loaded` (the
+   picture has loaded) and `data-plate-hold` (a new scene arrived with its plate already made:
+   the cut-outs are not drawn while it loads). On the plate layer: `data-active` (which picture
+   shows), `data-pull=focus` (the next picture is a mood edit of the shown one), `data-push` (a
+   or b: restarts the slow push-in for a new scene). The cut-outs keep their old look until the
+   picture is there, then leave the way an actor that walks off does. */
+
+.tv-plate{position:absolute;inset:0;overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .6s ease,visibility 0s .6s}
+.tv-stage[data-plate-state=ready] .tv-plate{opacity:1;visibility:visible;transition:opacity .4s ease,visibility 0s}
+.tv-stage[data-tv-mode=lobby] .tv-plate{display:none}
+/* the slow push-in toward the speaker: about 3.6% over a long scene, eased, restarted by a new scene */
+.tv-plate-zoom{position:absolute;inset:0;transform-origin:var(--head-x,50%) var(--head-y,45%);will-change:transform}
+.tv-plate[data-push=a] .tv-plate-zoom{animation:df-plate-push-a 150s cubic-bezier(.12,.55,.3,1) forwards}
+.tv-plate[data-push=b] .tv-plate-zoom{animation:df-plate-push-b 150s cubic-bezier(.12,.55,.3,1) forwards}
+@keyframes df-plate-push-a{from{transform:scale(1)}to{transform:scale(1.036)}}
+@keyframes df-plate-push-b{from{transform:scale(1)}to{transform:scale(1.036)}}
+.tv-plate-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;opacity:0;filter:blur(0);transition:opacity 1.3s ease,filter 1.3s ease}
+.tv-plate[data-active="0"] .tv-plate-img[data-i="0"],.tv-plate[data-active="1"] .tv-plate-img[data-i="1"]{opacity:1}
+/* a mood edit of the shown plate: blur out, swap, blur in */
+.tv-plate[data-pull=focus] .tv-plate-img{transition:opacity .5s ease,filter .5s ease;filter:blur(22px)}
+.tv-plate[data-pull=focus][data-active="0"] .tv-plate-img[data-i="0"],.tv-plate[data-pull=focus][data-active="1"] .tv-plate-img[data-i="1"]{filter:blur(0);transition:opacity .55s ease .4s,filter .55s ease .4s}
+/* drifting dust motes or embers, added to the light (additive), always on */
+.tv-plate-dust{position:absolute;inset:0;mix-blend-mode:screen;opacity:.6;overflow:hidden}
+.tv-plate-dust::before,.tv-plate-dust::after{content:'';position:absolute;inset:-8% 0;background-repeat:repeat}
+.tv-plate-dust::before{background-image:radial-gradient(circle at 20% 30%,#ffe2a8e6 0,#ffe2a800 calc(var(--u)*.16)),radial-gradient(circle at 70% 60%,#ffc87acc 0,#ffc87a00 calc(var(--u)*.12)),radial-gradient(circle at 45% 82%,#fff0ccd9 0,#fff0cc00 calc(var(--u)*.2));background-size:calc(var(--u)*13.5) calc(var(--u)*17.2),calc(var(--u)*17.7) calc(var(--u)*21.4),calc(var(--u)*9.9) calc(var(--u)*13.5);animation:df-dust-rise 47s linear infinite}
+.tv-plate-dust::after{background-image:radial-gradient(circle at 35% 55%,#ffdca0b3 0,#ffdca000 calc(var(--u)*.1)),radial-gradient(circle at 80% 20%,#ff9f5ab3 0,#ff9f5a00 calc(var(--u)*.14)),radial-gradient(circle at 10% 90%,#ffe9bfc0 0,#ffe9bf00 calc(var(--u)*.09));background-size:calc(var(--u)*11.3) calc(var(--u)*14.7),calc(var(--u)*15.9) calc(var(--u)*19.1),calc(var(--u)*8.2) calc(var(--u)*10.9);animation:df-dust-drift 73s linear infinite}
+@keyframes df-dust-rise{from{background-position:0 0,0 0,0 0}to{background-position:calc(var(--u)*2.1) calc(var(--u)*-17.2),calc(var(--u)*-3.1) calc(var(--u)*-21.4),calc(var(--u)*1.3) calc(var(--u)*-13.5)}}
+@keyframes df-dust-drift{from{background-position:0 0,0 0,0 0}to{background-position:calc(var(--u)*-11.3) calc(var(--u)*-7),calc(var(--u)*15.9) calc(var(--u)*-9.5),calc(var(--u)*-8.2) calc(var(--u)*-5.4)}}
+/* a slow breathing vignette */
+.tv-plate-vignette{position:absolute;inset:0;background:radial-gradient(ellipse 78% 74% at 50% 46%,transparent 52%,#02040a99 100%);animation:df-plate-breathe 9s ease-in-out infinite alternate}
+@keyframes df-plate-breathe{from{opacity:.55}to{opacity:1}}
+
+/* the scrim keeps the title and the chips readable without dimming the picture */
+.tv-stage[data-plate-state=ready][data-tv-mode=scene]>.tv-scrim{background:linear-gradient(0deg,#03060ecc 0%,#03060e66 14%,#03060e00 30%),linear-gradient(180deg,#03060e8c 0%,#03060e00 22%)}
+/* the cut-outs leave as the plate comes in; their speech bubbles stay, standing in the plate's own
+   layer beside the speaker's head */
+.tv-stage[data-plate-state=ready]:is([data-plate-loaded],[data-plate-hold]) .tv-fig-body{opacity:0;visibility:hidden;transition:opacity .35s ease,visibility 0s .35s}
+.tv-stage[data-plate-state=ready]:is([data-plate-loaded],[data-plate-hold]) .tv-mist{display:none}
+.tv-plate-bubbles{position:absolute;inset:0;z-index:9;pointer-events:none}
+.tv-plate-bubbles>.tv-fig-bubbles{position:absolute;top:0;left:0;right:auto}
+.tv-plate-bubbles>.tv-fig-bubbles[data-narrow]{width:calc(var(--u)*17.5)}

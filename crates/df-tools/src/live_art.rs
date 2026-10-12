@@ -2,7 +2,7 @@
 //!
 //! A revision names game state, so an equal revision never carries new game content, and the
 //! display's view store keeps the view it accepted. The server does publish generated art
-//! (`GameplayScene.live_backdrop`, `SceneActor.live_sprite`) as a presentation-only change that
+//! (`GameplayScene.live_backdrop`, `GameplayScene.live_plate`, `SceneActor.live_sprite`) as a presentation-only change that
 //! leaves the revision untouched, together with other equal-revision presentation (table lines,
 //! tempo cues) that the display must keep taking at the pace of its director. So the display
 //! copies only the art fields from such a view into the one it shows, and only when the scene and
@@ -40,12 +40,20 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
             .zip(&new.cast)
             .all(|(old, new)| old.id == new.id && old.sprite == new.sprite);
     let well_formed_art = well_formed(&new.live_backdrop)
+        && well_formed(&new.live_plate)
         && new.cast.iter().all(|actor| well_formed(&actor.live_sprite));
     if !same_scene || !well_formed_art {
         return false;
     }
     let mut changed = shown.live_backdrop != new.live_backdrop;
     shown.live_backdrop.clone_from(&new.live_backdrop);
+    // PLAY-V09: the scene plate, its layout and its state are generated art too.
+    changed |= shown.live_plate != new.live_plate
+        || shown.plate_layout != new.plate_layout
+        || shown.plate_state != new.plate_state;
+    shown.live_plate.clone_from(&new.live_plate);
+    shown.plate_layout.clone_from(&new.plate_layout);
+    shown.plate_state = new.plate_state;
     for (old, new) in shown.cast.iter_mut().zip(&new.cast) {
         changed |= old.live_sprite != new.live_sprite;
         old.live_sprite.clone_from(&new.live_sprite);
@@ -109,6 +117,39 @@ mod tests {
             shown,
             view("", "", "The shrine is quiet.", "The Heron Shrine")
         );
+    }
+
+    #[test]
+    fn the_scene_plate_its_layout_and_its_state_are_copied_with_the_other_art() {
+        let mut shown = view("", "", "The shrine is quiet.", "The Heron Shrine");
+        let mut newer = view("", "", "Newer narration.", "The Heron Shrine");
+        if let Some(rpc::view_message::Audience::Display(display)) = newer.audience.as_mut()
+            && let Some(scene) = display.scene.as_mut()
+        {
+            scene.live_plate = key('c');
+            scene.plate_state = rpc::PlateState::Ready as i32;
+            scene.plate_layout = Some(rpc::PlateLayout {
+                bubble_side: rpc::PlateSide::Left as i32,
+                head_x_permille: 640,
+                head_y_permille: 370,
+                head_width_permille: 120,
+                head_height_permille: 180,
+            });
+        }
+        assert!(merge_art(&mut shown, &newer));
+        let Some(rpc::view_message::Audience::Display(display)) = shown.audience.as_ref() else {
+            panic!("a display view");
+        };
+        let scene = display.scene.as_ref().unwrap();
+        assert_eq!(scene.live_plate, key('c'));
+        assert_eq!(scene.plate_state, rpc::PlateState::Ready as i32);
+        assert_eq!(scene.plate_layout.as_ref().unwrap().head_x_permille, 640);
+        assert_eq!(display.narration, "The shrine is quiet.");
+        assert!(!merge_art(&mut shown, &newer), "nothing more to copy");
+        assert!(!merge_art(
+            &mut shown,
+            &view("/gameplay/imagery/x", "", "x", "The Heron Shrine")
+        ));
     }
 
     #[test]

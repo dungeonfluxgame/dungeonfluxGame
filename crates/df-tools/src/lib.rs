@@ -33,6 +33,8 @@ mod voice_line;
 #[cfg(any(target_arch = "wasm32", test))]
 mod live_art;
 #[cfg(any(target_arch = "wasm32", test))]
+mod plate_layout;
+#[cfg(any(target_arch = "wasm32", test))]
 mod presentation;
 #[cfg(any(target_arch = "wasm32", test))]
 mod speech_capture;
