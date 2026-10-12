@@ -111,7 +111,7 @@
    `live_stage.rs` tries each side, then narrower, until the bubble overlaps no head, the roll
    panel or the screen edge, and sets `data-side` and `data-narrow` on the container. */
 .tv-fig:has(.tv-bubble){z-index:9}
-.tv-fig-bubbles{position:absolute;top:2%;z-index:9;width:calc(var(--u)*25)}
+.tv-fig-bubbles{position:absolute;top:9%;z-index:9;width:calc(var(--u)*25)}
 .tv-fig-bubbles[data-narrow]{width:calc(var(--u)*17.5)}
 .tv-fig-bubbles:not([data-side=left]){left:88%}
 .tv-fig-bubbles[data-side=left]{right:88%}
