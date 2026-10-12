@@ -1,0 +1,59 @@
+{
+  "schema": "df-hero-sources/1",
+  "file": "sources",
+  "description": "The source tags every entry in content/hero-tables resolves to. A hero records the tags of the sources it uses, and a table can see them. A licensed pack, if the owner ever obtains a written licence, would be declared here as a new tag; none is declared today and no Player's Handbook content is present.",
+  "sources": [
+    {
+      "id": "srd-5.2.1",
+      "kind": "published-open-licence",
+      "name": "System Reference Document 5.2.1",
+      "publisher": "Wizards of the Coast LLC",
+      "version": "5.2.1",
+      "language": "English",
+      "licence": {
+        "id": "CC-BY-4.0",
+        "name": "Creative Commons Attribution 4.0 International",
+        "url": "https://creativecommons.org/licenses/by/4.0/legalcode",
+        "line": "Licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0)."
+      },
+      "attribution": "This work includes material from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of the Coast LLC, available at https://www.dndbeyond.com/srd. The SRD 5.2.1 is licensed under the Creative Commons Attribution 4.0 International License, available at https://creativecommons.org/licenses/by/4.0/legalcode.",
+      "publisher_page": "https://www.dndbeyond.com/srd",
+      "local_file": "development/rules-sources/srd-5.2.1-en.pdf",
+      "sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87",
+      "standard_rules": true,
+      "requires_rights_grant": false,
+      "disclosure": "Standard 2024 fifth-edition rules content from the System Reference Document 5.2.1.",
+      "used_by": [
+        "catalog-srd.json"
+      ]
+    },
+    {
+      "id": "custom-v1",
+      "kind": "disclosed-custom",
+      "name": "DungeonFlux custom hero content, version 1",
+      "publisher": "DungeonFlux",
+      "version": "1",
+      "date": "2026-10-12",
+      "licence": {
+        "id": "project-original",
+        "name": "Original work of the DungeonFlux project",
+        "url": null,
+        "line": "Written for DungeonFlux. Not copied or paraphrased from any published non-SRD book."
+      },
+      "attribution": null,
+      "standard_rules": false,
+      "requires_rights_grant": false,
+      "mechanics_added": false,
+      "template_compatible": true,
+      "may_be_switched_off_per_table": true,
+      "ruleset_note": "Adds no rule, feat, feature, item or coin. Backgrounds use only the SRD background template (three ability scores, one SRD Origin feat, two skills, one tool, equipment worth 50 GP or 50 GP). Story cards, trades and callings are presentation aids that spend only the free choices of the standard build. See planning/generated-content.md for the disclosed, versioned custom-content rule.",
+      "disclosure": "DungeonFlux original background, not from the published rules",
+      "disclosure_for_story_content": "DungeonFlux original story content, not from the published rules",
+      "used_by": [
+        "life-path.json",
+        "jobs.json",
+        "backgrounds-custom-v1.json"
+      ]
+    }
+  ]
+}

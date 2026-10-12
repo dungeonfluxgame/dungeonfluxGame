@@ -1,0 +1,701 @@
+{
+  "schema": "df-hero-jobs/1",
+  "file": "jobs",
+  "revision": "1",
+  "source": "custom-v1",
+  "description": "Job families and specific trades (design stage 3) and the level-3 calling list (design 4.9). A trade is the hero's job on the sheet ('Soldier (harbor watch archer)'). Today the mechanics come from one SRD background (srd_background) or, when the table enables the custom-v1 pack, from custom_background. Trades flagged hero-only (a phrase instead of dossier_past_trade) are not in the NPC dossier tables. Skill leans are colour for the class's own skill picks and never grant a proficiency.",
+  "families": [
+    {
+      "id": "arms-and-guard",
+      "label": "Arms and guard",
+      "card": "arms-and-guard",
+      "carrier_weights": {
+        "soldier": 3
+      },
+      "weak": false,
+      "summary": "Posts held for wages: gate, wall, quarry, caravan."
+    },
+    {
+      "id": "road-and-river",
+      "label": "Road and river",
+      "card": "road-and-river",
+      "carrier_weights": {
+        "soldier": 2,
+        "criminal": 1
+      },
+      "weak": false,
+      "summary": "Moving goods and people by water, cart and foot."
+    },
+    {
+      "id": "shadow-and-street",
+      "label": "Shadow and street",
+      "card": "shadow-and-street",
+      "carrier_weights": {
+        "criminal": 3
+      },
+      "weak": false,
+      "summary": "Work on the margins of a town, mostly after dark."
+    },
+    {
+      "id": "faith-and-healing",
+      "label": "Faith and healing",
+      "card": "faith-and-healing",
+      "carrier_weights": {
+        "acolyte": 3
+      },
+      "weak": false,
+      "summary": "Tending the sick, the hives, the bells and the shrine lamp."
+    },
+    {
+      "id": "books-and-ledgers",
+      "label": "Books and ledgers",
+      "card": "books-and-ledgers",
+      "carrier_weights": {
+        "sage": 3
+      },
+      "weak": false,
+      "summary": "Ink, tallies, shelves and who owes what."
+    },
+    {
+      "id": "craft-and-field",
+      "label": "Craft and field",
+      "card": "craft-and-field",
+      "carrier_weights": {
+        "soldier": 1,
+        "sage": 1,
+        "acolyte": 1
+      },
+      "weak": true,
+      "follow_up": "work-taught-you",
+      "summary": "Trades and harvests; the work alone does not point to one background."
+    }
+  ],
+  "trades": [
+    {
+      "id": "quarry-guard",
+      "label": "Quarry guard",
+      "family": "arms-and-guard",
+      "phrase": "a guard on the quarry rim",
+      "srd_background": "soldier",
+      "custom_background": "quarry-guard",
+      "skill_leans": {
+        "perception": 1,
+        "survival": 1
+      },
+      "tool_leans": {
+        "dice-set": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "caravan-guard",
+      "label": "Caravan guard",
+      "family": "arms-and-guard",
+      "phrase": "a guard riding beside a trade caravan",
+      "srd_background": "soldier",
+      "custom_background": null,
+      "skill_leans": {
+        "perception": 1,
+        "animal-handling": 1
+      },
+      "tool_leans": {
+        "playing-cards": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "harbor-watch",
+      "label": "Harbor watch",
+      "family": "arms-and-guard",
+      "phrase": "a night watchman on the harbor",
+      "srd_background": "soldier",
+      "custom_background": null,
+      "skill_leans": {
+        "perception": 1,
+        "investigation": 1
+      },
+      "tool_leans": {
+        "dragonchess": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "militia-levy",
+      "label": "Militia levy",
+      "family": "arms-and-guard",
+      "phrase": "a militia levy who drilled on market days",
+      "srd_background": "soldier",
+      "custom_background": null,
+      "skill_leans": {
+        "persuasion": 1,
+        "survival": 1
+      },
+      "tool_leans": {
+        "three-dragon-ante": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "quartermaster-clerk",
+      "label": "Quartermaster's clerk",
+      "family": "arms-and-guard",
+      "dossier_past_trade": "quartermaster-clerk",
+      "srd_background": "soldier",
+      "custom_background": null,
+      "skill_leans": {
+        "investigation": 1,
+        "insight": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "toll-warden",
+      "label": "Toll warden",
+      "family": "arms-and-guard",
+      "phrase": "a toll warden at a narrow bridge",
+      "srd_background": "soldier",
+      "custom_background": "tollhouse-warden",
+      "skill_leans": {
+        "insight": 1,
+        "investigation": 1
+      },
+      "tool_leans": {
+        "dice-set": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "ferry-hand",
+      "label": "Ferry hand",
+      "family": "road-and-river",
+      "dossier_past_trade": "ferry-hand",
+      "srd_background": "soldier",
+      "custom_background": "ferry-hand",
+      "skill_leans": {
+        "perception": 1,
+        "survival": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "mule-driver",
+      "label": "Mule driver",
+      "family": "road-and-river",
+      "dossier_past_trade": "mule-driver",
+      "srd_background": "soldier",
+      "custom_background": null,
+      "skill_leans": {
+        "animal-handling": 1,
+        "survival": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "ship-cook",
+      "label": "Ship's cook",
+      "family": "road-and-river",
+      "dossier_past_trade": "ship-cook",
+      "srd_background": "soldier",
+      "custom_background": null,
+      "skill_leans": {
+        "insight": 1,
+        "persuasion": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "grain-courier",
+      "label": "Grain courier",
+      "family": "road-and-river",
+      "dossier_past_trade": "grain-courier",
+      "srd_background": "criminal",
+      "custom_background": "caravan-runner",
+      "skill_leans": {
+        "persuasion": 1,
+        "perception": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "stable-hand",
+      "label": "Stable hand",
+      "family": "road-and-river",
+      "dossier_past_trade": "stable-hand",
+      "srd_background": "soldier",
+      "custom_background": null,
+      "skill_leans": {
+        "animal-handling": 1,
+        "perception": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "caravan-runner",
+      "label": "Caravan runner",
+      "family": "road-and-river",
+      "phrase": "a runner along a caravan's long column",
+      "srd_background": "criminal",
+      "custom_background": "caravan-runner",
+      "skill_leans": {
+        "animal-handling": 1,
+        "persuasion": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "rope-walker",
+      "label": "Rope-walker",
+      "family": "shadow-and-street",
+      "dossier_past_trade": "rope-walker",
+      "srd_background": "criminal",
+      "custom_background": null,
+      "skill_leans": {
+        "acrobatics": 1,
+        "perception": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "lamplighter",
+      "label": "Lamplighter",
+      "family": "shadow-and-street",
+      "dossier_past_trade": "lamplighter",
+      "srd_background": "criminal",
+      "custom_background": "lamplighter",
+      "skill_leans": {
+        "perception": 1,
+        "investigation": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "street-singer",
+      "label": "Street singer",
+      "family": "shadow-and-street",
+      "dossier_past_trade": "street-singer",
+      "srd_background": "criminal",
+      "custom_background": "street-singer",
+      "skill_leans": {
+        "persuasion": 1,
+        "insight": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "smuggler",
+      "label": "Smuggler",
+      "family": "shadow-and-street",
+      "phrase": "a hand on the smugglers' night boats",
+      "srd_background": "criminal",
+      "custom_background": null,
+      "skill_leans": {
+        "stealth": 1,
+        "deception": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "pickpocket",
+      "label": "Pickpocket",
+      "family": "shadow-and-street",
+      "phrase": "a pickpocket working the crowds",
+      "srd_background": "criminal",
+      "custom_background": null,
+      "skill_leans": {
+        "sleight-of-hand": 1,
+        "perception": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "fences-runner",
+      "label": "Fence's runner",
+      "family": "shadow-and-street",
+      "phrase": "a runner for a receiver of stolen goods",
+      "srd_background": "criminal",
+      "custom_background": null,
+      "skill_leans": {
+        "persuasion": 1,
+        "insight": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "healers-aide",
+      "label": "Healer's aide",
+      "family": "faith-and-healing",
+      "dossier_past_trade": "healers-aide",
+      "srd_background": "acolyte",
+      "custom_background": "healers-aide",
+      "skill_leans": {
+        "medicine": 1,
+        "insight": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "bee-keeper",
+      "label": "Beekeeper's hand",
+      "family": "faith-and-healing",
+      "dossier_past_trade": "bee-keeper",
+      "srd_background": "acolyte",
+      "custom_background": "hive-tender",
+      "skill_leans": {
+        "nature": 1,
+        "animal-handling": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "bell-founder",
+      "label": "Bell-founder's apprentice",
+      "family": "faith-and-healing",
+      "dossier_past_trade": "bell-founder",
+      "srd_background": "acolyte",
+      "custom_background": null,
+      "skill_leans": {
+        "history": 1,
+        "religion": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "shrine-keeper",
+      "label": "Shrine keeper",
+      "family": "faith-and-healing",
+      "phrase": "a keeper of a roadside shrine",
+      "srd_background": "acolyte",
+      "custom_background": null,
+      "skill_leans": {
+        "religion": 1,
+        "insight": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "hospice-orderly",
+      "label": "Hospice orderly",
+      "family": "faith-and-healing",
+      "phrase": "an orderly in a hospice for the dying",
+      "srd_background": "acolyte",
+      "custom_background": "healers-aide",
+      "skill_leans": {
+        "medicine": 1,
+        "persuasion": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "counting-house-copyist",
+      "label": "Counting-house copyist",
+      "family": "books-and-ledgers",
+      "dossier_past_trade": "counting-house-copyist",
+      "srd_background": "sage",
+      "custom_background": "tally-clerk",
+      "skill_leans": {
+        "investigation": 1,
+        "history": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "scribe",
+      "label": "Scribe",
+      "family": "books-and-ledgers",
+      "phrase": "a scribe who wrote letters for anyone who paid",
+      "srd_background": "sage",
+      "custom_background": null,
+      "skill_leans": {
+        "history": 1,
+        "persuasion": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "apprentice-scholar",
+      "label": "Apprentice scholar",
+      "family": "books-and-ledgers",
+      "phrase": "an apprentice scholar in a cold lecture hall",
+      "srd_background": "sage",
+      "custom_background": null,
+      "skill_leans": {
+        "arcana": 1,
+        "history": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "bookbinder",
+      "label": "Bookbinder's hand",
+      "family": "books-and-ledgers",
+      "phrase": "a bookbinder's hand in a cramped shop",
+      "srd_background": "sage",
+      "custom_background": "bookbinders-hand",
+      "skill_leans": {
+        "investigation": 1,
+        "arcana": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "lecture-hall-porter",
+      "label": "Lecture-hall porter",
+      "family": "books-and-ledgers",
+      "phrase": "a porter who carried books and heard lectures through the door",
+      "srd_background": "sage",
+      "custom_background": null,
+      "skill_leans": {
+        "history": 1,
+        "perception": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "net-mender",
+      "label": "Net-mender",
+      "family": "craft-and-field",
+      "dossier_past_trade": "net-mender",
+      "srd_background": "soldier",
+      "custom_background": "net-mender",
+      "skill_leans": {
+        "nature": 1,
+        "survival": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "mason-apprentice",
+      "label": "Mason's apprentice",
+      "family": "craft-and-field",
+      "dossier_past_trade": "mason-apprentice",
+      "srd_background": "soldier",
+      "custom_background": "masons-apprentice",
+      "skill_leans": {
+        "investigation": 1,
+        "history": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "journeyman-tailor",
+      "label": "Journeyman tailor",
+      "family": "craft-and-field",
+      "dossier_past_trade": "journeyman-tailor",
+      "srd_background": "sage",
+      "custom_background": null,
+      "skill_leans": {
+        "insight": 1,
+        "sleight-of-hand": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "farmhand",
+      "label": "Farmhand",
+      "family": "craft-and-field",
+      "phrase": "a farmhand through every season",
+      "srd_background": "acolyte",
+      "custom_background": null,
+      "skill_leans": {
+        "animal-handling": 1,
+        "nature": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "potters-hand",
+      "label": "Potter's hand",
+      "family": "craft-and-field",
+      "phrase": "a potter's hand at the wheel and the kiln",
+      "srd_background": "sage",
+      "custom_background": null,
+      "skill_leans": {
+        "history": 1,
+        "nature": 1
+      },
+      "source": "custom-v1"
+    },
+    {
+      "id": "tanners-hand",
+      "label": "Tanner's hand",
+      "family": "craft-and-field",
+      "phrase": "a tanner's hand who never got the smell out",
+      "srd_background": "criminal",
+      "custom_background": null,
+      "skill_leans": {
+        "survival": 1,
+        "nature": 1
+      },
+      "source": "custom-v1"
+    }
+  ],
+  "callings": [
+    {
+      "class": "barbarian",
+      "subclass_id": "path-of-the-berserker",
+      "subclass_name": "Path of the Berserker",
+      "tag": "fury",
+      "line": "When it comes, the fury does not ask permission.",
+      "sheet_line": "Calling at level 3: Path of the Berserker",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "bard",
+      "subclass_id": "college-of-lore",
+      "subclass_name": "College of Lore",
+      "tag": "lore",
+      "line": "Everything is a verse waiting to be remembered.",
+      "sheet_line": "Calling at level 3: College of Lore",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "cleric",
+      "subclass_id": "life-domain",
+      "subclass_name": "Life Domain",
+      "tag": "mending",
+      "line": "You mend what the world breaks.",
+      "sheet_line": "Calling at level 3: Life Domain",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "druid",
+      "subclass_id": "circle-of-the-land",
+      "subclass_name": "Circle of the Land",
+      "tag": "land",
+      "line": "You read the land as others read a page.",
+      "sheet_line": "Calling at level 3: Circle of the Land",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "fighter",
+      "subclass_id": "champion",
+      "subclass_name": "Champion",
+      "tag": "champion",
+      "line": "You intend to win by being simply better.",
+      "sheet_line": "Calling at level 3: Champion",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "monk",
+      "subclass_id": "warrior-of-the-open-hand",
+      "subclass_name": "Warrior of the Open Hand",
+      "tag": "open-hand",
+      "line": "Your hands have learned to say what you cannot.",
+      "sheet_line": "Calling at level 3: Warrior of the Open Hand",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "paladin",
+      "subclass_id": "oath-of-devotion",
+      "subclass_name": "Oath of Devotion",
+      "tag": "devotion",
+      "line": "Your vow is the only thing you cannot put down.",
+      "sheet_line": "Calling at level 3: Oath of Devotion",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "ranger",
+      "subclass_id": "hunter",
+      "subclass_name": "Hunter",
+      "tag": "hunter",
+      "line": "You know what hunts, and how it is hunted.",
+      "sheet_line": "Calling at level 3: Hunter",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "rogue",
+      "subclass_id": "thief",
+      "subclass_name": "Thief",
+      "tag": "thief",
+      "line": "Locked things have always told you their secrets.",
+      "sheet_line": "Calling at level 3: Thief",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "sorcerer",
+      "subclass_id": "draconic-sorcery",
+      "subclass_name": "Draconic Sorcery",
+      "tag": "old-blood",
+      "line": "Something old sleeps in your blood.",
+      "sheet_line": "Calling at level 3: Draconic Sorcery",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "warlock",
+      "subclass_id": "fiend-patron",
+      "subclass_name": "Fiend Patron",
+      "tag": "bargain",
+      "line": "You made a bargain, and the other party remembers.",
+      "sheet_line": "Calling at level 3: Fiend Patron",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    },
+    {
+      "class": "wizard",
+      "subclass_id": "evoker",
+      "subclass_name": "Evoker",
+      "tag": "evoker",
+      "line": "You learned power is a craft with edges.",
+      "sheet_line": "Calling at level 3: Evoker",
+      "leaning": "A leaning, not a choice. Nothing changes until level 3, and the story may still talk you out of it.",
+      "playable_choice": false,
+      "subclass_source": "srd-5.2.1",
+      "source": "custom-v1"
+    }
+  ],
+  "reserved_calling_tags": [
+    {
+      "tag": "tactician",
+      "class": "fighter",
+      "subclass_id": null,
+      "shown": false,
+      "requires": "licensed-pack"
+    },
+    {
+      "tag": "spell-blade",
+      "class": "fighter",
+      "subclass_id": null,
+      "shown": false,
+      "requires": "licensed-pack"
+    },
+    {
+      "tag": "mind-warrior",
+      "class": "fighter",
+      "subclass_id": null,
+      "shown": false,
+      "requires": "licensed-pack"
+    }
+  ]
+}
