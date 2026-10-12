@@ -66,10 +66,8 @@ pub async fn next_frame() {
 async fn sleep_ms(milliseconds: i32) {
     let promise = Promise::new(&mut |resolve, _| {
         if let Some(window) = web_sys::window() {
-            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
-                &resolve,
-                milliseconds,
-            );
+            let _ = window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, milliseconds);
         }
     });
     let _ = JsFuture::from(promise).await;
@@ -215,8 +213,13 @@ fn fetch_order(
         budget: u32::MAX,
         ..limits
     };
-    let mut order = index.select(focus, coarse, Some(usable)).files_coarse_first();
-    for file in index.select(focus, limits, Some(usable)).files_coarse_first() {
+    let mut order = index
+        .select(focus, coarse, Some(usable))
+        .files_coarse_first();
+    for file in index
+        .select(focus, limits, Some(usable))
+        .files_coarse_first()
+    {
         if !order.contains(&file) {
             order.push(file);
         }
@@ -227,7 +230,11 @@ fn fetch_order(
 fn replan(index: &LodIndex, shared: &SharedSplats, focus: Focus, limits: Limits) -> u32 {
     let loaded = {
         let shared = shared.borrow();
-        shared.chunks.keys().copied().collect::<std::collections::HashSet<u32>>()
+        shared
+            .chunks
+            .keys()
+            .copied()
+            .collect::<std::collections::HashSet<u32>>()
     };
     let resident = |file: u32| loaded.contains(&file);
     let selection = index.select(focus, limits, Some(&resident));
@@ -242,7 +249,12 @@ fn replan(index: &LodIndex, shared: &SharedSplats, focus: Focus, limits: Limits)
 /// Runs the whole streaming load. Spawn it with `wasm_bindgen_futures::spawn_local`; it ends
 /// when the scene is complete and the budget has been stable for good, or on failure (the state
 /// becomes [`LoadState::Failed`] and the painted ground stays).
-pub async fn stream(core: Rc<GpuCore>, shared: SharedSplats, chunk_layout: JsValue, config: StreamConfig) {
+pub async fn stream(
+    core: Rc<GpuCore>,
+    shared: SharedSplats,
+    chunk_layout: JsValue,
+    config: StreamConfig,
+) {
     let started = js_sys::Date::now();
     shared.borrow_mut().state = LoadState::Loading;
     let result = run(&core, &shared, &chunk_layout, &config, started).await;
@@ -316,13 +328,14 @@ async fn run(
             }
             let planned = replan(&index, shared, focus, limits);
             let now = js_sys::Date::now() - started;
-            let mut state = shared.borrow_mut();
-            state.stats.chunks_loaded = state.chunks.len() as u32;
-            if planned > 0 && state.stats.first_draw_ms.is_none() {
-                state.stats.first_draw_ms = Some(now);
-                state.state = LoadState::Showing;
+            {
+                let mut state = shared.borrow_mut();
+                state.stats.chunks_loaded = state.chunks.len() as u32;
+                if planned > 0 && state.stats.first_draw_ms.is_none() {
+                    state.stats.first_draw_ms = Some(now);
+                    state.state = LoadState::Showing;
+                }
             }
-            drop(state);
             next_frame().await;
         }
         let settled = {
@@ -334,12 +347,13 @@ async fn run(
         };
         if settled {
             replan(&index, shared, focus, limits);
-            let mut state = shared.borrow_mut();
-            if state.stats.full_detail_ms.is_none() {
-                state.stats.full_detail_ms = Some(js_sys::Date::now() - started);
+            {
+                let mut state = shared.borrow_mut();
+                if state.stats.full_detail_ms.is_none() {
+                    state.stats.full_detail_ms = Some(js_sys::Date::now() - started);
+                }
+                state.state = LoadState::Complete;
             }
-            state.state = LoadState::Complete;
-            drop(state);
             // Stay alive for later budget changes: the ladder may raise or lower the budget.
             while shared.borrow().budget == loaded_budget {
                 sleep_ms(BUDGET_POLL_MS).await;

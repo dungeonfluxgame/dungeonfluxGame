@@ -123,9 +123,7 @@ type Table = Arc<HashMap<String, Entry>>;
 
 /// Routes exactly the splat files present in `directory` at startup.
 pub(super) fn router(directory: &Path) -> Result<Router, io::Error> {
-    let table: Table = Arc::new(
-        scan(directory)?.into_iter().collect(),
-    );
+    let table: Table = Arc::new(scan(directory)?.into_iter().collect());
     Ok(Router::new()
         .route("/assets/splat/{*path}", get(lookup))
         .with_state(table))
@@ -224,7 +222,12 @@ mod tests {
         let again = get_path(&mut router, "/assets/splat/quay.splat", conditional).await;
         assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
 
-        let meta = get_path(&mut router, "/assets/splat/pass/meta.json", HeaderMap::new()).await;
+        let meta = get_path(
+            &mut router,
+            "/assets/splat/pass/meta.json",
+            HeaderMap::new(),
+        )
+        .await;
         assert_eq!(meta.status(), StatusCode::OK);
         assert_eq!(meta.headers()[header::CONTENT_TYPE], "application/json");
         let plane = get_path(

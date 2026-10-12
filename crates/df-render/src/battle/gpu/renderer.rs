@@ -11,10 +11,9 @@ use super::{
     shaders,
     splat_engine::{FrameParams, LoadState, SharedSplats, SplatEngine},
     sys::{
-        BUFFER_COPY_DST, BUFFER_MAP_READ, BUFFER_QUERY_RESOLVE, BUFFER_STORAGE, BUFFER_UNIFORM,
-        BUFFER_VERTEX,
-        BUFFER_COPY_SRC, Descriptor, GpuBindGroup, GpuBuffer, GpuQuerySet, GpuRenderPass,
-        GpuRenderPipeline, GpuTexture, array, float_array,
+        BUFFER_COPY_DST, BUFFER_COPY_SRC, BUFFER_MAP_READ, BUFFER_QUERY_RESOLVE, BUFFER_STORAGE,
+        BUFFER_UNIFORM, BUFFER_VERTEX, Descriptor, GpuBindGroup, GpuBuffer, GpuQuerySet,
+        GpuRenderPass, GpuRenderPipeline, GpuTexture, array, float_array,
     },
     textures::{self, ImageTexture},
 };
@@ -436,7 +435,11 @@ impl Renderer {
         );
         core.queue
             .write_buffer(&terrain_buffer, 0.0, &float_array(&terrain_data));
-        let terrain_group = bind_group(&core, &terrain_layout, vec![entry_buffer(0, &terrain_buffer)]);
+        let terrain_group = bind_group(
+            &core,
+            &terrain_layout,
+            vec![entry_buffer(0, &terrain_buffer)],
+        );
         let frame_group = bind_group(
             &core,
             &core.layout_frame,
@@ -471,9 +474,9 @@ impl Renderer {
             }
             None => None,
         };
-        let initial_budget = splat.as_ref().map_or(DEFAULT_SPLAT_CAPACITY, |scene| {
-            scene.engine.capacity()
-        });
+        let initial_budget = splat
+            .as_ref()
+            .map_or(DEFAULT_SPLAT_CAPACITY, |scene| scene.engine.capacity());
         let count_readback = buffer(&core, 16, BUFFER_COPY_DST | BUFFER_MAP_READ);
         let timing = core.timestamps.then(|| Timing {
             set: core.device.create_query_set(
@@ -564,7 +567,9 @@ impl Renderer {
 
     /// The loader's side of the splat scene, when this renderer has one.
     pub fn splat_shared(&self) -> Option<SharedSplats> {
-        self.splat.as_ref().map(|scene| scene.engine.shared().clone())
+        self.splat
+            .as_ref()
+            .map(|scene| scene.engine.shared().clone())
     }
 
     /// The bind group layout a resident chunk is built against.
@@ -718,7 +723,9 @@ impl Renderer {
         if has_splats && self.quality.splat_scale > MIN_SPLAT_SCALE + 0.01 {
             self.quality.splat_scale = (self.quality.splat_scale - 0.12).max(MIN_SPLAT_SCALE);
         } else if has_splats && self.quality.splat_budget > MIN_SPLAT_BUDGET {
-            self.set_budget(((self.quality.splat_budget as f32 * 0.75) as u32).max(MIN_SPLAT_BUDGET));
+            self.set_budget(
+                ((self.quality.splat_budget as f32 * 0.75) as u32).max(MIN_SPLAT_BUDGET),
+            );
         } else if has_splats && self.quality.min_contribution < MAX_MIN_CONTRIBUTION {
             self.quality.min_contribution =
                 (self.quality.min_contribution * 1.7).min(MAX_MIN_CONTRIBUTION);
@@ -1190,6 +1197,7 @@ impl Renderer {
     ) -> bool {
         let quality = self.quality;
         let stamps = measuring.then(|| self.stamps(0));
+        let depth_off = self.debug_switches & 1 != 0;
         let Some(splats) = &mut self.splat else {
             return false;
         };
@@ -1245,8 +1253,16 @@ impl Renderer {
         .rotation();
         let shift = layer.translate + Vec3::new(0.0, layer.offset_y, 0.0);
         let placement = [
-            turn.x, turn.y, turn.z, turn.w, shift.x, shift.y, shift.z, layer.scale,
+            turn.x,
+            turn.y,
+            turn.z,
+            turn.w,
+            shift.x,
+            shift.y,
+            shift.z,
+            layer.scale,
         ];
+        splats.engine.depth_threshold = if depth_off { 2.0 } else { 0.4 };
         splats.engine.prepare(encoder, &params, placement, stamps)
     }
 
@@ -1330,9 +1346,7 @@ impl Renderer {
                 )
                 .build(),
         );
-        if self.debug_switches & 1 == 0 {
-            splats.engine.resolve(&pass);
-        }
+        splats.engine.resolve(&pass);
         pass
     }
 
@@ -1352,7 +1366,9 @@ impl Renderer {
             return;
         };
         if let Some(scene) = &self.splat {
-            scene.engine.copy_visible_count(&compute, &self.count_readback);
+            scene
+                .engine
+                .copy_visible_count(&compute, &self.count_readback);
         }
         render.resolve_query_set(&timing.set, 0, 8, &timing.resolve, 0.0);
         render.copy_buffer_to_buffer(&timing.resolve, 0.0, &timing.read, 0.0, 64.0);
@@ -1366,10 +1382,11 @@ impl Renderer {
         let read = timing.read.clone();
         let count = self.count_readback.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let stamps = wasm_bindgen_futures::JsFuture::from(read.map_async(BUFFER_MAP_READ)).await;
+            let stamps =
+                wasm_bindgen_futures::JsFuture::from(read.map_async(BUFFER_MAP_READ)).await;
             if stamps.is_ok() {
                 let values = js_sys::BigUint64Array::new(&read.get_mapped_range());
-                let at = |index: u32| u64::from(values.get_index(index)) as f64;
+                let at = |index: u32| values.get_index(index) as f64;
                 let ms = |first: u32| ((at(first + 1) - at(first)) / 1.0e6).max(0.0) as f32;
                 let begin = (0..8).step_by(2).map(&at).fold(f64::MAX, f64::min);
                 let end = (1..8).step_by(2).map(&at).fold(0.0, f64::max);
@@ -1382,7 +1399,8 @@ impl Renderer {
                 blend(&mut value.gpu_ms, ((end - begin) / 1.0e6).max(0.0) as f32);
             }
             read.unmap();
-            let counted = wasm_bindgen_futures::JsFuture::from(count.map_async(BUFFER_MAP_READ)).await;
+            let counted =
+                wasm_bindgen_futures::JsFuture::from(count.map_async(BUFFER_MAP_READ)).await;
             if counted.is_ok() {
                 let words = js_sys::Uint32Array::new(&count.get_mapped_range());
                 measured.borrow_mut().visible = words.get_index(0);

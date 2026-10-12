@@ -195,7 +195,7 @@ stand in (it decodes WebP with macOS `sips`):
 ```sh
 cargo run --release -p df-render --example splat_fit -- <scan>/v1 out.json \
   --orient 180,0,0 --scale 1 --offset-y 0 --translate 0,0,0 --grid -9,-6.75,1.5,12,9 \
-  --finest 1 --coarsest 3 [--search -45,45,-45,45,3]
+  --finest 1 [--search -45,45,-45,45,3]
 ```
 
 `--search` slides the grid over a region and ranks open, flat windows; the printed `terrain` and

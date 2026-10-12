@@ -45,17 +45,18 @@ pub use model::{
 };
 pub use scene_file::{
     Attribution, BackdropLayer, BattleScene, DEFAULT_SCENE_ID, Distribution, GroundLayer,
-    SceneFileError, SplatFormat, SplatGrade, SplatLayer, embedded_ids, load_embedded, parse as parse_scene,
+    SceneFileError, SplatFormat, SplatGrade, SplatLayer, embedded_ids, load_embedded,
+    parse as parse_scene,
 };
 pub use splat::{
-    ProceduralGround, RECORD_WORDS, RawSplat, SogLoader, SogMeta, SogPlanes, Splat, SplatCloud, SplatError,
-    SplatFileLoader, SplatLoader, SplatSorter, SplatTransform, encode_splat_file, orientation_from_euler_deg,
-    pack_record, pack_records,
+    ProceduralGround, RECORD_WORDS, RawSplat, SogLoader, SogMeta, SogPlanes, Splat, SplatCloud,
+    SplatError, SplatFileLoader, SplatLoader, SplatSorter, SplatTransform, counting_order,
+    depth_sort_key, encode_splat_file, orientation_from_euler_deg, pack_record, pack_records,
 };
 pub use stage::{FigureView, FlashView, FrameView, Stage, StageError};
 pub use terrain::{
-    GroundPoint, GroundSettings, HeightField, TerrainError, WalkSettings, blocked_cells, blocker_density,
-    estimate_height_field, estimate_height_field_covered,
+    GroundPoint, GroundSettings, HeightField, TerrainError, WalkSettings, blocked_cells,
+    blocker_density, estimate_height_field, estimate_height_field_covered,
 };
 pub use theme::{ColorGrade, Theme};
 

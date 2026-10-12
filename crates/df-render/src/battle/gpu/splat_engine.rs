@@ -18,9 +18,10 @@ use super::{
     core::{GpuCore, UnavailableReason},
     splat_shaders,
     sys::{
-        BUFFER_COPY_DST, BUFFER_COPY_SRC, BUFFER_INDIRECT, BUFFER_STORAGE, BUFFER_UNIFORM, Descriptor, GpuBindGroup,
-        GpuBuffer, GpuCommandEncoder, GpuComputePipeline, GpuRenderPass, GpuRenderPipeline,
-        GpuTexture, SHADER_COMPUTE, SHADER_FRAGMENT, SHADER_VERTEX, array, float_array,
+        BUFFER_COPY_DST, BUFFER_COPY_SRC, BUFFER_INDIRECT, BUFFER_STORAGE, BUFFER_UNIFORM,
+        Descriptor, GpuBindGroup, GpuBuffer, GpuCommandEncoder, GpuComputePipeline, GpuRenderPass,
+        GpuRenderPipeline, GpuTexture, SHADER_COMPUTE, SHADER_FRAGMENT, SHADER_VERTEX, array,
+        float_array,
     },
 };
 use crate::battle::{
@@ -176,6 +177,9 @@ pub struct SplatEngine {
     decode_group: GpuBindGroup,
     targets: Option<SplatTargets>,
     active: u32,
+    /// Accumulated coverage a pixel needs before the scan counts as a surface for depth. Above 1
+    /// the scan writes no depth at all (used to show what occlusion hides).
+    pub depth_threshold: f32,
 }
 
 fn entry(binding: u32, visibility: u32, kind: &str, config: JsValue) -> JsValue {
@@ -188,12 +192,24 @@ fn entry(binding: u32, visibility: u32, kind: &str, config: JsValue) -> JsValue 
 
 fn storage(read_only: bool) -> JsValue {
     Descriptor::new()
-        .with("type", if read_only { "read-only-storage" } else { "storage" })
+        .with(
+            "type",
+            if read_only {
+                "read-only-storage"
+            } else {
+                "storage"
+            },
+        )
         .build()
 }
 
 fn uniform_entry(binding: u32, visibility: u32) -> JsValue {
-    entry(binding, visibility, "buffer", Descriptor::new().with("type", "uniform").build())
+    entry(
+        binding,
+        visibility,
+        "buffer",
+        Descriptor::new().with("type", "uniform").build(),
+    )
 }
 
 fn storage_entry(binding: u32, visibility: u32, read_only: bool) -> JsValue {
@@ -205,7 +221,9 @@ fn data_texture(binding: u32, visibility: u32) -> JsValue {
         binding,
         visibility,
         "texture",
-        Descriptor::new().with("sampleType", "unfilterable-float").build(),
+        Descriptor::new()
+            .with("sampleType", "unfilterable-float")
+            .build(),
     )
 }
 
@@ -226,7 +244,10 @@ fn buffer(core: &GpuCore, size: usize, usage: u32) -> GpuBuffer {
 fn buffer_entry(binding: u32, buffer: &GpuBuffer) -> JsValue {
     Descriptor::new()
         .with("binding", binding)
-        .with("resource", Descriptor::new().with("buffer", buffer.clone()).build())
+        .with(
+            "resource",
+            Descriptor::new().with("buffer", buffer.clone()).build(),
+        )
         .build()
 }
 
@@ -351,9 +372,11 @@ impl SplatEngine {
         };
         let project_source = splat_shaders::project();
         let sort_layout = [&layouts.sort];
-        let draw_module = core
-            .device
-            .create_shader_module(&Descriptor::new().with("code", splat_shaders::draw().as_str()).build());
+        let draw_module = core.device.create_shader_module(
+            &Descriptor::new()
+                .with("code", splat_shaders::draw().as_str())
+                .build(),
+        );
         let resolve_module = core.device.create_shader_module(
             &Descriptor::new()
                 .with("code", splat_shaders::composite().as_str())
@@ -380,7 +403,14 @@ impl SplatEngine {
                 .with(
                     "primitive",
                     Descriptor::new()
-                        .with("topology", if depth { "triangle-list" } else { "triangle-strip" })
+                        .with(
+                            "topology",
+                            if depth {
+                                "triangle-list"
+                            } else {
+                                "triangle-strip"
+                            },
+                        )
                         .with("cullMode", "none")
                         .build(),
                 );
@@ -417,8 +447,18 @@ impl SplatEngine {
                 "decode",
                 &[&layouts.decode_chunk, &layouts.decode_global],
             ),
-            draw: render(&draw_module.clone().into(), &layouts.draw, draw_targets, false),
-            resolve: render(&resolve_module.clone().into(), &layouts.resolve, resolve_targets, true),
+            draw: render(
+                &draw_module.clone().into(),
+                &layouts.draw,
+                draw_targets,
+                false,
+            ),
+            resolve: render(
+                &resolve_module.clone().into(),
+                &layouts.resolve,
+                resolve_targets,
+                true,
+            ),
         };
         let capacity_usize = capacity as usize;
         let uniform = buffer(&core, UNIFORM_BYTES, BUFFER_UNIFORM | BUFFER_COPY_DST);
@@ -431,8 +471,16 @@ impl SplatEngine {
         let keys = buffer(&core, capacity_usize * 4, BUFFER_STORAGE);
         let order = buffer(&core, capacity_usize * 4, BUFFER_STORAGE);
         let hist = buffer(&core, BINS * 4, BUFFER_STORAGE | BUFFER_COPY_DST);
-        let counter = buffer(&core, 16, BUFFER_STORAGE | BUFFER_COPY_DST | BUFFER_COPY_SRC);
-        let args = buffer(&core, 16, BUFFER_STORAGE | BUFFER_INDIRECT | BUFFER_COPY_DST);
+        let counter = buffer(
+            &core,
+            16,
+            BUFFER_STORAGE | BUFFER_COPY_DST | BUFFER_COPY_SRC,
+        );
+        let args = buffer(
+            &core,
+            16,
+            BUFFER_STORAGE | BUFFER_INDIRECT | BUFFER_COPY_DST,
+        );
         let ranges = buffer(&core, MAX_RANGES * 16, BUFFER_STORAGE | BUFFER_COPY_DST);
         let placement = buffer(&core, 32, BUFFER_UNIFORM | BUFFER_COPY_DST);
         let sort_group = group(
@@ -498,6 +546,7 @@ impl SplatEngine {
             decode_group,
             targets: None,
             active: 0,
+            depth_threshold: 0.4,
         })
     }
 
@@ -533,8 +582,12 @@ impl SplatEngine {
             old.colour.destroy_texture();
         }
         let usage = super::core::COLOUR_TARGET_USAGE;
-        let accum = self.core.create_texture(width, height, ACCUM_FORMAT, usage, 1);
-        let colour = self.core.create_texture(width, height, "rgba8unorm", usage, 1);
+        let accum = self
+            .core
+            .create_texture(width, height, ACCUM_FORMAT, usage, 1);
+        let colour = self
+            .core
+            .create_texture(width, height, "rgba8unorm", usage, 1);
         let group = group(
             &self.core,
             &self.layouts.resolve,
@@ -627,9 +680,11 @@ impl SplatEngine {
             .write_buffer(&self.placement, 0.0, &float_array(&placement));
         if !plan.ranges.is_empty() {
             let words: Vec<u32> = plan.ranges.iter().flatten().copied().collect();
-            self.core
-                .queue
-                .write_buffer(&self.ranges, 0.0, &js_sys::Uint32Array::from(words.as_slice()));
+            self.core.queue.write_buffer(
+                &self.ranges,
+                0.0,
+                &js_sys::Uint32Array::from(words.as_slice()),
+            );
         }
         let shared = self.shared.borrow();
         let pass = encoder.begin_compute_pass(&Descriptor::new().build());
@@ -657,14 +712,24 @@ impl SplatEngine {
         data.extend_from_slice(&frame.view);
         data.extend_from_slice(&frame.view_proj);
         data.extend_from_slice(&[frame.eye[0], frame.eye[1], frame.eye[2], frame.sort_range_m]);
-        data.extend_from_slice(&[frame.viewport.0, frame.viewport.1, frame.focal_px, frame.near_cull_m]);
+        data.extend_from_slice(&[
+            frame.viewport.0,
+            frame.viewport.1,
+            frame.focal_px,
+            frame.near_cull_m,
+        ]);
         data.extend_from_slice(&[
             frame.min_extent_px,
             frame.min_contribution,
             1.0 / 255.0,
             self.active as f32,
         ]);
-        data.extend_from_slice(&[frame.exposure_gain, frame.saturation, frame.ambient, frame.pool_m]);
+        data.extend_from_slice(&[
+            frame.exposure_gain,
+            frame.saturation,
+            frame.ambient,
+            frame.pool_m,
+        ]);
         data.extend_from_slice(&[frame.tint[0], frame.tint[1], frame.tint[2], 0.0]);
         data.extend_from_slice(&[
             frame.pool_centre.0,
@@ -676,7 +741,7 @@ impl SplatEngine {
             frame.projection_m10,
             frame.projection_m14,
             frame.depth_bias_m,
-            0.4,
+            self.depth_threshold,
         ]);
         data.extend_from_slice(&[frame.sky[0], frame.sky[1], frame.sky[2], 0.0]);
         data.extend_from_slice(&frame.clip);
@@ -747,16 +812,20 @@ pub fn make_chunk(
 ) -> ChunkGpu {
     let params = buffer(core, CHUNK_PARAM_BYTES, BUFFER_UNIFORM | BUFFER_COPY_DST);
     let (mins, maxs) = means_range;
-    let mut constants = vec![mins[0], mins[1], mins[2], 0.0, maxs[0], maxs[1], maxs[2], 0.0];
+    let mut constants = vec![
+        mins[0], mins[1], mins[2], 0.0, maxs[0], maxs[1], maxs[2], 0.0,
+    ];
     constants.extend_from_slice(&[0.0; 4]);
-    core.queue.write_buffer(&params, 0.0, &float_array(&constants));
+    core.queue
+        .write_buffer(&params, 0.0, &float_array(&constants));
     core.queue.write_buffer(
         &params,
         32.0,
         &js_sys::Uint32Array::from(&[width, 0, 0, 0][..]),
     );
     let books = buffer(core, codebooks.len() * 4, BUFFER_STORAGE | BUFFER_COPY_DST);
-    core.queue.write_buffer(&books, 0.0, &float_array(codebooks));
+    core.queue
+        .write_buffer(&books, 0.0, &float_array(codebooks));
     let mut entries = vec![buffer_entry(0, &params)];
     for (index, texture) in textures.iter().enumerate() {
         entries.push(

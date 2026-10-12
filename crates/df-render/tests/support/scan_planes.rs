@@ -57,7 +57,9 @@ pub fn decode_webp(path: &Path) -> Option<(Vec<u8>, usize, usize)> {
     let mut rgba = Vec::with_capacity(width * rows * 4);
     for row in 0..rows {
         let source = if top_down { row } else { rows - 1 - row };
-        for pixel in pixels[source * stride..source * stride + width * bytes_per_pixel].chunks_exact(bytes_per_pixel) {
+        for pixel in pixels[source * stride..source * stride + width * bytes_per_pixel]
+            .chunks_exact(bytes_per_pixel)
+        {
             // BMP stores BGR(A).
             let alpha = if bytes_per_pixel == 4 { pixel[3] } else { 255 };
             rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], alpha]);

@@ -9,7 +9,10 @@ mod scan_planes;
 
 use df_render::battle::{LodIndex, Vec3};
 
-fn chunk_or_skip(scene: &str, chunk: &str) -> Option<(df_render::battle::SogMeta, Vec<df_render::battle::RawSplat>)> {
+fn chunk_or_skip(
+    scene: &str,
+    chunk: &str,
+) -> Option<(df_render::battle::SogMeta, Vec<df_render::battle::RawSplat>)> {
     let Some(root) = scan_planes::scan_directory() else {
         eprintln!("skipped: no downloaded scans (set DF_SPLAT_SCAN_DIR)");
         return None;
@@ -37,7 +40,13 @@ fn a_real_lossy_chunk_decodes_to_plausible_positions_scales_colours_and_rotation
     let n = splats.len() as f32;
     // Colour: this autumn scene is bright and warm; the independent decoder's means are
     // (0.733, 0.724, 0.660) over the first chunk.
-    let mean = |channel: usize| splats.iter().map(|s| s.colour[channel] as f32 / 255.0).sum::<f32>() / n;
+    let mean = |channel: usize| {
+        splats
+            .iter()
+            .map(|s| s.colour[channel] as f32 / 255.0)
+            .sum::<f32>()
+            / n
+    };
     for (channel, expected) in [(0, 0.733), (1, 0.724), (2, 0.660)] {
         assert!(
             (mean(channel) - expected).abs() < 0.02,
@@ -75,7 +84,10 @@ fn a_real_lossy_chunk_decodes_to_plausible_positions_scales_colours_and_rotation
     let mut xs: Vec<f32> = splats.iter().map(|s| s.position.x).collect();
     xs.sort_by(f32::total_cmp);
     let (low, high) = (xs[xs.len() / 100], xs[xs.len() * 99 / 100]);
-    assert!((low + 52.3).abs() < 2.0 && (high - 56.7).abs() < 2.0, "x percentiles {low} {high}");
+    assert!(
+        (low + 52.3).abs() < 2.0 && (high - 56.7).abs() < 2.0,
+        "x percentiles {low} {high}"
+    );
 }
 
 #[test]
@@ -108,5 +120,9 @@ fn a_real_lod_index_parses_and_selects_within_budget_around_a_point() {
     assert_eq!(plan.total, selection.total);
     assert!(!plan.truncated);
     // Everything planned lives in a chunk file the index names.
-    assert!(plan.jobs.iter().all(|job| (job.file as usize) < index.files().len()));
+    assert!(
+        plan.jobs
+            .iter()
+            .all(|job| (job.file as usize) < index.files().len())
+    );
 }

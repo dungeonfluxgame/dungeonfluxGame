@@ -97,7 +97,9 @@ struct FileNode {
 fn parse_file_name(name: &str) -> Option<ChunkFile> {
     let folder = name.strip_suffix("/meta.json")?;
     let (level, chunk) = folder.split_once('_')?;
-    let digits = |text: &str| !text.is_empty() && text.len() <= 6 && text.bytes().all(|b| b.is_ascii_digit());
+    let digits = |text: &str| {
+        !text.is_empty() && text.len() <= 6 && text.bytes().all(|b| b.is_ascii_digit())
+    };
     if !digits(level) || !digits(chunk) {
         return None;
     }
@@ -213,6 +215,8 @@ pub struct Limits {
 pub struct Pick {
     pub level: u32,
     pub range: Range,
+    /// Distance from the focus to the leaf's box, in scan units: nearer chunks load first.
+    pub distance: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -224,16 +228,21 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// The chunk files the selection reads, in first-use order, finest last so coarse arrives first.
+    /// The chunk files the selection reads: coarse levels first (so something recognisable draws
+    /// at once), and within a level the file nearest the focus first.
     pub fn files_coarse_first(&self) -> Vec<u32> {
-        let mut seen: Vec<(u32, u32)> = Vec::new();
+        let mut seen: Vec<(u32, u32, f32)> = Vec::new();
         for pick in &self.picks {
-            if !seen.iter().any(|(_, file)| *file == pick.range.file) {
-                seen.push((pick.level, pick.range.file));
+            match seen
+                .iter_mut()
+                .find(|(_, file, _)| *file == pick.range.file)
+            {
+                Some(entry) => entry.2 = entry.2.min(pick.distance),
+                None => seen.push((pick.level, pick.range.file, pick.distance)),
             }
         }
-        seen.sort_by_key(|(level, file)| (std::cmp::Reverse(*level), *file));
-        seen.into_iter().map(|(_, file)| file).collect()
+        seen.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.total_cmp(&b.2)).then(a.1.cmp(&b.1)));
+        seen.into_iter().map(|(_, file, _)| file).collect()
     }
 }
 
@@ -286,7 +295,8 @@ impl Selection {
                     plan.truncated = true;
                     break;
                 }
-                plan.ranges.push([offset, count, plan.total + job_total, job_total]);
+                plan.ranges
+                    .push([offset, count, plan.total + job_total, job_total]);
                 job_total += count;
             }
             if job_total > 0 {
@@ -330,12 +340,15 @@ impl LodIndex {
     ) -> Selection {
         let radius = focus.radius.max(1e-3);
         let span = limits.coarsest.saturating_sub(limits.finest);
-        let wanted: Vec<u32> = self
+        let distances: Vec<f32> = self
             .leaves
             .iter()
-            .map(|leaf| {
-                let distance = distance_to_box(focus.centre, leaf.min, leaf.max);
-                if distance <= radius {
+            .map(|leaf| distance_to_box(focus.centre, leaf.min, leaf.max))
+            .collect();
+        let wanted: Vec<u32> = distances
+            .iter()
+            .map(|distance| {
+                if *distance <= radius {
                     0
                 } else {
                     (distance / radius).log2().ceil().max(0.0) as u32
@@ -346,9 +359,10 @@ impl LodIndex {
         for bias in 0..=span {
             let mut picks = Vec::new();
             let mut total = 0u64;
-            for (leaf, step) in self.leaves.iter().zip(&wanted) {
+            for (position, (leaf, step)) in self.leaves.iter().zip(&wanted).enumerate() {
                 let want = (limits.finest + step + bias).min(limits.coarsest);
-                if let Some(pick) = choose(leaf, want, limits, loaded) {
+                if let Some(mut pick) = choose(leaf, want, limits, loaded) {
+                    pick.distance = distances[position];
                     total += u64::from(pick.range.count);
                     picks.push(pick);
                 }
@@ -375,7 +389,11 @@ fn choose(
             .copied()
             .flatten()
             .filter(|range| loaded.is_none_or(|loaded| loaded(range.file)))
-            .map(|range| Pick { level, range })
+            .map(|range| Pick {
+                level,
+                range,
+                distance: 0.0,
+            })
     };
     (want..=limits.coarsest)
         .find_map(resident)
@@ -434,7 +452,10 @@ mod tests {
         let bad_file = synthetic().replace("\"file\":3", "\"file\":9");
         assert_eq!(LodIndex::parse(&bad_file).unwrap_err(), LodError::FileIndex);
         // A range whose file belongs to a different level than its key is inconsistent.
-        let crossed = synthetic().replace("\"1\":{\"file\":1,\"offset\":0,\"count\":500}", "\"1\":{\"file\":2,\"offset\":0,\"count\":500}");
+        let crossed = synthetic().replace(
+            "\"1\":{\"file\":1,\"offset\":0,\"count\":500}",
+            "\"1\":{\"file\":2,\"offset\":0,\"count\":500}",
+        );
         assert_eq!(LodIndex::parse(&crossed).unwrap_err(), LodError::FileIndex);
     }
 
@@ -486,7 +507,12 @@ mod tests {
         assert_eq!(second.picks[0].level, 0);
         assert_eq!(second.picks[1].level, 2);
         let nothing = |_file: u32| false;
-        assert!(index.select(focus_at(0.5, 100.0), limits(u32::MAX), Some(&nothing)).picks.is_empty());
+        assert!(
+            index
+                .select(focus_at(0.5, 100.0), limits(u32::MAX), Some(&nothing))
+                .picks
+                .is_empty()
+        );
     }
 
     #[test]
@@ -504,7 +530,11 @@ mod tests {
             let selection = index.select(focus_at(500.0, 600.0), limits(budget), None);
             let coarsest_possible = 250 + 250 + 5;
             if budget >= coarsest_possible {
-                assert!(selection.total <= budget, "budget {budget} total {}", selection.total);
+                assert!(
+                    selection.total <= budget,
+                    "budget {budget} total {}",
+                    selection.total
+                );
             }
         }
     }

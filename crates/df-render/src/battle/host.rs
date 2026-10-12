@@ -19,9 +19,7 @@ use super::{
         textures,
     },
     hud::Hud,
-    scene_file::{
-        BackdropLayer, BattleScene, GroundLayer, SplatFormat, SplatGrade, SplatLayer,
-    },
+    scene_file::{BackdropLayer, BattleScene, GroundLayer, SplatFormat, SplatGrade, SplatLayer},
     splat::{
         ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, SplatFileLoader, SplatLoader,
         SplatTransform, pack_records,
@@ -370,6 +368,21 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
         canvas.set_height(height);
     }
     let frame = state.stage.frame();
+    // Where the figures stand, written with the periodic stats (for harnesses and diagnostics).
+    let figures: Vec<String> = if (state.frames + 1).is_multiple_of(state.stats_every) {
+        frame
+            .figures
+            .iter()
+            .map(|figure| {
+                format!(
+                    "{}@{:.2},{:.2},{:.2}",
+                    figure.name, figure.position.x, figure.position.y, figure.position.z
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     renderer.render(&frame, state.stage.scene(), (width, height));
     renderer.observe_frame_ms(delta_ms as f32);
     state.frames += 1;
@@ -398,9 +411,14 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
         state.fallback_applied = true;
         renderer.set_painted(&ground.stem, &backdrop.stem);
         state.stage.replace_painted_layers(ground, backdrop);
-        let _ = state.host.set_attribute("data-battlefield-fallback", "painted");
+        let _ = state
+            .host
+            .set_attribute("data-battlefield-fallback", "painted");
     }
     if state.frames.is_multiple_of(state.stats_every) {
+        let _ = state
+            .host
+            .set_attribute("data-battlefield-figures", &figures.join(";"));
         let stats = renderer.stats();
         let summary = format!(
             "ms={delta_ms:.1} gpu_ms={:.1} sort_ms={:.2} splat_ms={:.2} overlay_ms={:.2} post_ms={:.2} visible={} planned={} budget={} min_contribution={:.2} scale={:.2} splat_scale={:.2} frames={}",
@@ -474,7 +492,8 @@ fn spawn_splat_load(
                 return;
             };
             // Finest detail covers the grid and a margin; the scene file may widen it.
-            let derived = 0.5 * (grid_width_m * grid_width_m + grid_depth_m * grid_depth_m).sqrt() + 3.0;
+            let derived =
+                0.5 * (grid_width_m * grid_width_m + grid_depth_m * grid_depth_m).sqrt() + 3.0;
             let (finest, coarsest) = layer.levels.unwrap_or((0, 0));
             splat_stream::stream(
                 gpu,

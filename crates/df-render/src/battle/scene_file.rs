@@ -259,12 +259,12 @@ impl SplatGrade {
         pool_m: 0.0,
     };
     pub const DUSK: Self = Self {
-        exposure_ev: -0.55,
-        saturation: 0.85,
-        tint: [1.06, 0.88, 0.76],
+        exposure_ev: -0.3,
+        saturation: 0.9,
+        tint: [1.04, 0.92, 0.82],
         sky: [0.20, 0.17, 0.24],
-        ambient: 0.62,
-        pool_m: 11.0,
+        ambient: 0.7,
+        pool_m: 12.0,
     };
     pub const NIGHT: Self = Self {
         exposure_ev: -1.3,
@@ -397,10 +397,19 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
     )
     .map_err(SceneFileError::Grid)?;
     if let Some(terrain) = file.terrain {
-        let heights = terrain.heights_cm.iter().map(|cm| *cm as f32 * 0.01).collect();
-        let field =
-            HeightField::new(terrain.origin, terrain.step_m, terrain.cols, terrain.rows, heights)
-                .map_err(SceneFileError::Terrain)?;
+        let heights = terrain
+            .heights_cm
+            .iter()
+            .map(|cm| *cm as f32 * 0.01)
+            .collect();
+        let field = HeightField::new(
+            terrain.origin,
+            terrain.step_m,
+            terrain.cols,
+            terrain.rows,
+            heights,
+        )
+        .map_err(SceneFileError::Terrain)?;
         grid = grid.with_terrain(field);
     }
     let distribution = match file.distribution.as_deref() {
@@ -508,9 +517,7 @@ fn validate_splat(splat: FileSplat) -> Result<SplatLayer, SceneFileError> {
         return Err(SceneFileError::Splat("orient_deg"));
     }
     let levels = match splat.levels {
-        Some([finest, coarsest]) if finest <= coarsest && coarsest < 32 => {
-            Some((finest, coarsest))
-        }
+        Some([finest, coarsest]) if finest <= coarsest && coarsest < 32 => Some((finest, coarsest)),
         Some(_) => return Err(SceneFileError::Splat("levels")),
         None => None,
     };
@@ -563,11 +570,16 @@ fn resolve_grade(file: FileGrade) -> Result<SplatGrade, SceneFileError> {
     grade.sky = file.sky.unwrap_or(grade.sky);
     grade.ambient = file.ambient.unwrap_or(grade.ambient);
     grade.pool_m = file.pool_m.unwrap_or(grade.pool_m);
-    let finite = [grade.exposure_ev, grade.saturation, grade.ambient, grade.pool_m]
-        .into_iter()
-        .chain(grade.tint)
-        .chain(grade.sky)
-        .all(f32::is_finite);
+    let finite = [
+        grade.exposure_ev,
+        grade.saturation,
+        grade.ambient,
+        grade.pool_m,
+    ]
+    .into_iter()
+    .chain(grade.tint)
+    .chain(grade.sky)
+    .all(f32::is_finite);
     if !finite
         || !(-6.0..=6.0).contains(&grade.exposure_ev)
         || !(0.0..=3.0).contains(&grade.saturation)
@@ -741,7 +753,9 @@ mod tests {
         ));
     }
 
-    fn scan_scene(edit: impl FnOnce(&mut serde_json::Value)) -> Result<BattleScene, SceneFileError> {
+    fn scan_scene(
+        edit: impl FnOnce(&mut serde_json::Value),
+    ) -> Result<BattleScene, SceneFileError> {
         let mut value = base();
         value["schema"] = 2.into();
         value["splat"] = serde_json::json!({
@@ -772,7 +786,10 @@ mod tests {
         assert_eq!(layer.format, SplatFormat::Lod);
         assert_eq!(layer.levels, Some((1, 3)));
         assert_eq!(layer.clip, Some((6.0, 40.0)));
-        assert_eq!(layer.grade.exposure_ev, -0.2, "an explicit value overrides the preset");
+        assert_eq!(
+            layer.grade.exposure_ev, -0.2,
+            "an explicit value overrides the preset"
+        );
         assert_eq!(layer.grade.saturation, SplatGrade::DUSK.saturation);
         // A half turn about X puts the scan's -Y up.
         let up = layer.orient.rotate(Vec3::new(0.0, -1.0, 0.0));
@@ -793,8 +810,14 @@ mod tests {
             bad(|v| v["splat"]["url"] = "/assets/splat/abc/v1/meta.json".into()),
             SceneFileError::Splat(_)
         ));
-        assert!(matches!(bad(|v| v["splat"]["levels"] = serde_json::json!([3, 1])), SceneFileError::Splat("levels")));
-        assert!(matches!(bad(|v| v["splat"]["clip"]["radius_m"] = 0.into()), SceneFileError::Splat("clip")));
+        assert!(matches!(
+            bad(|v| v["splat"]["levels"] = serde_json::json!([3, 1])),
+            SceneFileError::Splat("levels")
+        ));
+        assert!(matches!(
+            bad(|v| v["splat"]["clip"]["radius_m"] = 0.into()),
+            SceneFileError::Splat("clip")
+        ));
         assert!(matches!(
             bad(|v| v["splat"]["grade"]["preset"] = "noon".into()),
             SceneFileError::Splat("grade preset")
@@ -835,7 +858,10 @@ mod tests {
         let mut private = 0;
         for id in embedded_ids().filter(|id| id.starts_with("scan-")) {
             let scene = load_embedded(id).unwrap().unwrap();
-            let layer = scene.splat.as_ref().expect("a scan scene has a splat layer");
+            let layer = scene
+                .splat
+                .as_ref()
+                .expect("a scan scene has a splat layer");
             assert_eq!(layer.format, SplatFormat::Lod, "{id}");
             assert!(layer.url.ends_with("/v1/lod-meta.json"), "{id}");
             let attribution = scene.attribution.as_ref().expect("scans name their source");
@@ -845,7 +871,10 @@ mod tests {
             } else {
                 assert_eq!(attribution.licence, "CC BY 4.0", "{id}");
             }
-            assert!(scene.grid.terrain().is_some(), "{id} follows measured ground");
+            assert!(
+                scene.grid.terrain().is_some(),
+                "{id} follows measured ground"
+            );
             assert!(scene.grid.walkable_cells().count() >= 40, "{id}");
         }
         assert_eq!(private, 3, "three unlicensed scans");

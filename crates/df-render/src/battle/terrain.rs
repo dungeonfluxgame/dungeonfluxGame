@@ -42,10 +42,14 @@ impl HeightField {
         if cols < 2 || rows < 2 || (cols as usize).saturating_mul(rows as usize) > MAX_SAMPLES {
             return Err(TerrainError::Size);
         }
-        if !step_m.is_finite() || !(0.05..=10.0).contains(&step_m) || origin.iter().any(|v| !v.is_finite()) {
+        if !step_m.is_finite()
+            || !(0.05..=10.0).contains(&step_m)
+            || origin.iter().any(|v| !v.is_finite())
+        {
             return Err(TerrainError::Step);
         }
-        if heights.len() != cols as usize * rows as usize || heights.iter().any(|h| !h.is_finite()) {
+        if heights.len() != cols as usize * rows as usize || heights.iter().any(|h| !h.is_finite())
+        {
             return Err(TerrainError::Heights);
         }
         Ok(Self {
@@ -151,8 +155,8 @@ fn lowest_dense_layer(heights: &mut [f32], settings: &GroundSettings) -> Option<
         return None;
     }
     heights.sort_by(f32::total_cmp);
-    let need = ((heights.len() as f32 * settings.layer_share).ceil() as usize)
-        .max(settings.minimum_count);
+    let need =
+        ((heights.len() as f32 * settings.layer_share).ceil() as usize).max(settings.minimum_count);
     (0..=heights.len().saturating_sub(need))
         .find(|&start| heights[start + need - 1] - heights[start] <= settings.band_m)
         .map(|start| heights[start + need / 2])
@@ -169,7 +173,8 @@ pub fn estimate_height_field(
     rows: u32,
     settings: &GroundSettings,
 ) -> Result<HeightField, TerrainError> {
-    estimate_height_field_covered(points, origin, step_m, cols, rows, settings).map(|(field, _)| field)
+    estimate_height_field_covered(points, origin, step_m, cols, rows, settings)
+        .map(|(field, _)| field)
 }
 
 /// As [`estimate_height_field`], also returning the share of lattice points (0..1) whose height
@@ -183,10 +188,19 @@ pub fn estimate_height_field_covered(
     rows: u32,
     settings: &GroundSettings,
 ) -> Result<(HeightField, f32), TerrainError> {
-    let blank = HeightField::new(origin, step_m, cols, rows, vec![0.0; cols as usize * rows as usize])?;
+    let blank = HeightField::new(
+        origin,
+        step_m,
+        cols,
+        rows,
+        vec![0.0; cols as usize * rows as usize],
+    )?;
     let (cols, rows) = (cols as usize, rows as usize);
     let mut windows: Vec<Vec<f32>> = vec![Vec::new(); cols * rows];
-    for point in points.iter().filter(|p| p.opacity >= settings.minimum_opacity) {
+    for point in points
+        .iter()
+        .filter(|p| p.opacity >= settings.minimum_opacity)
+    {
         let u = (point.position.x - origin[0]) / step_m;
         let v = (point.position.z - origin[1]) / step_m;
         // Each splat counts for the lattice points within one step of it.
@@ -258,7 +272,13 @@ fn smoothed(heights: &[f32], cols: usize, rows: usize) -> Vec<f32> {
                 for dc in -1i64..=1 {
                     let (c, r) = (col as i64 + dc, row as i64 + dr);
                     if (0..cols as i64).contains(&c) && (0..rows as i64).contains(&r) {
-                        let w = if dc == 0 && dr == 0 { 4.0 } else if dc == 0 || dr == 0 { 2.0 } else { 1.0 };
+                        let w = if dc == 0 && dr == 0 {
+                            4.0
+                        } else if dc == 0 || dr == 0 {
+                            2.0
+                        } else {
+                            1.0
+                        };
                         sum += heights[r as usize * cols + c as usize] * w;
                         weight += w;
                     }
@@ -308,7 +328,10 @@ pub fn blocker_density(
     settings: &WalkSettings,
 ) -> Vec<f32> {
     let mut counts = vec![0u32; cols as usize * rows as usize];
-    for point in points.iter().filter(|p| p.opacity >= settings.minimum_opacity) {
+    for point in points
+        .iter()
+        .filter(|p| p.opacity >= settings.minimum_opacity)
+    {
         let col = ((point.position.x - origin[0]) / cell_m).floor();
         let row = ((point.position.z - origin[1]) / cell_m).floor();
         if col < 0.0 || row < 0.0 || col >= cols as f32 || row >= rows as f32 {
@@ -320,7 +343,10 @@ pub fn blocker_density(
         }
     }
     let area = cell_m * cell_m;
-    counts.into_iter().map(|count| count as f32 / area).collect()
+    counts
+        .into_iter()
+        .map(|count| count as f32 / area)
+        .collect()
 }
 
 /// Cells (`[col, row]`) of a grid that a figure cannot stand in, judged from the ground height
@@ -338,7 +364,10 @@ pub fn blocked_cells(
     let mut blocked = Vec::new();
     for row in 0..rows as i32 {
         for col in 0..cols as i32 {
-            let min = [origin[0] + col as f32 * cell_m, origin[1] + row as f32 * cell_m];
+            let min = [
+                origin[0] + col as f32 * cell_m,
+                origin[1] + row as f32 * cell_m,
+            ];
             let relief = field.relief_in(min, [min[0] + cell_m, min[1] + cell_m]);
             let per_m2 = density[row as usize * cols as usize + col as usize];
             if relief > settings.maximum_relief_m || per_m2 >= settings.blockers_per_m2 {
@@ -396,13 +425,23 @@ mod tests {
 
     #[test]
     fn the_ground_estimate_follows_a_slope_and_ignores_floaters_and_grass() {
-        let field = estimate_height_field(&scene(), [0.0, 0.0], 0.5, 21, 21, &GroundSettings::default())
-            .unwrap();
+        let field = estimate_height_field(
+            &scene(),
+            [0.0, 0.0],
+            0.5,
+            21,
+            21,
+            &GroundSettings::default(),
+        )
+        .unwrap();
         for x in [1.0f32, 3.0, 5.0, 8.0] {
             for z in [1.0f32, 4.0, 8.0] {
                 let truth = x * 0.1 + 0.02;
                 let found = field.height_at(x, z);
-                assert!((found - truth).abs() < 0.12, "at {x},{z}: {found} vs {truth}");
+                assert!(
+                    (found - truth).abs() < 0.12,
+                    "at {x},{z}: {found} vs {truth}"
+                );
             }
         }
     }
@@ -412,9 +451,13 @@ mod tests {
         let points: Vec<_> = (0..2000)
             .map(|i| point((i % 40) as f32 * 0.1, 1.0, (i / 40) as f32 * 0.02))
             .collect();
-        let field = estimate_height_field(&points, [0.0, 0.0], 0.5, 12, 12, &GroundSettings::default())
-            .unwrap();
-        assert!((field.height_at(5.0, 5.0) - 1.0).abs() < 0.05, "filled far corner");
+        let field =
+            estimate_height_field(&points, [0.0, 0.0], 0.5, 12, 12, &GroundSettings::default())
+                .unwrap();
+        assert!(
+            (field.height_at(5.0, 5.0) - 1.0).abs() < 0.05,
+            "filled far corner"
+        );
         assert_eq!(
             estimate_height_field(&[], [0.0, 0.0], 0.5, 4, 4, &GroundSettings::default()),
             Err(TerrainError::NoGround)
@@ -433,17 +476,35 @@ mod tests {
             HeightField::new([0.0, 0.0], 1.0, 2, 2, vec![0.0; 3]),
             Err(TerrainError::Heights)
         );
-        assert_eq!(HeightField::new([0.0, 0.0], 0.0, 2, 2, vec![0.0; 4]), Err(TerrainError::Step));
-        assert_eq!(HeightField::new([0.0, 0.0], 1.0, 1, 2, vec![0.0; 2]), Err(TerrainError::Size));
+        assert_eq!(
+            HeightField::new([0.0, 0.0], 0.0, 2, 2, vec![0.0; 4]),
+            Err(TerrainError::Step)
+        );
+        assert_eq!(
+            HeightField::new([0.0, 0.0], 1.0, 1, 2, vec![0.0; 2]),
+            Err(TerrainError::Size)
+        );
     }
 
     #[test]
     fn a_boulder_blocks_its_cells_and_open_sloping_ground_stays_walkable() {
         let points = scene();
-        let field = estimate_height_field(&points, [0.0, 0.0], 0.5, 21, 21, &GroundSettings::default())
-            .unwrap();
-        let blocked = blocked_cells(&field, &points, [0.0, 0.0], 1.0, 10, 10, &WalkSettings::default());
-        assert!(blocked.contains(&[6, 2]), "boulder cell blocked: {blocked:?}");
+        let field =
+            estimate_height_field(&points, [0.0, 0.0], 0.5, 21, 21, &GroundSettings::default())
+                .unwrap();
+        let blocked = blocked_cells(
+            &field,
+            &points,
+            [0.0, 0.0],
+            1.0,
+            10,
+            10,
+            &WalkSettings::default(),
+        );
+        assert!(
+            blocked.contains(&[6, 2]),
+            "boulder cell blocked: {blocked:?}"
+        );
         assert!(!blocked.contains(&[2, 7]), "open ground walkable");
         assert!(!blocked.contains(&[8, 5]));
     }
@@ -468,10 +529,19 @@ mod tests {
         let points: Vec<_> = (0..4000)
             .map(|i| point((i % 40) as f32 * 0.05, 1.0, (i / 40) as f32 * 0.02))
             .collect();
-        let (_, covered) =
-            estimate_height_field_covered(&points, [0.0, 0.0], 0.5, 12, 12, &GroundSettings::default())
-                .unwrap();
-        assert!(covered > 0.05 && covered < 0.4, "only the corner has splats: {covered}");
+        let (_, covered) = estimate_height_field_covered(
+            &points,
+            [0.0, 0.0],
+            0.5,
+            12,
+            12,
+            &GroundSettings::default(),
+        )
+        .unwrap();
+        assert!(
+            covered > 0.05 && covered < 0.4,
+            "only the corner has splats: {covered}"
+        );
         let (_, full) = estimate_height_field_covered(
             &scene(),
             [0.0, 0.0],

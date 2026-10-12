@@ -9,13 +9,15 @@
 //! ```text
 //! cargo run -p df-render --example splat_fit -- <scan-dir> <out.json> \
 //!     --orient 180,0,0 --scale 1 --offset-y 0.27 --yaw 0 --translate 0,0,0 \
-//!     --grid -9,-6.75,1.5,12,9 --finest 1 --coarsest 3 [--step 0.5]
+//!     --grid -9,-6.75,1.5,12,9 --finest 1 [--step 0.5]
 //! ```
 
 #[cfg(target_arch = "wasm32")]
 fn main() {}
 
+// The shared support module also serves the real-data tests, which use helpers this tool does not.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 #[path = "../tests/support/scan_planes.rs"]
 mod scan_planes;
 
@@ -31,13 +33,18 @@ mod native {
     use super::scan_planes;
     use df_render::battle::{
         Focus, GroundPoint, GroundSettings, Limits, LodIndex, Quat, SplatTransform, Vec3,
-        WalkSettings, blocked_cells, blocker_density, estimate_height_field, estimate_height_field_covered, orientation_from_euler_deg,
+        WalkSettings, blocked_cells, blocker_density, estimate_height_field,
+        estimate_height_field_covered, orientation_from_euler_deg,
     };
 
     fn numbers(text: &str, count: usize) -> Result<Vec<f32>, String> {
         let values: Vec<f32> = text
             .split(',')
-            .map(|part| part.trim().parse::<f32>().map_err(|e| format!("{text}: {e}")))
+            .map(|part| {
+                part.trim()
+                    .parse::<f32>()
+                    .map_err(|e| format!("{text}: {e}"))
+            })
             .collect::<Result<_, _>>()?;
         (values.len() == count)
             .then_some(values)
@@ -46,11 +53,14 @@ mod native {
 
     pub fn run() -> Result<(), String> {
         let mut args = std::env::args().skip(1);
-        let scan: PathBuf = args.next().ok_or("scan directory (…/<id>/v1) required")?.into();
+        let scan: PathBuf = args
+            .next()
+            .ok_or("scan directory (…/<id>/v1) required")?
+            .into();
         let out: PathBuf = args.next().ok_or("output json required")?.into();
         let mut transform = SplatTransform::IDENTITY;
         let mut grid = (-9.0, -6.75, 1.5, 12u32, 9u32);
-        let (mut finest, mut coarsest, mut step) = (0u32, 0u32, 0.5f32);
+        let (mut finest, mut step) = (0u32, 0.5f32);
         let mut walk = WalkSettings::default();
         let mut search: Option<Vec<f32>> = None;
         while let Some(flag) = args.next() {
@@ -72,7 +82,6 @@ mod native {
                     grid = (v[0], v[1], v[2], v[3] as u32, v[4] as u32);
                 }
                 "--finest" => finest = value.parse().map_err(|_| "finest")?,
-                "--coarsest" => coarsest = value.parse().map_err(|_| "coarsest")?,
                 "--step" => step = value.parse().map_err(|_| "step")?,
                 "--search" => search = Some(numbers(&value, 5)?),
                 "--blockers" => walk.blockers_per_m2 = value.parse().map_err(|_| "blockers")?,
@@ -86,7 +95,8 @@ mod native {
         let depth = rows as f32 * cell;
         let centre = Vec3::new(ox + width * 0.5, 0.0, oz + depth * 0.5);
 
-        let index_text = std::fs::read_to_string(scan.join("lod-meta.json")).map_err(|e| e.to_string())?;
+        let index_text =
+            std::fs::read_to_string(scan.join("lod-meta.json")).map_err(|e| e.to_string())?;
         let index = LodIndex::parse(&index_text).map_err(|e| format!("{e:?}"))?;
         let focus = Focus {
             centre: transform.to_scan(centre),
@@ -99,7 +109,11 @@ mod native {
         };
         let selection = index.select(focus, limits, None);
         let plan = selection.plan(1 << 20);
-        eprintln!("level {finest}: {} splats in {} chunk(s)", plan.total, plan.jobs.len());
+        eprintln!(
+            "level {finest}: {} splats in {} chunk(s)",
+            plan.total,
+            plan.jobs.len()
+        );
 
         if let Some(window) = &search {
             return search_arenas(&scan, &index, transform, grid, finest, window, &walk);
@@ -112,7 +126,9 @@ mod native {
             let folder = scan.join(&index.files()[job.file as usize].folder);
             let (_, splats) = scan_planes::load_chunk(&folder)
                 .ok_or_else(|| format!("cannot read chunk {}", folder.display()))?;
-            for range in &plan.ranges[job.range_base as usize..(job.range_base + job.range_count) as usize] {
+            for range in
+                &plan.ranges[job.range_base as usize..(job.range_base + job.range_count) as usize]
+            {
                 let from = range[0] as usize;
                 for splat in splats.iter().skip(from).take(range[1] as usize) {
                     let world = transform.to_world(splat.position);
@@ -143,7 +159,12 @@ mod native {
 
         let mut centres: Vec<f32> = (0..rows)
             .flat_map(|row| (0..cols).map(move |col| (col, row)))
-            .map(|(col, row)| field.height_at(ox + (col as f32 + 0.5) * cell, oz + (row as f32 + 0.5) * cell))
+            .map(|(col, row)| {
+                field.height_at(
+                    ox + (col as f32 + 0.5) * cell,
+                    oz + (row as f32 + 0.5) * cell,
+                )
+            })
             .collect();
         centres.sort_by(f32::total_cmp);
         let mean = centres[centres.len() / 2];
@@ -155,7 +176,10 @@ mod native {
             transform.offset_y - mean
         );
         let density = blocker_density(&field, &points, [ox, oz], cell, cols, rows, &walk);
-        eprintln!("blockers per m2 (thousands; threshold {:.1}):", walk.blockers_per_m2 / 1000.0);
+        eprintln!(
+            "blockers per m2 (thousands; threshold {:.1}):",
+            walk.blockers_per_m2 / 1000.0
+        );
         for row in 0..rows as usize {
             let line: Vec<String> = (0..cols as usize)
                 .map(|col| format!("{:5.2}", density[row * cols as usize + col] / 1000.0))
@@ -166,7 +190,10 @@ mod native {
         for row in 0..rows as i32 {
             let mut line = String::new();
             for col in 0..cols as i32 {
-                let centre = field.height_at(ox + (col as f32 + 0.5) * cell, oz + (row as f32 + 0.5) * cell);
+                let centre = field.height_at(
+                    ox + (col as f32 + 0.5) * cell,
+                    oz + (row as f32 + 0.5) * cell,
+                );
                 if blocked.contains(&[col, row]) {
                     line.push_str("  ## ");
                 } else {
@@ -175,7 +202,11 @@ mod native {
             }
             eprintln!("{line}");
         }
-        let heights_cm: Vec<i32> = field.heights().iter().map(|h| (h * 100.0).round() as i32).collect();
+        let heights_cm: Vec<i32> = field
+            .heights()
+            .iter()
+            .map(|h| (h * 100.0).round() as i32)
+            .collect();
         let json = serde_json::json!({
             "terrain": {
                 "origin": terrain_origin,
@@ -187,8 +218,11 @@ mod native {
             "blocked": blocked,
             "ground_mean_m": mean,
         });
-        std::fs::write(&out, serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+        std::fs::write(
+            &out,
+            serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
         eprintln!("wrote {}", out.display());
         Ok(())
     }
@@ -226,9 +260,14 @@ mod native {
             let folder = scan.join(&index.files()[job.file as usize].folder);
             let (_, splats) = scan_planes::load_chunk(&folder)
                 .ok_or_else(|| format!("cannot read chunk {}", folder.display()))?;
-            let ranges = &plan.ranges[job.range_base as usize..(job.range_base + job.range_count) as usize];
+            let ranges =
+                &plan.ranges[job.range_base as usize..(job.range_base + job.range_count) as usize];
             for range in ranges {
-                for splat in splats.iter().skip(range[0] as usize).take(range[1] as usize) {
+                for splat in splats
+                    .iter()
+                    .skip(range[0] as usize)
+                    .take(range[1] as usize)
+                {
                     let world = transform.to_world(splat.position);
                     let inside = world.x > x0 - 2.0
                         && world.x < x1 + width + 2.0
@@ -247,7 +286,10 @@ mod native {
         let mut buckets: std::collections::HashMap<(i32, i32), Vec<usize>> = Default::default();
         for (position, point) in points.iter().enumerate() {
             buckets
-                .entry((point.position.x.floor() as i32, point.position.z.floor() as i32))
+                .entry((
+                    point.position.x.floor() as i32,
+                    point.position.z.floor() as i32,
+                ))
                 .or_default()
                 .push(position);
         }
@@ -256,7 +298,8 @@ mod native {
         while wz <= z1 {
             let mut wx = x0;
             while wx <= x1 {
-                let (min_x, max_x, min_z, max_z) = (wx - 1.0, wx + width + 1.0, wz - 1.0, wz + depth + 1.0);
+                let (min_x, max_x, min_z, max_z) =
+                    (wx - 1.0, wx + width + 1.0, wz - 1.0, wz + depth + 1.0);
                 let mut local: Vec<GroundPoint> = Vec::new();
                 for bx in min_x.floor() as i32..=max_x.floor() as i32 {
                     for bz in min_z.floor() as i32..=max_z.floor() as i32 {
@@ -284,7 +327,10 @@ mod native {
                     let centres: Vec<f32> = (0..rows)
                         .flat_map(|r| (0..cols).map(move |c| (c, r)))
                         .map(|(c, r)| {
-                            field.height_at(wx + (c as f32 + 0.5) * cell, wz + (r as f32 + 0.5) * cell)
+                            field.height_at(
+                                wx + (c as f32 + 0.5) * cell,
+                                wz + (r as f32 + 0.5) * cell,
+                            )
                         })
                         .collect();
                     let (low, high) = centres
@@ -309,7 +355,9 @@ mod native {
                         })
                         .count() as f32
                         / area;
-                    let score = blocked.len() as f32 - open as f32 * 0.5 + (high - low) * 4.0 + overhead * 0.02;
+                    let score = blocked.len() as f32 - open as f32 * 0.5
+                        + (high - low) * 4.0
+                        + overhead * 0.02;
                     results.push((score, wx, wz, blocked.len(), open, mean, overhead));
                 }
                 wx += step;
@@ -317,10 +365,15 @@ mod native {
             wz += step;
         }
         results.sort_by(|a, b| a.0.total_cmp(&b.0));
-        eprintln!("best windows (score, window origin, centre, blocked cells, largest open region, ground):");
+        eprintln!(
+            "best windows (score, window origin, centre, blocked cells, largest open region, ground):"
+        );
         let mut shown: Vec<(f32, f32)> = Vec::new();
         for (score, wx, wz, blocked, open, mean, overhead) in results {
-            if shown.iter().any(|(x, z)| (x - wx).abs() < 6.0 && (z - wz).abs() < 6.0) {
+            if shown
+                .iter()
+                .any(|(x, z)| (x - wx).abs() < 6.0 && (z - wz).abs() < 6.0)
+            {
                 continue;
             }
             shown.push((wx, wz));

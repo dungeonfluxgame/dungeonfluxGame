@@ -222,12 +222,13 @@
       3
     ],
     "max_splats": 2500000,
+    "depth_bias_m": 0.3,
     "clip": {
       "above_m": 6.0,
       "radius_m": 45.0
     },
     "grade": {
-      "preset": "neutral"
+      "preset": "dusk"
     },
     "url": "/assets/splat/9b6bc6bf/v1/lod-meta.json"
   },

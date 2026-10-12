@@ -843,7 +843,10 @@ mod tests {
         assert_eq!(heights.len(), 2);
         for (x, y) in heights {
             let expected = (x - origin[0]) * 0.1;
-            assert!((y - expected).abs() < 0.02, "feet at {y} on ground {expected}");
+            assert!(
+                (y - expected).abs() < 0.02,
+                "feet at {y} on ground {expected}"
+            );
         }
     }
 

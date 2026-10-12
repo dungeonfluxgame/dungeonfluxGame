@@ -517,7 +517,12 @@ impl SplatTransform {
 pub fn orientation_from_euler_deg(degrees: [f32; 3]) -> Quat {
     let about = |axis: Vec3, degrees: f32| {
         let half = degrees.to_radians() * 0.5;
-        Quat::new(axis.x * half.sin(), axis.y * half.sin(), axis.z * half.sin(), half.cos())
+        Quat::new(
+            axis.x * half.sin(),
+            axis.y * half.sin(),
+            axis.z * half.sin(),
+            half.cos(),
+        )
     };
     about(Vec3::new(0.0, 0.0, 1.0), degrees[2])
         .compose(about(Vec3::new(0.0, 1.0, 0.0), degrees[1]))
@@ -649,9 +654,15 @@ fn snorm16_bits(value: f32) -> u32 {
 }
 
 /// Packs one splat, already placed in the world, into the eight words the splat shaders read.
-pub fn pack_record(centre: Vec3, scale: Vec3, rotation: Quat, colour: [u8; 4]) -> [u32; RECORD_WORDS] {
+pub fn pack_record(
+    centre: Vec3,
+    scale: Vec3,
+    rotation: Quat,
+    colour: [u8; 4],
+) -> [u32; RECORD_WORDS] {
     let q = rotation.normalized();
-    let half = |a: f32, b: f32| u32::from(f32_to_f16_bits(a)) | (u32::from(f32_to_f16_bits(b)) << 16);
+    let half =
+        |a: f32, b: f32| u32::from(f32_to_f16_bits(a)) | (u32::from(f32_to_f16_bits(b)) << 16);
     [
         centre.x.to_bits(),
         centre.y.to_bits(),
@@ -1195,7 +1206,10 @@ mod tests {
     fn half_precision_packing_round_trips_scales_and_saturates() {
         for value in [0.0f32, 1.0, 0.5, 0.0123, 3.7, 0.0001, -2.5, 1000.0] {
             let back = half_to_f32(f32_to_f16_bits(value));
-            assert!((back - value).abs() <= value.abs() * 0.001 + 1e-7, "{value} -> {back}");
+            assert!(
+                (back - value).abs() <= value.abs() * 0.001 + 1e-7,
+                "{value} -> {back}"
+            );
         }
         assert_eq!(half_to_f32(f32_to_f16_bits(1e9)), 65504.0);
         assert_eq!(f32_to_f16_bits(f32::NAN) & 0x7c00, 0x7c00);
@@ -1236,7 +1250,10 @@ mod tests {
         assert_eq!((words.len(), dropped), (RECORD_WORDS, 1));
         assert_eq!(f32::from_bits(words[0]), 2.0);
         assert_eq!(f32::from_bits(words[2]), 5.0);
-        assert!((half_to_f32(words[6] as u16) - 0.2).abs() < 1e-3, "scale doubled");
+        assert!(
+            (half_to_f32(words[6] as u16) - 0.2).abs() < 1e-3,
+            "scale doubled"
+        );
     }
 
     #[test]
@@ -1280,13 +1297,22 @@ mod tests {
             assert!(near <= far + step, "{far} then {near}");
         }
         // The nearest and farthest splats land at the two ends.
-        assert_eq!(depths[order[0] as usize], depths.iter().cloned().fold(f32::MIN, f32::max));
+        assert_eq!(
+            depths[order[0] as usize],
+            depths.iter().cloned().fold(f32::MIN, f32::max)
+        );
         let last = *order.last().unwrap() as usize;
-        assert_eq!(depths[last], depths.iter().cloned().fold(f32::MAX, f32::min));
+        assert_eq!(
+            depths[last],
+            depths.iter().cloned().fold(f32::MAX, f32::min)
+        );
         // Resolution: one key step is a few millimetres at 10 m and under 3 cm at 300 m.
         let step_at = |d: f32| (depth_sort_key(d, range) - depth_sort_key(d + 0.05, range)) as f32;
         assert!(step_at(10.0) >= 1.0 && depth_sort_key(0.0, range) == 65535);
-        assert!(depth_sort_key(2000.0, range) == 0, "beyond the range everything shares the far key");
+        assert!(
+            depth_sort_key(2000.0, range) == 0,
+            "beyond the range everything shares the far key"
+        );
     }
 
     #[test]
