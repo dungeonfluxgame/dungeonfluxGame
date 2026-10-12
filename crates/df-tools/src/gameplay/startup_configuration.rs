@@ -772,10 +772,25 @@ pub(super) fn database_config(
     let mut configuration = tokio_postgres::Config::new();
     configuration
         .host("127.0.0.1")
-        .port(55517)
+        .port(database_port()?)
         .user("df_gameplay_demo_admin_20261004")
         .dbname(&name);
     Ok(configuration)
+}
+
+/// The launcher's PostgreSQL port. PLAY-L01 harness knob: `DF_GAMEPLAY_DEMO_DATABASE_PORT` names a
+/// private instance's port (evaluation runs must not share the launcher's); an invalid value is
+/// refused without echoing it.
+fn database_port() -> Result<u16, io::Error> {
+    match std::env::var("DF_GAMEPLAY_DEMO_DATABASE_PORT") {
+        Err(VarError::NotPresent) => Ok(55517),
+        Ok(value) => value
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port >= 1024)
+            .ok_or_else(|| refused("DF_GAMEPLAY_DEMO_DATABASE_PORT")),
+        Err(_) => Err(refused("DF_GAMEPLAY_DEMO_DATABASE_PORT")),
+    }
 }
 
 /// Resolve once at startup; missing files are diagnosed by the typed pack loader.

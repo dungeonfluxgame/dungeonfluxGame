@@ -1530,17 +1530,5 @@ async fn join_grant_driver(
 }
 
 fn database_config() -> Result<tokio_postgres::Config, io::Error> {
-    let mut configuration =
-        startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))?;
-    // PLAY-L01 harness knob: a private PostgreSQL on its own port (evaluation runs must not share
-    // the launcher's instance). Unset keeps the launcher's port; an invalid value is refused.
-    if let Ok(port) = std::env::var("DF_GAMEPLAY_DEMO_DATABASE_PORT") {
-        let port = port
-            .parse::<u16>()
-            .ok()
-            .filter(|port| *port >= 1024)
-            .ok_or_else(|| io::Error::other("DF_GAMEPLAY_DEMO_DATABASE_PORT invalid"))?;
-        configuration.port(port);
-    }
-    Ok(configuration)
+    startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))
 }
