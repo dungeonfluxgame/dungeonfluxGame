@@ -220,7 +220,7 @@ mod native {
                 .iter()
                 .map(|span| {
                     format!(
-                        "{} trace={} span={} parent={} duration_us={:?} attributes={:?}\n",
+                        "{} trace={} span={} parent={} duration_us={:?} attributes={:?} events={:?}\n",
                         span.name,
                         span.span_context.trace_id(),
                         span.span_context.span_id(),
@@ -228,7 +228,11 @@ mod native {
                         span.end_time
                             .duration_since(span.start_time)
                             .map(|duration| duration.as_micros()),
-                        span.attributes
+                        span.attributes,
+                        span.events
+                            .iter()
+                            .map(|event| (&event.name, &event.attributes))
+                            .collect::<Vec<_>>()
                     )
                 })
                 .collect())

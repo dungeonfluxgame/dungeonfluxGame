@@ -23,6 +23,7 @@ mod recovery_qualification;
 mod rest_qualification;
 mod restart_qualification;
 mod room;
+mod speech_input;
 mod startup_configuration;
 #[cfg(test)]
 mod startup_contract;
@@ -73,8 +74,12 @@ fn credential<T>(request: &Request<T>) -> Result<[u8; 32], Status> {
         .get("x-df-local-binding")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| Status::unauthenticated("local binding required"))?;
+    parse_binding(value).ok_or_else(|| Status::unauthenticated("local binding invalid"))
+}
+/// The 32 bytes of a lowercase hexadecimal room binding, if `value` is exactly that.
+fn parse_binding(value: &str) -> Option<[u8; 32]> {
     if value.len() != 64 {
-        return Err(Status::unauthenticated("local binding invalid"));
+        return None;
     }
     let mut result = [0; 32];
     for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
@@ -83,12 +88,9 @@ fn credential<T>(request: &Request<T>) -> Result<[u8; 32], Status> {
             b'a'..=b'f' => Some(byte - b'a' + 10),
             _ => None,
         };
-        let high =
-            digit(pair[0]).ok_or_else(|| Status::unauthenticated("local binding invalid"))?;
-        let low = digit(pair[1]).ok_or_else(|| Status::unauthenticated("local binding invalid"))?;
-        result[index] = (high << 4) | low;
+        result[index] = (digit(pair[0])? << 4) | digit(pair[1])?;
     }
-    Ok(result)
+    Some(result)
 }
 impl Service {
     async fn view(
@@ -587,6 +589,11 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             .as_ref()
             .map_or("harbor", |prepared| prepared.record.seed.as_str()),
     )?;
+    let speech = speech_input::SpeechInput::start(if interactive {
+        speech_input::speech_settings(speech_input::SpeechInputs::from_environment())?
+    } else {
+        speech_input::SpeechSettings::Off(speech_input::SpeechOff::Qualification)
+    })?;
     let npc_phase = courier_npc_qualification::phase();
     let npc_budget = npc_phase
         .map(courier_npc_qualification::call_budget)
@@ -1146,7 +1153,12 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .merge(music_assets::router(
             &std::path::Path::new(&asset_root).join("../music"),
         )?)
-        .merge(voice::router(voice.clone()));
+        .merge(voice::router(voice.clone()))
+        .merge(speech_input::router(
+            speech.clone(),
+            speech_input::actor_identity(sender.clone()),
+            settings.allowed_origins.clone().into(),
+        ));
     let npc = npc_phase.map(|phase| {
         tokio::spawn(courier_npc_qualification::run(
             service.clone(),
@@ -1214,6 +1226,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if interactive {
         let origin = &settings.allowed_origins[0];
         println!("{}", voice.startup_line());
+        println!("{}", speech.startup_line());
         println!("READY display={origin}/gameplay/display player={origin}/gameplay/player");
     }
     let outcome: Result<(), Box<dyn std::error::Error>> = {

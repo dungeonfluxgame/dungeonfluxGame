@@ -78,6 +78,11 @@ pub(super) enum Call {
         request: rpc::WatchViewRequest,
         reply: oneshot::Sender<Result<(LocalDemoRole, rpc::ViewMessage), tonic::Status>>,
     },
+    /// Which current room member a player binding belongs to (speech input).
+    SpeechMember {
+        credential: [u8; 32],
+        reply: oneshot::Sender<Result<df_types::MemberId, tonic::Status>>,
+    },
 }
 impl ActorInput for Call {
     fn retained_heap_bytes(&self) -> Option<usize> {
@@ -95,7 +100,7 @@ impl ActorInput for Call {
                         .as_ref()
                         .map_or(0, |id| bytes(&id.value)),
                 ),
-            Self::QualificationInputs { .. } => Some(0),
+            Self::QualificationInputs { .. } | Self::SpeechMember { .. } => Some(0),
             Self::Dialogue { request, .. } => Some(request.retained_heap_bytes()),
             Self::Submit { request, .. } => {
                 let character_bytes = if let Some(character) = &request.character {
@@ -911,6 +916,11 @@ impl Reducer<Call> for Actor {
                         "finite demonstration call budget exhausted",
                     )));
                 }
+                Call::SpeechMember { reply, .. } => {
+                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
+                        "finite demonstration call budget exhausted",
+                    )));
+                }
             }
             return;
         }
@@ -975,6 +985,11 @@ impl Reducer<Call> for Actor {
             } => reply
                 .send(after_grant_reconnect(reconnected, || {
                     self.view(credential, request)
+                }))
+                .is_ok(),
+            Call::SpeechMember { credential, reply } => reply
+                .send(after_grant_reconnect(reconnected, || {
+                    self.dialogue_member(&credential)
                 }))
                 .is_ok(),
         };

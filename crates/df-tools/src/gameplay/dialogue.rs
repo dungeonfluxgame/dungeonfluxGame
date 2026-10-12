@@ -207,7 +207,7 @@ fn disposition(value: IntentDisposition) -> rpc::DialogueDisposition {
 }
 
 impl actor::Actor {
-    fn dialogue_member(&mut self, credential: &[u8; 32]) -> Result<MemberId, Status> {
+    pub(super) fn dialogue_member(&mut self, credential: &[u8; 32]) -> Result<MemberId, Status> {
         if self
             .issuer
             .authenticate(credential)
