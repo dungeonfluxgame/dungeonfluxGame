@@ -922,6 +922,7 @@ pub(super) fn project_journey(
         table_choices,
         presentation_sequence: 0,
         reply_speaker: String::new(),
+        adventure_ended: super::beat_script_runtime::ended(state)?,
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
     let mut scene = if super::beat_script_runtime::native_inn(state)? {
@@ -1026,10 +1027,11 @@ pub(super) fn action_offer_rejection(
     {
         return Ok(Some(rpc::RejectionCode::WrongTurn));
     }
+    // The same list the player's phone shows, so an offer the phone lists is never stale here.
     if !super::beat_script_runtime::matches_id(current, kind, offer)?
-        || !super::journey::offered(current, member)?
+        || !super::beat_script_runtime::view_offers(current, member)?
             .iter()
-            .any(|(offered, _)| *offered == kind)
+            .any(|(offered, _, _)| *offered == kind)
     {
         return Ok(Some(rpc::RejectionCode::StaleOffer));
     }

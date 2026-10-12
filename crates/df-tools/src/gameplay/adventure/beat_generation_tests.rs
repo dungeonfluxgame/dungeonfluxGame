@@ -309,6 +309,19 @@ fn peaceful_ending_resolves_once_closes_on_the_end_card_and_shows_the_same_label
             };
             let resolve = offered(&current);
             assert_eq!(resolve.len(), 1, "{kind} resolution is the only choice");
+            // The server's own admission of a submitted offer accepts what the phone lists.
+            assert!(
+                super::super::wire::action_offer_rejection(
+                    &current,
+                    native::first(),
+                    rpc::GameplayActionKind::ResolveErrand,
+                    &resolve[0],
+                    &[]
+                )
+                .unwrap()
+                .is_none(),
+                "{kind} resolution must not be refused as stale"
+            );
             current = native::act(&current, native::first(), 10, "resolve-errand");
             // The resolution is offered once: the epilogue offers only its close.
             let closing = offered(&current);

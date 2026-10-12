@@ -421,7 +421,9 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         },
         members,
         speaker,
-        heading: if choices.is_empty() {
+        heading: if input.journey.adventure_ended {
+            "The End"
+        } else if choices.is_empty() {
             "The story waits"
         } else {
             "What do you do?"

@@ -581,6 +581,16 @@ pub(super) fn dialogue_labels(
         Ok(Some(labels))
     })
 }
+/// The adventure's end card: an authored ending beat that offers nothing more.
+pub(super) fn ended(state: &GameState) -> Result<bool, RepositoryError> {
+    beat_script::with_script(|script| {
+        if script.is_canonical() {
+            return Ok(false);
+        }
+        let beat = script.current(state)?;
+        Ok(beat.kind == BeatKind::Ending && beat.offers.is_empty())
+    })
+}
 pub(super) fn action_label(
     id: &str,
     kind: rpc::GameplayActionKind,
