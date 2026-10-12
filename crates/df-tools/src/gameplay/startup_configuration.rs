@@ -421,6 +421,33 @@ const GENERATED_STEMS: &[&str] = &[
     "portrait-bandit-full",
     "portrait-courier-full",
 ];
+/// Art for the 3D battlefield: one painted top-down ground per generated location, and the
+/// full-body cut-out figures. A missing file is simply not served and the display falls back.
+const BATTLEFIELD_STEMS: &[&str] = &[
+    "ground-salt-quay",
+    "ground-pinewood-trail",
+    "ground-windward-pass",
+    "ground-lamplit-market",
+    "ground-rookhill-gate",
+    "ground-reedmoor-boardwalk",
+    "ground-thistledown-farm",
+    "ground-orrery-library",
+    "figure-hero-1",
+    "figure-hero-2",
+    "figure-bandit",
+    "figure-ant-bandit",
+    "figure-ant-cultist",
+    "figure-ant-giant-rat",
+    "figure-ant-giant-weasel",
+    "figure-ant-goblin-warrior",
+    "figure-ant-guard",
+    "figure-ant-kobold-warrior",
+    "figure-ant-mastiff",
+    "figure-ant-scout",
+    "figure-ant-skeleton",
+    "figure-ant-wolf",
+    "figure-ant-zombie",
+];
 const GENERATED_EXTENSIONS: [(&str, &str); 3] = [
     ("webp", "image/webp"),
     ("png", "image/png"),
@@ -443,11 +470,16 @@ pub(super) fn load_extra_assets(
     let mut loaded = Vec::new();
     let mut total = 0usize;
     let mut candidates = Vec::new();
-    for stem in GENERATED_STEMS.iter().copied().chain(
-        super::adventure::generated_stems()
-            .iter()
-            .map(String::as_str),
-    ) {
+    for stem in GENERATED_STEMS
+        .iter()
+        .chain(BATTLEFIELD_STEMS)
+        .copied()
+        .chain(
+            super::adventure::generated_stems()
+                .iter()
+                .map(String::as_str),
+        )
+    {
         for (extension, mime) in GENERATED_EXTENSIONS {
             candidates.push((
                 asset_root

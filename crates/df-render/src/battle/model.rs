@@ -146,6 +146,8 @@ pub enum Beat {
 pub struct HudState {
     pub active: Option<TokenId>,
     pub round: u32,
+    /// Turn order, first to act first. Empty means the order tokens were supplied in.
+    pub initiative: Vec<TokenId>,
     pub finishing_blow: Option<FinishingBlow>,
 }
 
@@ -166,6 +168,8 @@ pub enum FloatTone {
 /// A screen-space popup anchored above a token.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FloatingText {
+    /// Unique for the life of the stage, so a view can keep one element per popup.
+    pub id: u64,
     pub token: TokenId,
     pub text: String,
     pub tone: FloatTone,

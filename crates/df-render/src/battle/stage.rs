@@ -122,6 +122,7 @@ pub struct Stage {
     clock_s: f32,
     reduced_motion: bool,
     dropped_beats: u32,
+    next_float_id: u64,
 }
 
 fn flat_direction(from: Vec3, to: Vec3) -> Vec3 {
@@ -155,6 +156,7 @@ impl Stage {
             clock_s: 0.0,
             reduced_motion,
             dropped_beats: 0,
+            next_float_id: 0,
         }
     }
 
@@ -172,6 +174,10 @@ impl Stage {
 
     pub fn set_round(&mut self, round: u32) {
         self.hud.round = round;
+    }
+
+    pub fn set_initiative(&mut self, order: Vec<TokenId>) {
+        self.hud.initiative = order;
     }
 
     pub fn set_active(&mut self, active: Option<TokenId>) {
@@ -421,12 +427,16 @@ impl Stage {
                     age_s: 0.0,
                 });
             }
-            Step::Float { token, text, tone } => self.floats.push(FloatingText {
+            Step::Float { token, text, tone } => {
+                self.next_float_id += 1;
+                self.floats.push(FloatingText {
+                id: self.next_float_id,
                 token,
                 text,
                 tone,
                 age_s: 0.0,
-            }),
+            })
+            }
             Step::ShowHitPoints { token, current } => {
                 if let Some(index) = self.token_index(&token) {
                     let runtime = &mut self.tokens[index];

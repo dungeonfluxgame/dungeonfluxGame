@@ -1,6 +1,7 @@
 //! Thin server-projected room, creation, dialogue and combat clients.
 mod dialogue_recovery;
 mod live_chrome;
+mod live_battlefield;
 mod live_combat;
 mod live_exploration;
 mod live_lobby;
@@ -1446,6 +1447,10 @@ pub(super) fn start() -> Result<(), JsValue> {
     let document = web_sys::window()
         .and_then(|window| window.document())
         .ok_or_else(|| JsValue::from_str("document absent"))?;
+    // PLAY-F02 mount point: `#battle-preview` shows the 3D battlefield alone, with no server calls.
+    if live_battlefield::preview_requested() {
+        return live_battlefield::start_preview(&document);
+    }
     for role in ["player", "display"] {
         let Some(root) = document.get_element_by_id(role) else {
             continue;

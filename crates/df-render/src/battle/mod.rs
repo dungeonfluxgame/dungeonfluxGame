@@ -6,6 +6,13 @@
 //! backend and the DOM overlay are `wasm32` only and sit behind [`BattleStage`]. Everything shown
 //! is presentation of server decisions; positions are staging only (see [`formation`]).
 
+#[cfg(target_arch = "wasm32")]
+mod gpu;
+#[cfg(target_arch = "wasm32")]
+mod host;
+#[cfg(target_arch = "wasm32")]
+mod hud;
+
 mod camera;
 mod director;
 mod formation;
@@ -36,3 +43,6 @@ pub use splat::{
 };
 pub use stage::{FigureView, FlashView, FrameView, Stage, StageError};
 pub use theme::{ColorGrade, Theme};
+
+#[cfg(target_arch = "wasm32")]
+pub use host::{Availability, BattleStage, StageOptions, UnavailableReason, prefers_reduced_motion};
