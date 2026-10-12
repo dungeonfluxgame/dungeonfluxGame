@@ -126,28 +126,28 @@
             1,
             1
           ],
-          "text": "You reach {loc.name} as {patron.desc} {entrance}. {foreshadow}"
+          "text": "You meet {patron.first} in {place}. {place_detail}"
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "{loc.atmos_c} {patron.desc|cap} {entrance}. {foreshadow}"
+          "text": "In {place}, {patron.first} awaits you. {place_detail}"
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "As you cross {loc.name}, {patron.desc} {entrance}. {foreshadow}"
+          "text": "You find {patron.first} in {place}. {place_detail}"
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "{patron.desc|cap} {entrance} just as you arrive at {loc.name}. {foreshadow}"
+          "text": "In {place}, {patron.first} beckons you closer. {place_detail}"
         }
       ]
     },
@@ -423,28 +423,28 @@
             1,
             1
           ],
-          "text": "{patron.first} draws you aside, {patron.mannerism}. {arrival}"
+          "text": "{patron.first} draws you aside, {patron.mannerism}."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "{patron.first} lowers {patron.pos} voice and leans close, {patron.mannerism}. {arrival}"
+          "text": "{patron.first} lowers {patron.pos} voice and leans close, {patron.mannerism}."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "Before you can press further, {patron.first} stiffens, {patron.mannerism}. {arrival}"
+          "text": "Before you can press further, {patron.first} stiffens, {patron.mannerism}."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "{patron.first} hesitates, {patron.mannerism}, then looks past you. {arrival}"
+          "text": "{patron.first} hesitates, {patron.mannerism}, then looks past you."
         }
       ]
     },
@@ -463,7 +463,7 @@
             2,
             2
           ],
-          "text": "Sworn on the Road"
+          "text": "A Promise Kept"
         },
         {
           "faces": [
@@ -489,28 +489,28 @@
             1,
             1
           ],
-          "text": "{patron.first} lets out a shaky breath and steadies {patron.self} behind you. {arrival}"
+          "text": "{patron.first} lets out a shaky breath and steadies {patron.self} behind you."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "Relief crosses {patron.first}'s face, and {patron.sub} moves to your side. {arrival}"
+          "text": "Relief crosses {patron.first}'s face, and {patron.sub} moves to your side."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "{patron.first} nods, {patron.mannerism}, and stays close at your shoulder. {arrival}"
+          "text": "{patron.first} nods, {patron.mannerism}, and stays close at your shoulder."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "{patron.first} presses close behind you, trusting your lead. {arrival}"
+          "text": "{patron.first} presses close behind you, trusting your lead."
         }
       ]
     },
@@ -664,28 +664,28 @@
             1,
             1
           ],
-          "text": "{ant.short|cap} will not be talked down."
+          "text": "{place_detail} {arrival} The challenge is clear."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "{ant.short|cap} has made up {ant.pos} mind."
+          "text": "{place_detail} {arrival} There is no more talking."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "There will be no more talking."
+          "text": "{place_detail} {arrival} The threat is plain."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "{ant.short|cap} raises {ant.pos} weapon in answer."
+          "text": "{place_detail} {arrival} A weapon rises."
         }
       ]
     },
@@ -697,28 +697,28 @@
             1,
             1
           ],
-          "text": "{ant.short|cap} will not be turned aside."
+          "text": "{place_detail} {arrival} It lunges."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "{ant.short|cap} lowers {ant.pos} head and rushes in."
+          "text": "{place_detail} {arrival} It closes in."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "There is no reasoning with it."
+          "text": "{place_detail} {arrival} It comes at you."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "{ant.short|cap} circles, searching for a gap."
+          "text": "{place_detail} {arrival} It circles you."
         }
       ]
     },
@@ -730,28 +730,28 @@
             1,
             1
           ],
-          "text": "{ant.short|cap} advances without a sound."
+          "text": "{place_detail} {arrival} It advances."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "{ant.short|cap} cannot be reasoned with."
+          "text": "{place_detail} {arrival} It keeps coming."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "{ant.short|cap} comes on, slow and certain."
+          "text": "{place_detail} {arrival} It closes in."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "The lantern light does not slow {ant.obj}."
+          "text": "{place_detail} {arrival} It will not stop."
         }
       ]
     },
@@ -808,28 +808,28 @@
             1,
             1
           ],
-          "text": "In the quiet that follows, you piece it together."
+          "text": "You reach {place}. The truth comes out."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "As the dust settles, the truth comes out."
+          "text": "At {place}, the pieces fit together."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "When the shaking stops, the pieces fit together."
+          "text": "You reach {place} and piece it together."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "Between breaths, you work out what drove the fight."
+          "text": "At {place}, you work out what drove the fight."
         }
       ]
     },
@@ -865,28 +865,28 @@
             1,
             1
           ],
-          "text": "You stood your ground. Come on; {dest.short} isn't far now."
+          "text": "We made it to {dest.short}. I owe you my thanks."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "I owe you more than I can say. {dest.name|cap} is just ahead."
+          "text": "Thank you. We can catch our breath here."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "Thank you. {contact.first} will be waiting at {dest.name}."
+          "text": "You stood your ground. {contact.first} will be waiting here."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "Let's go before anything else finds us. {dest.name|cap} is close."
+          "text": "We are safe here. Thank you for seeing me through."
         }
       ]
     },
@@ -950,7 +950,7 @@
             1,
             2
           ],
-          "text": "{patron.first} is driven off into the dark, and the road to {dest.short} stays closed tonight."
+          "text": "{patron.first} is driven off into the dark, and the way to {dest.short} stays closed tonight."
         },
         {
           "faces": [
@@ -1052,7 +1052,7 @@
             4,
             4
           ],
-          "text": "End of the Road"
+          "text": "Journey's End"
         }
       ]
     },

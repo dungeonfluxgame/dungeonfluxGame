@@ -465,13 +465,18 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             }
             startup_configuration::AdventureMode::Random
             | startup_configuration::AdventureMode::Campaign => {
-                let prepared = adventure::startup::prepare(
+                let mut prepared = adventure::startup::prepare(
                     settings,
                     &database_config()?,
                     &std::env::current_dir()?,
                     &storyteller,
                 )
                 .await?;
+                adventure::startup::substitute_missing_art(
+                    &mut prepared.loaded,
+                    &prepared.record,
+                    std::path::Path::new(&asset_root),
+                );
                 let opening = prepared
                     .loaded
                     .pack

@@ -46,7 +46,7 @@ fn recorded_id<T: Entry>(table: &str, entries: &[T], entry: &T) -> String {
         entry.id().to_owned()
     }
 }
-struct Roller<'a> {
+pub(super) struct Roller<'a> {
     dice: Dice,
     rolls: Vec<Roll>,
     forced: &'a ForcedEntries,
@@ -129,7 +129,7 @@ impl Roller<'_> {
         );
         Ok(entry)
     }
-    fn text(
+    pub(super) fn text(
         &mut self,
         table: &str,
         choices: &Table<TextEntry>,
@@ -234,7 +234,7 @@ pub(crate) fn generate_with_prose(
         intersects(&e.fits, &loc.tags)
     })?;
     let patron = roller.select("patron", tables.patrons.die, &tables.patrons.entries, |e| {
-        intersects(&e.fits, &loc.tags)
+        intersects(&e.fits, &loc.tags) && tables.places.patron_fits(&e.id, loc)
     })?;
     let stake = roller.select("stake", tables.stakes.die, &tables.stakes.entries, |e| {
         intersects(&e.tags, &hook.stake_tags)
@@ -262,13 +262,20 @@ pub(crate) fn generate_with_prose(
         "destination",
         destinations.die,
         &destinations.entries,
-        |_| true,
+        |e| {
+            tables.places.available(&e.id)
+                && tables.contacts.entries.iter().any(|c| {
+                    intersects(&c.fits, &loc.tags)
+                        && tables.places.contact_fits(&c.id, &e.id)
+                        && forced.get("contact").is_none_or(|id| id == &c.id)
+                })
+        },
     )?;
     let contact = roller.select(
         "contact",
         tables.contacts.die,
         &tables.contacts.entries,
-        |e| intersects(&e.fits, &loc.tags),
+        |e| intersects(&e.fits, &loc.tags) && tables.places.contact_fits(&e.id, &dest.id),
     )?;
     let reward = roller.text("reward", &tables.rewards, |_| true)?;
     let patron_first = roller.text(
@@ -446,6 +453,8 @@ pub(crate) fn generate_with_prose(
         atmos.insert(text.clone());
         context.insert(format!("loc.atmos_{letter}"), text);
     }
+    let settings =
+        super::setting::roll_settings(tables, loc, &patron.id, dest, &mut roller, &mut context)?;
     context.insert("pos".into(), pronouns(&patron.gender)?[2].into());
     let entrance = render::render(&hook.entrance, &context)?;
     context.insert("entrance".into(), entrance);
@@ -524,14 +533,37 @@ pub(crate) fn generate_with_prose(
     }
     context.insert("name".into(), "{name}".into());
     let mut sheets = Vec::new();
-    let mut expression = |beat: &str,
+    let mut expression = |scene_key: Option<SceneKey>,
+                          beat: &str,
                           slot: &str,
                           speaker: &str,
                           pattern: &str,
                           bound: usize|
      -> Result<String, GenerateError> {
-        let baseline = render::render(pattern, &context)?;
-        let mut facts = context.clone();
+        let place = scene_key
+            .map(|key| settings.scene(key))
+            .unwrap_or(&settings.meeting);
+        let mut scene_context = context.clone();
+        scene_context.insert("place".into(), place.name.clone());
+        scene_context.insert("place_short".into(), place.short.clone());
+        let detail = match scene_key {
+            Some(SceneKey::Room | SceneKey::Defeat) => context
+                .get("loc.atmos_a")
+                .ok_or_else(|| GenerateError::Pattern("loc.atmos_a".into()))?
+                .clone(),
+            Some(SceneKey::Combat) => context
+                .get("setting.confrontation.detail")
+                .ok_or_else(|| GenerateError::Pattern("setting.confrontation.detail".into()))?
+                .clone(),
+            Some(SceneKey::Victory | SceneKey::Inn) => dest.arrival.clone(),
+            _ => context
+                .get("setting.meeting.detail")
+                .ok_or_else(|| GenerateError::Pattern("setting.meeting.detail".into()))?
+                .clone(),
+        };
+        scene_context.insert("place_detail".into(), detail);
+        let baseline = render::render(pattern, &scene_context)?;
+        let mut facts = scene_context.clone();
         let forbidden = if slot == "clue" {
             Vec::new()
         } else {
@@ -544,6 +576,7 @@ pub(crate) fn generate_with_prose(
         };
         let mut must_mention = Vec::new();
         for key in [
+            "place_short",
             "loc.name",
             "patron.first",
             "patron.full",
@@ -553,7 +586,7 @@ pub(crate) fn generate_with_prose(
             "dest.name",
             "ant.short",
         ] {
-            if let Some(value) = context.get(key)
+            if let Some(value) = scene_context.get(key)
                 && baseline.to_lowercase().contains(&value.to_lowercase())
                 && !must_mention.contains(value)
             {
@@ -633,13 +666,32 @@ pub(crate) fn generate_with_prose(
             damage_sides: ant.stats.weapon.damage_sides,
         },
     };
-    pack.offer_labels.begin_story =
-        expression("gathering", "begin_label", "", template("begin_label")?, 40)?;
-    pack.offer_labels.ask_courier =
-        expression("roleplay", "ask_label", "", template("ask_label")?, 40)?;
-    pack.offer_labels.escort_courier =
-        expression("roleplay", "help_label", "", template("help_label")?, 40)?;
+    pack.offer_labels.begin_story = expression(
+        None,
+        "gathering",
+        "begin_label",
+        "",
+        template("begin_label")?,
+        40,
+    )?;
+    pack.offer_labels.ask_courier = expression(
+        None,
+        "roleplay",
+        "ask_label",
+        "",
+        template("ask_label")?,
+        40,
+    )?;
+    pack.offer_labels.escort_courier = expression(
+        None,
+        "roleplay",
+        "help_label",
+        "",
+        template("help_label")?,
+        40,
+    )?;
     pack.offer_labels.defend_courier = expression(
+        None,
         "confrontation",
         "stand_label",
         "",
@@ -647,13 +699,14 @@ pub(crate) fn generate_with_prose(
         40,
     )?;
     pack.offer_labels.choose_harbor_scene = expression(
+        None,
         "resolution",
         "continue_label",
         "",
         template("continue_label")?,
         40,
     )?;
-    pack.courier_clue = expression("roleplay", "clue", "", template("clue")?, 280)?;
+    pack.courier_clue = expression(None, "roleplay", "clue", "", template("clue")?, 280)?;
     pack.escort_support_suffix = render::render(
         &named(&tables.prose, "escort_support_suffix")?
             .variants
@@ -684,8 +737,6 @@ pub(crate) fn generate_with_prose(
         &tables.asset(&ant.art)?,
         (&ant.voice, &ant.gender, &ant.age),
     );
-    let arrival_art = tables.asset(&loc.art.arrival)?;
-    let interior_art = tables.asset(&loc.art.interior)?;
     for scene in &mut pack.scenes {
         let (beat, title, narration, speaker, line, portrait) = match scene.key {
             SceneKey::Room => (
@@ -757,8 +808,8 @@ pub(crate) fn generate_with_prose(
                 tables.asset(&contact.art)?,
             ),
         };
-        scene.title = expression(beat, "title", speaker, &title, 32)?;
-        let story = expression(beat, "narration", speaker, &narration, 220)?;
+        scene.title = expression(Some(scene.key), beat, "title", speaker, &title, 32)?;
+        let story = expression(Some(scene.key), beat, "narration", speaker, &narration, 220)?;
         scene.speaker = if speaker == "ant" {
             pack.bandit.name.clone()
         } else {
@@ -768,12 +819,10 @@ pub(crate) fn generate_with_prose(
                 .unwrap_or_default()
         };
         check("speaker", &scene.speaker, 28)?;
-        scene.dialogue = expression(beat, "line", speaker, &line, 160)?;
-        scene.asset = if scene.key == SceneKey::Inn {
-            interior_art.clone()
-        } else {
-            arrival_art.clone()
-        };
+        scene.dialogue = expression(Some(scene.key), beat, "line", speaker, &line, 160)?;
+        let setting = settings.scene(scene.key);
+        scene.asset = tables.asset(&setting.art_key)?;
+        scene.setting = Some(setting.clone());
         scene.speaker_portrait = portrait;
         // Who is on stage: the patron through the story, the antagonist from the beat that
         // brings it in, the contact at the destination, nobody but the heroes in the lobby.
@@ -840,6 +889,7 @@ pub(crate) fn generate_with_prose(
         rolls: roller.rolls,
         pack,
         tuning,
+        settings,
     })
 }
 fn check(slot: &str, text: &str, maximum: usize) -> Result<(), GenerateError> {

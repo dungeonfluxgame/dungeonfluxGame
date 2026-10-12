@@ -5,7 +5,10 @@
     "file_stem": "scene-salt-quay-arrival",
     "aspect": "16:9",
     "used_by": "locations.salt-quay arrival scene (room, opening, dialogue, combat, victory, defeat)",
-    "prompt": "A fishing-town quay at night: wet timber planks, moored boats with furled sails, hanging nets, lanterns on poles reflected in black water, a bell buoy half seen in drifting fog. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "A fishing-town quay at night: wet timber planks, moored boats with furled sails, hanging nets, lanterns on poles reflected in black water, a bell buoy half seen in drifting fog. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "quay"
+    ]
   },
   {
     "art_key": "loc-salt-quay-interior",
@@ -13,7 +16,10 @@
     "file_stem": "scene-salt-quay-interior",
     "aspect": "16:9",
     "used_by": "destinations of salt-quay (resolution scene)",
-    "prompt": "The warm interior of a waterside net loft: rope coils, hanging nets, a long scarred table, a banked fire and a single lantern, rain-dark window shutters, an inviting but watchful mood. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "The warm interior of a waterside net loft: rope coils, hanging nets, a long scarred table, a banked fire and a single lantern, rain-dark window shutters, an inviting but watchful mood. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "net-loft"
+    ]
   },
   {
     "art_key": "loc-pinewood-trail-arrival",
@@ -21,7 +27,10 @@
     "file_stem": "scene-pinewood-trail-arrival",
     "aspect": "16:9",
     "used_by": "locations.pinewood-trail arrival scene (room, opening, dialogue, combat, victory, defeat)",
-    "prompt": "A narrow forest trail among tall pines under a full moon, mist between the trunks, a small wayside shrine with one glowing candle, mossy roots catching lantern light. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "A narrow forest trail among tall pines under a full moon, mist between the trunks, a small wayside shrine with one glowing candle, mossy roots catching lantern light. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "forest-trail"
+    ]
   },
   {
     "art_key": "loc-pinewood-trail-interior",
@@ -29,7 +38,10 @@
     "file_stem": "scene-pinewood-trail-interior",
     "aspect": "16:9",
     "used_by": "destinations of pinewood-trail (resolution scene)",
-    "prompt": "The inside of a timber woodland lodge: heavy beams, a wide stone hearth with a crackling fire, drying herbs, antlers over the mantel, a long plank table and a sense of shelter after a hard night. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "The inside of a timber woodland lodge: heavy beams, a wide stone hearth with a crackling fire, drying herbs, antlers over the mantel, a long plank table and a sense of shelter after a hard night. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "woodland-lodge"
+    ]
   },
   {
     "art_key": "loc-windward-pass-arrival",
@@ -37,7 +49,10 @@
     "file_stem": "scene-windward-pass-arrival",
     "aspect": "16:9",
     "used_by": "locations.windward-pass arrival scene (room, opening, dialogue, combat, victory, defeat)",
-    "prompt": "A high mountain pass at night: a stone path hugging a cliff, thin blowing snow, a cairn hung with faded pennants, far valleys under stars, torchlight guttering in the wind. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "A high mountain pass at night: a stone path hugging a cliff, thin blowing snow, a cairn hung with faded pennants, far valleys under stars, torchlight guttering in the wind. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "mountain-pass"
+    ]
   },
   {
     "art_key": "loc-windward-pass-interior",
@@ -45,7 +60,10 @@
     "file_stem": "scene-windward-pass-interior",
     "aspect": "16:9",
     "used_by": "destinations of windward-pass (resolution scene)",
-    "prompt": "The common hall of a stone mountain waystation: a roaring hearth, thick rafters, wet boots steaming by the fire, benches and a heavy table, amber light against cold blue shadow. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "The common hall of a stone mountain waystation: a roaring hearth, thick rafters, wet boots steaming by the fire, benches and a heavy table, amber light against cold blue shadow. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "waystation-hall"
+    ]
   },
   {
     "art_key": "loc-lamplit-market-arrival",
@@ -53,7 +71,10 @@
     "file_stem": "scene-lamplit-market-arrival",
     "aspect": "16:9",
     "used_by": "locations.lamplit-market arrival scene (room, opening, dialogue, combat, victory, defeat)",
-    "prompt": "A crowded night market in a walled town: canvas awnings, hundreds of paper lanterns in red and gold, wet cobbles mirroring the lamps, steaming stalls, a street fiddler's corner, narrow alleys receding into dark. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "A crowded night market in a walled town: canvas awnings, hundreds of paper lanterns in red and gold, wet cobbles mirroring the lamps, steaming stalls, a street fiddler's corner, narrow alleys receding into dark. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "market-street"
+    ]
   },
   {
     "art_key": "loc-lamplit-market-interior",
@@ -61,7 +82,10 @@
     "file_stem": "scene-lamplit-market-interior",
     "aspect": "16:9",
     "used_by": "destinations of lamplit-market (resolution scene)",
-    "prompt": "The back room of a cluttered market shop: shelves of jars and dried herbs, hanging lanterns, a low table with steaming cups, patterned screens glowing warmly, secrets-in-the-lamplight mood. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "The back room of a cluttered market shop: shelves of jars and dried herbs, hanging lanterns, a low table with steaming cups, patterned screens glowing warmly, secrets-in-the-lamplight mood. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "apothecary"
+    ]
   },
   {
     "art_key": "loc-rookhill-gate-arrival",
@@ -69,7 +93,10 @@
     "file_stem": "scene-rookhill-gate-arrival",
     "aspect": "16:9",
     "used_by": "locations.rookhill-gate arrival scene (room, opening, dialogue, combat, victory, defeat)",
-    "prompt": "An old hillside cemetery gate at night: open iron gates, rows of pale headstones, votive candles in glass cups, yew trees with sleeping rooks, fog pooling around stone angels, a chapel tower against the stars. Solemn, not frightening. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "An old hillside cemetery gate at night: open iron gates, rows of pale headstones, votive candles in glass cups, yew trees with sleeping rooks, fog pooling around stone angels, a chapel tower against the stars. Solemn, not frightening. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "graveyard-gate"
+    ]
   },
   {
     "art_key": "loc-rookhill-gate-interior",
@@ -77,7 +104,10 @@
     "file_stem": "scene-rookhill-gate-interior",
     "aspect": "16:9",
     "used_by": "destinations of rookhill-gate (resolution scene)",
-    "prompt": "A candlelit stone chapel interior: a wall of silent bronze bells, a carved stone tomb, many small flames, cool blue stone with warm amber candle glow, quiet and sacred. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "A candlelit stone chapel interior: a wall of silent bronze bells, a carved stone tomb, many small flames, cool blue stone with warm amber candle glow, quiet and sacred. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "chapel"
+    ]
   },
   {
     "art_key": "loc-reedmoor-boardwalk-arrival",
@@ -85,7 +115,10 @@
     "file_stem": "scene-reedmoor-boardwalk-arrival",
     "aspect": "16:9",
     "used_by": "locations.reedmoor-boardwalk arrival scene (room, opening, dialogue, combat, victory, defeat)",
-    "prompt": "A marsh boardwalk at night: slick plank path over still black water, tall reeds, drifting mist, pale marsh lights in the distance, a leaning stilt shrine wrapped in vines, fireflies like gold dots. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "A marsh boardwalk at night: slick plank path over still black water, tall reeds, drifting mist, pale marsh lights in the distance, a leaning stilt shrine wrapped in vines, fireflies like gold dots. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "marsh-boardwalk"
+    ]
   },
   {
     "art_key": "loc-reedmoor-boardwalk-interior",
@@ -93,7 +126,10 @@
     "file_stem": "scene-reedmoor-boardwalk-interior",
     "aspect": "16:9",
     "used_by": "destinations of reedmoor-boardwalk (resolution scene)",
-    "prompt": "The inside of a lamplit stilt house over water: curved reed walls, heron-shaped lanterns, polished boards, drying nets of reeds, a stove glowing, water glinting through floor gaps. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "The inside of a lamplit stilt house over water: curved reed walls, heron-shaped lanterns, polished boards, drying nets of reeds, a stove glowing, water glinting through floor gaps. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "stilt-house"
+    ]
   },
   {
     "art_key": "loc-thistledown-farm-arrival",
@@ -101,7 +137,10 @@
     "file_stem": "scene-thistledown-farm-arrival",
     "aspect": "16:9",
     "used_by": "locations.thistledown-farm arrival scene (room, opening, dialogue, combat, victory, defeat)",
-    "prompt": "A hill farmstead at dusk turning to night: a crooked orchard, a warm lit farmhouse window, a barn with a weathervane, silver cart tracks, long grass under a rising moon, a quiet pastoral mood. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "A hill farmstead at dusk turning to night: a crooked orchard, a warm lit farmhouse window, a barn with a weathervane, silver cart tracks, long grass under a rising moon, a quiet pastoral mood. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "farmyard"
+    ]
   },
   {
     "art_key": "loc-thistledown-farm-interior",
@@ -109,7 +148,10 @@
     "file_stem": "scene-thistledown-farm-interior",
     "aspect": "16:9",
     "used_by": "destinations of thistledown-farm (resolution scene)",
-    "prompt": "A bright farmhouse kitchen: copper pans, a crackling hearth, fresh bread on a long table, hanging onions and herbs, lantern light on whitewashed walls, a feeling of welcome. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "A bright farmhouse kitchen: copper pans, a crackling hearth, fresh bread on a long table, hanging onions and herbs, lantern light on whitewashed walls, a feeling of welcome. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "farm-kitchen"
+    ]
   },
   {
     "art_key": "loc-orrery-library-arrival",
@@ -117,7 +159,10 @@
     "file_stem": "scene-orrery-library-arrival",
     "aspect": "16:9",
     "used_by": "locations.orrery-library arrival scene (room, opening, dialogue, combat, victory, defeat)",
-    "prompt": "A grand night library with a glass dome sheltering a great brass orrery, tall shelves with rolling ladders, lamplight gilding leather spines, a shaft of moonlight with drifting dust, rain on tall windows. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "A grand night library with a glass dome sheltering a great brass orrery, tall shelves with rolling ladders, lamplight gilding leather spines, a shaft of moonlight with drifting dust, rain on tall windows. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "library-hall"
+    ]
   },
   {
     "art_key": "loc-orrery-library-interior",
@@ -125,7 +170,10 @@
     "file_stem": "scene-orrery-library-interior",
     "aspect": "16:9",
     "used_by": "destinations of orrery-library (resolution scene)",
-    "prompt": "A private map room in a library: tables covered in charts and brass instruments, a green-shaded lamp, ladders and shelves of rolled maps, a small fire, quiet scholarly warmth. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark."
+    "prompt": "A private map room in a library: tables covered in charts and brass instruments, a green-shaded lamp, ladders and shelves of rolled maps, a small fire, quiet scholarly warmth. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Wide 16:9 composition with a calm, darker, less detailed lower third reserved for interface overlays. No people in the foreground, no text, no lettering, no signage, no UI, no watermark.",
+    "depicts": [
+      "map-room"
+    ]
   },
   {
     "art_key": "patron-ferry-clerk",
@@ -446,5 +494,115 @@
     "aspect": "2:3",
     "used_by": "villains.types.fiend-envoy (campaign layer)",
     "prompt": "Fantasy villain portrait of a polite envoy from beyond, a woman with too-bright eyes, an elegant dark coat, subtle horns hidden beneath a veil, a layered, unreadable smile. Menacing but suitable for a family living-room game. Cinematic painterly realism, moonlit and torchlit heroic fantasy, deep navy night palette with warm amber lantern light, rich atmospheric depth, tactile material detail, matching the existing DungeonFlux harbor key art. Vertical 2:3 head-and-shoulders portrait, subject facing the viewer with a clear, readable expression, softly blurred night background with a few warm amber glows, warm rim light and cool moonlit fill. No text, no frame, no logo, no watermark."
+  },
+  {
+    "art_key": "place-inn-taproom",
+    "kind": "scene",
+    "file_stem": "scene-place-inn-taproom",
+    "aspect": "16:9",
+    "used_by": "places.meeting_places.innkeeper",
+    "depicts": [
+      "inn"
+    ],
+    "prompt": "Moonlit heroic fantasy taproom interior, warm amber lanterns, readable wide scene without text."
+  },
+  {
+    "art_key": "place-temple-sanctuary",
+    "kind": "scene",
+    "file_stem": "scene-place-temple-sanctuary",
+    "aspect": "16:9",
+    "used_by": "places.meeting_places.acolyte",
+    "depicts": [
+      "temple"
+    ],
+    "prompt": "Moonlit heroic fantasy sanctuary interior, warm amber lanterns, readable wide scene without text."
+  },
+  {
+    "art_key": "place-archive-stacks",
+    "kind": "scene",
+    "file_stem": "scene-place-archive-stacks",
+    "aspect": "16:9",
+    "used_by": "places.meeting_places.archivist",
+    "depicts": [
+      "archive"
+    ],
+    "prompt": "Moonlit heroic fantasy archive interior, warm amber lanterns, readable wide scene without text."
+  },
+  {
+    "art_key": "place-ferry-office",
+    "kind": "scene",
+    "file_stem": "scene-place-ferry-office",
+    "aspect": "16:9",
+    "used_by": "places.meeting_places.ferry-clerk",
+    "depicts": [
+      "ferry-office"
+    ],
+    "prompt": "Moonlit heroic fantasy ferry office interior, warm amber lanterns, readable wide scene without text."
+  },
+  {
+    "art_key": "place-cloth-shop",
+    "kind": "scene",
+    "file_stem": "scene-place-cloth-shop",
+    "aspect": "16:9",
+    "used_by": "places.meeting_places.merchant",
+    "depicts": [
+      "shop"
+    ],
+    "prompt": "Moonlit heroic fantasy cloth shop interior, warm amber lanterns, readable wide scene without text."
+  },
+  {
+    "art_key": "place-herb-shed",
+    "kind": "scene",
+    "file_stem": "scene-place-herb-shed",
+    "aspect": "16:9",
+    "used_by": "places.meeting_places.herbwife",
+    "depicts": [
+      "herb-shed"
+    ],
+    "prompt": "Moonlit heroic fantasy herb shed interior, warm amber lanterns, readable wide scene without text."
+  },
+  {
+    "art_key": "place-lamp-room",
+    "kind": "scene",
+    "file_stem": "scene-place-lamp-room",
+    "aspect": "16:9",
+    "used_by": "places.meeting_places.lamp-warden",
+    "depicts": [
+      "lamp-room"
+    ],
+    "prompt": "Moonlit heroic fantasy lamp room interior, warm amber lanterns, readable wide scene without text."
+  },
+  {
+    "art_key": "place-shepherds-fold",
+    "kind": "scene",
+    "file_stem": "scene-place-shepherds-fold",
+    "aspect": "16:9",
+    "used_by": "places.meeting_places.shepherd",
+    "depicts": [
+      "sheepfold"
+    ],
+    "prompt": "Moonlit heroic fantasy sheepfold exterior, warm amber lanterns, readable wide scene without text."
+  },
+  {
+    "art_key": "place-guardhouse",
+    "kind": "scene",
+    "file_stem": "scene-place-guardhouse",
+    "aspect": "16:9",
+    "used_by": "places.meeting_places.veteran",
+    "depicts": [
+      "guardhouse"
+    ],
+    "prompt": "Moonlit heroic fantasy guardhouse interior, warm amber lanterns, readable wide scene without text."
+  },
+  {
+    "art_key": "place-bell-chamber",
+    "kind": "scene",
+    "file_stem": "scene-place-bell-chamber",
+    "aspect": "16:9",
+    "used_by": "places.meeting_places.bell-ringer",
+    "depicts": [
+      "bell-chamber"
+    ],
+    "prompt": "Moonlit heroic fantasy bell chamber interior, warm amber lanterns, readable wide scene without text."
   }
 ]

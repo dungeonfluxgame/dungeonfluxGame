@@ -28,6 +28,8 @@ pub(crate) struct AdventureRecord {
     pub(crate) seeded_dice: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     campaign: Option<pack::CampaignIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) settings: Option<super::setting::ChapterSettings>,
     /// Copies of the pack's listener-safety data, so a review of the record shows them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     secret_terms: Vec<String>,
@@ -160,6 +162,7 @@ impl GeneratedAdventure {
                     })
                 })
                 .collect(),
+            settings: Some(self.settings.clone()),
         };
         let record =
             serde_json::to_vec_pretty(&record).map_err(|_| GenerateError::Serialization)?;
@@ -211,6 +214,23 @@ pub(crate) fn reload(
     if record.expression.output_sha256 != format!("{:x}", output.finalize()) {
         return Err(RecordError::Invalid("expression output hash"));
     }
+    match record.setting_state() {
+        SettingState::LegacyNoSettings
+            if loaded.pack.scenes.iter().any(|s| s.setting.is_some()) =>
+        {
+            return Err(RecordError::Invalid("legacy record with scene settings"));
+        }
+        SettingState::Defined(settings)
+            if loaded
+                .pack
+                .scenes
+                .iter()
+                .any(|s| s.setting.as_ref() != Some(settings.scene(s.key))) =>
+        {
+            return Err(RecordError::Invalid("record scene settings binding"));
+        }
+        _ => {}
+    }
     let mut story = BTreeSet::new();
     for (index, roll) in record.rolls.iter().enumerate() {
         if roll.n != index + 1
@@ -261,7 +281,17 @@ pub(crate) fn reload(
     }
     Ok((loaded, record))
 }
+pub(crate) enum SettingState<'a> {
+    LegacyNoSettings,
+    Defined(&'a super::setting::ChapterSettings),
+}
 impl AdventureRecord {
+    pub(crate) fn setting_state(&self) -> SettingState<'_> {
+        match &self.settings {
+            Some(settings) => SettingState::Defined(settings),
+            None => SettingState::LegacyNoSettings,
+        }
+    }
     pub(crate) fn entry(&self, table: &str) -> Result<&str, RecordError> {
         self.rolls
             .iter()
