@@ -91,11 +91,11 @@ message TurnBudget { uint32 movement_ft = 1; bool action = 2; bool bonus_action 
 message CombatAmmunition { uint32 arrows = 1; uint32 bolts = 2; }
 message LegalCombatTarget { bytes participant_id = 1; string weapon = 2; string cover = 3; string range_reason = 4; bool disadvantage = 5; repeated string reasons = 6; string option_id = 7; }
 // Home screen (lobby) presentation, decided by the server from validated theme data and carried
-// on JourneyView.home (field 30). Presentation only: a box is permille of the viewport.
-message HomeBox { uint32 left_permille = 1; uint32 top_permille = 2; uint32 width_permille = 3; uint32 height_permille = 4; }
+// on JourneyView.home (field 30). Presentation only: the layout is fixed in the browser (PLAY-V11).
 // The painting's mood: colours as #rrggbb, vignette and grade as permille (1000 is unchanged).
 message HomeMood { string accent = 1; string tint = 2; uint32 vignette_permille = 3; uint32 brightness_permille = 4; uint32 contrast_permille = 5; uint32 saturation_permille = 6; }
-// fallback: no theme record exists for this painting, so the neutral mood and the default layout apply.
-message HomeTheme { string location_id = 1; string arrangement = 2; HomeBox title = 3; HomeBox code = 4; HomeBox party = 5; HomeMood mood = 6; repeated string atmosphere = 7; bool fallback = 8; }
+// fallback: no theme record exists for this painting, so the neutral mood applies. Fields 2 to 5 were
+// the arrangement name and the title, code and party boxes (retired by PLAY-V11, so reserved).
+message HomeTheme { reserved 2 to 5; reserved "arrangement", "title", "code", "party"; string location_id = 1; HomeMood mood = 6; repeated string atmosphere = 7; bool fallback = 8; }
 // PLAY-V10: the home screen loop, for the display only. The path is served only when the state is READY.
 enum HomeVideoState { HOME_VIDEO_STATE_UNSPECIFIED = 0; HOME_VIDEO_STATE_NONE = 1; HOME_VIDEO_STATE_PENDING = 2; HOME_VIDEO_STATE_READY = 3; HOME_VIDEO_STATE_FAILED = 4; }

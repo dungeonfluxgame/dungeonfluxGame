@@ -1,13 +1,13 @@
 //! The home screen's theme (PLAY-V05), decided by the server from the painting it is about to show.
 //! The first time a location painting is used, its bytes are decoded and measured, and the
-//! measures are cached by the painting's content hash. The chosen arrangement is the one whose
-//! blocks leave the painting's focal region clear and sit on the calmest, darkest ground; the mood
-//! comes from the painting's own colours and light; the atmosphere follows the location's kind and
-//! those same measures. Clients never analyse art or choose a layout.
+//! measures are cached by the painting's content hash. The mood comes from the painting's own
+//! colours and light; the atmosphere follows the location's kind and those same measures. The
+//! layout is one fixed composition drawn by the browser (PLAY-V11); no block is placed from the
+//! painting. Clients never analyse art.
 //!
-//! A painting that cannot be read, decoded, or laid out returns a typed error to the caller, and
-//! [`lobby_view`] then sends the documented fallback: today's layout with a neutral mood, flagged
-//! `fallback` so the browser knows the view has no theme.
+//! A painting that cannot be read, decoded, or measured returns a typed error to the caller, and
+//! [`lobby_view`] then sends the documented fallback: a neutral mood, flagged `fallback` so the
+//! browser knows the view has no theme.
 pub(crate) mod analysis;
 
 use super::adventure::setting::{SceneSetting, SettingKind};
@@ -35,8 +35,6 @@ const NEUTRAL_ACCENT: &str = "#e8cb94";
 const NEUTRAL_TINT: &str = "#0b1623";
 const NEUTRAL_VIGNETTE: u32 = 550;
 const NEUTRAL_GRADE: u32 = 1000;
-/// The arrangement the stylesheet draws without a theme, which the fallback view names.
-const FALLBACK_ARRANGEMENT: &str = "title-top-left-panels-bottom";
 
 /// The closed set of atmosphere effects. The browser draws each as a looping overlay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,105 +66,9 @@ impl Atmosphere {
     }
 }
 
-/// A block's box in permille of the viewport.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Boxed {
-    left: u32,
-    top: u32,
-    width: u32,
-    height: u32,
-}
-
-impl Boxed {
-    const fn new(left: u32, top: u32, width: u32, height: u32) -> Self {
-        Self {
-            left,
-            top,
-            width,
-            height,
-        }
-    }
-
-    fn as_array(self) -> [u32; 4] {
-        [self.left, self.top, self.width, self.height]
-    }
-
-    fn to_wire(self) -> rpc::HomeBox {
-        rpc::HomeBox {
-            left_permille: self.left,
-            top_permille: self.top,
-            width_permille: self.width,
-            height_permille: self.height,
-        }
-    }
-}
-
-/// The three blocks of one named arrangement. Each party box is sized for six heroes, so a
-/// smaller party only fills part of the same space.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Arrangement {
-    pub(crate) name: &'static str,
-    title: Boxed,
-    code: Boxed,
-    party: Boxed,
-}
-
-impl Arrangement {
-    pub(crate) fn boxes(&self) -> [[u32; 4]; 3] {
-        [self.title, self.code, self.party].map(Boxed::as_array)
-    }
-}
-
-/// The named arrangements a home screen may use: a handful of composed layouts, never free-form.
-pub(crate) const ARRANGEMENTS: [Arrangement; 7] = [
-    Arrangement {
-        name: FALLBACK_ARRANGEMENT,
-        title: Boxed::new(45, 50, 520, 420),
-        code: Boxed::new(40, 580, 430, 380),
-        party: Boxed::new(490, 590, 480, 370),
-    },
-    Arrangement {
-        name: "title-top-right-panels-stacked-left",
-        title: Boxed::new(490, 50, 470, 420),
-        code: Boxed::new(40, 280, 430, 380),
-        party: Boxed::new(40, 680, 500, 280),
-    },
-    Arrangement {
-        name: "title-centre-panels-bottom-corners",
-        title: Boxed::new(230, 170, 540, 420),
-        code: Boxed::new(30, 600, 420, 360),
-        party: Boxed::new(500, 600, 480, 360),
-    },
-    Arrangement {
-        name: "title-top-right-panels-bottom-band",
-        title: Boxed::new(490, 50, 470, 420),
-        code: Boxed::new(40, 560, 430, 380),
-        party: Boxed::new(490, 560, 480, 400),
-    },
-    Arrangement {
-        name: "title-top-left-narrow-panels-bottom",
-        title: Boxed::new(45, 50, 410, 500),
-        code: Boxed::new(40, 580, 430, 380),
-        party: Boxed::new(490, 580, 480, 380),
-    },
-    Arrangement {
-        name: "title-top-right-narrow-panels-bottom",
-        title: Boxed::new(550, 50, 410, 500),
-        code: Boxed::new(40, 580, 430, 380),
-        party: Boxed::new(490, 580, 480, 380),
-    },
-    Arrangement {
-        name: "single-bottom-band",
-        title: Boxed::new(45, 50, 520, 420),
-        code: Boxed::new(30, 580, 400, 380),
-        party: Boxed::new(460, 580, 500, 380),
-    },
-];
-
-/// One painting's theme: the arrangement, the mood and the atmosphere.
+/// One painting's theme: the mood and the atmosphere.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Theme {
-    pub(crate) arrangement: &'static Arrangement,
     pub(crate) mood: MoodMeasures,
     pub(crate) atmosphere: Vec<Atmosphere>,
 }
@@ -194,9 +96,6 @@ pub(crate) enum HomeThemeError {
     Analysis {
         painting: String,
         reason: AnalysisError,
-    },
-    NoUncoveredArrangement {
-        painting: String,
     },
 }
 
@@ -231,10 +130,6 @@ impl fmt::Display for HomeThemeError {
                     "home theme {painting} cannot be measured: {reason:?}"
                 )
             }
-            Self::NoUncoveredArrangement { painting } => write!(
-                formatter,
-                "home theme {painting}: every arrangement covers its focal region"
-            ),
         }
     }
 }
@@ -308,26 +203,10 @@ pub(crate) fn theme_from_cache(
     kind: Option<SettingKind>,
 ) -> Result<Theme, HomeThemeError> {
     let measures = measures_in(cache, root, painting)?;
-    let arrangement =
-        choose_arrangement(&measures).ok_or_else(|| HomeThemeError::NoUncoveredArrangement {
-            painting: painting.to_owned(),
-        })?;
     Ok(Theme {
-        arrangement,
         mood: measures.mood.clone(),
         atmosphere: atmosphere_for(kind, &measures),
     })
-}
-
-/// The arrangement with the least penalty among those that leave the focal region clear at every
-/// reference viewport; `None` when every arrangement covers it somewhere.
-pub(crate) fn choose_arrangement(measures: &Measures) -> Option<&'static Arrangement> {
-    ARRANGEMENTS
-        .iter()
-        .map(|arrangement| (arrangement, analysis::fit(arrangement.boxes(), measures)))
-        .filter(|(_, fit)| fit.is_clear())
-        .min_by(|left, right| left.1.penalty.total_cmp(&right.1.penalty))
-        .map(|(arrangement, _)| arrangement)
 }
 
 /// The measures of a painting: from the cache when its bytes were measured before, otherwise
@@ -468,10 +347,6 @@ fn suits(effect: Atmosphere, measures: &Measures) -> bool {
 fn theme_view(theme: &Theme, location: String) -> rpc::HomeTheme {
     rpc::HomeTheme {
         location_id: location,
-        arrangement: theme.arrangement.name.to_owned(),
-        title: Some(theme.arrangement.title.to_wire()),
-        code: Some(theme.arrangement.code.to_wire()),
-        party: Some(theme.arrangement.party.to_wire()),
         mood: Some(mood_view(&theme.mood)),
         atmosphere: theme
             .atmosphere
@@ -493,15 +368,10 @@ fn mood_view(mood: &MoodMeasures) -> rpc::HomeMood {
     }
 }
 
-/// Today's layout with the neutral mood. The blocks are unset, so the stylesheet places them
-/// exactly as it did before home themes existed.
+/// The neutral mood, flagged `fallback`; the stylesheet draws the same layout with its own colours.
 fn fallback_view(location: String) -> rpc::HomeTheme {
     rpc::HomeTheme {
         location_id: location,
-        arrangement: FALLBACK_ARRANGEMENT.to_owned(),
-        title: None,
-        code: None,
-        party: None,
         mood: Some(mood_view(&MoodMeasures {
             accent: NEUTRAL_ACCENT.to_owned(),
             tint: NEUTRAL_TINT.to_owned(),

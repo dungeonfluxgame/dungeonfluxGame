@@ -1,18 +1,14 @@
-//! Native checks of the home-screen theme: the scorer on synthetic paintings with a known focal
-//! region, the arrangement geometry at the reference viewports, every location painting that can
-//! appear, refusals that name the painting, the documented fallback, and the lobby view carried
-//! through the generated protocol.
+//! Native checks of the home-screen theme: the mood and the atmosphere on synthetic and real
+//! paintings, every location painting that can appear, refusals that name the painting, the
+//! documented fallback, and the lobby view carried through the generated protocol.
 use super::adventure::setting::SettingKind;
-use super::home_theme::analysis::{self, AnalysisError, Measures, VIEWPORTS};
+use super::home_theme::analysis::{self, AnalysisError, Measures};
 use super::home_theme::{
-    ARRANGEMENTS, Arrangement, Atmosphere, Cache, HomeThemeError, atmosphere_for,
-    choose_arrangement, lobby_view, theme_for, theme_from_cache,
+    Atmosphere, Cache, HomeThemeError, atmosphere_for, lobby_view, theme_for, theme_from_cache,
 };
 use image::{Rgb, RgbImage};
 use prost::Message;
 use std::path::{Path, PathBuf};
-
-const PARTY_SIZES: [usize; 3] = [0, 2, 6];
 
 fn asset_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui")
@@ -24,191 +20,14 @@ fn synthetic(pixel: impl Fn(u32, u32) -> [u8; 3]) -> RgbImage {
     RgbImage::from_fn(width, height, |x, y| Rgb(pixel(x, y)))
 }
 
-/// Navy night with one pale disc centred at `(cx, cy)` in painting fractions.
-fn moon_at(cx: f64, cy: f64) -> RgbImage {
-    synthetic(|x, y| {
-        let fx = f64::from(x) / 640.0;
-        let fy = f64::from(y) / 360.0;
-        let distance = ((fx - cx).powi(2) + ((fy - cy) * 0.5625).powi(2)).sqrt();
-        if distance < 0.07 {
-            [250, 246, 226]
-        } else {
-            [14, 22, 40]
-        }
-    })
-}
-
 fn measure(image: &RgbImage) -> Measures {
     analysis::measure(image).expect("a lit synthetic painting measures")
 }
 
-fn overlaps(a: [f64; 4], b: [f64; 4]) -> bool {
-    a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
-}
-
-/// The arrangement's three blocks in pixels at one viewport, as `[left, top, right, bottom]`.
-fn blocks_px(arrangement: &Arrangement, viewport: (u32, u32)) -> [[f64; 4]; 3] {
-    let (width, height) = (f64::from(viewport.0), f64::from(viewport.1));
-    arrangement.boxes().map(|[left, top, w, h]| {
-        [
-            width * f64::from(left) / 1000.0,
-            height * f64::from(top) / 1000.0,
-            width * f64::from(left + w) / 1000.0,
-            height * f64::from(top + h) / 1000.0,
-        ]
-    })
-}
-
 #[test]
-fn a_moon_in_the_upper_right_is_the_focal_region_and_the_chosen_layout_leaves_it_clear() {
-    let measures = measure(&moon_at(0.8, 0.25));
-    let [left, top, right, bottom] = measures.focal;
-    assert!(
-        left <= 0.8 && 0.8 <= right && top <= 0.25 && 0.25 <= bottom,
-        "focal box {:?} must contain the moon centre",
-        measures.focal
-    );
-    assert!(
-        right - left < 0.5,
-        "focal box {:?} should be the moon, not the sky",
-        measures.focal
-    );
-    let arrangement = choose_arrangement(&measures).expect("some layout leaves the moon clear");
-    let fit = analysis::fit(arrangement.boxes(), &measures);
-    assert!(
-        fit.is_clear(),
-        "{} covers the moon: {fit:?}",
-        arrangement.name
-    );
-}
-
-#[test]
-fn a_moon_low_on_the_left_is_found_where_it_is_painted() {
-    let measures = measure(&moon_at(0.2, 0.75));
-    let [left, top, right, bottom] = measures.focal;
-    assert!(
-        left <= 0.2 && 0.2 <= right,
-        "focal {:?} misses x 0.2",
-        measures.focal
-    );
-    assert!(
-        top <= 0.75 && 0.75 <= bottom,
-        "focal {:?} misses y 0.75",
-        measures.focal
-    );
-}
-
-#[test]
-fn a_layout_that_covers_the_focal_region_is_not_clear_and_scores_it() {
-    let mut measures = measure(&moon_at(0.8, 0.25));
-    measures.focal = [0.0, 0.0, 0.5, 0.5];
-    let title_top_left = ARRANGEMENTS
-        .iter()
-        .find(|arrangement| arrangement.name == "title-top-left-panels-bottom")
-        .expect("the fallback arrangement is defined");
-    let fit = analysis::fit(title_top_left.boxes(), &measures);
-    assert!(
-        !fit.is_clear(),
-        "the title block covers the top-left focal region"
-    );
-    assert!(
-        fit.focal_covered_permille
-            .iter()
-            .all(|covered| *covered > 0)
-    );
-}
-
-#[test]
-fn a_flat_black_painting_has_no_focal_region_and_is_refused_as_unlit() {
+fn a_flat_black_painting_is_refused_as_unlit() {
     let image = synthetic(|_, _| [0, 0, 0]);
     assert_eq!(analysis::measure(&image).err(), Some(AnalysisError::Flat));
-}
-
-#[test]
-fn ground_that_is_bright_and_busy_costs_more_than_ground_that_is_dark_and_calm() {
-    // The left half is dark and flat; the right half is a bright checker.
-    let image = synthetic(|x, y| {
-        if x < 320 {
-            [12, 18, 30]
-        } else if (x / 8 + y / 8) % 2 == 0 {
-            [245, 240, 220]
-        } else {
-            [40, 30, 20]
-        }
-    });
-    let measures = measure(&image);
-    let calm = [
-        [45, 45, 240, 200],
-        [30, 690, 260, 290],
-        [650, 690, 330, 290],
-    ];
-    let busy = [
-        [45, 45, 240, 200],
-        [600, 690, 260, 290],
-        [650, 690, 330, 290],
-    ];
-    let calm_fit = analysis::fit(calm, &measures);
-    let busy_fit = analysis::fit(busy, &measures);
-    assert!(
-        busy_fit.penalty > calm_fit.penalty,
-        "bright busy ground {busy_fit:?} must cost more than dark calm ground {calm_fit:?}"
-    );
-}
-
-#[test]
-fn every_arrangement_keeps_its_blocks_inside_and_apart_at_each_reference_viewport() {
-    for arrangement in ARRANGEMENTS {
-        for viewport in VIEWPORTS {
-            let blocks = blocks_px(&arrangement, viewport);
-            for block in blocks {
-                assert!(
-                    block[0] >= 0.0 && block[1] >= 0.0,
-                    "{} leaves the viewport at {viewport:?}",
-                    arrangement.name
-                );
-                assert!(
-                    block[2] <= f64::from(viewport.0) && block[3] <= f64::from(viewport.1),
-                    "{} leaves the viewport at {viewport:?}",
-                    arrangement.name
-                );
-            }
-            for (index, block) in blocks.iter().enumerate() {
-                for other in &blocks[index + 1..] {
-                    assert!(
-                        !overlaps(*block, *other),
-                        "{} overlaps its own blocks at {viewport:?}",
-                        arrangement.name
-                    );
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn every_arrangement_gives_the_join_block_a_qr_tile_and_the_party_two_rows_of_three() {
-    // The join block holds a square QR tile of 22% of the screen height at 1080p beside the room
-    // code (PLAY-Q01), so its box must be at least that tall at 1080p. Six heroes take two rows
-    // of three, so the party box must hold two rows of cards at the smallest viewport.
-    for arrangement in ARRANGEMENTS {
-        let join_1080 = blocks_px(&arrangement, (1920, 1080))[1];
-        let join_height = join_1080[3] - join_1080[1];
-        assert!(
-            // The QR tile (22% of the height) plus the address and hint lines, with the padding.
-            join_height >= 0.35 * 1080.0,
-            "{} join block is {join_height}px tall, short of the QR tile",
-            arrangement.name
-        );
-        let party = blocks_px(&arrangement, (800, 577))[2];
-        let width = party[2] - party[0];
-        let height = party[3] - party[1];
-        assert!(
-            width >= 384.0 && height >= 160.0,
-            "{} party box {width}x{height} at 800x577 is too small for {:?} heroes",
-            arrangement.name,
-            PARTY_SIZES
-        );
-    }
 }
 
 #[test]
@@ -217,12 +36,6 @@ fn every_location_arrival_painting_gets_a_theme_from_its_pixels() {
     for painting in arrival_paintings() {
         let theme = theme_for(&asset_root(), &painting, None)
             .unwrap_or_else(|error| panic!("{painting} should have a theme: {error}"));
-        assert!(
-            ARRANGEMENTS
-                .iter()
-                .any(|arrangement| arrangement.name == theme.arrangement.name),
-            "{painting} names an undefined arrangement"
-        );
         assert!(theme.mood.accent.starts_with('#') && theme.mood.accent.len() == 7);
         themed += 1;
     }
@@ -233,8 +46,8 @@ fn every_location_arrival_painting_gets_a_theme_from_its_pixels() {
 }
 
 #[test]
-fn the_arrangement_is_the_same_cold_warm_and_in_any_order_of_paintings() {
-    // Arrange: two real paintings whose layouts are close, measured in two orders with fresh caches.
+fn a_theme_is_the_same_cold_warm_and_in_any_order_of_paintings() {
+    // Arrange: two real paintings, measured in two orders with fresh caches.
     let farm = "assets/ui/generated/scene-thistledown-farm-arrival.webp";
     let reedmoor = "assets/ui/generated/scene-reedmoor-boardwalk-arrival.webp";
     let root = asset_root();
@@ -261,15 +74,6 @@ fn the_arrangement_is_the_same_cold_warm_and_in_any_order_of_paintings() {
         reedmoor_second, reedmoor_first,
         "reedmoor depends on the order of paintings"
     );
-    assert_eq!(farm_cold.arrangement.name, farm_later.arrangement.name);
-    // The farm's layout must leave the focal region clear at every reference viewport.
-    let measures = analysis::measure(
-        &image::open(root.join("generated/scene-thistledown-farm-arrival.webp"))
-            .expect("the farm painting decodes")
-            .into_rgb8(),
-    )
-    .expect("the farm measures");
-    assert!(analysis::fit(farm_cold.arrangement.boxes(), &measures).is_clear());
 }
 
 #[test]
@@ -337,8 +141,6 @@ fn a_file_that_is_not_an_image_is_refused_by_name_as_undecodable() {
 fn without_an_installed_asset_root_the_lobby_view_is_the_documented_fallback() {
     let view = lobby_view("assets/ui/generated/scene-salt-quay-arrival.webp", None);
     assert!(view.fallback, "a lobby with no installed theme says so");
-    assert_eq!(view.arrangement, "title-top-left-panels-bottom");
-    assert!(view.title.is_none() && view.code.is_none() && view.party.is_none());
     assert!(view.atmosphere.is_empty());
     let mood = view.mood.expect("the neutral mood is always sent");
     assert_eq!(mood.accent, "#e8cb94");
@@ -349,16 +151,14 @@ fn without_an_installed_asset_root_the_lobby_view_is_the_documented_fallback() {
 fn the_lobby_theme_survives_the_generated_protocol_encoding() {
     let view = super::rpc::HomeTheme {
         location_id: "salt-quay".to_owned(),
-        arrangement: "single-bottom-band".to_owned(),
-        title: Some(super::rpc::HomeBox {
-            left_permille: 30,
-            top_permille: 690,
-            width_permille: 320,
-            height_permille: 290,
+        mood: Some(super::rpc::HomeMood {
+            accent: "#e8cb94".to_owned(),
+            tint: "#0b1623".to_owned(),
+            vignette_permille: 550,
+            brightness_permille: 900,
+            contrast_permille: 1000,
+            saturation_permille: 1000,
         }),
-        code: None,
-        party: None,
-        mood: None,
         atmosphere: vec!["mist".to_owned(), "water-glints".to_owned()],
         fallback: false,
     };
@@ -397,47 +197,4 @@ fn arrival_paintings() -> Vec<String> {
     paintings.sort();
     paintings.dedup();
     paintings
-}
-
-/// Development report, not a gate: writes each location painting's focal box and how every
-/// arrangement covers it, to the file named by `DF_HOME_THEME_REPORT`. Run with `--ignored`.
-#[test]
-#[ignore = "development report; set DF_HOME_THEME_REPORT to a file path"]
-fn report_home_theme_focal_and_coverage_for_each_location_painting() {
-    let Some(path) = std::env::var_os("DF_HOME_THEME_REPORT") else {
-        return;
-    };
-    let mut report = Vec::new();
-    for painting in arrival_paintings() {
-        let file = super::home_theme::painting_file(&asset_root(), &painting)
-            .expect("the painting file resolves");
-        let image = image::open(&file)
-            .expect("the painting decodes")
-            .into_rgb8();
-        let measures = measure(&image);
-        let fits: Vec<serde_json::Value> = ARRANGEMENTS
-            .iter()
-            .map(|arrangement| {
-                let fit = analysis::fit(arrangement.boxes(), &measures);
-                serde_json::json!({
-                    "arrangement": arrangement.name,
-                    "covered_permille": fit.focal_covered_permille,
-                    "penalty": fit.penalty,
-                })
-            })
-            .collect();
-        report.push(serde_json::json!({
-            "painting": painting,
-            "size": measures.size,
-            "focal": measures.focal,
-            "mean_luminance": measures.mean_luminance,
-            "warm_balance": measures.warm_balance,
-            "fits": fits,
-        }));
-    }
-    std::fs::write(
-        path,
-        serde_json::to_string_pretty(&report).expect("the report serialises"),
-    )
-    .expect("the report file is writable");
 }

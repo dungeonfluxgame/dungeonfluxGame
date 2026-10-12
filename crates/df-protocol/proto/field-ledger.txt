@@ -543,11 +543,6 @@ field dungeonflux.public.v1.JourneyView 14 live_faces type=11 label=3 presence=f
 field dungeonflux.public.v1.JourneyView 15 presentation_sequence type=4 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 16 reply_speaker type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 30 home type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeTheme oneof=-
-message dungeonflux.public.v1.HomeBox
-field dungeonflux.public.v1.HomeBox 1 left_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeBox 2 top_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeBox 3 width_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeBox 4 height_permille type=13 label=1 presence=false target=- oneof=-
 message dungeonflux.public.v1.HomeMood
 field dungeonflux.public.v1.HomeMood 1 accent type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.HomeMood 2 tint type=9 label=1 presence=false target=- oneof=-
@@ -557,13 +552,14 @@ field dungeonflux.public.v1.HomeMood 5 contrast_permille type=13 label=1 presenc
 field dungeonflux.public.v1.HomeMood 6 saturation_permille type=13 label=1 presence=false target=- oneof=-
 message dungeonflux.public.v1.HomeTheme
 field dungeonflux.public.v1.HomeTheme 1 location_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeTheme 2 arrangement type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeTheme 3 title type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeBox oneof=-
-field dungeonflux.public.v1.HomeTheme 4 code type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeBox oneof=-
-field dungeonflux.public.v1.HomeTheme 5 party type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeBox oneof=-
 field dungeonflux.public.v1.HomeTheme 6 mood type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeMood oneof=-
 field dungeonflux.public.v1.HomeTheme 7 atmosphere type=9 label=3 presence=false target=- oneof=-
 field dungeonflux.public.v1.HomeTheme 8 fallback type=8 label=1 presence=false target=- oneof=-
+reserved-range dungeonflux.public.v1.HomeTheme Some(2) Some(6)
+reserved-name dungeonflux.public.v1.HomeTheme arrangement
+reserved-name dungeonflux.public.v1.HomeTheme title
+reserved-name dungeonflux.public.v1.HomeTheme code
+reserved-name dungeonflux.public.v1.HomeTheme party
 # PLAY-V09: scene plate (GameplayScene 20 live_plate, 21 plate_layout, 22 plate_state)
 enum dungeonflux.public.v1.PlateSide
 enum dungeonflux.public.v1.PlateState

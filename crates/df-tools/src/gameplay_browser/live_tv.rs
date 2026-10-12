@@ -21,13 +21,14 @@ use std::{cell::Cell, time::Duration};
 use web_sys::Event;
 
 pub(super) const GENERATED: &str = "/assets/ui/generated";
-/// The party cards a scene shows, and the least the lobby shows (an open seat each).
 // PLAY-Q01: the server's QR code of the join link (see gameplay/join_link.rs).
 const JOIN_QR: &str = "/gameplay/join-qr.svg";
+/// The party cards a scene shows.
 const PARTY_SLOTS: usize = 2;
-/// The most party cards the lobby draws: two rows of three.
+/// The seats the lobby row always shows (open seats pad a smaller party), and the most it draws,
+/// all in one row.
+const LOBBY_SEATS_MIN: usize = 4;
 const PARTY_MAX: usize = 6;
-const TAGLINE: &str = "AI dungeon master for fifth-edition fantasy";
 const DM_AVATAR: &str = "/assets/concept-art/dm-avatar.webp";
 const GATHERED_SOUND_DELAY: Duration = Duration::from_millis(700);
 
@@ -56,10 +57,8 @@ pub(super) struct TvModel {
     pub(super) lede: String,
     pub(super) speaker: Option<TvSpeaker>,
     pub(super) room_code: String,
-    pub(super) join_label: String,
     // PLAY-Q01: the host the room code is typed at, named in the join hint.
     pub(super) join_host: String,
-    pub(super) join_path: String,
     pub(super) party: Vec<TvMember>,
     pub(super) art: String,
     pub(super) art_fallback: &'static str,
@@ -161,7 +160,6 @@ pub(super) struct TvStage {
     speaker_name: Element,
     speaker_line: Element,
     code: Element,
-    link: Element,
     // PLAY-Q01: the join hint, which names the host for the room code.
     hint: Element,
     roster_slot: Element,
@@ -327,7 +325,6 @@ impl TvStage {
         image.set_attribute("hidden", "")?;
         let text = node(document, &brand, "span", "tv-wordmark-text", "Dungeon")?;
         node(document, &text, "b", "", "Flux")?;
-        node(document, &brand, "p", "tv-tagline", TAGLINE)?;
         let load = {
             let (image, text) = (image.clone(), text.clone());
             Closure::wrap(Box::new(move |_: Event| {
@@ -362,10 +359,8 @@ impl TvStage {
             "Room code",
         )?;
         let code = node(document, &code_box, "div", "tv-code room-code", "")?;
-        let link = node(document, &join, "a", "tv-url join-link", "")?;
-        link.set_attribute("target", "_blank")?;
         let hint = node(document, &join, "p", "tv-hint", "")?;
-        let roster = node(document, &lobby_row, "section", "tv-panel tv-roster", "")?;
+        let roster = node(document, &lobby_row, "section", "tv-roster", "")?;
         node(document, &roster, "div", "tv-label", "Your party")?;
         let gathered = node(
             document,
@@ -455,7 +450,6 @@ impl TvStage {
             speaker_name,
             speaker_line,
             code,
-            link,
             hint,
             roster_slot,
             party_bar,
@@ -662,13 +656,14 @@ impl TvStage {
             home.append_child(&self.party)?;
         }
         self.code.set_text_content(Some(&model.room_code));
-        self.link.set_text_content(Some(&model.join_label));
-        self.link.set_attribute("href", &model.join_path)?;
+        // The code's length sizes it to the join card (live_home.css).
+        self.code.set_attribute(
+            "style",
+            &format!("--chars:{}", model.room_code.chars().count().max(1)),
+        )?;
         // PLAY-Q01
-        self.hint.set_text_content(Some(&format!(
-            "Scan to join, or enter the room code at {}",
-            model.join_host
-        )));
+        self.hint
+            .set_text_content(Some(&format!("Or enter the code at {}", model.join_host)));
         match &model.speaker {
             Some(speaker) if !lobby => {
                 set_hidden(&self.speaker, false)?;
@@ -688,9 +683,10 @@ impl TvStage {
             _ => set_hidden(&self.speaker, true)?,
         }
         let announce = self.drawn.get() && lobby;
-        // The lobby shows an open seat for each place up to six; a scene keeps its two cards.
+        // The lobby shows four seats at least, with open seats for the empty ones, up to six in one
+        // row; a scene keeps its two cards.
         let shown = if lobby {
-            model.party.len().clamp(PARTY_SLOTS, PARTY_MAX)
+            model.party.len().clamp(LOBBY_SEATS_MIN, PARTY_MAX)
         } else {
             PARTY_SLOTS
         };
