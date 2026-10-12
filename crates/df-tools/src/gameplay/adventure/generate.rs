@@ -181,6 +181,8 @@ fn npc(
             ("role", &archetype.role),
             ("desc", &archetype.desc),
             ("voice", &archetype.voice),
+            ("gender", &archetype.gender),
+            ("age", &archetype.age),
             ("id", &archetype.id),
         ],
     );
@@ -393,6 +395,8 @@ pub(crate) fn generate_with_prose(
             ("id", &ant.id),
             ("group", group(ant)),
             ("voice", &ant.voice),
+            ("gender", &ant.gender),
+            ("age", &ant.age),
         ],
     );
     let [sub, obj, pos, reflexive] = pronouns(&ant.gender)?;
@@ -663,21 +667,21 @@ pub(crate) fn generate_with_prose(
         &patron.id,
         &patron_first,
         &tables.asset(&patron.art)?,
-        &patron.voice,
+        (&patron.voice, &patron.gender, &patron.age),
     );
     let contact_actor = super::listener::cast_member(
         CastRole::Contact,
         &contact.id,
         &contact_first,
         &tables.asset(&contact.art)?,
-        &contact.voice,
+        (&contact.voice, &contact.gender, &contact.age),
     );
     let antagonist_actor = super::listener::cast_member(
         CastRole::Antagonist,
         &ant.id,
         &pack.bandit.name,
         &tables.asset(&ant.art)?,
-        &ant.voice,
+        (&ant.voice, &ant.gender, &ant.age),
     );
     let arrival_art = tables.asset(&loc.art.arrival)?;
     let interior_art = tables.asset(&loc.art.interior)?;

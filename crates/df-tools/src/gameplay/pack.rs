@@ -501,6 +501,10 @@ pub(super) struct SceneCastMember {
     pub(super) sprite: String,
     pub(super) portrait: String,
     pub(super) voice: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) gender: Option<Gender>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) age: Option<Age>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -512,12 +516,59 @@ pub(super) enum CastRole {
     Bystander,
 }
 
-/// What a language model needs to voice one speaking character in character.
+/// The pronoun set a character is cast and voiced with.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Gender {
+    He,
+    She,
+    They,
+    It,
+}
+
+/// How old a character sounds.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Age {
+    Young,
+    Adult,
+    Elder,
+}
+
+impl Gender {
+    pub(super) fn from_table(text: &str) -> Option<Self> {
+        match text {
+            "he" => Some(Self::He),
+            "she" => Some(Self::She),
+            "they" => Some(Self::They),
+            "it" => Some(Self::It),
+            _ => None,
+        }
+    }
+}
+
+impl Age {
+    pub(super) fn from_table(text: &str) -> Option<Self> {
+        match text {
+            "young" => Some(Self::Young),
+            "adult" => Some(Self::Adult),
+            "elder" => Some(Self::Elder),
+            _ => None,
+        }
+    }
+}
+
+/// What a language model needs to voice one speaking character in character, and what voice
+/// casting needs to pick a voice without reading the free-text `voice` phrase.
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SpeakerProfile {
     /// Equals the `speaker` of the scenes this character speaks in.
     pub(super) name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) gender: Option<Gender>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) age: Option<Age>,
     /// Who the character is to the party, in a short phrase.
     pub(super) role: String,
     /// How the character sounds, in a short phrase.
@@ -1999,6 +2050,18 @@ pub(super) fn bandit() -> df_rules::local_journey::BanditRules {
             },
         }
     })
+}
+/// Every speaking character of the active pack, for voice casting: name, gender, age and the
+/// free-text voice phrase.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "voice casting at startup is the caller; it reads the pack's speakers here"
+    )
+)]
+pub(super) fn speakers() -> Vec<SpeakerProfile> {
+    with_content(|pack| pack.speakers.clone())
 }
 pub(super) fn narrative_budget() -> u64 {
     active().map_or(8, |loaded| {

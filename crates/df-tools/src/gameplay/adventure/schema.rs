@@ -78,6 +78,8 @@ pub(super) struct NpcArchetype {
     pub(super) role: String,
     pub(super) desc: String,
     pub(super) gender: String,
+    /// One of `young`, `adult`, `elder`; agrees with `voice` and the portrait.
+    pub(super) age: String,
     pub(super) voice: String,
     pub(super) fits: Vec<String>,
     pub(super) art: String,
@@ -147,6 +149,8 @@ pub(super) struct Antagonist {
     pub(super) klass: String,
     pub(super) speaks: bool,
     pub(super) gender: String,
+    /// One of `young`, `adult`, `elder`.
+    pub(super) age: String,
     pub(super) voice: String,
     pub(super) fits: Vec<String>,
     pub(super) name_form: String,

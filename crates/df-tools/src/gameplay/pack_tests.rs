@@ -1456,6 +1456,21 @@ fn shipped_pack_lists_its_secret_terms_and_speakers_and_bad_ones_are_refused() {
             "{pointer}"
         );
     }
+    use super::pack::{Age, Gender};
+    assert_eq!(loaded.pack.speakers[0].gender, Some(Gender::He));
+    assert_eq!(loaded.pack.speakers[0].age, Some(Age::Young));
+    assert_eq!(super::pack::with_test_pack(loaded.clone(), super::pack::speakers).len(), 2);
+    for (pointer, value) in [
+        ("/speakers/0/gender", json!("xe")),
+        ("/speakers/0/age", json!("ancient")),
+        ("/scenes/1/cast/0/gender", json!("")),
+    ] {
+        let pack = set(&shipped_pack(), pointer, value);
+        assert!(
+            matches!(refusal(&pack, &shipped_tuning()), PackError::Parse { .. }),
+            "{pointer}"
+        );
+    }
     let pack = edit(&shipped_pack(), |document| {
         document["speakers"][0]["mood"] = json!("cheerful");
     });

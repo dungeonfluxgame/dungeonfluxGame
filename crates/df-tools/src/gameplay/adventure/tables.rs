@@ -677,6 +677,23 @@ impl Tables {
                 ));
             }
         }
+        let ages = self
+            .patrons
+            .entries
+            .iter()
+            .chain(&self.contacts.entries)
+            .map(|npc| (&npc.age, "patrons.json"))
+            .chain(
+                self.antagonists
+                    .entries
+                    .iter()
+                    .map(|ant| (&ant.age, "antagonists.json")),
+            );
+        for (age, file) in ages {
+            if !["young", "adult", "elder"].contains(&age.as_str()) {
+                return Err(invalid(file, "age", "age must be young, adult or elder"));
+            }
+        }
         for key in ["surnames", "goblin", "kobold", "creature_adj", "undead_adj"] {
             if !self.names.contains_key(key) {
                 return Err(invalid("names.json", "tables", format!("missing {key}")));

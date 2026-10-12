@@ -137,7 +137,8 @@
                 "text": "Step aside. {stake.short|cap} was never yours to carry."
               }
             ]
-          }
+          },
+          "age": "young"
         },
         {
           "faces": [
@@ -255,7 +256,8 @@
                 "text": "Whatever {patron.first} told you, it was only half the truth."
               }
             ]
-          }
+          },
+          "age": "adult"
         },
         {
           "faces": [
@@ -375,7 +377,8 @@
                 "text": "This way is closed, and so are your questions. Give it here."
               }
             ]
-          }
+          },
+          "age": "adult"
         },
         {
           "faces": [
@@ -494,7 +497,8 @@
                 "text": "Give, give, or I poke you with my sword!"
               }
             ]
-          }
+          },
+          "age": "adult"
         },
         {
           "faces": [
@@ -614,7 +618,8 @@
                 "text": "You trespass! {stake.short|cap} belongs to the deep ones now!"
               }
             ]
-          }
+          },
+          "age": "adult"
         },
         {
           "faces": [
@@ -700,7 +705,8 @@
               }
             ]
           },
-          "warnings": null
+          "warnings": null,
+          "age": "adult"
         },
         {
           "faces": [
@@ -784,7 +790,8 @@
               }
             ]
           },
-          "warnings": null
+          "warnings": null,
+          "age": "adult"
         },
         {
           "faces": [
@@ -869,7 +876,8 @@
               }
             ]
           },
-          "warnings": null
+          "warnings": null,
+          "age": "adult"
         },
         {
           "faces": [
@@ -957,7 +965,8 @@
               }
             ]
           },
-          "warnings": null
+          "warnings": null,
+          "age": "adult"
         },
         {
           "faces": [
@@ -1043,7 +1052,8 @@
               }
             ]
           },
-          "warnings": null
+          "warnings": null,
+          "age": "adult"
         },
         {
           "faces": [
@@ -1129,7 +1139,8 @@
               }
             ]
           },
-          "warnings": null
+          "warnings": null,
+          "age": "adult"
         },
         {
           "faces": [
@@ -1247,7 +1258,8 @@
                 "text": "Whoever sent you picked the wrong road."
               }
             ]
-          }
+          },
+          "age": "adult"
         }
       ]
     }

@@ -1,7 +1,7 @@
 //! Listener-safety data the generator derives from the rolled facts: the phrases that give the
 //! private clue away, and who each speaking character is. The pack carries both so that an
 //! in-character reply never has to guess them from prose.
-use super::super::pack::{CastRole, SceneCastMember, SpeakerProfile};
+use super::super::pack::{Age, CastRole, Gender, SceneCastMember, SpeakerProfile};
 use super::schema::{Antagonist, Destination, Secret};
 use std::collections::BTreeMap;
 
@@ -45,9 +45,12 @@ pub(super) fn cast_member(
     id: &str,
     name: &str,
     portrait: &str,
-    voice: &str,
+    voice: (&str, &str, &str),
 ) -> SceneCastMember {
+    let (voice, gender, age) = voice;
     SceneCastMember {
+        gender: Gender::from_table(gender),
+        age: Age::from_table(age),
         id: id.to_owned(),
         name: name.to_owned(),
         role,
@@ -65,13 +68,23 @@ pub(super) fn speakers(
     antagonist_name: &str,
 ) -> Vec<SpeakerProfile> {
     let field = |key: &str| context.get(key).cloned().unwrap_or_default();
+    let traits = |prefix: &str| {
+        (
+            Gender::from_table(&field(&format!("{prefix}.gender"))),
+            Age::from_table(&field(&format!("{prefix}.age"))),
+        )
+    };
     let mut profiles = vec![
         SpeakerProfile {
+            gender: traits("patron").0,
+            age: traits("patron").1,
             name: field("patron.first"),
             role: format!("{} who asks the heroes for help", field("patron.desc")),
             voice: field("patron.voice"),
         },
         SpeakerProfile {
+            gender: traits("contact").0,
+            age: traits("contact").1,
             name: field("contact.first"),
             role: format!(
                 "{}, the heroes' contact at the end of the road",
@@ -82,6 +95,8 @@ pub(super) fn speakers(
     ];
     if antagonist.speaks {
         profiles.push(SpeakerProfile {
+            gender: traits("ant").0,
+            age: traits("ant").1,
             name: antagonist_name.to_owned(),
             role: format!(
                 "a hostile {} fighting the heroes: taunts, threatens or parleys, never helps",

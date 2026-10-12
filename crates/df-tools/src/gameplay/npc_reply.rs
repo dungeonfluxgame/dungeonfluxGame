@@ -407,11 +407,15 @@ mod tests {
             speakers: vec![
                 SpeakerProfile {
                     name: "Courier".to_owned(),
+                    gender: None,
+                    age: None,
                     role: "a frightened courier carrying a sealed packet".to_owned(),
                     voice: "hurried and anxious".to_owned(),
                 },
                 SpeakerProfile {
                     name: "Bandit".to_owned(),
+                    gender: None,
+                    age: None,
                     role: "a hostile bandit fighting the heroes".to_owned(),
                     voice: "sneering and rough".to_owned(),
                 },

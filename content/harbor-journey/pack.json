@@ -219,7 +219,9 @@
           "role": "patron",
           "sprite": "assets/ui/generated/sprite-courier",
           "portrait": "assets/ui/generated/portrait-courier",
-          "voice": "hurried and anxious"
+          "voice": "hurried and anxious",
+          "gender": "he",
+          "age": "young"
         }
       ]
     },
@@ -237,7 +239,9 @@
           "role": "patron",
           "sprite": "assets/ui/generated/sprite-courier",
           "portrait": "assets/ui/generated/portrait-courier",
-          "voice": "hurried and anxious"
+          "voice": "hurried and anxious",
+          "gender": "he",
+          "age": "young"
         },
         {
           "id": "bandit",
@@ -245,7 +249,9 @@
           "role": "antagonist",
           "sprite": "assets/ui/generated/sprite-bandit",
           "portrait": "assets/ui/generated/portrait-bandit",
-          "voice": "sneering and rough"
+          "voice": "sneering and rough",
+          "gender": "he",
+          "age": "adult"
         }
       ]
     },
@@ -263,7 +269,9 @@
           "role": "patron",
           "sprite": "assets/ui/generated/sprite-courier",
           "portrait": "assets/ui/generated/portrait-courier",
-          "voice": "hurried and anxious"
+          "voice": "hurried and anxious",
+          "gender": "he",
+          "age": "young"
         },
         {
           "id": "bandit",
@@ -271,7 +279,9 @@
           "role": "antagonist",
           "sprite": "assets/ui/generated/sprite-bandit",
           "portrait": "assets/ui/generated/portrait-bandit",
-          "voice": "sneering and rough"
+          "voice": "sneering and rough",
+          "gender": "he",
+          "age": "adult"
         }
       ]
     },
@@ -290,7 +300,9 @@
           "role": "antagonist",
           "sprite": "assets/ui/generated/sprite-bandit",
           "portrait": "assets/ui/generated/portrait-bandit",
-          "voice": "sneering and rough"
+          "voice": "sneering and rough",
+          "gender": "he",
+          "age": "adult"
         }
       ]
     },
@@ -308,7 +320,9 @@
           "role": "patron",
           "sprite": "assets/ui/generated/sprite-courier",
           "portrait": "assets/ui/generated/portrait-courier",
-          "voice": "hurried and anxious"
+          "voice": "hurried and anxious",
+          "gender": "he",
+          "age": "young"
         }
       ]
     },
@@ -328,7 +342,9 @@
           "role": "patron",
           "sprite": "assets/ui/generated/sprite-courier",
           "portrait": "assets/ui/generated/portrait-courier",
-          "voice": "hurried and anxious"
+          "voice": "hurried and anxious",
+          "gender": "he",
+          "age": "young"
         }
       ]
     },
@@ -351,12 +367,16 @@
     {
       "name": "Courier",
       "role": "a frightened courier who needs the heroes' help to deliver a sealed packet",
-      "voice": "hurried and anxious"
+      "voice": "hurried and anxious",
+      "gender": "he",
+      "age": "young"
     },
     {
       "name": "Bandit",
       "role": "a dockside bandit who attacks the heroes to take the packet",
-      "voice": "sneering and rough"
+      "voice": "sneering and rough",
+      "gender": "he",
+      "age": "adult"
     }
   ]
 }
