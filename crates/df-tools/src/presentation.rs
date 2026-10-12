@@ -178,6 +178,9 @@ pub(crate) struct StageActor {
     /// Speaking now, or acting on this turn.
     pub(crate) speaking: bool,
     pub(crate) down: bool,
+    // PLAY-L01: a server-generated expression variant of this character's cut-out, loaded from
+    // `/gameplay/imagery/<key>`; `None` shows the authored cut-out.
+    pub(crate) live_sprite: Option<String>,
 }
 
 /// A local served asset path, or `None` for anything else. Only these reach CSS or `src`.
@@ -188,6 +191,23 @@ pub(crate) fn asset_url(path: &str) -> Option<String> {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'.' | b'_')))
     .then(|| format!("/{path}"))
+}
+
+// PLAY-L01: a server-generated image path: `/gameplay/imagery/` and a 64-digit lowercase
+// hexadecimal key, nothing else. Only these reach CSS or `src` besides local assets.
+pub(crate) fn imagery_url(path: &str) -> Option<String> {
+    let key = path.strip_prefix("/gameplay/imagery/")?;
+    let plain = key.len() == 64 && key.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'));
+    plain.then(|| path.to_owned())
+}
+
+// PLAY-L01: the expression variant the scene's cast gives the named character, if any.
+fn live_sprite_of(scene: &rpc::GameplayScene, name: &str) -> Option<String> {
+    scene
+        .cast
+        .iter()
+        .find(|actor| actor.name == name)
+        .and_then(|actor| imagery_url(&actor.live_sprite))
 }
 
 /// Generated portrait stem of a speaker the art pack names by role.
@@ -254,6 +274,7 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
             hit_points: hit_points(member),
             speaking: fighting && member.active_turn,
             down: is_down(member),
+            live_sprite: None,
         })
         .collect();
     let speaker_portrait = asset_url(&scene.speaker_portrait);
@@ -272,6 +293,7 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
                 hit_points: hit_points(foe),
                 speaking: foe.active_turn,
                 down: foe.maximum_hit_points > 0 && foe.hit_points == 0,
+                live_sprite: None,
             });
         }
     } else if !journey.speaker.is_empty() && !journey.dialogue.is_empty() {
@@ -287,6 +309,7 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
                 hit_points: None,
                 speaking: true,
                 down: false,
+                live_sprite: live_sprite_of(scene, &journey.speaker),
             });
         }
     }
