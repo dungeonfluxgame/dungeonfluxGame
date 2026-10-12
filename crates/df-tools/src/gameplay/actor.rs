@@ -143,11 +143,26 @@ impl ActorInput for Call {
 pub(super) struct Publication {
     updates: watch::Sender<Checkpoint>,
     intents: std::sync::mpsc::SyncSender<()>,
+    campaign: Option<super::adventure::campaign_completion::CompletionObserver>,
 }
 impl Publication {
     pub(super) fn new(updates: watch::Sender<Checkpoint>) -> (Self, std::sync::mpsc::Receiver<()>) {
         let (intents, receiver) = std::sync::mpsc::sync_channel(1);
-        (Self { updates, intents }, receiver)
+        (
+            Self {
+                updates,
+                intents,
+                campaign: None,
+            },
+            receiver,
+        )
+    }
+    pub(super) fn with_campaign(
+        mut self,
+        observer: Option<super::adventure::campaign_completion::CompletionObserver>,
+    ) -> Self {
+        self.campaign = observer;
+        self
     }
     pub(super) fn publish(&mut self, checkpoint: &Checkpoint) {
         self.updates.send_replace(checkpoint.clone());
@@ -166,6 +181,9 @@ impl PublicationOwner<NativeScope<LocalDemoAuthority>> for Publication {
         checkpoint: &Checkpoint,
     ) -> Result<(), DeliveryError> {
         self.publish(checkpoint);
+        if let Some(observer) = &self.campaign {
+            observer.observe(checkpoint);
+        }
         Ok(())
     }
     fn wake_committed_intents(
@@ -279,6 +297,7 @@ pub(super) struct Actor {
     pub codec: NativeCodecLimits,
     pub fenced: bool,
     pub recovery_wakeup: watch::Sender<Checkpoint>,
+    pub campaign_observer: Option<super::adventure::campaign_completion::CompletionObserver>,
     pub intent_notifications: std::sync::mpsc::Receiver<()>,
     pub calls_remaining: u16,
     /// Plain play without `DF_GAMEPLAY_CALL_BUDGET`: calls are neither refused nor counted down.
@@ -325,6 +344,11 @@ pub(super) fn require_readable(fenced: bool) -> Result<(), tonic::Status> {
 }
 
 impl Actor {
+    fn observe_campaign(&self) {
+        if let Some(observer) = &self.campaign_observer {
+            observer.observe(self.owner.checkpoint());
+        }
+    }
     pub(super) fn next_completion_wake(&self) -> Option<Instant> {
         self.completion_retry.as_ref().and_then(|retry| retry.next)
     }
@@ -484,6 +508,7 @@ impl Actor {
                 self.fenced = false;
                 // Receipt recovery reloads canonical state without redispatching a
                 // committed effect. Publish that restored state to existing watches.
+                self.observe_campaign();
                 self.recovery_wakeup.send_if_modified(|published| {
                     if published == self.owner.checkpoint() {
                         false
@@ -573,6 +598,7 @@ impl Actor {
                     .reload_current(&scope, &context)
                     .map_err(unavailable)?;
                 self.fenced = false;
+                self.observe_campaign();
                 self.recovery_wakeup
                     .send_replace(self.owner.checkpoint().clone());
             }
@@ -688,6 +714,7 @@ impl Actor {
             SubmissionOutcome::Confirmed(committed) => {
                 if recovering && self.owner.is_current() {
                     self.fenced = false;
+                    self.observe_campaign();
                     self.recovery_wakeup
                         .send_replace(self.owner.checkpoint().clone());
                 }

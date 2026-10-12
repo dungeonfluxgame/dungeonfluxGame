@@ -84,3 +84,5 @@ development/evidence/journey/journal.lock
 
 # Generated adventure run caches are private durable data, never source.
 /development/runs/
+
+/development/campaigns/

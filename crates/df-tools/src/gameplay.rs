@@ -329,11 +329,27 @@ async fn credits() -> Html<&'static str> {
 /// argument keeps the fixed loopback address, 290-second limit, and small connection,
 /// stream, and call bounds the qualification harnesses were written against.
 pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(command) = std::env::args_os().nth(1)
+        && (command == "--campaign-run" || command == "--campaign-status")
+    {
+        return adventure::cli::campaign_run(
+            &std::env::args_os().skip(2).collect::<Vec<_>>(),
+            command == "--campaign-status",
+        );
+    }
     if std::env::args_os()
         .nth(1)
         .is_some_and(|argument| argument == "--roll-adventure")
     {
         return adventure::cli::run(&std::env::args_os().skip(2).collect::<Vec<_>>());
+    }
+    if let Some(command) = std::env::args_os().nth(1)
+        && (command == "--roll-campaign" || command == "--simulate-campaign")
+    {
+        return adventure::cli::campaign(
+            &std::env::args_os().skip(2).collect::<Vec<_>>(),
+            command == "--simulate-campaign",
+        );
     }
     let interactive = std::env::args().nth(4).is_none();
     let adventure_settings = if interactive {
@@ -384,7 +400,8 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                     pack::load(&directory).map_err(|error| io::Error::other(error.to_string()))?;
                 (directory, loaded)
             }
-            startup_configuration::AdventureMode::Random => {
+            startup_configuration::AdventureMode::Random
+            | startup_configuration::AdventureMode::Campaign => {
                 let prepared = adventure::startup::prepare(
                     settings,
                     &database_config()?,
@@ -834,7 +851,18 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let (updates, receiver) = watch::channel(initial.clone());
+    let (campaign_observer, campaign_worker) = if let Some(run) = generated_adventure
+        .as_ref()
+        .and_then(|prepared| prepared.campaign.clone())
+    {
+        let (observer, worker) = adventure::campaign_completion::worker(run)?;
+        observer.observe(&initial);
+        (Some(observer), Some(worker))
+    } else {
+        (None, None)
+    };
     let (publication, intent_notifications) = actor::Publication::new(updates.clone());
+    let publication = publication.with_campaign(campaign_observer.clone());
     let courier_reductions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let owner = match DurableOwner::new(
         repository,
@@ -867,6 +895,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         codec,
         fenced: false,
         recovery_wakeup: updates,
+        campaign_observer,
         intent_notifications,
         calls_remaining: call_budget.unwrap_or(u16::MAX),
         calls_unbounded: call_budget.is_none(),
@@ -1211,6 +1240,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         tokio::task::spawn_blocking(move || thread.join())
             .await?
             .map_err(|_| io::Error::other("gameplay actor join failed"))??;
+    if let Some(worker) = campaign_worker {
+        tokio::task::spawn_blocking(move || drop(worker)).await?;
+    }
     drained.map_err(|_| io::Error::other("gameplay actor drain failed"))?;
     released.map_err(|_| io::Error::other("gameplay exact-fence release failed"))?;
     closed.map_err(|_| io::Error::other("gameplay repository close failed"))?;

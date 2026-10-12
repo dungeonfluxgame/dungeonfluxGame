@@ -1,0 +1,2007 @@
+{
+  "acts": [
+    "Act I: The Hook and the Hint",
+    "Act II: The Widening Dark",
+    "Act III: The Reckoning"
+  ],
+  "artifact": {
+    "faces": [
+      8,
+      8
+    ],
+    "form": "a spiral horn that calls the water",
+    "hunger": "the drowned places",
+    "id": "tidehorn",
+    "name": "the Tidehorn",
+    "power": "commands tide and flood",
+    "short": "the Tidehorn"
+  },
+  "clock": [
+    "Crops yellow near the Reedmoor Boardwalk; healers shrug.",
+    "The sickness reaches the outskirts of the Orrery Library.",
+    "Wells and streams turn bitter, and rumors accuse neighbors.",
+    "Aldous offers a cure, and the desperate begin paying.",
+    "Half of the Tarn Marches is under quarantine and quarrels break out.",
+    "The source of the blight is moved to Thistledown Farm, beyond reach.",
+    "The land fails; Aldous stands as its only hope, and its only owner."
+  ],
+  "contact": {
+    "archetype": "watch-sergeant",
+    "first": "Rudd",
+    "surname": "Cobb"
+  },
+  "factions": [
+    {
+      "faction": {
+        "asset": "a library, instruments and some real scholarship",
+        "faces": [
+          9,
+          9
+        ],
+        "fits": [
+          "scholar",
+          "town",
+          "sacred"
+        ],
+        "goal": "understand the sky and the sleeping powers under it",
+        "id": "orrery-circle",
+        "name": "the Orrery Circle"
+      },
+      "party": {
+        "faces": [
+          6,
+          6
+        ],
+        "id": "ally",
+        "text": "eager to ally if the party proves itself"
+      },
+      "villain": {
+        "faces": [
+          1,
+          1
+        ],
+        "id": "foe",
+        "text": "opposes the villain"
+      }
+    },
+    {
+      "faction": {
+        "asset": "spies in every household of consequence",
+        "faces": [
+          2,
+          2
+        ],
+        "fits": [
+          "town",
+          "scholar",
+          "market"
+        ],
+        "goal": "collect secrets and trade them for influence",
+        "id": "gray-mantle",
+        "name": "the Gray Mantle"
+      },
+      "party": {
+        "faces": [
+          4,
+          4
+        ],
+        "id": "neutral",
+        "text": "neutral, open to a good argument"
+      },
+      "villain": {
+        "faces": [
+          3,
+          3
+        ],
+        "id": "wary",
+        "text": "wary of the villain"
+      }
+    },
+    {
+      "faction": {
+        "asset": "old titles, old grudges and a few secretly loyal soldiers",
+        "faces": [
+          7,
+          7
+        ],
+        "fits": [
+          "town",
+          "scholar",
+          "farm"
+        ],
+        "goal": "restore a fallen noble house to power",
+        "id": "ashen-court",
+        "name": "the Ashen Court"
+      },
+      "party": {
+        "faces": [
+          2,
+          2
+        ],
+        "id": "wary",
+        "text": "wary and testing"
+      },
+      "villain": {
+        "faces": [
+          1,
+          1
+        ],
+        "id": "foe",
+        "text": "opposes the villain"
+      }
+    }
+  ],
+  "generator_version": "splitmix64-campaign-1",
+  "lieutenant_fates": {
+    "die": 6,
+    "entries": [
+      {
+        "effect": "delivers one missing clue publicly; ally attitude +1",
+        "faces": [
+          1,
+          1
+        ],
+        "id": "captured-talks",
+        "text": "is captured and answers questions"
+      },
+      {
+        "effect": "no clue; lieutenant removed from the story",
+        "faces": [
+          2,
+          2
+        ],
+        "id": "captured-silent",
+        "text": "is captured but refuses to speak"
+      },
+      {
+        "effect": "clock +1; may return once, unchanged",
+        "faces": [
+          3,
+          3
+        ],
+        "id": "escapes",
+        "text": "slips away in the confusion"
+      },
+      {
+        "effect": "clock +1; returns later as an extra minion chapter",
+        "faces": [
+          4,
+          4
+        ],
+        "id": "escapes-wounded",
+        "text": "escapes with a lasting grudge"
+      },
+      {
+        "effect": "a lead on the next node; an obligation recorded",
+        "faces": [
+          5,
+          5
+        ],
+        "id": "informant",
+        "text": "offers to inform on the villain, for a price"
+      },
+      {
+        "effect": "clock +1; the villain learns the party's approach",
+        "faces": [
+          6,
+          6
+        ],
+        "id": "rescued",
+        "text": "is carried off by the villain's agents"
+      }
+    ]
+  },
+  "milestones": [
+    "a standing welcome in the Orrery Circle halls",
+    "a standing invitation to the Orrery Circle councils",
+    "a safe room in the Orrery Library"
+  ],
+  "outline": [
+    {
+      "act": 1,
+      "allowed": [
+        "courier",
+        "escort",
+        "warning"
+      ],
+      "chapter_type": "warning",
+      "needs": [
+        "travel/exploration turns"
+      ],
+      "nodes": [],
+      "number": 1,
+      "pillars": [
+        25,
+        45,
+        30
+      ],
+      "role": "opening",
+      "skipped": false
+    },
+    {
+      "act": 1,
+      "allowed": [
+        "mystery",
+        "retrieval",
+        "delve",
+        "hunt"
+      ],
+      "chapter_type": "hunt",
+      "needs": [
+        "travel/exploration turns",
+        "multiple enemies"
+      ],
+      "nodes": [
+        "omens"
+      ],
+      "number": 2,
+      "pillars": [
+        40,
+        20,
+        40
+      ],
+      "role": "first-site",
+      "skipped": false
+    },
+    {
+      "act": 1,
+      "allowed": [
+        "parley",
+        "escort",
+        "retrieval"
+      ],
+      "chapter_type": "parley",
+      "needs": [
+        "skill checks with DCs",
+        "branching beyond two approaches"
+      ],
+      "nodes": [],
+      "number": 3,
+      "pillars": [
+        10,
+        70,
+        20
+      ],
+      "role": "ally",
+      "skipped": false
+    },
+    {
+      "act": 2,
+      "allowed": [
+        "heist",
+        "parley",
+        "rescue",
+        "mystery"
+      ],
+      "chapter_type": "rescue",
+      "needs": [
+        "multiple enemies",
+        "travel/exploration turns"
+      ],
+      "nodes": [
+        "villain"
+      ],
+      "number": 4,
+      "pillars": [
+        40,
+        30,
+        30
+      ],
+      "role": "midpoint",
+      "skipped": false
+    },
+    {
+      "act": 2,
+      "allowed": [
+        "hunt",
+        "rescue",
+        "defence",
+        "delve"
+      ],
+      "chapter_type": "hunt",
+      "needs": [
+        "travel/exploration turns",
+        "multiple enemies"
+      ],
+      "nodes": [],
+      "number": 5,
+      "pillars": [
+        40,
+        20,
+        40
+      ],
+      "role": "pressure",
+      "skipped": false
+    },
+    {
+      "act": 2,
+      "allowed": [
+        "lieutenant"
+      ],
+      "chapter_type": "lieutenant",
+      "needs": [
+        "multiple enemies",
+        "higher-CR creatures"
+      ],
+      "nodes": [
+        "scheme"
+      ],
+      "number": 6,
+      "pillars": [
+        60,
+        20,
+        20
+      ],
+      "role": "lieutenant",
+      "skipped": false
+    },
+    {
+      "act": 3,
+      "allowed": [
+        "race-clock",
+        "rescue",
+        "heist",
+        "defence"
+      ],
+      "chapter_type": "rescue",
+      "needs": [
+        "multiple enemies",
+        "travel/exploration turns"
+      ],
+      "nodes": [
+        "stronghold"
+      ],
+      "number": 7,
+      "pillars": [
+        40,
+        30,
+        30
+      ],
+      "role": "approach",
+      "skipped": false
+    },
+    {
+      "act": 3,
+      "allowed": [
+        "finale"
+      ],
+      "chapter_type": "finale",
+      "needs": [
+        "multiple enemies",
+        "higher-CR creatures",
+        "skill checks with DCs"
+      ],
+      "nodes": [
+        "weakness"
+      ],
+      "number": 8,
+      "pillars": [
+        50,
+        30,
+        20
+      ],
+      "role": "finale",
+      "skipped": false
+    }
+  ],
+  "patron": {
+    "archetype": "archivist",
+    "first": "Dessa",
+    "surname": "Quillon"
+  },
+  "premise": {
+    "archetype": "A fey bargain comes due",
+    "clock": "blight-spreads",
+    "faces": [
+      18,
+      18
+    ],
+    "family": "blight",
+    "id": "fey-bargain",
+    "pitch": "Generations ago, the region's founders struck a bargain with something in the hills, and the term has run out. Someone is quietly trying to pay with other people's lives.",
+    "region_tags": [
+      "wild",
+      "farm",
+      "sacred"
+    ],
+    "titles": [
+      "A Bargain at Hollow Hill",
+      "The Summer That Would Not End",
+      "What the Hill Remembers",
+      "Three Wishes and a Debt"
+    ],
+    "villain_types": [
+      "fey-lord",
+      "blight-druid",
+      "usurper",
+      "prophet"
+    ]
+  },
+  "region": "the Tarn Marches",
+  "region_short": "the Marches",
+  "rolls": [
+    {
+      "die": 20,
+      "entry_id": "fey-bargain",
+      "n": 1,
+      "natural": 18,
+      "status": "ok",
+      "table": "premise"
+    },
+    {
+      "die": 12,
+      "entry_id": "dragon",
+      "n": 2,
+      "natural": 5,
+      "status": "rejected",
+      "table": "villain.type"
+    },
+    {
+      "die": 12,
+      "entry_id": "lich",
+      "n": 3,
+      "natural": 11,
+      "status": "rejected",
+      "table": "villain.type"
+    },
+    {
+      "die": 12,
+      "entry_id": "dragon",
+      "n": 4,
+      "natural": 5,
+      "status": "rejected",
+      "table": "villain.type"
+    },
+    {
+      "die": 12,
+      "entry_id": "sleeping-horror",
+      "n": 5,
+      "natural": 1,
+      "status": "rejected",
+      "table": "villain.type"
+    },
+    {
+      "die": 12,
+      "entry_id": "dragon",
+      "n": 6,
+      "natural": 5,
+      "status": "rejected",
+      "table": "villain.type"
+    },
+    {
+      "die": 12,
+      "entry_id": "usurper",
+      "n": 7,
+      "natural": 3,
+      "status": "ok",
+      "table": "villain.type"
+    },
+    {
+      "die": 12,
+      "entry_id": "Aldous",
+      "n": 8,
+      "natural": 4,
+      "status": "ok",
+      "table": "villain.name"
+    },
+    {
+      "die": 12,
+      "entry_id": "Winter",
+      "n": 9,
+      "natural": 12,
+      "status": "ok",
+      "table": "villain.title"
+    },
+    {
+      "die": 12,
+      "entry_id": "has lost the thread of reason and calls it clarity",
+      "n": 10,
+      "natural": 9,
+      "status": "ok",
+      "table": "villain.motive"
+    },
+    {
+      "die": 12,
+      "entry_id": "seize-throne",
+      "n": 11,
+      "natural": 2,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "claim-the-relic",
+      "n": 12,
+      "natural": 7,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "seize-throne",
+      "n": 13,
+      "natural": 2,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "claim-the-relic",
+      "n": 14,
+      "natural": 7,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "claim-the-relic",
+      "n": 15,
+      "natural": 7,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "silence-witnesses",
+      "n": 16,
+      "natural": 10,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "own-the-streets",
+      "n": 17,
+      "natural": 6,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "crown-a-puppet",
+      "n": 18,
+      "natural": 12,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "seize-throne",
+      "n": 19,
+      "natural": 2,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "crown-a-puppet",
+      "n": 20,
+      "natural": 12,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "crown-a-puppet",
+      "n": 21,
+      "natural": 12,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "feed-the-thing",
+      "n": 22,
+      "natural": 8,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "provoke-war",
+      "n": 23,
+      "natural": 5,
+      "status": "rejected",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 12,
+      "entry_id": "call-in-the-pact",
+      "n": 24,
+      "natural": 9,
+      "status": "ok",
+      "table": "villain.scheme"
+    },
+    {
+      "die": 10,
+      "entry_id": "bargains with fine print",
+      "n": 25,
+      "natural": 7,
+      "status": "ok",
+      "table": "villain.method"
+    },
+    {
+      "die": 8,
+      "entry_id": "a pack of trained beasts",
+      "n": 26,
+      "natural": 8,
+      "status": "ok",
+      "table": "villain.resources"
+    },
+    {
+      "die": 12,
+      "entry_id": "a-loved-one",
+      "n": 27,
+      "natural": 3,
+      "status": "ok",
+      "table": "villain.weakness"
+    },
+    {
+      "die": 12,
+      "entry_id": "turns every nearby lamp flame faintly blue",
+      "n": 28,
+      "natural": 3,
+      "status": "ok",
+      "table": "villain.signature"
+    },
+    {
+      "die": 12,
+      "entry_id": "tidehorn",
+      "n": 29,
+      "natural": 8,
+      "status": "ok",
+      "table": "artifact"
+    },
+    {
+      "die": 12,
+      "entry_id": "the Tarn Marches",
+      "n": 30,
+      "natural": 1,
+      "status": "ok",
+      "table": "region.name"
+    },
+    {
+      "die": 4,
+      "entry_id": "4",
+      "n": 31,
+      "natural": 4,
+      "status": "ok",
+      "table": "region.sites"
+    },
+    {
+      "die": 8,
+      "entry_id": "orrery-library",
+      "n": 32,
+      "natural": 8,
+      "status": "ok",
+      "table": "site.home-base"
+    },
+    {
+      "die": 8,
+      "entry_id": "reedmoor-boardwalk",
+      "n": 33,
+      "natural": 6,
+      "status": "ok",
+      "table": "site.first-clue"
+    },
+    {
+      "die": 8,
+      "entry_id": "lamplit-market",
+      "n": 34,
+      "natural": 4,
+      "status": "rejected",
+      "table": "site.lieutenant-lair"
+    },
+    {
+      "die": 8,
+      "entry_id": "salt-quay",
+      "n": 35,
+      "natural": 1,
+      "status": "ok",
+      "table": "site.lieutenant-lair"
+    },
+    {
+      "die": 8,
+      "entry_id": "thistledown-farm",
+      "n": 36,
+      "natural": 7,
+      "status": "ok",
+      "table": "site.stronghold"
+    },
+    {
+      "die": 8,
+      "entry_id": "windward-pass",
+      "n": 37,
+      "natural": 3,
+      "status": "rejected",
+      "table": "site.rumor-source"
+    },
+    {
+      "die": 8,
+      "entry_id": "lamplit-market",
+      "n": 38,
+      "natural": 4,
+      "status": "ok",
+      "table": "site.rumor-source"
+    },
+    {
+      "die": 8,
+      "entry_id": "windward-pass",
+      "n": 39,
+      "natural": 3,
+      "status": "rejected",
+      "table": "site.ally-haven"
+    },
+    {
+      "die": 8,
+      "entry_id": "reedmoor-boardwalk",
+      "n": 40,
+      "natural": 6,
+      "status": "rejected",
+      "table": "site.ally-haven"
+    },
+    {
+      "die": 8,
+      "entry_id": "orrery-library",
+      "n": 41,
+      "natural": 8,
+      "status": "rejected",
+      "table": "site.ally-haven"
+    },
+    {
+      "die": 8,
+      "entry_id": "pinewood-trail",
+      "n": 42,
+      "natural": 2,
+      "status": "ok",
+      "table": "site.ally-haven"
+    },
+    {
+      "die": 8,
+      "entry_id": "salt-quay",
+      "n": 43,
+      "natural": 1,
+      "status": "rejected",
+      "table": "site.old-secret"
+    },
+    {
+      "die": 8,
+      "entry_id": "rookhill-gate",
+      "n": 44,
+      "natural": 5,
+      "status": "ok",
+      "table": "site.old-secret"
+    },
+    {
+      "die": 8,
+      "entry_id": "rookhill-gate",
+      "n": 45,
+      "natural": 5,
+      "status": "rejected",
+      "table": "site.neutral-ground"
+    },
+    {
+      "die": 8,
+      "entry_id": "thistledown-farm",
+      "n": 46,
+      "natural": 7,
+      "status": "rejected",
+      "table": "site.neutral-ground"
+    },
+    {
+      "die": 8,
+      "entry_id": "thistledown-farm",
+      "n": 47,
+      "natural": 7,
+      "status": "rejected",
+      "table": "site.neutral-ground"
+    },
+    {
+      "die": 8,
+      "entry_id": "windward-pass",
+      "n": 48,
+      "natural": 3,
+      "status": "ok",
+      "table": "site.neutral-ground"
+    },
+    {
+      "die": 6,
+      "entry_id": "3",
+      "n": 49,
+      "natural": 3,
+      "status": "ok",
+      "table": "factions.count"
+    },
+    {
+      "die": 12,
+      "entry_id": "orrery-circle",
+      "n": 50,
+      "natural": 9,
+      "status": "ok",
+      "table": "faction.0"
+    },
+    {
+      "die": 6,
+      "entry_id": "ally",
+      "n": 51,
+      "natural": 6,
+      "status": "ok",
+      "table": "faction.0.party"
+    },
+    {
+      "die": 6,
+      "entry_id": "foe",
+      "n": 52,
+      "natural": 1,
+      "status": "ok",
+      "table": "faction.0.villain"
+    },
+    {
+      "die": 12,
+      "entry_id": "gray-mantle",
+      "n": 53,
+      "natural": 2,
+      "status": "ok",
+      "table": "faction.1"
+    },
+    {
+      "die": 6,
+      "entry_id": "neutral",
+      "n": 54,
+      "natural": 4,
+      "status": "ok",
+      "table": "faction.1.party"
+    },
+    {
+      "die": 6,
+      "entry_id": "wary",
+      "n": 55,
+      "natural": 3,
+      "status": "ok",
+      "table": "faction.1.villain"
+    },
+    {
+      "die": 12,
+      "entry_id": "ashen-court",
+      "n": 56,
+      "natural": 7,
+      "status": "ok",
+      "table": "faction.2"
+    },
+    {
+      "die": 6,
+      "entry_id": "wary",
+      "n": 57,
+      "natural": 2,
+      "status": "ok",
+      "table": "faction.2.party"
+    },
+    {
+      "die": 6,
+      "entry_id": "foe",
+      "n": 58,
+      "natural": 1,
+      "status": "ok",
+      "table": "faction.2.villain"
+    },
+    {
+      "die": 10,
+      "entry_id": "herbwife",
+      "n": 59,
+      "natural": 2,
+      "status": "rejected",
+      "table": "ally.patron"
+    },
+    {
+      "die": 10,
+      "entry_id": "acolyte",
+      "n": 60,
+      "natural": 7,
+      "status": "rejected",
+      "table": "ally.patron"
+    },
+    {
+      "die": 10,
+      "entry_id": "archivist",
+      "n": 61,
+      "natural": 4,
+      "status": "ok",
+      "table": "ally.patron"
+    },
+    {
+      "die": 20,
+      "entry_id": "Dessa",
+      "n": 62,
+      "natural": 4,
+      "status": "ok",
+      "table": "ally.patron.given"
+    },
+    {
+      "die": 20,
+      "entry_id": "Quillon",
+      "n": 63,
+      "natural": 15,
+      "status": "ok",
+      "table": "ally.patron.surname"
+    },
+    {
+      "die": 6,
+      "entry_id": "river-healer",
+      "n": 64,
+      "natural": 2,
+      "status": "rejected",
+      "table": "ally.contact"
+    },
+    {
+      "die": 6,
+      "entry_id": "shrine-keeper",
+      "n": 65,
+      "natural": 4,
+      "status": "rejected",
+      "table": "ally.contact"
+    },
+    {
+      "die": 6,
+      "entry_id": "river-healer",
+      "n": 66,
+      "natural": 2,
+      "status": "rejected",
+      "table": "ally.contact"
+    },
+    {
+      "die": 6,
+      "entry_id": "shrine-keeper",
+      "n": 67,
+      "natural": 4,
+      "status": "rejected",
+      "table": "ally.contact"
+    },
+    {
+      "die": 6,
+      "entry_id": "river-healer",
+      "n": 68,
+      "natural": 2,
+      "status": "rejected",
+      "table": "ally.contact"
+    },
+    {
+      "die": 6,
+      "entry_id": "watch-sergeant",
+      "n": 69,
+      "natural": 3,
+      "status": "ok",
+      "table": "ally.contact"
+    },
+    {
+      "die": 20,
+      "entry_id": "Rudd",
+      "n": 70,
+      "natural": 16,
+      "status": "ok",
+      "table": "ally.contact.given"
+    },
+    {
+      "die": 20,
+      "entry_id": "Cobb",
+      "n": 71,
+      "natural": 3,
+      "status": "ok",
+      "table": "ally.contact.surname"
+    },
+    {
+      "die": 6,
+      "entry_id": "chapter-count",
+      "n": 72,
+      "natural": 4,
+      "status": "ok",
+      "table": "chapters"
+    },
+    {
+      "die": 8,
+      "entry_id": "hired-tracker",
+      "n": 73,
+      "natural": 3,
+      "status": "rejected",
+      "table": "lieutenant.0"
+    },
+    {
+      "die": 8,
+      "entry_id": "bone-sentinel",
+      "n": 74,
+      "natural": 5,
+      "status": "ok",
+      "table": "lieutenant.0"
+    },
+    {
+      "die": 12,
+      "entry_id": "mercy against vengeance",
+      "n": 75,
+      "natural": 5,
+      "status": "ok",
+      "table": "theme.a"
+    },
+    {
+      "die": 12,
+      "entry_id": "the cost of power",
+      "n": 76,
+      "natural": 3,
+      "status": "ok",
+      "table": "theme.b"
+    },
+    {
+      "die": 6,
+      "entry_id": "heroic and warm",
+      "n": 77,
+      "natural": 1,
+      "status": "ok",
+      "table": "tone"
+    },
+    {
+      "die": 20,
+      "entry_id": "retrieval",
+      "n": 78,
+      "natural": 8,
+      "status": "rejected",
+      "table": "slot.1"
+    },
+    {
+      "die": 20,
+      "entry_id": "rest-interlude",
+      "n": 79,
+      "natural": 20,
+      "status": "rejected",
+      "table": "slot.1"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 80,
+      "natural": 2,
+      "status": "ok",
+      "table": "slot.1"
+    },
+    {
+      "die": 20,
+      "entry_id": "escort",
+      "n": 81,
+      "natural": 4,
+      "status": "rejected",
+      "table": "slot.2"
+    },
+    {
+      "die": 20,
+      "entry_id": "heist",
+      "n": 82,
+      "natural": 12,
+      "status": "rejected",
+      "table": "slot.2"
+    },
+    {
+      "die": 20,
+      "entry_id": "warning",
+      "n": 83,
+      "natural": 6,
+      "status": "rejected",
+      "table": "slot.2"
+    },
+    {
+      "die": 20,
+      "entry_id": "rescue",
+      "n": 84,
+      "natural": 16,
+      "status": "rejected",
+      "table": "slot.2"
+    },
+    {
+      "die": 20,
+      "entry_id": "retrieval",
+      "n": 85,
+      "natural": 8,
+      "status": "ok",
+      "table": "slot.2"
+    },
+    {
+      "die": 20,
+      "entry_id": "delve",
+      "n": 86,
+      "natural": 10,
+      "status": "rejected",
+      "table": "slot.3"
+    },
+    {
+      "die": 20,
+      "entry_id": "rest-interlude",
+      "n": 87,
+      "natural": 20,
+      "status": "rejected",
+      "table": "slot.3"
+    },
+    {
+      "die": 20,
+      "entry_id": "warning",
+      "n": 88,
+      "natural": 5,
+      "status": "rejected",
+      "table": "slot.3"
+    },
+    {
+      "die": 20,
+      "entry_id": "race-clock",
+      "n": 89,
+      "natural": 15,
+      "status": "rejected",
+      "table": "slot.3"
+    },
+    {
+      "die": 20,
+      "entry_id": "finale",
+      "n": 90,
+      "natural": 19,
+      "status": "rejected",
+      "table": "slot.3"
+    },
+    {
+      "die": 20,
+      "entry_id": "rest-interlude",
+      "n": 91,
+      "natural": 20,
+      "status": "rejected",
+      "table": "slot.3"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 92,
+      "natural": 1,
+      "status": "rejected",
+      "table": "slot.3"
+    },
+    {
+      "die": 20,
+      "entry_id": "mystery",
+      "n": 93,
+      "natural": 9,
+      "status": "rejected",
+      "table": "slot.3"
+    },
+    {
+      "die": 20,
+      "entry_id": "retrieval",
+      "n": 94,
+      "natural": 7,
+      "status": "ok",
+      "table": "slot.3"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 95,
+      "natural": 1,
+      "status": "rejected",
+      "table": "slot.4"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 96,
+      "natural": 1,
+      "status": "rejected",
+      "table": "slot.4"
+    },
+    {
+      "die": 20,
+      "entry_id": "defence",
+      "n": 97,
+      "natural": 11,
+      "status": "rejected",
+      "table": "slot.4"
+    },
+    {
+      "die": 20,
+      "entry_id": "rescue",
+      "n": 98,
+      "natural": 16,
+      "status": "ok",
+      "table": "slot.4"
+    },
+    {
+      "die": 20,
+      "entry_id": "mystery",
+      "n": 99,
+      "natural": 9,
+      "status": "rejected",
+      "table": "slot.5"
+    },
+    {
+      "die": 20,
+      "entry_id": "rest-interlude",
+      "n": 100,
+      "natural": 20,
+      "status": "rejected",
+      "table": "slot.5"
+    },
+    {
+      "die": 20,
+      "entry_id": "parley",
+      "n": 101,
+      "natural": 14,
+      "status": "rejected",
+      "table": "slot.5"
+    },
+    {
+      "die": 20,
+      "entry_id": "heist",
+      "n": 102,
+      "natural": 12,
+      "status": "rejected",
+      "table": "slot.5"
+    },
+    {
+      "die": 20,
+      "entry_id": "retrieval",
+      "n": 103,
+      "natural": 7,
+      "status": "rejected",
+      "table": "slot.5"
+    },
+    {
+      "die": 20,
+      "entry_id": "warning",
+      "n": 104,
+      "natural": 5,
+      "status": "rejected",
+      "table": "slot.5"
+    },
+    {
+      "die": 20,
+      "entry_id": "lieutenant",
+      "n": 105,
+      "natural": 18,
+      "status": "rejected",
+      "table": "slot.5"
+    },
+    {
+      "die": 20,
+      "entry_id": "escape",
+      "n": 106,
+      "natural": 17,
+      "status": "rejected",
+      "table": "slot.5"
+    },
+    {
+      "die": 20,
+      "entry_id": "escort",
+      "n": 107,
+      "natural": 4,
+      "status": "rejected",
+      "table": "slot.5"
+    },
+    {
+      "die": 20,
+      "entry_id": "rescue",
+      "n": 108,
+      "natural": 16,
+      "status": "ok",
+      "table": "slot.5"
+    },
+    {
+      "die": 20,
+      "entry_id": "retrieval",
+      "n": 109,
+      "natural": 8,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "heist",
+      "n": 110,
+      "natural": 12,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "rescue",
+      "n": 111,
+      "natural": 16,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 112,
+      "natural": 2,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "mystery",
+      "n": 113,
+      "natural": 9,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 114,
+      "natural": 1,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 115,
+      "natural": 1,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "defence",
+      "n": 116,
+      "natural": 11,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "finale",
+      "n": 117,
+      "natural": 19,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "parley",
+      "n": 118,
+      "natural": 14,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "defence",
+      "n": 119,
+      "natural": 11,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "rest-interlude",
+      "n": 120,
+      "natural": 20,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "retrieval",
+      "n": 121,
+      "natural": 7,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "finale",
+      "n": 122,
+      "natural": 19,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "finale",
+      "n": 123,
+      "natural": 19,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "heist",
+      "n": 124,
+      "natural": 12,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "heist",
+      "n": 125,
+      "natural": 12,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "escape",
+      "n": 126,
+      "natural": 17,
+      "status": "rejected",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "lieutenant",
+      "n": 127,
+      "natural": 18,
+      "status": "ok",
+      "table": "slot.6"
+    },
+    {
+      "die": 20,
+      "entry_id": "escort",
+      "n": 128,
+      "natural": 3,
+      "status": "rejected",
+      "table": "slot.7"
+    },
+    {
+      "die": 20,
+      "entry_id": "parley",
+      "n": 129,
+      "natural": 14,
+      "status": "rejected",
+      "table": "slot.7"
+    },
+    {
+      "die": 20,
+      "entry_id": "escort",
+      "n": 130,
+      "natural": 3,
+      "status": "rejected",
+      "table": "slot.7"
+    },
+    {
+      "die": 20,
+      "entry_id": "rescue",
+      "n": 131,
+      "natural": 16,
+      "status": "ok",
+      "table": "slot.7"
+    },
+    {
+      "die": 20,
+      "entry_id": "escort",
+      "n": 132,
+      "natural": 3,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "lieutenant",
+      "n": 133,
+      "natural": 18,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "rescue",
+      "n": 134,
+      "natural": 16,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "parley",
+      "n": 135,
+      "natural": 14,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "escape",
+      "n": 136,
+      "natural": 17,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "warning",
+      "n": 137,
+      "natural": 5,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "retrieval",
+      "n": 138,
+      "natural": 8,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "warning",
+      "n": 139,
+      "natural": 6,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "escort",
+      "n": 140,
+      "natural": 3,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "delve",
+      "n": 141,
+      "natural": 10,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "delve",
+      "n": 142,
+      "natural": 10,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "warning",
+      "n": 143,
+      "natural": 6,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 144,
+      "natural": 2,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 145,
+      "natural": 2,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 146,
+      "natural": 1,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "race-clock",
+      "n": 147,
+      "natural": 15,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 148,
+      "natural": 2,
+      "status": "rejected",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "finale",
+      "n": 149,
+      "natural": 19,
+      "status": "ok",
+      "table": "slot.8"
+    },
+    {
+      "die": 20,
+      "entry_id": "warning",
+      "n": 150,
+      "natural": 5,
+      "status": "ok",
+      "table": "repair.0.slot1"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 151,
+      "natural": 1,
+      "status": "rejected",
+      "table": "repair.1.slot2"
+    },
+    {
+      "die": 20,
+      "entry_id": "escape",
+      "n": 152,
+      "natural": 17,
+      "status": "rejected",
+      "table": "repair.1.slot2"
+    },
+    {
+      "die": 20,
+      "entry_id": "heist",
+      "n": 153,
+      "natural": 12,
+      "status": "rejected",
+      "table": "repair.1.slot2"
+    },
+    {
+      "die": 20,
+      "entry_id": "rescue",
+      "n": 154,
+      "natural": 16,
+      "status": "rejected",
+      "table": "repair.1.slot2"
+    },
+    {
+      "die": 20,
+      "entry_id": "hunt",
+      "n": 155,
+      "natural": 13,
+      "status": "ok",
+      "table": "repair.1.slot2"
+    },
+    {
+      "die": 20,
+      "entry_id": "rescue",
+      "n": 156,
+      "natural": 16,
+      "status": "rejected",
+      "table": "repair.2.slot3"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 157,
+      "natural": 1,
+      "status": "rejected",
+      "table": "repair.2.slot3"
+    },
+    {
+      "die": 20,
+      "entry_id": "rest-interlude",
+      "n": 158,
+      "natural": 20,
+      "status": "rejected",
+      "table": "repair.2.slot3"
+    },
+    {
+      "die": 20,
+      "entry_id": "escape",
+      "n": 159,
+      "natural": 17,
+      "status": "rejected",
+      "table": "repair.2.slot3"
+    },
+    {
+      "die": 20,
+      "entry_id": "parley",
+      "n": 160,
+      "natural": 14,
+      "status": "ok",
+      "table": "repair.2.slot3"
+    },
+    {
+      "die": 20,
+      "entry_id": "retrieval",
+      "n": 161,
+      "natural": 7,
+      "status": "rejected",
+      "table": "repair.3.slot4"
+    },
+    {
+      "die": 20,
+      "entry_id": "warning",
+      "n": 162,
+      "natural": 6,
+      "status": "rejected",
+      "table": "repair.3.slot4"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 163,
+      "natural": 2,
+      "status": "rejected",
+      "table": "repair.3.slot4"
+    },
+    {
+      "die": 20,
+      "entry_id": "rescue",
+      "n": 164,
+      "natural": 16,
+      "status": "ok",
+      "table": "repair.3.slot4"
+    },
+    {
+      "die": 20,
+      "entry_id": "finale",
+      "n": 165,
+      "natural": 19,
+      "status": "rejected",
+      "table": "repair.4.slot5"
+    },
+    {
+      "die": 20,
+      "entry_id": "escort",
+      "n": 166,
+      "natural": 3,
+      "status": "rejected",
+      "table": "repair.4.slot5"
+    },
+    {
+      "die": 20,
+      "entry_id": "escort",
+      "n": 167,
+      "natural": 4,
+      "status": "rejected",
+      "table": "repair.4.slot5"
+    },
+    {
+      "die": 20,
+      "entry_id": "heist",
+      "n": 168,
+      "natural": 12,
+      "status": "rejected",
+      "table": "repair.4.slot5"
+    },
+    {
+      "die": 20,
+      "entry_id": "escort",
+      "n": 169,
+      "natural": 3,
+      "status": "rejected",
+      "table": "repair.4.slot5"
+    },
+    {
+      "die": 20,
+      "entry_id": "escort",
+      "n": 170,
+      "natural": 4,
+      "status": "rejected",
+      "table": "repair.4.slot5"
+    },
+    {
+      "die": 20,
+      "entry_id": "courier",
+      "n": 171,
+      "natural": 2,
+      "status": "rejected",
+      "table": "repair.4.slot5"
+    },
+    {
+      "die": 20,
+      "entry_id": "hunt",
+      "n": 172,
+      "natural": 13,
+      "status": "ok",
+      "table": "repair.4.slot5"
+    },
+    {
+      "die": 12,
+      "entry_id": "clock-feint",
+      "n": 173,
+      "natural": 7,
+      "status": "ok",
+      "table": "twist.act1"
+    },
+    {
+      "die": 12,
+      "entry_id": "clock-feint",
+      "n": 174,
+      "natural": 7,
+      "status": "rejected",
+      "table": "twist.act2"
+    },
+    {
+      "die": 12,
+      "entry_id": "puppet-master",
+      "n": 175,
+      "natural": 4,
+      "status": "rejected",
+      "table": "twist.act2"
+    },
+    {
+      "die": 12,
+      "entry_id": "villain-right",
+      "n": 176,
+      "natural": 12,
+      "status": "ok",
+      "table": "twist.act2"
+    },
+    {
+      "die": 12,
+      "entry_id": "variant 1",
+      "n": 177,
+      "natural": 1,
+      "status": "ok",
+      "table": "milestone.act1"
+    },
+    {
+      "die": 12,
+      "entry_id": "variant 11",
+      "n": 178,
+      "natural": 11,
+      "status": "ok",
+      "table": "milestone.act2"
+    },
+    {
+      "die": 12,
+      "entry_id": "variant 3",
+      "n": 179,
+      "natural": 3,
+      "status": "ok",
+      "table": "milestone.act3"
+    },
+    {
+      "die": 4,
+      "entry_id": "A Bargain at Hollow Hill",
+      "n": 180,
+      "natural": 1,
+      "status": "ok",
+      "table": "campaign.title"
+    }
+  ],
+  "rules_mode": "standard",
+  "schema": "df-campaign-frame/1",
+  "seed": 8765480034098654957,
+  "sites": [
+    {
+      "location": "orrery-library",
+      "name": "the Orrery Library",
+      "role": "home-base"
+    },
+    {
+      "location": "reedmoor-boardwalk",
+      "name": "the Reedmoor Boardwalk",
+      "role": "first-clue"
+    },
+    {
+      "location": "salt-quay",
+      "name": "the Salt Quay",
+      "role": "lieutenant-lair"
+    },
+    {
+      "location": "thistledown-farm",
+      "name": "Thistledown Farm",
+      "role": "stronghold"
+    },
+    {
+      "location": "lamplit-market",
+      "name": "the Lamplit Market",
+      "role": "rumor-source"
+    },
+    {
+      "location": "pinewood-trail",
+      "name": "the Pinewood Trail",
+      "role": "ally-haven"
+    },
+    {
+      "location": "rookhill-gate",
+      "name": "the Rookhill Gate",
+      "role": "old-secret"
+    },
+    {
+      "location": "windward-pass",
+      "name": "the Windward Pass",
+      "role": "neutral-ground"
+    }
+  ],
+  "tables_revision": "b6cb8bf0fb289d9f6edd7d40be2ed7eabb9e5d312cef6653c5046698e82ca4cf",
+  "themes": [
+    "mercy against vengeance",
+    "the cost of power"
+  ],
+  "title": "A Bargain at Hollow Hill",
+  "tone": "heroic and warm",
+  "twists": [
+    {
+      "faces": [
+        7,
+        7
+      ],
+      "families": [
+        "ritual",
+        "breach",
+        "blight",
+        "waking"
+      ],
+      "hints": [
+        "Two notes disagreed about the date.",
+        "The ritual circle's markings were for a different night."
+      ],
+      "id": "clock-feint",
+      "reveal": "The visible schedule was a feint; the real deadline is much closer."
+    },
+    {
+      "faces": [
+        12,
+        12
+      ],
+      "families": [
+        "blight",
+        "war",
+        "succession",
+        "relic"
+      ],
+      "hints": [
+        "A ledger showed the old rulers taking more than their share.",
+        "Villagers spoke of Aldous with something close to gratitude."
+      ],
+      "id": "villain-right",
+      "reveal": "Aldous is right about one thing: the region's old order really was unjust."
+    }
+  ],
+  "villain": {
+    "kind": {
+      "art": "villain-usurper",
+      "faces": [
+        3,
+        3
+      ],
+      "families": [
+        "succession",
+        "war",
+        "crime",
+        "hunt"
+      ],
+      "gender": "he",
+      "id": "usurper",
+      "label": "a smiling usurper in borrowed finery",
+      "lieutenant_pref": [
+        "guard",
+        "scout"
+      ],
+      "voice": "smooth, charming man"
+    },
+    "lieutenants": [
+      {
+        "antagonist": "skeleton",
+        "faces": [
+          5,
+          5
+        ],
+        "id": "bone-sentinel",
+        "title": "the Bone Sentinel"
+      }
+    ],
+    "method": "bargains with fine print",
+    "motive": "has lost the thread of reason and calls it clarity",
+    "name": "Aldous",
+    "resources": "a pack of trained beasts",
+    "scheme": "call in a bargain that hands over the whole region",
+    "signature": "turns every nearby lamp flame faintly blue",
+    "title": "Winter Regent",
+    "weakness": {
+      "clues": [
+        "A grave is tended every night with fresh flowers.",
+        "A letter in an unfamiliar hand begs someone to stop."
+      ],
+      "faces": [
+        3,
+        3
+      ],
+      "id": "a-loved-one",
+      "text": "still protects one person they once loved"
+    }
+  }
+}

@@ -1,5 +1,15 @@
 //! Pure, server-owned chapter generation; governing design: adventure-generator §§1–12.
 mod bounds;
+pub(crate) mod campaign;
+pub(crate) mod campaign_completion;
+pub(crate) mod campaign_render;
+pub(crate) mod campaign_startup;
+pub(crate) mod campaign_store;
+#[cfg(test)]
+mod campaign_store_tests;
+pub(crate) mod campaign_tables;
+#[cfg(test)]
+mod campaign_tests;
 pub(crate) mod cli;
 mod generate;
 pub(crate) mod record;

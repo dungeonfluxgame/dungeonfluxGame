@@ -469,6 +469,10 @@ pub(super) struct PackFile {
     pub(super) id: String,
     pub(super) locale: String,
     pub(super) room_code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) campaign: Option<CampaignIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) campaign_epilogue: Option<FinaleProse>,
     pub(super) creation: CreationPack,
     pub(super) equipment: Vec<EquipmentRow>,
     #[serde(rename = "antagonist", alias = "bandit")]
@@ -482,6 +486,20 @@ pub(super) struct PackFile {
     pub(super) scenes: Vec<Scene>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CampaignIdentity {
+    pub(super) id: String,
+    pub(super) chapter: u8,
+    pub(super) frame_sha256: String,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FinaleProse {
+    pub(super) asked: String,
+    pub(super) escorted: String,
+    pub(super) defeat: String,
+}
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CreationPack {
@@ -1131,6 +1149,47 @@ fn validate_weapon(
 // ---------------------------------------------------------------------------------------------
 
 fn validate_pack(pack: &PackFile) -> Result<(), PackError> {
+    if let Some(campaign) = &pack.campaign {
+        if super::adventure::campaign_store::validate_id(&campaign.id).is_err() {
+            return Err(malformed(
+                SourceFile::Pack,
+                "campaign.id",
+                "a bounded campaign id",
+            ));
+        }
+        range(
+            SourceFile::Pack,
+            "campaign.chapter",
+            i64::from(campaign.chapter),
+            1,
+            10,
+        )?;
+        if campaign.frame_sha256.len() != 64
+            || !campaign.frame_sha256.bytes().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err(malformed(
+                SourceFile::Pack,
+                "campaign.frame_sha256",
+                "64 hexadecimal characters",
+            ));
+        }
+    }
+    if let Some(epilogue) = &pack.campaign_epilogue {
+        for (key, value) in [
+            ("asked", &epilogue.asked),
+            ("escorted", &epilogue.escorted),
+            ("defeat", &epilogue.defeat),
+        ] {
+            text(
+                SourceFile::Pack,
+                &format!("campaign_epilogue.{key}"),
+                value,
+                1,
+                220,
+            )?;
+        }
+    }
+
     const FILE: SourceFile = SourceFile::Pack;
     identifier(FILE, "id", &pack.id)?;
     if pack.locale != "en" {
