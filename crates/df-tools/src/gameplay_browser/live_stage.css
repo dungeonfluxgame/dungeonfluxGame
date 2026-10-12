@@ -247,7 +247,7 @@
 .tv-stage[data-scene-state=awaiting-choice] .tv-choices{opacity:1;visibility:visible;transition:opacity .5s ease}
 /* an actor absent from the next scene walks off before the backdrop changes */
 .tv-fig[data-actor-state=exiting]{opacity:0;transition:opacity .35s ease,visibility 0s .35s}
-/* a hero typing or holding to talk: a small loader bubble on that hero (on the HUD card in a fight) */
+/* a hero typing or talking: a small loader bubble on that hero (on the HUD card in a fight) */
 .tv-intent{display:inline-flex;align-items:center;gap:calc(var(--u)*.35);padding:calc(var(--u)*.45) calc(var(--u)*.8);min-height:calc(var(--u)*2.2)}
 .tv-intent .tv-intent-dots{display:inline-flex;gap:calc(var(--u)*.35);align-items:center}
 .tv-intent .tv-intent-dots i{display:block;width:calc(var(--u)*.6);height:calc(var(--u)*.6);border-radius:50%;background:#7a4b13;animation:df-think 1.1s ease-in-out infinite}

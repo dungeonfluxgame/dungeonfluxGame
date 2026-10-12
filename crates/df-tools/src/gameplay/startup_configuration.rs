@@ -937,6 +937,45 @@ pub(super) fn battle_scene(input: Result<String, VarError>) -> Result<Option<Str
     Ok(Some(value))
 }
 
+/// `DF_GAMEPLAY_TEST_FIGHT=<n>` and `DF_GAMEPLAY_TEST_FOE=<creature id>`: a development setting
+/// that starts every fight against `n` enemies, `n` from 1 to the most a fight holds, of the
+/// named creature (the adventure's own creature when unnamed). Unset, a game is unchanged. A
+/// creature without a count, a count out of range and a creature the rules table lacks are
+/// refused at startup rather than replaced.
+pub(super) fn test_fight(
+    count: Result<String, VarError>,
+    foe: Result<String, VarError>,
+) -> Result<Option<super::journey::tactical::TestFight>, io::Error> {
+    let (count, foe) = (optional(count)?, optional(foe)?);
+    let Some(count) = count else {
+        return match foe {
+            None => Ok(None),
+            Some(_) => Err(io::Error::other(
+                "DF_GAMEPLAY_TEST_FOE needs DF_GAMEPLAY_TEST_FIGHT",
+            )),
+        };
+    };
+    let most = super::journey::tactical::MAXIMUM_ENEMIES;
+    let enemies = count
+        .parse::<usize>()
+        .ok()
+        .filter(|enemies| (1..=most).contains(enemies))
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "DF_GAMEPLAY_TEST_FIGHT invalid: use a whole number from 1 to {most}"
+            ))
+        })?;
+    if let Some(foe) = &foe
+        && df_rules::tactical::CombatantSpec::creature(3, foe, df_rules::tactical::Cell(0, 0), 0)
+            .is_err()
+    {
+        return Err(io::Error::other(
+            "DF_GAMEPLAY_TEST_FOE invalid: use a creature id of the rules table, for example kobold-warrior",
+        ));
+    }
+    Ok(Some(super::journey::tactical::TestFight { enemies, foe }))
+}
+
 /// `DF_GAMEPLAY_BATTLE_FPS`: the battlefield's fixed presentation rate, 24 or 30 (default 30).
 /// Anything else is refused at startup rather than silently replaced.
 pub(super) fn battle_fps(input: Result<String, VarError>) -> Result<u32, io::Error> {
@@ -2093,6 +2132,33 @@ mod adventure_settings_tests {
         for bad in ["", "nowhere", "../salt-quay", "SALT-QUAY"] {
             assert!(battle_scene(set(bad)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_test_fight_setting_takes_one_to_the_most_enemies_and_a_creature_of_the_rules_table() {
+        let set = |value: &str| Ok::<_, VarError>(value.to_owned());
+        let unset = || Err::<String, _>(VarError::NotPresent);
+        assert_eq!(test_fight(unset(), unset()).unwrap(), None);
+        let most = super::super::journey::tactical::MAXIMUM_ENEMIES;
+        for count in 1..=most {
+            let chosen = test_fight(set(&count.to_string()), unset())
+                .unwrap()
+                .unwrap();
+            assert_eq!((chosen.enemies, chosen.foe), (count, None));
+        }
+        let wolves = test_fight(set("2"), set("wolf")).unwrap().unwrap();
+        assert_eq!((wolves.enemies, wolves.foe.as_deref()), (2, Some("wolf")));
+        for bad in ["", "0", &(most + 1).to_string(), "-1", "two", "1.5", " 1"] {
+            assert!(test_fight(set(bad), unset()).is_err(), "count {bad:?}");
+        }
+        for bad in ["", "dragon", "Wolf", "hero"] {
+            assert!(test_fight(set("1"), set(bad)).is_err(), "foe {bad:?}");
+        }
+        assert!(
+            test_fight(unset(), set("wolf")).is_err(),
+            "a creature needs a count"
+        );
+        assert!(test_fight(Err(VarError::NotUnicode("x".into())), unset()).is_err());
     }
 
     #[test]

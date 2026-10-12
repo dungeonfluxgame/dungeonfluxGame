@@ -1,10 +1,13 @@
-//! The hold-to-talk control as a pure state machine, so its rules are testable without a
-//! browser or a clock: the driver passes the time of each event in and carries out the
-//! returned [`Command`].
+//! The talk control as a pure state machine, so its rules are testable without a browser or a
+//! clock: the driver passes the time of each event in and carries out the returned [`Command`].
 //!
-//! One recording exists at a time. A press opens the microphone, a release (or the fifteen
-//! second cap) ends the recording and sends it, and the transcript that comes back is only
-//! ever a draft in the dialogue text box: nothing is said until the player sends it.
+//! A tap starts listening and the next tap stops it. A press counts as a tap only when it is
+//! released over the control: a cancelled pointer or a drag off the control abandons the press
+//! and toggles nothing. One recording exists at a time. The first tap opens the microphone, the
+//! second tap (or the fifteen second cap) ends the recording and sends it, and the transcript that
+//! comes back is only ever a draft in the dialogue text box: nothing is said until the player sends
+//! it. Listening also ends without a tap when the page is hidden, the connection is lost, the text
+//! box goes away, or the player starts typing.
 use std::time::Duration;
 
 use crate::speech_clip::{
@@ -15,7 +18,7 @@ use crate::speech_clip::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Phase {
     Idle,
-    /// Pressed; the browser has not yet handed over the microphone.
+    /// Tapped; the browser has not yet handed over the microphone.
     Requesting(Early),
     Recording {
         started: Duration,
@@ -26,11 +29,12 @@ pub(crate) enum Phase {
     Review,
 }
 
-/// What happened to a press before the microphone arrived.
+/// What became of a start before the microphone arrived.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Early {
-    Holding,
-    Released,
+    /// The recording begins as soon as the microphone is handed over.
+    Wanted,
+    /// Interrupted while starting: the microphone is released unused.
     Cancelled,
 }
 
@@ -62,6 +66,32 @@ pub(crate) enum Command {
     AbortUpload,
 }
 
+/// Why listening ends without a tap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Interruption {
+    /// The player pressed Escape or the Cancel button.
+    Cancelled,
+    /// The page was hidden.
+    PageHidden,
+    /// The phone lost its connection to the game.
+    ConnectionLost,
+    /// The scene changed so that the text box went away.
+    SceneChanged,
+    /// The player started typing in the text box.
+    Typing,
+}
+
+impl Interruption {
+    const fn notice(self) -> Notice {
+        match self {
+            Self::ConnectionLost => Notice::ConnectionLost,
+            Self::Cancelled | Self::PageHidden | Self::SceneChanged | Self::Typing => {
+                Notice::Discarded
+            }
+        }
+    }
+}
+
 /// A message for the player: every failure has its own.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Notice {
@@ -70,7 +100,6 @@ pub(crate) enum Notice {
     InsecureContext,
     CannotRecord,
     MicrophoneFailed,
-    ReadyToTalk,
     Discarded,
     TooShort,
     Empty,
@@ -104,9 +133,8 @@ impl Notice {
             Self::MicrophoneFailed => {
                 "The microphone could not be started. Try again, or type instead."
             }
-            Self::ReadyToTalk => "Microphone allowed. Press and hold the button to talk.",
             Self::Discarded => "Recording discarded.",
-            Self::TooShort => "That was too short to hear. Hold the button while you speak.",
+            Self::TooShort => "That was too short to hear. Tap to start, speak, then tap again.",
             Self::Empty => "Nothing was recorded. Check your microphone, or type instead.",
             Self::TooLarge => "That recording was too large to send. Try a shorter line.",
             Self::TooLong => "That recording was too long. Keep it under fifteen seconds.",
@@ -147,11 +175,13 @@ impl Notice {
     }
 }
 
-/// The hold-to-talk state.
+/// The talk state.
 #[derive(Debug)]
 pub(crate) struct Capture {
     phase: Phase,
     notice: Option<Notice>,
+    /// A pointer or key is down on the control and counts as a tap if released there.
+    pressed: bool,
 }
 
 impl Default for Capture {
@@ -165,6 +195,7 @@ impl Capture {
         Self {
             phase: Phase::Idle,
             notice: None,
+            pressed: false,
         }
     }
 
@@ -176,6 +207,23 @@ impl Capture {
         self.notice
     }
 
+    /// Whether the control is listening for the player's words: the microphone is opening for a
+    /// tap or is recording. The table's speech-intent mark follows this.
+    pub(crate) const fn is_listening(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Requesting(Early::Wanted) | Phase::Recording { .. }
+        )
+    }
+
+    /// Whether a recording or its upload is under way, so typing must interrupt it.
+    pub(crate) const fn is_busy(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Requesting(_) | Phase::Recording { .. } | Phase::Listening
+        )
+    }
+
     /// Whole seconds recorded so far, while recording.
     pub(crate) fn elapsed_seconds(&self, now: Duration) -> Option<u64> {
         match self.phase {
@@ -184,16 +232,42 @@ impl Capture {
         }
     }
 
-    /// A deliberate press. Only an idle control (or one holding a draft) starts recording.
-    pub(crate) fn press(&mut self, environment: Environment) -> Option<Command> {
+    /// A pointer or key went down on the control. Nothing starts until it is released there.
+    pub(crate) const fn press_down(&mut self) {
+        self.pressed = true;
+    }
+
+    /// The press ended. Released over the control after a press on it, this is a tap: it starts
+    /// listening when the control is idle or holds a draft, and stops it while recording. A tap
+    /// while the microphone is opening is ignored, and so is one while the clip is being heard.
+    pub(crate) fn release(
+        &mut self,
+        now: Duration,
+        inside: bool,
+        environment: Environment,
+    ) -> Option<Command> {
+        let tapped = std::mem::take(&mut self.pressed) && inside;
+        if !tapped {
+            return None;
+        }
         match self.phase {
-            Phase::Idle | Phase::Review => {}
+            Phase::Idle | Phase::Review => self.start(environment),
+            Phase::Recording { started } => self.stop(now, started),
             Phase::Listening => {
                 self.notice = Some(Notice::Busy);
-                return None;
+                None
             }
-            Phase::Requesting(_) | Phase::Recording { .. } => return None,
+            Phase::Requesting(_) => None,
         }
+    }
+
+    /// The press stopped being a tap: the pointer was cancelled or dragged off the control, or the
+    /// key lost focus. A recording already under way goes on until the next tap.
+    pub(crate) const fn abandon_press(&mut self) {
+        self.pressed = false;
+    }
+
+    fn start(&mut self, environment: Environment) -> Option<Command> {
         if !environment.secure_context {
             self.notice = Some(Notice::InsecureContext);
             return None;
@@ -203,23 +277,29 @@ impl Capture {
             return None;
         }
         self.notice = None;
-        self.phase = Phase::Requesting(Early::Holding);
+        self.phase = Phase::Requesting(Early::Wanted);
         Some(Command::OpenMicrophone)
+    }
+
+    fn stop(&mut self, now: Duration, started: Duration) -> Option<Command> {
+        if now.saturating_sub(started) < MINIMUM_CLIP {
+            return self.discard(Notice::TooShort);
+        }
+        self.phase = Phase::Listening;
+        self.notice = None;
+        Some(Command::FinishRecording)
     }
 
     /// The browser handed over the microphone and the recorder started.
     pub(crate) fn microphone_ready(&mut self, now: Duration) -> Option<Command> {
         match self.phase {
-            Phase::Requesting(Early::Holding) => {
+            Phase::Requesting(Early::Wanted) => {
                 self.phase = Phase::Recording { started: now };
                 None
             }
-            Phase::Requesting(early) => {
+            Phase::Requesting(Early::Cancelled) => {
                 self.phase = Phase::Idle;
-                self.notice = Some(match early {
-                    Early::Cancelled => Notice::Discarded,
-                    _ => Notice::ReadyToTalk,
-                });
+                self.notice = Some(Notice::Discarded);
                 Some(Command::Discard)
             }
             // A microphone nobody is waiting for must not stay open.
@@ -239,47 +319,23 @@ impl Capture {
         });
     }
 
-    /// The press ended. `inside` is whether the pointer is still over the control: letting go
-    /// anywhere else cancels.
-    pub(crate) fn release(&mut self, now: Duration, inside: bool) -> Option<Command> {
+    /// Ends listening for a reason other than a tap. A start still opening its microphone is
+    /// cancelled, a recording is dropped unheard, and an upload is abandoned so that a late
+    /// transcript cannot replace what the player typed. An idle control or a draft is unaffected.
+    pub(crate) fn interrupt(&mut self, why: Interruption) -> Option<Command> {
+        self.pressed = false;
         match self.phase {
-            Phase::Requesting(Early::Holding) => {
-                self.phase = Phase::Requesting(if inside {
-                    Early::Released
-                } else {
-                    Early::Cancelled
-                });
-                None
-            }
-            Phase::Recording { started } => {
-                if !inside {
-                    return self.discard(Notice::Discarded);
-                }
-                if now.saturating_sub(started) < MINIMUM_CLIP {
-                    return self.discard(Notice::TooShort);
-                }
-                self.phase = Phase::Listening;
-                self.notice = None;
-                Some(Command::FinishRecording)
-            }
-            _ => None,
-        }
-    }
-
-    /// Escape, sliding off the control, losing focus: the recording is dropped unheard.
-    pub(crate) fn cancel(&mut self) -> Option<Command> {
-        match self.phase {
-            Phase::Requesting(Early::Holding | Early::Released) => {
+            Phase::Requesting(_) => {
                 self.phase = Phase::Requesting(Early::Cancelled);
                 None
             }
-            Phase::Recording { .. } => self.discard(Notice::Discarded),
+            Phase::Recording { .. } => self.discard(why.notice()),
             Phase::Listening => {
                 self.phase = Phase::Idle;
-                self.notice = Some(Notice::Discarded);
+                self.notice = Some(why.notice());
                 Some(Command::AbortUpload)
             }
-            _ => None,
+            Phase::Idle | Phase::Review => None,
         }
     }
 
@@ -389,29 +445,42 @@ mod tests {
         Duration::from_millis(milliseconds)
     }
 
+    /// A complete tap: the press goes down and is released over the control at `milliseconds`.
+    fn tap_in(
+        capture: &mut Capture,
+        milliseconds: u64,
+        environment: Environment,
+    ) -> Option<Command> {
+        capture.press_down();
+        capture.release(at(milliseconds), true, environment)
+    }
+
+    fn tap(capture: &mut Capture, milliseconds: u64) -> Option<Command> {
+        tap_in(capture, milliseconds, SECURE)
+    }
+
     fn recording(started: u64) -> Capture {
         let mut capture = Capture::new();
-        assert_eq!(capture.press(SECURE), Some(Command::OpenMicrophone));
+        assert_eq!(tap(&mut capture, started), Some(Command::OpenMicrophone));
         assert_eq!(capture.microphone_ready(at(started)), None);
         capture
     }
 
     #[test]
-    fn a_full_cycle_goes_idle_recording_listening_review_idle() {
+    fn a_tap_starts_listening_and_a_second_tap_stops_to_review() {
         let mut capture = Capture::new();
         assert_eq!(capture.phase(), Phase::Idle);
 
-        assert_eq!(capture.press(SECURE), Some(Command::OpenMicrophone));
-        assert_eq!(capture.phase(), Phase::Requesting(Early::Holding));
+        assert_eq!(tap(&mut capture, 0), Some(Command::OpenMicrophone));
+        assert_eq!(capture.phase(), Phase::Requesting(Early::Wanted));
+        assert!(capture.is_listening());
         assert_eq!(capture.microphone_ready(at(1_000)), None);
         assert_eq!(capture.phase(), Phase::Recording { started: at(1_000) });
         assert_eq!(capture.elapsed_seconds(at(3_500)), Some(2));
 
-        assert_eq!(
-            capture.release(at(3_500), true),
-            Some(Command::FinishRecording)
-        );
+        assert_eq!(tap(&mut capture, 3_500), Some(Command::FinishRecording));
         assert_eq!(capture.phase(), Phase::Listening);
+        assert!(!capture.is_listening());
         assert!(capture.decoded(40_000, 80_044));
         assert!(capture.heard(SpeechOutcome::Heard, "who sent you"));
         assert_eq!(capture.phase(), Phase::Review);
@@ -422,31 +491,41 @@ mod tests {
     }
 
     #[test]
-    fn a_recording_is_dropped_unheard_when_cancelled_or_released_elsewhere() {
-        let mut escaped = recording(0);
-        assert_eq!(escaped.cancel(), Some(Command::Discard));
-        assert_eq!(escaped.phase(), Phase::Idle);
-        assert_eq!(escaped.notice(), Some(Notice::Discarded));
+    fn a_cancelled_pointer_or_a_drag_off_the_control_does_not_toggle() {
+        let mut capture = recording(0);
 
-        let mut slid_off = recording(0);
-        assert_eq!(slid_off.release(at(5_000), false), Some(Command::Discard));
-        assert_eq!(slid_off.phase(), Phase::Idle);
-        assert_eq!(slid_off.notice(), Some(Notice::Discarded));
+        capture.press_down();
+        capture.abandon_press();
+        assert_eq!(capture.release(at(5_000), true, SECURE), None);
+
+        capture.press_down();
+        assert_eq!(capture.release(at(5_000), false, SECURE), None);
+
+        assert_eq!(capture.phase(), Phase::Recording { started: at(0) });
+        assert_eq!(capture.notice(), None);
+    }
+
+    #[test]
+    fn a_release_without_a_press_on_the_control_is_not_a_tap() {
+        let mut capture = Capture::new();
+        assert_eq!(capture.tick(at(10_000)), None);
+        assert_eq!(capture.release(at(10), true, SECURE), None);
+        assert_eq!(capture.interrupt(Interruption::Cancelled), None);
+        assert_eq!(capture.recorder_failed(), None);
+        assert_eq!(capture.phase(), Phase::Idle);
+        assert_eq!(tap(&mut capture, 20), Some(Command::OpenMicrophone));
     }
 
     #[test]
     fn a_clip_shorter_than_the_minimum_is_discarded() {
         let mut capture = recording(1_000);
 
-        assert_eq!(capture.release(at(1_399), true), Some(Command::Discard));
+        assert_eq!(tap(&mut capture, 1_399), Some(Command::Discard));
 
         assert_eq!(capture.phase(), Phase::Idle);
         assert_eq!(capture.notice(), Some(Notice::TooShort));
         let mut exact = recording(1_000);
-        assert_eq!(
-            exact.release(at(1_400), true),
-            Some(Command::FinishRecording)
-        );
+        assert_eq!(tap(&mut exact, 1_400), Some(Command::FinishRecording));
     }
 
     #[test]
@@ -459,61 +538,46 @@ mod tests {
 
         assert_eq!(capture.phase(), Phase::Listening);
         assert_eq!(capture.notice(), Some(Notice::Capped));
-        // The release that follows the cap changes nothing.
-        assert_eq!(capture.release(at(18_000), true), None);
+        // A tap after the cap changes nothing: the clip is already being heard.
+        assert_eq!(tap(&mut capture, 18_000), None);
         assert_eq!(capture.phase(), Phase::Listening);
     }
 
     #[test]
-    fn only_one_recording_exists_at_a_time() {
+    fn only_one_recording_exists_and_taps_while_starting_or_stopping_are_ignored() {
         let mut capture = Capture::new();
-        capture.press(SECURE);
-        assert_eq!(capture.press(SECURE), None);
+        assert_eq!(tap(&mut capture, 0), Some(Command::OpenMicrophone));
+        assert_eq!(tap(&mut capture, 10), None);
+        assert_eq!(capture.phase(), Phase::Requesting(Early::Wanted));
+        assert_eq!(capture.notice(), None);
         capture.microphone_ready(at(0));
-        assert_eq!(capture.press(SECURE), None);
-        capture.release(at(1_000), true);
+        assert_eq!(tap(&mut capture, 1_000), Some(Command::FinishRecording));
 
-        assert_eq!(capture.press(SECURE), None);
+        assert_eq!(tap(&mut capture, 1_100), None);
         assert_eq!(capture.phase(), Phase::Listening);
         assert_eq!(capture.notice(), Some(Notice::Busy));
     }
 
     #[test]
-    fn letting_go_before_the_microphone_arrives_opens_nothing() {
-        let mut released = Capture::new();
-        released.press(SECURE);
-        assert_eq!(released.release(at(100), true), None);
-        assert_eq!(released.phase(), Phase::Requesting(Early::Released));
-
-        assert_eq!(released.microphone_ready(at(900)), Some(Command::Discard));
-
-        assert_eq!(released.phase(), Phase::Idle);
-        assert_eq!(released.notice(), Some(Notice::ReadyToTalk));
-
-        let mut escaped = Capture::new();
-        escaped.press(SECURE);
-        assert_eq!(escaped.cancel(), None);
-        assert_eq!(escaped.press(SECURE), None);
-        assert_eq!(escaped.microphone_ready(at(900)), Some(Command::Discard));
-        assert_eq!(escaped.notice(), Some(Notice::Discarded));
-    }
-
-    #[test]
-    fn nothing_but_a_deliberate_press_asks_for_the_microphone() {
+    fn a_start_cancelled_before_the_microphone_arrives_releases_it_unused() {
         let mut capture = Capture::new();
-        assert_eq!(capture.tick(at(10_000)), None);
-        assert_eq!(capture.release(at(10), true), None);
-        assert_eq!(capture.cancel(), None);
-        assert_eq!(capture.recorder_failed(), None);
+        assert_eq!(tap(&mut capture, 0), Some(Command::OpenMicrophone));
+
+        assert_eq!(capture.interrupt(Interruption::Cancelled), None);
+        assert!(!capture.is_listening());
+        assert_eq!(capture.microphone_ready(at(900)), Some(Command::Discard));
+
         assert_eq!(capture.phase(), Phase::Idle);
-        assert_eq!(capture.press(SECURE), Some(Command::OpenMicrophone));
+        assert_eq!(capture.notice(), Some(Notice::Discarded));
+        // A tap after that starts a fresh recording.
+        assert_eq!(tap(&mut capture, 1_000), Some(Command::OpenMicrophone));
     }
 
-    /// The browser module is not compiled for native tests, so its one rule is checked in the
-    /// source: the only call that can raise a permission prompt sits in `open_microphone`, and
-    /// that function starts only from the press command.
     #[test]
     fn the_prompting_browser_call_is_only_reachable_from_a_press() {
+        // The browser module is not compiled for native tests, so its one rule is checked in the
+        // source: the only call that can raise a permission prompt sits in `open_microphone`, and
+        // that function starts only from the press command.
         let source = include_str!("gameplay_browser/talk_control.rs");
         assert_eq!(source.matches("get_user_media").count(), 1);
         assert_eq!(source.matches("enumerate_devices").count(), 0);
@@ -547,7 +611,7 @@ mod tests {
             (MicrophoneFault::Other, Notice::MicrophoneFailed),
         ] {
             let mut capture = Capture::new();
-            capture.press(SECURE);
+            tap(&mut capture, 0);
             capture.microphone_failed(fault);
             assert_eq!(capture.phase(), Phase::Idle);
             assert_eq!(capture.notice(), Some(notice));
@@ -565,7 +629,7 @@ mod tests {
             secure_context: false,
             can_record: true,
         };
-        assert_eq!(insecure.press(plain_http), None);
+        assert_eq!(tap_in(&mut insecure, 0, plain_http), None);
         assert_eq!(insecure.phase(), Phase::Idle);
         assert_eq!(insecure.notice(), Some(Notice::InsecureContext));
         assert!(insecure.notice().unwrap().message().contains("https"));
@@ -575,7 +639,7 @@ mod tests {
             secure_context: true,
             can_record: false,
         };
-        assert_eq!(unsupported.press(no_recorder), None);
+        assert_eq!(tap_in(&mut unsupported, 0, no_recorder), None);
         assert_eq!(unsupported.notice(), Some(Notice::CannotRecord));
     }
 
@@ -587,7 +651,7 @@ mod tests {
             (100_000, MAXIMUM_CLIP_BYTES + 1, Notice::TooLarge),
         ] {
             let mut capture = recording(0);
-            capture.release(at(2_000), true);
+            tap(&mut capture, 2_000);
 
             assert!(!capture.decoded(samples, bytes));
 
@@ -614,7 +678,7 @@ mod tests {
         let mut messages = Vec::new();
         for outcome in failures {
             let mut capture = recording(0);
-            capture.release(at(2_000), true);
+            tap(&mut capture, 2_000);
 
             assert!(!capture.heard(outcome, ""));
 
@@ -629,7 +693,7 @@ mod tests {
     #[test]
     fn a_hearing_with_no_words_is_nothing_heard_not_a_draft() {
         let mut capture = recording(0);
-        capture.release(at(2_000), true);
+        tap(&mut capture, 2_000);
 
         assert!(!capture.heard(SpeechOutcome::Heard, "   "));
 
@@ -640,49 +704,146 @@ mod tests {
     #[test]
     fn cancelling_while_listening_abandons_the_upload() {
         let mut capture = recording(0);
-        capture.release(at(2_000), true);
+        tap(&mut capture, 2_000);
 
-        assert_eq!(capture.cancel(), Some(Command::AbortUpload));
+        assert_eq!(
+            capture.interrupt(Interruption::Cancelled),
+            Some(Command::AbortUpload)
+        );
 
         assert_eq!(capture.phase(), Phase::Idle);
+        assert_eq!(capture.notice(), Some(Notice::Discarded));
         // A late answer for the abandoned clip changes nothing.
         assert!(!capture.heard(SpeechOutcome::Heard, "late words"));
         assert_eq!(capture.phase(), Phase::Idle);
     }
 
     #[test]
-    fn a_lost_connection_and_an_unreadable_recording_each_end_listening() {
+    fn hiding_the_page_ends_a_recording_unheard() {
+        let mut capture = recording(0);
+
+        assert_eq!(
+            capture.interrupt(Interruption::PageHidden),
+            Some(Command::Discard)
+        );
+
+        assert_eq!(capture.phase(), Phase::Idle);
+        assert!(!capture.is_listening());
+        assert_eq!(capture.notice(), Some(Notice::Discarded));
+    }
+
+    #[test]
+    fn losing_the_connection_ends_a_recording_or_an_upload_with_its_own_message() {
+        let mut recording_lost = recording(0);
+        assert_eq!(
+            recording_lost.interrupt(Interruption::ConnectionLost),
+            Some(Command::Discard)
+        );
+        assert_eq!(recording_lost.phase(), Phase::Idle);
+        assert_eq!(recording_lost.notice(), Some(Notice::ConnectionLost));
+
+        let mut upload_lost = recording(0);
+        assert_eq!(tap(&mut upload_lost, 2_000), Some(Command::FinishRecording));
+        assert_eq!(
+            upload_lost.interrupt(Interruption::ConnectionLost),
+            Some(Command::AbortUpload)
+        );
+        assert_eq!(upload_lost.phase(), Phase::Idle);
+        assert_eq!(upload_lost.notice(), Some(Notice::ConnectionLost));
+    }
+
+    #[test]
+    fn a_failed_upload_and_an_unreadable_recording_each_end_listening() {
         let mut lost = recording(0);
-        lost.release(at(2_000), true);
+        assert_eq!(tap(&mut lost, 2_000), Some(Command::FinishRecording));
         lost.upload_failed();
         assert_eq!(lost.notice(), Some(Notice::ConnectionLost));
 
         let mut unreadable = recording(0);
-        unreadable.release(at(2_000), true);
+        assert_eq!(tap(&mut unreadable, 2_000), Some(Command::FinishRecording));
         unreadable.unreadable();
         assert_eq!(unreadable.notice(), Some(Notice::Unreadable));
         assert_eq!(unreadable.phase(), Phase::Idle);
     }
 
     #[test]
-    fn a_recorder_that_fails_mid_recording_is_dropped_with_its_own_message() {
-        let mut capture = recording(0);
+    fn typing_ends_listening_and_a_late_transcript_is_not_applied() {
+        let mut recording_typed = recording(0);
+        assert_eq!(
+            recording_typed.interrupt(Interruption::Typing),
+            Some(Command::Discard)
+        );
+        assert_eq!(recording_typed.phase(), Phase::Idle);
 
-        assert_eq!(capture.recorder_failed(), Some(Command::Discard));
+        let mut upload_typed = recording(0);
+        assert_eq!(
+            tap(&mut upload_typed, 2_000),
+            Some(Command::FinishRecording)
+        );
+        assert_eq!(
+            upload_typed.interrupt(Interruption::Typing),
+            Some(Command::AbortUpload)
+        );
+        // A transcript that comes back later must not replace what the player typed.
+        assert!(!upload_typed.heard(SpeechOutcome::Heard, "late words"));
+        assert_eq!(upload_typed.phase(), Phase::Idle);
+    }
 
-        assert_eq!(capture.phase(), Phase::Idle);
-        assert_eq!(capture.notice(), Some(Notice::MicrophoneFailed));
-        assert_eq!(capture.recorder_failed(), None);
+    #[test]
+    fn typing_while_idle_or_holding_a_draft_changes_nothing() {
+        let mut idle = Capture::new();
+        assert_eq!(idle.interrupt(Interruption::Typing), None);
+        assert_eq!(idle.phase(), Phase::Idle);
+
+        let mut draft = recording(0);
+        assert_eq!(tap(&mut draft, 2_000), Some(Command::FinishRecording));
+        assert!(draft.decoded(40_000, 80_044));
+        assert!(draft.heard(SpeechOutcome::Heard, "words"));
+
+        assert_eq!(draft.interrupt(Interruption::Typing), None);
+        assert_eq!(draft.phase(), Phase::Review);
+    }
+
+    #[test]
+    fn the_text_box_going_away_ends_a_start_and_a_recording() {
+        let mut starting = Capture::new();
+        assert_eq!(tap(&mut starting, 0), Some(Command::OpenMicrophone));
+        assert_eq!(starting.interrupt(Interruption::SceneChanged), None);
+        assert_eq!(starting.microphone_ready(at(300)), Some(Command::Discard));
+        assert_eq!(starting.phase(), Phase::Idle);
+
+        let mut recording_now = recording(0);
+        assert_eq!(
+            recording_now.interrupt(Interruption::SceneChanged),
+            Some(Command::Discard)
+        );
+        assert_eq!(recording_now.phase(), Phase::Idle);
+        assert_eq!(recording_now.notice(), Some(Notice::Discarded));
+    }
+
+    #[test]
+    fn the_table_mark_follows_only_the_microphone_opening_or_recording() {
+        let mut capture = Capture::new();
+        assert!(!capture.is_listening());
+
+        tap(&mut capture, 0);
+        assert!(capture.is_listening());
+        capture.microphone_ready(at(0));
+        assert!(capture.is_listening());
+
+        tap(&mut capture, 2_000);
+        assert!(!capture.is_listening());
+        assert!(capture.is_busy());
     }
 
     #[test]
     fn a_draft_does_not_block_talking_again() {
         let mut capture = recording(0);
-        capture.release(at(2_000), true);
+        tap(&mut capture, 2_000);
         capture.decoded(40_000, 80_044);
         capture.heard(SpeechOutcome::Heard, "first");
         assert_eq!(capture.phase(), Phase::Review);
 
-        assert_eq!(capture.press(SECURE), Some(Command::OpenMicrophone));
+        assert_eq!(tap(&mut capture, 3_000), Some(Command::OpenMicrophone));
     }
 }

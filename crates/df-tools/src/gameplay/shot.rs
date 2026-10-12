@@ -107,6 +107,14 @@ pub(in crate::gameplay) enum HeroSlot {
 }
 
 impl HeroSlot {
+    /// Whether the slot is on the right of the frame.
+    fn is_right(self) -> bool {
+        matches!(
+            self,
+            Self::RightForeground | Self::RightMid | Self::BackRight
+        )
+    }
+
     /// Where the hero's head is intended to be, in permille of the frame: the centre.
     fn head_centre(self) -> (u16, u16) {
         match self {
@@ -296,6 +304,8 @@ pub(in crate::gameplay) struct DressingShot {
 pub(in crate::gameplay) struct ShotSpec {
     pub(in crate::gameplay) family: &'static str,
     pub(in crate::gameplay) place_description: &'static str,
+    /// From the adventure record, so every plate of a place keeps its interior or exterior.
+    pub(in crate::gameplay) exterior: bool,
     pub(in crate::gameplay) time_of_day: TimeOfDay,
     pub(in crate::gameplay) lights: Vec<&'static str>,
     pub(in crate::gameplay) camera: Camera,
@@ -324,6 +334,8 @@ pub(in crate::gameplay) struct ShotInput<'a> {
     pub(in crate::gameplay) place_id: &'a str,
     /// The setting kind's kebab-case name, such as `herb-shed`.
     pub(in crate::gameplay) place_kind: &'a str,
+    /// The adventure record's own word: the place is outdoors (true) or an enclosed interior.
+    pub(in crate::gameplay) exterior: bool,
     pub(in crate::gameplay) title: &'a str,
     /// The scene's story text (narration and the speaker's line). Only read for whole-word
     /// cues of the time of day and the speaker's expression; never copied anywhere.
@@ -666,6 +678,16 @@ fn tags_match(entry: &[String], wanted: &[&str]) -> bool {
 
 /// The tags a hero's art number gives: what their cut-out is (a fighter with a greatsword, an
 /// archer) picks which activities suit them.
+/// Whether a pose has a hand on a weapon (a hero holds only the weapon of their own sheet).
+fn handles_a_weapon(activity: &str) -> bool {
+    contains_any(
+        activity,
+        &[
+            "sword", "spear", "blade", "bow", "knife", "dagger", "axe", "hilt",
+        ],
+    )
+}
+
 fn hero_tags(art: u8) -> &'static [&'static str] {
     match art {
         3 => &["ranger"],
@@ -855,7 +877,11 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
     let (family_name, family) = family_of(input.place_kind)?;
     let story = input.story_text.to_ascii_lowercase();
     let scene_label = format!("{:?}", input.scene_key);
+    // What belongs to the place (the camera, the sides, the props, the light, the hour) is chosen
+    // from the place alone, so every plate of a place keeps it; the speaker's task and the heroes'
+    // poses vary with the scene.
     let mut stream = Stream::seeded(&[input.place_id, &scene_label, input.title]);
+    let mut place_stream = Stream::seeded(&[input.place_id]);
     let heroes_present: Vec<u8> = input
         .heroes
         .iter()
@@ -878,7 +904,7 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
         (None, _) | (Some(_), SceneKey::Combat) => Camera::WideEstablishing,
         (Some(_), SceneKey::Inn | SceneKey::Victory) => Camera::SpeakerClose,
         (Some(_), _) => {
-            if stream.below(2) == 0 {
+            if place_stream.below(2) == 0 {
                 Camera::OverShoulderLeft
             } else {
                 Camera::OverShoulderRight
@@ -890,7 +916,7 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
             Camera::OverShoulderLeft => SpeakerSlot::MidRight,
             Camera::OverShoulderRight => SpeakerSlot::MidLeft,
             Camera::WideEstablishing | Camera::SpeakerClose => {
-                if stream.below(2) == 0 {
+                if place_stream.below(2) == 0 {
                     SpeakerSlot::MidLeft
                 } else {
                     SpeakerSlot::MidRight
@@ -925,17 +951,23 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
     let blocked = speaker
         .as_ref()
         .map(|speaker| speaker.slot.blocked_hero_slot());
-    let slots: Vec<HeroSlot> = hero_order(camera)
+    // The first hero stands on the left and the second on the right in every plate of a place.
+    let mut slots: Vec<HeroSlot> = hero_order(camera)
         .into_iter()
         .filter(|slot| Some(*slot) != blocked)
         .collect();
+    slots.truncate(heroes_present.len());
+    slots.sort_by_key(|slot| slot.is_right());
     let mut order = heroes_present;
-    stream.shuffle(&mut order);
+    order.sort_unstable();
     let mut used_activities: Vec<&str> = Vec::new();
     let mut heroes = Vec::with_capacity(order.len());
     for (art, slot) in order.into_iter().zip(slots) {
         let tags = hero_tags(art);
-        let fresh = |activity: &&Tagged| !used_activities.contains(&activity.text.as_str());
+        // A hero's own weapon is the one on their sheet: no pose may put another in their hands.
+        let fresh = |activity: &&Tagged| {
+            !used_activities.contains(&activity.text.as_str()) && !handles_a_weapon(&activity.text)
+        };
         let specific: Vec<&Tagged> = family
             .activities
             .iter()
@@ -967,9 +999,9 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
         });
     }
     let mut extra_names: Vec<&'static str> = family.extras.iter().map(String::as_str).collect();
-    stream.shuffle(&mut extra_names);
+    place_stream.shuffle(&mut extra_names);
     let mut zones = [ExtraZone::FarLeft, ExtraZone::FarRight, ExtraZone::Deep];
-    stream.shuffle(&mut zones);
+    place_stream.shuffle(&mut zones);
     let extras = extra_names
         .into_iter()
         .zip(zones)
@@ -978,14 +1010,14 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
         .collect();
     let mut dressing_items: Vec<&'static str> =
         family.dressing.iter().map(String::as_str).collect();
-    stream.shuffle(&mut dressing_items);
+    place_stream.shuffle(&mut dressing_items);
     let dressing = dressing_items
         .into_iter()
         .zip([DressingZone::BottomLeft, DressingZone::BottomRight])
         .map(|(item, zone)| DressingShot { item, zone })
         .collect();
     let mut light_names: Vec<&'static str> = family.lights.iter().map(String::as_str).collect();
-    stream.shuffle(&mut light_names);
+    place_stream.shuffle(&mut light_names);
     light_names.truncate(2);
     let time_of_day = story_time(&story).unwrap_or_else(|| {
         let nightly = matches!(family_name, "waterfront" | "woodland" | "watch");
@@ -999,7 +1031,10 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
                 TimeOfDay::Dusk,
             ]
         };
-        stream.pick(choices).copied().unwrap_or(TimeOfDay::Dusk)
+        place_stream
+            .pick(choices)
+            .copied()
+            .unwrap_or(TimeOfDay::Dusk)
     });
     let others = input
         .others
@@ -1011,6 +1046,7 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
     let spec = ShotSpec {
         family: family_name,
         place_description: family.fixed_description.as_str(),
+        exterior: input.exterior,
         time_of_day,
         lights: light_names,
         camera,

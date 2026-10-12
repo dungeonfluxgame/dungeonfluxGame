@@ -305,9 +305,11 @@ impl Hud {
     ) -> Result<(), JsValue> {
         self.title.set_text_content(Some(&stage.scene().title));
         let active = frame.figures.iter().find(|figure| figure.active);
-        let turn = active.map_or_else(String::new, |figure| {
-            format!("{}\u{2019}s turn", figure.name)
-        });
+        let turn = match (&frame.hud.prompt, active) {
+            (Some(prompt), _) => prompt.clone(),
+            (None, Some(figure)) => format!("{}\u{2019}s turn", figure.name),
+            (None, None) => String::new(),
+        };
         if self.turn.text_content().as_deref() != Some(turn.as_str()) {
             self.turn.set_text_content(Some(&turn));
         }

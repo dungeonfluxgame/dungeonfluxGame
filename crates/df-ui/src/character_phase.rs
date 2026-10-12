@@ -805,6 +805,53 @@ mod browser {
         Ok(())
     }
 
+    /// Hides every option whose required group does not hold one of its listed options, and
+    /// forgets the player's selection of a hidden option.
+    fn refresh_requirements(
+        root: &Element,
+        state: &Rc<RefCell<CharacterDraftState>>,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        let cards = root.query_selector_all("[data-requires-group]")?;
+        for index in 0..cards.length() {
+            let Some(card) = cards
+                .item(index)
+                .and_then(|node| node.dyn_into::<Element>().ok())
+            else {
+                continue;
+            };
+            let required = card
+                .get_attribute("data-requires-group")
+                .unwrap_or_default();
+            let listed_with = card
+                .get_attribute("data-requires-options")
+                .unwrap_or_default();
+            let chosen = state.borrow().choices.get(&required).cloned();
+            if chosen.is_some_and(|chosen| listed_with.split(',').any(|id| id == chosen)) {
+                card.remove_attribute("hidden")?;
+                continue;
+            }
+            card.set_attribute("hidden", "")?;
+            let own = card
+                .query_selector("button")?
+                .and_then(|button| button.get_attribute("data-option-id"));
+            let group = card
+                .closest("[data-group-id]")?
+                .and_then(|group| group.get_attribute("data-group-id"));
+            if let (Some(own), Some(group)) = (own, group) {
+                let mut draft = state.borrow_mut();
+                if draft.choices.get(&group) == Some(&own) {
+                    draft.choices.remove(&group);
+                    draft.dirty_groups.remove(&group);
+                }
+            }
+            if let Some(button) = card.query_selector("button")? {
+                button.set_attribute("aria-pressed", "false")?;
+            }
+            card.set_attribute("data-selected", "false")?;
+        }
+        Ok(())
+    }
+
     fn input_view<'a>(label: &'a str, view: &'a CharacterPhaseView) -> TextInputView<'a> {
         TextInputView {
             label,
@@ -1102,6 +1149,7 @@ mod browser {
             self.portrait
                 .update(&self.document, view.portrait, replaced)?;
             self.update_groups(view, replaced)?;
+            refresh_requirements(&self.root, &self.state)?;
             self.update_facts(view)?;
             self.update_actions(view)?;
             if let Some(node) = focused
@@ -1254,6 +1302,7 @@ mod browser {
                 {
                     let root = self.document.create_element("section")?;
                     root.set_class_name("character-panel character-choice-group");
+                    root.set_attribute("data-group-id", &group.id)?;
                     let heading = child(&self.document, &root, "h2", "", None)?;
                     let description = child(
                         &self.document,
@@ -1320,6 +1369,7 @@ mod browser {
                         let group_id = group.id.clone();
                         let option_id = option.id.clone();
                         let container = nodes.options_root.clone();
+                        let surface_root = self.root.clone();
                         let message = self.message.clone();
                         action.on_activate(move || {
                             if state.borrow_mut().choose(&group_id, &option_id).is_err() {
@@ -1338,7 +1388,7 @@ mod browser {
                                 }
                                 Ok(())
                             })();
-                            if result.is_err() { replace_text(&message, Some("Choice recorded locally; its presentation could not refresh.")); }
+                            if result.is_err() || refresh_requirements(&surface_root, &state).is_err() { replace_text(&message, Some("Choice recorded locally; its presentation could not refresh.")); }
                         })?;
                         entry.insert(OptionNodes {
                             root,
@@ -1372,6 +1422,31 @@ mod browser {
                     }
                 }
             }
+            Ok(())
+        }
+
+        /// Lists `option` of `group` only while `requires_group` holds one of `requires_options`
+        /// (the server says which: an appearance goes with the packages that grant its weapon).
+        /// An option that stops being listed loses the player's selection of it.
+        pub fn require_option(
+            &self,
+            group: &str,
+            option: &str,
+            requires_group: &str,
+            requires_options: &[String],
+        ) -> Result<(), CharacterPhaseError> {
+            if let Some(card) = self
+                .groups
+                .borrow()
+                .get(group)
+                .and_then(|nodes| nodes.options.get(option))
+            {
+                card.root
+                    .set_attribute("data-requires-group", requires_group)?;
+                card.root
+                    .set_attribute("data-requires-options", &requires_options.join(","))?;
+            }
+            refresh_requirements(&self.root, &self.state)?;
             Ok(())
         }
 

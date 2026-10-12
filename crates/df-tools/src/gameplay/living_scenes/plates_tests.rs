@@ -204,6 +204,7 @@ fn layout() -> PlateLayout {
         scene_key: SceneKey::Opening,
         place_id: "p",
         place_kind: "bell-chamber",
+        exterior: false,
         title: "t",
         story_text: "",
         speaker: Some(SpeakerInput {
@@ -444,7 +445,7 @@ async fn an_edit_that_lands_in_another_scene_is_ignored() {
 }
 
 #[tokio::test]
-async fn a_creature_speaker_means_no_plate_and_no_failure() {
+async fn a_creature_speaker_means_no_plate_and_no_failure_but_never_cut_outs() {
     let (shared, mut queue) = shared(16);
     let mut current = scene(SceneKey::Opening, "A Rat in the Cellar", Some("Gnaw"));
     current.cast = vec![member(
@@ -457,7 +458,11 @@ async fn a_creature_speaker_means_no_plate_and_no_failure() {
     assert!(drain(&mut queue).is_empty());
     let mut message = display_message(&current);
     apply(&shared, &mut message);
-    assert_eq!(shown_scene(&message).plate_state, 0);
+    assert_eq!(
+        shown_scene(&message).plate_state,
+        rpc::PlateState::Unavailable as i32,
+        "no plate will come, and the display is told so instead of being left to guess"
+    );
 }
 
 #[tokio::test]
@@ -470,6 +475,171 @@ async fn a_party_that_changes_in_a_scene_gets_a_plate_for_the_new_party() {
     let second = fresh_ids(&drain(&mut queue));
     assert_eq!((first.len(), second.len()), (1, 1));
     assert_ne!(first, second);
+}
+
+#[tokio::test]
+async fn the_opening_plate_is_asked_for_in_the_lobby_once_a_hero_is_confirmed_and_again_for_a_new_party()
+ {
+    let (shared, mut queue) = shared(16);
+    let lobby = scene(SceneKey::Room, "The Gathering", None);
+    let opening = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+    observe(&shared, &lobby, std::slice::from_ref(&opening), &[]);
+    assert!(
+        drain(&mut queue).is_empty(),
+        "no hero is confirmed yet, so there is no party to show"
+    );
+    observe(&shared, &lobby, std::slice::from_ref(&opening), &[1]);
+    let first = drain(&mut queue);
+    assert!(
+        matches!(&first[..], [Job::Fresh { scene, heroes, ahead: false, .. }]
+            if scene.title == "Word Before Dawn" && heroes == &[1]),
+        "the first confirmed hero starts the opening plate at once"
+    );
+    observe(&shared, &lobby, std::slice::from_ref(&opening), &[1]);
+    assert!(
+        drain(&mut queue).is_empty(),
+        "the same party asks for nothing more"
+    );
+    observe(&shared, &lobby, std::slice::from_ref(&opening), &[1, 2]);
+    let second = drain(&mut queue);
+    assert!(
+        matches!(&second[..], [Job::Fresh { heroes, .. }] if heroes == &[1, 2]),
+        "a later hero makes the plate for the gathered party, once"
+    );
+    let mut lobby_message = display_message(&lobby);
+    apply(&shared, &mut lobby_message);
+    assert_eq!(
+        shown_scene(&lobby_message).plate_state,
+        rpc::PlateState::Unspecified as i32,
+        "the lobby itself has no plate"
+    );
+    // The party's plate lands before the story starts: the opening scene shows it at once.
+    let ids = fresh_ids(&second);
+    ready(&shared, &ids[0], 'a');
+    observe(&shared, &opening, &[], &[1, 2]);
+    assert!(
+        drain(&mut queue).is_empty(),
+        "the opening plate is not asked for twice"
+    );
+    let mut message = display_message(&opening);
+    apply(&shared, &mut message);
+    assert_eq!(
+        shown_scene(&message).plate_state,
+        rpc::PlateState::Ready as i32
+    );
+}
+
+#[tokio::test]
+async fn a_planned_scene_whose_request_was_dropped_is_pending_and_is_asked_for_by_the_next_view() {
+    let (shared, mut queue) = shared(1);
+    let other = scene(SceneKey::DialogueSeal, "Hard Questions", Some("Kestrel"));
+    let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+    // The queue holds one request; the current scene's request after it does not fit.
+    shared.observe_with(&view(&other, &[1], false), Some(other.clone()), Vec::new());
+    shared.observe_with(
+        &view(&current, &[1], false),
+        Some(current.clone()),
+        Vec::new(),
+    );
+    assert!(locked(&shared.book).current_entry().is_none());
+    let mut message = display_message(&current);
+    apply(&shared, &mut message);
+    assert_eq!(
+        shown_scene(&message).plate_state,
+        rpc::PlateState::Pending as i32,
+        "a plate that is on its way is never mistaken for a scene without one"
+    );
+    drain(&mut queue);
+    observe(&shared, &current, &[], &[1]);
+    assert_eq!(
+        fresh_ids(&drain(&mut queue)).len(),
+        1,
+        "the next view of the same scene asks again"
+    );
+}
+
+#[test]
+fn the_successors_of_a_scene_follow_a_won_fight_and_the_lobby_leads_to_the_opening() {
+    let keys = |scene: &pack::Scene| -> Vec<SceneKey> {
+        successors(scene).into_iter().map(|next| next.key).collect()
+    };
+    assert_eq!(keys(&pack::scene(SceneKey::Room)), [SceneKey::Opening]);
+    assert_eq!(
+        keys(&pack::scene(SceneKey::Opening)),
+        [SceneKey::DialogueSeal, SceneKey::DialogueEscort]
+    );
+    for answer in [SceneKey::DialogueSeal, SceneKey::DialogueEscort] {
+        assert_eq!(
+            keys(&pack::scene(answer)),
+            [SceneKey::Victory],
+            "the fight is never plated, so its won scene is the one made ahead"
+        );
+    }
+}
+
+/// A mystery chapter's shape: a look keeps the place, a journey leads to a new place, and the
+/// ending follows it.
+fn mystery_script() -> (BeatScript, Vec<pack::Scene>) {
+    let mut scenes = std::collections::BTreeMap::new();
+    for (id, key, title) in [
+        ("opening", SceneKey::Opening, "Traces to Follow"),
+        ("crates", SceneKey::Opening, "Marks on the Ground"),
+        ("travel", SceneKey::DialogueEscort, "The Way Onward"),
+        ("destination", SceneKey::Inn, "A Journey Settled"),
+        ("epilogue", SceneKey::Inn, "The Ending"),
+        ("end", SceneKey::Inn, "The Last Word"),
+    ] {
+        scenes.insert(id.to_owned(), scene(key, title, Some("Kestrel")));
+    }
+    let beat = |id: &str, kind: &str, targets: &[&str]| {
+        serde_json::json!({
+            "id": id, "kind": kind, "scene": "opening", "scene_variant": id,
+            "state": { "durable": id }, "offers": [],
+            "transitions": targets.iter().map(|target| serde_json::json!({
+                "trigger": { "on": "offer", "offer": "go" }, "target": target
+            })).collect::<Vec<_>>(),
+        })
+    };
+    let script = serde_json::from_value(serde_json::json!({
+        "entry": "opening", "terminal": ["end"], "scenes": scenes,
+        "beats": [
+            beat("opening", "investigate", &["crates", "travel"]),
+            beat("crates", "investigate", &["crates", "travel"]),
+            beat("travel", "travel", &["destination"]),
+            beat("destination", "ending", &["epilogue"]),
+            beat("epilogue", "ending", &["end"]),
+            beat("end", "ending", &[]),
+        ],
+    }))
+    .unwrap();
+    (script, Vec::new())
+}
+
+#[test]
+fn the_destination_of_a_journey_and_the_ending_after_it_are_made_while_the_party_is_still_on_the_way()
+ {
+    let (script, scenes) = mystery_script();
+    let titles = |from: &str| -> Vec<String> {
+        let current = script.scenes[from].clone();
+        successors_in(&script, &scenes, &current)
+            .into_iter()
+            .map(|next| next.title)
+            .collect()
+    };
+    assert_eq!(
+        titles("opening"),
+        [
+            "Marks on the Ground",
+            "The Way Onward",
+            "A Journey Settled",
+            "The Ending"
+        ],
+        "the look, the journey, and the new place with its ending, nearest first"
+    );
+    assert_eq!(
+        titles("travel"),
+        ["A Journey Settled", "The Ending", "The Last Word"]
+    );
 }
 
 #[test]

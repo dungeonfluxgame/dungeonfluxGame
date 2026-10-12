@@ -206,13 +206,16 @@ policy. A refusal or empty reply falls back to the prepared in-character line an
 retried with reworded instructions to get around it. The setting is read once at startup. A saved
 adventure keeps the text it was generated with.
 
-### Speech input (hold to talk)
+### Speech input (tap to talk)
 
-On the phone, a "Hold to talk" button sits under the dialogue text box. The player holds it
-(pointer, touch, or Space/Enter), speaks for up to 15 seconds and releases; the server
-transcribes the clip and the words appear in the same text box. The player edits them and
-presses Send (the same path as a typed line) or Clear. Typing works throughout, and a press is
-the only thing that ever asks the browser for the microphone.
+On the phone, a "Tap to talk" button sits under the dialogue text box. The player taps it
+(pointer, touch, or Space/Enter) to start; the button reads "Listening… tap to stop" while it
+listens, for up to 15 seconds. A second tap stops it, and the server transcribes the clip and the
+words appear in the same text box. Listening also ends without a tap when the page is hidden, the
+connection drops, the text box goes away, or the player starts typing. A press that is cancelled
+or dragged off the button does nothing, and Escape cancels. The player edits the words and presses
+Send (the same path as a typed line) or Clear. Typing works throughout, and a tap is the only thing
+that ever asks the browser for the microphone.
 
 Settings (process environment; invalid values refuse startup without echoing them):
 
@@ -305,6 +308,31 @@ downloaded) and point the server at it.
   cells and the layout stay in the scene data, the stage and the view, and the camera still frames the reachable
   region. `on` turns the hairline grid back on for development. Any other value refuses startup. The
   `#battle-preview` address takes `&grid=1`.
+
+### Test fights against 1 to n enemies
+
+A development setting, off by default (a normal game is unchanged): the adventure's first choice
+leads straight to a tactical fight against `n` enemies.
+
+- `DF_GAMEPLAY_TEST_FIGHT=<n>` (or `development/run-gameplay.sh --test-fight <n>`): `n` from 1 to
+  4. Any other value refuses startup. After the opening's first choice (ask or escort) the server
+  submits the courier defence for the same player at once, so the fight begins without the
+  dialogue step; every rule, check and revision is the ordinary one.
+- `DF_GAMEPLAY_TEST_FOE=<creature id>` (or `--test-foe <id>`): the creature, from the compiled
+  rules table (`bandit`, `cultist`, `guard`, `goblin-warrior`, `kobold-warrior`, `skeleton`,
+  `zombie`, `wolf`, `giant-rat`, `giant-weasel`, `mastiff`, `scout`). Default: the adventure's
+  own creature. Needs `DF_GAMEPLAY_TEST_FIGHT`; an unknown id refuses startup. A creature that is
+  not the adventure's own carries 20 arrows or bolts when it has a bow or crossbow.
+- The startup line `TEST FIGHT enemies=<n> foe=<id>` confirms it. It applies to databases created
+  while it is set; a stored game keeps the enemies it started with.
+- The limit of 4 is the number of enemy entities the server holds and of enemy spawn cells on
+  every layout of every battle scene (13 scenes, including the four scans); a native test starts
+  a fight against 1, 2, 3 and 4 on every scene. At six heroes against six enemies several things
+  break and none is changed here: the server numbers heroes 1 and 2 and enemies from 3, there are
+  four enemy entities, four spawn cells per side on every layout, the participant admission allows
+  six combatants (and 15 identity comparisons), the pack and adventure tables allow at most four
+  enemies, and the flat display fallback holds two heroes and three non-player figures. A larger
+  fight needs all of these raised together, and new spawn cells authored on all 36 layouts.
 
 Run a real fight on a scan (the scans listed in `artifacts/tmp/splat-dl/README.txt`):
 

@@ -22,8 +22,8 @@ message SubmitActionResponse { oneof outcome { DecisionReceipt committed_decisio
 enum HarborDestination { HARBOR_DESTINATION_UNSPECIFIED = 0; LOADING_PIER = 1; LANTERN_WHARF = 2; HARBOR_INN = 3; }
 // live_backdrop (display only): a server-generated re-render of this scene's painting, `/gameplay/imagery/<key>`; empty when none. Presentation only.
 message GameplayScene { HarborDestination destination = 1; string title = 2; string scene_asset = 3; string speaker_portrait = 4; repeated SceneActor cast = 5; string rules_note = 6; string place = 7; string location_id = 8; string live_backdrop = 9; string live_plate = 20; PlateLayout plate_layout = 21; PlateState plate_state = 22; }
-// PLAY-V09 scene plate (display and phones): one composed film still of the scene, `/gameplay/imagery/<key>`. `live_plate` is empty unless `plate_state` is READY; UNSPECIFIED means the scene has no plate (none planned, or imagery off), PENDING means one is being made, FAILED means none will come. The layout says where the speaker's head is in the plate and which side of it is kept calm for the speech bubble. Presentation only; a failed plate never changes the game.
-enum PlateState { PLATE_STATE_UNSPECIFIED = 0; PLATE_STATE_PENDING = 1; PLATE_STATE_READY = 2; PLATE_STATE_FAILED = 3; }
+// PLAY-V09 scene plate (display and phones): one composed film still of the scene, `/gameplay/imagery/<key>`. `live_plate` is empty unless `plate_state` is READY; UNSPECIFIED means the scene has no plate (none planned, or imagery off), PENDING means one is being made, FAILED means none will come. UNAVAILABLE (PLAY-V12) means imagery is on but this story scene has no plate and will not get one (a creature speaks, or the scene has no place): the display holds the establishing picture and never draws cut-outs. The layout says where the speaker's head is in the plate and which side of it is kept calm for the speech bubble. Presentation only; a failed plate never changes the game.
+enum PlateState { PLATE_STATE_UNSPECIFIED = 0; PLATE_STATE_PENDING = 1; PLATE_STATE_READY = 2; PLATE_STATE_FAILED = 3; PLATE_STATE_UNAVAILABLE = 4; }
 enum PlateSide { PLATE_SIDE_UNSPECIFIED = 0; PLATE_SIDE_LEFT = 1; PLATE_SIDE_RIGHT = 2; }
 // Positions are permille of the plate (0 to 1000 across and down); the head box is centred on the head position.
 message PlateLayout { PlateSide bubble_side = 1; uint32 head_x_permille = 2; uint32 head_y_permille = 3; uint32 head_width_permille = 4; uint32 head_height_permille = 5; repeated PlateHead heroes = 6; }
@@ -43,16 +43,17 @@ message JoinRefusal { RejectionCode code = 1; }
 enum JourneyPhase { JOURNEY_PHASE_UNSPECIFIED = 0; ROOM = 1; CHARACTER_CREATION = 2; OPENING = 3; DIALOGUE = 4; COMBAT = 5; COMPLETE = 6; }
 message JourneyChoice { string group_id = 1; string option_id = 2; }
 message CharacterSelection { string name = 1; repeated JourneyChoice choices = 2; }
-message JourneyOption { string option_id = 1; string label = 2; string description = 3; }
+message JourneyOption { string option_id = 1; string label = 2; string description = 3; string requires_group = 4; repeated string requires_options = 5; }
 message JourneyGroup { string group_id = 1; string label = 2; repeated JourneyOption options = 3; }
 message CharacterCreationOffer { string description = 1; repeated JourneyGroup groups = 2; string source_revision = 3; }
 message CharacterSheet { string name = 1; repeated SheetFact facts = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; uint32 armor_class = 5; string source_revision = 6; }
 message SheetFact { string label = 1; string value = 2; }
 message PartyMemberView { string name = 1; bool character_ready = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; bool active_turn = 5; bool unconscious = 6; bytes participant_id = 7; GridCell cell = 8; uint32 side = 9; repeated string conditions = 10; uint32 attack_style = 11; string voice_set = 12; string portrait = 13; }
-message CombatOutcome { string actor_name = 1; string target_name = 2; uint32 attack_die = 3; sint32 attack_modifier = 4; sint32 attack_total = 5; uint32 target_armor_class = 6; bool hit = 7; bool critical = 8; repeated uint32 damage_dice = 9; uint32 damage = 10; uint32 target_hit_points = 11; bool knocked_out = 12; bool grazed = 13; string source_revision = 14; bytes actor_id = 15; bytes target_id = 16; string weapon = 17; uint32 attack_style = 18; }
+message CombatOutcome { string actor_name = 1; string target_name = 2; uint32 attack_die = 3; sint32 attack_modifier = 4; sint32 attack_total = 5; uint32 target_armor_class = 6; bool hit = 7; bool critical = 8; repeated uint32 damage_dice = 9; uint32 damage = 10; uint32 target_hit_points = 11; bool knocked_out = 12; bool grazed = 13; string source_revision = 14; bytes actor_id = 15; bytes target_id = 16; string weapon = 17; uint32 attack_style = 18; string damage_type = 19; }
 message CombatView { repeated PartyMemberView participants = 1; string active_actor = 2; uint32 round = 3; repeated CombatOutcome outcomes = 4; bool finished = 5; string source_revision = 6; bytes active_participant_id = 7; repeated InitiativeRoll initiative = 8; string layout_id = 9; repeated GridCell reachable_cells = 10; repeated LegalCombatTarget legal_targets = 11; TurnBudget own_budget = 12; CombatAmmunition own_ammunition = 13; bytes reaction_participant_id = 14; string location_id = 15; }
 message InitiativeRoll { bytes participant_id = 1; string name = 2; uint32 die = 3; sint32 modifier = 4; sint32 total = 5; uint32 order = 6; }
-message JourneyView { JourneyPhase phase = 1; string room_code = 2; string join_path = 3; repeated PartyMemberView party = 4; CharacterCreationOffer creation = 5; CharacterSheet own_character = 6; CombatView combat = 7; string speaker = 8; string dialogue = 9; repeated TableLine table_log = 10; TempoCue tempo = 11; repeated string table_choices = 12; repeated NpcStanding standing = 13; repeated LiveFace live_faces = 14; uint64 presentation_sequence = 15; string reply_speaker = 16; repeated ComposingHero composing = 17; HomeTheme home = 30; HomeVideoState home_video_state = 31; string home_video_path = 32; string join_url = 45; bool adventure_ended = 50; string adventure_title = 51; bool choice_hints_hidden = 70; }
+// adventure_name (PLAY-V12, display and phones): the adventure's own title, on every view; the display's establishing shot names it with the place. Presentation only.
+message JourneyView { JourneyPhase phase = 1; string room_code = 2; string join_path = 3; repeated PartyMemberView party = 4; CharacterCreationOffer creation = 5; CharacterSheet own_character = 6; CombatView combat = 7; string speaker = 8; string dialogue = 9; repeated TableLine table_log = 10; TempoCue tempo = 11; repeated string table_choices = 12; repeated NpcStanding standing = 13; repeated LiveFace live_faces = 14; uint64 presentation_sequence = 15; string reply_speaker = 16; repeated ComposingHero composing = 17; HomeTheme home = 30; HomeVideoState home_video_state = 31; string home_video_path = 32; string join_url = 45; bool adventure_ended = 50; string adventure_title = 51; bool choice_hints_hidden = 70; string adventure_name = 75; }
 // A server-generated health variant of a hero's cut-out (`/gameplay/imagery/<key>`), by the party member's name; presentation only.
 message LiveFace { string name = 1; string sprite = 2; string battle_sprite = 3; }
 enum TableRole { TABLE_ROLE_UNSPECIFIED = 0; HERO = 1; NPC = 2; NARRATOR = 3; }
@@ -65,7 +66,7 @@ service DialogueService {
   rpc Submit(RawDialogueRequest) returns (DialogueResponse);
   rpc Confirm(ConfirmDialogueRequest) returns (SubmitActionResponse);
   rpc Cancel(CancelDialogueRequest) returns (DialogueResponse);
-  // Ephemeral speech intent (typing or holding to talk). Presentation only: never committed, never a revision.
+  // Ephemeral speech intent (typing or talking). Presentation only: never committed, never a revision.
   rpc Compose(ComposeRequest) returns (ComposeResponse);
 }
 enum DialogueContext { DIALOGUE_CONTEXT_UNSPECIFIED = 0; DIALOGUE_CONTEXT_QUESTION = 1; DIALOGUE_CONTEXT_SOCIAL = 2; DIALOGUE_CONTEXT_PLAN_ONLY = 3; DIALOGUE_CONTEXT_META = 4; DIALOGUE_CONTEXT_JOKE = 5; DIALOGUE_CONTEXT_CLARIFY = 6; }
@@ -93,11 +94,11 @@ message TurnBudget { uint32 movement_ft = 1; bool action = 2; bool bonus_action 
 message CombatAmmunition { uint32 arrows = 1; uint32 bolts = 2; }
 message LegalCombatTarget { bytes participant_id = 1; string weapon = 2; string cover = 3; string range_reason = 4; bool disadvantage = 5; repeated string reasons = 6; string option_id = 7; }
 // Home screen (lobby) presentation, decided by the server from validated theme data and carried
-// on JourneyView.home (field 30). Presentation only: a box is permille of the viewport.
-message HomeBox { uint32 left_permille = 1; uint32 top_permille = 2; uint32 width_permille = 3; uint32 height_permille = 4; }
+// on JourneyView.home (field 30). Presentation only: the layout is fixed in the browser (PLAY-V11).
 // The painting's mood: colours as #rrggbb, vignette and grade as permille (1000 is unchanged).
 message HomeMood { string accent = 1; string tint = 2; uint32 vignette_permille = 3; uint32 brightness_permille = 4; uint32 contrast_permille = 5; uint32 saturation_permille = 6; }
-// fallback: no theme record exists for this painting, so the neutral mood and the default layout apply.
-message HomeTheme { string location_id = 1; string arrangement = 2; HomeBox title = 3; HomeBox code = 4; HomeBox party = 5; HomeMood mood = 6; repeated string atmosphere = 7; bool fallback = 8; }
+// fallback: no theme record exists for this painting, so the neutral mood applies. Fields 2 to 5 were
+// the arrangement name and the title, code and party boxes (retired by PLAY-V11, so reserved).
+message HomeTheme { reserved 2 to 5; reserved "arrangement", "title", "code", "party"; string location_id = 1; HomeMood mood = 6; repeated string atmosphere = 7; bool fallback = 8; }
 // PLAY-V10: the home screen loop, for the display only. The path is served only when the state is READY.
 enum HomeVideoState { HOME_VIDEO_STATE_UNSPECIFIED = 0; HOME_VIDEO_STATE_NONE = 1; HOME_VIDEO_STATE_PENDING = 2; HOME_VIDEO_STATE_READY = 3; HOME_VIDEO_STATE_FAILED = 4; }

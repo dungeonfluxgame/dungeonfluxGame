@@ -2,16 +2,18 @@
 //!
 //! A plate is the whole scene as one photographic picture: the heroes seen from behind, the
 //! speaker the lit focal point, extras and foreground objects, one light. It replaces the painted
-//! backdrop with separate cut-outs on the shared display (the display keeps those cut-outs only
-//! while a plate is pending or has failed).
+//! backdrop with separate cut-outs on the shared display (the display draws those cut-outs only
+//! when a plate has failed or none is planned; until the plate is ready the scene shows its
+//! establishing shot, PLAY-V12).
 //!
-//! The director here watches the display's view. The moment a scene becomes current it requests
-//! that scene's plate, and the plates of the scenes that can follow it (the beat script knows the
-//! successors), so a successor is usually ready when the party arrives. Nothing waits for a
-//! plate: a pending or failed plate leaves the scene exactly as it was, and a request that cannot
-//! be queued is dropped and made again by a later view. When the mood tracker settles on a lasting
-//! face for the speaker, the current plate is edited (the experiments showed an edit keeps the
-//! room and a fresh render re-stages it) instead of re-drawing the cut-out.
+//! The director here watches the display's view. The moment a hero is confirmed in the lobby it
+//! requests the opening scene's plate; the moment a scene becomes current it requests that
+//! scene's plate, and the plates of the scenes that can follow it (the beat script knows the
+//! successors, a won fight included), so a successor is usually ready when the party arrives.
+//! Nothing in the game waits for a plate or changes with it, and a
+//! request that cannot be queued is dropped and made again by a later view. When the mood tracker
+//! settles on a lasting face for the speaker, the current plate is edited (the experiments showed
+//! an edit keeps the room and a fresh render re-stages it) instead of re-drawing the cut-out.
 //!
 //! The one worker task owns every render it starts (a `JoinSet`), ends with the last handle, and
 //! reports each outcome to the plate book, never to the game.
@@ -27,7 +29,7 @@ use tokio::{sync::mpsc, task::JoinSet};
 
 use super::{
     super::{
-        beat_script::BeatKind,
+        beat_script::{self, Beat, BeatKind, BeatScript, BeatTransition, BeatTrigger},
         imagery::{
             ImageFailure, ImageKey, ImageKind, ImageRequest, Lookup, OutputSpec, PlaceFacts,
             PlateReferences, ReferenceImage, hero_locator_phrase, party_sheet, plate_moment,
@@ -48,7 +50,7 @@ const MAXIMUM_ENTRIES: usize = 32;
 /// Requests that may wait for the worker; a further one is dropped and made again later.
 const QUEUE_CAPACITY: usize = 16;
 /// The most successor scenes whose plates are requested ahead of time.
-const MAXIMUM_SUCCESSORS: usize = 3;
+const MAXIMUM_SUCCESSORS: usize = 6;
 /// A plate for a scene that may come next waits this long before it is made, so the plate of the
 /// scene on screen is always the first to reach the image service (the service runs two calls at
 /// a time and serves them in the order they arrive).
@@ -64,6 +66,8 @@ struct PlateScene {
     asset: String,
     place_id: String,
     place_kind: String,
+    /// The adventure record's `exterior` for the place.
+    exterior: bool,
     place: Option<PlaceFacts>,
     story_text: String,
     speaker: Option<Speaker>,
@@ -105,6 +109,7 @@ impl PlateScene {
             asset: scene.asset.clone(),
             place_id: setting.place_id.clone(),
             place_kind,
+            exterior: setting.exterior,
             place: PlaceFacts::new(&setting.name, &setting.short),
             story_text: format!("{} {}", scene.narration, scene.dialogue),
             speaker: speaker.map(|member| Speaker {
@@ -137,6 +142,7 @@ impl PlateScene {
             scene_key: self.key,
             place_id: &self.place_id,
             place_kind: &self.place_kind,
+            exterior: self.exterior,
             title: &self.title,
             story_text: &self.story_text,
             speaker: self.speaker.as_ref().map(|speaker| SpeakerInput {
@@ -178,63 +184,88 @@ fn locate(title: &str, asset: &str) -> Option<pack::Scene> {
     })
 }
 
-/// The scenes that can follow `current`, from the beat script's transitions (fights are not
-/// plated, so they are skipped). Without a script the legacy journey's order applies.
+/// How many transitions deep the scenes that can follow are looked for: a travel scene's own
+/// destination, and the ending after it, are made while the party is still on the way.
+const MAXIMUM_LOOKAHEAD: usize = 3;
+
+/// The scenes that can follow `current`, nearest first, from the beat script's transitions (the
+/// canonical script when the pack gives none). A fight is never plated, so its win leads on to the
+/// scene after it (a loss is not made ahead of time); a journey and an ending lead on to what
+/// they lead to, so the first picture of a new place is requested while the party can still
+/// choose to go there.
 fn successors(current: &pack::Scene) -> Vec<pack::Scene> {
     pack::with_content(|content| {
-        let mut found: Vec<pack::Scene> = Vec::new();
-        let add = |scene: pack::Scene, found: &mut Vec<pack::Scene>| {
-            if scene.title != current.title && !found.iter().any(|known| known.title == scene.title)
-            {
-                found.push(scene);
-            }
-        };
-        let Some(script) = &content.beat_script else {
-            let next: &[SceneKey] = match current.key {
-                SceneKey::Opening => &[SceneKey::DialogueSeal, SceneKey::DialogueEscort],
-                SceneKey::Victory => &[SceneKey::Inn],
-                _ => &[],
-            };
-            for key in next {
-                if let Some(scene) = content.scenes.iter().find(|scene| scene.key == *key) {
-                    add(scene.clone(), &mut found);
-                }
-            }
-            return found;
-        };
-        let scene_of = |scene: &pack::SceneKey, variant: &Option<String>| match variant {
+        let script = content
+            .beat_script
+            .as_ref()
+            .unwrap_or_else(|| beat_script::canonical());
+        successors_in(script, &content.scenes, current)
+    })
+}
+
+fn successors_in(
+    script: &BeatScript,
+    scenes: &[pack::Scene],
+    current: &pack::Scene,
+) -> Vec<pack::Scene> {
+    {
+        let scene_of = |beat: &Beat| match &beat.scene_variant {
             Some(variant) => script.scenes.get(variant).cloned(),
-            None => content
-                .scenes
+            None => scenes
                 .iter()
-                .find(|candidate| candidate.key == *scene)
+                .find(|candidate| candidate.key == beat.scene)
                 .cloned(),
         };
+        let mut found: Vec<pack::Scene> = Vec::new();
+        let mut seen: Vec<&str> = Vec::new();
+        let mut queue: VecDeque<(&Beat, usize)> = VecDeque::new();
         for beat in &script.beats {
-            let Some(scene) = scene_of(&beat.scene, &beat.scene_variant) else {
-                continue;
-            };
-            if scene.title != current.title || scene.key != current.key {
-                continue;
-            }
-            for transition in &beat.transitions {
-                let Some(target) = script
-                    .beats
-                    .iter()
-                    .find(|next| next.id == transition.target)
-                else {
-                    continue;
-                };
-                if target.kind == BeatKind::Fight {
-                    continue;
-                }
-                if let Some(next) = scene_of(&target.scene, &target.scene_variant) {
-                    add(next, &mut found);
-                }
+            let here = scene_of(beat)
+                .is_some_and(|scene| scene.title == current.title && scene.key == current.key);
+            if here {
+                queue.extend(
+                    beat.transitions
+                        .iter()
+                        .filter_map(|transition| Some((script.find(&transition.target)?, 1))),
+                );
             }
         }
+        while let Some((beat, depth)) = queue.pop_front() {
+            if seen.contains(&beat.id.as_str()) {
+                continue;
+            }
+            seen.push(&beat.id);
+            let onward: Vec<&BeatTransition> = match beat.kind {
+                BeatKind::Fight => beat
+                    .transitions
+                    .iter()
+                    .filter(|won| won.trigger == BeatTrigger::FightWon)
+                    .collect(),
+                BeatKind::Travel | BeatKind::Ending if depth < MAXIMUM_LOOKAHEAD => {
+                    beat.transitions.iter().collect()
+                }
+                _ => Vec::new(),
+            };
+            if beat.kind != BeatKind::Fight
+                && let Some(next) = scene_of(beat)
+                && next.title != current.title
+                && !found.iter().any(|known| known.title == next.title)
+            {
+                found.push(next);
+            }
+            let deeper = if beat.kind == BeatKind::Fight {
+                depth
+            } else {
+                depth + 1
+            };
+            queue.extend(
+                onward
+                    .into_iter()
+                    .filter_map(|transition| Some((script.find(&transition.target)?, deeper))),
+            );
+        }
         found
-    })
+    }
 }
 
 /// What one display view says about plates.
@@ -320,6 +351,11 @@ struct Current {
     id: Option<String>,
     scene: Option<PlateScene>,
     heroes: Vec<u8>,
+    /// The health variants of hurt heroes the scene's plate was named with.
+    faces: Vec<(u8, ImageKey)>,
+    /// A story scene that never gets a plate (it has no place to stage): the display holds its
+    /// establishing picture instead of drawing cut-outs.
+    unplated: bool,
     in_combat: bool,
 }
 
@@ -637,29 +673,50 @@ impl Shared {
                     book.order.retain(|known| known != id);
                 }
             }
+            let unplated = scene.is_none()
+                && located.as_ref().is_none_or(|located| {
+                    !matches!(located.key, SceneKey::Room | SceneKey::Combat)
+                });
             book.current = Some(Current {
                 scene_key: view.scene_key.clone(),
                 id,
                 scene: scene.clone(),
                 heroes: view.heroes.clone(),
+                faces: faces.clone(),
+                unplated,
                 in_combat: view.in_combat,
             });
-            if let Some(scene) = scene
-                && !view.in_combat
-            {
-                self.ensure(&mut book, &scene, &view.heroes, &faces, false);
-                for next in next
-                    .iter()
-                    .take(MAXIMUM_SUCCESSORS)
-                    .filter_map(PlateScene::of)
-                {
-                    self.ensure(&mut book, &next, &view.heroes, &faces, true);
+            // The lobby has no plate of its own, but the opening scene is known once the adventure
+            // is rolled and a hero is confirmed: it is asked for now, and again for each change of
+            // party (a plate shows the party, so at most one per party size), and is normally
+            // ready before the story starts.
+            let lobby = scene.is_none() && !view.heroes.is_empty();
+            if !view.in_combat {
+                if let Some(scene) = &scene {
+                    self.ensure(&mut book, scene, &view.heroes, &faces, false);
+                }
+                if scene.is_some() || lobby {
+                    for next in next
+                        .iter()
+                        .take(MAXIMUM_SUCCESSORS)
+                        .filter_map(PlateScene::of)
+                    {
+                        self.ensure(&mut book, &next, &view.heroes, &faces, scene.is_some());
+                    }
                 }
             }
             woke = true;
         } else if combat_changed && let Some(current) = book.current.as_mut() {
             current.in_combat = view.in_combat;
             woke = true;
+        } else if !view.in_combat
+            && book.current_entry().is_none()
+            && let Some(current) = book.current.as_ref()
+            && let Some(scene) = current.scene.clone()
+        {
+            // The scene's request was dropped (a full queue): it is made again by this view.
+            let (heroes, faces) = (current.heroes.clone(), current.faces.clone());
+            self.ensure(&mut book, &scene, &heroes, &faces, false);
         }
         let covers = book.covers();
         drop(book);
@@ -717,9 +774,6 @@ impl Shared {
             return;
         }
         match book.current_entry() {
-            Some(Entry::Pending) => {
-                scene.plate_state = rpc::PlateState::Pending as i32;
-            }
             Some(Entry::Ready { .. }) => {
                 if let Some((key, placement)) = book.shown() {
                     scene.live_plate = key.path();
@@ -730,7 +784,18 @@ impl Shared {
             Some(Entry::Failed) => {
                 scene.plate_state = rpc::PlateState::Failed as i32;
             }
-            Some(Entry::NotPlanned) | None => {}
+            Some(Entry::NotPlanned) => {
+                scene.plate_state = rpc::PlateState::Unavailable as i32;
+            }
+            // A planned scene whose request is not in the book yet is pending too: the display
+            // never mistakes a plate that is on its way for a scene without one.
+            Some(Entry::Pending) | None => {
+                if current.scene.is_some() {
+                    scene.plate_state = rpc::PlateState::Pending as i32;
+                } else if current.unplated {
+                    scene.plate_state = rpc::PlateState::Unavailable as i32;
+                }
+            }
         }
     }
 

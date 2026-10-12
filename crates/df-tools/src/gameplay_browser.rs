@@ -65,6 +65,9 @@ struct Client {
     watch_abort: Option<AbortHandle>,
     callbacks: Vec<Callback>,
     creation: Option<CharacterPhaseSurface>,
+    /// The creation offer of the view the form is drawn in: a confirm always sends this one,
+    /// never the offer the form was first built with.
+    creation_offer: Option<rpc::GameplayActionOffer>,
     live: live_screens::LiveScreens,
     chrome: live_chrome::Chrome,
     scene_delivery: Option<Rc<PublicSceneDelivery>>,
@@ -1180,14 +1183,15 @@ fn creation(
             label:"Confirm your hero".to_owned(),enabled:editable}],
     };
     drop(state);
+    client.borrow_mut().creation_offer = Some(action.clone());
     if let Some(existing) = client.borrow().creation.as_ref() {
         existing
             .update(&view)
             .map_err(|error| character_render_error(client, &error))?;
+        apply_option_requirements(client, existing, offer)?;
         return Ok(());
     }
     let weak = Rc::downgrade(client);
-    let offered = action.clone();
     let created = CharacterPhaseSurface::create(
         &client.borrow().document,
         "journey-character",
@@ -1201,6 +1205,9 @@ fn creation(
         },
         move |submission| {
             let Some(client) = weak.upgrade() else {
+                return;
+            };
+            let Some(offered) = client.borrow().creation_offer.clone() else {
                 return;
             };
             let selection = rpc::CharacterSelection {
@@ -1230,8 +1237,34 @@ fn creation(
     .map_err(|error| character_render_error(client, &error))?;
     // Flavor is not an admitted field in this bounded character contract.
     created.flavor_input().root().set_attribute("hidden", "")?;
+    apply_option_requirements(client, &created, offer)?;
     surface.append_child(created.root())?;
     client.borrow_mut().creation = Some(created);
+    Ok(())
+}
+/// Lists an option only with the choices the server says it goes with (an appearance only with
+/// the packages that grant the weapon it shows); the server refuses the others in any case.
+fn apply_option_requirements(
+    client: &Rc<RefCell<Client>>,
+    surface: &CharacterPhaseSurface,
+    offer: &rpc::CharacterCreationOffer,
+) -> Result<(), JsValue> {
+    for group in &offer.groups {
+        for option in group
+            .options
+            .iter()
+            .filter(|option| !option.requires_group.is_empty())
+        {
+            surface
+                .require_option(
+                    &group.group_id,
+                    &option.option_id,
+                    &option.requires_group,
+                    &option.requires_options,
+                )
+                .map_err(|error| character_render_error(client, &error))?;
+        }
+    }
     Ok(())
 }
 fn action_button(
@@ -1349,8 +1382,8 @@ fn receive_view(
     view: rpc::ViewMessage,
 ) -> Result<(), JsValue> {
     // PLAY-V09: the plate picture a display view names is fetched at once, usually while the
-    // scene before it is still being spoken. A refused fetch only means the scene change cannot
-    // show the plate instantly; the plate then fades in over the cut-outs as it loads.
+    // scene before it is still being spoken. A refused fetch only means the cut to the plate waits
+    // for the picture to load.
     if let Some(rpc::view_message::Audience::Display(display)) = &view.audience
         && let Some(scene) = display.scene.as_ref()
         && let Some(url) = crate::presentation::imagery_url(&scene.live_plate)
@@ -1775,6 +1808,7 @@ fn new_client(
         watch_abort: None,
         callbacks: Vec::new(),
         creation: None,
+        creation_offer: None,
         live: live_screens::LiveScreens::default(),
         chrome: live_chrome::Chrome::default(),
         scene_delivery: None,

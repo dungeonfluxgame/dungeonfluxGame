@@ -53,7 +53,7 @@ pub(crate) const FIGHT_LINE_FADE_MS: u32 = 500;
 /// An actor walking on, and off.
 pub(crate) const ACTOR_ENTER_MS: u32 = 800;
 pub(crate) const ACTOR_EXIT_MS: u32 = 350;
-/// A speech-intent loader (a hero typing or holding to talk) that the table has not affirmed
+/// A speech-intent loader (a hero typing or talking) that the table has not affirmed
 /// for this long is gone from the display, so a closed tab never leaves a stuck bubble. The
 /// server's own expiry is the same length; the phone refreshes about every 2 s.
 pub(crate) const INTENT_EXPIRY_MS: u64 = 5_000;
@@ -140,7 +140,7 @@ pub(crate) fn scene_next(state: SceneState, event: SceneEvent) -> Option<SceneSt
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LineState {
-    /// A hero is typing or holding to talk: the loader bubble shows on that hero.
+    /// A hero is typing or talking: the loader bubble shows on that hero.
     Composing,
     /// The hero submitted; the loader stays while the line is cleaned and committed.
     Submitted,

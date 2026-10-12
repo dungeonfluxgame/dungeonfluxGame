@@ -130,6 +130,69 @@ pub(crate) fn new_outcomes<'a>(
         .collect()
 }
 
+/// A grid cell as (column, row).
+pub(crate) type GridCell = (u32, u32);
+
+/// Where each combatant of the view stands, by name.
+// Read by the browser display; a native build only runs its tests.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn standing_cells(
+    journey: &rpc::JourneyView,
+) -> std::collections::HashMap<String, GridCell> {
+    journey
+        .combat
+        .iter()
+        .flat_map(|combat| &combat.participants)
+        .filter_map(|member| {
+            let cell = member.cell.as_ref()?;
+            Some((member.name.clone(), (cell.col, cell.row)))
+        })
+        .collect()
+}
+
+/// How one outcome of a view fits its attacker's turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) struct TurnMark {
+    /// The first outcome of a run by the same attacker: its turn begins here.
+    pub(crate) turn_start: bool,
+    /// Where the attacker stood before, and where the server put it, on its first outcome of the
+    /// view when those differ: a walk shown before that outcome's attack.
+    pub(crate) walk: Option<(GridCell, GridCell)>,
+}
+
+/// Splits the outcomes a view adds into the turns they belong to, in the server's order (nothing
+/// is reordered): a turn is a run of outcomes by one attacker, and it is preceded by the walk that
+/// took the attacker from where the previous view left it to where this view says it stands.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn turn_marks(
+    outcomes: &[&rpc::CombatOutcome],
+    before: &std::collections::HashMap<String, GridCell>,
+    now: &std::collections::HashMap<String, GridCell>,
+) -> Vec<TurnMark> {
+    let mut walked: Vec<&str> = Vec::new();
+    let mut last: Option<&str> = None;
+    outcomes
+        .iter()
+        .map(|outcome| {
+            let attacker = outcome.actor_name.as_str();
+            let turn_start = last != Some(attacker);
+            last = Some(attacker);
+            let walk = if walked.contains(&attacker) {
+                None
+            } else {
+                walked.push(attacker);
+                before
+                    .get(attacker)
+                    .zip(now.get(attacker))
+                    .filter(|(from, to)| from != to)
+                    .map(|(from, to)| (*from, *to))
+            };
+            TurnMark { turn_start, walk }
+        })
+        .collect()
+}
+
 /// The changes the display should present. With no previous view (first view, reconnect,
 /// a tab that was hidden) nothing is presented: obsolete cues are skipped, not replayed.
 pub(crate) fn transitions(previous: Option<&CombatSnapshot>, next: &CombatSnapshot) -> Transitions {
@@ -386,6 +449,9 @@ pub(crate) enum PlateState {
     Pending,
     Ready,
     Failed,
+    /// PLAY-V12: imagery is on but this story scene will not get a plate: it holds its
+    /// establishing picture.
+    Unavailable,
 }
 
 impl PlateState {
@@ -395,7 +461,55 @@ impl PlateState {
             Self::Pending => "pending",
             Self::Ready => "ready",
             Self::Failed => "failed",
+            Self::Unavailable => "unavailable",
         }
+    }
+}
+
+impl PlateState {
+    /// The state a stage flag names (the inverse of [`Self::name`]); anything else is none.
+    pub(crate) fn from_name(name: &str) -> Self {
+        match name {
+            "pending" => Self::Pending,
+            "ready" => Self::Ready,
+            "failed" => Self::Failed,
+            "unavailable" => Self::Unavailable,
+            _ => Self::None,
+        }
+    }
+}
+
+/// PLAY-V12: which picture a story scene shows on the shared display.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Shot {
+    /// The scene's cut-out figures stand in the painting: imagery is off, no plate is planned
+    /// for the scene, or its plate failed for good.
+    Stage,
+    /// The place picture alone, with the narrator over it, until the plate can be cut to. A
+    /// scene never shows its cut-outs while its plate is on its way.
+    Establishing,
+    /// The composed plate.
+    Plate,
+}
+
+impl Shot {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Stage => "stage",
+            Self::Establishing => "establishing",
+            Self::Plate => "plate",
+        }
+    }
+}
+
+/// The picture a story scene shows: the plate only once its picture has loaded and the
+/// narration of the scene's entry is over; the establishing shot until then.
+pub(crate) fn shot_of(plate: PlateState, picture_loaded: bool, narration_over: bool) -> Shot {
+    match plate {
+        PlateState::None | PlateState::Failed => Shot::Stage,
+        PlateState::Pending | PlateState::Unavailable => Shot::Establishing,
+        PlateState::Ready if picture_loaded && narration_over => Shot::Plate,
+        PlateState::Ready => Shot::Establishing,
     }
 }
 
@@ -439,6 +553,7 @@ pub(crate) fn plate_of(scene: &rpc::GameplayScene) -> PlateView {
         Ok(rpc::PlateState::Pending) => PlateState::Pending,
         Ok(rpc::PlateState::Ready) => PlateState::Ready,
         Ok(rpc::PlateState::Failed) => PlateState::Failed,
+        Ok(rpc::PlateState::Unavailable) => PlateState::Unavailable,
         Ok(rpc::PlateState::Unspecified) | Err(_) => PlateState::None,
     };
     let url = imagery_url(&scene.live_plate);
@@ -751,6 +866,65 @@ fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> +
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn strike(actor: &str, target: &str) -> rpc::CombatOutcome {
+        rpc::CombatOutcome {
+            actor_name: actor.to_owned(),
+            target_name: target.to_owned(),
+            hit: true,
+            ..Default::default()
+        }
+    }
+
+    /// Three enemy turns arrive in one view: a move and an attack each, the second creature
+    /// attacking twice. They split into turns in the server's order, each turn beginning at its
+    /// creature's first outcome with the walk that brought it there, and a creature that did not
+    /// move has no walk.
+    #[test]
+    fn a_view_with_three_enemy_turns_is_split_into_ordered_turns_with_their_walks() {
+        let outcomes = [
+            strike("Kobold 1", "Brakka"),
+            strike("Kobold 2", "Sylvie"),
+            strike("Kobold 2", "Sylvie"),
+            strike("Kobold 3", "Brakka"),
+        ];
+        let refs: Vec<&rpc::CombatOutcome> = outcomes.iter().collect();
+        let before = HashMap::from([
+            ("Kobold 1".to_owned(), (5, 1)),
+            ("Kobold 2".to_owned(), (6, 1)),
+            ("Kobold 3".to_owned(), (3, 3)),
+        ]);
+        let now = HashMap::from([
+            ("Kobold 1".to_owned(), (2, 4)),
+            ("Kobold 2".to_owned(), (1, 4)),
+            ("Kobold 3".to_owned(), (3, 3)),
+        ]);
+
+        let marks = turn_marks(&refs, &before, &now);
+
+        assert_eq!(
+            marks,
+            [
+                TurnMark {
+                    turn_start: true,
+                    walk: Some(((5, 1), (2, 4)))
+                },
+                TurnMark {
+                    turn_start: true,
+                    walk: Some(((6, 1), (1, 4)))
+                },
+                TurnMark {
+                    turn_start: false,
+                    walk: None
+                },
+                TurnMark {
+                    turn_start: true,
+                    walk: None
+                },
+            ]
+        );
+    }
 
     fn plate_scene(state: rpc::PlateState, path: &str, side: rpc::PlateSide) -> rpc::GameplayScene {
         rpc::GameplayScene {
@@ -827,6 +1001,56 @@ mod tests {
             PlateState::Failed,
         ] {
             assert!(!state.name().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_scene_shows_its_cut_outs_only_when_no_plate_will_come() {
+        for narration_over in [false, true] {
+            for loaded in [false, true] {
+                assert_eq!(
+                    shot_of(PlateState::None, loaded, narration_over),
+                    Shot::Stage
+                );
+                assert_eq!(
+                    shot_of(PlateState::Failed, loaded, narration_over),
+                    Shot::Stage
+                );
+                assert_eq!(
+                    shot_of(PlateState::Pending, loaded, narration_over),
+                    Shot::Establishing,
+                    "a plate that is on its way is never drawn as cut-outs"
+                );
+                assert_eq!(
+                    shot_of(PlateState::Unavailable, loaded, narration_over),
+                    Shot::Establishing,
+                    "a scene with no plate holds its establishing picture"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_ready_plate_is_cut_to_only_after_it_has_loaded_and_the_narration_is_over() {
+        assert_eq!(shot_of(PlateState::Ready, false, false), Shot::Establishing);
+        assert_eq!(shot_of(PlateState::Ready, true, false), Shot::Establishing);
+        assert_eq!(shot_of(PlateState::Ready, false, true), Shot::Establishing);
+        assert_eq!(shot_of(PlateState::Ready, true, true), Shot::Plate);
+        for (shot, name) in [
+            (Shot::Stage, "stage"),
+            (Shot::Establishing, "establishing"),
+            (Shot::Plate, "plate"),
+        ] {
+            assert_eq!(shot.name(), name);
+        }
+        for state in [
+            PlateState::None,
+            PlateState::Pending,
+            PlateState::Ready,
+            PlateState::Failed,
+            PlateState::Unavailable,
+        ] {
+            assert_eq!(PlateState::from_name(state.name()), state);
         }
     }
 
