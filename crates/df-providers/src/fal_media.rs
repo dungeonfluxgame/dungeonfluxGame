@@ -129,7 +129,12 @@ pub struct FalMediaConfig {
     fixture_api: Option<SocketAddr>,
     fixture_media: Option<SocketAddr>,
     pins: Vec<FalCdnPin>,
+    /// A video endpoint other than the family's default, chosen by a validated setting.
+    video_model: Option<String>,
 }
+
+/// The video endpoints the adapter knows how to request and check.
+pub const KLING_O1_IMAGE_TO_VIDEO: &str = "fal-ai/kling-video/o1/image-to-video";
 
 impl FalMediaConfig {
     pub fn live(family: FalMediaFamily, pins: Vec<FalCdnPin>) -> Self {
@@ -138,7 +143,27 @@ impl FalMediaConfig {
             fixture_api: None,
             fixture_media: None,
             pins,
+            video_model: None,
         }
+    }
+
+    /// Selects the video endpoint. Only the endpoints this adapter has a body and checks for are
+    /// accepted; anything else refuses before a request is built.
+    pub fn with_video_model(mut self, model: &str) -> Result<Self, FalMediaReason> {
+        if self.family != FalMediaFamily::Video
+            || (model != FalMediaFamily::Video.model() && model != KLING_O1_IMAGE_TO_VIDEO)
+        {
+            return Err(FalMediaReason::Profile);
+        }
+        self.video_model = Some(model.to_owned());
+        Ok(self)
+    }
+
+    /// The endpoint id requests for this configuration are sent to.
+    pub fn model(&self) -> &str {
+        self.video_model
+            .as_deref()
+            .unwrap_or_else(|| self.family.model())
     }
     pub fn loopback_fixture(
         family: FalMediaFamily,
@@ -157,6 +182,7 @@ impl FalMediaConfig {
             fixture_api: Some(api),
             fixture_media: Some(media),
             pins: Vec::new(),
+            video_model: None,
         })
     }
 }
@@ -176,6 +202,8 @@ pub enum FalMediaReason {
     Container(MediaContainerRefusal),
     Metadata,
     UsageOverrun,
+    /// The live price lookup failed or answered something unusable; nothing was submitted.
+    Pricing,
 }
 
 /// Safe retained facts on rejection. Supplier identity and observed usage survive failure.
@@ -296,7 +324,7 @@ impl NativeFalMediaProvider {
             _ => 0,
         };
         if self.config.family != FalMediaFamily::Video
-            || p.model != FalMediaFamily::Video.model()
+            || p.model != self.config.model()
             || !matches!(p.duration_seconds, 5 | 10)
             || resolution_side == 0
             || p.width.min(p.height) != resolution_side
@@ -311,8 +339,7 @@ impl NativeFalMediaProvider {
         if frame.asset.kind != AssetKind::Image
             || frame.asset.byte_length == 0
             || frame.asset.byte_length > 10 * 1024 * 1024
-            || !strict_fal_locator(&frame.locator)
-            || frame.locator.len() > 8192
+            || !reference_locator_ok(&frame.locator)
         {
             return Err(error(FalMediaReason::Reference, None));
         }
@@ -322,11 +349,28 @@ impl NativeFalMediaProvider {
             Duration::from_secs(u64::from(p.duration_seconds)),
             UsageUnit::VideoMillisecond,
         )?;
-        self.submit(request.checked(), owner, json!({
-            "prompt":semantic.prompt,"image_url":frame.locator,"duration":p.duration_seconds.to_string(),
-            "resolution":p.resolution,"seed":p.seed,"enable_safety_checker":p.safety,
-            "enable_prompt_expansion":p.prompt_expansion
-        }), ExpectedMedia::Video(p.clone()), cancellation).await
+        // Kling o1 animates between a start and an end frame; the same still is both, so the clip
+        // returns to the picture it began from. Its body has no resolution or seed fields.
+        let body = if p.model == KLING_O1_IMAGE_TO_VIDEO {
+            json!({
+                "prompt":semantic.prompt,"start_image_url":frame.locator,"end_image_url":frame.locator,
+                "duration":p.duration_seconds.to_string()
+            })
+        } else {
+            json!({
+                "prompt":semantic.prompt,"image_url":frame.locator,"duration":p.duration_seconds.to_string(),
+                "resolution":p.resolution,"seed":p.seed,"enable_safety_checker":p.safety,
+                "enable_prompt_expansion":p.prompt_expansion
+            })
+        };
+        self.submit(
+            request.checked(),
+            owner,
+            body,
+            ExpectedMedia::Video(p.clone()),
+            cancellation,
+        )
+        .await
     }
 
     pub async fn submit_sound<'a>(
@@ -389,7 +433,7 @@ impl NativeFalMediaProvider {
         if !request.payload().is_empty() && request.payload() != serialized {
             return Err(error(FalMediaReason::Payload, None));
         }
-        let path = format!("/{}", self.config.family.model());
+        let path = format!("/{}", self.config.model());
         let response = self
             .execute(
                 HttpMethod::Post,
@@ -415,14 +459,12 @@ impl NativeFalMediaProvider {
         if !matches!(response.status, 200 | 202) {
             return Err(error(FalMediaReason::Status, Some(&id)));
         }
-        let prefix = format!(
-            "https://queue.fal.run/{}/requests/{}",
-            self.config.family.model(),
-            id.as_str()
-        );
-        let status = confined_url(&value, "status_url", &prefix, "status", &id)?;
-        let result = confined_url(&value, "response_url", &prefix, "response", &id)?;
-        let cancel = confined_url(&value, "cancel_url", &prefix, "cancel", &id)?;
+        // fal names a request under its endpoint's path, or under the owner and app that hold it
+        // (`fal-ai/kling-video/requests/{id}` for `fal-ai/kling-video/o1/image-to-video`). Either is
+        // this request on the queue host, so either is accepted; anything else is refused.
+        let status = confined_url(&value, "status_url", "status", &id)?;
+        let result = confined_result_url(&value, "response_url", &id)?;
+        let cancel = confined_url(&value, "cancel_url", "cancel", &id)?;
         Ok(FalMediaJob {
             provider: self,
             request,
@@ -433,6 +475,47 @@ impl NativeFalMediaProvider {
             expected,
             completed: false,
         })
+    }
+
+    /// The live unit price of a video endpoint in USD per second, from fal's pricing API. Read
+    /// only: it sends no queue request and spends nothing. Anything but a USD per-second price
+    /// for this endpoint is a `Pricing` refusal.
+    pub async fn video_price_per_second(
+        &self,
+        deadline: Duration,
+        cancellation: impl Future<Output = ()>,
+    ) -> Result<f64, FalMediaError> {
+        let model = self.config.model();
+        let origin = self.config.fixture_api.map_or_else(
+            || "https://api.fal.ai".to_owned(),
+            |a| format!("http://{a}"),
+        );
+        let request = HttpRequest::fal_native(
+            HttpMethod::Get,
+            &format!("{origin}/v1/models/pricing?endpoint_id={model}"),
+            &self.credential,
+            Vec::new(),
+        );
+        let response = self
+            .http
+            .execute(request, deadline, cancellation)
+            .await
+            .map_err(|failure| error(FalMediaReason::Transport(failure.reason), None))?;
+        let value = parse_json(&response, None)?;
+        let price = value
+            .get("prices")
+            .and_then(Value::as_array)
+            .and_then(|prices| {
+                prices.iter().find(|entry| {
+                    entry.get("endpoint_id").and_then(Value::as_str) == Some(model)
+                        && entry.get("unit").and_then(Value::as_str) == Some("seconds")
+                        && entry.get("currency").and_then(Value::as_str) == Some("USD")
+                })
+            })
+            .and_then(|entry| entry.get("unit_price"))
+            .and_then(Value::as_f64)
+            .filter(|price| price.is_finite() && *price > 0.0);
+        price.ok_or_else(|| error(FalMediaReason::Pricing, None))
     }
 
     async fn execute(
@@ -550,10 +633,16 @@ impl<Semantic: Eq> FalMediaJob<'_, Semantic> {
                 return Err(error(FalMediaReason::Json, Some(&self.id)));
             }
         }
+        // A status body may omit the request id; the status URL is already confined to this
+        // request, so an absent id is this request. A different id is still refused.
+        let observed_id = value
+            .get("request_id")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| self.id.as_str());
         let observation = classify_fal_status_response(
             response.status,
             &self.id,
-            value.get("request_id").and_then(Value::as_str),
+            Some(observed_id),
             value.get("status").and_then(Value::as_str),
             value.get("error_type").and_then(Value::as_str),
             value.get("error").and_then(Value::as_str),
@@ -929,6 +1018,25 @@ fn validate_output(
     }
 }
 
+/// A reference frame is a fal.media locator (at most 8192 bytes), or an inline JPEG or PNG the
+/// queue accepts as a data URI. The inline form is bounded by the frame's declared byte length,
+/// and it is base64 only, so nothing else can ride in the field.
+fn reference_locator_ok(locator: &str) -> bool {
+    let inline = locator
+        .strip_prefix("data:image/jpeg;base64,")
+        .or_else(|| locator.strip_prefix("data:image/png;base64,"));
+    match inline {
+        Some(data) => {
+            !data.is_empty()
+                && data.len() <= 14 * 1024 * 1024
+                && data
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+        }
+        None => locator.len() <= 8192 && strict_fal_locator(locator),
+    }
+}
+
 fn optional_u64_mismatch(value: &Value, field: &str, expected: u64) -> bool {
     value
         .get(field)
@@ -991,10 +1099,48 @@ fn valid_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
 }
+/// Whether `url` is this request on fal's queue host: `https://queue.fal.run/<owner>/<app>[/…]/
+/// requests/<id>`, then nothing or the expected `suffix`. Any query, fragment or traversal, any other
+/// host, and any other request id is refused. `suffix` of `None` is the result, which fal names as
+/// the request itself or as `…/response`.
+fn queue_url_confined(url: &str, id: &ProviderRequestId, suffix: Option<&str>) -> bool {
+    let Some(tail) = url.strip_prefix("https://queue.fal.run/") else {
+        return false;
+    };
+    if tail.contains(['?', '#']) || tail.contains("..") {
+        return false;
+    }
+    let needle = format!("/requests/{}", id.as_str());
+    let Some(position) = tail.rfind(&needle) else {
+        return false;
+    };
+    let (app, rest) = (&tail[..position], &tail[position + needle.len()..]);
+    let is_app = app.split('/').count() >= 2 && app.split('/').all(|part| !part.is_empty());
+    let rest_ok = match suffix {
+        Some(expected) => rest == format!("/{expected}"),
+        None => rest.is_empty() || rest == "/response",
+    };
+    is_app && rest_ok
+}
+
+fn confined_result_url(
+    value: &Value,
+    field: &str,
+    id: &ProviderRequestId,
+) -> Result<String, FalMediaError> {
+    let url = value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| error(FalMediaReason::QueueUrls, Some(id)))?;
+    if !queue_url_confined(url, id, None) {
+        return Err(error(FalMediaReason::QueueUrls, Some(id)));
+    }
+    Ok(url.to_owned())
+}
+
 fn confined_url(
     value: &Value,
     field: &str,
-    prefix: &str,
     suffix: &str,
     id: &ProviderRequestId,
 ) -> Result<String, FalMediaError> {
@@ -1002,7 +1148,7 @@ fn confined_url(
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| error(FalMediaReason::QueueUrls, Some(id)))?;
-    if url != format!("{prefix}/{suffix}") {
+    if !queue_url_confined(url, id, Some(suffix)) {
         return Err(error(FalMediaReason::QueueUrls, Some(id)));
     }
     Ok(url.to_owned())

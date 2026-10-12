@@ -75,6 +75,8 @@ pub(super) struct TvModel {
     pub(super) scene_key: String,
     /// The lobby's home screen from the server; absent outside the lobby and for a fallback.
     pub(super) home: Option<rpc::HomeTheme>,
+    /// PLAY-V10: the served loop of the lobby's home painting, once the server says it is ready.
+    pub(super) home_video: Option<String>,
     /// PLAY-V09: the scene's composed plate, which replaces the painting and the cut-outs.
     pub(super) plate: PlateView,
     /// The adventure's end card, shown over the scene and kept up until the next step.
@@ -144,6 +146,8 @@ pub(super) struct TvStage {
     place: Element,
     lede: Element,
     atmosphere: Element,
+    /// PLAY-V10: the looping video over the still, below the scrim and the themed blocks.
+    home_loop: live_home_video::HomeLoop,
     lobby_row: Element,
     stagebox: Element,
     narration: Element,
@@ -307,6 +311,8 @@ impl TvStage {
         }
         let art_previous = node(document, &root, "div", "tv-art tv-art-previous", "")?;
         let art = node(document, &root, "div", "tv-art", "")?;
+        let loop_layer = node(document, &root, "div", "tv-loop", "")?;
+        let home_loop = live_home_video::HomeLoop::new(document, loop_layer)?;
         let atmosphere = node(document, &root, "div", "tv-atmosphere", "")?;
         let plate = mount_plate(document, &root)?;
         node(document, &root, "div", "tv-scrim", "")?;
@@ -435,6 +441,7 @@ impl TvStage {
             place,
             lede,
             atmosphere,
+            home_loop,
             lobby_row,
             stagebox,
             narration,
@@ -610,6 +617,12 @@ impl TvStage {
             .set_attribute("data-tv-mode", if lobby { "lobby" } else { "scene" })?;
         self.set_art(&image_layers(&model.art, model.art_fallback))?;
         live_home::apply(&self.root, &self.atmosphere, model.home.as_ref())?;
+        // The loop plays only in the lobby; a story scene or a fight never shows it.
+        self.home_loop.apply(if lobby {
+            model.home_video.as_deref()
+        } else {
+            None
+        })?;
         let known_place = self.place.text_content().unwrap_or_default();
         self.same_place
             .set(!model.place.is_empty() && known_place == model.place);
@@ -930,6 +943,7 @@ impl TvStage {
             self.wordmark.load.as_ref().unchecked_ref(),
         );
         self.wordmark.text.remove_attribute("hidden")?;
+        self.home_loop.release();
         self.root.remove();
         removed
     }

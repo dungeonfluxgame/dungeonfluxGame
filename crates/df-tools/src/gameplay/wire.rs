@@ -927,6 +927,9 @@ pub(super) fn project_journey(
         adventure_ended: super::beat_script_runtime::ended(state)?,
         adventure_title: super::beat_script_runtime::adventure_title(state)?,
         composing: Vec::new(),
+        // PLAY-V10: set per view for the display's lobby by `home_video::apply`; none here.
+        home_video_state: rpc::HomeVideoState::None as i32,
+        home_video_path: String::new(),
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
     let mut scene = if super::beat_script_runtime::native_inn(state)? {

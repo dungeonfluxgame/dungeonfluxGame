@@ -46,6 +46,26 @@ fn merge_faces(shown: &mut Option<rpc::JourneyView>, new: Option<&rpc::JourneyVi
     true
 }
 
+/// PLAY-V10: copies the home loop's state and served path (`JourneyView.home_video_*`) of `new`
+/// into `shown`. A path is taken only in the server's own route form.
+fn merge_loop(shown: &mut Option<rpc::JourneyView>, new: Option<&rpc::JourneyView>) -> bool {
+    let (Some(shown), Some(new)) = (shown.as_mut(), new) else {
+        return false;
+    };
+    let route_ok = new.home_video_path.is_empty()
+        || (new.home_video_path.starts_with("/gameplay/home-video/")
+            && new.home_video_path.len() <= 96);
+    if !route_ok
+        || (shown.home_video_state == new.home_video_state
+            && shown.home_video_path == new.home_video_path)
+    {
+        return false;
+    }
+    shown.home_video_state = new.home_video_state;
+    shown.home_video_path.clone_from(&new.home_video_path);
+    true
+}
+
 /// Copies the generated-art fields of `new` into `shown` and returns whether any changed. Nothing
 /// is copied unless both are views for the same audience of the same scene (title and authored
 /// painting) with the same cast, in the same order, and every art path in `new` is well formed.
@@ -57,9 +77,13 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
             Some(rpc::view_message::Audience::Display(shown)),
             Some(rpc::view_message::Audience::Display(new)),
         ) => {
+            // PLAY-V10: the lobby's loop belongs to the lobby's painting, which the audience names
+            // directly, so it is merged even when the view carries no scene.
+            let loop_changed = shown.scene_asset == new.scene_asset
+                && merge_loop(&mut shown.journey, new.journey.as_ref());
             let (Some(shown_scene), Some(new_scene)) = (shown.scene.as_mut(), new.scene.as_ref())
             else {
-                return false;
+                return loop_changed;
             };
             let same_scene = shown_scene.title == new_scene.title
                 && shown_scene.scene_asset == new_scene.scene_asset
@@ -94,7 +118,7 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
                 changed |= old.live_sprite != new.live_sprite;
                 old.live_sprite.clone_from(&new.live_sprite);
             }
-            changed | merge_faces(&mut shown.journey, new.journey.as_ref())
+            changed | merge_faces(&mut shown.journey, new.journey.as_ref()) | loop_changed
         }
         (
             Some(rpc::view_message::Audience::Player(shown)),

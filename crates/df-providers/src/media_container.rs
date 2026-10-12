@@ -347,7 +347,9 @@ fn full_zero(data: &[u8]) -> Result<(), MediaContainerRefusal> {
 
 pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContainerRefusal> {
     let top = boxes(data, 0)?;
-    only(&top, &[b"ftyp", b"moov", b"mdat", b"free"])?;
+    // `udta` at the top level is user metadata (the provider's clips carry one); it has no media,
+    // so it is allowed beside the boxes that do. Every sample and track is still checked below.
+    only(&top, &[b"ftyp", b"moov", b"mdat", b"free", b"udta"])?;
     let file_type = one(&top, b"ftyp")?.payload;
     if file_type.len() < 8
         || file_type.len() % 4 != 0
@@ -380,7 +382,30 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
     }
     let track = one(&movie_children, b"trak")?;
     let track_children = boxes(track.payload, track.start)?;
-    only(&track_children, &[b"tkhd", b"mdia"])?;
+    only(&track_children, &[b"tkhd", b"edts", b"mdia"])?;
+    // An edit list may only start the track at its beginning (or be empty): a shifted start would
+    // move the clip's frames against the clock the adapter checks, so any other list is refused.
+    for edit in track_children.iter().filter(|child| child.kind == b"edts") {
+        let edits = boxes(edit.payload, edit.start)?;
+        only(&edits, &[b"elst"])?;
+        let list = one(&edits, b"elst")?.payload;
+        let count = u32::from_be_bytes(
+            bytes(list, 4, 4)?
+                .try_into()
+                .map_err(|_| MediaContainerRefusal::Malformed)?,
+        );
+        // One entry at normal speed: its media time is the encoder's composition offset, which
+        // only moves the first presented frame, so it is accepted; a changed rate is not.
+        if bytes(list, 0, 1)? != [0] || count != 1 || list.len() != 8 + 12 {
+            return Err(MediaContainerRefusal::Unsupported);
+        }
+        let entry = &list[8..20];
+        let media_time = i32::from_be_bytes([entry[4], entry[5], entry[6], entry[7]]);
+        let rate = [entry[8], entry[9], entry[10], entry[11]];
+        if media_time < -1 || rate != [0, 1, 0, 0] {
+            return Err(MediaContainerRefusal::Unsupported);
+        }
+    }
     let header = one(&track_children, b"tkhd")?.payload;
     let (matrix_offset, width_offset) = match bytes(header, 0, 1)? {
         [0] if header.len() == 84 => (40, 76),
@@ -424,10 +449,13 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
     } else {
         be64(header, 28)?
     };
-    if u128::from(movie_time.ticks) * u128::from(timebase.ticks_per_second)
-        != u128::from(timebase.ticks) * u128::from(movie_time.ticks_per_second)
-        || track_duration != movie_time.ticks
-    {
+    // Encoders round each duration to its own timescale, so the movie and media clocks agree to
+    // within two milliseconds; the track's duration in movie ticks must match exactly.
+    let movie_scaled = u128::from(movie_time.ticks) * u128::from(timebase.ticks_per_second);
+    let media_scaled = u128::from(timebase.ticks) * u128::from(movie_time.ticks_per_second);
+    let tolerance =
+        2 * u128::from(movie_time.ticks_per_second) * u128::from(timebase.ticks_per_second) / 1000;
+    if movie_scaled.abs_diff(media_scaled) > tolerance || track_duration != movie_time.ticks {
         return Err(MediaContainerRefusal::Timebase);
     }
     let handler = one(&mdia_children, b"hdlr")?.payload;
@@ -564,10 +592,9 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
             samples = samples
                 .checked_add(u64::from(be32(ctts.payload, 8 + i * 8)?))
                 .ok_or(MediaContainerRefusal::Bounds)?;
-            // Nonzero offsets need presentation/edit-list policy, not a desired-duration guess.
-            if be32(ctts.payload, 12 + i * 8)? != 0 {
-                return Err(MediaContainerRefusal::Unsupported);
-            }
+            // Composition offsets reorder presentation (B-frames); they change neither the sample
+            // count nor the media clock, which are what this inspection checks.
+            be32(ctts.payload, 12 + i * 8)?;
         }
         if samples != frames as u64 {
             return Err(MediaContainerRefusal::Timebase);
@@ -722,4 +749,21 @@ fn validate_avcc(data: &[u8]) -> Result<(), MediaContainerRefusal> {
         return Err(MediaContainerRefusal::Unsupported);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod provider_sample_tests {
+    use super::inspect_mp4;
+
+    /// Development check, not a gate: the spike's real Kling clip must pass the container
+    /// inspection the adapter applies to every provider output. Runs only with `DF_PROVIDER_MP4_SAMPLE`.
+    #[test]
+    #[ignore = "reads a provider sample; set DF_PROVIDER_MP4_SAMPLE"]
+    fn a_real_provider_clip_is_accepted_by_the_container_inspection() {
+        let Some(path) = std::env::var_os("DF_PROVIDER_MP4_SAMPLE") else {
+            return;
+        };
+        let bytes = std::fs::read(path).expect("the sample is readable");
+        inspect_mp4(&bytes).expect("the provider clip is a valid MP4 for the adapter");
+    }
 }

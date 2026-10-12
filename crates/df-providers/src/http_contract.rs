@@ -464,7 +464,9 @@ pub fn classify_fal_status_response(
     error: Option<&str>,
     inference_time_seconds: Option<f64>,
 ) -> Result<FalQueueObservation, HttpRequestError> {
-    if http_status != 200 {
+    // The queue answers a status poll with 200, or with 202 while the request is accepted and not
+    // yet finished; any other status is not a reading of this request.
+    if http_status != 200 && http_status != 202 {
         return Ok(FalQueueObservation::Unknown(expected_request_id.clone()));
     }
     let Some(observed_request_id) = observed_request_id else {

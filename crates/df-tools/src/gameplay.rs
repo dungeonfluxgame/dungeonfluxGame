@@ -22,6 +22,9 @@ mod health_faces;
 mod home_theme;
 #[cfg(test)]
 mod home_theme_tests;
+mod home_video;
+#[cfg(test)]
+mod home_video_tests;
 mod imagery;
 mod inn_qualification;
 mod join_link;
@@ -156,6 +159,8 @@ impl Service {
         viewed.map(|(role, mut message)| {
             self.living.observe(&message);
             self.living.apply(&mut message);
+            // PLAY-V10: the home loop's state, read on every view so a loop that lands wakes it.
+            home_video::apply(&mut message);
             (role, message)
         })
     }
@@ -215,7 +220,12 @@ impl rpc::session_service_server::SessionService for Service {
         let mut table_lines = self.table_log.subscribe();
         table_lines.borrow_and_update();
         // A published scene image wakes a watcher the way a new table line does.
-        let mut art = self.living.subscribe();
+        // PLAY-V10: a stream without living art still wakes when a home loop lands.
+        let mut art = Some(
+            self.living
+                .subscribe()
+                .unwrap_or_else(home_video::wake_subscribe),
+        );
         if let Some(art) = art.as_mut() {
             art.borrow_and_update();
         }
@@ -1177,6 +1187,16 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         living_scenes::Timing::from_interval(living_interval),
         startup_configuration::plates_enabled(std::env::var("DF_GAMEPLAY_PLATES"))?,
     );
+    // PLAY-V10: the home screen's looping video, made from the still just in time.
+    let home_video_line = home_video::install(
+        home_video::home_video_settings(
+            home_video::HomeVideoInputs::from_environment(),
+            &std::env::current_dir()?,
+            !interactive,
+        )?,
+        std::path::Path::new(&asset_root),
+        living.clone(),
+    )?;
     let tempo = if std::env::args().nth(4).is_some() {
         None
     } else {
@@ -1383,6 +1403,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .merge(splat_assets::router(&splat_directory)?)
         .merge(voice::router(voice.clone()))
         .merge(imagery::router(imagery.clone()))
+        .merge(home_video::router())
         .merge(speech_input::router(
             speech.clone(),
             speech_input::actor_identity(sender.clone()),
@@ -1457,6 +1478,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         let origin = &settings.allowed_origins[0];
         println!("{}", voice.startup_line());
         println!("{}", imagery.startup_line());
+        println!("{home_video_line}");
         println!("{}", speech.startup_line());
         // PLAY-Q01: the join link and its QR code, from the public base address when one is set.
         println!(

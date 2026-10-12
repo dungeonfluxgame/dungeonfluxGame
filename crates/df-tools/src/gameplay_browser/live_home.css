@@ -72,6 +72,13 @@
 
 /* The sound control is fixed to the top right, where a title on the right would sit. In a small
    pane it becomes a small icon in the corner, clear of the logo; the TV keeps its label. */
+/* PLAY-V10: the looping video over the still. Two stacked clips cross-fade; the still beneath stays
+   visible until a clip is on, and nothing here depends on the device's motion setting. */
+.tv-loop{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0}
+.tv-loop-clip{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 40%;opacity:0;transition:opacity 500ms linear}
+.tv-loop-clip[data-on]{opacity:1}
+.tv-loop-clip[data-first]{transition-duration:900ms}
+
 @media (max-width: 1000px) {
   body:has(.tv-stage[data-home][data-tv-mode=lobby]) .tv-voice-control{font-size:14px!important;min-height:0!important;padding:.4em!important;right:.8vw!important;top:.8vh!important}
   body:has(.tv-stage[data-home][data-tv-mode=lobby]) .tv-voice-label{display:none}

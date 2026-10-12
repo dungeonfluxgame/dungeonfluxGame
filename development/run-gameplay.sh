@@ -166,6 +166,11 @@ fi
 mkdir -p "$TMPDIR" "$PLAY"
 chmod 700 "$PLAY"
 
+# Home video (PLAY-V10): take only the fal key from the ignored .env, never printing it.
+if test -z "${FAL_KEY:-}" && test -f "$ROOT/.env"; then
+  FAL_KEY=$(sed -n 's/^FAL_KEY=//p' "$ROOT/.env" | head -n 1)
+  if test -n "$FAL_KEY"; then export FAL_KEY; else unset FAL_KEY; fi
+fi
 # Spoken narration: take only the ElevenLabs key from the ignored .env, never printing it.
 if test -z "${ELEVENLABS_API_KEY:-}" && test -f "$ROOT/.env"; then
   ELEVENLABS_API_KEY=$(sed -n 's/^ELEVENLABS_API_KEY=//p' "$ROOT/.env" | head -n 1)
