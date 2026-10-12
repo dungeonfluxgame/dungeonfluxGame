@@ -2738,15 +2738,15 @@
       "name": "sprite-ant-skeleton",
       "path": "assets/ui/generated/sprite-ant-skeleton.webp",
       "kind": "sprite",
-      "bytes": 340008,
-      "sha256": "89738d94899eafd03de842f152e0337c70e76fdf019bce8b141d2566404c3c6d",
+      "bytes": 284274,
+      "sha256": "c7171dffbbb42c3847b1e4904b481199d32e8765eaf0aedc3abad115ea67551f",
       "dimensions": [
         768,
         1152
       ],
       "synthetic": true,
       "source_file": "sprite-ant-skeleton.png",
-      "source_sha256": "0bac74d18559780932abcdc23c68b841375115346b15f5c2f207297801a6f8cf",
+      "source_sha256": "e7095da1b79734a098c01e37c4656b50ac221a87cd2fafea586105cbf44f0e7c",
       "art_key": "ant-skeleton",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
@@ -2759,15 +2759,15 @@
       "name": "sprite-contact-old-mapmaker",
       "path": "assets/ui/generated/sprite-contact-old-mapmaker.webp",
       "kind": "sprite",
-      "bytes": 221752,
-      "sha256": "ba3356b9219408598b3384c0728253acf057ec4b0a20a31a9761da48ee336146",
+      "bytes": 212098,
+      "sha256": "f22dfaea867bd61c2296109b4a928ea3451ca97f0bd9fd58635ff1cf075b3552",
       "dimensions": [
         768,
         1152
       ],
       "synthetic": true,
       "source_file": "sprite-contact-old-mapmaker.png",
-      "source_sha256": "f75d62835641af6404245aae6dceebd323f535804a48768ab2786fea948aade6",
+      "source_sha256": "c7af7c5eb17d1f744677279f896b9bb12531c3d3f60def42741964fc2a45ecf2",
       "art_key": "contact-old-mapmaker",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
@@ -2801,15 +2801,15 @@
       "name": "sprite-patron-acolyte",
       "path": "assets/ui/generated/sprite-patron-acolyte.webp",
       "kind": "sprite",
-      "bytes": 239486,
-      "sha256": "49e54df8d6efcd04855708ebbbc266593c645dfa165ee45faeaa358e17265601",
+      "bytes": 211088,
+      "sha256": "e470ceae27512ace111bdf44fd7255b4193fe9028432956accf9b16e86629318",
       "dimensions": [
         768,
         1152
       ],
       "synthetic": true,
       "source_file": "sprite-patron-acolyte.png",
-      "source_sha256": "a24680e8b509888065411e1987b01bd74fa13918e9d5825fadbdd65d293c5185",
+      "source_sha256": "d66018ce313ae022e3057514aadac23d1ab8b160ea5656a6794ff2177957c40e",
       "art_key": "patron-acolyte",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
@@ -2906,15 +2906,15 @@
       "name": "sprite-patron-lamp-warden",
       "path": "assets/ui/generated/sprite-patron-lamp-warden.webp",
       "kind": "sprite",
-      "bytes": 268798,
-      "sha256": "e6af32f4f8625e69e261ba72df311a6c19b5975f1aa9ae769a56da545af9b6d2",
+      "bytes": 222464,
+      "sha256": "28a9f3835848a91b9465662e6b85ced4df5ff4264212a98c24e94026cc250baf",
       "dimensions": [
         768,
         1152
       ],
       "synthetic": true,
       "source_file": "sprite-patron-lamp-warden.png",
-      "source_sha256": "3343b442756a19765f7654d08cf1f0add9bcc8f13652c2647d944265867ea6d6",
+      "source_sha256": "409ab71ef9582dcca07d3c1ee2129d088697e85d417a8ffd9eac721b0a57d6a1",
       "art_key": "patron-lamp-warden",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
@@ -2927,15 +2927,15 @@
       "name": "sprite-patron-merchant",
       "path": "assets/ui/generated/sprite-patron-merchant.webp",
       "kind": "sprite",
-      "bytes": 300082,
-      "sha256": "77c458c4f87db6606dddeef25ebb00aac22b2404ca7a3ee58fdf8ce2cd78d79f",
+      "bytes": 236518,
+      "sha256": "bbe16dce02d73cd90d57a6b5ec87c72b7ce37acaae92def6906dddc58cd43610",
       "dimensions": [
         768,
         1152
       ],
       "synthetic": true,
       "source_file": "sprite-patron-merchant.png",
-      "source_sha256": "12dc5b2d0abbd0f38d2eb2898c714f2540a3bd8c41d504833940cf2bfc808ff7",
+      "source_sha256": "d05d75c20c5e4d94864029e8961e8620ae7f72f1667b989d0469e216daf68cde",
       "art_key": "patron-merchant",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
@@ -2969,16 +2969,626 @@
       "name": "sprite-patron-veteran",
       "path": "assets/ui/generated/sprite-patron-veteran.webp",
       "kind": "sprite",
-      "bytes": 275032,
-      "sha256": "0b113716329d6f7cb7e344ce5a651fd0bd987a421924270128b41e9d088a6e07",
+      "bytes": 232058,
+      "sha256": "5bce80180b5df73599c53a6e7a09e75cc9ccb0e17cea5e6b0e7f01653d80f65b",
       "dimensions": [
         768,
         1152
       ],
       "synthetic": true,
       "source_file": "sprite-patron-veteran.png",
-      "source_sha256": "b11c3eb9c8335f6e81684d034710482da7f6335c8bf1a6e36bc15e2a076ce853",
+      "source_sha256": "4668694490aea3994d11b25069045dffb8b6c09d31ebcd56bd0d1da4c89babc6",
       "art_key": "patron-veteran",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "scene-place-archive-stacks",
+      "path": "assets/ui/generated/scene-place-archive-stacks.webp",
+      "kind": "scene",
+      "bytes": 203992,
+      "sha256": "d939816fffefe0403cf8bb7d9646792c16a7bb3658178871cccb6453a367794b",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-place-archive-stacks.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: DungeonFlux fantasy tabletop stage backdrop, premium AAA key art. Generate a NEW location in the exact house style of the three approved reference interiors attached in this conversation: cinematic painterly realism, deep navy night shadows against rich warm amber lantern and firelight, restrained cool moonlight, grounded heroic fantasy, sophisticated natural brushwork with rich believable tactile texture and atmospheric depth. As if painted by the same artist. Match their material detail, tonal grading, realistic perspective and lighting. Opaque landscape PNG, true wide 16:9, request 2048x1152 or larger at highest available quality; no downscaling.\nCOMPOSITION IS CRITICAL: eye-level view from inside the room, viewer standing a few paces in. Entire foreground and lower third is clear open floor from left edge to right edge for standing character cutouts. No foreground table, counter, chair, clutter, rugs with busy patterns or other floor obstruction. Keep floor dark, calm, readable and subtly textured, with only soft restrained reflections. All furniture and interesting props are in midground, sides, and back. Strong readable depth and instantly recognizable place identity from across a living room. Room feels occupied through objects but is COMPLETELY EMPTY of beings.\nABSOLUTE EXCLUSIONS: no people, animals, figures, statues of figures, faces or silhouettes anywhere, even in windows or decorative imagery. No anatomy, no text, letters, numbers, readable writing, labels, signage, watermark, signature, border, frame, UI. No cartoon styling, plastic CGI, muddy detail, gore or modern objects.\nFLOOR LAYOUT: nearest furniture must begin behind 60% image height; side furniture terminates in midground. Bottom 40% is floor only, uninterrupted all the way from left edge to right edge. Foreground deep navy shadow, dark exposure and low contrast matching the approved reference floors.\nSCENE: A records archive, unmistakably a dense archive rather than a tavern. Towering dark wooden shelves filled with unlabelled leather ledgers and scroll cases on BOTH sides, rolling ladders placed against the side shelves in midground, a clerk's high desk with a green-shaded brass lamp at ONE side well behind the open foreground. An arched aisle recedes into deep navy shadow at the back. Books have absolutely no lettering or symbols. Night amber lantern light, warm green-shaded lamp light, and restrained cool moonlight from a high window. Open worn timber floor across the entire foreground and lower third.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-place-cloth-shop",
+      "path": "assets/ui/generated/scene-place-cloth-shop.webp",
+      "kind": "scene",
+      "bytes": 240568,
+      "sha256": "1acfd39a2fe7d3a91bbcdf74be2a9eb029107d0c124d0f91ce68971e4b329a02",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-place-cloth-shop.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: DungeonFlux fantasy tabletop stage backdrop, premium AAA key art. Generate a NEW location in the exact house style of the three approved reference interiors attached in this conversation: cinematic painterly realism, deep navy night shadows against rich warm amber lantern and firelight, restrained cool moonlight, grounded heroic fantasy, sophisticated natural brushwork with rich believable tactile texture and atmospheric depth. As if painted by the same artist. Match their material detail, tonal grading, realistic perspective and lighting. Opaque landscape PNG, true wide 16:9, request 2048x1152 or larger at highest available quality; no downscaling.\nCOMPOSITION IS CRITICAL: eye-level view from inside the room, viewer standing a few paces in. Entire foreground and lower third is clear open floor from left edge to right edge for standing character cutouts. No foreground table, counter, chair, clutter, rugs with busy patterns or other floor obstruction. Keep floor dark, calm, readable and subtly textured, with only soft restrained reflections. All furniture and interesting props are in midground, sides, and back. Strong readable depth and instantly recognizable place identity from across a living room. Room feels occupied through objects but is COMPLETELY EMPTY of beings.\nABSOLUTE EXCLUSIONS: no people, animals, figures, statues of figures, faces or silhouettes anywhere, even in windows or decorative imagery. No anatomy, no text, letters, numbers, readable writing, labels, signage, watermark, signature, border, frame, UI. No cartoon styling, plastic CGI, muddy detail, gore or modern objects.\nFLOOR LAYOUT: nearest furniture must begin behind 60% image height; side furniture terminates in midground. Bottom 40% is floor only, uninterrupted all the way from left edge to right edge. Foreground deep navy shadow, dark exposure and low contrast matching the approved reference floors.\nSCENE: A cloth merchant's shop, unmistakably a textile store. Side shelves with neatly folded bolts of richly coloured cloth, softly draped silks in muted burgundy, deep teal, indigo and amber. A measuring table with brass scales at ONE side, set back well into midground. Hanging amber lamps, a curtained doorway at the back, a small moonlit window. Fabric weave, soft heavy folds, aged timber and brass are tactile and believable. No mannequins, no people or figures. Worn timber floor completely unobstructed across the entire foreground and lower third. No busy fabric or props at the front.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-place-ferry-office",
+      "path": "assets/ui/generated/scene-place-ferry-office.webp",
+      "kind": "scene",
+      "bytes": 208466,
+      "sha256": "8ad93ad4f871a7915a76c44187a66f0d2ea307a818a4afcba23503924f4b8b04",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-place-ferry-office.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: DungeonFlux fantasy tabletop stage backdrop, premium AAA key art. Generate a NEW location in the exact house style of the three approved reference interiors attached in this conversation: cinematic painterly realism, deep navy night shadows against rich warm amber lantern and firelight, restrained cool moonlight, grounded heroic fantasy, sophisticated natural brushwork with rich believable tactile texture and atmospheric depth. As if painted by the same artist. Match their material detail, tonal grading, realistic perspective and lighting. Opaque landscape PNG, true wide 16:9, request 2048x1152 or larger at highest available quality; no downscaling.\nCOMPOSITION IS CRITICAL: eye-level view from inside the room, viewer standing a few paces in. Entire foreground and lower third is clear open floor from left edge to right edge for standing character cutouts. No foreground table, counter, chair, clutter, rugs with busy patterns or other floor obstruction. Keep floor dark, calm, readable and subtly textured, with only soft restrained reflections. All furniture and interesting props are in midground, sides, and back. Strong readable depth and instantly recognizable place identity from across a living room. Room feels occupied through objects but is COMPLETELY EMPTY of beings.\nABSOLUTE EXCLUSIONS: no people, animals, figures, statues of figures, faces or silhouettes anywhere, even in windows or decorative imagery. No anatomy, no text, letters, numbers, readable writing, labels, signage, watermark, signature, border, frame, UI. No cartoon styling, plastic CGI, muddy detail, gore or modern objects.\nFLOOR LAYOUT: nearest furniture must begin behind 60% image height; side furniture terminates in midground. Bottom 40% is floor only, uninterrupted all the way from left edge to right edge. Foreground deep navy shadow, dark exposure and low contrast matching the approved reference floors.\nSCENE: A rustic ferry landing office, instantly recognizable as a waterside ferry service interior. A ticket counter along ONE side, set back in midground, with a brass bell and closed unlabelled ledgers. A dark chalk tally slate on the side wall with only a few simple short chalk strokes, absolutely no words, letters, numerals or script. Coiled mooring ropes and wooden oars on the walls. A WIDE window at the back shows an EMPTY lantern-lit wooden ferry moored immediately outside over black water; no figures aboard or ashore. Warm amber lanterns inside, cool moonlit water outside. Worn wet-sheened timber floor remains completely open across foreground and lower third.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-place-inn-taproom",
+      "path": "assets/ui/generated/scene-place-inn-taproom.webp",
+      "kind": "scene",
+      "bytes": 197804,
+      "sha256": "76ce52b2464c55313f18d97e3e18ed4acb3800db69d5732ab35f14881c298b34",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-place-inn-taproom.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: DungeonFlux fantasy tabletop stage backdrop, premium AAA key art. Generate a NEW location in the exact house style of the three approved reference interiors attached in this conversation: cinematic painterly realism, deep navy night shadows against rich warm amber lantern and firelight, restrained cool moonlight, grounded heroic fantasy, sophisticated natural brushwork with rich believable tactile texture and atmospheric depth. As if painted by the same artist. Match their material detail, tonal grading, realistic perspective and lighting. Opaque landscape PNG, true wide 16:9, request 2048x1152 or larger at highest available quality; no downscaling.\nCOMPOSITION IS CRITICAL: eye-level view from inside the room, viewer standing a few paces in. Entire foreground and lower third is clear open floor from left edge to right edge for standing character cutouts. No foreground table, counter, chair, clutter, rugs with busy patterns or other floor obstruction. Keep floor dark, calm, readable and subtly textured, with only soft restrained reflections. All furniture and interesting props are in midground, sides, and back. Strong readable depth and instantly recognizable place identity from across a living room. Room feels occupied through objects but is COMPLETELY EMPTY of beings.\nABSOLUTE EXCLUSIONS: no people, animals, figures, statues of figures, faces or silhouettes anywhere, even in windows or decorative imagery. No anatomy, no text, letters, numbers, readable writing, labels, signage, watermark, signature, border, frame, UI. No cartoon styling, plastic CGI, muddy detail, gore or modern objects.\nSCENE: A country inn taproom, unmistakably a welcoming rustic inn. Long polished wooden bar along the LEFT side set back in midground, with kegs behind it and hanging tankards. Broad stone hearth with a banked glowing fire on the RIGHT. Low timber beams hung with amber lanterns. Benches and round tables pushed to side walls, leaving the whole foreground and central floor empty. A stair and a wooden door at the back. Cool moonlight through a small window; warm amber lantern, candle and hearth light. Worn timber, polished bar edge, iron tankards, soot-textured stone.\nSTRICT FLOOR CORRECTION: nearest furniture must begin BEHIND the upper edge of the lower third (behind 67% image height); side bar and benches terminate entirely in midground. The bottom 40% is floor only, all the way from left image edge to right image edge. Increase deep navy shadow on foreground, with lower contrast and darker exposure matching the reference floors.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-place-temple-sanctuary",
+      "path": "assets/ui/generated/scene-place-temple-sanctuary.webp",
+      "kind": "scene",
+      "bytes": 206756,
+      "sha256": "38897ead4df8ad6f3de57fb02b03c008af642761fab6478d163df07b7cedca31",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-place-temple-sanctuary.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: DungeonFlux fantasy tabletop stage backdrop, premium AAA key art. Generate a NEW location in the exact house style of the three approved reference interiors attached in this conversation: cinematic painterly realism, deep navy night shadows against rich warm amber lantern and firelight, restrained cool moonlight, grounded heroic fantasy, sophisticated natural brushwork with rich believable tactile texture and atmospheric depth. As if painted by the same artist. Match their material detail, tonal grading, realistic perspective and lighting. Opaque landscape PNG, true wide 16:9, request 2048x1152 or larger at highest available quality; no downscaling.\nCOMPOSITION IS CRITICAL: eye-level view from inside the room, viewer standing a few paces in. Entire foreground and lower third is clear open floor from left edge to right edge for standing character cutouts. No foreground table, counter, chair, clutter, rugs with busy patterns or other floor obstruction. Keep floor dark, calm, readable and subtly textured, with only soft restrained reflections. All furniture and interesting props are in midground, sides, and back. Strong readable depth and instantly recognizable place identity from across a living room. Room feels occupied through objects but is COMPLETELY EMPTY of beings.\nABSOLUTE EXCLUSIONS: no people, animals, figures, statues of figures, faces or silhouettes anywhere, even in windows or decorative imagery. No anatomy, no text, letters, numbers, readable writing, labels, signage, watermark, signature, border, frame, UI. No cartoon styling, plastic CGI, muddy detail, gore or modern objects.\nFLOOR LAYOUT: nearest furniture must begin behind 60% image height; side furniture terminates in midground. Bottom 40% is floor only, uninterrupted all the way from left edge to right edge. Foreground deep navy shadow, dark exposure and low contrast matching the approved reference floors.\nSCENE: A small stone temple sanctuary, unmistakably a sacred worship chamber. A simple stone altar with a ring of lit candles at the BACK, framed by carved stone pillars and a modest architectural alcove. Carvings are geometric rather than figurative and contain no writing. A brazier and offering bowls at the sides in midground. Worn flagstone floor, uninterrupted across the entire foreground and lower third. A tall narrow window washes the sanctuary with cool moonlight. Warm amber candles and brazier glow illuminate tactile stone.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-place-bell-chamber",
+      "path": "assets/ui/generated/scene-place-bell-chamber.webp",
+      "kind": "scene",
+      "bytes": 229914,
+      "sha256": "134bd9ba7e647f500faae3556783bca6469eccfe58a793bf1370d86d63e21399",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-place-bell-chamber.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux premium AAA fantasy tabletop stage backdrop. Create one finished image, wide 16:9 landscape at 2048x1152 or larger, opaque. Match the approved DungeonFlux reference art visible in the conversation exactly: cinematic painterly realism with exceptionally believable timber, stone, brass, cloth and worn natural surfaces; subtle painterly finish with crisp tactile detail, deep navy-blue night shadows and concentrated warm amber lantern/firelight, cinematic atmospheric depth and restrained bloom. Grounded heroic fantasy, same artist as the approved salt-quay, lamplit-market and orrery-library interiors. Composition: eye-level view from a few paces inside the place, wide room-space rather than object close-up; clear open floor spans the entire foreground and whole lower third so standing character cut-outs can be composited. All furniture, equipment, baskets and props are pushed to the mid-ground, back and sides, never blocking the foreground. Keep the lower third calmer and darker with readable subtle floor texture, no overly bright reflections. The location must read instantly from across a living room. Rich depth behind the open stage. No people, animals, creatures, figures, statues or silhouettes anywhere. No text, letters, numbers, labels, signage, watermark, signature, frame, borders or UI. No cartoon stylization, gore, plastic surfaces or muddy detail.\nScene: A bell tower ringing chamber at night. Thick bell ropes hang in a row from the timber ceiling at the back, beyond the clear foreground stage. Great structural beams frame the chamber; a ladder at the side climbs into the upper darkness where the actual bronze bell glints subtly. An amber lantern hangs from a hook, louvred windows admit navy-blue moonlight. Ancient worn wood, braided rope and bronze, believable bell-tower mechanism. Immediately recognizable as a ringing chamber, no figures or statues.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-place-guardhouse",
+      "path": "assets/ui/generated/scene-place-guardhouse.webp",
+      "kind": "scene",
+      "bytes": 249988,
+      "sha256": "dbf92639627dfc2f78aec9d1d06b0678c9cbdcdc55260d0fd3315ab92dfb7053",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-place-guardhouse.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux premium AAA fantasy tabletop stage backdrop. Create one finished image, wide 16:9 landscape at 2048x1152 or larger, opaque. Match the approved DungeonFlux reference art visible in the conversation exactly: cinematic painterly realism with exceptionally believable timber, stone, brass, cloth and worn natural surfaces; subtle painterly finish with crisp tactile detail, deep navy-blue night shadows and concentrated warm amber lantern/firelight, cinematic atmospheric depth and restrained bloom. Grounded heroic fantasy, same artist as the approved salt-quay, lamplit-market and orrery-library interiors. Composition: eye-level view from a few paces inside the place, wide room-space rather than object close-up; clear open floor spans the entire foreground and whole lower third so standing character cut-outs can be composited. All furniture, equipment, baskets and props are pushed to the mid-ground, back and sides, never blocking the foreground. Keep the lower third calmer and darker with readable subtle floor texture, no overly bright reflections. The location must read instantly from across a living room. Rich depth behind the open stage. No people, animals, creatures, figures, statues or silhouettes anywhere. No text, letters, numbers, labels, signage, watermark, signature, frame, borders or UI. No cartoon stylization, gore, plastic surfaces or muddy detail.\nScene: An old soldier's guardhouse room at night. A rack of spears and a dented plain shield hang on the wall; a campaign chest and a small table with a whetstone sit to one side beyond the foreground. A stone hearth with a kettle gives warm amber light. A barred window admits cool moonlight beside a heavy wooden door at the back. Worn stone walls, aged timber, restrained military equipment. Instantly recognizable as a veteran soldier's guardhouse, unoccupied and orderly.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-place-herb-shed",
+      "path": "assets/ui/generated/scene-place-herb-shed.webp",
+      "kind": "scene",
+      "bytes": 367034,
+      "sha256": "c8caf30e1c311f72184d77cc03d7d22f80e1d58b969d618b3eea7bbb558c25e6",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-place-herb-shed.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux premium AAA fantasy tabletop stage backdrop. Create one finished image, wide 16:9 landscape at 2048x1152 or larger, opaque. Match the approved DungeonFlux reference art visible in the conversation exactly: cinematic painterly realism with exceptionally believable timber, stone, brass, cloth and worn natural surfaces; subtle painterly finish with crisp tactile detail, deep navy-blue night shadows and concentrated warm amber lantern/firelight, cinematic atmospheric depth and restrained bloom. Grounded heroic fantasy, same artist as the approved salt-quay, lamplit-market and orrery-library interiors. Composition: eye-level view from a few paces inside the place, wide room-space rather than object close-up; clear open floor spans the entire foreground and whole lower third so standing character cut-outs can be composited. All furniture, equipment, baskets and props are pushed to the mid-ground, back and sides, never blocking the foreground. Keep the lower third calmer and darker with readable subtle floor texture, no overly bright reflections. The location must read instantly from across a living room. Rich depth behind the open stage. No people, animals, creatures, figures, statues or silhouettes anywhere. No text, letters, numbers, labels, signage, watermark, signature, frame, borders or UI. No cartoon stylization, gore, plastic surfaces or muddy detail.\nScene: A herb gatherer's drying shed at night. Bundles of identifiable dried herbs hang densely from every rafter; shelves of unlabelled clay jars and stone mortars line the walls. A small stove and simmering pot sit to one side, baskets are tucked against wall shelves. An open half-door in the back reveals an empty moonlit night garden. Warm amber lantern and stove firelight illuminate dry leaves, rough timber and clay, balanced by cool moonlight at the back doorway. Instantly recognizable as an herb-drying shed.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-place-lamp-room",
+      "path": "assets/ui/generated/scene-place-lamp-room.webp",
+      "kind": "scene",
+      "bytes": 309690,
+      "sha256": "8fe25f721ee4eaf117377237e898a8f18ea114f3100ffb3ade76d7a053fe6ec0",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-place-lamp-room.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux premium AAA fantasy tabletop stage backdrop. Create one finished image, wide 16:9 landscape at 2048x1152 or larger, opaque. Match the approved DungeonFlux reference art visible in the conversation exactly: cinematic painterly realism with exceptionally believable timber, stone, brass, cloth and worn natural surfaces; subtle painterly finish with crisp tactile detail, deep navy-blue night shadows and concentrated warm amber lantern/firelight, cinematic atmospheric depth and restrained bloom. Grounded heroic fantasy, same artist as the approved salt-quay, lamplit-market and orrery-library interiors. Composition: eye-level view from a few paces inside the place, wide room-space rather than object close-up; clear open floor spans the entire foreground and whole lower third so standing character cut-outs can be composited. All furniture, equipment, baskets and props are pushed to the mid-ground, back and sides, never blocking the foreground. Keep the lower third calmer and darker with readable subtle floor texture, no overly bright reflections. The location must read instantly from across a living room. Rich depth behind the open stage. No people, animals, creatures, figures, statues or silhouettes anywhere. No text, letters, numbers, labels, signage, watermark, signature, frame, borders or UI. No cartoon stylization, gore, plastic surfaces or muddy detail.\nScene: A lamp warden's watch room at the foot of a signal tower at night. Racks of polished lanterns and unlabelled oil cans line the walls; a spiral stair rises at the back into the tower. A side workbench holds neat lengths of wick and glass lantern panes. A round window shows moonlit fog. Several amber lanterns illuminate brass, iron, old stone and wood with cool navy moonlight from the round window. Immediately recognizable as a lantern-maintenance room beneath a signal tower.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-place-shepherds-fold",
+      "path": "assets/ui/generated/scene-place-shepherds-fold.webp",
+      "kind": "scene",
+      "bytes": 295442,
+      "sha256": "f432bb9e13d1e14f03ccb7fa8061810d586318740782ccd6ba1cc1b96fdab333",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-place-shepherds-fold.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux premium AAA fantasy tabletop stage backdrop. Create one finished image, wide 16:9 landscape at 2048x1152 or larger, opaque. Match the approved DungeonFlux reference art visible in the conversation exactly: cinematic painterly realism with exceptionally believable timber, stone, brass, cloth and worn natural surfaces; subtle painterly finish with crisp tactile detail, deep navy-blue night shadows and concentrated warm amber lantern/firelight, cinematic atmospheric depth and restrained bloom. Grounded heroic fantasy, same artist as the approved salt-quay, lamplit-market and orrery-library interiors. Composition: eye-level view from a few paces inside the place, wide room-space rather than object close-up; clear open floor spans the entire foreground and whole lower third so standing character cut-outs can be composited. All furniture, equipment, baskets and props are pushed to the mid-ground, back and sides, never blocking the foreground. Keep the lower third calmer and darker with readable subtle floor texture, no overly bright reflections. The location must read instantly from across a living room. Rich depth behind the open stage. No people, animals, creatures, figures, statues or silhouettes anywhere. No text, letters, numbers, labels, signage, watermark, signature, frame, borders or UI. No cartoon stylization, gore, plastic surfaces or muddy detail.\nScene: A shepherd's stone fold and bothy on a hillside at night, viewed at eye level from a few paces inside the low-walled yard. A turf-roofed stone hut stands to one side with a glowing amber open doorway; a small watch fire is set safely off to one side in the mid-ground. Shepherd's crooks and a lantern hang on a post, wooden hurdle fences sit against low dry-stone boundary walls, cool moonlit hills recede behind. The entire broad foreground is clear dark packed-earth yard for standing character cut-outs. Absolutely no sheep, dogs or other animals, no people. The humble shepherd's fold and bothy must read clearly.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-guard",
+      "path": "assets/ui/generated/sprite-ant-guard.webp",
+      "kind": "sprite",
+      "bytes": 225178,
+      "sha256": "e6e6ad12ec823b62badbd317ca79e45c843344c846c1f763a5d68688ad493b47",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-guard.png",
+      "source_sha256": "658af3ab477d0f5f301fd19004520610c0a7287b382f846246b7c5a07d675425",
+      "art_key": "ant-guard",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-kobold-warrior",
+      "path": "assets/ui/generated/sprite-ant-kobold-warrior.webp",
+      "kind": "sprite",
+      "bytes": 285740,
+      "sha256": "480a6fe363bce454efd948be4550a8df4359c64e2d95489a8e32b2b3e7c56161",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-kobold-warrior.png",
+      "source_sha256": "ca1ebcd5fd6b84dfc9b5edae6ad47eb66ea9b92cbfb0e8e055cd87969aeee1ce",
+      "art_key": "ant-kobold-warrior",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-mastiff",
+      "path": "assets/ui/generated/sprite-ant-mastiff.webp",
+      "kind": "sprite",
+      "bytes": 232228,
+      "sha256": "0be5e1989ada5705cfb8869ce4095ad73763f6c61ad7ba11815e6e5e3489aa29",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-mastiff.png",
+      "source_sha256": "1791d5b77a82c7c4587cb3cdfb4d1b84e91b6e02651f6fb2c9c1e18f14ef30bb",
+      "art_key": "ant-mastiff",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-wolf",
+      "path": "assets/ui/generated/sprite-ant-wolf.webp",
+      "kind": "sprite",
+      "bytes": 244764,
+      "sha256": "d889366bfee3f34498a740a920e49ce5d7aa9138f51b0b97be6461678057e5cf",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-wolf.png",
+      "source_sha256": "375778c72de0dd0f564c1a4f36a9c34bc607449043d51e90ff4ada54316712a9",
+      "art_key": "ant-wolf",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-zombie",
+      "path": "assets/ui/generated/sprite-ant-zombie.webp",
+      "kind": "sprite",
+      "bytes": 252424,
+      "sha256": "c7078459e815ce603ca032062a25c901c5bbf0b2ac9cf6d61ddd0be9942092db",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-zombie.png",
+      "source_sha256": "bd41f9e2f51e251c87c96fdf3c47baf2ea2e1d54fc029965ead2a09e8fa17924",
+      "art_key": "ant-zombie",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-contact-miller",
+      "path": "assets/ui/generated/sprite-contact-miller.webp",
+      "kind": "sprite",
+      "bytes": 221340,
+      "sha256": "1d6da0fdda8f1efbc5e1d7297a69e8055450a913fbcc2e717e6bc0be67758aa2",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-contact-miller.png",
+      "source_sha256": "bcda05ca0ed0c8e37208c8f7f340ae0956818f60202600ff633e162fca31cae1",
+      "art_key": "contact-miller",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-contact-shrine-keeper",
+      "path": "assets/ui/generated/sprite-contact-shrine-keeper.webp",
+      "kind": "sprite",
+      "bytes": 228820,
+      "sha256": "0514a092d624b71963af63fb90a22e634c36d0b92fd1cedd234966cbe5839225",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-contact-shrine-keeper.png",
+      "source_sha256": "d63e0bf9f37213e73f8c80a2c194e9d50f5393c7eecbe45b869c0a5a4a7ddb9b",
+      "art_key": "contact-shrine-keeper",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-contact-tinker",
+      "path": "assets/ui/generated/sprite-contact-tinker.webp",
+      "kind": "sprite",
+      "bytes": 240262,
+      "sha256": "ab6b1210844f0bb35d9c0aa46566b98878b7c600c9329e93d61ce25f0be63ebd",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-contact-tinker.png",
+      "source_sha256": "3f83e33f16763a51bde319b3fb073c26be28a17b8805bdf2569644ac72a43120",
+      "art_key": "contact-tinker",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-contact-watch-sergeant",
+      "path": "assets/ui/generated/sprite-contact-watch-sergeant.webp",
+      "kind": "sprite",
+      "bytes": 198154,
+      "sha256": "229baa2ba377a44740ff57f87d08e792d2770042c8e866c6dce435fe30079211",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-contact-watch-sergeant.png",
+      "source_sha256": "11b2a60409aa4a464a249566258cebcc31411c359d3705c5300c491c51ea60f0",
+      "art_key": "contact-watch-sergeant",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-patron-herbwife",
+      "path": "assets/ui/generated/sprite-patron-herbwife.webp",
+      "kind": "sprite",
+      "bytes": 264096,
+      "sha256": "04962a4c98c9d3d250771c62800825cf25a71fc161612efb2ca0c98b7f119630",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-patron-herbwife.png",
+      "source_sha256": "cbd3e8568eb966988f044029669e3ce5cd957b0719f7e37387540e3410f2d878",
+      "art_key": "patron-herbwife",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-dragon",
+      "path": "assets/ui/generated/sprite-villain-dragon.webp",
+      "kind": "sprite",
+      "bytes": 328482,
+      "sha256": "87b2c60294abad6ff10e45de17d5740aaf6e4ff364aa4920ea787f3106434f4a",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-dragon.png",
+      "source_sha256": "c8bc5da7fa7c948580d09126a99f28161b5d8fc8d35d6c03cc8fa6de3de0b63b",
+      "art_key": "villain-dragon",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-fallen-champion",
+      "path": "assets/ui/generated/sprite-villain-fallen-champion.webp",
+      "kind": "sprite",
+      "bytes": 304086,
+      "sha256": "be3713a1e393132c2f5d8ad32dea6e063c45bc2d1614ac36e58cf5d68245798e",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-fallen-champion.png",
+      "source_sha256": "6de4c93a1894e518ba76523b986ffacc0d48c59fa55974af6b1a80104e3c077f",
+      "art_key": "villain-fallen-champion",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-prophet",
+      "path": "assets/ui/generated/sprite-villain-prophet.webp",
+      "kind": "sprite",
+      "bytes": 259066,
+      "sha256": "92b29c5a86704888fffbcae75c9d57df37d6b7b09b8e552faf086d6cafc11b1e",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-prophet.png",
+      "source_sha256": "f6c971eea857a9f872f98383035062737da3a7178e45e13e553dc3daeec7afa5",
+      "art_key": "villain-prophet",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-sleeping-horror",
+      "path": "assets/ui/generated/sprite-villain-sleeping-horror.webp",
+      "kind": "sprite",
+      "bytes": 224128,
+      "sha256": "1e0262ae606d6cd332b4a0f47e7e9ec74f3e7811ce85aca5acf9a2c5c5d32c1e",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-sleeping-horror.png",
+      "source_sha256": "f73fc5ecd8f71f97a5d256da6cb84616eba7d696544c4a3605a0fc20504bb2b8",
+      "art_key": "villain-sleeping-horror",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-usurper",
+      "path": "assets/ui/generated/sprite-villain-usurper.webp",
+      "kind": "sprite",
+      "bytes": 273342,
+      "sha256": "b3e729bc3d5d94c48aad49802bbd3e48e6ce34e84940040608bd07d8457f7b6a",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-usurper.png",
+      "source_sha256": "3096b08be4d10a708bcf63fa35f63408b23c6108342cfcfe0ecba0272683f464",
+      "art_key": "villain-usurper",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-blight-druid",
+      "path": "assets/ui/generated/sprite-villain-blight-druid.webp",
+      "kind": "sprite",
+      "bytes": 316116,
+      "sha256": "85c13f2031e1260edbdaec029d16897edf08cc11b75e2f7b9e3921e0f63b9ac6",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-blight-druid.png",
+      "source_sha256": "b2f5e07525d2ad3c5c6d485fcb3f909783cb904d579b1dfcabe123744eebce7e",
+      "art_key": "villain-blight-druid",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-fiend-envoy",
+      "path": "assets/ui/generated/sprite-villain-fiend-envoy.webp",
+      "kind": "sprite",
+      "bytes": 290392,
+      "sha256": "0b5880b39eaf6cf82d64f56711688cf45e4d6a9895609639ad1f52e2f4285064",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-fiend-envoy.png",
+      "source_sha256": "c9f78495341951bdd30b2524ab45fb21d8ec4ecd649d99f0eff055235534b322",
+      "art_key": "villain-fiend-envoy",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-lich",
+      "path": "assets/ui/generated/sprite-villain-lich.webp",
+      "kind": "sprite",
+      "bytes": 309064,
+      "sha256": "1dacac6fa96d4bfe53a13e9abfdfa30cd8e5a24d38a38739dadec540004cad36",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-lich.png",
+      "source_sha256": "e989b10f30f572ab07ed402c5d12b783be4af0b13d00d1684c37a19de2f1841a",
+      "art_key": "villain-lich",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-ritualist",
+      "path": "assets/ui/generated/sprite-villain-ritualist.webp",
+      "kind": "sprite",
+      "bytes": 238558,
+      "sha256": "029b4bc9031d35c1373a55e5613724c7650902f5a934133342903a4b7ac7645b",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-ritualist.png",
+      "source_sha256": "487b8d3b23588ebf5c3f764ade8e0f11ec8df554b7ab7c69f763ee65809c6624",
+      "art_key": "villain-ritualist",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-warlord",
+      "path": "assets/ui/generated/sprite-villain-warlord.webp",
+      "kind": "sprite",
+      "bytes": 293876,
+      "sha256": "9bf95bb513b41613504109fb3382fbffc0ed4a401a8d7ffaf275d73b9268b58e",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-warlord.png",
+      "source_sha256": "9a0bac8405c681bbc9c93b4e8297b831213f529bb0ee6102ba89cf3d7bbe19bd",
+      "art_key": "villain-warlord",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
         "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
