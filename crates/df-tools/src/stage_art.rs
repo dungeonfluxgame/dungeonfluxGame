@@ -1,15 +1,20 @@
 //! The one rule that names a character cut-out after its portrait.
 //!
-//! The server allowlists the `sprite-*` twins of the generated portraits and the display
-//! asks for them by the same rule, so both sides call this function and cannot drift apart.
+//! The server allowlists the `sprite-*` twins of the generated portraits by this rule. The
+//! display no longer derives a cut-out name: it asks for the `sprite` path the server sends
+//! in each scene's cast, so only the server side applies the rule now.
 
+#[cfg(not(target_arch = "wasm32"))]
 const PORTRAIT_PREFIX: &str = "portrait-";
+#[cfg(not(target_arch = "wasm32"))]
 const SPRITE_PREFIX: &str = "sprite-";
+#[cfg(not(target_arch = "wasm32"))]
 const FULL_SUFFIX: &str = "-full";
 
 /// The transparent cut-out stem for a portrait stem: `portrait-ant-wolf` becomes
 /// `sprite-ant-wolf`. A stem that is not a plain portrait (a scene, an icon, a `-full`
 /// portrait, an existing sprite) has no sprite.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn sprite_stem(portrait_stem: &str) -> Option<String> {
     let name = portrait_stem.strip_prefix(PORTRAIT_PREFIX)?;
     if name.is_empty() || name.ends_with(FULL_SUFFIX) {

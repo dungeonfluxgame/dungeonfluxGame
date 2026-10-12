@@ -31,6 +31,8 @@ mod presentation;
 mod speech_capture;
 mod stage_art;
 #[cfg(any(target_arch = "wasm32", test))]
+mod stage_depth;
+#[cfg(any(target_arch = "wasm32", test))]
 mod stage_director;
 
 /// Source identity injected by the reproducible fixture build command.

@@ -15,9 +15,9 @@
 //! `data-music-state` attribute of the display root.
 use super::*;
 use crate::music_score::{
-    DUCK_ATTACK_SECONDS, DUCK_DECIBELS, DUCK_RELEASE_SECONDS, Facts, LAYER_TRACKS, LOOP_SECONDS,
-    Outcome, Phase, Stinger, Tempo, effective_phase, facts_of, mix_for, next_beat, stinger_between,
-    tempo_of,
+    CueMemory, DUCK_ATTACK_SECONDS, DUCK_DECIBELS, DUCK_RELEASE_SECONDS, Facts, LAYER_TRACKS,
+    LOOP_SECONDS, Outcome, Phase, Stinger, Tempo, effective_phase, facts_of, mix_for, next_beat,
+    stinger_between, tempo_of,
 };
 use gloo_timers::callback::Interval;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -101,6 +101,9 @@ struct Director {
     published: String,
     failure: Option<String>,
     ticker: Option<Interval>,
+    /// The server tempo cues consumed on the current watch connection.
+    cues: CueMemory,
+    connection: u64,
     listeners: Vec<Closure<dyn FnMut(Event)>>,
 }
 
@@ -235,8 +238,21 @@ impl Director {
         self.failure = Some(failure_text(error));
     }
 
-    fn accept(&mut self, tempo: Tempo, facts: Facts) {
+    /// `connection` identifies the watch connection the view came from; a new one starts a new
+    /// server cue sequence, so the consumed sequence is forgotten.
+    fn accept(&mut self, tempo: Tempo, facts: Facts, connection: u64) {
+        if connection != self.connection {
+            self.connection = connection;
+            self.cues.reset();
+        }
         let previous = self.latest.take();
+        // A cue already consumed (the same one on a later revision, or a stale one) changes
+        // nothing: the tempo that is playing stays, and its release hold keeps running.
+        let news = self.cues.consume(&tempo);
+        let tempo = match previous.as_ref() {
+            Some(previous) if !news => previous.tempo,
+            _ => tempo,
+        };
         let release_since = (tempo.phase == Phase::Release).then(|| {
             previous
                 .as_ref()
@@ -524,7 +540,7 @@ impl Director {
             },
         );
         let snapshot = format!(
-            "{{\"sound\":{},\"context\":{},\"phase\":{},\"intensity\":{},\"sequence\":{},\
+            "{{\"sound\":{},\"context\":{},\"phase\":{},\"intensity\":{},\"sequence\":{},\"cue\":{},\
 \"gains\":{gains},\"filter_hertz\":{},\"master\":{},\"bed\":{},\"bed_playing\":{},\
 \"layers_started\":{},\"ducked\":{},\"volume\":{},\"loaded\":{},\"missing\":{},\
 \"stingers\":{},\"error\":{}}}",
@@ -533,6 +549,7 @@ impl Director {
             optional_text(latest.map(|latest| latest.tempo.phase.name())),
             optional_number(latest.map(|latest| latest.tempo.intensity)),
             optional_number(latest.map(|latest| latest.tempo.sequence)),
+            optional_number(latest.and_then(|latest| latest.tempo.cue)),
             optional_number(self.applied.map(|applied| applied.filter_hertz)),
             optional_number(self.applied.map(|applied| applied.master)),
             optional_text(latest.map(|latest| latest.facts.bed.track())),
@@ -582,7 +599,7 @@ fn list<'a>(values: impl Iterator<Item = &'a str>) -> String {
 /// Called once per newly applied view. Music is best effort: a failure is recorded in the
 /// debug snapshot and never affects rendering.
 pub(super) fn observe(client: &Rc<RefCell<Client>>) {
-    let (document, root, view) = {
+    let (document, root, view, connection) = {
         let state = client.borrow();
         if state.role != "display" {
             return;
@@ -594,7 +611,12 @@ pub(super) fn observe(client: &Rc<RefCell<Client>>) {
         else {
             return;
         };
-        (state.document.clone(), state.root.clone(), view)
+        (
+            state.document.clone(),
+            state.root.clone(),
+            view,
+            state.generation,
+        )
     };
     let sequence = view
         .revision
@@ -612,7 +634,7 @@ pub(super) fn observe(client: &Rc<RefCell<Client>>) {
     let facts = facts_of(&scene, journey, &display.scene_asset);
     match director(&document, &root) {
         Ok(shared) => {
-            shared.borrow_mut().accept(tempo, facts);
+            shared.borrow_mut().accept(tempo, facts, connection);
             tick(&shared);
         }
         Err(_) => {
@@ -649,6 +671,8 @@ fn create(document: &Document, root: &Element) -> Result<Shared, JsValue> {
         published: String::new(),
         failure: None,
         ticker: None,
+        cues: CueMemory::default(),
+        connection: 0,
         listeners: Vec::new(),
     }));
     for name in ["pointerdown", "keydown", "click"] {

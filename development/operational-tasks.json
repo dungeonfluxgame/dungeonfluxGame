@@ -2984,6 +2984,596 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T01:10:31+00:00",
       "updated_at": "2026-10-12T01:10:31+00:00"
+    },
+    {
+      "id": "PLAY-F04",
+      "feature_id": "F13",
+      "title": "Vary battlefield layouts with obstacles and add combat sound",
+      "objective": "Each location gets several battlefield layouts with obstacle props that hide and block; figures path around them; a ranged attacker draws and looses an arrow; footsteps, weapon sounds and short effort and pain vocals play in step with the action; downed figures settle on the ground. Also: a status effect system — icons and shader treatments for the fifteen standard conditions and common states.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-render/src/battle/",
+        "crates/df-tools/src/gameplay_browser/",
+        "content/battle-scenes/",
+        "assets/ui/generated/"
+      ],
+      "acceptance_json": [
+        "Every location has at least three layouts that load, validate and look different.",
+        "A figure walks around a blocking obstacle and is partly hidden when behind one.",
+        "A ranged attack shows draw, flight and impact without the attacker walking up.",
+        "Footstep, weapon and voice sounds occur at the matching moment and never before sound is enabled.",
+        "Layouts and attack styles are staging only until the rules supply them, and say so in code.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for layout validation, path finding and timeline order.",
+        "Real browser frames of six layouts and the sound log of one fight.",
+        "An owner listening check of the new sounds."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M8",
+        "milestone_goal": "A battle worth watching: a staged battlefield on the TV, matching the owner's reference demo.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner feedback 2026-10-11 on the first battlefield: test more varied layouts and obstacles; add grunt, pain and weapon sound effects and footsteps when the players run.",
+        "objective": "Each location gets several battlefield layouts with obstacle props that hide and block; figures path around them; a ranged attacker draws and looses an arrow; footsteps, weapon sounds and short effort and pain vocals play in step with the action; downed figures settle on the ground.",
+        "owners": [
+          "df-render",
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Vary battlefield layouts with obstacles and add combat sound",
+            "owner": "df-render"
+          },
+          {
+            "hook": "Vary battlefield layouts with obstacles and add combat sound",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-F02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-presentation.md",
+            "sha256": "ce020b212e9d10b13e7588125396633ab37a549b317ca7aa74b98df1a5a29dcb"
+          },
+          {
+            "path": "planning/tempo-engine.md",
+            "sha256": "e227dda990685f5771b577529652c44d59704a23db8ad206e3e59be41f4c81d6"
+          }
+        ],
+        "input_revision": "63484e991213266767f04a72350f19bf7cd6274f",
+        "required_capabilities": {
+          "audio": true,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:01:58+00:00",
+      "updated_at": "2026-10-12T02:01:58+00:00"
+    },
+    {
+      "id": "PLAY-T01",
+      "feature_id": "R14",
+      "title": "Tactical combat rules: grid positions, movement, cover, ranged attacks",
+      "objective": "A pure, tested rules module for fights on a grid under standard 2024 rules: positions and movement, difficult terrain, opportunity attacks, Dash, Disengage and Dodge, melee reach, ranged attacks with range and ammunition, cover from obstacles, any number of combatants, legal enemy tactics, and a Fighter build that fights with a longbow.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-rules/",
+        "crates/df-combat/",
+        "crates/df-encounter/",
+        "planning/tactical-combat.md"
+      ],
+      "acceptance_json": [
+        "Complete simulated fights with three heroes against one, two and three enemies are legal at every step and last several rounds.",
+        "Cover, range, disadvantage in melee and ammunition show up in the recorded rolls.",
+        "Every rule cites its SRD section; every simplification is disclosed.",
+        "Existing game tests are unaffected.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native rule tests and fight simulations with fixed dice."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M10",
+        "milestone_goal": "Tactical fights: positions, movement, cover, ranged attacks and several enemies under standard rules.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11 for a ranged player and for layouts and obstacles that matter; fights today have no positions and end in one or two hits.",
+        "objective": "A pure, tested rules module for fights on a grid under standard 2024 rules: positions and movement, difficult terrain, opportunity attacks, Dash, Disengage and Dodge, melee reach, ranged attacks with range and ammunition, cover from obstacles, any number of combatants, legal enemy tactics, and a Fighter build that fights with a longbow.",
+        "owners": [
+          "df-rules"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Tactical combat rules: grid positions, movement, cover, ranged attacks",
+            "owner": "df-rules"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-B03"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/rules-coverage.md",
+            "sha256": "87a61156b1594c93c235a5815e209fbfb6ba5679e9d625bbacfb500d48d684d5"
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "1e51af33f9af8a6847a3eb21fd299bc6e53185c4c1af148377c4f8b6d182a463"
+          }
+        ],
+        "input_revision": "63484e991213266767f04a72350f19bf7cd6274f",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:01:58+00:00",
+      "updated_at": "2026-10-12T02:01:58+00:00"
+    },
+    {
+      "id": "PLAY-T02",
+      "feature_id": "R14",
+      "title": "Play tactical fights: movement and ranged attacks in the running game",
+      "objective": "Wire the tactical rules into the game: the server keeps each combatant's cell and the chosen layout, players move, dash, disengage, dodge and shoot from their phones, enemies act by the legal tactic policy, the battlefield shows server positions and paths, and a player can create the archer.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/",
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-protocol/proto/gameplay.proto",
+        "content/harbor-journey/"
+      ],
+      "acceptance_json": [
+        "A table plays a fight with two melee heroes and the archer against several enemies on a layout with cover, using only their phones.",
+        "Positions, reachable squares and legal targets come from the server; the browser decides none.",
+        "Reload mid-fight resumes with the same positions.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native journey tests; real browser play of two fights."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M10",
+        "milestone_goal": "Tactical fights: positions, movement, cover, ranged attacks and several enemies under standard rules.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Without this the archer and the layouts are only staging.",
+        "objective": "Wire the tactical rules into the game: the server keeps each combatant's cell and the chosen layout, players move, dash, disengage, dodge and shoot from their phones, enemies act by the legal tactic policy, the battlefield shows server positions and paths, and a player can create the archer.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Play tactical fights: movement and ranged attacks in the running game",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/runtime-reliability.md",
+            "sha256": "176e5a8fb04e1d9cb2402225c9eb1bb4ffd110abf353f226a302e10e780acf05"
+          }
+        ],
+        "input_revision": "63484e991213266767f04a72350f19bf7cd6274f",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:01:58+00:00",
+      "updated_at": "2026-10-12T02:01:58+00:00"
+    },
+    {
+      "id": "PLAY-L01",
+      "feature_id": "F15",
+      "title": "Living scenes: re-render the scene and faces to follow the conversation",
+      "objective": "A server image service with budgets, cache and safety, and on top of it: characters' faces re-rendered to match the mood of the exchange, and the backdrop re-framed at most every thirty seconds when the mood or shot changes, cross-faded on the TV.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/",
+        "crates/df-tools/src/gameplay_browser/",
+        "planning/asset-engine.md"
+      ],
+      "acceptance_json": [
+        "An insult, a compliment and a flirt each visibly change the addressed character's expression.",
+        "The backdrop changes framing or light no more often than the interval and never mid-roll or in combat.",
+        "Prompts contain only server vocabulary and vetted facts; raw player text never reaches an image model.",
+        "With the service off, over budget or failing, the game looks exactly as it does today.",
+        "A 30-minute session stays inside the configured image budget.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests with a fake image provider.",
+        "A bounded live run judged by eye.",
+        "Real browser frames before and after each swap."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M6",
+        "milestone_goal": "Personal and immersive visuals: the players' own faces, and rooms they can look around.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11: re-render the scene every 30 seconds with camera, setting and characters slightly changed based on the conversation and themes so players are not bored.",
+        "objective": "A server image service with budgets, cache and safety, and on top of it: characters' faces re-rendered to match the mood of the exchange, and the backdrop re-framed at most every thirty seconds when the mood or shot changes, cross-faded on the TV.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Living scenes: re-render the scene and faces to follow the conversation",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "89b3d692353ee82210cbe9f501f62b6d12bde89ec35b17ba57a0df3711ab8342"
+          },
+          {
+            "path": "planning/generated-content.md",
+            "sha256": "0b252a24a8911108660f3276d8359d9df825a3398c7c7a4033c62e2279007ac0"
+          },
+          {
+            "path": "planning/g12-d01-consented-observation-policy.md",
+            "sha256": "ce82e9b4115fa73625aff25145a21e504868fde75c52ee52a8cc110e08142679"
+          },
+          {
+            "path": "planning/pricing-and-costs.md",
+            "sha256": "28b68d5ec0757887f5b5f8dad708520950692d014c50b2faebb39cf3d5b16a7b"
+          }
+        ],
+        "input_revision": "1df12ab11cb69762aca534680967c9028f626219",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:06:04+00:00",
+      "updated_at": "2026-10-12T02:06:04+00:00"
+    },
+    {
+      "id": "PLAY-I01",
+      "feature_id": "R14",
+      "title": "Investigate a scene: examine anything, roll to understand it, see it rendered",
+      "objective": "Before meeting the quest-giver the party looks around the location. A player can pick or name anything in the scene; the server resolves a standard ability check against a DC from the standard ladder, the storyteller describes what is learned from the adventure's facts, and a close-up of that object is generated on demand and shown on the TV. Nothing is pre-generated.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/",
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-rules/",
+        "content/adventure-tables/",
+        "crates/df-protocol/proto/gameplay.proto"
+      ],
+      "acceptance_json": [
+        "A generated chapter opens with an investigation beat before the first conversation.",
+        "Examining something shows the d20 roll, modifier, DC and result on the TV and the phone.",
+        "The check uses the standard skill and DC ladder; the dice are never fudged.",
+        "A named object the scene could not contain is refused in character; nothing unsafe is rendered.",
+        "The close-up appears within the image deadline or the scene continues without it.",
+        "A success can reveal a clue that later conversation recognises.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for the check, the vetting of subjects and the clue flow.",
+        "Real browser play of the investigation beat with the image service on."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M6",
+        "milestone_goal": "Personal and immersive visuals: the players' own faces, and rooms they can look around.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11: add a scene where you investigate the environment before talking to someone so we can see you attempting to roll to understand something; do not pre-generate the artifacts, since anything in a scene can be one.",
+        "objective": "Before meeting the quest-giver the party looks around the location. A player can pick or name anything in the scene; the server resolves a standard ability check against a DC from the standard ladder, the storyteller describes what is learned from the adventure's facts, and a close-up of that object is generated on demand and shown on the TV. Nothing is pre-generated.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Investigate a scene: examine anything, roll to understand it, see it rendered",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "1e51af33f9af8a6847a3eb21fd299bc6e53185c4c1af148377c4f8b6d182a463"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "89b3d692353ee82210cbe9f501f62b6d12bde89ec35b17ba57a0df3711ab8342"
+          }
+        ],
+        "input_revision": "1df12ab11cb69762aca534680967c9028f626219",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:06:04+00:00",
+      "updated_at": "2026-10-12T02:06:04+00:00"
+    },
+    {
+      "id": "PLAY-S01",
+      "feature_id": "F14",
+      "title": "Fight inside real Gaussian-splat scans",
+      "objective": "Real splat scans load as battle scenes in the Rust WebGPU battlefield: level-of-detail loading without freezing, a grid that follows the scanned ground, figures occluded by scan geometry, cameras fitted per scan, and smooth frame rates. Four scans supplied by the owner are fitted; three are unlicensed and for private local testing only.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-render/src/battle/",
+        "crates/df-tools/src/gameplay/splat_assets.rs",
+        "content/battle-scenes/",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "acceptance_json": [
+        "Each of the four scans shows a full scripted fight with figures standing on its ground at the right scale.",
+        "A figure behind scan geometry is hidden by it.",
+        "The page stays responsive while a scan loads and holds 60 frames per second on the real GPU.",
+        "No scan data is committed; unlicensed scans are selectable only by an explicit private-test setting.",
+        "A missing or failing scan falls back to the painted scene without a blank frame.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native loader and selection tests.",
+        "Real-GPU browser frames and frame-time measurements per scan."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M8",
+        "milestone_goal": "A battle worth watching: a staged battlefield on the TV, matching the owner's reference demo.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11 to download four superspl.at scenes and make them work as battle scenes.",
+        "objective": "Real splat scans load as battle scenes in the Rust WebGPU battlefield: level-of-detail loading without freezing, a grid that follows the scanned ground, figures occluded by scan geometry, cameras fitted per scan, and smooth frame rates. Four scans supplied by the owner are fitted; three are unlicensed and for private local testing only.",
+        "owners": [
+          "df-render",
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Fight inside real Gaussian-splat scans",
+            "owner": "df-render"
+          },
+          {
+            "hook": "Fight inside real Gaussian-splat scans",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-F02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "89b3d692353ee82210cbe9f501f62b6d12bde89ec35b17ba57a0df3711ab8342"
+          },
+          {
+            "path": "planning/client-presentation.md",
+            "sha256": "ce020b212e9d10b13e7588125396633ab37a549b317ca7aa74b98df1a5a29dcb"
+          },
+          {
+            "path": "planning/optimization.md",
+            "sha256": "7de2ec91c89c7afaf3d1c047eddd00135f1a24fde934a49eec6c4d930aae8ce8"
+          }
+        ],
+        "input_revision": "5324346027fd9fc8b98fd52343b97d9bd56f77c6",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:12:38+00:00",
+      "updated_at": "2026-10-12T02:12:38+00:00"
+    },
+    {
+      "id": "PLAY-R01",
+      "feature_id": "X10",
+      "title": "Content rating: mature by default, with a switch to a restrained mode",
+      "objective": "One setting decides how dark and adult the generated text, voices, sounds and images may be. Mature is the default; restrained reproduces the earlier softened behaviour. Secret safety and the limits on minors and real likenesses hold in both.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/",
+        "content/adventure-tables/",
+        "planning/gameplay-tuning.md"
+      ],
+      "acceptance_json": [
+        "Unset means mature; restrained reproduces existing seeds byte for byte.",
+        "Guidance, validators and table entries differ between modes only where rating applies.",
+        "Secret and prompt-injection refusals behave identically in both modes.",
+        "No mode sexualises a minor or a real person's likeness.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests in both modes.",
+        "A bounded live comparison of one adventure in each mode."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M2",
+        "milestone_goal": "Tunable: content and mechanics parameters change through data, without a rebuild.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner decision 2026-10-11: this is an adult game, so no censorship, with a config to turn it on.",
+        "objective": "One setting decides how dark and adult the generated text, voices, sounds and images may be. Mature is the default; restrained reproduces the earlier softened behaviour. Secret safety and the limits on minors and real likenesses hold in both.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Content rating: mature by default, with a switch to a restrained mode",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-B03"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/gameplay-tuning.md",
+            "sha256": "73453c02a6f6d206f2957c652df77534d843ea6d60a6d7334c5802bf1a10ca12"
+          },
+          {
+            "path": "planning/generated-content.md",
+            "sha256": "0b252a24a8911108660f3276d8359d9df825a3398c7c7a4033c62e2279007ac0"
+          }
+        ],
+        "input_revision": "5324346027fd9fc8b98fd52343b97d9bd56f77c6",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:12:38+00:00",
+      "updated_at": "2026-10-12T02:12:38+00:00"
     }
   ],
   "dependencies": [
@@ -3102,6 +3692,26 @@
     {
       "task_id": "PLAY-X05",
       "prerequisite_task_id": "PLAY-E01"
+    },
+    {
+      "task_id": "PLAY-T02",
+      "prerequisite_task_id": "PLAY-T01"
+    },
+    {
+      "task_id": "PLAY-T02",
+      "prerequisite_task_id": "PLAY-F04"
+    },
+    {
+      "task_id": "PLAY-T02",
+      "prerequisite_task_id": "PLAY-E01"
+    },
+    {
+      "task_id": "PLAY-I01",
+      "prerequisite_task_id": "PLAY-E01"
+    },
+    {
+      "task_id": "PLAY-I01",
+      "prerequisite_task_id": "PLAY-L01"
     }
   ]
 }

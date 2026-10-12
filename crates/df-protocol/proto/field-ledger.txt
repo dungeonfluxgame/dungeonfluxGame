@@ -383,3 +383,6 @@ field dungeonflux.public.v1.NpcStanding 1 npc_id type=9 label=1 presence=false t
 field dungeonflux.public.v1.NpcStanding 2 name type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.NpcStanding 3 attitude type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 13 standing type=11 label=3 presence=false target=.dungeonflux.public.v1.NpcStanding oneof=-
+field dungeonflux.public.v1.GameplayScene 6 rules_note type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 7 place type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 12 table_choices type=9 label=3 presence=false target=- oneof=-

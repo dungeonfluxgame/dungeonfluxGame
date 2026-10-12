@@ -48,6 +48,8 @@ pub(super) struct ExplorationModel {
     pub(super) scene_asset: Option<String>,
     pub(super) portrait_asset: Option<String>,
     pub(super) has_whisper: bool,
+    /// The scene's rules wording, shown on its own line under the narration.
+    pub(super) rules_note: String,
     pub(super) binding: ClientBindingId,
     pub(super) scene: ConceptScene,
     pub(super) title: String,
@@ -182,6 +184,9 @@ fn decorate(screen: &ExplorationScreen, model: &ExplorationModel) -> Result<(), 
         root.set_attribute("data-whisper", "")?;
     } else {
         root.remove_attribute("data-whisper")?;
+    }
+    if let Some(document) = root.owner_document() {
+        live_rules::mount(&document, root, &model.rules_note)?;
     }
     for choice in &model.choices {
         if choice.id.contains(['"', '\\']) {
