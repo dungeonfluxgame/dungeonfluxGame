@@ -35,7 +35,8 @@ const check = async (step) => {
 const enabled = (page) =>
   page.locator('button:not([disabled])').allInnerTexts().then((all) => all.map((t) => t.trim()));
 const tvText = () => tv.locator('body').innerText();
-const concluded = async () => /Journey Settled|agreement kept|brought the answer/.test(await tvText());
+// The end card is the TV's scene titled "The End" (its text may be upper-cased by CSS).
+const concluded = async () => /^the end$/im.test(await tvText());
 
 // Polls both phones for the first enabled option that the predicate accepts (chips appear only
 // after the TV finishes its lines, so a single read is not enough).
@@ -65,6 +66,7 @@ const press = async (step, accept) => {
   const until = Date.now() + 30000;
   while (Date.now() < until && (await tvText()) === before) await settle(500);
   await settle(1500);
+  s.note(`${step}: phone a after: ${JSON.stringify((await pa.locator('body').innerText()).slice(0, 260))}`);
   await check(`${step}: ${found.label}`);
   await tv.screenshot({ path: `${out}/${step}-tv.png` });
   return true;

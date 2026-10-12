@@ -66,6 +66,7 @@ pub(super) fn observation(code: rpc::RejectionCode) -> rpc::SubmitActionResponse
 pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
     Some(match entry {
         "script-choice" => rpc::GameplayActionKind::ExamineHarborSeal,
+        "resolve-errand" => rpc::GameplayActionKind::ResolveErrand,
         "create-character" => rpc::GameplayActionKind::CreateCharacter,
         "begin-story" => rpc::GameplayActionKind::BeginStory,
         "ask-courier" => rpc::GameplayActionKind::AskCourier,
@@ -90,6 +91,7 @@ pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
 pub(super) fn action_entry(kind: rpc::GameplayActionKind) -> Option<&'static str> {
     Some(match kind {
         rpc::GameplayActionKind::ExamineHarborSeal => "script-choice",
+        rpc::GameplayActionKind::ResolveErrand => "resolve-errand",
         rpc::GameplayActionKind::CreateCharacter => "create-character",
         rpc::GameplayActionKind::BeginStory => "begin-story",
         rpc::GameplayActionKind::AskCourier => "ask-courier",
@@ -625,6 +627,9 @@ fn table_choices(
     match phase {
         rpc::JourneyPhase::Combat => return Ok(Vec::new()),
         rpc::JourneyPhase::Dialogue => {
+            if let Some(labels) = super::beat_script_runtime::dialogue_labels(current)? {
+                return Ok(labels);
+            }
             return Ok(vec![super::pack::offer_label(
                 rpc::GameplayActionKind::DefendCourier,
             )]);
@@ -644,7 +649,8 @@ fn table_choices(
         {
             continue;
         }
-        for (kind, label) in super::journey::offered(current, link.member)? {
+        // The phones read the same labels: a scripted chapter's authored text, never a handler's.
+        for (kind, label, _) in super::beat_script_runtime::view_offers(current, link.member)? {
             if kind != rpc::GameplayActionKind::CreateCharacter && !labels.contains(&label) {
                 labels.push(label);
             }
@@ -918,6 +924,7 @@ pub(super) fn project_journey(
         reply_speaker: String::new(),
         home: (phase == rpc::JourneyPhase::Room)
             .then(|| super::home_theme::lobby_view(&authored.asset, authored.setting.as_ref())),
+        adventure_ended: super::beat_script_runtime::ended(state)?,
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
     let mut scene = if super::beat_script_runtime::native_inn(state)? {
@@ -1025,10 +1032,11 @@ pub(super) fn action_offer_rejection(
     {
         return Ok(Some(rpc::RejectionCode::WrongTurn));
     }
+    // The same list the player's phone shows, so an offer the phone lists is never stale here.
     if !super::beat_script_runtime::matches_id(current, kind, offer)?
-        || !super::journey::offered(current, member)?
+        || !super::beat_script_runtime::view_offers(current, member)?
             .iter()
-            .any(|(offered, _)| *offered == kind)
+            .any(|(offered, _, _)| *offered == kind)
     {
         return Ok(Some(rpc::RejectionCode::StaleOffer));
     }

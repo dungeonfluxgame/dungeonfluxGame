@@ -45,6 +45,8 @@ pub(super) enum BeatKind {
     Travel,
     Conclude,
     Investigate,
+    /// A resolution, epilogue or end card: authored pure steps that follow a terminal beat.
+    Ending,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -81,6 +83,8 @@ pub(super) enum BeatEffect {
     /// Public observation only. A source-qualified ability-check handler will attach
     /// here in roadmap item 3; this effect contains no check, DC or roll fields.
     Observe,
+    /// Hands over the errand's object or person. Offered once, on a resolution beat.
+    Resolve,
     Continue,
 }
 impl BeatEffect {
@@ -98,6 +102,7 @@ impl BeatEffect {
             Self::ShortRest => A::ShortRest,
             Self::ChooseHarborScene => A::ChooseHarborScene,
             Self::ThirdApproach | Self::Observe => A::ExamineHarborSeal,
+            Self::Resolve => A::ResolveErrand,
             Self::Continue => A::BeginStory,
         }
     }
@@ -210,7 +215,7 @@ impl BeatScript {
         for id in &self.terminal {
             if self
                 .find(id)
-                .is_none_or(|beat| beat.kind != BeatKind::Conclude)
+                .is_none_or(|beat| !matches!(beat.kind, BeatKind::Conclude | BeatKind::Ending))
             {
                 return Err(refuse(id, E::TerminalWiring));
             }
@@ -328,6 +333,7 @@ impl BeatScript {
                 BeatKind::Investigate if !uses_encounter => true,
                 BeatKind::Travel if !uses_encounter => true,
                 BeatKind::Conclude if !uses_encounter => true,
+                BeatKind::Ending => true,
                 BeatKind::Narrate => matches!(
                     beat.state.durable.as_str(),
                     "courier-answer-seal" | "courier-answer-escort"
@@ -365,6 +371,7 @@ impl BeatScript {
                 BeatKind::Converse => &[],
                 BeatKind::Conclude => &[],
                 BeatKind::Investigate => &[],
+                BeatKind::Ending => &[],
             };
             if required
                 .iter()
@@ -417,6 +424,9 @@ impl BeatScript {
                         offer.effect == BeatEffect::ChooseHarborScene
                     }
                     BeatKind::Conclude if !uses_encounter => false,
+                    BeatKind::Ending => {
+                        matches!(offer.effect, BeatEffect::Resolve | BeatEffect::Continue)
+                    }
                     BeatKind::Narrate => offer.effect == BeatEffect::DefendCourier,
                     BeatKind::Converse => matches!(
                         offer.effect,
@@ -485,7 +495,7 @@ impl BeatScript {
                         }
                         if !uses_encounter
                             && effect == BeatEffect::ChooseHarborScene
-                            && target.kind != BeatKind::Conclude
+                            && !matches!(target.kind, BeatKind::Conclude | BeatKind::Ending)
                         {
                             return Err(refuse(&beat.id, E::HandlerWiring));
                         }
@@ -503,11 +513,13 @@ impl BeatScript {
                             BeatEffect::ChooseHarborScene if !uses_encounter => {
                                 target.state.durable.as_str()
                             }
-                            BeatEffect::Observe | BeatEffect::Continue if !uses_encounter => {
+                            BeatEffect::Observe | BeatEffect::Continue | BeatEffect::Resolve
+                                if !uses_encounter =>
+                            {
                                 target.state.durable.as_str()
                             }
                             BeatEffect::ChooseHarborScene => "harbor-inn",
-                            BeatEffect::Observe | BeatEffect::Continue => {
+                            BeatEffect::Observe | BeatEffect::Continue | BeatEffect::Resolve => {
                                 return Err(refuse(&beat.id, E::HandlerWiring));
                             }
                             BeatEffect::ShortRest => return Err(refuse(&beat.id, E::RestWiring)),
@@ -669,7 +681,10 @@ impl BeatScript {
                     {
                         (true, true)
                     }
-                    BeatEffect::Continue | BeatEffect::Observe | BeatEffect::ChooseHarborScene
+                    BeatEffect::Continue
+                    | BeatEffect::Observe
+                    | BeatEffect::Resolve
+                    | BeatEffect::ChooseHarborScene
                         if started && target.state.durable != "room" =>
                     {
                         (started, answered)

@@ -76,7 +76,7 @@ pub(super) fn scene_roles(script: &BeatScript) -> Result<BTreeMap<String, SceneR
                 BeatKind::Gather => SceneRole::Room,
                 BeatKind::Investigate | BeatKind::Converse => SceneRole::Observation,
                 BeatKind::Narrate | BeatKind::Travel => SceneRole::Followup,
-                BeatKind::Conclude => SceneRole::Contact,
+                BeatKind::Conclude | BeatKind::Ending => SceneRole::Contact,
                 BeatKind::Fight | BeatKind::Rest => return Err(refuse(&beat.id)),
             }
         };

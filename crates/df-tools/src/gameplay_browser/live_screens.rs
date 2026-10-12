@@ -311,10 +311,10 @@ fn choice_icon(action_kind: i32) -> &'static str {
 }
 
 /// Offers that need no extra typed input become scene choices; the rest keep their
-/// existing controls in the dock.
+/// existing controls in the dock. A travel with one destination needs no drop-down.
 fn is_simple_offer(offer: &rpc::GameplayActionOffer) -> bool {
     offer.input_groups.is_empty()
-        && offer.destinations.is_empty()
+        && offer.destinations.len() <= 1
         && !matches!(
             rpc::GameplayActionKind::try_from(offer.action_kind),
             Ok(rpc::GameplayActionKind::CreateCharacter
@@ -424,7 +424,9 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         },
         members,
         speaker,
-        heading: if choices.is_empty() {
+        heading: if input.journey.adventure_ended {
+            "The End"
+        } else if choices.is_empty() {
             "The story waits"
         } else {
             "What do you do?"
@@ -457,14 +459,12 @@ pub(super) fn submit_offer(client: &Rc<RefCell<Client>>, offer_id: &str) {
         );
         return;
     };
-    match prepare(
-        client,
-        &offer,
-        None,
-        false,
-        false,
-        rpc::HarborDestination::Unspecified as i32,
-    ) {
+    // A single destination is the only one the server offered, so it is sent as chosen.
+    let destination = match offer.destinations.as_slice() {
+        [only] => only.destination,
+        _ => rpc::HarborDestination::Unspecified as i32,
+    };
+    match prepare(client, &offer, None, false, false, destination) {
         Ok(body) => send(client.clone(), body, false),
         Err(error) => feedback(&client.borrow(), &error),
     }

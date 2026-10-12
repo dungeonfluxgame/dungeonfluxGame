@@ -63,6 +63,10 @@ pub(in crate::gameplay) fn current(
     let contents = model::contents().map_err(NativeTargetError::State)?;
     let mut result = Vec::new();
     for (kind, label) in authored_offered(checkpoint, member).map_err(NativeTargetError::State)? {
+        // A resolution is the script's own pure step, offered by the script rather than a handler.
+        if kind == rpc::GameplayActionKind::ResolveErrand {
+            continue;
+        }
         let entry = wire::action_entry(kind).ok_or(NativeTargetError::UnsupportedAction)?;
         let action = model::content(entry).map_err(NativeTargetError::State)?;
         let target = match kind {
