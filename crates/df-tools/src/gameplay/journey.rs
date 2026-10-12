@@ -660,6 +660,9 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
         scene_asset: pack::scene(pack::SceneKey::Inn).asset,
         speaker_portrait: pack::scene(pack::SceneKey::Inn).speaker_portrait,
         cast: Vec::new(),
+        // The view fills in the rules note and the place, which the pack alone knows.
+        rules_note: String::new(),
+        place: String::new(),
     }
 }
 pub(super) fn accepted(
@@ -5339,11 +5342,17 @@ mod tests {
                         let mandatory = prose["tables"][key]["variants"][0]["text"]
                             .as_str()
                             .unwrap();
+                        // Before the rest the rules wording is the scene's own rules note and is
+                        // never joined into the narration; the rested text carries its wording
+                        // inside the story itself.
+                        let note = view.scene.as_ref().unwrap().rules_note.as_str();
                         let mut expected = if key == "defeat_mech" {
                             let rules = mandatory.replace("{story}", "");
                             let rules = rules.split_whitespace().collect::<Vec<_>>().join(" ");
-                            format!("{} {rules}", ending.defeat)
+                            assert_eq!(note, rules);
+                            ending.defeat.clone()
                         } else {
+                            assert_eq!(note, "");
                             format!("{} {mandatory}", ending.defeat)
                         };
                         if approach == "escort-courier" {

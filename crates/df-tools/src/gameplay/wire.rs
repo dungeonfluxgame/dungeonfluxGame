@@ -507,6 +507,46 @@ pub(super) fn journey_view(
     project_journey(current, role, principal).map(|projection| projection.view)
 }
 
+/// What the players can choose right now, as labels only, for the shared display: every ready
+/// hero's current offers merged in offer order without repeats. It carries no offer id and
+/// nothing private. A fight's turn belongs to the one hero acting, so it is left empty there.
+/// In a conversation the one choice is the public next step of the story: the members' offers
+/// there also depend on a private note's audience, which the shared display must not reflect.
+fn table_choices(
+    current: &Checkpoint,
+    phase: rpc::JourneyPhase,
+) -> Result<Vec<String>, RepositoryError> {
+    match phase {
+        rpc::JourneyPhase::Combat => return Ok(Vec::new()),
+        rpc::JourneyPhase::Dialogue => {
+            return Ok(vec![super::pack::offer_label(
+                rpc::GameplayActionKind::DefendCourier,
+            )]);
+        }
+        _ => {}
+    }
+    let state = current.state();
+    let mut labels: Vec<String> = Vec::new();
+    for link in super::journey::participants(current) {
+        let Some(hero) = link.character else {
+            continue;
+        };
+        if !state
+            .characters
+            .iter()
+            .any(|character| character.entity == hero)
+        {
+            continue;
+        }
+        for (kind, label) in super::journey::offered(current, link.member)? {
+            if kind != rpc::GameplayActionKind::CreateCharacter && !labels.contains(&label) {
+                labels.push(label);
+            }
+        }
+    }
+    Ok(labels)
+}
+
 pub(super) fn project_journey(
     current: &Checkpoint,
     role: df_persistence::local_demo_scope::LocalDemoRole,
@@ -691,14 +731,8 @@ pub(super) fn project_journey(
     } else {
         &authored.narration
     };
-    // The story text and the rules wording are separate strings in the pack; this is the one
-    // place the server joins them for display.
-    let narration = if rested || authored.rules_note.is_empty() {
-        narration.to_owned()
-    } else {
-        format!("{narration} {}", authored.rules_note)
-    };
-    let narration = narration.as_str();
+    // The story text and the rules wording are separate strings in the pack and stay separate
+    // on the wire: the story is narrated and spoken, the rules note is only read.
     let narration = match witnessed_courier_support(current, observer, perceived.facts(), &party)? {
         Some(name) => pack::with_content(|content| {
             format!(
@@ -726,6 +760,20 @@ pub(super) fn project_journey(
         }
         narration
     });
+    // A rested scene and an epilogue replace the story text whole, and the rules wording
+    // belonged to the text they replace.
+    let epilogue_replaces = key == SceneKey::Inn
+        && pack::with_content(|content| content.campaign_epilogue.is_some());
+    let rules_note = if rested || epilogue_replaces {
+        String::new()
+    } else {
+        authored.rules_note.clone()
+    };
+    let table_choices = if role == LocalDemoRole::Display {
+        table_choices(current, phase)?
+    } else {
+        Vec::new()
+    };
     let journey = rpc::JourneyView {
         phase: if creation.is_some() {
             rpc::JourneyPhase::CharacterCreation as i32
@@ -742,6 +790,7 @@ pub(super) fn project_journey(
         dialogue: authored.dialogue.clone(),
         table_log: Vec::new(),
         tempo: None,
+        table_choices,
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
     let mut scene = if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] {
@@ -753,9 +802,17 @@ pub(super) fn project_journey(
             scene_asset: authored.asset.clone(),
             speaker_portrait: authored.speaker_portrait.clone(),
             cast: Vec::new(),
+            rules_note: String::new(),
+            place: String::new(),
         }
     };
     scene.cast = scene_cast(&authored);
+    scene.rules_note = rules_note;
+    scene.place = authored
+        .setting
+        .as_ref()
+        .map(|setting| setting.name.clone())
+        .unwrap_or_default();
 
     let audience = match role {
         LocalDemoRole::Display => rpc::view_message::Audience::Display(rpc::DisplayGameplayView {

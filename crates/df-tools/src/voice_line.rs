@@ -44,7 +44,8 @@ impl VoiceLine {
     }
 }
 
-/// The scene narration first, then the current speaker line; empty text is not spoken.
+/// The scene narration first, then the current speaker line; empty text is not spoken. The
+/// scene's rules note is a separate field and is never read here: it is shown, not voiced.
 pub(crate) fn display_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine> {
     let mut lines = Vec::with_capacity(2);
     if !display.narration.trim().is_empty() {
@@ -130,6 +131,25 @@ mod tests {
                     text: "You are late.".to_owned()
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn the_rules_note_is_never_voiced() {
+        let mut view = display("Rain falls.", "", "");
+        view.scene = Some(rpc::GameplayScene {
+            rules_note: "Positions are measured in feet.".to_owned(),
+            ..Default::default()
+        });
+
+        let lines = display_lines(&view);
+
+        assert_eq!(
+            lines,
+            vec![VoiceLine {
+                role: "narrator".to_owned(),
+                text: "Rain falls.".to_owned()
+            }]
         );
     }
 
