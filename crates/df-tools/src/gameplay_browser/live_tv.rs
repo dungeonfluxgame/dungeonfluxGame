@@ -7,11 +7,13 @@
 //! Stable shell for other screens (combat): `.tv-stage` is the fixed full-viewport root,
 //! `.tv-art` the full-bleed painting, `.tv-scrim` the text gradients, `.tv-safe` the
 //! overscan-safe grid (rows: top, headline, spacer, content, party bar), `.tv-title` the scene
-//! title, `.tv-stagebox` the centred lower-third and `.tv-partybar` the compact party row.
+//! title with its `.tv-place` line, `.tv-stagebox` the Dungeon Master's caption and its
+//! `.tv-rules` line, `.tv-choices` the read-only row of what the table can do and
+//! `.tv-bigcard` the title and closing cards the director shows over the dimmed painting.
 use super::live_sfx::{self, Cue};
 use super::live_stage::{Figures, StageMode};
 use super::*;
-use crate::presentation::{HERO_ROLE, SceneFamily, StageActor};
+use crate::presentation::{Card, CardKind, HERO_ROLE, SceneFamily, StageActor};
 use std::{cell::Cell, time::Duration};
 use web_sys::Event;
 
@@ -53,6 +55,12 @@ pub(super) struct TvModel {
     pub(super) art: String,
     pub(super) art_fallback: &'static str,
     pub(super) cast: Vec<StageActor>,
+    /// The place the scene is set in, shown under its title.
+    pub(super) place: String,
+    /// The rules wording of the scene, kept apart from the story narration.
+    pub(super) rules_note: String,
+    /// What the table can do now: labels only, for the read-only row of chips.
+    pub(super) choices: Vec<String>,
     pub(super) family: SceneFamily,
     /// Names the scene for the figures: a non-player character stays until it changes.
     pub(super) scene_key: String,
@@ -64,12 +72,22 @@ struct WordmarkSlot {
     load: Closure<dyn FnMut(Event)>,
 }
 
-struct Card {
+struct SeatCard {
     root: Element,
     glyph: Element,
     portrait: Element,
     name: Element,
     status: Element,
+}
+
+/// The centred card of the story's title and of a fight's close.
+struct BigCard {
+    root: Element,
+    kicker: Element,
+    headline: Element,
+    line: Element,
+    place: Element,
+    heroes: Element,
 }
 
 pub(super) struct TvStage {
@@ -81,11 +99,18 @@ pub(super) struct TvStage {
     gathered: Element,
     /// Whether a view has been drawn yet: the first one plays no seat sounds.
     drawn: Cell<bool>,
+    /// The scene just drawn is set in the place of the one before it.
+    same_place: Cell<bool>,
     title: Element,
+    place: Element,
     lede: Element,
     lobby_row: Element,
     stagebox: Element,
     narration: Element,
+    rules: Element,
+    rules_text: Element,
+    choices: Element,
+    card: BigCard,
     speaker: Element,
     speaker_glyph: Element,
     speaker_portrait: Element,
@@ -96,7 +121,7 @@ pub(super) struct TvStage {
     roster_slot: Element,
     party_bar: Element,
     party: Element,
-    cards: Vec<Card>,
+    cards: Vec<SeatCard>,
     dock: Element,
     wordmark: WordmarkSlot,
 }
@@ -138,6 +163,25 @@ fn portrait(
     Ok((frame, glyph, image))
 }
 
+fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue> {
+    let root = node(document, parent, "div", "tv-bigcard", "")?;
+    root.set_attribute("aria-hidden", "true")?;
+    let kicker = node(document, &root, "p", "tv-bigcard-kicker", "")?;
+    let headline = node(document, &root, "h2", "tv-bigcard-title", "")?;
+    node(document, &root, "div", "tv-bigcard-rule", "")?;
+    let line = node(document, &root, "p", "tv-bigcard-line", "")?;
+    let place = node(document, &root, "p", "tv-bigcard-place", "")?;
+    let heroes = node(document, &root, "ul", "tv-bigcard-heroes", "")?;
+    Ok(BigCard {
+        root,
+        kicker,
+        headline,
+        line,
+        place,
+        heroes,
+    })
+}
+
 impl TvStage {
     pub(super) fn mount(document: &Document, parent: &Element) -> Result<Self, JsValue> {
         let root = node(document, parent, "div", "tv-stage", "")?;
@@ -170,6 +214,7 @@ impl TvStage {
         let headline = node(document, &safe, "section", "tv-headline", "")?;
         let title = node(document, &headline, "h1", "tv-title", "")?;
         node(document, &headline, "div", "tv-divider", "")?;
+        let place = node(document, &headline, "p", "tv-place", "")?;
         let lede = node(document, &headline, "p", "tv-lede", "")?;
 
         let lobby_row = node(document, &safe, "section", "tv-lobby-row", "")?;
@@ -221,6 +266,10 @@ impl TvStage {
         )?;
         let narration = node(document, &caption, "p", "tv-narration", "")?;
         narration.set_attribute("data-voice-role", "narrator")?;
+        // The rules wording is read, never spoken, and looks quieter than the story.
+        let rules = node(document, &stagebox, "p", "tv-rules", "")?;
+        node(document, &rules, "span", "tv-rules-tag", "Rules")?;
+        let rules_text = node(document, &rules, "span", "tv-rules-text", "")?;
         node(document, &stagebox, "div", "tv-divider", "")?;
         let speaker = node(document, &stagebox, "div", "tv-speaker", "")?;
         let (_, speaker_glyph, speaker_portrait) = portrait(document, &speaker, "tv-portrait")?;
@@ -238,7 +287,7 @@ impl TvStage {
             let name = node(document, &words, "div", "tv-member-name", "")?;
             node(document, &words, "div", "tv-member-role", HERO_ROLE)?;
             let status = node(document, &words, "div", "tv-member-status", "")?;
-            cards.push(Card {
+            cards.push(SeatCard {
                 root: card,
                 glyph,
                 portrait: image,
@@ -246,6 +295,9 @@ impl TvStage {
                 status,
             });
         }
+        let choices = node(document, &root, "ol", "tv-choices", "")?;
+        choices.set_attribute("aria-label", "What the table can do")?;
+        let card = mount_card(document, &root)?;
         let dock = node(document, &root, "div", "tv-dock", "")?;
         node(document, &root, "div", "tv-peek", "")?;
         Ok(Self {
@@ -256,11 +308,17 @@ impl TvStage {
             roster,
             gathered,
             drawn: Cell::new(false),
+            same_place: Cell::new(false),
             title,
+            place,
             lede,
             lobby_row,
             stagebox,
             narration,
+            rules,
+            rules_text,
+            choices,
+            card,
             speaker,
             speaker_glyph,
             speaker_portrait,
@@ -315,8 +373,57 @@ impl TvStage {
         }
     }
 
+    /// Fills the title or closing card; the stylesheet shows it while the director is in the
+    /// matching state.
+    pub(super) fn show_card(&self, document: &Document, card: &Card) -> Result<(), JsValue> {
+        let shown = &self.card;
+        shown.root.set_attribute(
+            "data-kind",
+            match card.kind {
+                CardKind::Title => "title",
+                CardKind::Victory => "victory",
+                CardKind::Defeat => "defeat",
+            },
+        )?;
+        shown.kicker.set_text_content(Some(&card.kicker));
+        shown.headline.set_text_content(Some(&card.headline));
+        shown.line.set_text_content(Some(&card.subline));
+        shown.place.set_text_content(Some(&card.place));
+        set_hidden(&shown.place, card.place.is_empty())?;
+        set_hidden(&shown.line, card.subline.is_empty())?;
+        shown.heroes.set_text_content(None);
+        set_hidden(&shown.heroes, card.heroes.is_empty())?;
+        for hero in &card.heroes {
+            let item = node(document, &shown.heroes, "li", "tv-bigcard-hero", "")?;
+            let crest = node(document, &item, "span", "tv-bigcard-crest", "")?;
+            crest.set_attribute("style", &format!("background-image:url({})", hero.portrait))?;
+            node(document, &item, "b", "tv-bigcard-name", &hero.name)?;
+            node(document, &item, "span", "tv-bigcard-role", &hero.role)?;
+        }
+        Ok(())
+    }
+
+    /// Which speaker the stage's words belong to; the stylesheet shows the Dungeon Master's
+    /// caption or the character's bubble accordingly, never both.
+    pub(super) fn set_speaker(&self, speaker: &str) -> Result<(), JsValue> {
+        if speaker.is_empty() {
+            self.root.remove_attribute("data-speaker")
+        } else {
+            self.root.set_attribute("data-speaker", speaker)
+        }
+    }
+
     /// Restarts the staggered title, narration and figure entrance.
     pub(super) fn begin_entering(&self) -> Result<(), JsValue> {
+        // A beat in the same place only cross-fades its title; a new place replays the entrance.
+        self.root.set_attribute(
+            "data-title-anim",
+            if self.same_place.get() {
+                "fade"
+            } else {
+                "full"
+            },
+        )?;
         let tick = if self.root.get_attribute("data-scene-swap").as_deref() == Some("a") {
             "b"
         } else {
@@ -335,10 +442,18 @@ impl TvStage {
         self.root
             .set_attribute("data-tv-mode", if lobby { "lobby" } else { "scene" })?;
         self.set_art(&image_layers(&model.art, model.art_fallback))?;
+        let known_place = self.place.text_content().unwrap_or_default();
+        self.same_place
+            .set(!model.place.is_empty() && known_place == model.place);
         self.title.set_text_content(Some(&model.title));
+        self.place.set_text_content(Some(&model.place));
+        set_hidden(&self.place, model.place.is_empty())?;
         self.lede.set_text_content(Some(&model.lede));
         self.narration.set_text_content(Some(&model.narration));
         self.narration.set_attribute("title", &model.narration)?;
+        self.rules_text.set_text_content(Some(&model.rules_note));
+        set_hidden(&self.rules, model.rules_note.is_empty() || lobby)?;
+        self.set_choices(if lobby { &[] } else { &model.choices })?;
         set_hidden(&self.lobby_row, !lobby)?;
         set_hidden(&self.stagebox, lobby)?;
         // The party cards are one set of nodes that moves with the mode.
@@ -450,17 +565,50 @@ impl TvStage {
             live_sfx::play(Cue::PartyGathered, GATHERED_SOUND_DELAY);
         }
         if lobby {
-            self.figures
-                .update(&[], &model.scene_key, model.family, StageMode::Scene)?;
+            self.figures.update(
+                &[],
+                &model.scene_key,
+                &model.art,
+                model.family,
+                StageMode::Scene,
+            )?;
         } else {
             self.figures.update(
                 &model.cast,
                 &model.scene_key,
+                &model.art,
                 model.family,
                 StageMode::Scene,
             )?;
         }
         self.drawn.set(true);
+        Ok(())
+    }
+
+    /// The read-only row of numbered chips: what the table can do now. It is replaced only
+    /// when the labels change, so a redraw never restarts its animation.
+    pub(super) fn set_choices(&self, labels: &[String]) -> Result<(), JsValue> {
+        let shown: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let signature = shown.join("\u{1f}");
+        self.root
+            .set_attribute("data-chips", &shown.len().to_string())?;
+        if self.choices.get_attribute("data-labels").as_deref() == Some(signature.as_str()) {
+            return Ok(());
+        }
+        self.choices.set_attribute("data-labels", &signature)?;
+        self.choices.set_text_content(None);
+        let document = self.root.owner_document().ok_or("document absent")?;
+        for (number, label) in shown.iter().enumerate() {
+            let chip = node(&document, &self.choices, "li", "tv-choice", "")?;
+            node(
+                &document,
+                &chip,
+                "span",
+                "tv-choice-number",
+                &(number + 1).to_string(),
+            )?;
+            node(&document, &chip, "span", "tv-choice-label", label)?;
+        }
         Ok(())
     }
 

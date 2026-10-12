@@ -7,6 +7,7 @@ mod live_exploration;
 mod live_lobby;
 mod live_motion;
 mod live_music;
+mod live_rules;
 mod live_screens;
 mod live_sfx;
 mod live_stage;
