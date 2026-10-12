@@ -181,7 +181,7 @@ struct Active {
 
 enum Mode {
     Off(SpeechOff),
-    On(Active),
+    On(Box<Active>),
 }
 
 /// Transcription of players' clips, or the reason there is none.
@@ -256,13 +256,13 @@ impl SpeechInput {
         deadline: Duration,
     ) -> Self {
         Self {
-            mode: Arc::new(Mode::On(Active {
+            mode: Arc::new(Mode::On(Box::new(Active {
                 provider,
                 deadline,
                 model,
                 budget: Mutex::new(budget_seconds),
                 in_flight: Mutex::new(BTreeSet::new()),
-            })),
+            }))),
         }
     }
 
