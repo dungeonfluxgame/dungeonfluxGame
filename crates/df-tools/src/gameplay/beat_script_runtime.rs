@@ -11,6 +11,8 @@ use df_types::MemberId;
 pub(super) const STEP: &str = "beat-script-step";
 /// The submitted action entry of an authored investigation (`observe`) choice.
 pub(super) const CHOICE_ACTION: &str = "script-choice";
+/// The submitted action entry of a resolution choice.
+pub(super) const RESOLVE_ACTION: &str = "resolve-errand";
 const OFFER_PREFIX: &str = "beat-script-offer-";
 fn invalid<T>() -> Result<T, RepositoryError> {
     Err(RepositoryError::InvalidCandidate)
@@ -138,7 +140,9 @@ pub(super) fn phase_of(beat: &Beat) -> rpc::JourneyPhase {
             rpc::JourneyPhase::Dialogue
         }
         BeatKind::Fight => rpc::JourneyPhase::Combat,
-        BeatKind::Rest | BeatKind::Travel | BeatKind::Conclude => rpc::JourneyPhase::Complete,
+        BeatKind::Rest | BeatKind::Travel | BeatKind::Conclude | BeatKind::Ending => {
+            rpc::JourneyPhase::Complete
+        }
     }
 }
 pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
@@ -203,7 +207,10 @@ pub(super) fn pure_target(
         if script.uses_encounter()
             || !matches!(
                 selected.effect,
-                BeatEffect::Continue | BeatEffect::Observe | BeatEffect::ChooseHarborScene
+                BeatEffect::Continue
+                    | BeatEffect::Observe
+                    | BeatEffect::Resolve
+                    | BeatEffect::ChooseHarborScene
             )
         {
             return Ok(None);
@@ -226,7 +233,7 @@ pub(super) fn contents() -> Vec<String> {
         if script.is_canonical() {
             return Vec::new();
         }
-        let mut entries = vec![STEP.into(), CHOICE_ACTION.into()];
+        let mut entries = vec![STEP.into(), CHOICE_ACTION.into(), RESOLVE_ACTION.into()];
         for beat in &script.beats {
             entries.push(beat.state.durable.clone());
             for offer in &beat.offers {
@@ -350,7 +357,10 @@ pub(super) fn validate(
             }
             BeatEffect::AskCourier => Some("private-courier-note"),
             BeatEffect::EscortCourier | BeatEffect::ThirdApproach => Some("escort-courier"),
-            BeatEffect::Continue | BeatEffect::Observe | BeatEffect::ChooseHarborScene => None,
+            BeatEffect::Continue
+            | BeatEffect::Observe
+            | BeatEffect::Resolve
+            | BeatEffect::ChooseHarborScene => None,
             _ => return invalid(),
         };
         let expected = native.unwrap_or(STEP);
@@ -534,9 +544,12 @@ pub(super) fn view_offers(
         }
         let mut result = Vec::new();
         for offer in &script.current(current.state())?.offers {
-            if available
-                .iter()
-                .any(|(kind, _)| *kind == offer.effect.action())
+            // Authored pure steps are the script's own; no handler affordance backs them.
+            let pure = matches!(offer.effect, BeatEffect::Resolve | BeatEffect::Continue);
+            if pure
+                || available
+                    .iter()
+                    .any(|(kind, _)| *kind == offer.effect.action())
             {
                 result.push((
                     offer.effect.action(),
@@ -546,6 +559,26 @@ pub(super) fn view_offers(
             }
         }
         Ok(result)
+    })
+}
+/// The shared display's labels for a conversation: the current beat's own authored offers, which
+/// never depend on a private note's audience. `None` for the canonical script, which keeps its
+/// handler label.
+pub(super) fn dialogue_labels(
+    current: &Checkpoint,
+) -> Result<Option<Vec<String>>, RepositoryError> {
+    beat_script::with_script(|script| {
+        if script.is_canonical() {
+            return Ok(None);
+        }
+        let beat = script.current(current.state())?;
+        let mut labels = Vec::new();
+        for offer in &beat.offers {
+            if offer.effect.action() != rpc::GameplayActionKind::CreateCharacter {
+                labels.push(script.label(offer)?);
+            }
+        }
+        Ok(Some(labels))
     })
 }
 pub(super) fn action_label(

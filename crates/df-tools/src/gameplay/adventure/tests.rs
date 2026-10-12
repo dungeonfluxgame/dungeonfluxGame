@@ -1134,6 +1134,9 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 /// Current tactical pack, encounter tuning, and disclosed-cover record pins.
+/// PLAY-E03 re-pinned only the record hashes. Pack and tuning hashes were verified unchanged for
+/// all three seeds; the record embeds the table revision, which covers the peaceful resolution,
+/// epilogue and end-card entries added to `beat-scripts.json`.
 /// PLAY-T02 intentionally changes fight/rest text and activates source encounters.
 /// The record pins were taken again when PLAY-T02 met PLAY-N05 (the record embeds the NPC
 /// dossiers, which now carry each speaker's errand knowledge); pack and tuning matched PLAY-T02's
@@ -1144,7 +1147,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "6c712a452151cd563087b25b4f4db8c6b12aa4a22faab8334de7e054781cc65f",
             "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
-            "057e96f54349f70cc514ec02d83f3ae24f941b65be2961acb724f70b10732a67",
+            "cfbb0c1381b7c4d9f907090dd337cc931cb4805d91921888b688f84410f52a47",
         ],
     ),
     (
@@ -1152,7 +1155,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "3439dfadef74fc3e1dae7feda47a4abe782e8cba02a7ed5d2cd043522b754fb0",
             "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
-            "b6033d9f40639c08b9e0a9108d9d124fb623a7b3fa657d778ca1febe0261b7a6",
+            "29e4331b797364a312e00dfd4001d20fc459eee21a71746acee5d41c8248e61d",
         ],
     ),
     (
@@ -1160,7 +1163,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "701d607820e81326cec219c8f7f5da8b9849e4bcd2dcde7f3a34f607e7398968",
             "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
-            "4118eed983e2d248d3948fac3d134b0b6b6cf88124bb12a0c6ab391a5fec9c1b",
+            "c0def55ca2c8bcc931b2a7329d9b7caceb3e805ff94977c446e2038cc992015e",
         ],
     ),
 ];

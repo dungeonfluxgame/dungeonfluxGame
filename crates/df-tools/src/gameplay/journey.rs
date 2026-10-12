@@ -2715,7 +2715,10 @@ fn stage_using(
     } else {
         kind
     };
-    affordance::validate(current, command.member, action, targets).map_err(bad)?;
+    // An authored resolution is the script's own pure step; no handler affordance backs it.
+    if selected.effect != super::beat_script::BeatEffect::Resolve {
+        affordance::validate(current, command.member, action, targets).map_err(bad)?;
+    }
     // Target identity is validated against the current source-admitted binding above.
     // The registered handlers consume their existing authored, implicit target form;
     // keep that source contract intact after exact typed target confirmation.
