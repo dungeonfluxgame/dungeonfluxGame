@@ -12,12 +12,15 @@ mod gpu;
 mod host;
 #[cfg(target_arch = "wasm32")]
 mod hud;
+#[cfg(target_arch = "wasm32")]
+mod speech_bubble;
 
 mod camera;
 mod combat_feed;
 mod director;
 pub mod feel;
 mod figure_art;
+pub mod float_text;
 mod formation;
 pub mod framing;
 mod grid;
@@ -31,6 +34,8 @@ mod pacing;
 pub mod particles;
 mod scene_file;
 mod sound;
+pub mod speech;
+pub mod splash;
 mod splat;
 mod stage;
 mod status;
@@ -41,9 +46,7 @@ pub use camera::{CameraPose, CameraRig, PoseError, ShotName};
 pub use combat_feed::{
     CombatFeed, CombatSnapshot, FeedMode, FeedReport, InitiativeEntry, Member, Outcome,
 };
-pub use director::{
-    Anim, FlashTone, PlanError, ReadyStyle, Step, TimedStep, Timeline, plan, plan_with,
-};
+pub use director::{Anim, FlashTone, PlanError, ReadyStyle, Step, TimedStep, Timeline, plan};
 pub use figure_art::{VisibleBounds, visible_bounds};
 pub use formation::{Formation, FormationError, derive as derive_formation, from_layout};
 pub use grid::{Cell, Grid, GridError};

@@ -3,7 +3,7 @@
 //! arrow. The figure shader is parameterised by three small per-instance vectors: which status
 //! treatments apply to the body, to the edge and as overlays (bit masks the pure core resolved
 //! with its combination rules), the slump pose, and a few animation inputs. Time-based motion
-//! runs on the frame clock and freezes under reduced motion.
+//! runs on the frame clock.
 
 use super::shaders::FRAME;
 use crate::battle::Status;
@@ -60,7 +60,7 @@ struct VOut {
     @location(4) bounds: vec3<f32>, // visible top, bottom, centre
     @location(5) fx1: vec4<f32>,    // body mask lo/hi, edge mask lo/hi
     @location(6) fx2: vec4<f32>,    // overlay mask lo/hi, slump, thud
-    @location(7) fx3: vec4<f32>,    // reduced motion, dim, heartbeat, phase
+    @location(7) fx3: vec4<f32>,    // unused, dim, heartbeat, phase
     @location(8) world: vec3<f32>,
 }
 
@@ -143,8 +143,7 @@ fn shade(in: VOut) -> vec4<f32> {
     let ddx = dpdx(in.uv * dims);
     let ddy = dpdy(in.uv * dims);
     let lod = max(0.5 * log2(max(dot(ddx, ddx), dot(ddy, ddy))) - 0.35, 0.0);
-    let reduced = in.fx3.x > 0.5;
-    let tt = select(frame.eye.w, 1.7, reduced);
+    let tt = frame.eye.w;
     let restrained = frame.light.w > 0.5;
     let alpha = in.look.z;
 
@@ -374,8 +373,7 @@ fn shade(in: VOut) -> vec4<f32> {
     let lo = in.fx2.x;
     let hi = in.fx2.y;
     let slump = in.fx2.z;
-    let reduced = in.fx3.x > 0.5;
-    let tt = select(frame.eye.w, 1.7, reduced);
+    let tt = frame.eye.w;
     let phase = in.fx3.w;
     let restrained = frame.light.w > 0.5;
     let p = in.p;

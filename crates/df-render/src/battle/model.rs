@@ -126,6 +126,13 @@ pub enum Beat {
         /// The target's hit points once the blow lands, as the server reports them.
         target_hit_points_after: Option<u32>,
     },
+    /// The server moved a figure to a cell: it walks the path of cells there (a straight eased
+    /// glide when no path is open), with the camera holding its start and end in frame.
+    Move {
+        actor: TokenId,
+        from: Cell,
+        to: Cell,
+    },
     Heal {
         source: TokenId,
         target: TokenId,
@@ -172,7 +179,7 @@ pub fn initiative_line(die: u32, modifier: i32, total: i32, order: u32) -> Strin
 }
 
 /// A die above a figure during the initiative roll. It tumbles for `tumble_s` seconds after it
-/// appears (0 under reduced motion) and then shows its total.
+/// appears and then shows its total.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DieView {
     pub token: TokenId,
@@ -252,11 +259,11 @@ pub struct FloatingText {
     pub token: TokenId,
     pub text: String,
     pub tone: FloatTone,
-    /// Seconds since it appeared; it fades out by [`FLOAT_LIFETIME_S`].
+    /// Seconds since it appeared; see [`super::float_text`] for how long it lives.
     pub age_s: f32,
+    /// How long it stays fully shown after it has risen, in seconds.
+    pub hold_s: f32,
 }
-
-pub const FLOAT_LIFETIME_S: f32 = 1.4;
 
 /// What a camera shot is centred on.
 #[derive(Clone, Debug, PartialEq)]

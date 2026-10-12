@@ -33,6 +33,7 @@ async fn tunnel() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
         wasm: bytes::Bytes::new(),
         battle_scene: None,
         battle_fps: 30,
+        splat_lod: 1,
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

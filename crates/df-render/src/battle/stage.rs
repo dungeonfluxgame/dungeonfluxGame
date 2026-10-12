@@ -9,19 +9,20 @@ use super::{
     camera::{CameraPose, CameraRig, ShotName},
     director::{self, Anim, FALL_LANDS, FlashTone, PlanError, ReadyStyle, Step, Timeline},
     feel::{self, FeelState, FeelView, ImpactClass, ImpactEffect},
+    float_text,
     framing::{self, Body},
     grid::{Cell, Grid},
     health::{self, Reaction, Tone},
     layout::{Cover, Layout},
     math::{Vec3, ease_in_out},
     model::{
-        AttackResult, BadgeView, Beat, CameraCommand, CameraFocus, DieView, FLOAT_LIFETIME_S,
-        FinishingBlow, FloatingText, Highlight, HitPoints, HudState, InitiativeShow, Side, Token,
-        TokenId,
+        AttackResult, BadgeView, Beat, CameraCommand, CameraFocus, DieView, FinishingBlow,
+        FloatingText, Highlight, HitPoints, HudState, InitiativeShow, Side, Token, TokenId,
     },
     particles::Particles,
     scene_file::BattleScene,
     sound::{SoundEvent, SoundKind, voice_for},
+    speech,
     status::{self, Status, StatusPose, StatusSet},
 };
 
@@ -110,6 +111,44 @@ struct Runtime {
 pub const HP_HOLD_SECONDS: f32 = 8.0;
 /// How long the roll panel stays up.
 pub const ROLL_CARD_SECONDS: f32 = 3.4;
+/// The celebration (or the defeat) after the blow that decides a fight, in seconds from that blow
+/// landing: the last foe falls, the finishing card, then a held wide shot of the party with the
+/// sting and the heroes reacting. The stage is busy for all of it, so nothing that waits on the
+/// stage (the victory card, leaving the battlefield) starts before it is over.
+pub const CELEBRATION_SECONDS: f32 = 6.0;
+/// The wide shot of the party is held at least this long, however long the blow itself took.
+const PARTY_HOLD_MIN_S: f32 = 1.6;
+/// The sting sounds this long after the blow lands.
+const STING_AT_S: f32 = 0.9;
+/// The camera's pan to the party, in seconds.
+const PARTY_PAN_S: f32 = 1.1;
+/// How much closer than the fitted wide shot the party is held (all stay inside the safe area).
+const PARTY_DOLLY: f32 = 0.85;
+/// Gap between one hero's reaction and the next, in seconds.
+const REACT_STAGGER_S: f32 = 0.3;
+
+/// Attack names waiting for their blows, at most.
+const MAX_PENDING_LABELS: usize = 16;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Ending {
+    Victory,
+    Defeat,
+}
+
+/// The held beat after a deciding blow.
+struct Celebration {
+    ending: Ending,
+    /// Seconds since the blow landed.
+    since_s: f32,
+    /// Seconds still to hold.
+    left_s: f32,
+    sting_played: bool,
+    /// Seconds since the camera went to the party, once it has.
+    party_for_s: Option<f32>,
+    /// How many figures have reacted so far.
+    reacted: usize,
+}
 
 struct Playback {
     timeline: Timeline,
@@ -213,6 +252,27 @@ pub struct ImpactEvent {
 /// Camera distance above which a shot counts as a wide shot (it gets the slow orbit drift).
 const WIDE_DISTANCE_M: f32 = 9.0;
 
+/// The line being spoken now, for the bubble over the speaker.
+pub struct SpeechView<'a> {
+    pub token: &'a TokenId,
+    pub name: &'a str,
+    pub text: &'a str,
+    pub line_id: u64,
+    pub age_s: f32,
+}
+
+/// A spoken line on the stage: who says it and how the camera was before it came in.
+struct Speech {
+    token: TokenId,
+    name: String,
+    text: String,
+    line_id: u64,
+    age_s: f32,
+    /// Where the camera was when the line began, to ease back to; `None` when the camera was
+    /// busy with a beat and was left alone.
+    return_pose: Option<CameraPose>,
+}
+
 pub struct FrameView<'a> {
     pub camera: CameraPose,
     pub shake_px: (f32, f32),
@@ -222,11 +282,11 @@ pub struct FrameView<'a> {
     pub feel: FeelView,
     /// Particle instances for the renderer (see `particles`).
     pub particles: Vec<f32>,
-    pub fade: f32,
     /// Far to near, so alpha blending is correct.
     pub figures: Vec<FigureView>,
     pub highlight: Option<&'a Highlight>,
     pub tactical_highlights: &'a [Highlight],
+    pub speech: Option<SpeechView<'a>>,
     pub projectiles: Vec<ProjectileView>,
     /// The layout in play and the grid with its obstacles applied.
     pub layout: Option<&'a Layout>,
@@ -235,7 +295,6 @@ pub struct FrameView<'a> {
     pub floats: &'a [FloatingText],
     pub hud: &'a HudState,
     pub clock_s: f32,
-    pub reduced_motion: bool,
     /// The restrained content rating: no blood in the effects.
     pub restrained: bool,
 }
@@ -259,11 +318,14 @@ pub struct Stage {
     pending_tokens: Option<Vec<Token>>,
     highlight: Option<Highlight>,
     tactical_highlights: Vec<Highlight>,
+    speech: Option<Speech>,
+    celebration: Option<Celebration>,
+    /// The attack names waiting for their blow's result: who struck, and with what.
+    attack_labels: Vec<(TokenId, String)>,
     hud: HudState,
     floats: Vec<FloatingText>,
     flash: Option<Flash>,
     clock_s: f32,
-    reduced_motion: bool,
     dropped_beats: u32,
     next_float_id: u64,
     roll_card_left_s: f32,
@@ -292,14 +354,14 @@ fn flat_direction(from: Vec3, to: Vec3) -> Vec3 {
 }
 
 impl Stage {
-    pub fn new(scene: BattleScene, reduced_motion: bool) -> Self {
+    pub fn new(scene: BattleScene) -> Self {
         let opening = scene
             .cameras
             .get(&ShotName::Tactical)
             .copied()
             .expect("scene files are validated to hold every named shot");
         Self {
-            rig: CameraRig::new(opening, reduced_motion),
+            rig: CameraRig::new(opening),
             grid: scene.grid.clone(),
             layout: None,
             sounds: VecDeque::new(),
@@ -315,11 +377,13 @@ impl Stage {
             pending_tokens: None,
             highlight: None,
             tactical_highlights: Vec::new(),
+            speech: None,
+            celebration: None,
+            attack_labels: Vec::new(),
             hud: HudState::default(),
             floats: Vec::new(),
             flash: None,
             clock_s: 0.0,
-            reduced_motion,
             dropped_beats: 0,
             next_float_id: 0,
             roll_card_left_s: 0.0,
@@ -328,7 +392,7 @@ impl Stage {
             particles: Particles::default(),
             impacts: VecDeque::new(),
             tempo_permille: 300,
-            feel_enabled: !reduced_motion,
+            feel_enabled: true,
             last_angles: None,
             last_framing: None,
         }
@@ -436,16 +500,96 @@ impl Stage {
         }
     }
 
+    /// A line is spoken by the figure called `speaker_name`: a bubble opens over it and the camera
+    /// eases in on it. Returns false (and shows nothing) when nobody of that name is on the field.
+    /// A second line while one is up replaces it. The camera is left alone while a beat plays.
+    pub fn speak(&mut self, speaker_name: &str, text: &str, line_id: u64) -> bool {
+        let wanted = speaker_name.trim().to_lowercase();
+        let Some(runtime) = self
+            .tokens
+            .iter()
+            .find(|runtime| runtime.token.name.trim().to_lowercase() == wanted)
+        else {
+            return false;
+        };
+        let token = runtime.token.id.clone();
+        let name = runtime.token.name.clone();
+        // A replaced line keeps the pose the camera first left.
+        let return_pose = match self.speech.take() {
+            Some(previous) => previous.return_pose,
+            None if self.playing.is_none() && self.queue.is_empty() => Some(self.rig.pose()),
+            None => None,
+        };
+        if return_pose.is_some() {
+            let command = CameraCommand {
+                shot: ShotName::TurnFocus,
+                focus: CameraFocus::Action {
+                    actor: token.clone(),
+                    target: None,
+                    stand: None,
+                },
+                dolly: speech::CAMERA_DOLLY,
+            };
+            if let Some((pose, _)) = self.camera_pose_for(&command) {
+                self.rig
+                    .pan_to(pose, Duration::from_secs_f32(speech::CAMERA_EASE_S));
+            }
+        }
+        self.speech = Some(Speech {
+            token,
+            name,
+            text: text.to_owned(),
+            line_id,
+            age_s: 0.0,
+            return_pose,
+        });
+        true
+    }
+
+    /// The line `line_id` ended (its voice finished): the bubble closes and the camera eases back.
+    /// A call for any other line is ignored.
+    pub fn end_speech(&mut self, line_id: u64) {
+        if self
+            .speech
+            .as_ref()
+            .is_none_or(|speech| speech.line_id != line_id)
+        {
+            return;
+        }
+        self.close_speech();
+    }
+
+    fn close_speech(&mut self) {
+        let Some(speech) = self.speech.take() else {
+            return;
+        };
+        if let Some(pose) = speech.return_pose
+            && self.playing.is_none()
+            && self.queue.is_empty()
+        {
+            self.rig
+                .pan_to(pose, Duration::from_secs_f32(speech::CAMERA_EASE_S));
+        }
+    }
+
+    /// Names the attack `attacker` is about to make ("Greatsword", "Bite", "Graze"): the result
+    /// shown at its target reads "Name - result". Call it before staging the blow; one attacker's
+    /// blows take their names in the order they were given. A name a blow never used is dropped
+    /// after a number more arrive, so it cannot attach to a much later blow.
+    pub fn set_attack_label(&mut self, attacker: &TokenId, label: &str) {
+        self.attack_labels
+            .push((attacker.clone(), label.to_owned()));
+        if self.attack_labels.len() > MAX_PENDING_LABELS {
+            self.attack_labels.remove(0);
+        }
+    }
+
     pub fn set_initiative(&mut self, order: Vec<TokenId>) {
         self.hud.initiative = order;
     }
 
     pub fn set_active(&mut self, active: Option<TokenId>) {
         self.hud.active = active;
-    }
-
-    pub fn reduced_motion(&self) -> bool {
-        self.reduced_motion
     }
 
     /// Whether the start-of-fight initiative sequence is playing.
@@ -490,18 +634,16 @@ impl Stage {
         self.restrained
     }
 
-    pub fn set_reduced_motion(&mut self, reduced: bool) {
-        self.reduced_motion = reduced;
-        self.rig.set_reduced_motion(reduced);
-    }
-
     /// Beats that could not be planned when their turn came (a token vanished meanwhile).
     pub fn dropped_beats(&self) -> u32 {
         self.dropped_beats
     }
 
     pub fn is_busy(&self) -> bool {
-        self.playing.is_some() || !self.queue.is_empty() || self.feel.is_active()
+        self.playing.is_some()
+            || !self.queue.is_empty()
+            || self.feel.is_active()
+            || self.celebration.is_some()
     }
 
     pub fn tokens(&self) -> impl Iterator<Item = &Token> {
@@ -573,6 +715,9 @@ impl Stage {
         self.pending_tokens = None;
         self.tokens
             .retain(|runtime| tokens.iter().any(|token| token.id == runtime.token.id));
+        // Figures the server moved since the last view: they walk there, they are not teleported.
+        let mut moves: Vec<(TokenId, Cell, Cell)> = Vec::new();
+        let had_figures = !self.tokens.is_empty();
         for incoming in tokens {
             let centre = self.grid.cell_centre(incoming.cell);
             match self
@@ -582,7 +727,11 @@ impl Stage {
             {
                 Some(runtime) => {
                     if runtime.token.cell != incoming.cell {
-                        runtime.position = centre;
+                        if had_figures {
+                            moves.push((incoming.id.clone(), runtime.token.cell, incoming.cell));
+                        } else {
+                            runtime.position = centre;
+                        }
                     }
                     if runtime.hp_hold_s.is_some() {
                         runtime.pending_hp = incoming.hit_points;
@@ -618,6 +767,9 @@ impl Stage {
                 }
             }
         }
+        for (actor, from, to) in moves {
+            let _ = self.stage(Beat::Move { actor, from, to });
+        }
     }
 
     /// Keeps the shown hit points of these tokens until their blow is staged, so a bar never
@@ -648,6 +800,7 @@ impl Stage {
             Beat::Heal { source, target, .. } => {
                 [source, target].into_iter().find(|id| !known(id)).cloned()
             }
+            Beat::Move { actor, .. } => (!known(actor)).then(|| actor.clone()),
             Beat::Initiative { rolls } => rolls
                 .iter()
                 .map(|roll| &roll.token)
@@ -679,12 +832,7 @@ impl Stage {
 
     fn start_next(&mut self) {
         while let Some(beat) = self.queue.pop_front() {
-            match director::plan_with(
-                &self.grid,
-                &self.resting_tokens(),
-                &beat,
-                self.reduced_motion,
-            ) {
+            match director::plan(&self.grid, &self.resting_tokens(), &beat) {
                 Ok(timeline) => {
                     self.initiative_playing = matches!(beat, Beat::Initiative { .. });
                     self.playing = Some(Playback {
@@ -718,10 +866,17 @@ impl Stage {
         let dt = sim.as_secs_f32().min(0.25);
         self.rig.update(elapsed);
         self.observe_camera_speed(real_dt);
+        if let Some(speech) = &mut self.speech {
+            speech.age_s += real_dt;
+            if speech.age_s >= speech::MAX_LINE_S {
+                self.close_speech();
+            }
+        }
         if self.playing.is_none() {
             self.start_next();
         }
         self.advance_playback(sim);
+        self.advance_celebration(real_dt);
         let mut footfalls = Vec::new();
         for runtime in &mut self.tokens {
             if runtime.hp_hold_s.is_none() {
@@ -813,7 +968,8 @@ impl Stage {
         for text in &mut self.floats {
             text.age_s += dt;
         }
-        self.floats.retain(|text| text.age_s < FLOAT_LIFETIME_S);
+        self.floats
+            .retain(|text| text.age_s < float_text::lifetime(text.hold_s));
         if let Some(flash) = &mut self.flash {
             flash.age_s += real_dt;
             let life = if flash.tone == FlashTone::Heal {
@@ -1131,23 +1287,33 @@ impl Stage {
             Step::Flash { tone, strength } => {
                 self.flash = Some(Flash {
                     tone,
-                    // Reduced motion softens the flash into a gentle fade.
-                    strength: if self.reduced_motion {
-                        strength * 0.35
-                    } else {
-                        strength
-                    },
+                    strength,
                     age_s: 0.0,
                 });
             }
-            Step::Float { token, text, tone } => {
+            Step::Float {
+                token,
+                text,
+                tone,
+                attacker,
+                downed,
+            } => {
                 self.next_float_id += 1;
+                // The attack's name, when the view gave one for this attacker's blow.
+                let attack = attacker.and_then(|attacker| {
+                    let at = self
+                        .attack_labels
+                        .iter()
+                        .position(|(id, _)| *id == attacker)?;
+                    Some(self.attack_labels.remove(at).1)
+                });
                 self.floats.push(FloatingText {
                     id: self.next_float_id,
                     token,
-                    text,
+                    text: float_text::compose(attack.as_deref(), &text, tone, downed),
                     tone,
                     age_s: 0.0,
+                    hold_s: float_text::hold_for(tone, downed),
                 })
             }
             Step::ShowHitPoints { token, current } => {
@@ -1196,19 +1362,14 @@ impl Stage {
                 modifier,
                 total,
             } => {
-                let tumble_s = if self.reduced_motion {
-                    0.0
-                } else {
-                    DIE_TUMBLE_SECONDS
-                };
                 self.hud.roll_for_initiative.dice.push(DieView {
                     token,
                     face: die,
                     modifier,
                     total,
                     age_s: 0.0,
-                    tumble_s,
-                    landed: tumble_s == 0.0,
+                    tumble_s: DIE_TUMBLE_SECONDS,
+                    landed: false,
                 });
             }
             Step::InitiativeLand { token } => {
@@ -1302,13 +1463,12 @@ impl Stage {
         let Some(index) = self.token_index(id) else {
             return;
         };
-        let reduced = self.reduced_motion;
         let grid = &self.grid;
         let target = grid.cell_centre(cell);
         let runtime = &mut self.tokens[index];
         let from = grid.cell_at(runtime.position).unwrap_or(runtime.token.cell);
         let path = grid.path(from, cell).unwrap_or_default();
-        if reduced || per_step.is_zero() {
+        if per_step.is_zero() {
             runtime.walk = None;
             runtime.position = target;
             return;
@@ -1331,16 +1491,161 @@ impl Stage {
         });
     }
 
+    /// Whether `runtime` is down (or going down this moment).
+    fn is_down(runtime: &Runtime, falling: &TokenId) -> bool {
+        runtime.token.id == *falling
+            || runtime.downed
+            || matches!(&runtime.anim, Some(active) if matches!(active.anim, Anim::Fall))
+            || runtime.shown_hp.is_some_and(|hp| hp.current == 0)
+    }
+
+    /// A figure starts to fall: if that leaves no one standing on its side, the fight is decided
+    /// and the held beat begins from this blow.
+    fn note_fall(&mut self, id: &TokenId) {
+        if self.celebration.is_some() {
+            return;
+        }
+        let Some(side) = self
+            .token_index(id)
+            .map(|index| self.tokens[index].token.side)
+        else {
+            return;
+        };
+        let everyone_down = self
+            .tokens
+            .iter()
+            .filter(|runtime| runtime.token.side == side)
+            .all(|runtime| Self::is_down(runtime, id));
+        if !everyone_down {
+            return;
+        }
+        let ending = if side == Side::Enemy {
+            Ending::Victory
+        } else {
+            Ending::Defeat
+        };
+        self.celebration = Some(Celebration {
+            ending,
+            since_s: 0.0,
+            left_s: CELEBRATION_SECONDS,
+            sting_played: false,
+            party_for_s: None,
+            reacted: 0,
+        });
+    }
+
+    /// The camera, the sting and the reactions of the held beat; ends it when its time is up.
+    fn advance_celebration(&mut self, real_dt: f32) {
+        let Some(mut beat) = self.celebration.take() else {
+            return;
+        };
+        beat.since_s += real_dt;
+        beat.left_s -= real_dt;
+        let ending = beat.ending;
+        if !beat.sting_played && beat.since_s >= STING_AT_S {
+            beat.sting_played = true;
+            let kind = match ending {
+                Ending::Victory => SoundKind::VictorySting,
+                Ending::Defeat => SoundKind::DefeatSting,
+            };
+            let heard_by = self
+                .tokens
+                .iter()
+                .find(|runtime| {
+                    runtime.token.side
+                        == if ending == Ending::Victory {
+                            Side::Hero
+                        } else {
+                            Side::Enemy
+                        }
+                })
+                .map(|runtime| runtime.token.id.clone());
+            if let Some(token) = heard_by {
+                self.emit(kind, &token);
+            }
+        }
+        // The blow's own timeline (the fall and the finishing card) plays out first; then the
+        // camera goes to the party and holds there.
+        let timeline_over = self.playing.is_none() && self.queue.is_empty();
+        if timeline_over && beat.party_for_s.is_none() {
+            beat.party_for_s = Some(0.0);
+            beat.left_s = beat.left_s.max(PARTY_HOLD_MIN_S);
+            if let Some(pose) = self.party_pose(ending) {
+                self.rig.pan_to(pose, Duration::from_secs_f32(PARTY_PAN_S));
+            }
+        } else if let Some(held) = &mut beat.party_for_s {
+            *held += real_dt;
+        }
+        if let Some(held) = beat.party_for_s {
+            // The figures react one after another: the heroes raise their weapons in a victory,
+            // the enemies snarl over a defeat.
+            let side = if ending == Ending::Victory {
+                Side::Hero
+            } else {
+                Side::Enemy
+            };
+            let actors: Vec<TokenId> = self
+                .tokens
+                .iter()
+                .filter(|runtime| runtime.token.side == side && !runtime.downed)
+                .map(|runtime| runtime.token.id.clone())
+                .collect();
+            while beat.reacted < actors.len()
+                && held >= beat.reacted as f32 * REACT_STAGGER_S + 0.25
+            {
+                let style = if ending == Ending::Victory {
+                    ReadyStyle::Brandish
+                } else {
+                    ReadyStyle::Snarl
+                };
+                self.start_anim(&actors[beat.reacted], Anim::Ready { style });
+                beat.reacted += 1;
+            }
+        }
+        if beat.left_s > 0.0 {
+            self.celebration = Some(beat);
+        }
+    }
+
+    /// The wide shot of the party on the field: every hero in frame (the fallen ones too, in a
+    /// defeat), from the side the camera already holds.
+    fn party_pose(&self, ending: Ending) -> Option<CameraPose> {
+        let base = *self.scene.cameras.get(&ShotName::TurnFocus)?;
+        let party: Vec<Body> = self
+            .tokens
+            .iter()
+            .filter(|runtime| runtime.token.side == Side::Hero)
+            .map(|runtime| Body {
+                feet: runtime.position,
+                height_m: runtime.token.clamped_height(),
+            })
+            .collect();
+        let (first, rest) = party.split_first()?;
+        let home_yaw = self
+            .scene
+            .cameras
+            .get(&ShotName::Tactical)
+            .map(|pose| pose.yaw_deg);
+        let _ = ending;
+        let shot = framing::action_shot_from(
+            &base,
+            &self.rig.pose(),
+            first,
+            None,
+            rest,
+            &[],
+            framing::FRAMED_ASPECT,
+            home_yaw,
+        );
+        Some(shot.pose.dollied(PARTY_DOLLY))
+    }
+
     fn start_anim(&mut self, id: &TokenId, anim: Anim) {
         let Some(index) = self.token_index(id) else {
             return;
         };
-        if matches!(anim, Anim::Fall) && self.reduced_motion {
-            self.tokens[index].downed = true;
-            return;
-        }
-        if matches!(anim, Anim::Draw { .. }) && self.reduced_motion {
-            return;
+        if matches!(anim, Anim::Fall) {
+            self.note_fall(id);
         }
         let here = self.tokens[index].position;
         let other = match &anim {
@@ -1436,15 +1741,17 @@ impl Stage {
                 Vec::new()
             },
             shake_px: (rig_shake.0 + view.shake_px.0, rig_shake.1 + view.shake_px.1),
-            fade: self.rig.transition_fade(),
             figures,
             highlight: self.highlight.as_ref(),
             tactical_highlights: &self.tactical_highlights,
-            projectiles: self
-                .projectiles
-                .iter()
-                .map(|projectile| projectile_view(projectile, self.reduced_motion))
-                .collect(),
+            speech: self.speech.as_ref().map(|speech| SpeechView {
+                token: &speech.token,
+                name: &speech.name,
+                text: &speech.text,
+                line_id: speech.line_id,
+                age_s: speech.age_s,
+            }),
+            projectiles: self.projectiles.iter().map(projectile_view).collect(),
             layout: self.layout(),
             grid: &self.grid,
             flash: self.flash.map(|flash| FlashView {
@@ -1462,7 +1769,6 @@ impl Stage {
             floats: &self.floats,
             hud: &self.hud,
             clock_s: self.clock_s,
-            reduced_motion: self.reduced_motion,
             restrained: self.restrained,
         }
     }
@@ -1514,7 +1820,7 @@ impl Stage {
         let unit = phase / std::f32::consts::TAU;
         let reach = self.grid.cell_m() * 0.5;
         let statuses = self.display_statuses(runtime);
-        let pose = status::pose_for(statuses, self.reduced_motion);
+        let pose = status::pose_for(statuses);
         let mut slump = pose.slump;
         let mut busy = runtime.walk.is_some();
         let mut falling = false;
@@ -1578,7 +1884,7 @@ impl Stage {
             position = walk_position(walk);
         }
         let resting = !busy && !runtime.downed && !falling;
-        if resting && pose.idle > 0.0 && !self.reduced_motion {
+        if resting && pose.idle > 0.0 {
             // Weight shifts: two slow sways at rates that differ per figure, so a line of
             // figures never moves in step.
             lean += pose.idle
@@ -1752,7 +2058,7 @@ fn arrow_at(projectile: &Projectile, t: f32) -> Vec3 {
     projectile.from + travel * t + Vec3::new(0.0, height, 0.0)
 }
 
-fn projectile_view(projectile: &Projectile, reduced_motion: bool) -> ProjectileView {
+fn projectile_view(projectile: &Projectile) -> ProjectileView {
     let t = (projectile.age_s / projectile.flight_s).clamp(0.0, 1.0);
     let head = arrow_at(projectile, t);
     let tangent = (head - arrow_at(projectile, (t - 0.03).max(0.0))).normalized();
@@ -1762,11 +2068,7 @@ fn projectile_view(projectile: &Projectile, reduced_motion: bool) -> ProjectileV
         tangent
     };
     let tail = head - tangent * 0.85;
-    let trail = if reduced_motion {
-        tail
-    } else {
-        arrow_at(projectile, (t - 0.28).max(0.0))
-    };
+    let trail = arrow_at(projectile, (t - 0.28).max(0.0));
     let stuck_for = (projectile.age_s - projectile.flight_s).max(0.0);
     let alpha = if projectile.hits {
         1.0
@@ -1847,7 +2149,7 @@ mod tests {
     use super::*;
     use super::{Cover, SoundKind, Status};
     use crate::battle::{
-        model::{AttackResult, FloatTone, HitPoints},
+        model::{AttackResult, HitPoints},
         scene_file::load_embedded,
     };
 
@@ -1870,9 +2172,9 @@ mod tests {
         }
     }
 
-    fn stage(reduced: bool) -> Stage {
+    fn stage() -> Stage {
         let scene = load_embedded("salt-quay").unwrap().unwrap();
-        let mut stage = Stage::new(scene, reduced);
+        let mut stage = Stage::new(scene);
         stage.set_tokens(vec![
             token("hero", Side::Hero, Cell::new(3, 4), 12),
             token("ally", Side::Hero, Cell::new(5, 4), 12),
@@ -1912,7 +2214,7 @@ mod tests {
 
     #[test]
     fn figures_start_standing_on_their_cell_centres() {
-        let stage = stage(false);
+        let stage = stage();
         let hero = figure(&stage, "hero");
         assert_eq!(hero.position, stage.grid().cell_centre(Cell::new(3, 4)));
         assert!(hero.lean.abs() < 0.03 && hero.alpha == 1.0);
@@ -1928,7 +2230,7 @@ mod tests {
             .collect();
         let field = super::super::terrain::HeightField::new(origin, 1.0, 40, 40, heights).unwrap();
         scene.grid = scene.grid.clone().with_terrain(field);
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         stage.set_tokens(vec![
             token("hero", Side::Hero, Cell::new(1, 4), 10),
             token("goblin", Side::Enemy, Cell::new(6, 4), 8),
@@ -1953,7 +2255,7 @@ mod tests {
 
     #[test]
     fn frame_lists_figures_far_to_near() {
-        let stage = stage(false);
+        let stage = stage();
         let order: Vec<String> = stage
             .frame()
             .figures
@@ -1965,7 +2267,7 @@ mod tests {
 
     #[test]
     fn a_downing_blow_plays_through_walk_impact_fall_and_the_finishing_card() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         let mut saw_walk_away_from_cell = false;
         let mut saw_float = false;
@@ -2001,7 +2303,7 @@ mod tests {
 
     #[test]
     fn held_hit_points_wait_for_the_impact_then_expire_if_the_blow_never_comes() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let enemy = TokenId::new("enemy");
         stage.hold_hit_points([&enemy]);
         stage.set_tokens(vec![
@@ -2015,41 +2317,8 @@ mod tests {
     }
 
     #[test]
-    fn an_approach_then_a_strike_land_the_blow_after_the_step_and_return_home() {
-        let mut stage = stage(false);
-        stage
-            .stage(Beat::Approach {
-                attacker: TokenId::new("hero"),
-                target: TokenId::new("enemy"),
-            })
-            .unwrap();
-        run(&mut stage, 1.3);
-        let beside = figure(&stage, "hero").position;
-        assert!(
-            (beside - stage.grid().cell_centre(Cell::new(3, 4))).length() > 1.0,
-            "stepped forward"
-        );
-        stage
-            .stage(Beat::Strike {
-                attacker: TokenId::new("hero"),
-                target: TokenId::new("enemy"),
-                result: AttackResult::Hit {
-                    damage: 2,
-                    critical: false,
-                    downed: false,
-                },
-                target_hit_points_after: Some(3),
-            })
-            .unwrap();
-        run(&mut stage, 6.0);
-        let hero = figure(&stage, "hero");
-        assert!((hero.position - stage.grid().cell_centre(Cell::new(3, 4))).length() < 0.01);
-        assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 3);
-    }
-
-    #[test]
     fn the_hit_point_bar_changes_only_at_the_moment_of_impact() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         run(&mut stage, 1.0);
         assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 5);
@@ -2059,7 +2328,7 @@ mod tests {
 
     #[test]
     fn an_ordinary_hit_returns_the_attacker_to_formation() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage
             .stage(Beat::Attack {
                 attacker: TokenId::new("hero"),
@@ -2083,7 +2352,7 @@ mod tests {
 
     #[test]
     fn a_late_token_update_waits_until_the_beat_finishes() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         run(&mut stage, 0.5);
         stage.set_tokens(vec![
@@ -2101,7 +2370,7 @@ mod tests {
 
     #[test]
     fn staging_a_beat_for_an_unknown_token_is_refused_and_the_queue_is_bounded() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         assert_eq!(
             stage.stage(Beat::TurnStart {
                 actor: TokenId::new("ghost")
@@ -2124,38 +2393,183 @@ mod tests {
     }
 
     #[test]
-    fn reduced_motion_cuts_the_camera_teleports_steps_and_drops_shake() {
-        let mut stage = stage(true);
+    fn the_finishing_shot_has_the_victory_lens_then_the_camera_holds_the_party_wide() {
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
-        for _ in 0..400 {
-            stage.update(Duration::from_millis(50));
-            let frame = stage.frame();
-            assert_eq!(frame.shake_px, (0.0, 0.0));
-            assert!(frame.floats.iter().all(|text| text.tone != FloatTone::Miss));
+        // While the finishing card is up: the victory lens and pitch, the fallen foe and the
+        // attacker both in frame.
+        let mut on_victory_shot = false;
+        let mut ended = false;
+        for _ in 0..1200 {
+            stage.update(Duration::from_millis(20));
+            let victory = stage.scene().cameras[&ShotName::Victory];
+            let pose = stage.camera_pose();
+            if stage.hud().finishing_blow.is_some()
+                && !stage.rig.is_panning()
+                && (pose.pitch_deg - victory.pitch_deg).abs() < 0.01
+                && (pose.fov_deg - victory.fov_deg).abs() < 0.01
+                && projected_inside_safe(&stage, "hero")
+                && projected_inside_safe(&stage, "enemy")
+            {
+                on_victory_shot = true;
+            }
+            if !stage.is_busy() {
+                ended = true;
+                break;
+            }
         }
-        let enemy = figure(&stage, "enemy");
-        assert!(enemy.downed && enemy.slump > 0.99);
+        assert!(on_victory_shot && ended);
+        // The beat ends on the party held wide: every hero in frame.
+        assert!(projected_inside_safe(&stage, "hero"));
+        assert!(projected_inside_safe(&stage, "ally"));
+    }
+
+    /// The deciding blow is followed by a held beat of CELEBRATION_SECONDS from the blow
+    /// landing, the stage is busy for all of it, and the victory sting and the heroes' reactions
+    /// happen inside it.
+    #[test]
+    fn the_last_foe_down_holds_a_six_second_victory_beat_with_the_stage_busy_throughout() {
+        assert_eq!(CELEBRATION_SECONDS, 6.0);
+        let mut stage = stage();
+        stage.stage(killing_blow()).unwrap();
+        let mut impact_at = None;
+        let mut idle_at = None;
+        let mut sting_at = None;
+        let mut elapsed = 0.0f32;
+        for _ in 0..2000 {
+            stage.update(Duration::from_millis(20));
+            elapsed += 0.02;
+            if impact_at.is_none() && stage.take_impacts().into_iter().next().is_some() {
+                impact_at = Some(elapsed);
+            }
+            for event in stage.take_sounds() {
+                if event.kind == SoundKind::VictorySting && sting_at.is_none() {
+                    sting_at = Some(elapsed);
+                }
+            }
+            if impact_at.is_some() && !stage.is_busy() && idle_at.is_none() {
+                idle_at = Some(elapsed);
+            }
+            if idle_at.is_some() {
+                break;
+            }
+        }
+        let (impact, idle) = (
+            impact_at.expect("a blow landed"),
+            idle_at.expect("the beat ended"),
+        );
+        assert!(
+            idle - impact >= CELEBRATION_SECONDS - 0.5,
+            "busy {} s after the blow",
+            idle - impact
+        );
+        assert!(
+            idle - impact < CELEBRATION_SECONDS + 2.5,
+            "{}",
+            idle - impact
+        );
+        let sting = sting_at.expect("the victory sting played");
+        assert!(
+            sting > impact && sting < idle,
+            "sting {sting} within {impact}..{idle}"
+        );
+    }
+
+    /// The stage never reports idle between the blow and the end of the beat, so whatever waits
+    /// on it (the victory card, leaving the battlefield) cannot start early.
+    #[test]
+    fn the_stage_is_never_idle_between_the_deciding_blow_and_the_end_of_the_beat() {
+        let mut stage = stage();
+        stage.stage(killing_blow()).unwrap();
+        let mut landed = false;
+        let mut gaps = 0;
+        let mut frames_after = 0;
+        for _ in 0..2000 {
+            stage.update(Duration::from_millis(20));
+            landed |= stage.take_impacts().into_iter().next().is_some();
+            if landed {
+                frames_after += 1;
+                if !stage.is_busy() {
+                    break;
+                }
+            }
+        }
+        assert!(landed);
+        assert!(frames_after as f32 * 0.02 >= CELEBRATION_SECONDS - 0.5);
+        for _ in 0..50 {
+            stage.update(Duration::from_millis(20));
+            if stage.is_busy() {
+                gaps += 1;
+            }
+        }
+        assert_eq!(gaps, 0, "idle stays idle once the beat is over");
+    }
+
+    #[test]
+    fn a_blow_that_leaves_another_foe_standing_holds_no_celebration() {
+        let mut stage = stage();
+        let mut tokens: Vec<Token> = stage.tokens().cloned().collect();
+        tokens.push(token("enemy2", Side::Enemy, Cell::new(6, 1), 5));
+        stage.set_tokens(tokens);
+        stage.stage(killing_blow()).unwrap();
+        let mut sting = false;
+        for _ in 0..1500 {
+            stage.update(Duration::from_millis(20));
+            sting |= stage
+                .take_sounds()
+                .iter()
+                .any(|event| event.kind == SoundKind::VictorySting);
+        }
+        assert!(!sting, "one foe is still standing");
         assert!(!stage.is_busy());
     }
 
     #[test]
-    fn the_camera_ends_on_the_victory_shot_after_the_finishing_blow() {
-        let mut stage = stage(false);
-        stage.stage(killing_blow()).unwrap();
-        run(&mut stage, 20.0);
-        // The finishing shot has the victory lens and pitch, and holds the fallen foe and the
-        // attacker both in frame, off the line between them.
-        let victory = stage.scene().cameras[&ShotName::Victory];
-        let pose = stage.camera_pose();
-        assert!((pose.pitch_deg - victory.pitch_deg).abs() < 0.01);
-        assert!((pose.fov_deg - victory.fov_deg).abs() < 0.01);
-        assert!(projected_inside_safe(&stage, "hero"));
-        assert!(projected_inside_safe(&stage, "enemy"));
+    fn the_last_hero_down_holds_a_defeat_beat_of_the_same_length_with_its_own_sting() {
+        let mut stage = stage();
+        for target in ["hero", "ally"] {
+            stage
+                .stage(Beat::Attack {
+                    attacker: TokenId::new("enemy"),
+                    target: TokenId::new(target),
+                    result: AttackResult::Hit {
+                        damage: 20,
+                        critical: false,
+                        downed: true,
+                    },
+                    target_hit_points_after: Some(0),
+                })
+                .unwrap();
+        }
+        let mut sting_at = None;
+        let mut victory_sting = false;
+        let mut elapsed = 0.0f32;
+        let mut last_busy = 0.0f32;
+        for _ in 0..3000 {
+            stage.update(Duration::from_millis(20));
+            elapsed += 0.02;
+            for event in stage.take_sounds() {
+                victory_sting |= event.kind == SoundKind::VictorySting;
+                if event.kind == SoundKind::DefeatSting && sting_at.is_none() {
+                    sting_at = Some(elapsed);
+                }
+            }
+            if stage.is_busy() {
+                last_busy = elapsed;
+            }
+        }
+        let sting = sting_at.expect("the defeat sting played");
+        assert!(!victory_sting);
+        assert!(
+            last_busy - sting >= CELEBRATION_SECONDS - STING_AT_S - 0.6,
+            "held {} s after the sting",
+            last_busy - sting
+        );
     }
 
     #[test]
     fn projecting_a_cell_centre_lands_inside_the_screen_for_the_establishing_shot() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.establish();
         run(&mut stage, 3.0);
         for cell in [Cell::new(3, 4), Cell::new(4, 1)] {
@@ -2181,59 +2595,8 @@ mod tests {
     }
 
     #[test]
-    fn one_footstep_sounds_per_cell_walked_there_and_back() {
-        let mut stage = stage(false);
-        stage
-            .stage(Beat::Attack {
-                attacker: TokenId::new("hero"),
-                target: TokenId::new("enemy"),
-                result: AttackResult::Miss,
-                target_hit_points_after: None,
-            })
-            .unwrap();
-        let heard = sounds_after(&mut stage, 9.0);
-        let steps = heard
-            .iter()
-            .filter(|(_, kind, who)| *kind == SoundKind::Footstep && who == "hero")
-            .count();
-        let out = stage
-            .grid()
-            .path(Cell::new(3, 4), Cell::new(3, 2))
-            .map_or(0, |path| path.len() - 1);
-        assert_eq!(steps, out * 2, "out and back, one per cell");
-        let order: Vec<SoundKind> = heard.iter().map(|(_, kind, _)| *kind).collect();
-        let first_swing = order
-            .iter()
-            .position(|kind| *kind == SoundKind::SwordSwing)
-            .unwrap();
-        let last_out_step = heard
-            .iter()
-            .take(first_swing)
-            .filter(|(_, kind, _)| *kind == SoundKind::Footstep)
-            .count();
-        assert_eq!(last_out_step, out, "the steps in come before the swing");
-    }
-
-    #[test]
-    fn reduced_motion_teleports_and_so_makes_no_footsteps() {
-        let mut stage = stage(true);
-        stage.stage(killing_blow()).unwrap();
-        let heard = sounds_after(&mut stage, 20.0);
-        assert!(
-            heard
-                .iter()
-                .all(|(_, kind, _)| *kind != SoundKind::Footstep)
-        );
-        assert!(
-            heard
-                .iter()
-                .any(|(_, kind, _)| *kind == SoundKind::BladeHit)
-        );
-    }
-
-    #[test]
     fn voices_follow_the_token_and_the_surface_the_scene() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         let mut seen = Vec::new();
         for _ in 0..400 {
@@ -2245,16 +2608,16 @@ mod tests {
             .find(|event| event.kind == SoundKind::Effort)
             .unwrap();
         assert_eq!(effort.voice, crate::battle::VoiceSet::HeroMale);
-        let step = seen
+        let thud = seen
             .iter()
-            .find(|event| event.kind == SoundKind::Footstep)
+            .find(|event| event.kind == SoundKind::BodyFall)
             .unwrap();
-        assert_eq!(step.surface, stage.scene().surface);
+        assert_eq!(thud.surface, stage.scene().surface);
     }
 
     #[test]
     fn the_sound_queue_is_bounded_and_counts_what_it_dropped() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         for _ in 0..(MAX_PENDING_SOUNDS + 5) {
             stage.emit(SoundKind::HealBreath, &TokenId::new("hero"));
         }
@@ -2263,7 +2626,7 @@ mod tests {
     }
 
     fn archer_stage() -> Stage {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut archer = token("hero", Side::Hero, Cell::new(3, 4), 12);
         archer.attack = crate::battle::model::AttackStyle::Ranged;
         stage.set_tokens(vec![
@@ -2347,7 +2710,7 @@ mod tests {
 
     #[test]
     fn the_downed_state_kneels_then_lies_on_the_ground_with_a_landing_squash() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         let mut slumps = Vec::new();
         let mut thud_peak = 0.0f32;
@@ -2377,7 +2740,7 @@ mod tests {
 
     #[test]
     fn a_downed_figure_that_is_healed_stands_again() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         run(&mut stage, 20.0);
         stage.set_tokens(vec![
@@ -2392,7 +2755,7 @@ mod tests {
 
     #[test]
     fn idle_figures_sway_out_of_step_and_over_time() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         run(&mut stage, 1.0);
         let at_one: Vec<f32> = ["hero", "ally", "enemy"]
             .iter()
@@ -2401,17 +2764,11 @@ mod tests {
         assert!(at_one[0] != at_one[1] && at_one[1] != at_one[2]);
         run(&mut stage, 3.0);
         assert!(figure(&stage, "hero").lean != at_one[0]);
-        let reduced = {
-            let mut calm = self::stage(true);
-            run(&mut calm, 2.0);
-            figure(&calm, "hero").lean
-        };
-        assert_eq!(reduced, 0.0, "no idle sway under reduced motion");
     }
 
     #[test]
     fn the_target_ring_shows_during_the_focus_and_clears_at_contact() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage
             .stage(Beat::Attack {
                 attacker: TokenId::new("hero"),
@@ -2428,7 +2785,7 @@ mod tests {
 
     #[test]
     fn bloodied_follows_the_hit_points_on_screen_and_unconscious_the_fall() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         // The enemy has 5 of 12: already bloodied at rest (at or below half).
         assert!(figure(&stage, "enemy").statuses.contains(Status::Bloodied));
         assert!(!figure(&stage, "hero").statuses.contains(Status::Bloodied));
@@ -2450,7 +2807,7 @@ mod tests {
 
     #[test]
     fn a_server_status_waits_for_the_blow_that_causes_it() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let enemy_id = TokenId::new("enemy");
         stage.hold_hit_points([&enemy_id]);
         let mut poisoned = token("enemy", Side::Enemy, Cell::new(4, 1), 4);
@@ -2467,7 +2824,7 @@ mod tests {
 
     #[test]
     fn statuses_shape_the_pose_and_prone_with_poison_shows_both() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut ally = token("ally", Side::Hero, Cell::new(5, 4), 12);
         ally.statuses = vec![Status::Prone, Status::Poisoned];
         let mut hero = token("hero", Side::Hero, Cell::new(3, 4), 12);
@@ -2489,7 +2846,7 @@ mod tests {
 
     #[test]
     fn a_frightened_figure_leans_away_from_the_nearest_opponent() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut hero = token("hero", Side::Hero, Cell::new(1, 4), 12);
         hero.statuses = vec![Status::Frightened];
         stage.set_tokens(vec![
@@ -2527,7 +2884,7 @@ mod tests {
             heroes: (0..4).map(|col| Cell::new(col + 1, 5)).collect(),
             enemies: (0..4).map(|col| Cell::new(col + 1, 0)).collect(),
         }];
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         assert!(stage.set_layout("wall"));
         assert!(!stage.set_layout("missing"));
         stage.set_tokens(vec![
@@ -2535,37 +2892,6 @@ mod tests {
             token("enemy", Side::Enemy, Cell::new(3, 0), 5),
         ]);
         stage
-    }
-
-    #[test]
-    fn a_figure_walks_around_an_obstacle_and_never_stands_on_a_blocked_cell() {
-        let mut stage = layout_stage();
-        stage
-            .stage(Beat::Attack {
-                attacker: TokenId::new("hero"),
-                target: TokenId::new("enemy"),
-                result: AttackResult::Miss,
-                target_hit_points_after: None,
-            })
-            .unwrap();
-        let mut cells = std::collections::BTreeSet::new();
-        for _ in 0..600 {
-            stage.update(Duration::from_millis(25));
-            let hero = figure(&stage, "hero");
-            if let Some(cell) = stage.grid().cell_at(hero.position) {
-                assert!(
-                    stage.grid().is_walkable(cell),
-                    "stood in a crate at {cell:?}"
-                );
-                cells.insert(cell);
-            }
-        }
-        assert!(
-            cells.iter().any(|cell| cell.col == 0 || cell.col == 6),
-            "went round the end"
-        );
-        assert!(cells.len() > 6);
-        assert!(!stage.is_busy());
     }
 
     #[test]
@@ -2578,6 +2904,7 @@ mod tests {
             token("hero", Side::Hero, Cell::new(3, 4), 12),
             token("enemy", Side::Enemy, Cell::new(3, 2), 5),
         ]);
+        run(&mut stage, 6.0);
         let hero = figure(&stage, "hero");
         let pip = hero.cover.expect("beside the crates");
         assert_eq!(pip.level, Cover::Half);
@@ -2691,7 +3018,7 @@ mod tests {
 
     #[test]
     fn the_roll_call_fills_the_tracker_in_the_servers_order_with_badges_1st_2nd_3rd() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage
             .stage(Beat::Initiative {
                 rolls: rolls_for(&["enemy", "hero", "ally"]),
@@ -2752,7 +3079,7 @@ mod tests {
 
     #[test]
     fn each_die_tumbles_then_lands_on_its_total() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage
             .stage(Beat::Initiative {
                 rolls: rolls_for(&["hero", "ally", "enemy"]),
@@ -2774,41 +3101,33 @@ mod tests {
     }
 
     #[test]
-    fn the_camera_whips_to_each_stop_and_cuts_with_a_fade_under_reduced_motion() {
-        let mut calm = stage(true);
-        calm.stage(Beat::Initiative {
-            rolls: rolls_for(&["hero", "enemy", "ally"]),
-        })
-        .unwrap();
-        let mut lively = stage(false);
+    fn the_camera_whips_to_each_stop_with_a_zoom_punch_on_arrival() {
+        let mut lively = stage();
         lively
             .stage(Beat::Initiative {
                 rolls: rolls_for(&["hero", "enemy", "ally"]),
             })
             .unwrap();
-        let (mut calm_panned, mut lively_overshoot) = (false, false);
         let mut closest = f32::MAX;
+        let mut panned = false;
         for _ in 0..900 {
-            calm.update(Duration::from_millis(20));
             lively.update(Duration::from_millis(20));
-            calm_panned |= calm.rig.is_panning();
             // A whip travels farther than it needs to and comes back: the lens punches in.
             closest = closest.min(lively.camera_pose().fov_deg);
-            lively_overshoot |= lively.rig.is_panning();
+            panned |= lively.rig.is_panning();
         }
-        assert!(!calm_panned, "reduced motion never pans: it cuts");
-        assert!(lively_overshoot);
+        assert!(panned);
         let victory = lively.scene().cameras[&ShotName::Victory].fov_deg;
         assert!(
             closest < victory * 0.97,
             "zoom punch on arrival: {closest} vs {victory}"
         );
-        assert!(!calm.is_busy() && !lively.is_busy());
+        assert!(!lively.is_busy());
     }
 
     #[test]
     fn a_newer_view_cuts_the_sequence_short_and_goes_to_the_current_turn() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.set_active(Some(TokenId::new("hero")));
         stage
             .stage(Beat::Initiative {
@@ -2861,6 +3180,8 @@ mod tests {
                     damage: 0,
                     target_hit_points_after: 12,
                     downed: false,
+                    weapon: String::new(),
+                    grazed: false,
                 })
                 .collect(),
             initiative: ["e", "a", "b"]
@@ -2880,7 +3201,7 @@ mod tests {
     #[test]
     fn the_initiative_is_staged_for_a_fight_the_display_watched_begin() {
         use crate::battle::{CombatFeed, FeedMode};
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut feed = CombatFeed::new(FeedMode::HoldForCues);
         feed.apply(&mut stage, &feed_snapshot(true, 0, 1)).unwrap();
         assert!(stage.is_busy());
@@ -2902,7 +3223,7 @@ mod tests {
     fn no_sequence_when_the_display_joins_a_fight_already_in_progress() {
         use crate::battle::{CombatFeed, FeedMode};
         for (live, outcomes, round) in [(false, 0, 1), (true, 2, 1), (true, 0, 2)] {
-            let mut stage = stage(false);
+            let mut stage = stage();
             let mut feed = CombatFeed::new(FeedMode::HoldForCues);
             feed.apply(&mut stage, &feed_snapshot(live, outcomes, round))
                 .unwrap();
@@ -2917,7 +3238,7 @@ mod tests {
     #[test]
     fn a_view_that_shows_someone_already_acted_ends_the_sequence_in_progress() {
         use crate::battle::{CombatFeed, FeedMode};
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut feed = CombatFeed::new(FeedMode::HoldForCues);
         feed.apply(&mut stage, &feed_snapshot(true, 0, 1)).unwrap();
         run(&mut stage, 1.0);
@@ -2929,7 +3250,7 @@ mod tests {
 
     #[test]
     fn the_archer_is_mirrored_when_her_target_is_on_the_left_of_the_screen() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut archer = token("hero", Side::Hero, Cell::new(3, 4), 12);
         archer.attack = crate::battle::model::AttackStyle::Ranged;
         stage.set_tokens(vec![
@@ -2947,7 +3268,7 @@ mod tests {
             token("ally", Side::Hero, Cell::new(5, 4), 12),
             token("enemy", Side::Enemy, Cell::new(0, 1), 5),
         ]);
-        run(&mut stage, 0.2);
+        run(&mut stage, 6.0);
         assert!(
             figure(&stage, "hero").mirror,
             "target to the left: mirrored"
@@ -2994,7 +3315,7 @@ mod tests {
     /// that is not moving.
     #[test]
     fn both_fighters_stay_in_frame_through_a_whole_attack_and_the_camera_rests_at_contact() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         for _ in 0..30 {
             frame_step(&mut stage);
         }
@@ -3036,7 +3357,7 @@ mod tests {
     #[test]
     fn a_bystander_is_never_in_front_of_the_fighters() {
         let scene = load_embedded("scan-village").unwrap().unwrap();
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         stage.set_tokens(vec![
             token("brakka", Side::Hero, Cell::new(1, 2), 12),
             token("mudge", Side::Enemy, Cell::new(2, 1), 5),
@@ -3079,7 +3400,7 @@ mod tests {
     #[test]
     fn a_blow_emits_one_impact_event_scaled_by_its_size_and_a_heavy_one_shakes_harder() {
         let strength = |damage: u32| {
-            let mut stage = stage(false);
+            let mut stage = stage();
             stage.stage(ordinary_hit("hero", "enemy", damage)).unwrap();
             let mut peak = 0.0f32;
             let mut events = Vec::new();
@@ -3105,7 +3426,7 @@ mod tests {
 
     #[test]
     fn a_miss_sways_the_camera_without_an_impact_event_or_hit_stop() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage
             .stage(Beat::Attack {
                 attacker: TokenId::new("hero"),
@@ -3125,7 +3446,7 @@ mod tests {
 
     #[test]
     fn hit_stop_freezes_the_figures_for_a_few_frames_and_then_releases() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(ordinary_hit("hero", "enemy", 7)).unwrap();
         let mut frozen_frames = 0;
         let mut previous = None;
@@ -3153,7 +3474,7 @@ mod tests {
 
     #[test]
     fn the_finishing_blow_runs_in_slow_motion_and_is_busy_for_all_of_it() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
         let mut saw_slow = false;
         for _ in 0..900 {
@@ -3171,7 +3492,7 @@ mod tests {
     #[test]
     fn the_camera_lives_while_it_waits_and_follows_the_tempo() {
         let sampled = |tempo: u16| {
-            let mut stage = stage(false);
+            let mut stage = stage();
             stage.set_tempo_intensity(tempo);
             let mut yaws = Vec::new();
             for _ in 0..(30 * 30) {
@@ -3195,7 +3516,7 @@ mod tests {
         assert!((calm[60] - calm[90]).abs() > 1e-3);
         assert!(peak != calm);
         // With effects off the camera is dead still, as before.
-        let mut off = stage(false);
+        let mut off = stage();
         off.set_feel_enabled(false);
         let first = off.frame().camera;
         for _ in 0..120 {
@@ -3210,7 +3531,7 @@ mod tests {
     #[test]
     fn the_camera_never_shows_a_frame_without_the_acting_figure_on_an_enemy_turn() {
         let scene = load_embedded("scan-riverbed").unwrap().unwrap();
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         stage.set_tokens(vec![
             token("dagna", Side::Hero, Cell::new(2, 4), 12),
             token("tomas", Side::Enemy, Cell::new(6, 1), 8),
@@ -3243,7 +3564,7 @@ mod tests {
     #[test]
     fn a_self_action_frames_the_actor_clear_of_a_bystander() {
         let scene = load_embedded("scan-village").unwrap().unwrap();
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         stage.set_tokens(vec![
             token("brakka", Side::Hero, Cell::new(1, 2), 6),
             token("mudge", Side::Enemy, Cell::new(2, 1), 5),
@@ -3291,7 +3612,7 @@ mod tests {
 
     #[test]
     fn a_roll_card_waits_for_the_camera_to_settle_on_the_fighters() {
-        let mut stage = stage(false);
+        let mut stage = stage();
         // Start from the heading the framing will pick, so the move is a pan, not a cut.
         let pick = |stage: &Stage| {
             let attacker = body_of_figure(stage, "hero");
@@ -3346,7 +3667,7 @@ mod tests {
     /// z, and Sylvie nearby. Brakka kills the weasel, then the weasel hits Brakka.
     fn weasel_fight() -> Stage {
         let scene = load_embedded("scan-village").unwrap().unwrap();
-        let mut stage = Stage::new(scene, false);
+        let mut stage = Stage::new(scene);
         let mut weasel = token("weasel", Side::Enemy, Cell::new(3, 1), 4);
         weasel.height_m = 0.6;
         stage.set_tokens(vec![
@@ -3518,7 +3839,7 @@ mod tests {
     fn a_blow_shakes_the_struck_figure_by_the_share_of_the_bar_it_took_whichever_path_brings_it() {
         install_test_hooks();
         // The staged path: the blow lands at its impact and a drop to 0 is the largest reaction.
-        let mut dropped = stage(false);
+        let mut dropped = stage();
         dropped.stage(killing_blow()).unwrap();
         run(&mut dropped, 0.5);
         assert!(strongest_shift(&mut dropped, "enemy", 4.0) > 5.0);
@@ -3528,7 +3849,7 @@ mod tests {
         // starts at contact on the stage's simulation clock, so the hit-stop holds it.
         let timeline = |blow: Beat, reactive: bool| {
             install_hooks(reactive);
-            let mut stage = stage(false);
+            let mut stage = stage();
             stage.stage(blow).unwrap();
             let rest = figure(&stage, "enemy").position;
             let mut shifts = Vec::new();
@@ -3574,7 +3895,7 @@ mod tests {
         install_hooks(true);
         // The unstaged path: a view that simply reports fewer hit points reacts as well, and a
         // view that reports more (a heal) does not.
-        let mut direct = stage(false);
+        let mut direct = stage();
         direct.set_tokens(vec![
             token("hero", Side::Hero, Cell::new(3, 4), 12),
             token("ally", Side::Hero, Cell::new(5, 4), 12),
@@ -3582,7 +3903,7 @@ mod tests {
         ]);
         let shift = strongest_shift(&mut direct, "enemy", 1.0);
         assert!(shift > 0.1 && shift < 0.3, "{shift}");
-        let mut healed = stage(false);
+        let mut healed = stage();
         healed.set_tokens(vec![
             token("hero", Side::Hero, Cell::new(3, 4), 12),
             token("ally", Side::Hero, Cell::new(5, 4), 12),
@@ -3594,7 +3915,7 @@ mod tests {
     #[test]
     fn only_a_critical_figure_trembles() {
         install_test_hooks();
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.set_tokens(vec![
             token("hero", Side::Hero, Cell::new(3, 4), 2),
             token("ally", Side::Hero, Cell::new(5, 4), 12),
@@ -3610,7 +3931,7 @@ mod tests {
     fn a_health_variant_of_the_picture_changes_with_the_blow_not_before_it() {
         install_test_hooks();
         let variant = format!("/gameplay/imagery/{}", "b".repeat(64));
-        let mut stage = stage(false);
+        let mut stage = stage();
         stage.hold_hit_points([&TokenId::new("enemy")]);
         stage.stage(hit(3, false, 2)).unwrap();
         health::set_variants([("ENEMY".to_owned(), variant.clone())]);
@@ -3632,7 +3953,7 @@ mod tests {
     #[test]
     fn a_figure_unconscious_at_one_hit_point_is_down_and_not_a_dark_heap() {
         install_test_hooks();
-        let mut stage = stage(false);
+        let mut stage = stage();
         let mut knocked_out = token("hero", Side::Hero, Cell::new(3, 4), 1);
         knocked_out.statuses = vec![Status::Unconscious];
         stage.set_tokens(vec![
@@ -3660,5 +3981,398 @@ mod tests {
         run(&mut stage, 0.2);
         assert_eq!(figure(&stage, "hero").dim, LAID_LOW_DIM_WITH_VARIANT);
         health::set_variants([]);
+    }
+
+    #[test]
+    fn a_figure_the_server_moves_walks_around_an_obstacle_and_never_stands_on_a_blocked_cell() {
+        let mut stage = layout_stage();
+        // The server moves the hero across the field, past the row of crates.
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 1), 12),
+            token("enemy", Side::Enemy, Cell::new(3, 2), 5),
+        ]);
+        assert!(stage.is_busy(), "the move is staged, not teleported");
+        let start = figure(&stage, "hero").position;
+        let mut cells = std::collections::BTreeSet::new();
+        for _ in 0..600 {
+            stage.update(Duration::from_millis(25));
+            let hero = figure(&stage, "hero");
+            if let Some(cell) = stage.grid().cell_at(hero.position) {
+                assert!(
+                    stage.grid().is_walkable(cell),
+                    "stood in a crate at {cell:?}"
+                );
+                cells.insert(cell);
+            }
+        }
+        let end = figure(&stage, "hero").position;
+        assert!((end - stage.grid().cell_centre(Cell::new(3, 1))).length() < 0.01);
+        assert!((end - start).length() > 1.0);
+        assert!(cells.len() > 3);
+        assert!(!stage.is_busy());
+    }
+
+    #[test]
+    fn an_attack_leaves_every_figure_exactly_where_the_server_put_it() {
+        let mut stage = stage();
+        let home = |stage: &Stage, id: &str| {
+            let offset =
+                figure(stage, id).position - stage.grid().cell_centre(figure_cell(stage, id));
+            offset.x.hypot(offset.z)
+        };
+        stage
+            .stage(Beat::Approach {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+            })
+            .unwrap();
+        run(&mut stage, 1.6);
+        assert!(home(&stage, "hero") < 0.01, "the approach moves nobody");
+        stage
+            .stage(Beat::Strike {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Hit {
+                    damage: 2,
+                    critical: false,
+                    downed: false,
+                },
+                target_hit_points_after: Some(3),
+            })
+            .unwrap();
+        for _ in 0..240 {
+            stage.update(Duration::from_millis(25));
+            assert!(
+                home(&stage, "hero") < 0.75,
+                "at most a lunge within its own square"
+            );
+        }
+        assert!(home(&stage, "hero") < 0.01);
+        assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 3);
+    }
+
+    fn figure_cell(stage: &Stage, id: &str) -> Cell {
+        stage
+            .tokens()
+            .find(|token| token.id.0 == id)
+            .map(|token| token.cell)
+            .unwrap()
+    }
+
+    #[test]
+    fn one_footstep_sounds_per_cell_the_server_moves_a_figure() {
+        let mut stage = stage();
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 2), 12),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 5),
+        ]);
+        let heard = sounds_after(&mut stage, 9.0);
+        let steps = heard
+            .iter()
+            .filter(|(_, kind, who)| *kind == SoundKind::Footstep && who == "hero")
+            .count();
+        let cells = stage
+            .grid()
+            .path(Cell::new(3, 4), Cell::new(3, 2))
+            .map_or(0, |path| path.len() - 1);
+        assert_eq!(steps, cells, "one per cell walked");
+    }
+
+    fn crowded_stage() -> Stage {
+        let scene = load_embedded("scan-riverbed").unwrap().unwrap();
+        let mut stage = Stage::new(scene);
+        let mut archer = token("archer", Side::Hero, Cell::new(0, 5), 12);
+        archer.attack = crate::battle::model::AttackStyle::Ranged;
+        stage.set_tokens(vec![
+            archer,
+            token("dagna", Side::Hero, Cell::new(2, 5), 12),
+            token("hilde", Side::Hero, Cell::new(4, 4), 12),
+            token("brakka", Side::Hero, Cell::new(6, 5), 12),
+            token("goblin-a", Side::Enemy, Cell::new(7, 0), 5),
+            token("goblin-b", Side::Enemy, Cell::new(3, 1), 5),
+            token("goblin-c", Side::Enemy, Cell::new(5, 2), 5),
+        ]);
+        for _ in 0..30 {
+            frame_step(&mut stage);
+        }
+        stage
+    }
+
+    /// A ranged attack across the whole field with seven figures spread over the grid: attacker
+    /// and target are both in frame at rest, and the arrow is on screen the whole time it flies.
+    #[test]
+    fn a_ranged_attack_across_a_crowded_field_keeps_both_ends_and_the_arrow_in_frame() {
+        let mut stage = crowded_stage();
+        stage.stage(ordinary_hit("archer", "goblin-a", 3)).unwrap();
+        let mut frames = 0;
+        let mut arrow_frames = 0;
+        let mut settled = 0;
+        while stage.is_busy() && frames < 1200 {
+            frame_step(&mut stage);
+            frames += 1;
+            if !stage.rig.is_panning() && stage.hud().active.is_some() {
+                // Settled on the shot: both ends are in the safe area.
+                if projected_inside_safe(&stage, "archer")
+                    && projected_inside_safe(&stage, "goblin-a")
+                {
+                    settled += 1;
+                }
+            }
+            let frame = stage.frame();
+            for arrow in &frame.projectiles {
+                arrow_frames += 1;
+                let (x, y) = stage
+                    .project(arrow.head, framing::FRAMED_ASPECT)
+                    .expect("the arrow is in front of the camera");
+                assert!(
+                    (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y),
+                    "frame {frames}: the arrow is off the screen at {x:.2},{y:.2}"
+                );
+            }
+        }
+        assert!(
+            arrow_frames > 5,
+            "the arrow flew and was seen: {arrow_frames}"
+        );
+        assert!(
+            settled > 20,
+            "both fighters framed for most of the beat: {settled}"
+        );
+    }
+
+    /// Every attacker and target pair among seven spread-out figures is framed: both inside the
+    /// safe area from the one pose the camera holds.
+    #[test]
+    fn any_pair_among_seven_spread_figures_is_framed_with_both_inside_the_safe_area() {
+        let stage = crowded_stage();
+        let ids = [
+            "archer", "dagna", "hilde", "brakka", "goblin-a", "goblin-b", "goblin-c",
+        ];
+        let style = stage.scene().cameras[&ShotName::TurnFocus];
+        let home = stage.scene().cameras[&ShotName::Tactical].yaw_deg;
+        for attacker in ids {
+            for target in ids {
+                if attacker == target {
+                    continue;
+                }
+                let others: Vec<framing::Body> = ids
+                    .iter()
+                    .filter(|id| **id != attacker && **id != target)
+                    .map(|id| body_of_figure(&stage, id))
+                    .collect();
+                let (a, t) = (
+                    body_of_figure(&stage, attacker),
+                    body_of_figure(&stage, target),
+                );
+                let shot = framing::action_shot_from(
+                    &style,
+                    &stage.rig.pose(),
+                    &a,
+                    Some(&t),
+                    &[],
+                    &others,
+                    framing::FRAMED_ASPECT,
+                    Some(home),
+                );
+                for fighter in [a, t] {
+                    assert!(
+                        framing::in_safe_area(&shot.pose, framing::FRAMED_ASPECT, &fighter),
+                        "{attacker} -> {target}: {shot:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The server moves a hero across a crowded field: the mover is on the screen for the whole
+    /// move, and nobody else moves.
+    #[test]
+    fn a_server_move_keeps_the_mover_in_frame_for_its_whole_walk() {
+        let mut stage = crowded_stage();
+        let before: Vec<Vec3> = ["archer", "dagna", "goblin-b"]
+            .iter()
+            .map(|id| figure(&stage, id).position)
+            .collect();
+        let mut tokens: Vec<Token> = stage.tokens().cloned().collect();
+        let hero = tokens
+            .iter_mut()
+            .find(|token| token.id.0 == "brakka")
+            .unwrap();
+        hero.cell = Cell::new(1, 3);
+        stage.set_tokens(tokens);
+        let mut frames = 0;
+        while stage.is_busy() && frames < 900 {
+            frame_step(&mut stage);
+            frames += 1;
+            let pose = stage.rig.pose();
+            let body = body_of_figure(&stage, "brakka");
+            let centre = framing::project_body(&pose, framing::FRAMED_ASPECT, &body)
+                .map(|(l, t, r, b)| ((l + r) * 0.5, (t + b) * 0.5));
+            let Some((x, y)) = centre else {
+                panic!("frame {frames}: the mover is behind the camera");
+            };
+            assert!(
+                (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y),
+                "frame {frames}: the mover is off the screen at {x:.2},{y:.2}"
+            );
+        }
+        assert!(frames < 900);
+        let after: Vec<Vec3> = ["archer", "dagna", "goblin-b"]
+            .iter()
+            .map(|id| figure(&stage, id).position)
+            .collect();
+        for (a, b) in before.iter().zip(&after) {
+            assert!((*a - *b).length() < 0.02, "nobody else moved");
+        }
+        let arrived = figure(&stage, "brakka").position;
+        assert!((arrived - stage.grid().cell_centre(Cell::new(1, 3))).length() < 0.02);
+    }
+
+    /// A spoken line: the bubble belongs to the figure named, the camera eases in on it and the
+    /// speaker is in frame; ending the line eases back; the stage is never busy for it.
+    #[test]
+    fn a_spoken_line_opens_over_its_speaker_with_the_camera_easing_in_and_back() {
+        let mut stage = stage();
+        run(&mut stage, 1.0);
+        let before = stage.camera_pose();
+        assert!(!stage.speak("Nobody", "Hello.", 1), "not on the field");
+        assert!(stage.frame().speech.is_none());
+        let name = figure(&stage, "enemy").name.clone();
+        assert!(stage.speak(&name, "Hand over the packet.", 7));
+        assert!(!stage.is_busy(), "a line does not hold the fight");
+        run(&mut stage, 1.5);
+        let speech = stage
+            .frame()
+            .speech
+            .map(|s| (s.name.to_owned(), s.text.to_owned(), s.line_id));
+        assert_eq!(
+            speech,
+            Some((name.clone(), "Hand over the packet.".to_owned(), 7))
+        );
+        let closer = stage.camera_pose();
+        assert!(
+            closer.distance < before.distance,
+            "{} vs {}",
+            closer.distance,
+            before.distance
+        );
+        assert!(projected_inside_safe(&stage, "enemy"));
+        stage.end_speech(99);
+        assert!(
+            stage.frame().speech.is_some(),
+            "another line's end is ignored"
+        );
+        stage.end_speech(7);
+        assert!(stage.frame().speech.is_none());
+        run(&mut stage, 1.5);
+        let back = stage.camera_pose();
+        assert!((back.distance - before.distance).abs() < 0.05);
+        assert!((back.target - before.target).length() < 0.05);
+    }
+
+    #[test]
+    fn a_line_that_is_never_ended_closes_itself_and_a_new_line_replaces_the_old() {
+        let mut stage = stage();
+        run(&mut stage, 1.0);
+        let before = stage.camera_pose();
+        let first = figure(&stage, "enemy").name.clone();
+        let second = figure(&stage, "hero").name.clone();
+        assert!(stage.speak(&first, "One.", 1));
+        run(&mut stage, 0.5);
+        assert!(stage.speak(&second, "Two.", 2));
+        assert_eq!(stage.frame().speech.map(|s| s.line_id), Some(2));
+        run(&mut stage, speech::MAX_LINE_S + 3.0);
+        assert!(stage.frame().speech.is_none());
+        let back = stage.camera_pose();
+        assert!(
+            (back.distance - before.distance).abs() < 0.05,
+            "the camera returns to where it was before the first line"
+        );
+    }
+
+    /// The floating result names the attack and its result, stays up for its whole hold after
+    /// rising, and without a name reads as it always did.
+    #[test]
+    fn the_floating_result_names_the_attack_and_stays_up_long_enough_to_read() {
+        let mut stage = stage();
+        stage.set_attack_label(&TokenId::new("hero"), "Greatsword");
+        stage.stage(ordinary_hit("hero", "enemy", 9)).unwrap();
+        let mut born_at = None;
+        let mut seen_for = 0.0f32;
+        for _ in 0..1200 {
+            stage.update(Duration::from_millis(20));
+            let frame = stage.frame();
+            if let Some(text) = frame.floats.first() {
+                assert_eq!(text.text, "Greatsword - 9");
+                born_at.get_or_insert(stage.clock_s);
+                if text.age_s >= float_text::RISE_S {
+                    seen_for = text.age_s - float_text::RISE_S;
+                }
+            }
+        }
+        assert!(born_at.is_some(), "the result appeared");
+        assert!(seen_for >= 2.5, "stayed up {seen_for} s after rising");
+        let mut plain = self::stage();
+        plain.stage(ordinary_hit("hero", "enemy", 4)).unwrap();
+        run(&mut plain, 3.0);
+        let mut shown = Vec::new();
+        for _ in 0..200 {
+            plain.update(Duration::from_millis(20));
+            shown.extend(plain.frame().floats.iter().map(|text| text.text.clone()));
+        }
+        assert!(
+            shown.is_empty() || shown.iter().all(|text| text == "4"),
+            "{shown:?}"
+        );
+    }
+
+    #[test]
+    fn a_miss_and_a_critical_knockout_are_named_and_a_knockout_stays_longer() {
+        let mut stage = stage();
+        stage.set_attack_label(&TokenId::new("hero"), "Longbow");
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Miss,
+                target_hit_points_after: None,
+            })
+            .unwrap();
+        let mut texts = Vec::new();
+        for _ in 0..600 {
+            stage.update(Duration::from_millis(20));
+            for text in stage.frame().floats {
+                if !texts.contains(&text.text) {
+                    texts.push(text.text.clone());
+                }
+            }
+        }
+        assert_eq!(texts, vec!["Longbow - miss".to_owned()]);
+        let mut stage = self::stage();
+        stage.set_attack_label(&TokenId::new("hero"), "Bite");
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Hit {
+                    damage: 7,
+                    critical: true,
+                    downed: true,
+                },
+                target_hit_points_after: Some(0),
+            })
+            .unwrap();
+        let mut hold = 0.0;
+        let mut text = String::new();
+        for _ in 0..1500 {
+            stage.update(Duration::from_millis(20));
+            if let Some(first) = stage.frame().floats.first() {
+                hold = first.hold_s;
+                text = first.text.clone();
+            }
+        }
+        assert_eq!(text, "Bite - 7, critical, down");
+        assert_eq!(hold, float_text::HOLD_EMPHASIS_S);
     }
 }

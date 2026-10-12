@@ -45,7 +45,72 @@ const SCENES: &[(&str, &[u8])] = &[
         "harbor-journey",
         include_bytes!("../../../../../content/battle-scenes/harbor-journey.json"),
     ),
+    // The Gaussian-splat scan scenes. A story location never names one: they are reached only
+    // when `DF_GAMEPLAY_BATTLE_SCENE` forces the scene (see `force_scene`), and the three that carry
+    // no licence are private test scenes.
+    (
+        "scan-riverbed",
+        include_bytes!("../../../../../content/battle-scenes/scan-riverbed.json"),
+    ),
+    (
+        "scan-village",
+        include_bytes!("../../../../../content/battle-scenes/scan-village.json"),
+    ),
+    (
+        "scan-valley-bridges",
+        include_bytes!("../../../../../content/battle-scenes/scan-valley-bridges.json"),
+    ),
+    (
+        "scan-summit",
+        include_bytes!("../../../../../content/battle-scenes/scan-summit.json"),
+    ),
 ];
+
+/// The scene every fight is staged on, when `DF_GAMEPLAY_BATTLE_SCENE` forces one. The server is
+/// the authority for the grid, so it chooses the layout from the scene that will be shown, not
+/// from the story location's own scene.
+static FORCED_SCENE: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+
+/// Records the forced scene at startup. The id must be one of the scenes the server holds.
+pub(in crate::gameplay) fn force_scene(id: Option<&str>) -> Result<(), String> {
+    let forced = match id {
+        None => None,
+        Some(id) => Some(
+            SCENES
+                .iter()
+                .find(|(known, _)| *known == id)
+                .map(|(known, _)| *known)
+                .ok_or_else(|| format!("DF_GAMEPLAY_BATTLE_SCENE {id:?} has no authored grid"))?,
+        ),
+    };
+    FORCED_SCENE
+        .set(forced)
+        .map_err(|_| "the forced battle scene was already set".to_owned())
+}
+
+/// The scene a fight at the story's `place` is staged on.
+fn staged_location(place: String) -> String {
+    FORCED_SCENE
+        .get()
+        .copied()
+        .flatten()
+        .map_or(place, str::to_owned)
+}
+
+/// The authored scene bytes the server holds for a scene id.
+#[cfg(test)]
+pub(super) fn scene_bytes(id: &str) -> Option<&'static [u8]> {
+    SCENES
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map(|(_, bytes)| *bytes)
+}
+
+/// Every scene id the server holds.
+#[cfg(test)]
+pub(super) fn scene_ids() -> impl Iterator<Item = &'static str> {
+    SCENES.iter().map(|(id, _)| *id)
+}
 
 pub(in crate::gameplay) fn enabled() -> bool {
     pack::active().is_some_and(|loaded| loaded.tuning.tactical.is_some())
@@ -463,6 +528,7 @@ pub(super) fn start(
         }
         None => return Err(RepositoryError::InvalidCandidate),
     };
+    let location = staged_location(location);
     let bytes = SCENES
         .iter()
         .find(|(id, _)| *id == location)
@@ -3279,5 +3345,149 @@ pub(super) mod tests {
                     .all(|actor| actor.health().hit_points == 1)
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod shared_scene_tests {
+    use super::*;
+    use tactical_rules::{BattleSceneData, Cover};
+
+    fn cell(col: i32, row: i32) -> df_render::battle::Cell {
+        df_render::battle::Cell::new(col, row)
+    }
+
+    /// Every scene the server can stage a fight on, with its layouts as the rules parse them and
+    /// as the renderer parses the same file.
+    #[test]
+    fn every_scan_layout_the_server_can_choose_is_valid_for_the_rules_and_matches_the_renderer() {
+        let mut scans = 0;
+        for id in scene_ids() {
+            let bytes = scene_bytes(id).unwrap();
+            let data: BattleSceneData = serde_json::from_slice(bytes).unwrap();
+            let render = df_render::battle::load_embedded(id)
+                .unwrap_or_else(|| panic!("{id}: the renderer has no scene of that id"))
+                .unwrap_or_else(|error| panic!("{id}: {error:?}"));
+            assert_eq!(data.layouts.len(), render.layouts.len(), "{id}");
+            assert!(!data.layouts.is_empty(), "{id}: a layout to choose from");
+            scans += usize::from(id.starts_with("scan-"));
+            for layout in &data.layouts {
+                // The rules accept it: every spawn is walkable and each side reaches the other.
+                let map = BattleMap::from_json(bytes, &layout.id)
+                    .unwrap_or_else(|error| panic!("{id}/{}: {error:?}", layout.id));
+                let drawn = render
+                    .layouts
+                    .iter()
+                    .find(|candidate| candidate.id == layout.id)
+                    .unwrap_or_else(|| panic!("{id}/{}: the renderer lacks the layout", layout.id));
+                // The renderer places everyone on the same spawn cells...
+                let as_rules = |cells: &[df_render::battle::Cell]| -> Vec<(u16, u16)> {
+                    cells
+                        .iter()
+                        .map(|c| (u16::try_from(c.col).unwrap(), u16::try_from(c.row).unwrap()))
+                        .collect()
+                };
+                let rules_cells = |cells: &[tactical_rules::Cell]| -> Vec<(u16, u16)> {
+                    cells.iter().map(|c| (c.0, c.1)).collect()
+                };
+                assert_eq!(
+                    as_rules(&drawn.heroes),
+                    rules_cells(map.hero_spawns()),
+                    "{id}/{}",
+                    layout.id
+                );
+                assert_eq!(
+                    as_rules(&drawn.enemies),
+                    rules_cells(map.enemy_spawns()),
+                    "{id}/{}",
+                    layout.id
+                );
+                // ... on a grid that blocks exactly the cells the rules block.
+                let grid = render.grid.with_layout(drawn);
+                let (cols, rows) = map.dimensions();
+                assert_eq!(
+                    (u32::from(cols), u32::from(rows)),
+                    (grid.cols(), grid.rows())
+                );
+                for row in 0..i32::from(rows) {
+                    for col in 0..i32::from(cols) {
+                        let blocked = map.is_blocked(tactical_rules::Cell(col as u16, row as u16));
+                        assert_eq!(
+                            blocked,
+                            !grid.is_walkable(cell(col, row)),
+                            "{id}/{}: {col},{row}",
+                            layout.id
+                        );
+                    }
+                }
+                // Every spawn is on an open cell, both sides can reach each other.
+                for spawn in map.hero_spawns().iter().chain(map.enemy_spawns()) {
+                    assert!(!map.is_blocked(*spawn), "{id}/{}: {spawn:?}", layout.id);
+                }
+                for hero in &drawn.heroes {
+                    let reach = grid.reachable_from(*hero);
+                    assert!(
+                        drawn.enemies.iter().all(|enemy| reach.contains(enemy)),
+                        "{id}/{}",
+                        layout.id
+                    );
+                }
+                // Cover sits on blocked cells and works along the line between cell centres: two
+                // open cells on either side of a cover cell see each other through that cover.
+                for obstacle in &layout.obstacles {
+                    if obstacle.cover == Cover::None {
+                        continue;
+                    }
+                    let mut proved = false;
+                    for &tactical_rules::Cell(col, row) in &obstacle.cells {
+                        for (dc, dr) in [(1_i32, 0_i32), (0, 1), (1, 1), (1, -1)] {
+                            let before = (i32::from(col) - dc, i32::from(row) - dr);
+                            let after = (i32::from(col) + dc, i32::from(row) + dr);
+                            let open = |(c, r): (i32, i32)| {
+                                c >= 0
+                                    && r >= 0
+                                    && c < i32::from(cols)
+                                    && r < i32::from(rows)
+                                    && !map.is_blocked(tactical_rules::Cell(c as u16, r as u16))
+                            };
+                            if open(before) && open(after) {
+                                let from = tactical_rules::Cell(before.0 as u16, before.1 as u16);
+                                let to = tactical_rules::Cell(after.0 as u16, after.1 as u16);
+                                let cover = map.cover_between(from, to, &[]).unwrap();
+                                assert!(
+                                    cover >= obstacle.cover,
+                                    "{id}/{}: {} through {col},{row}",
+                                    layout.id,
+                                    obstacle.id
+                                );
+                                proved = true;
+                            }
+                        }
+                    }
+                    // A cover object with no open cells on both sides still blocks movement.
+                    for &tactical_rules::Cell(col, row) in &obstacle.cells {
+                        assert!(
+                            map.is_blocked(tactical_rules::Cell(col, row)),
+                            "{id}/{}: {} blocks",
+                            layout.id,
+                            obstacle.id
+                        );
+                    }
+                    let _ = proved;
+                }
+            }
+        }
+        assert_eq!(scans, 4, "the four scan scenes are authored for the server");
+    }
+
+    #[test]
+    fn a_forced_scene_must_be_one_the_server_holds() {
+        assert!(force_scene(Some("nowhere")).is_err());
+    }
+
+    #[test]
+    fn the_server_stages_a_fight_on_the_story_location_unless_a_scene_is_forced() {
+        // Not forced in this process: the story place stands.
+        assert_eq!(staged_location("salt-quay".to_owned()), "salt-quay");
     }
 }

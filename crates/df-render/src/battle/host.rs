@@ -22,6 +22,8 @@ use super::{
     pacing::{BattleFps, FramePacer, Pace},
     scene_file::{BackdropLayer, BattleScene, GroundLayer, SplatFormat, SplatGrade, SplatLayer},
     sound::SoundEvent,
+    speech_bubble::SpeechBubble,
+    splash::{self, Gate, Phase, Readiness},
     splat::{
         ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, SplatFileLoader, SplatLoader,
         SplatTransform, pack_records,
@@ -46,7 +48,6 @@ pub enum Availability {
 
 #[derive(Clone, Debug, Default)]
 pub struct StageOptions {
-    pub reduced_motion: bool,
     /// Replace the scene's own splat layer with the built-in procedural ground.
     pub procedural_splats: bool,
     /// The painted ground and backdrop to show instead when the scene's splats cannot be drawn
@@ -62,6 +63,10 @@ pub struct StageOptions {
     /// Runs the stage's clock at this share of real time (a review harness captures slow motion
     /// strips with it); `None` is real time.
     pub slow: Option<f32>,
+    /// Which tier of a streamed scan to draw as the finest: 0 is the largest tier the scene
+    /// authors for the scan, 1 the next one down (the default of the live game), and so on, never
+    /// coarser than the scene's coarsest tier.
+    pub splat_lod: u32,
 }
 
 /// Quality held constant for benchmarks (`#battle-preview=...&fixed&budget=..&minc=..&rscale=..`).
@@ -79,6 +84,7 @@ struct Inner {
     container: Option<Element>,
     canvas: Option<HtmlCanvasElement>,
     hud: Option<Hud>,
+    speech: Option<SpeechBubble>,
     stage: Stage,
     renderer: Option<Renderer>,
     availability: Availability,
@@ -89,6 +95,13 @@ struct Inner {
     frame_handle: Option<i32>,
     disposed: bool,
     revealed: bool,
+    /// The loading splash over the battlefield, until the scene is resolved and revealed.
+    splash: Option<SplashDom>,
+    gate: Gate,
+    /// Whether the stage was busy at the last frame, for the `data-battlefield-busy` marker.
+    last_busy: bool,
+    /// Chunks resident, chunks wanted and whether the scan is complete, for the splash.
+    scan_progress: (u32, u32, bool),
     frames: u64,
     stats_every: u64,
     fallback: Option<(GroundLayer, BackdropLayer)>,
@@ -98,6 +111,61 @@ struct Inner {
     /// Where blows that landed go, with their intensity: the one hook the HUD's own hit-shake
     /// subscribes to. Without one they are dropped.
     impact_sink: Option<Rc<dyn Fn(ImpactEvent)>>,
+}
+
+/// The loading splash: the place, the mark and a bar driven by the real chunk count.
+struct SplashDom {
+    root: Element,
+    bar: Element,
+    note: Element,
+    note_text: String,
+}
+
+const MARK_SVG: &str = "<svg viewBox=\"0 0 64 64\" aria-hidden=\"true\"><path d=\"M32 3 58 18v28L32 61 6 46V18Z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\"/><path d=\"M32 3 19 40h26ZM6 18l13 22M58 18 45 40M19 40l13 21 13-21\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linejoin=\"round\"/></svg>";
+
+impl SplashDom {
+    fn mount(document: &web_sys::Document, host: &Element, place: &str) -> Result<Self, JsValue> {
+        let root = document.create_element("div")?;
+        root.set_class_name("bf-splash");
+        root.set_attribute("role", "status")?;
+        let child =
+            |parent: &Element, tag: &str, class: &str, text: &str| -> Result<Element, JsValue> {
+                let node = document.create_element(tag)?;
+                node.set_class_name(class);
+                if !text.is_empty() {
+                    node.set_text_content(Some(text));
+                }
+                parent.append_child(&node)?;
+                Ok(node)
+            };
+        let mark = child(&root, "div", "bf-splash-mark", "")?;
+        mark.set_inner_html(MARK_SVG);
+        child(&root, "div", "bf-splash-brand", "DungeonFlux")?;
+        child(&root, "div", "bf-splash-place", place)?;
+        let track = child(&root, "div", "bf-splash-track", "")?;
+        let bar = child(&track, "i", "bf-splash-bar", "")?;
+        let note_text = splash::label(0, 0, false);
+        let note = child(&root, "div", "bf-splash-note", &note_text)?;
+        host.append_child(&root)?;
+        Ok(Self {
+            root,
+            bar,
+            note,
+            note_text,
+        })
+    }
+
+    fn show(&mut self, loaded: u32, wanted: u32, complete: bool) {
+        let fraction = splash::progress(loaded, wanted, complete);
+        let _ = self
+            .bar
+            .set_attribute("style", &format!("transform:scaleX({fraction:.4})"));
+        let text = splash::label(loaded, wanted, complete);
+        if text != self.note_text {
+            self.note.set_text_content(Some(&text));
+            self.note_text = text;
+        }
+    }
 }
 
 /// The animation-frame closure, shared so the loop can reschedule itself and `dispose` can drop it.
@@ -124,7 +192,8 @@ impl BattleStage {
                 container: None,
                 canvas: None,
                 hud: None,
-                stage: Stage::new(scene, true),
+                speech: None,
+                stage: Stage::new(scene),
                 renderer: None,
                 availability: Availability::Unavailable(reason),
                 pacer: FramePacer::new(BattleFps::DEFAULT),
@@ -132,6 +201,10 @@ impl BattleStage {
                 frame_handle: None,
                 disposed: false,
                 revealed: false,
+                splash: None,
+                gate: Gate::new(0.0),
+                last_busy: false,
+                scan_progress: (0, 0, false),
                 frames: 0,
                 stats_every: 60,
                 fallback: None,
@@ -223,7 +296,14 @@ impl BattleStage {
                 return Self::unavailable(host, scene, UnavailableReason::NotMounted);
             }
         };
-        if let (Some(layer), Some(shared)) = (splat_layer, splat_shared) {
+        if let (Some(mut layer), Some(shared)) = (splat_layer, splat_shared) {
+            // The scene authors the largest tier worth drawing; the chosen level steps down from it.
+            layer.levels = layer.levels.map(|(finest, coarsest)| {
+                (
+                    finest.saturating_add(options.splat_lod).min(coarsest),
+                    coarsest,
+                )
+            });
             spawn_splat_load(
                 gpu.clone(),
                 layer,
@@ -236,15 +316,18 @@ impl BattleStage {
         }
         mark(host, "active");
         let _ = host.set_attribute("data-battlefield-adapter", &gpu.adapter_description);
-        let mut stage = Stage::new(scene, options.reduced_motion);
+        let mut stage = Stage::new(scene);
         if options.feel_off {
             stage.set_feel_enabled(false);
         }
+        let splash = SplashDom::mount(&document, host, &stage.scene().title).ok();
+        let speech = SpeechBubble::mount(&document, &container).ok();
         let inner = Rc::new(RefCell::new(Inner {
             host: host.clone(),
             container: Some(container),
             canvas: Some(canvas),
             hud: Some(hud),
+            speech,
             stage,
             renderer: Some(renderer),
             availability: Availability::Available,
@@ -255,6 +338,10 @@ impl BattleStage {
             frame_handle: None,
             disposed: false,
             revealed: false,
+            splash,
+            gate: Gate::new(now_ms()),
+            last_busy: false,
+            scan_progress: (0, 0, false),
             frames: 0,
             stats_every: 30,
             fallback: options.fallback_layers,
@@ -309,6 +396,17 @@ impl BattleStage {
         self.inner.borrow_mut().stage.set_tempo_intensity(permille);
     }
 
+    /// Whether the scene is resolved: the scan at the chosen level fully drawn, its art arrived
+    /// and the figures placed. Until then the loading splash holds and nothing of the fight plays.
+    pub fn is_resolved(&self) -> bool {
+        self.inner.borrow().gate.resolved()
+    }
+
+    /// How far the scan has got: chunks resident, chunks wanted and whether it is complete.
+    pub fn scan_progress(&self) -> (u32, u32, bool) {
+        self.inner.borrow().scan_progress
+    }
+
     /// Stops the loop and removes everything the stage added. Safe to call more than once.
     pub fn dispose(&self) {
         let mut inner = self.inner.borrow_mut();
@@ -330,6 +428,12 @@ fn teardown(inner: &mut Inner) {
     }
     if let Some(hud) = inner.hud.take() {
         hud.dispose();
+    }
+    if let Some(bubble) = inner.speech.take() {
+        bubble.dispose();
+    }
+    if let Some(splash) = inner.splash.take() {
+        splash.root.remove();
     }
     inner.renderer = None;
     inner.canvas = None;
@@ -386,9 +490,12 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     // The simulation advances by real time since the previous presented frame, so speeds are
     // unchanged by the cap.
     let delta_ms = elapsed_ms.clamp(0.0, 100.0) * state.time_scale;
-    state
-        .stage
-        .update(Duration::from_secs_f64(delta_ms / 1000.0));
+    // Nothing of the fight plays behind the loading splash: the stage clock waits for it.
+    if state.gate.resolved() {
+        state
+            .stage
+            .update(Duration::from_secs_f64(delta_ms / 1000.0));
+    }
     for event in state.stage.take_sounds() {
         if let Some(sink) = &state.sound_sink {
             sink(event);
@@ -443,16 +550,67 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     };
     renderer.observe_frame_cost(cost_ms, period_ms);
     state.frames += 1;
-    // Show the battlefield once its art has arrived (or after a moment regardless), so the table
-    // does not watch placeholder discs turn into figures.
-    if !state.revealed
-        && state.frames > 2
-        && (renderer.pending_loads() == 0 || state.frames > REVEAL_AFTER_FRAMES)
-    {
+    // The splash holds until the scan at the chosen level is resolved, the art has arrived and the
+    // figures stand on their cells; then one transition reveals the finished scene.
+    let (scan, loaded, wanted) = match renderer.splat_shared() {
+        Some(splat) => {
+            let shared = splat.borrow();
+            let finished = matches!(shared.state, LoadState::Complete | LoadState::Failed);
+            (
+                finished || renderer.splat_unusable(),
+                shared.stats.chunks_loaded,
+                shared.stats.chunks_wanted,
+            )
+        }
+        None => (true, 0, 0),
+    };
+    let complete = scan && wanted > 0;
+    state.scan_progress = (loaded, wanted, complete);
+    let phase = state.gate.observe(
+        now_ms(),
+        Readiness {
+            scan,
+            art: renderer.pending_loads() == 0 || state.frames > REVEAL_AFTER_FRAMES,
+            figures: state.stage.tokens().next().is_some(),
+        },
+    );
+    if let Some(dom) = &mut state.splash {
+        dom.show(loaded, wanted, scan);
+        match phase {
+            Phase::Holding => {}
+            Phase::Revealing => {
+                let _ = dom.root.set_attribute("data-leaving", "");
+            }
+            Phase::Gone => {
+                dom.root.remove();
+            }
+        }
+        if phase == Phase::Gone {
+            state.splash = None;
+        }
+    }
+    if phase != Phase::Holding && !state.revealed {
         state.revealed = true;
         if let Some(container) = &state.container {
             let _ = container.set_attribute("data-ready", "");
         }
+    }
+    // A harness (and the display's battle machine, through `is_busy`) reads when the stage is
+    // playing something, including the held beat after the deciding blow.
+    let busy = state.stage.is_busy();
+    if busy != state.last_busy {
+        state.last_busy = busy;
+        let _ = state
+            .host
+            .set_attribute("data-battlefield-busy", if busy { "1" } else { "0" });
+    }
+    if state.frames.is_multiple_of(state.stats_every) {
+        let label = match phase {
+            Phase::Holding => "holding",
+            Phase::Revealing => "revealing",
+            Phase::Gone => "gone",
+        };
+        let _ = state.host.set_attribute("data-battlefield-splash", label);
     }
     if let Some(hud) = &mut state.hud {
         let aspect = width as f32 / height.max(1) as f32;
@@ -460,6 +618,11 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
             fail(state, UnavailableReason::NotMounted);
             return;
         }
+    }
+    if let (Some(bubble), Some(container)) = (&mut state.speech, &state.container) {
+        let aspect = width as f32 / height.max(1) as f32;
+        // A bubble that cannot be drawn is cosmetic; the fight carries on without it.
+        let _ = bubble.update(container, &state.stage, &frame, aspect);
     }
     if !state.fallback_applied
         && let Some((ground, backdrop)) = state.fallback.clone()

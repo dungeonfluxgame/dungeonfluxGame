@@ -62,6 +62,10 @@ pub enum SoundKind {
     InitiativeStop,
     /// The heavier hit at the last stop.
     InitiativeFinal,
+    /// The sting when the party wins a fight.
+    VictorySting,
+    /// The toll when the party falls.
+    DefeatSting,
 }
 
 /// How graphic the combat sound is. The game is for adults, so `Mature` is the default; the
@@ -196,6 +200,8 @@ impl SoundEvent {
             SoundKind::DiceRattle => &["dice-rattle"],
             SoundKind::DiceLand | SoundKind::InitiativeFinal => &["dice-land"],
             SoundKind::InitiativeStop => &["bubble-pop"],
+            SoundKind::VictorySting => &["victory-fanfare"],
+            SoundKind::DefeatSting => &["defeat-toll"],
         }
     }
 }
@@ -257,6 +263,9 @@ pub const ALL_CLIPS: &[&str] = &[
     "dice-rattle",
     "dice-land",
     "bubble-pop",
+    // The stings that end a fight, from the display's sound effects.
+    "victory-fanfare",
+    "defeat-toll",
     // The plainer impact used by the restrained set; part of the original pack.
     "hit",
 ];
@@ -379,6 +388,8 @@ mod tests {
             SoundKind::DiceLand,
             SoundKind::InitiativeStop,
             SoundKind::InitiativeFinal,
+            SoundKind::VictorySting,
+            SoundKind::DefeatSting,
         ];
         let mut used = std::collections::BTreeSet::new();
         for rating in [ContentRating::Mature, ContentRating::Restrained] {

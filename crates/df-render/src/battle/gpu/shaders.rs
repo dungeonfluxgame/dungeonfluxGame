@@ -170,7 +170,7 @@ fn cell_code(col: i32, row: i32) -> f32 {
     if (col < 0 || row < 0 || col >= cols || row >= rows) {
         return 0.0;
     }
-    return grid[32 + row * cols + col];
+    return grid[36 + row * cols + col];
 }
 
 fn code_colour(code: f32) -> vec3<f32> {
@@ -240,7 +240,12 @@ fn shade(in: VOut) -> vec4<f32> {
     let underlay = max(halo.x * alive.x, halo.y * alive.y) * grid[12];
     var alpha = clamp(core_alpha + underlay * (1.0 - core_alpha), 0.0, 1.0);
     var rgb = core_rgb + glow_rgb * (1.0 - core_alpha);
-    var strength = centre_fade;
+    // And dimmer toward the border of the play area; reachable and target lines keep most of
+    // their strength so they stay clearly above the base grid.
+    let edge_cells = min(min(p.x, grid[3] - p.x), min(p.y, grid[4] - p.y));
+    let edge_fade = mix(grid[33], 1.0, smoothstep(0.0, grid[32], edge_cells));
+    let lit = step(3.5, max(code_x, code_z));
+    var strength = mix(centre_fade * edge_fade, mix(centre_fade * edge_fade, 1.0, 0.75), lit);
     if (in.behind > 0.5) {
         strength = strength * grid[13];
     }
@@ -365,7 +370,7 @@ fn shade(in: VOut) -> vec4<f32> {
     if (kind == 9) {
         // A rotating reticle: a ring with four ticks.
         let c = in.c;
-        let ang = frame.eye.w * 0.9 * (1.0 - in.params.y);
+        let ang = frame.eye.w * 0.9;
         let r = vec2<f32>(c.x * cos(ang) - c.y * sin(ang), c.x * sin(ang) + c.y * cos(ang));
         let d = length(c);
         let ring = 1.0 - smoothstep(0.0, 0.1, abs(d - 0.62));
@@ -377,7 +382,7 @@ fn shade(in: VOut) -> vec4<f32> {
     if (kind == 10) {
         // A thin rotating dashed focus ring.
         let d = length(in.c);
-        let ang = atan2(in.c.y, in.c.x) + frame.eye.w * 0.8 * (1.0 - in.params.y);
+        let ang = atan2(in.c.y, in.c.x) + frame.eye.w * 0.8;
         let dash = step(0.5, fract(ang * 1.9099));
         let ring = 1.0 - smoothstep(0.0, 0.1, abs(d - 0.74));
         let a = ring * (0.5 + 0.5 * dash) * in.col.a;
@@ -461,7 +466,7 @@ struct Post {
     shadow: vec4<f32>,
     highlight: vec4<f32>,
     tilt: vec4<f32>,       // centre, band, fall-off, blur px
-    misc: vec4<f32>,       // vignette, flash strength, fade, tilt-shift on
+    misc: vec4<f32>,       // vignette, flash strength, unused, tilt-shift on
     flash: vec4<f32>,      // flash colour rgb
     shake: vec4<f32>,      // dx px, dy px, texel w, texel h
     motion: vec4<f32>,     // motion blur direction x, y (unit), blur px, radial punch
@@ -560,7 +565,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // The pulse when a hero is hit: the vignette flushes red for a moment.
     colour = colour + vec3<f32>(0.55, 0.03, 0.03) * vignette * post.split.z;
     colour = colour + post.flash.rgb * post.misc.y * 0.55;
-    colour = colour * (1.0 - post.misc.z);
     return vec4<f32>(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }
 "#;

@@ -256,6 +256,12 @@ downloaded) and point the server at it.
   to the next even divisor (15, 10, 7.5 fps for the 30 setting) and tries the faster rate again
   later. `data-battlefield-stats` reports `fps_target`, `fps_presented`, `fps_divisor`,
   `display_hz` and `cost_ms`. The `#battle-preview` address takes `&fps=24` or `&fps=30`.
+- `DF_GAMEPLAY_SPLAT_LOD=<0-3>`: which tier of a streamed scan the battlefield draws as its finest;
+  default 1. Every scan is stored in tiers (level 0 the most splats, each next level about half as
+  many); the scene file authors the largest tier worth drawing for it (`levels`), which is level 0
+  here, and level 1 is the next one down (about half the splats, a lighter and faster load). A
+  tier never goes past the scene's coarsest one. Any other value
+  refuses startup. The `#battle-preview` address takes `&lod=<0-3>`.
 
 Run a real fight on a scan (the scans listed in `artifacts/tmp/splat-dl/README.txt`):
 
@@ -286,6 +292,41 @@ Battle feel (camera shake, hit-stop, slow motion, handheld sway, blur, particles
 reviewed with `&beat=graze|heavy|critical|miss|finish|selfheal|enemyhit` (stages one blow after the camera has
 idled), `&slow=0.4` (the stage clock at that share of real time, for frame strips), `&tempo=0..1000` (the tempo
 intensity the sway follows) and `&feel=off` (everything off, for measurements).
+
+### The `#battle-preview` address
+
+Open `/gameplay/display#battle-preview=<scene>[:<layout>][&option...]` (on the gameplay server, or
+any page that carries the display) to look at the battlefield without playing. Options are joined
+with `&` and may come in any order:
+
+| Option | Meaning |
+| --- | --- |
+| `<scene>` or `<scene>:<layout>` | A built-in scene id (`scan-village`, `salt-quay`, ...) and optionally one of its layouts; with no layout the preview cycles through them. |
+| `heroes=<n>` | How many heroes stand on the field (default 3: Tobin the fighter, Sylvie the archer, Nimrael; more repeat those figures), 1 up to what the layout seats. |
+| `enemies=<n>` | How many goblins stand opposite (default 1), 1 up to what the layout seats. |
+| `hold` | Stage the figures and stop (no scripted fight). With `orbit` the camera turns slowly. |
+| `shot=<name>` | Cut to a named camera: `tactical`, `combat_est`, `turn_focus`, `impact`, `ko`, `victory`. |
+| `cam=<x,y,z>,<distance>,<yaw>,<pitch>,<fov>` | A free camera. |
+| `place=<token>:<col>:<row>` | Stand a token on a cell (repeatable). |
+| `beat=<kind>` | Stage one thing after the camera has idled, then hold: `graze`, `heavy`, `critical`, `miss`, `finish` (one blow of that kind), `selfheal`, `enemyhit`, `shoot` (the archer across the field), `speak` (an enemy's line, then a hero's, each with its bubble and the camera easing in and back), `named`, `namedmiss`, `namedcrit` (a blow whose floating result names the attack), `chain` (every enemy strikes in a row: stacked results), `victory` (every foe brought down: the held victory beat), `defeat` (every hero brought down). |
+| `lod=<0-3>` | The scan tier drawn as the finest (default 1; 0 is the largest). |
+| `splat` | Replace the scene's scan with the built-in procedural ground. |
+| `sog=<name>`, `splatfile=<name>` | A splat scene served from `/assets/splat/`. |
+| `fixed`, `budget=<n>`, `minc=<x>`, `sscale=<s>`, `rscale=<s>`, `dbg=<bits>` | Hold the frame-quality ladder for benchmarks and switch debugging views. |
+| `fps=24` or `fps=30` | The presentation rate. |
+| `slow=<share>` | Run the stage clock at that share of real time, for frame strips. |
+| `tempo=<0-1000>` | The tempo intensity the camera sway follows. |
+| `feel=off` | Battle feel (shake, hit-stop, blur, particles) off, for measurements. |
+| `restrained` | The restrained content rating. |
+| `statuses`, `sheet`, `sheet=<page>`, `still`, `close` | Review modes: the status cycle, contact sheets of figures with statuses, the layout still (`close` frames it nearer). |
+
+The battlefield data attributes (`data-battlefield-splash`, `-stats`, `-load`, `-figures`, `-demo`, `-line`,
+`-impact`, ...) on the host element tell a harness what is on screen.
+
+The loading splash holds over the battlefield (place, mark and a bar driven by the real chunk count) until the
+scan at the chosen tier is fully resolved, its art has arrived and the figures are placed; the stage clock waits
+behind it, so nothing of the fight plays early; then it fades out over the finished scene. The display's battle
+machine reads `live_battlefield::scene_resolved()`; a lost scan never holds longer than 45 seconds.
 
 Fitting a new scan or area is done with the native authoring tool, which reads the finest
 on-disk level, estimates the ground height field from the splats and marks cells a figure cannot
