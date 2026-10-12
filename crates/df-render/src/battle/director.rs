@@ -13,7 +13,7 @@ use super::{
     grid::{Cell, Grid},
     model::{
         AttackResult, AttackStyle, Beat, CameraCommand, CameraFocus, FloatTone, Highlight,
-        HighlightKind, Side, Token, TokenId,
+        HighlightKind, InitiativeRoll, Side, Token, TokenId,
     },
     sound::SoundKind,
 };
@@ -40,6 +40,7 @@ pub const FLIGHT: Duration = Duration::from_millis(400);
 const MAX_APPROACH: Duration = Duration::from_millis(1800);
 const MIN_STEP: Duration = Duration::from_millis(150);
 /// The fall's body lands on the ground this far into the fall animation.
+pub const READY: Duration = Duration::from_millis(700);
 pub const FALL_LANDS: Duration = Duration::from_millis(560);
 /// Extra time the impact shot stays up after a hit that deals damage.
 pub const IMPACT_HOLD: Duration = Duration::from_millis(1800);
@@ -55,6 +56,19 @@ pub enum Anim {
     Heal,
     /// Lean back drawing a bow toward the target, then snap forward on release.
     Draw { toward: TokenId },
+    /// The "ready" flourish at a roll-call stop.
+    Ready { style: ReadyStyle },
+}
+
+/// How a combatant shows it is ready at its roll-call stop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadyStyle {
+    /// A hero lifts a weapon and settles.
+    Brandish,
+    /// A creature snarls, lunging up and rocking back.
+    Snarl,
+    /// The archer nocks an arrow.
+    Nock,
 }
 
 impl Anim {
@@ -65,6 +79,7 @@ impl Anim {
             Self::Fall => FALL,
             Self::Heal => HEAL,
             Self::Draw { .. } => DRAW,
+            Self::Ready { .. } => READY,
         }
     }
 }
@@ -124,6 +139,41 @@ pub enum Step {
     },
     /// Rings the token being aimed at, with its name tag (or clears it).
     Target(Option<TokenId>),
+    /// A fast whip of the camera (a cut with a cross-fade under reduced motion).
+    Whip {
+        command: CameraCommand,
+        travel: Duration,
+    },
+    /// The big banner text ("Roll for initiative", "Round 1"), or none.
+    Banner(Option<String>),
+    /// Starts an initiative sequence: the tracker empties and refills as the camera visits.
+    InitiativeStart,
+    /// A d20 appears above a figure and tumbles (appearing already landed under reduced motion).
+    InitiativeDie {
+        token: TokenId,
+        die: u32,
+        modifier: i32,
+        total: i32,
+    },
+    InitiativeLand {
+        token: TokenId,
+    },
+    /// The order badge slams in beside the figure.
+    InitiativeBadge {
+        token: TokenId,
+        order: u32,
+        total: i32,
+    },
+    /// The figure's portrait pops into the round tracker.
+    TrackerReveal(TokenId),
+    /// Clears the dice and badges and lets the tracker show everyone.
+    InitiativeEnd,
+    /// The percussive hit of a roll-call stop; `index` raises the pitch, `last` makes it heavy.
+    Sting {
+        token: TokenId,
+        index: u32,
+        last: bool,
+    },
     /// An arrow in flight from one token to another. A miss flies past the target.
     Projectile {
         from: TokenId,
@@ -184,7 +234,19 @@ fn camera(shot: ShotName, focus: CameraFocus, dolly: f32) -> CameraCommand {
 /// (home) cells; the attacker's steps are planned from home and the stage resolves where it
 /// actually stands.
 pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, PlanError> {
+    plan_with(grid, tokens, beat, false)
+}
+
+/// As [`plan`], telling the director whether motion is reduced (the initiative dice then appear
+/// already landed and the sequence is shorter). Outcomes never depend on it.
+pub fn plan_with(
+    grid: &Grid,
+    tokens: &[Token],
+    beat: &Beat,
+    reduced_motion: bool,
+) -> Result<Timeline, PlanError> {
     match beat {
+        Beat::Initiative { rolls } => plan_initiative(tokens, rolls, reduced_motion),
         Beat::TurnStart { actor } => plan_turn(tokens, actor),
         Beat::Approach { attacker, target } => {
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
@@ -251,6 +313,233 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
             target_hit_points_after,
         } => plan_heal(tokens, source, target, *amount, *target_hit_points_after),
     }
+}
+
+/// Gap between one combatant's die and the next, and how long a die tumbles.
+const DICE_STAGGER: Duration = Duration::from_millis(280);
+const DICE_TUMBLE: Duration = Duration::from_millis(800);
+/// Under reduced motion the dice appear landed, one after another.
+const DICE_STAGGER_REDUCED: Duration = Duration::from_millis(160);
+const DICE_READ: Duration = Duration::from_millis(700);
+/// One roll-call stop is about a second; the whole roll-call never runs past this.
+pub const STOP: Duration = Duration::from_millis(1000);
+pub const MAX_ROLL_CALL: Duration = Duration::from_millis(7000);
+const MIN_STOP: Duration = Duration::from_millis(500);
+/// Combatants beyond this many are visited together, as one sweep, instead of one by one.
+pub const MAX_INDIVIDUAL_STOPS: usize = 6;
+const ROUND_BANNER: Duration = Duration::from_millis(1100);
+
+/// The start-of-fight sequence: the establishing shot and the banner, a d20 for every combatant
+/// in seat order, then the roll-call (the camera whips to each combatant in the server's turn
+/// order, a badge slams in, a flourish plays and the tracker fills), a pull-back, the "Round 1"
+/// banner and the first turn-focus shot. The order is exactly `rolls`; nothing is re-sorted.
+fn plan_initiative(
+    tokens: &[Token],
+    rolls: &[InitiativeRoll],
+    reduced_motion: bool,
+) -> Result<Timeline, PlanError> {
+    let mut builder = Builder { steps: Vec::new() };
+    for roll in rolls {
+        find(tokens, &roll.token)?;
+    }
+    let Some(first) = rolls.first() else {
+        return Ok(builder.finish(Duration::ZERO));
+    };
+    builder.at(Duration::ZERO, Step::InitiativeStart);
+    builder.at(Duration::ZERO, Step::SetActive(None));
+    builder.at(
+        Duration::ZERO,
+        Step::Camera {
+            command: camera(ShotName::CombatEst, CameraFocus::Scene, 1.0),
+            pan: Duration::from_millis(900),
+        },
+    );
+    builder.at(
+        Duration::from_millis(500),
+        Step::Banner(Some("Roll for initiative".to_owned())),
+    );
+
+    // The dice: seat order is the order of `tokens`.
+    let dice_start = Duration::from_millis(1000);
+    let (stagger, tumble) = if reduced_motion {
+        (DICE_STAGGER_REDUCED, Duration::ZERO)
+    } else {
+        (DICE_STAGGER, DICE_TUMBLE)
+    };
+    let seated: Vec<&InitiativeRoll> = tokens
+        .iter()
+        .filter_map(|token| rolls.iter().find(|roll| roll.token == token.id))
+        .collect();
+    let mut all_landed = dice_start;
+    for (index, roll) in seated.iter().enumerate() {
+        let appears = dice_start + stagger * index as u32;
+        let lands = appears + tumble;
+        builder.at(
+            appears,
+            Step::InitiativeDie {
+                token: roll.token.clone(),
+                die: roll.die,
+                modifier: roll.modifier,
+                total: roll.total,
+            },
+        );
+        if !reduced_motion {
+            builder.at(
+                appears,
+                Step::Sound {
+                    kind: SoundKind::DiceRattle,
+                    token: roll.token.clone(),
+                },
+            );
+            builder.at(
+                lands,
+                Step::InitiativeLand {
+                    token: roll.token.clone(),
+                },
+            );
+        }
+        builder.at(
+            lands,
+            Step::Sound {
+                kind: SoundKind::DiceLand,
+                token: roll.token.clone(),
+            },
+        );
+        all_landed = all_landed.max(lands);
+    }
+
+    // The roll-call, in the server's order.
+    let roll_call = all_landed + DICE_READ;
+    builder.at(roll_call, Step::Banner(None));
+    let individual = rolls.len().min(MAX_INDIVIDUAL_STOPS);
+    let grouped = &rolls[individual..];
+    let stops = individual + usize::from(!grouped.is_empty());
+    let per_stop = (MAX_ROLL_CALL / stops as u32).clamp(MIN_STOP, STOP);
+    let travel = (per_stop * 3 / 10).min(Duration::from_millis(350));
+    let ready_for = |token: &Token| {
+        if token.side == Side::Enemy {
+            ReadyStyle::Snarl
+        } else if token.attack == AttackStyle::Ranged {
+            ReadyStyle::Nock
+        } else {
+            ReadyStyle::Brandish
+        }
+    };
+    for (index, roll) in rolls.iter().take(individual).enumerate() {
+        let at = roll_call + per_stop * index as u32;
+        let arrive = at + travel;
+        let token = find(tokens, &roll.token)?;
+        builder.at(
+            at,
+            Step::Whip {
+                command: camera(ShotName::Victory, CameraFocus::Token(roll.token.clone()), 0.8),
+                travel,
+            },
+        );
+        builder.at(
+            arrive,
+            Step::Animate {
+                token: roll.token.clone(),
+                anim: Anim::Ready {
+                    style: ready_for(token),
+                },
+            },
+        );
+        builder.at(
+            arrive,
+            Step::InitiativeBadge {
+                token: roll.token.clone(),
+                order: index as u32 + 1,
+                total: roll.total,
+            },
+        );
+        builder.at(arrive, Step::TrackerReveal(roll.token.clone()));
+        builder.at(
+            arrive,
+            Step::Sting {
+                token: roll.token.clone(),
+                index: index as u32,
+                last: index + 1 == stops,
+            },
+        );
+    }
+    if let (Some(head), Some(tail)) = (grouped.first(), grouped.last()) {
+        // One sweep over everyone left: a wide shot between the first and last of them.
+        let at = roll_call + per_stop * individual as u32;
+        let arrive = at + travel;
+        builder.at(
+            at,
+            Step::Whip {
+                command: camera(
+                    ShotName::Impact,
+                    CameraFocus::Between(head.token.clone(), tail.token.clone()),
+                    1.5,
+                ),
+                travel,
+            },
+        );
+        for (offset, roll) in grouped.iter().enumerate() {
+            let token = find(tokens, &roll.token)?;
+            builder.at(
+                arrive,
+                Step::Animate {
+                    token: roll.token.clone(),
+                    anim: Anim::Ready {
+                        style: ready_for(token),
+                    },
+                },
+            );
+            builder.at(
+                arrive,
+                Step::InitiativeBadge {
+                    token: roll.token.clone(),
+                    order: (individual + offset) as u32 + 1,
+                    total: roll.total,
+                },
+            );
+            builder.at(arrive, Step::TrackerReveal(roll.token.clone()));
+        }
+        builder.at(
+            arrive,
+            Step::Sting {
+                token: head.token.clone(),
+                index: individual as u32,
+                last: true,
+            },
+        );
+    }
+
+    // Pull back, then the round banner and the first turn.
+    let over = roll_call + per_stop * stops as u32;
+    builder.at(
+        over,
+        Step::Whip {
+            command: camera(ShotName::Tactical, CameraFocus::Scene, 1.0),
+            travel: Duration::from_millis(350),
+        },
+    );
+    builder.at(over + Duration::from_millis(150), Step::InitiativeEnd);
+    let banner = over + Duration::from_millis(450);
+    builder.at(banner, Step::Banner(Some("Round 1".to_owned())));
+    let turn = banner + ROUND_BANNER;
+    builder.at(turn, Step::Banner(None));
+    builder.at(turn, Step::SetActive(Some(first.token.clone())));
+    let first_token = find(tokens, &first.token)?;
+    builder.at(
+        turn,
+        Step::Camera {
+            command: camera(ShotName::TurnFocus, CameraFocus::Token(first.token.clone()), 1.0),
+            pan: FOCUS_PAN,
+        },
+    );
+    builder.at(
+        turn,
+        Step::Highlight(Some(Highlight {
+            kind: HighlightKind::Move,
+            cells: vec![first_token.cell],
+        })),
+    );
+    Ok(builder.finish(turn + FOCUS_PAN))
 }
 
 fn plan_turn(tokens: &[Token], actor: &TokenId) -> Result<Timeline, PlanError> {
@@ -750,6 +1039,7 @@ mod tests {
                     Anim::Fall => "fall",
                     Anim::Heal => "heal",
                     Anim::Draw { .. } => "draw",
+                    Anim::Ready { .. } => "ready",
                 },
                 Step::Shake { .. } => "shake",
                 Step::Flash { .. } => "flash",
@@ -772,7 +1062,22 @@ mod tests {
                     SoundKind::BodyFall => "snd-body-fall",
                     SoundKind::HealBreath => "snd-heal",
                     SoundKind::Footstep => "snd-step",
+                    SoundKind::DiceRattle => "snd-dice-rattle",
+                    SoundKind::DiceLand => "snd-dice-land",
+                    SoundKind::InitiativeStop => "snd-stop",
+                    SoundKind::InitiativeFinal => "snd-final",
                 },
+                Step::Whip { .. } => "whip",
+                Step::Banner(Some(text)) if text.starts_with("Roll") => "banner-roll",
+                Step::Banner(Some(_)) => "banner-round",
+                Step::Banner(None) => "banner-off",
+                Step::InitiativeStart => "init-start",
+                Step::InitiativeDie { .. } => "die",
+                Step::InitiativeLand { .. } => "die-land",
+                Step::InitiativeBadge { .. } => "badge",
+                Step::TrackerReveal(_) => "tracker",
+                Step::InitiativeEnd => "init-end",
+                Step::Sting { .. } => "sting",
                 Step::Target(Some(_)) => "target",
                 Step::Target(None) => "untarget",
                 Step::Projectile { .. } => "arrow",
@@ -1178,5 +1483,252 @@ mod tests {
         assert!(path.len() > 4, "detours around the wall: {path:?}");
         assert!(blocked.is_walkable(beside));
         let _ = grid;
+    }
+
+    fn roll(id: &str, die: u32, modifier: i32) -> InitiativeRoll {
+        InitiativeRoll {
+            token: TokenId::new(id),
+            die,
+            modifier,
+            total: die as i32 + modifier,
+        }
+    }
+
+    /// Heroes and the goblin on a field, seats in the order given; `order` is the server's.
+    fn crowd(count: usize) -> (Vec<Token>, Vec<InitiativeRoll>) {
+        let tokens: Vec<Token> = (0..count)
+            .map(|index| {
+                let side = if index < 2 { Side::Hero } else { Side::Enemy };
+                token(&format!("c{index}"), side, Cell::new(index as i32 % 8, 1 + index as i32 / 8))
+            })
+            .collect();
+        // The server's order, deliberately not the seat order.
+        let mut rolls: Vec<InitiativeRoll> = tokens
+            .iter()
+            .enumerate()
+            .map(|(index, token)| roll(&token.id.0, 3 + (index as u32 * 7) % 17, 1))
+            .collect();
+        rolls.sort_by_key(|roll| std::cmp::Reverse(roll.total));
+        (tokens, rolls)
+    }
+
+    fn badge_order(timeline: &Timeline) -> Vec<(String, u32)> {
+        timeline
+            .steps
+            .iter()
+            .filter_map(|timed| match &timed.step {
+                Step::InitiativeBadge { token, order, .. } => Some((token.0.clone(), *order)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn whip_targets(timeline: &Timeline) -> Vec<String> {
+        timeline
+            .steps
+            .iter()
+            .filter_map(|timed| match &timed.step {
+                Step::Whip {
+                    command:
+                        CameraCommand {
+                            focus: CameraFocus::Token(id),
+                            ..
+                        },
+                    ..
+                } => Some(id.0.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_initiative_runs_banner_dice_roll_call_tracker_pull_back_round_banner_first_turn() {
+        let (grid, _) = field();
+        let (tokens, rolls) = crowd(3);
+        let timeline = plan(&grid, &tokens, &Beat::Initiative { rolls }).unwrap();
+        let labels = names(&timeline);
+        let order = [
+            "init-start",
+            "banner-roll",
+            "die",
+            "snd-dice-rattle",
+            "die-land",
+            "snd-dice-land",
+            "banner-off",
+            "whip",
+            "ready",
+            "badge",
+            "tracker",
+            "sting",
+            "banner-round",
+        ];
+        let positions: Vec<usize> = order.iter().map(|name| position(&labels, name)).collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{labels:?}");
+        assert_eq!(labels.last(), Some(&"highlight"));
+        assert!(labels[labels.len() - 3..].contains(&"focus"), "ends on the first turn-focus shot");
+        // Every die lands before the first stop; the last one is the pull-back whip.
+        let last_land = *times_of(&timeline, "die-land").last().unwrap();
+        let first_whip = times_of(&timeline, "whip")[0];
+        assert!(last_land < first_whip);
+        let whips = times_of(&timeline, "whip");
+        let tracker = times_of(&timeline, "tracker");
+        assert_eq!(tracker.len(), 3);
+        assert!(tracker.windows(2).all(|pair| pair[0] < pair[1]), "fills in order, one stop at a time");
+        assert_eq!(whips.len(), 4, "three stops and the pull-back");
+    }
+
+    #[test]
+    fn the_stops_follow_the_servers_order_and_the_badges_count_up() {
+        let (grid, _) = field();
+        let (tokens, rolls) = crowd(4);
+        let server_order: Vec<String> = rolls.iter().map(|roll| roll.token.0.clone()).collect();
+        let timeline = plan(&grid, &tokens, &Beat::Initiative { rolls }).unwrap();
+        assert_eq!(whip_targets(&timeline)[..4], server_order[..]);
+        let badges = badge_order(&timeline);
+        assert_eq!(
+            badges.iter().map(|(_, order)| *order).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(badges.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(), server_order);
+        // The dice are rolled in seat order, which is not the turn order.
+        let dice: Vec<String> = timeline
+            .steps
+            .iter()
+            .filter_map(|timed| match &timed.step {
+                Step::InitiativeDie { token, .. } => Some(token.0.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dice, vec!["c0", "c1", "c2", "c3"]);
+        assert_ne!(dice, server_order);
+    }
+
+    #[test]
+    fn a_tie_is_shown_in_the_order_the_server_resolved_it_whichever_way_that_went() {
+        let (grid, _) = field();
+        let (tokens, _) = crowd(3);
+        for tie_winner in ["c1", "c2"] {
+            let loser = if tie_winner == "c1" { "c2" } else { "c1" };
+            let rolls = vec![roll("c0", 19, 1), roll(tie_winner, 12, 2), roll(loser, 12, 2)];
+            assert_eq!(rolls[1].total, rolls[2].total, "a genuine tie");
+            let timeline = plan(&grid, &tokens, &Beat::Initiative { rolls }).unwrap();
+            assert_eq!(whip_targets(&timeline)[..3], ["c0", tie_winner, loser]);
+            let badges = badge_order(&timeline);
+            assert_eq!(badges[1], (tie_winner.to_owned(), 2));
+            assert_eq!(badges[2], (loser.to_owned(), 3));
+        }
+    }
+
+    #[test]
+    fn the_roll_call_never_runs_past_the_cap_however_many_fight() {
+        let (grid, _) = field();
+        for count in [2usize, 3, 6, 7, 10, 14] {
+            let (tokens, rolls) = crowd(count);
+            let timeline = plan(&grid, &tokens, &Beat::Initiative { rolls }).unwrap();
+            let first = times_of(&timeline, "whip")[0];
+            let pull_back = *times_of(&timeline, "whip").last().unwrap();
+            assert!(
+                pull_back - first <= MAX_ROLL_CALL,
+                "{count} combatants: roll-call {:?}",
+                pull_back - first
+            );
+            // About a second a combatant while that fits.
+            if count <= 6 {
+                assert!(pull_back - first >= STOP * count as u32 - Duration::from_millis(1));
+            }
+            assert_eq!(badge_order(&timeline).len(), count, "everyone gets an order badge");
+            assert_eq!(times_of(&timeline, "tracker").len(), count);
+        }
+    }
+
+    #[test]
+    fn beyond_six_the_remaining_enemies_are_swept_in_one_stop() {
+        let (grid, _) = field();
+        let (tokens, rolls) = crowd(9);
+        let timeline = plan(&grid, &tokens, &Beat::Initiative { rolls }).unwrap();
+        let whips = times_of(&timeline, "whip");
+        assert_eq!(whips.len(), MAX_INDIVIDUAL_STOPS + 2, "six stops, one sweep, the pull-back");
+        let sweep_badges: Vec<Duration> = timeline
+            .steps
+            .iter()
+            .filter_map(|timed| match &timed.step {
+                Step::InitiativeBadge { order, .. } if *order as usize > MAX_INDIVIDUAL_STOPS => {
+                    Some(timed.at)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sweep_badges.len(), 3);
+        assert!(sweep_badges.windows(2).all(|pair| pair[0] == pair[1]), "all at once");
+        assert_eq!(times_of(&timeline, "sting").len(), MAX_INDIVIDUAL_STOPS + 1);
+    }
+
+    #[test]
+    fn the_stings_rise_and_the_last_one_is_the_heavy_hit() {
+        let (grid, _) = field();
+        let (tokens, rolls) = crowd(4);
+        let timeline = plan(&grid, &tokens, &Beat::Initiative { rolls }).unwrap();
+        let stings: Vec<(u32, bool)> = timeline
+            .steps
+            .iter()
+            .filter_map(|timed| match &timed.step {
+                Step::Sting { index, last, .. } => Some((*index, *last)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stings, vec![(0, false), (1, false), (2, false), (3, true)]);
+    }
+
+    #[test]
+    fn each_kind_of_combatant_gets_its_own_ready_flourish() {
+        let (grid, _) = field();
+        let (mut tokens, rolls) = crowd(3);
+        tokens[1].attack = AttackStyle::Ranged;
+        let timeline = plan(&grid, &tokens, &Beat::Initiative { rolls }).unwrap();
+        let mut styles = std::collections::BTreeMap::new();
+        for timed in &timeline.steps {
+            if let Step::Animate {
+                token,
+                anim: Anim::Ready { style },
+            } = &timed.step
+            {
+                styles.insert(token.0.clone(), *style);
+            }
+        }
+        assert_eq!(styles["c0"], ReadyStyle::Brandish);
+        assert_eq!(styles["c1"], ReadyStyle::Nock);
+        assert_eq!(styles["c2"], ReadyStyle::Snarl);
+    }
+
+    #[test]
+    fn under_reduced_motion_the_dice_appear_landed_and_the_sequence_is_shorter() {
+        let (grid, _) = field();
+        let (tokens, rolls) = crowd(3);
+        let beat = Beat::Initiative { rolls };
+        let calm = plan_with(&grid, &tokens, &beat, true).unwrap();
+        let lively = plan_with(&grid, &tokens, &beat, false).unwrap();
+        let labels = names(&calm);
+        assert!(!labels.contains(&"snd-dice-rattle") && !labels.contains(&"die-land"));
+        assert!(calm.duration < lively.duration);
+        assert_eq!(whip_targets(&calm), whip_targets(&lively), "same order, same information");
+        assert_eq!(badge_order(&calm), badge_order(&lively));
+    }
+
+    #[test]
+    fn an_initiative_for_an_unknown_token_is_a_planning_error_and_an_empty_one_is_empty() {
+        let (grid, _) = field();
+        let (tokens, _) = crowd(3);
+        assert_eq!(
+            plan(
+                &grid,
+                &tokens,
+                &Beat::Initiative {
+                    rolls: vec![roll("ghost", 1, 0)]
+                }
+            ),
+            Err(PlanError::UnknownToken(TokenId::new("ghost")))
+        );
+        let empty = plan(&grid, &tokens, &Beat::Initiative { rolls: vec![] }).unwrap();
+        assert!(empty.steps.is_empty());
     }
 }

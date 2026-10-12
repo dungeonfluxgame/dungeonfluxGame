@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use super::{
     formation,
-    model::{AttackResult, AttackStyle, Beat, HitPoints, Side, Token, TokenId},
+    model::{AttackResult, AttackStyle, Beat, HitPoints, InitiativeRoll, Side, Token, TokenId},
     stage::Stage,
     status::Status,
 };
@@ -60,6 +60,15 @@ pub struct Outcome {
     pub downed: bool,
 }
 
+/// One recorded initiative roll as the server reports it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitiativeEntry {
+    pub id: String,
+    pub die: u32,
+    pub modifier: i32,
+    pub total: i32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CombatSnapshot {
     /// Party members in seat order, then enemies.
@@ -67,6 +76,11 @@ pub struct CombatSnapshot {
     pub active: Option<String>,
     pub round: u32,
     pub outcomes: Vec<Outcome>,
+    /// The server's recorded initiative rolls, first to act first. Empty when none are carried.
+    pub initiative: Vec<InitiativeEntry>,
+    /// The display watched this fight begin (it showed a non-combat view just before), rather than
+    /// loading into a fight already under way. Only then is the initiative moment staged.
+    pub begun_live: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -156,7 +170,31 @@ impl CombatFeed {
                 .iter()
                 .map(|member| (member.id.clone(), member.hit_points))
                 .collect();
+            let opening = snapshot.begun_live
+                && snapshot.outcomes.is_empty()
+                && snapshot.round <= 1
+                && !snapshot.initiative.is_empty();
+            if opening {
+                let rolls: Vec<InitiativeRoll> = snapshot
+                    .initiative
+                    .iter()
+                    .map(|entry| InitiativeRoll {
+                        token: TokenId::new(entry.id.clone()),
+                        die: entry.die,
+                        modifier: entry.modifier,
+                        total: entry.total,
+                    })
+                    .collect();
+                match stage.stage(Beat::Initiative { rolls }) {
+                    Ok(()) => report.staged += 1,
+                    Err(_) => report.dropped += 1,
+                }
+            }
         } else {
+            if !snapshot.outcomes.is_empty() || snapshot.round > 1 {
+                // Someone already acted: the initiative moment is history.
+                stage.skip_initiative();
+            }
             let fresh: Vec<&Outcome> = snapshot.outcomes.iter().skip(self.seen_outcomes).collect();
             self.seen_outcomes = snapshot.outcomes.len();
             let targets: Vec<TokenId> = fresh
@@ -209,13 +247,20 @@ impl CombatFeed {
         }
         stage.set_round(snapshot.round);
         stage.set_active(snapshot.active.clone().map(TokenId::new));
-        stage.set_initiative(
+        let order: Vec<TokenId> = if snapshot.initiative.is_empty() {
             snapshot
                 .members
                 .iter()
                 .map(|m| TokenId::new(m.id.clone()))
-                .collect(),
-        );
+                .collect()
+        } else {
+            snapshot
+                .initiative
+                .iter()
+                .map(|entry| TokenId::new(entry.id.clone()))
+                .collect()
+        };
+        stage.set_initiative(order);
         Some(report)
     }
 }
@@ -269,6 +314,8 @@ mod tests {
             active: Some("a".to_owned()),
             round: 1,
             outcomes,
+            initiative: vec![],
+            begun_live: false,
         }
     }
 
@@ -415,6 +462,8 @@ mod hold_tests {
             active: Some("a".to_owned()),
             round: 1,
             outcomes,
+            initiative: vec![],
+            begun_live: false,
         };
         feed.apply(&mut stage, &snapshot(12, vec![])).unwrap();
         let hit = Outcome {

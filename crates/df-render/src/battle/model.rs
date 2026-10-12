@@ -131,6 +131,67 @@ pub enum Beat {
         amount: u32,
         target_hit_points_after: Option<u32>,
     },
+    /// The start of a fight: everyone's d20 tumbles and lands, then the camera visits each
+    /// combatant in turn order. `rolls` are the server's recorded rolls, first to act first.
+    Initiative {
+        rolls: Vec<InitiativeRoll>,
+    },
+}
+
+/// One recorded initiative roll. Copied from the server; nothing is rolled here.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitiativeRoll {
+    pub token: TokenId,
+    pub die: u32,
+    pub modifier: i32,
+    pub total: i32,
+}
+
+/// 1 -> "1st", 2 -> "2nd", 11 -> "11th", 22 -> "22nd".
+pub fn ordinal(number: u32) -> String {
+    let suffix = match (number % 100, number % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    format!("{number}{suffix}")
+}
+
+/// A die above a figure during the initiative roll. It tumbles for `tumble_s` seconds after it
+/// appears (0 under reduced motion) and then shows its total.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DieView {
+    pub token: TokenId,
+    pub face: u32,
+    pub modifier: i32,
+    pub total: i32,
+    pub age_s: f32,
+    pub tumble_s: f32,
+    /// Set once the die has landed on its number.
+    pub landed: bool,
+}
+
+/// The big order badge that slams in beside a figure at its roll-call stop.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BadgeView {
+    pub token: TokenId,
+    pub order: u32,
+    pub name: String,
+    pub total: i32,
+    pub age_s: f32,
+}
+
+/// Everything the HUD shows for the initiative moment.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InitiativeShow {
+    pub banner: Option<String>,
+    pub dice: Vec<DieView>,
+    pub badges: Vec<BadgeView>,
+    /// While set, the round tracker shows only these tokens, in this order: it fills in as the
+    /// roll-call visits each combatant.
+    pub tracker: Option<Vec<TokenId>>,
 }
 
 /// What the HUD should show at the moment.
@@ -143,6 +204,7 @@ pub struct HudState {
     /// Turn order, first to act first. Empty means the order tokens were supplied in.
     pub initiative: Vec<TokenId>,
     pub finishing_blow: Option<FinishingBlow>,
+    pub roll_for_initiative: InitiativeShow,
 }
 
 /// What the d20 panel shows, copied from the server's roll description.

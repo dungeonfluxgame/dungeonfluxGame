@@ -56,6 +56,12 @@ pub enum SoundKind {
     Down,
     BodyFall,
     HealBreath,
+    DiceRattle,
+    DiceLand,
+    /// A short percussive hit at each roll-call stop; the stage raises its pitch stop by stop.
+    InitiativeStop,
+    /// The heavier hit at the last stop.
+    InitiativeFinal,
 }
 
 /// How graphic the combat sound is. The game is for adults, so `Mature` is the default; the
@@ -79,12 +85,14 @@ impl ContentRating {
 }
 
 /// One sound to play now. `token` is whose body it comes from.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SoundEvent {
     pub kind: SoundKind,
     pub voice: VoiceSet,
     pub surface: Surface,
     pub token: TokenId,
+    /// Playback speed: 1 normally, above 1 for a higher pitch (the rising roll-call stings).
+    pub rate: f32,
 }
 
 /// The voice set for a combatant. Heroes follow the figure art they stand as (`figure-hero-1` is
@@ -185,6 +193,9 @@ impl SoundEvent {
             ]),
             SoundKind::BodyFall => &["body-fall"],
             SoundKind::HealBreath => &["heal-breath"],
+            SoundKind::DiceRattle => &["dice-rattle"],
+            SoundKind::DiceLand | SoundKind::InitiativeFinal => &["dice-land"],
+            SoundKind::InitiativeStop => &["bubble-pop"],
         }
     }
 }
@@ -242,6 +253,10 @@ pub const ALL_CLIPS: &[&str] = &[
     "voice-humanoid-down",
     "body-fall",
     "heal-breath",
+    // Reused from the original pack for the initiative roll.
+    "dice-rattle",
+    "dice-land",
+    "bubble-pop",
     // The plainer impact used by the restrained set; part of the original pack.
     "hit",
 ];
@@ -303,6 +318,7 @@ mod tests {
             voice,
             surface,
             token: TokenId::new("t"),
+            rate: 1.0,
         }
     }
 
@@ -350,6 +366,10 @@ mod tests {
             SoundKind::Down,
             SoundKind::BodyFall,
             SoundKind::HealBreath,
+            SoundKind::DiceRattle,
+            SoundKind::DiceLand,
+            SoundKind::InitiativeStop,
+            SoundKind::InitiativeFinal,
         ];
         let mut used = std::collections::BTreeSet::new();
         for rating in [ContentRating::Mature, ContentRating::Restrained] {

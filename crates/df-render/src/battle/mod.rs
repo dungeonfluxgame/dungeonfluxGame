@@ -30,15 +30,17 @@ mod status;
 mod theme;
 
 pub use camera::{CameraPose, CameraRig, PoseError, ShotName};
-pub use combat_feed::{CombatFeed, CombatSnapshot, FeedMode, FeedReport, Member, Outcome};
-pub use director::{Anim, FlashTone, PlanError, Step, TimedStep, Timeline, plan};
+pub use combat_feed::{
+    CombatFeed, CombatSnapshot, FeedMode, FeedReport, InitiativeEntry, Member, Outcome,
+};
+pub use director::{Anim, FlashTone, PlanError, ReadyStyle, Step, TimedStep, Timeline, plan, plan_with};
 pub use figure_art::{VisibleBounds, visible_bounds};
 pub use formation::{Formation, FormationError, derive as derive_formation, from_layout};
 pub use grid::{Cell, Grid, GridError};
 pub use layout::{Cover, Layout, LayoutError, Obstacle, choose as choose_layout};
 pub use math::{Mat4, Quat, Vec3};
 pub use model::{
-    AttackResult, AttackStyle, Beat, CameraCommand, CameraFocus, FinishingBlow, FloatTone, FloatingText,
+    AttackResult, AttackStyle, BadgeView, Beat, DieView, InitiativeRoll, InitiativeShow, ordinal, CameraCommand, CameraFocus, FinishingBlow, FloatTone, FloatingText,
     Highlight, HighlightKind, HitPoints, HudState, RollCard, Side, Token, TokenId,
 };
 pub use scene_file::{

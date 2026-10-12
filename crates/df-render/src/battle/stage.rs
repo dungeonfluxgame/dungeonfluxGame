@@ -7,13 +7,13 @@ use std::{collections::VecDeque, time::Duration};
 
 use super::{
     camera::{CameraPose, CameraRig, ShotName},
-    director::{self, Anim, FALL_LANDS, FlashTone, PlanError, Step, Timeline},
+    director::{self, Anim, FALL_LANDS, FlashTone, PlanError, ReadyStyle, Step, Timeline},
     grid::{Cell, Grid},
     layout::{Cover, Layout},
     math::{Vec3, ease_in_out},
     model::{
-        Beat, CameraCommand, CameraFocus, FLOAT_LIFETIME_S, FinishingBlow, FloatingText, Highlight,
-        HitPoints, HudState, Side, Token, TokenId,
+        BadgeView, Beat, CameraCommand, CameraFocus, DieView, FLOAT_LIFETIME_S, FinishingBlow,
+        FloatingText, Highlight, HitPoints, HudState, InitiativeShow, Side, Token, TokenId,
     },
     scene_file::BattleScene,
     sound::{SoundEvent, SoundKind, voice_for},
@@ -96,6 +96,9 @@ struct Playback {
     next: usize,
     elapsed: Duration,
 }
+
+/// How long a tumbling initiative die spins before it shows its number.
+const DIE_TUMBLE_SECONDS: f32 = 0.8;
 
 #[derive(Clone, Copy, Debug)]
 struct Flash {
@@ -181,6 +184,9 @@ pub struct FrameView<'a> {
     pub floats: &'a [FloatingText],
     pub hud: &'a HudState,
     pub clock_s: f32,
+    pub reduced_motion: bool,
+    /// The restrained content rating: no blood in the effects.
+    pub restrained: bool,
 }
 
 pub struct Stage {
@@ -192,6 +198,9 @@ pub struct Stage {
     dropped_sounds: u32,
     projectiles: Vec<Projectile>,
     target: Option<TokenId>,
+    /// Whether the timeline now playing is the start-of-fight initiative sequence.
+    initiative_playing: bool,
+    restrained: bool,
     tokens: Vec<Runtime>,
     rig: CameraRig,
     playing: Option<Playback>,
@@ -233,6 +242,8 @@ impl Stage {
             dropped_sounds: 0,
             projectiles: Vec::new(),
             target: None,
+            initiative_playing: false,
+            restrained: false,
             scene,
             tokens: Vec::new(),
             playing: None,
@@ -286,6 +297,10 @@ impl Stage {
     }
 
     fn emit(&mut self, kind: SoundKind, token: &TokenId) {
+        self.emit_at_rate(kind, token, 1.0);
+    }
+
+    fn emit_at_rate(&mut self, kind: SoundKind, token: &TokenId, rate: f32) {
         let Some(index) = self.token_index(token) else {
             return;
         };
@@ -295,6 +310,7 @@ impl Stage {
             voice: voice_for(runtime.token.side, runtime.token.figure.as_deref()),
             surface: self.scene.surface,
             token: token.clone(),
+            rate,
         };
         if self.sounds.len() >= MAX_PENDING_SOUNDS {
             self.sounds.pop_front();
@@ -326,6 +342,45 @@ impl Stage {
 
     pub fn reduced_motion(&self) -> bool {
         self.reduced_motion
+    }
+
+    /// Whether the start-of-fight initiative sequence is playing.
+    pub fn is_rolling_initiative(&self) -> bool {
+        self.initiative_playing
+    }
+
+    /// Leaves the initiative sequence at once and cuts to the current turn: a newer accepted view
+    /// shows someone already acted, so the sequence is history.
+    pub fn skip_initiative(&mut self) {
+        if !self.initiative_playing {
+            return;
+        }
+        self.initiative_playing = false;
+        self.playing = None;
+        self.hud.roll_for_initiative = InitiativeShow::default();
+        for runtime in &mut self.tokens {
+            if matches!(runtime.anim.as_ref().map(|a| &a.anim), Some(Anim::Ready { .. })) {
+                runtime.anim = None;
+            }
+        }
+        let focus = self.hud.active.clone().map(CameraFocus::Token);
+        let command = CameraCommand {
+            shot: ShotName::TurnFocus,
+            focus: focus.unwrap_or(CameraFocus::Scene),
+            dolly: 1.0,
+        };
+        if let Some(pose) = self.camera_pose_for(&command) {
+            self.rig.cut_to(pose);
+        }
+    }
+
+    /// Mutes blood in the figure and tile effects (the restrained content rating).
+    pub fn set_restrained(&mut self, restrained: bool) {
+        self.restrained = restrained;
+    }
+
+    pub fn restrained(&self) -> bool {
+        self.restrained
     }
 
     pub fn set_reduced_motion(&mut self, reduced: bool) {
@@ -441,6 +496,11 @@ impl Stage {
             Beat::Heal { source, target, .. } => {
                 [source, target].into_iter().find(|id| !known(id)).cloned()
             }
+            Beat::Initiative { rolls } => rolls
+                .iter()
+                .map(|roll| &roll.token)
+                .find(|id| !known(id))
+                .cloned(),
         };
         if let Some(id) = missing {
             return Err(StageError::UnknownToken(id));
@@ -461,8 +521,14 @@ impl Stage {
 
     fn start_next(&mut self) {
         while let Some(beat) = self.queue.pop_front() {
-            match director::plan(&self.grid, &self.resting_tokens(), &beat) {
+            match director::plan_with(
+                &self.grid,
+                &self.resting_tokens(),
+                &beat,
+                self.reduced_motion,
+            ) {
                 Ok(timeline) => {
+                    self.initiative_playing = matches!(beat, Beat::Initiative { .. });
                     self.playing = Some(Playback {
                         timeline,
                         next: 0,
@@ -518,6 +584,15 @@ impl Stage {
                 active.landed = true;
                 runtime.thud_s = THUD_SECONDS;
             }
+        }
+        for die in &mut self.hud.roll_for_initiative.dice {
+            die.age_s += dt;
+            if die.age_s >= die.tumble_s {
+                die.landed = true;
+            }
+        }
+        for badge in &mut self.hud.roll_for_initiative.badges {
+            badge.age_s += dt;
         }
         for projectile in &mut self.projectiles {
             projectile.age_s += dt;
@@ -576,6 +651,7 @@ impl Stage {
             && playback.next >= playback.timeline.steps.len()
         {
             self.playing = None;
+            self.initiative_playing = false;
             self.start_next();
         } else {
             self.playing = Some(playback);
@@ -680,6 +756,81 @@ impl Stage {
             }
             Step::EndFinishingBlow => self.hud.finishing_blow = None,
             Step::Sound { kind, token } => self.emit(kind, &token),
+            Step::Whip { command, travel } => {
+                if let Some(pose) = self.camera_pose_for(&command) {
+                    self.rig.whip_to(pose, travel);
+                }
+            }
+            Step::Banner(text) => self.hud.roll_for_initiative.banner = text,
+            Step::InitiativeStart => {
+                self.hud.roll_for_initiative = InitiativeShow {
+                    tracker: Some(Vec::new()),
+                    ..InitiativeShow::default()
+                };
+            }
+            Step::InitiativeDie {
+                token,
+                die,
+                modifier,
+                total,
+            } => {
+                let tumble_s = if self.reduced_motion {
+                    0.0
+                } else {
+                    DIE_TUMBLE_SECONDS
+                };
+                self.hud.roll_for_initiative.dice.push(DieView {
+                    token,
+                    face: die,
+                    modifier,
+                    total,
+                    age_s: 0.0,
+                    tumble_s,
+                    landed: tumble_s == 0.0,
+                });
+            }
+            Step::InitiativeLand { token } => {
+                for die in &mut self.hud.roll_for_initiative.dice {
+                    if die.token == token {
+                        die.landed = true;
+                    }
+                }
+            }
+            Step::InitiativeBadge {
+                token,
+                order,
+                total,
+            } => {
+                let name = self
+                    .token_index(&token)
+                    .map(|index| self.tokens[index].token.name.clone())
+                    .unwrap_or_default();
+                self.hud.roll_for_initiative.badges.push(BadgeView {
+                    token,
+                    order,
+                    name,
+                    total,
+                    age_s: 0.0,
+                });
+            }
+            Step::TrackerReveal(token) => {
+                if let Some(tracker) = &mut self.hud.roll_for_initiative.tracker
+                    && !tracker.contains(&token)
+                {
+                    tracker.push(token);
+                }
+            }
+            Step::InitiativeEnd => self.hud.roll_for_initiative = InitiativeShow::default(),
+            Step::Sting { token, index, last } => {
+                let kind = if last {
+                    SoundKind::InitiativeFinal
+                } else {
+                    SoundKind::InitiativeStop
+                };
+                // Each stop sounds a little higher; the last, heavy one a little lower.
+                let rate = if last { 0.8 } else { 0.9 + 0.13 * index as f32 };
+                self.emit_at_rate(kind, &token, rate);
+            }
             Step::Target(target) => self.target = target,
             Step::Projectile {
                 from,
@@ -770,10 +921,18 @@ impl Stage {
             | Anim::Dodge { from: other } => self
                 .token_index(other)
                 .map(|other| self.tokens[other].position),
-            Anim::Fall | Anim::Heal => None,
+            Anim::Fall | Anim::Heal | Anim::Ready { .. } => None,
         };
         let direction = match (&anim, other) {
             (Anim::Lunge { .. } | Anim::Draw { .. }, Some(other)) => flat_direction(here, other),
+            (Anim::Ready { .. }, _) => {
+                // Facing the other side: heroes stand near the camera, enemies far.
+                if self.tokens[index].token.side == Side::Enemy {
+                    Vec3::new(0.0, 0.0, 1.0)
+                } else {
+                    Vec3::new(0.0, 0.0, -1.0)
+                }
+            }
             (Anim::Recoil { .. } | Anim::Dodge { .. }, Some(other)) => flat_direction(other, here),
             _ => Vec3::new(0.0, 0.0, -1.0),
         };
@@ -833,6 +992,8 @@ impl Stage {
             floats: &self.floats,
             hud: &self.hud,
             clock_s: self.clock_s,
+            reduced_motion: self.reduced_motion,
+            restrained: self.restrained,
         }
     }
 
@@ -911,6 +1072,21 @@ impl Stage {
                     heal_glow = arc;
                     position.y += 0.05 * arc;
                 }
+                Anim::Ready { style } => match style {
+                    ReadyStyle::Brandish => {
+                        // The weapon comes up and the body settles back down.
+                        position.y += 0.2 * arc;
+                        lean = -0.04 * arc;
+                    }
+                    ReadyStyle::Snarl => {
+                        position = position - active.direction * (0.22 * arc);
+                        lean = 0.12 * arc;
+                    }
+                    ReadyStyle::Nock => {
+                        lean = -0.1 * arc;
+                        position = position - active.direction * (0.08 * arc);
+                    }
+                },
                 Anim::Draw { .. } => {
                     // Lean back while the string comes to the ear, then snap forward on release.
                     let release = director::DRAW_RELEASE.as_secs_f32() / duration;
@@ -1776,6 +1952,8 @@ mod tests {
                 active: None,
                 round: 1,
                 outcomes: vec![],
+                initiative: vec![],
+                begun_live: false,
             },
         )
         .unwrap();
@@ -1812,9 +1990,225 @@ mod tests {
                 active: None,
                 round: 1,
                 outcomes: vec![],
+                initiative: vec![],
+                begun_live: false,
             },
         )
         .unwrap();
         assert!(stage.tokens().any(|t| t.id.0 == "a" && t.cell == Cell::new(6, 4)));
+    }
+
+    fn rolls_for(order: &[&str]) -> Vec<crate::battle::InitiativeRoll> {
+        order
+            .iter()
+            .enumerate()
+            .map(|(index, id)| crate::battle::InitiativeRoll {
+                token: TokenId::new(*id),
+                die: 18 - index as u32 * 4,
+                modifier: 2,
+                total: 20 - index as i32 * 4,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_roll_call_fills_the_tracker_in_the_servers_order_with_badges_1st_2nd_3rd() {
+        let mut stage = stage(false);
+        stage
+            .stage(Beat::Initiative {
+                rolls: rolls_for(&["enemy", "hero", "ally"]),
+            })
+            .unwrap();
+        assert!(stage.is_busy());
+        let mut tracker_sizes = Vec::new();
+        let mut seen_badges: Vec<(u32, String)> = Vec::new();
+        let mut banners = Vec::new();
+        for _ in 0..900 {
+            stage.update(Duration::from_millis(20));
+            let show = &stage.hud().roll_for_initiative;
+            if let Some(tracker) = &show.tracker {
+                if tracker_sizes.last() != Some(&tracker.len()) {
+                    tracker_sizes.push(tracker.len());
+                    let expected = ["enemy", "hero", "ally"];
+                    assert!(tracker.iter().zip(expected).all(|(have, want)| have.0 == want));
+                }
+            }
+            for badge in &show.badges {
+                if !seen_badges.iter().any(|(order, _)| *order == badge.order) {
+                    seen_badges.push((badge.order, badge.name.clone()));
+                }
+            }
+            if let Some(banner) = &show.banner {
+                if banners.last() != Some(banner) {
+                    banners.push(banner.clone());
+                }
+            }
+        }
+        assert_eq!(tracker_sizes, vec![0, 1, 2, 3]);
+        assert_eq!(
+            seen_badges,
+            vec![(1, "ENEMY".to_owned()), (2, "HERO".to_owned()), (3, "ALLY".to_owned())]
+        );
+        assert_eq!(banners, vec!["Roll for initiative".to_owned(), "Round 1".to_owned()]);
+        assert!(!stage.is_busy());
+        let show = &stage.hud().roll_for_initiative;
+        assert!(show.tracker.is_none() && show.badges.is_empty() && show.dice.is_empty());
+        assert_eq!(stage.hud().active, Some(TokenId::new("enemy")), "the first turn follows");
+    }
+
+    #[test]
+    fn each_die_tumbles_then_lands_on_its_total() {
+        let mut stage = stage(false);
+        stage
+            .stage(Beat::Initiative {
+                rolls: rolls_for(&["hero", "ally", "enemy"]),
+            })
+            .unwrap();
+        let mut tumbling = false;
+        let mut landed_after_tumble = false;
+        for _ in 0..300 {
+            stage.update(Duration::from_millis(20));
+            for die in &stage.hud().roll_for_initiative.dice {
+                if !die.landed {
+                    tumbling = true;
+                } else if tumbling && die.total == die.face as i32 + die.modifier {
+                    landed_after_tumble = true;
+                }
+            }
+        }
+        assert!(tumbling && landed_after_tumble);
+    }
+
+    #[test]
+    fn the_camera_whips_to_each_stop_and_cuts_with_a_fade_under_reduced_motion() {
+        let mut calm = stage(true);
+        calm.stage(Beat::Initiative {
+            rolls: rolls_for(&["hero", "enemy", "ally"]),
+        })
+        .unwrap();
+        let mut lively = stage(false);
+        lively
+            .stage(Beat::Initiative {
+                rolls: rolls_for(&["hero", "enemy", "ally"]),
+            })
+            .unwrap();
+        let (mut calm_panned, mut lively_overshoot) = (false, false);
+        let mut closest = f32::MAX;
+        for _ in 0..900 {
+            calm.update(Duration::from_millis(20));
+            lively.update(Duration::from_millis(20));
+            calm_panned |= calm.rig.is_panning();
+            // A whip travels farther than it needs to and comes back: the lens punches in.
+            closest = closest.min(lively.camera_pose().fov_deg);
+            lively_overshoot |= lively.rig.is_panning();
+        }
+        assert!(!calm_panned, "reduced motion never pans: it cuts");
+        assert!(lively_overshoot);
+        let victory = lively.scene().cameras[&ShotName::Victory].fov_deg;
+        assert!(closest < victory * 0.97, "zoom punch on arrival: {closest} vs {victory}");
+        assert!(!calm.is_busy() && !lively.is_busy());
+    }
+
+    #[test]
+    fn a_newer_view_cuts_the_sequence_short_and_goes_to_the_current_turn() {
+        let mut stage = stage(false);
+        stage.set_active(Some(TokenId::new("hero")));
+        stage
+            .stage(Beat::Initiative {
+                rolls: rolls_for(&["hero", "enemy", "ally"]),
+            })
+            .unwrap();
+        run(&mut stage, 3.0);
+        assert!(stage.is_rolling_initiative());
+        stage.skip_initiative();
+        assert!(!stage.is_rolling_initiative() && !stage.is_busy());
+        let show = &stage.hud().roll_for_initiative;
+        assert!(show.tracker.is_none() && show.badges.is_empty() && show.banner.is_none());
+        assert!(!stage.rig.is_panning());
+    }
+
+    fn feed_snapshot(begun_live: bool, outcomes: usize, round: u32) -> crate::battle::CombatSnapshot {
+        use crate::battle::{InitiativeEntry, Member, Outcome};
+        let member = |id: &str, side| Member {
+            id: id.to_owned(),
+            name: id.to_uppercase(),
+            side,
+            hit_points: 12,
+            maximum_hit_points: 12,
+            height_m: 1.5,
+            figure: None,
+            portrait: None,
+            attack: crate::battle::model::AttackStyle::Melee,
+            cell: None,
+            statuses: Vec::new(),
+        };
+        crate::battle::CombatSnapshot {
+            members: vec![member("a", Side::Hero), member("b", Side::Hero), member("e", Side::Enemy)],
+            active: Some("e".to_owned()),
+            round,
+            outcomes: (0..outcomes)
+                .map(|_| Outcome {
+                    actor: "e".to_owned(),
+                    target: "a".to_owned(),
+                    hit: false,
+                    critical: false,
+                    damage: 0,
+                    target_hit_points_after: 12,
+                    downed: false,
+                })
+                .collect(),
+            initiative: ["e", "a", "b"]
+                .iter()
+                .enumerate()
+                .map(|(index, id)| InitiativeEntry {
+                    id: (*id).to_owned(),
+                    die: 18 - index as u32 * 5,
+                    modifier: 1,
+                    total: 19 - index as i32 * 5,
+                })
+                .collect(),
+            begun_live,
+        }
+    }
+
+    #[test]
+    fn the_initiative_is_staged_for_a_fight_the_display_watched_begin() {
+        use crate::battle::{CombatFeed, FeedMode};
+        let mut stage = stage(false);
+        let mut feed = CombatFeed::new(FeedMode::HoldForCues);
+        feed.apply(&mut stage, &feed_snapshot(true, 0, 1)).unwrap();
+        assert!(stage.is_busy());
+        run(&mut stage, 0.2);
+        assert!(stage.is_rolling_initiative());
+        assert_eq!(
+            stage.hud().initiative.iter().map(|id| id.0.as_str()).collect::<Vec<_>>(),
+            vec!["e", "a", "b"],
+            "the tracker order is the server's, not the seat order"
+        );
+    }
+
+    #[test]
+    fn no_sequence_when_the_display_joins_a_fight_already_in_progress() {
+        use crate::battle::{CombatFeed, FeedMode};
+        for (live, outcomes, round) in [(false, 0, 1), (true, 2, 1), (true, 0, 2)] {
+            let mut stage = stage(false);
+            let mut feed = CombatFeed::new(FeedMode::HoldForCues);
+            feed.apply(&mut stage, &feed_snapshot(live, outcomes, round)).unwrap();
+            assert!(!stage.is_busy(), "live={live} outcomes={outcomes} round={round}");
+            assert!(!stage.is_rolling_initiative());
+        }
+    }
+
+    #[test]
+    fn a_view_that_shows_someone_already_acted_ends_the_sequence_in_progress() {
+        use crate::battle::{CombatFeed, FeedMode};
+        let mut stage = stage(false);
+        let mut feed = CombatFeed::new(FeedMode::HoldForCues);
+        feed.apply(&mut stage, &feed_snapshot(true, 0, 1)).unwrap();
+        run(&mut stage, 1.0);
+        assert!(stage.is_rolling_initiative());
+        feed.apply(&mut stage, &feed_snapshot(true, 1, 1)).unwrap();
+        assert!(!stage.is_rolling_initiative());
+        assert!(stage.hud().roll_for_initiative.badges.is_empty());
     }
 }

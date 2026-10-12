@@ -150,6 +150,20 @@ struct Pan {
     to: CameraPose,
     elapsed: f32,
     duration: f32,
+    /// A snappy move: overshoots a little and ends with a zoom punch.
+    whip: bool,
+}
+
+/// How far a whip overshoots its target before settling (as a share of the travel).
+const WHIP_OVERSHOOT: f32 = 1.45;
+/// How long the zoom punch after a whip lasts, and how much the lens tightens at its peak.
+const PUNCH: f32 = 0.2;
+const PUNCH_FOV_SHARE: f32 = 0.09;
+
+/// Ease out with a slight overshoot (the standard "back" curve): reaches 1 at `t = 1`.
+fn ease_out_back(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0) - 1.0;
+    1.0 + (WHIP_OVERSHOOT + 1.0) * t * t * t + WHIP_OVERSHOOT * t * t
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -162,6 +176,7 @@ struct Shake {
 #[derive(Clone, Debug)]
 pub struct CameraRig {
     pose: CameraPose,
+    punch: f32,
     pan: Option<Pan>,
     shake: Option<Shake>,
     cut_fade: f32,
@@ -172,6 +187,7 @@ impl CameraRig {
     pub fn new(pose: CameraPose, reduced_motion: bool) -> Self {
         Self {
             pose,
+            punch: 0.0,
             pan: None,
             shake: None,
             cut_fade: 0.0,
@@ -179,8 +195,17 @@ impl CameraRig {
         }
     }
 
+    /// The current pose, with the lens tightened while a whip's zoom punch plays.
     pub fn pose(&self) -> CameraPose {
-        self.pose
+        if self.punch <= 0.0 {
+            return self.pose;
+        }
+        let progress = 1.0 - self.punch / PUNCH;
+        CameraPose {
+            fov_deg: self.pose.fov_deg
+                * (1.0 - PUNCH_FOV_SHARE * (std::f32::consts::PI * progress).sin()),
+            ..self.pose
+        }
     }
 
     pub fn set_reduced_motion(&mut self, reduced: bool) {
@@ -207,6 +232,30 @@ impl CameraRig {
         self.pose = pose;
         self.pan = None;
         self.shake = None;
+        self.punch = 0.0;
+    }
+
+    /// A fast, snappy move to `pose`: `duration` of travel with a slight overshoot and settle,
+    /// then a short zoom punch on arrival. With reduced motion it is a cut with the short
+    /// cross-fade instead (no overshoot, no punch).
+    pub fn whip_to(&mut self, pose: CameraPose, duration: Duration) {
+        let duration = duration.min(MAX_PAN);
+        if self.reduced_motion || duration.is_zero() {
+            self.cut_to(pose);
+            if self.reduced_motion {
+                self.cut_fade = CUT_FADE_PEAK;
+            }
+            return;
+        }
+        self.shake = None;
+        self.punch = 0.0;
+        self.pan = Some(Pan {
+            from: self.pose,
+            to: pose,
+            elapsed: 0.0,
+            duration: duration.as_secs_f32(),
+            whip: true,
+        });
     }
 
     /// Eases to `pose` over `duration` (clamped to [`MAX_PAN`]). With reduced motion, or a zero
@@ -226,6 +275,7 @@ impl CameraRig {
             to: pose,
             elapsed: 0.0,
             duration: duration.as_secs_f32(),
+            whip: false,
         });
     }
 
@@ -264,13 +314,20 @@ impl CameraRig {
         let dt = elapsed.as_secs_f32().min(1.0);
         if let Some(mut pan) = self.pan.take() {
             pan.elapsed = (pan.elapsed + dt).min(pan.duration);
-            self.pose = pan
-                .from
-                .lerp(&pan.to, ease_in_out(pan.elapsed / pan.duration));
+            let progress = pan.elapsed / pan.duration;
+            let eased = if pan.whip {
+                ease_out_back(progress)
+            } else {
+                ease_in_out(progress)
+            };
+            self.pose = pan.from.lerp(&pan.to, eased);
             if pan.elapsed < pan.duration {
                 self.pan = Some(pan);
+            } else if pan.whip {
+                self.punch = PUNCH + dt;
             }
         }
+        self.punch = (self.punch - dt).max(0.0);
         if let Some(mut shake) = self.shake.take() {
             shake.elapsed += dt;
             if shake.elapsed < shake.duration {
@@ -405,5 +462,41 @@ mod tests {
             assert_eq!(ShotName::from_key(shot.key()), Some(shot));
         }
         assert_eq!(ShotName::from_key("nonsense"), None);
+    }
+
+    #[test]
+    fn a_whip_overshoots_a_little_settles_exactly_and_punches_the_lens() {
+        let mut rig = CameraRig::new(pose(10.0, 0.0), false);
+        rig.whip_to(pose(20.0, 0.0), Duration::from_millis(300));
+        let mut peak = 0.0f32;
+        let mut distances = Vec::new();
+        for _ in 0..31 {
+            rig.update(Duration::from_millis(10));
+            peak = peak.max(rig.pose().distance);
+            distances.push(rig.pose().distance);
+        }
+        assert!(peak > 20.2 && peak < 21.5, "overshoot of a few percent, got {peak}");
+        assert!(!rig.is_panning());
+        // Arrived: the base pose is exact once the punch is over.
+        let mut narrowest = f32::MAX;
+        for _ in 0..40 {
+            rig.update(Duration::from_millis(10));
+            narrowest = narrowest.min(rig.pose().fov_deg);
+        }
+        assert!(narrowest < 40.0 * 0.95, "the lens tightens on arrival: {narrowest}");
+        assert_eq!(rig.pose(), pose(20.0, 0.0));
+        // It travels fast: more than half the way in the first third of the time.
+        assert!(distances[9] > 15.0, "snappy start: {}", distances[9]);
+    }
+
+    #[test]
+    fn a_whip_under_reduced_motion_is_a_cut_with_the_short_fade() {
+        let mut rig = CameraRig::new(pose(10.0, 0.0), true);
+        rig.whip_to(pose(20.0, 40.0), Duration::from_millis(300));
+        assert_eq!(rig.pose(), pose(20.0, 40.0));
+        assert!(!rig.is_panning());
+        assert_eq!(rig.transition_fade(), CUT_FADE_PEAK);
+        rig.update(Duration::from_millis(50));
+        assert_eq!(rig.pose(), pose(20.0, 40.0), "no punch either");
     }
 }
