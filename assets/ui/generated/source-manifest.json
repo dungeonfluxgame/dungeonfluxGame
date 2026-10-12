@@ -4259,6 +4259,473 @@
         "attempts": 1
       },
       "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-bandit",
+      "path": "assets/ui/generated/figure-ant-bandit.webp",
+      "kind": "figure",
+      "bytes": 142070,
+      "sha256": "f7f5ff6de8ac262266c5205cdf6f7f34fc17eff983467967fe4b17be8f3f0461",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-bandit.png",
+      "source_sha256": "e589a45ee2bc5d53e67cecf030e7a41e3489dad4d5dd52e0498a29bc4c1befc9",
+      "art_key": "ant-bandit",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-cultist",
+      "path": "assets/ui/generated/figure-ant-cultist.webp",
+      "kind": "figure",
+      "bytes": 135054,
+      "sha256": "9a75546ee85f75926889389e0ec9328cd1d5b9ac1d96daf6ba6594ce9af38ee1",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-cultist.png",
+      "source_sha256": "543da3832cdd3a314656f3743840da25e614c50bee60819d0f2d7246253650c2",
+      "art_key": "ant-cultist",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-bandit",
+      "path": "assets/ui/generated/figure-bandit.webp",
+      "kind": "figure",
+      "bytes": 129838,
+      "sha256": "e366e0f1b5eacd3d22f074284b89cce832220d320d664eb71b319c8a9ffd9d02",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-bandit.png",
+      "source_sha256": "6816dc00cc2bc79d259e2a5400c459cf12b250e986859dd098152962ae5c12ad",
+      "art_key": "bandit",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-hero-1",
+      "path": "assets/ui/generated/figure-hero-1.webp",
+      "kind": "figure",
+      "bytes": 158438,
+      "sha256": "ec7e6ff089bdb85ceb56a70616c9d9bd90d24b91053623436283ba2564d23a26",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-hero-1.png",
+      "source_sha256": "3ec866fc3f302c924f05ad844c162f539acca70fe8bd77e9b5479acb03620900",
+      "art_key": "hero-1",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-hero-2",
+      "path": "assets/ui/generated/figure-hero-2.webp",
+      "kind": "figure",
+      "bytes": 165626,
+      "sha256": "5cefd1ba0b7785c7ee5ca426705d8e2a996ed8a23285caa3c9b4056b1f77efbf",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-hero-2.png",
+      "source_sha256": "8bd9eb3446ffa25e124350ce084e78dd96be976804209042ce1c8608d8efb323",
+      "art_key": "hero-2",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-giant-rat",
+      "path": "assets/ui/generated/figure-ant-giant-rat.webp",
+      "kind": "figure",
+      "bytes": 201540,
+      "sha256": "d0d8ed0177f455f3681e393139a98605c9a10f23a6ddf03d2ea56c08c26ce811",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-giant-rat.png",
+      "source_sha256": "43fa068a4a9c8475779a4b98e887964933ed83d2463cf0258533134e28f7dd36",
+      "art_key": "ant-giant-rat",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-giant-weasel",
+      "path": "assets/ui/generated/figure-ant-giant-weasel.webp",
+      "kind": "figure",
+      "bytes": 176540,
+      "sha256": "a77251247669a684321a4aedc72e12e660558b22457a7aea249f5bfefa267c07",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-giant-weasel.png",
+      "source_sha256": "183230c188792aaabaca01efa4bb983e682c761d191bff6329e9767d54990bf2",
+      "art_key": "ant-giant-weasel",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-goblin-warrior",
+      "path": "assets/ui/generated/figure-ant-goblin-warrior.webp",
+      "kind": "figure",
+      "bytes": 184498,
+      "sha256": "4721904e2c8613239914f26a9d878e03c386022e29f33c5307955f35581f230d",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-goblin-warrior.png",
+      "source_sha256": "b98bed7b98cf7b5b28b117efe7ad2b924ab9b577a9036c5fd163b5043f824e62",
+      "art_key": "ant-goblin-warrior",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-guard",
+      "path": "assets/ui/generated/figure-ant-guard.webp",
+      "kind": "figure",
+      "bytes": 160518,
+      "sha256": "c7f021c6b387402a1f43fe99a5aa12f372e5263c65911b74c7b7763099b8924d",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-guard.png",
+      "source_sha256": "6e8162d63b9db75ae0f65f436a1e63913c51ea34a0176aa09acc02be12cca8f5",
+      "art_key": "ant-guard",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-kobold-warrior",
+      "path": "assets/ui/generated/figure-ant-kobold-warrior.webp",
+      "kind": "figure",
+      "bytes": 167694,
+      "sha256": "9815cea65d565920ec9e11365729bdeb5e4645839dacf29dcfccbf82033e9734",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-kobold-warrior.png",
+      "source_sha256": "c93f501f1062481f313c4795a84ab9ba048418596b0c6dfb92b0740b4da05768",
+      "art_key": "ant-kobold-warrior",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-mastiff",
+      "path": "assets/ui/generated/figure-ant-mastiff.webp",
+      "kind": "figure",
+      "bytes": 181812,
+      "sha256": "defb9787f55b7ba1c83240434d4bc66f7d4708695cc7e91d6eb0d377ff36ed7c",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-mastiff.png",
+      "source_sha256": "69117f599ffa47e3f16ee00c3862325cadaf4666b8b28215b4c4a27521993528",
+      "art_key": "ant-mastiff",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-scout",
+      "path": "assets/ui/generated/figure-ant-scout.webp",
+      "kind": "figure",
+      "bytes": 117622,
+      "sha256": "64f3d26a868b5d7c3fc374d3f9a477bfb78ca9720eedbc155b89e76b34cc46a1",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-scout.png",
+      "source_sha256": "8f3c0d29d6f783ccc07793391eda405df9a681b53416cacfe146606484fd27d8",
+      "art_key": "ant-scout",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-skeleton",
+      "path": "assets/ui/generated/figure-ant-skeleton.webp",
+      "kind": "figure",
+      "bytes": 147730,
+      "sha256": "f224f1df55ddc94557b4a34ec614b1d7356a83ac180be4d8d08e6e3be6d1797a",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-skeleton.png",
+      "source_sha256": "dc75a6b61bb07ce71457db5493beb0731f08e603adbcae71c04aa7a2ac6c70e6",
+      "art_key": "ant-skeleton",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-wolf",
+      "path": "assets/ui/generated/figure-ant-wolf.webp",
+      "kind": "figure",
+      "bytes": 203956,
+      "sha256": "5bfd52440034f84390ce5bff0d789041376fe7483ff4cc68a2b38f39b332cd2d",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-wolf.png",
+      "source_sha256": "32f8e59af4cdeb7af39b08c1d40f63f83a0de063aec94ec1a7a0d26ff1d005eb",
+      "art_key": "ant-wolf",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-ant-zombie",
+      "path": "assets/ui/generated/figure-ant-zombie.webp",
+      "kind": "figure",
+      "bytes": 181282,
+      "sha256": "acd7929a60f680f662d9163f1a79ecefeea471a0b11cd9d2ef63dcc35c9e2557",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-ant-zombie.png",
+      "source_sha256": "7c8cca6cec5cc122f8d49d6d0c2c06e177b35e05752477d92ec02565147eec75",
+      "art_key": "ant-zombie",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "ground-lamplit-market",
+      "path": "assets/ui/generated/ground-lamplit-market.webp",
+      "kind": "ground",
+      "bytes": 583352,
+      "sha256": "12f5755384d47e56cfea77d59c3f9296c2e5e80fddd084589f0c65c8a525c1e7",
+      "dimensions": [
+        1536,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "ground-lamplit-market.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nAsset type: opaque battlefield GROUND painting for a fantasy tabletop game displayed on TV, used flat as a floor underneath a separately rendered square grid and standing character figures.\nComposition: square 2048 x 2048 pixels or larger, STRICT true orthographic straight-down view, camera axis exactly vertically perpendicular to one continuous level ground plane. Only the ground surface itself fills the frame edge to edge. Every texture feature keeps the same scale throughout; no vanishing point, foreshortening, angle or depth perspective.\nHouse style: cinematic painterly realism at night, rich tactile natural materials, deep navy and cool moon-blue balanced with softly painted pools of warm amber lantern light. The light sources themselves are completely outside the image. Middle 70 percent is readable, moderately bright and fairly even so figures and thin tile lines remain clear; gentle darker falloff only at outer edges, never a black border. Distribute small surface details subtly and evenly, with no dominant focal object. Scale: a square one eighth of the image width represents five feet of ground.\nStrict constraints: opaque image, floor only, NO horizon, NO sky, NO side view, NO walls, NO buildings, NO perspective, NO people, NO creatures, NO recognizable footprints, NO text, NO labels, NO watermark, NO grid or drawn tiles, NO large objects or obstacles.\nSubject/material: market street floor at night. Continuous level worn cobblestones across the entire frame, gently irregular joints, damp polished stone texture, shallow puddles, a very narrow shallow stone gutter flush with the pavement near one outer edge. Sparse scattered straw fragments and small petals lying flat and subdued. No stalls, buildings, walls, doors, lamps, furniture, crates or barrels. Broad soft overlapping warm amber stall-lamp spill and cool moonlit patches, all source fixtures outside the image.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "ground-pinewood-trail",
+      "path": "assets/ui/generated/ground-pinewood-trail.webp",
+      "kind": "ground",
+      "bytes": 653036,
+      "sha256": "5116794c17a6dfcf8c8a69dbb6f9f059da3f8e9b902733b4117693cd5eb6a6dc",
+      "dimensions": [
+        1536,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "ground-pinewood-trail.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nAsset type: opaque battlefield GROUND painting for a fantasy tabletop game displayed on TV, used flat as a floor underneath a separately rendered square grid and standing character figures.\nComposition: square 2048 x 2048 pixels or larger, STRICT true orthographic straight-down view, camera axis exactly vertically perpendicular to one continuous level ground plane. Only the ground surface itself fills the frame edge to edge. Every texture feature keeps the same scale throughout; no vanishing point, foreshortening, angle or depth perspective.\nHouse style: cinematic painterly realism at night, rich tactile natural materials, deep navy and cool moon-blue balanced with softly painted pools of warm amber lantern light. The light sources themselves are completely outside the image. Middle 70 percent is readable, moderately bright and fairly even so figures and thin tile lines remain clear; gentle darker falloff only at outer edges, never a black border. Distribute small surface details subtly and evenly, with no dominant focal object. Scale: a square one eighth of the image width represents five feet of ground.\nStrict constraints: opaque image, floor only, NO horizon, NO sky, NO side view, NO walls, NO buildings, NO perspective, NO people, NO creatures, NO recognizable footprints, NO text, NO labels, NO watermark, NO grid or drawn tiles, NO large objects or obstacles.\nSubject/material: forest trail clearing floor at night. Continuous gently varied packed earth covering the frame, fine pine needles scattered evenly, low roots flush with the soil, small moss patches and scattered modest stones embedded in the ground. No tree trunks, branches overhead, bushes, banks or trail vanishing into distance. Natural open earthy center and restrained moss toward edges. Soft cool moonlight and off-frame warm lantern spill painted on the dirt; nothing above ground.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "ground-salt-quay",
+      "path": "assets/ui/generated/ground-salt-quay.webp",
+      "kind": "ground",
+      "bytes": 520348,
+      "sha256": "4b652f3f51d8108477067e674772c21ca745d34a85ac85567f9c62f2ab64e0c7",
+      "dimensions": [
+        1536,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "ground-salt-quay.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nAsset type: opaque battlefield GROUND painting for a fantasy tabletop game displayed on TV, used flat as a floor underneath a separately rendered square grid and standing character figures.\nComposition: square 2048 x 2048 pixels or larger, STRICT true orthographic straight-down view, camera axis exactly vertically perpendicular to one continuous level ground plane. Only the ground surface itself fills the frame edge to edge. Every texture feature keeps the same scale throughout; no vanishing point, foreshortening, angle or depth perspective.\nHouse style: cinematic painterly realism at night, rich tactile natural materials, deep navy and cool moon-blue balanced with softly painted pools of warm amber lantern light. The light sources themselves are completely outside the image. Middle 70 percent is readable, moderately bright and fairly even so figures and thin tile lines remain clear; gentle darker falloff only at outer edges, never a black border. Distribute small surface details subtly and evenly, with no dominant focal object. Scale: a square one eighth of the image width represents five feet of ground.\nStrict constraints: opaque image, floor only, NO horizon, NO sky, NO side view, NO walls, NO buildings, NO perspective, NO people, NO creatures, NO recognizable footprints, NO text, NO labels, NO watermark, NO grid or drawn tiles, NO large objects or obstacles.\nSubject/material: wet timber quay floor at night. Weathered flat wooden planks laid parallel in the same plane, tarred seams, fine wood grain, unobtrusive small nail heads, irregular shallow puddles reflecting amber lantern spill and diffuse cool moonlight. A few small loose low coils of thin rope and sparse fish scales lying flat, each occupying much less than one eighth of the width, inconspicuous and away from center. The planks continue to all four edges; no dock edges, water body, boats, piers or posts.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "ground-windward-pass",
+      "path": "assets/ui/generated/ground-windward-pass.webp",
+      "kind": "ground",
+      "bytes": 696358,
+      "sha256": "8e1d070948b25c22795be3e4623b8add3a45ca303a936e861c81930dc2d4b352",
+      "dimensions": [
+        1536,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "ground-windward-pass.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nAsset type: opaque battlefield GROUND painting for a fantasy tabletop game displayed on TV, used flat as a floor underneath a separately rendered square grid and standing character figures.\nComposition: square 2048 x 2048 pixels or larger, STRICT true orthographic straight-down view, camera axis exactly vertically perpendicular to one continuous level ground plane. Only the ground surface itself fills the frame edge to edge. Every texture feature keeps the same scale throughout; no vanishing point, foreshortening, angle or depth perspective.\nHouse style: cinematic painterly realism at night, rich tactile natural materials, deep navy and cool moon-blue balanced with softly painted pools of warm amber lantern light. The light sources themselves are completely outside the image. Middle 70 percent is readable, moderately bright and fairly even so figures and thin tile lines remain clear; gentle darker falloff only at outer edges, never a black border. Distribute small surface details subtly and evenly, with no dominant focal object. Scale: a square one eighth of the image width represents five feet of ground.\nStrict constraints: opaque image, floor only, NO horizon, NO sky, NO side view, NO walls, NO buildings, NO perspective, NO people, NO creatures, NO recognizable footprints, NO text, NO labels, NO watermark, NO grid or drawn tiles, NO large objects or obstacles.\nSubject/material: mountain pass track floor at night. Continuous level wind-scoured rock slabs with irregular hairline cracks, embedded gravel, thin patchy snow dusting and sparse short tough grass flush with rock. No mountain vista, cliffs, drop-offs, cairns, boulders, torches or railings. Small rock and snow features evenly spread, open readable central walking surface, deep navy stone with diffuse cool moonlight and soft warm amber torch spill from completely off-frame.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "ground-orrery-library",
+      "path": "assets/ui/generated/ground-orrery-library.webp",
+      "kind": "ground",
+      "bytes": 360948,
+      "sha256": "540b28784f29f97dc5c467d6762058c12356d440ae6c6260f21ba334038f56b8",
+      "dimensions": [
+        1536,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "ground-orrery-library.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept\nAsset type: battlefield floor painting for a TV tabletop arena; square opaque PNG, 2048x2048 pixels.\nPrimary request: the floor of a great fantasy library hall at night, viewed exactly vertically down. Paint ONLY the horizontal floor surface, filling all four edges.\nStyle: cinematic painterly realism, rich tactile material detail, approved DungeonFlux palette of deep navy moonlight and soft warm amber lamplight.\nComposition: STRICT ORTHOGRAPHIC TOP VIEW, camera pointing vertically down at a flat floor, like a material surface painting. No tilt, oblique angle, perspective or convergence. A single continuous walkable floor across every edge, no room perimeter shown. Middle 70 percent open and fairly even in brightness for overlaid square tile lines and figures. Outer edges gently darken.\nMaterials: dark polished worn stone slabs meeting tasteful dark walnut parquet strips and small geometric parquet areas; all surfaces flush. Faint thin brass star-chart inlay lines, arcs and tiny unlabeled star points distributed quietly across the floor, almost worn away, subtle rather than a dominant medallion. Fine natural stone variation, gentle wear marks, tiny cracks and wood grain. Moderate softly distributed detail, no single pattern dominates. Scale: full image spans about forty feet, one eighth width represents a five-foot tile; material slabs and parquet strips believable scale.\nLighting: broad soft cool moonlight visible on the floor with restrained diffuse warm amber lamp pools along margins; lamps absent, no reflected windows or objects. Night while center remains readable.\nAvoid: horizon, sky, walls, shelves, books, tables, orrery mechanism, spheres, furniture, stairs, columns, architectural side views, perspective, raised trim, circular altar, obstacles, figures, creatures, footprints, text, symbols resembling writing, labels, watermark or drawn grid. Only a flat horizontal stone and wood floor.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "ground-reedmoor-boardwalk",
+      "path": "assets/ui/generated/ground-reedmoor-boardwalk.webp",
+      "kind": "ground",
+      "bytes": 504608,
+      "sha256": "5b5ccb9c9482d355fdf53ca36450745875bf44793c50077f5e2740c6d2ea32a5",
+      "dimensions": [
+        1536,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "ground-reedmoor-boardwalk.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept\nAsset type: battlefield floor painting for a TV tabletop arena; square opaque PNG, 2048x2048 pixels.\nPrimary request: the ground surface of a broad marsh boardwalk at night, viewed exactly vertically down. Paint ONLY the flat ground surface filling all four edges.\nStyle: cinematic painterly realism, rich tactile natural detail, approved DungeonFlux palette of deep navy moonlight and soft warm amber lantern illumination.\nComposition: STRICT ORTHOGRAPHIC TOP VIEW, camera pointing vertically down at a flat floor like a material surface painting. No tilt, oblique angle or perspective convergence. Broad grey boardwalk covers nearly the whole image; skinny natural black-water and muddy reed-stubble margins occupy only the outer few percent. The middle 70 percent is a broad continuous traversable deck, open and fairly even in brightness for overlaid square grid and figures. Outer edges gently darken. Plank widths remain constant from top to bottom. No railing, posts or framing structure.\nMaterials: weathered grey wooden boards, shallow grain, age cracks, subtle damp sheen, small nail heads, narrow black-water gaps between planks. Sparse tiny reed stubble and soft mud at extreme margins. Details softly and evenly distributed; no dominant objects or broken walkway. Scale: full image spans about forty feet, one eighth width represents a five-foot tile; individual boards have realistic wide plank scale.\nLighting: broad soft cool moonlight on wood with restrained diffuse amber lantern-light pools painted on surface, lamps absent. Center stays readable.\nAvoid: horizon, sky, reflections of buildings or sky, walls, huts, side views, perspective, rails, raised posts, stairs, large ropes, holes, obstacles, figures, creatures, footprints, text, watermark, labels or drawn grid. Do not paint a scenic view. Only a horizontal floor plane.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "ground-rookhill-gate",
+      "path": "assets/ui/generated/ground-rookhill-gate.webp",
+      "kind": "ground",
+      "bytes": 622052,
+      "sha256": "13476ec3701d43944f079fd0c5baf5a326f71f394afaf0c837dd97ad2353e292",
+      "dimensions": [
+        1536,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "ground-rookhill-gate.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept\nAsset type: battlefield floor painting for a TV tabletop arena; square opaque PNG, 2048x2048 pixels.\nPrimary request: the ground of a graveyard gate path at night, viewed exactly vertically down from above. Paint ONLY the ground, filling all four edges.\nStyle: cinematic painterly realism, rich tactile natural detail, approved DungeonFlux palette of deep navy moonlight and soft warm amber lantern illumination.\nComposition: STRICT ORTHOGRAPHIC TOP VIEW, camera pointing vertically down at a flat floor, like a material surface painting. No tilt, no oblique angle, no perspective convergence. Entire frame is a single continuous walkable floor. Center 70 percent is open and fairly even in brightness, readable under overlaid square grid and standing figures. Outer edges gently darken.\nMaterials: old irregular graveyard flagstones, shallow root-heaved seams, tiny moss patches, scattered dead leaves, fine cracks, small subtle damp patches. Roots stay low and embedded. Details softly and evenly distributed; no large or dominant objects. Scale: full image spans about forty feet, one eighth width represents a five-foot tile. Stones and leaves have believable scale.\nLighting: soft pale cool moonlight broadly over the surface, softly brushed restrained amber lantern pools, lamps themselves absent. Night mood while center remains visible.\nAvoid: horizon, sky, walls, side-view buildings, gates, tombstones, statues, steps, upright objects, deep holes, obstacles, figures, creatures, recognizable footprints, text, labels, watermarks, drawn grid. Do not paint a wall or a scenic view. Only the horizontal ground plane.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "ground-thistledown-farm",
+      "path": "assets/ui/generated/ground-thistledown-farm.webp",
+      "kind": "ground",
+      "bytes": 547126,
+      "sha256": "ba97bef5a6027a4a068d2619490f13096bc56130e0d039bef2301da9c780fead",
+      "dimensions": [
+        1536,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "ground-thistledown-farm.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept\nAsset type: battlefield floor painting for a TV tabletop arena; square opaque PNG, 2048x2048 pixels.\nPrimary request: a farmyard ground at night, viewed exactly vertically down. Paint ONLY the horizontal ground surface, filling all four edges.\nStyle: cinematic painterly realism, rich tactile natural detail, approved DungeonFlux palette of deep navy moonlight and soft warm amber lantern illumination.\nComposition: STRICT ORTHOGRAPHIC TOP VIEW, camera pointing vertically down at a flat floor like a material surface painting. No tilt, no oblique angle, no perspective convergence. Single continuous walkable ground plane. Middle 70 percent open and fairly even in brightness, readable for overlaid tile lines and standing figures. Outer edges gently darken.\nMaterials: trampled fine earth, soft shallow cart ruts, scattered thin straw, tiny pebbles, subtle damp compacted mud sheen. A few small cobbles surround one modest flat worn wooden well cover flush with the ground near the outer margin, cover only about a fifteenth of the image width, does not protrude. No open well. Surface details subtle and evenly distributed, cart ruts faint rather than trenches. Scale: full frame spans about forty feet, one eighth width is a five-foot tile. Straw strands tiny and realistically scaled.\nLighting: broad gentle cool moonlight with soft restrained amber lantern-light pools falling on earth; lamps absent. Center stays readable and navy rather than black.\nAvoid: horizon, sky, houses, barn, walls, side views, perspective, carts, farm tools, hay bales, plants, trees, open holes, raised well structure, dominant objects, deep trenches, figures, creatures, recognizable footprints, text, labels, watermarks, drawn grid. Only flat horizontal farmyard surface.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
     }
   ]
 }
