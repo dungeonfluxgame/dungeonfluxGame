@@ -21,6 +21,11 @@ pub(super) const LINE_CHARACTERS: usize = 420;
 struct Ring {
     next_sequence: u64,
     lines: VecDeque<rpc::TableLine>,
+    /// Counts every change a view shows (a line appended, a reply starting or ending), so a
+    /// view whose game revision did not move can still be told from the one before it.
+    version: u64,
+    /// The speakers whose reply to a hero's typed line is being written right now.
+    replying: Vec<String>,
 }
 
 pub(super) struct TableLog {
@@ -46,6 +51,8 @@ impl TableLog {
             ring: Mutex::new(Ring {
                 next_sequence: 1,
                 lines: VecDeque::new(),
+                version: 0,
+                replying: Vec::new(),
             }),
             wake: watch::channel(0).0,
         }
@@ -88,7 +95,7 @@ impl TableLog {
         if text.is_empty() {
             return;
         }
-        let sequence = {
+        let version = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
             let sequence = ring.next_sequence;
             ring.next_sequence += 1;
@@ -103,11 +110,46 @@ impl TableLog {
             while ring.lines.len() > RING_LINES {
                 ring.lines.pop_front();
             }
-            sequence
+            ring.version += 1;
+            ring.version
         };
-        self.wake.send_replace(sequence);
+        self.wake.send_replace(version);
     }
 
+    /// Marks `speaker` as writing a reply until the returned guard is dropped, so every screen
+    /// can show that someone is thinking. Presentation only: nothing waits on it.
+    pub(super) fn reply_pending(self: &Arc<Self>, speaker: &str) -> ReplyPending {
+        if self.enabled {
+            let version = {
+                let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+                ring.replying.push(speaker.chars().take(48).collect());
+                ring.version += 1;
+                ring.version
+            };
+            self.wake.send_replace(version);
+        }
+        ReplyPending {
+            log: self.clone(),
+            speaker: speaker.chars().take(48).collect(),
+        }
+    }
+
+    fn reply_done(&self, speaker: &str) {
+        if !self.enabled {
+            return;
+        }
+        let version = {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(position) = ring.replying.iter().position(|known| known == speaker) {
+                ring.replying.remove(position);
+            }
+            ring.version += 1;
+            ring.version
+        };
+        self.wake.send_replace(version);
+    }
+
+    #[cfg(test)]
     pub(super) fn lines(&self) -> Vec<rpc::TableLine> {
         self.ring
             .lock()
@@ -129,8 +171,24 @@ impl TableLog {
             None => None,
         };
         if let Some(journey) = journey {
-            journey.table_log = self.lines();
+            let ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            journey.table_log = ring.lines.iter().cloned().collect();
+            journey.presentation_sequence = ring.version;
+            journey.reply_speaker = ring.replying.first().cloned().unwrap_or_default();
         }
+    }
+}
+
+/// Keeps a speaker marked as replying; dropping it (reply written, failed or abandoned) clears
+/// the mark.
+pub(super) struct ReplyPending {
+    log: Arc<TableLog>,
+    speaker: String,
+}
+
+impl Drop for ReplyPending {
+    fn drop(&mut self) {
+        self.log.reply_done(&self.speaker);
     }
 }
 
@@ -247,6 +305,60 @@ mod tests {
                 .all(|pair| pair[0].sequence < pair[1].sequence)
         );
         assert_eq!(lines[RING_LINES - 1].sequence, 30);
+    }
+
+    fn display_view() -> rpc::ViewMessage {
+        rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    journey: Some(rpc::JourneyView::default()),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn attached(log: &TableLog) -> rpc::JourneyView {
+        let mut view = display_view();
+        log.attach(&mut view);
+        match view.audience {
+            Some(rpc::view_message::Audience::Display(display)) => display.journey.unwrap(),
+            _ => unreachable!("the test builds a display view"),
+        }
+    }
+
+    #[test]
+    fn every_change_moves_the_presentation_sequence_and_wakes_watchers() {
+        let log = TableLog::new();
+        let wake = log.subscribe();
+        let first = attached(&log).presentation_sequence;
+        speech(&log, "Who sent you?");
+        let typed = attached(&log).presentation_sequence;
+        let pending = log.reply_pending("Courier");
+        let thinking = attached(&log);
+        drop(pending);
+        let done = attached(&log);
+
+        assert!(first < typed);
+        assert!(typed < thinking.presentation_sequence);
+        assert!(thinking.presentation_sequence < done.presentation_sequence);
+        assert_eq!(thinking.reply_speaker, "Courier");
+        assert_eq!(done.reply_speaker, "");
+        assert!(wake.has_changed().unwrap());
+    }
+
+    #[test]
+    fn a_reply_mark_clears_even_when_the_reply_never_comes() {
+        let log = TableLog::new();
+        {
+            let _abandoned = log.reply_pending("Courier");
+            assert_eq!(attached(&log).reply_speaker, "Courier");
+        }
+        assert_eq!(attached(&log).reply_speaker, "");
+        let disabled = TableLog::disabled();
+        drop(disabled.reply_pending("Courier"));
+        assert_eq!(attached(&disabled).presentation_sequence, 0);
     }
 
     #[test]

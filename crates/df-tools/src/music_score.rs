@@ -18,7 +18,8 @@ pub(crate) const BEAT_SECONDS: f64 = 60.0 / BPM;
 pub(crate) const LOOP_SECONDS: f64 = 64.0 * BEAT_SECONDS;
 
 /// How long a Release keeps the resolving motif before the mix settles to the calm bed when
-/// the tempo is derived from the view. A server cue carries its own `hold_millis` instead.
+/// the tempo is derived from the view, or a cue arrives without a `hold_millis`. A server
+/// Release cue carries the tuned hold in its `hold_millis`.
 pub(crate) const RELEASE_HOLD_MILLIS: f64 = 14_000.0;
 /// Narration ducking: depth and the attack/release of the ramp.
 pub(crate) const DUCK_DECIBELS: f32 = -9.0;
@@ -353,7 +354,12 @@ fn tempo_from_cue(cue: &rpc::TempoCue, sequence: u64) -> Option<Tempo> {
         intensity: u16::try_from(cue.intensity_permille.min(1_000)).unwrap_or(1_000),
         sequence,
         cue: Some(cue.sequence),
-        release_hold_millis: f64::from(cue.hold_millis),
+        // The server sends the hold with a Release cue only; no hold means the standard one.
+        release_hold_millis: if cue.hold_millis == 0 {
+            RELEASE_HOLD_MILLIS
+        } else {
+            f64::from(cue.hold_millis)
+        },
     })
 }
 
@@ -789,6 +795,20 @@ mod tests {
         memory.reset();
         view.tempo = Some(cue(rpc::TempoPhase::Build, 300, 1, 250));
         assert!(memory.consume(&tempo_of(&quiet, &view, 1)));
+    }
+
+    #[test]
+    fn a_cue_without_a_hold_uses_the_standard_release_hold() {
+        let quiet = scene("");
+        let mut view = journey(rpc::JourneyPhase::Complete);
+        view.tempo = Some(cue(rpc::TempoPhase::Release, 450, 2, 0));
+        let release = tempo(&quiet, &view);
+        assert_eq!(release.release_hold_millis, RELEASE_HOLD_MILLIS);
+        assert_eq!(
+            effective_phase(release, RELEASE_HOLD_MILLIS - 1.0),
+            Phase::Release,
+            "a release is not cut to the server's minimum cue gap"
+        );
     }
 
     #[test]

@@ -10,15 +10,23 @@
 //! Bounds: every state has a maximum dwell, so a finish signal that never arrives times out;
 //! when the queue is long or the display is far behind, cosmetic cues are dropped and the
 //! outcome-bearing ones (the killing blow, the defeat, the banner) are kept in shortened form.
-//! The dwell of a spoken or narrated line is itself cosmetic: a newly accepted view that
-//! carries an outcome ends it at once, and a plain redraw never waits for it, so the display
-//! cannot lag the phones behind a long line.
+//! A line being narrated or spoken is never cut by a scene change: the scene's successor waits
+//! for the line to finish (the speech leads the picture), then the transition runs. Only what
+//! must stay immediate preempts a line: dice outcomes, a defeat, the banner, and a scene change
+//! that starts a fight (the line ends at once and the fight's banner takes over). Several quick
+//! actions are caught up, not queued without bound: with two scene changes waiting, or one that
+//! has waited [`SCENE_WAIT_CAP_MS`], the line in progress ends and the scenes converge to the
+//! newest. A plain redraw never waits for a line, so phones are never behind (display only).
 use std::collections::VecDeque;
 
 /// Queue length beyond which stale cosmetic cues are collapsed.
 pub(crate) const QUEUE_CAP: usize = 10;
 /// Age of the oldest queued cue beyond which stale cosmetic cues are collapsed.
 pub(crate) const LAG_LIMIT_MS: u64 = 4_000;
+/// The longest a scene change waits for the line being spoken before that line is ended so the
+/// display catches up. Longer than any line's own bounded dwell, so it is only reached when a
+/// clip's end signal never arrives and quick actions keep queueing.
+pub(crate) const SCENE_WAIT_CAP_MS: u64 = 12_000;
 const SHORT_FLOOR_MS: u32 = 150;
 const VOICE_MINIMUM_MS: u32 = 1_200;
 const VOICE_GRACE_MS: u32 = 3_000;
@@ -76,6 +84,8 @@ pub(crate) struct Cue<D> {
     outcome: bool,
     short: bool,
     queued_ms: u64,
+    /// A scene change that starts a fight: it ends the line in progress instead of waiting.
+    immediate: bool,
 }
 
 /// What the browser layer applies.
@@ -96,6 +106,8 @@ pub(crate) enum Command<D> {
 #[derive(Clone, Debug)]
 pub(crate) struct ViewDiff<D> {
     pub(crate) scene_changed: bool,
+    /// The scene change is the start of a fight: it does not wait for the line being spoken.
+    pub(crate) enters_combat: bool,
     /// The story begins with this view: the scene change shows the title card (the payload)
     /// after the wordmark and before the scene enters.
     pub(crate) title: Option<D>,
@@ -118,6 +130,7 @@ impl<D> Default for ViewDiff<D> {
     fn default() -> Self {
         Self {
             scene_changed: false,
+            enters_combat: false,
             title: None,
             roll: None,
             impact: None,
@@ -210,6 +223,7 @@ impl<D: Clone> StageDirector<D> {
             outcome,
             short: false,
             queued_ms: now_ms,
+            immediate: false,
         }
     }
 
@@ -223,7 +237,9 @@ impl<D: Clone> StageDirector<D> {
             cues.extend(diff.roll.map(|d| make(CueKind::Roll, Some(d))));
             cues.extend(diff.impact.map(|d| make(CueKind::Impact, Some(d))));
             cues.extend(diff.defeat.map(|d| make(CueKind::Defeat, Some(d))));
-            cues.push(make(CueKind::Scene, diff.title.clone()));
+            let mut scene = make(CueKind::Scene, diff.title.clone());
+            scene.immediate = diff.enters_combat;
+            cues.push(scene);
             cues.extend(diff.banner.map(|d| make(CueKind::Banner, Some(d))));
             cues.extend(diff.closing.map(|d| make(CueKind::Closing, Some(d))));
         } else {
@@ -268,9 +284,10 @@ impl<D: Clone> StageDirector<D> {
         self.advance(now_ms)
     }
 
-    /// A line being narrated or spoken is cosmetic. When the cues just queued carry an outcome
-    /// (a roll, a defeat, a scene change, a banner) the line ends now rather than holding
-    /// that outcome back; the new view's own lines still play after it.
+    /// A line being narrated or spoken is cosmetic only against what must stay immediate: a
+    /// roll, a defeat, a banner, or a scene change that starts a fight end it now rather than
+    /// holding that outcome back. An ordinary scene change waits for the line (see the module
+    /// documentation); the new view's own lines play after the transition.
     fn preempt_cosmetic_dwell(&mut self) {
         let dwelling = self.active.as_ref().is_some_and(|active| {
             matches!(active.state, StageState::Narrating | StageState::Speaking)
@@ -281,10 +298,9 @@ impl<D: Clone> StageDirector<D> {
                 CueKind::Roll
                     | CueKind::Impact
                     | CueKind::Defeat
-                    | CueKind::Scene
                     | CueKind::Banner
                     | CueKind::Closing
-            )
+            ) || (cue.kind == CueKind::Scene && cue.immediate)
         });
         if dwelling && outcome {
             self.active = None;
@@ -359,6 +375,49 @@ impl<D: Clone> StageDirector<D> {
     /// outcome-bearing cues stay, shortened; the newest view is still drawn by the last
     /// `Render`/`Scene`.
     fn collapse_if_behind(&mut self, now_ms: u64) {
+        // Quick actions catch up: two scene changes waiting, or one that has waited too long,
+        // end the line being spoken so the display converges to the newest scene.
+        let scenes_waiting = self
+            .queue
+            .iter()
+            .filter(|cue| cue.kind == CueKind::Scene)
+            .count();
+        let waited_too_long = self
+            .queue
+            .iter()
+            .find(|cue| cue.kind == CueKind::Scene)
+            .is_some_and(|cue| now_ms.saturating_sub(cue.queued_ms) > SCENE_WAIT_CAP_MS);
+        let dwelling = self.active.as_ref().is_some_and(|active| {
+            matches!(active.state, StageState::Narrating | StageState::Speaking)
+        });
+        if dwelling && (scenes_waiting >= 2 || waited_too_long) {
+            self.active = None;
+        }
+        if scenes_waiting >= 2 {
+            // Several scene changes converge to the newest: what the older views would have
+            // narrated or said is skipped, while every outcome they carried is kept.
+            let newest = self
+                .queue
+                .iter()
+                .rposition(|cue| cue.kind == CueKind::Scene)
+                .unwrap_or(0);
+            let mut kept = VecDeque::new();
+            for (position, cue) in self.queue.drain(..).enumerate() {
+                let outcome = cue.outcome
+                    || matches!(
+                        cue.kind,
+                        CueKind::Roll
+                            | CueKind::Impact
+                            | CueKind::Defeat
+                            | CueKind::Banner
+                            | CueKind::Closing
+                    );
+                if position >= newest || outcome {
+                    kept.push_back(cue);
+                }
+            }
+            self.queue = kept;
+        }
         let behind = self
             .queue
             .front()
@@ -584,6 +643,7 @@ impl<D: Clone> StageDirector<D> {
                 outcome: false,
                 short: ended.short,
                 queued_ms: ended.started_ms,
+                immediate: false,
             },
             next,
         ))
@@ -944,13 +1004,13 @@ mod tests {
         assert_eq!(names(&commands), ["render", "Rolling"]);
     }
 
-    #[test]
-    fn a_scene_change_ends_the_line_being_spoken_at_once() {
+    fn line_then_scene_change(enters_combat: bool) -> (Director, Vec<Command<&'static str>>) {
         let mut director = Director::new();
         director.on_view(
             0,
             ViewDiff {
                 speech: Some(("old line", 7_000)),
+                voiced: true,
                 ..ViewDiff::default()
             },
         );
@@ -958,12 +1018,116 @@ mod tests {
             300,
             ViewDiff {
                 scene_changed: true,
+                enters_combat,
+                speech: Some(("new line", 2_000)),
+                voiced: true,
+                ..ViewDiff::default()
+            },
+        );
+        (director, commands)
+    }
+
+    #[test]
+    fn a_scene_change_waits_for_the_line_being_spoken_to_finish() {
+        let (mut director, commands) = line_then_scene_change(false);
+        assert!(commands.is_empty(), "{commands:?}");
+        assert_eq!(
+            director.state(),
+            StageState::Speaking,
+            "the old line plays on"
+        );
+        // The clip ends: only then does the transition run.
+        let commands = director.on_cue_finished(4_000, CueKind::Speak);
+        assert_eq!(director.state(), StageState::LeavingScene, "{commands:?}");
+        assert_eq!(names(&commands), ["LeavingScene"]);
+    }
+
+    #[test]
+    fn a_scene_change_that_starts_a_fight_ends_the_line_at_once() {
+        let (director, commands) = line_then_scene_change(true);
+        assert_eq!(director.state(), StageState::LeavingScene);
+        assert_eq!(names(&commands), ["LeavingScene"]);
+    }
+
+    #[test]
+    fn without_audio_the_same_order_runs_on_reading_time() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                speech: Some(("old line", 3_000)),
+                ..ViewDiff::default()
+            },
+        );
+        director.on_view(
+            300,
+            ViewDiff {
+                scene_changed: true,
                 speech: Some(("new line", 2_000)),
                 ..ViewDiff::default()
             },
         );
-        assert_eq!(director.state(), StageState::LeavingScene);
-        assert_eq!(names(&commands), ["LeavingScene"]);
+        assert_eq!(director.state(), StageState::Speaking);
+        assert!(director.on_tick(2_999).is_empty());
+        let commands = director.on_tick(3_000);
+        assert_eq!(director.state(), StageState::LeavingScene, "{commands:?}");
+    }
+
+    #[test]
+    fn several_quick_scene_changes_catch_up_to_the_newest() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                speech: Some(("old line", 7_000)),
+                voiced: true,
+                ..ViewDiff::default()
+            },
+        );
+        let scene = |line| ViewDiff {
+            scene_changed: true,
+            speech: Some((line, 2_000)),
+            ..ViewDiff::default()
+        };
+        assert!(director.on_view(300, scene("second")).is_empty());
+        // A third view while two scene changes wait: the line ends and the display converges.
+        let commands = director.on_view(600, scene("third"));
+        assert_eq!(director.state(), StageState::LeavingScene, "{commands:?}");
+        let scenes = director
+            .queue
+            .iter()
+            .filter(|cue| cue.kind == CueKind::Scene)
+            .count();
+        assert_eq!(scenes, 0, "the waiting scene changes merged into one");
+    }
+
+    #[test]
+    fn a_scene_change_never_waits_longer_than_the_cap() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                speech: Some(("stuck line", 7_000)),
+                voiced: true,
+                ..ViewDiff::default()
+            },
+        );
+        director.on_view(
+            100,
+            ViewDiff {
+                scene_changed: true,
+                ..ViewDiff::default()
+            },
+        );
+        assert_eq!(director.state(), StageState::Speaking);
+        // The clip's end never arrives; the cap ends the line and the display catches up to the
+        // newest scene (drawn at once, the transition skipped).
+        let commands = director.on_tick(100 + SCENE_WAIT_CAP_MS + 1);
+        assert_eq!(director.state(), StageState::Idle, "{commands:?}");
+        assert!(
+            names(&commands).contains(&"render".to_owned()),
+            "{commands:?}"
+        );
     }
 
     #[test]

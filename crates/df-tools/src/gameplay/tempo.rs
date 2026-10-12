@@ -118,7 +118,7 @@ impl TempoOwner {
             tuning.policy(),
         )
         .map_err(TempoError::Policy)?;
-        let cue = cue(&frame.state, frame.phase, 1);
+        let cue = cue(&frame.state, frame.phase, 1, tuning);
         Ok(Self {
             state: frame.state,
             phase: frame.phase,
@@ -351,7 +351,7 @@ impl TempoOwner {
         intensity: i64,
     ) -> Result<(), TempoError> {
         let phase = wire_phase(current_phase);
-        if millis.saturating_sub(self.published_millis) >= 250
+        if millis.saturating_sub(self.published_millis) >= CUE_MINIMUM_GAP_MILLIS
             && (phase != self.cue.phase
                 || intensity.abs_diff(i64::from(self.cue.intensity_permille)) >= 50)
         {
@@ -363,7 +363,7 @@ impl TempoOwner {
                     .sequence
                     .checked_add(1)
                     .ok_or(TempoError::Sequence)?,
-                hold_millis: 250,
+                hold_millis: hold_millis(current_phase, self.tuning),
             };
             self.published_millis = millis;
         }
@@ -407,12 +407,32 @@ fn wire_phase(phase: TempoPhase) -> i32 {
         TempoPhase::Release => rpc::TempoPhase::Release,
     }) as i32
 }
-fn cue(state: &TempoState, phase: TempoPhase, sequence: u64) -> rpc::TempoCue {
+fn cue(
+    state: &TempoState,
+    phase: TempoPhase,
+    sequence: u64,
+    tuning: pack::TempoTuning,
+) -> rpc::TempoCue {
     rpc::TempoCue {
         intensity_permille: state.intensity as u32,
         phase: wire_phase(phase),
         sequence,
-        hold_millis: 250,
+        hold_millis: hold_millis(phase, tuning),
+    }
+}
+
+/// The fewest milliseconds between two published cues. It is the server's own rate limit and
+/// is not sent to clients.
+const CUE_MINIMUM_GAP_MILLIS: u64 = 250;
+
+/// What a cue's `hold_millis` means: for a Release cue, how long the music holds the release
+/// before settling to the calm bed (from the tuning); for every other phase, 0 (nothing to
+/// hold). It is never the rate limit between cues.
+fn hold_millis(phase: TempoPhase, tuning: pack::TempoTuning) -> u32 {
+    if phase == TempoPhase::Release {
+        tuning.release_hold_millis
+    } else {
+        0
     }
 }
 
@@ -604,6 +624,36 @@ mod tests {
         );
         assert_eq!(target(pack::SceneKey::Defeat, false, tuning), (300, true));
         assert_eq!(target(pack::SceneKey::Defeat, true, tuning), (80, true));
+    }
+    #[test]
+    fn only_a_release_cue_carries_a_hold_and_it_is_the_tuned_release_duration() {
+        let tuning = pack::TempoTuning::default();
+        assert_eq!(tuning.release_hold_millis, 14_000);
+        assert_eq!(hold_millis(TempoPhase::Release, tuning), 14_000);
+        for phase in [
+            TempoPhase::Calm,
+            TempoPhase::Build,
+            TempoPhase::Anticipation,
+            TempoPhase::Peak,
+        ] {
+            assert_eq!(hold_millis(phase, tuning), 0, "{phase:?}");
+        }
+        let mut tuned = tuning;
+        tuned.release_hold_millis = 6_000;
+        let mut victory = owner(tuned);
+        victory.state.intensity = 900;
+        victory.phase = TempoPhase::Peak;
+        step(
+            &mut victory,
+            0,
+            tuned.base_intensity_permille.victory,
+            true,
+            Some(PublicEvent::Victory),
+        );
+        victory.publish(1_000).unwrap();
+        assert_eq!(victory.cue.phase, rpc::TempoPhase::Release as i32);
+        assert_eq!(victory.cue.hold_millis, 6_000);
+        assert_ne!(victory.cue.hold_millis, 250);
     }
     #[test]
     fn cues_are_rate_bounded_and_repeated_views_do_not_replay_impulses() {

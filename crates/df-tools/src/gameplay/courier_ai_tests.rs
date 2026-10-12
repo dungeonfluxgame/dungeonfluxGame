@@ -1000,3 +1000,124 @@ fn edited_courier_clue_is_recorded_and_only_revealed_to_its_recipient() {
         );
     });
 }
+
+mod session_healing {
+    use super::*;
+    use crate::gameplay::session_recovery::{Health, Resolution, delay, recover};
+    use std::time::{Duration, Instant};
+
+    fn lost_ack_session() -> (
+        Rc<RefCell<Stored>>,
+        Owner,
+        GameInput,
+        OperationId,
+        Checkpoint,
+    ) {
+        let (current, first, _) = before_answer();
+        let input = command(&current, first, 6, "ask-courier", vec![]);
+        let operation = OperationId::from_bytes(&[6; 16]).unwrap();
+        let stored = Rc::new(RefCell::new(Stored {
+            checkpoint: current.clone(),
+            receipts: vec![],
+            commit: Commit::LostAcknowledgement,
+            events: vec![],
+            unavailable_lookups: 0,
+        }));
+        let (mut session, _) = owner(&stored, current.clone());
+        // The commit reached the database but its acknowledgement was lost (or ran past its
+        // bound): the outcome is unknown and the owner would fence the session.
+        assert_eq!(
+            submit(&mut session, &input, operation),
+            SubmissionOutcome::LookupRequired
+        );
+        assert!(session.has_uncertain_operation() && !session.is_current());
+        (stored, session, input, operation, current)
+    }
+
+    fn retry(session: &mut Owner, input: &GameInput, operation: OperationId) -> Resolution {
+        let scope = Scope {
+            operation,
+            input: input.clone(),
+            fingerprint: operation.as_bytes().to_vec(),
+        };
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: "session-healing-test".to_owned(),
+        };
+        recover(session, scope, input, &context)
+    }
+
+    #[test]
+    fn a_fenced_session_recovers_by_itself_once_the_database_answers() {
+        let (stored, mut session, input, operation, before) = lost_ack_session();
+        // The database is briefly unreachable: each attempt says "not yet".
+        stored.borrow_mut().unavailable_lookups = 2;
+        let mut health = Health::fenced(Instant::now(), 2_100);
+        let mut resolutions = Vec::new();
+        for _ in 0..3 {
+            let resolution = retry(&mut session, &input, operation);
+            health.attempted(Instant::now(), &resolution);
+            resolutions.push(resolution);
+        }
+        assert_eq!(
+            resolutions,
+            [
+                Resolution::Retry(RepositoryError::Unavailable),
+                Resolution::Retry(RepositoryError::Unavailable),
+                Resolution::Recovered,
+            ]
+        );
+        assert!(session.is_current() && !session.has_uncertain_operation());
+        assert_ne!(session.checkpoint(), &before, "the decision was committed");
+        assert_eq!(health.attempts(), 3);
+        // The commit happened once; recovering never repeated it.
+        assert_eq!(
+            stored
+                .borrow()
+                .events
+                .iter()
+                .filter(|event| **event == "commit")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_commit_that_stays_unknown_keeps_being_retried_and_never_hangs_the_owner() {
+        let (stored, mut session, input, operation, _) = lost_ack_session();
+        stored.borrow_mut().unavailable_lookups = usize::MAX;
+        let mut health = Health::fenced(Instant::now(), 12_000);
+        let mut now = Instant::now();
+        for _ in 0..40 {
+            let resolution = retry(&mut session, &input, operation);
+            assert_eq!(resolution, Resolution::Retry(RepositoryError::Unavailable));
+            health.attempted(now, &resolution);
+            let next = health
+                .next_attempt()
+                .expect("an unknown commit is never given up");
+            assert!(next - now <= Duration::from_secs(5), "the wait is capped");
+            now = next;
+        }
+        assert!(!health.is_lost());
+        assert!(session.has_uncertain_operation());
+        // The database comes back much later: the very next attempt recovers.
+        stored.borrow_mut().unavailable_lookups = 0;
+        assert_eq!(
+            retry(&mut session, &input, operation),
+            Resolution::Recovered
+        );
+        assert!(session.is_current());
+        assert_eq!(delay(40), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_different_operation_cannot_resolve_the_retained_one() {
+        let (_, mut session, input, _, _) = lost_ack_session();
+        let other = OperationId::from_bytes(&[0x77; 16]).unwrap();
+        assert_eq!(
+            retry(&mut session, &input, other),
+            Resolution::Retry(RepositoryError::UnresolvedCommit)
+        );
+        assert!(session.has_uncertain_operation());
+    }
+}

@@ -305,8 +305,9 @@ fn edited_text_options_equipment_and_room_drive_complete_journey() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        let axum::response::Html(body) = runtime.block_on(crate::gameplay::room::player_page());
-        assert!(body.contains("data-room=\"TUNED\""));
+        let axum::response::Html(body) =
+            runtime.block_on(crate::gameplay::room::player_page_for("0123456789abcdef"));
+        assert!(body.contains("data-room=\"TUNED\" data-run=\"0123456789abcdef\""));
         assert!(!body.contains("data-room=\"LANTERN\""));
     });
 }

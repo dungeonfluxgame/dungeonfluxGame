@@ -98,7 +98,7 @@ fn add_character_limits(facts: &mut Value, profile: Option<&SpeakerProfile>) {
 pub(super) struct NpcReplyContext {
     member: MemberId,
     pub(super) facts: Value,
-    speaker: String,
+    pub(super) speaker: String,
     hero_name: String,
     hero_index: u32,
     typed_words: String,

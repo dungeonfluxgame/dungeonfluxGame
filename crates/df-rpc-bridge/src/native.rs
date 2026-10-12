@@ -5,12 +5,31 @@ use std::{
     io,
     num::NonZeroUsize,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     task::{Context, Poll},
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf},
     sync::mpsc,
+};
+
+/// How often an idle tunnel is pinged, and how long it may stay silent before it is dropped.
+/// A browser answers pings by itself, so a live page never trips this; a page that vanished
+/// without closing its socket (a crashed or suspended tab) releases its connection slot and
+/// watch stream within [`KeepAlive::idle_limit`] instead of holding them until the process ends.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct KeepAlive {
+    pub(crate) interval: Duration,
+    pub(crate) idle_limit: Duration,
+}
+
+pub(crate) const KEEP_ALIVE: KeepAlive = KeepAlive {
+    interval: Duration::from_secs(15),
+    idle_limit: Duration::from_secs(45),
 };
 
 /// Failure to reserve a bounded incoming slot before a WebSocket upgrade.
@@ -121,7 +140,7 @@ impl NativeConnectionPermit {
         socket: WebSocket,
         metrics: Arc<ConnectionMetrics>,
     ) -> io::Result<()> {
-        pump_websocket(socket, metrics, |connection| {
+        pump_websocket(socket, metrics, KEEP_ALIVE, |connection| {
             let accepting = self
                 .accepting
                 .lock()
@@ -256,7 +275,15 @@ pub async fn accept_websocket_measured(
     incoming: mpsc::Sender<Result<TunnelStream, io::Error>>,
     metrics: Arc<ConnectionMetrics>,
 ) -> io::Result<()> {
-    pump_websocket(socket, metrics, |connection| {
+    accept_websocket_kept(socket, incoming, metrics, KEEP_ALIVE).await
+}
+async fn accept_websocket_kept(
+    socket: WebSocket,
+    incoming: mpsc::Sender<Result<TunnelStream, io::Error>>,
+    metrics: Arc<ConnectionMetrics>,
+    keep_alive: KeepAlive,
+) -> io::Result<()> {
+    pump_websocket(socket, metrics, keep_alive, |connection| {
         incoming
             .try_send(Ok(connection))
             .map_err(|error| match error {
@@ -273,6 +300,7 @@ pub async fn accept_websocket_measured(
 async fn pump_websocket(
     socket: WebSocket,
     metrics: Arc<ConnectionMetrics>,
+    keep_alive: KeepAlive,
     admit: impl FnOnce(TunnelStream) -> io::Result<()>,
 ) -> io::Result<()> {
     let _scope = ConnectionScope(metrics.clone());
@@ -293,8 +321,15 @@ async fn pump_websocket(
     }
     let (mut outgoing, mut incoming_socket) = socket.split();
     let (mut reader, mut writer) = tokio::io::split(tunnel);
+    // Milliseconds after `opened` at which the last frame (of any kind) was heard.
+    let opened = Instant::now();
+    let last_heard = AtomicU64::new(0);
     let receive = async {
         while let Some(message) = incoming_socket.next().await {
+            last_heard.store(
+                u64::try_from(opened.elapsed().as_millis()).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
             match message.map_err(io::Error::other)? {
                 Message::Binary(bytes) if bytes.len() <= MESSAGE_BYTES => {
                     metrics.socket_receive(bytes.len(), true)?;
@@ -325,18 +360,41 @@ async fn pump_websocket(
     };
     let send = async {
         let mut buffer = vec![0; FRAME_BYTES];
+        let mut ticker = tokio::time::interval(keep_alive.interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The first tick completes at once; pings start one interval after the upgrade.
+        ticker.tick().await;
         loop {
-            let count = reader.read(&mut buffer).await?;
-            if count == 0 {
-                return Ok(());
+            tokio::select! {
+                read = reader.read(&mut buffer) => {
+                    let count = read?;
+                    if count == 0 {
+                        return Ok(());
+                    }
+                    metrics.observe(false, &buffer[..count])?;
+                    metrics.backlog(count)?;
+                    outgoing
+                        .send(Message::Binary(buffer[..count].to_vec().into()))
+                        .await
+                        .map_err(io::Error::other)?;
+                    metrics.backlog(0)?;
+                }
+                _ = ticker.tick() => {
+                    let silent = opened.elapsed().saturating_sub(Duration::from_millis(
+                        last_heard.load(Ordering::Relaxed),
+                    ));
+                    if silent > keep_alive.idle_limit {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "websocket tunnel idle: no frame or pong heard",
+                        ));
+                    }
+                    outgoing
+                        .send(Message::Ping(Vec::new().into()))
+                        .await
+                        .map_err(io::Error::other)?;
+                }
             }
-            metrics.observe(false, &buffer[..count])?;
-            metrics.backlog(count)?;
-            outgoing
-                .send(Message::Binary(buffer[..count].to_vec().into()))
-                .await
-                .map_err(io::Error::other)?;
-            metrics.backlog(0)?;
         }
     };
     let result = tokio::select! { result = receive => result, result = send => result };
@@ -405,6 +463,62 @@ mod tests {
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
     }
+    /// A tunnel whose peer vanished without closing (a crashed or suspended tab) is dropped
+    /// after the idle limit, so its connection slot is released, while a peer that answers
+    /// pings is never dropped however quiet the tunnel is.
+    #[tokio::test]
+    async fn a_silent_peer_is_dropped_and_an_answering_one_is_kept() {
+        let keep_alive = KeepAlive {
+            interval: Duration::from_millis(40),
+            idle_limit: Duration::from_millis(250),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (incoming, mut receiver) = mpsc::channel(4);
+        let (finished_sender, mut finished) = mpsc::unbounded_channel();
+        let app = Router::new().route(
+            "/",
+            get(move |upgrade: WebSocketUpgrade| {
+                let incoming = incoming.clone();
+                let finished_sender = finished_sender.clone();
+                async move {
+                    upgrade.on_upgrade(move |socket| async move {
+                        let metrics = Arc::new(ConnectionMetrics::new(false));
+                        let result =
+                            accept_websocket_kept(socket, incoming, metrics, keep_alive).await;
+                        let _ = finished_sender.send(result);
+                    })
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        // The silent peer connects and is never polled again, so it never answers a ping.
+        let (silent, _) = tokio_tungstenite::connect_async(format!("ws://{address}/"))
+            .await
+            .unwrap();
+        let _silent_tunnel = receiver.recv().await.unwrap().unwrap();
+        let verdict = tokio::time::timeout(Duration::from_secs(3), finished.recv())
+            .await
+            .expect("the silent tunnel was never dropped")
+            .unwrap();
+        assert_eq!(verdict.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        drop(silent);
+        // A peer that keeps reading answers pings automatically and stays well past the limit.
+        let (mut answering, _) = tokio_tungstenite::connect_async(format!("ws://{address}/"))
+            .await
+            .unwrap();
+        let _answering_tunnel = receiver.recv().await.unwrap().unwrap();
+        let reader = tokio::spawn(async move { while answering.next().await.is_some() {} });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(900), finished.recv())
+                .await
+                .is_err(),
+            "a peer that answers pings was dropped"
+        );
+        reader.abort();
+        server.abort();
+    }
+
     struct OwnedListener(tokio::task::JoinHandle<io::Result<()>>);
     impl Drop for OwnedListener {
         fn drop(&mut self) {

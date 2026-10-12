@@ -78,6 +78,10 @@ struct LineDetail {
     role: TableRole,
     kind: TableKind,
     text: String,
+    /// Said at the table rather than scripted for the scene: it belongs on the figure named
+    /// as its speaker and nowhere else, so a reply that outlives its beat is not shown on a
+    /// stranger.
+    conversational: bool,
 }
 
 impl LineDetail {
@@ -87,6 +91,7 @@ impl LineDetail {
             role: line.role,
             kind: line.kind,
             text: line.text.clone(),
+            conversational: !line.scripted,
         }
     }
 }
@@ -256,8 +261,16 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         let speech = fresh
             .iter()
             .rev()
-            .find(|line| line.kind == TableKind::Speech && line.role == TableRole::Npc)
+            .find(|line| {
+                line.scripted && line.kind == TableKind::Speech && line.role == TableRole::Npc
+            })
             .map(|line| LineDetail::of(line));
+        // After a reload the line to leave on screen is the speaker's last answer to a hero
+        // when that is the newest thing said, otherwise the scene's own line.
+        let reply_now = lines
+            .last()
+            .filter(|line| line.kind == TableKind::Speech && line.role == TableRole::Npc)
+            .map(LineDetail::of);
         // A hero's typed line and what a hero did outside a fight are shown at once: they are
         // table talk, so no cue waits for them and they never hold an outcome back.
         let in_fight = transitions.new_roll || snapshot.stage != CombatStage::Absent;
@@ -267,7 +280,10 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             fresh
                 .iter()
                 .filter(|line| match line.kind {
-                    TableKind::Speech => matches!(line.role, TableRole::Hero(_)),
+                    TableKind::Speech => {
+                        matches!(line.role, TableRole::Hero(_))
+                            || (line.role == TableRole::Npc && !line.scripted)
+                    }
                     TableKind::Action => !in_fight && line.role != TableRole::Narrator,
                 })
                 .map(|line| LineDetail::of(line))
@@ -287,6 +303,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         };
         let diff = ViewDiff {
             scene_changed,
+            enters_combat: transitions.entered_combat,
             roll: roll.clone().map(|roll| Detail::Roll(Box::new(roll))),
             impact: roll.clone().map(|roll| Detail::Roll(Box::new(roll))),
             defeat: roll
@@ -316,6 +333,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                         role: TableRole::Narrator,
                         kind: TableKind::Speech,
                         text: narration.clone(),
+                        conversational: false,
                     }),
                     hold,
                 )
@@ -340,7 +358,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         };
         (
             commands,
-            restart.then_some(speech).flatten(),
+            restart.then_some(reply_now.or(speech)).flatten(),
             chime,
             immediate,
         )
@@ -352,6 +370,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         live_sfx::play(Cue::TurnChime, Duration::ZERO);
     }
     let applied = apply(client, commands);
+    let thinking = show_thinking(client, &view);
     if let Some(line) = seed {
         // A reload shows the current line silently, attributed to its speaker, and leaves the
         // character's words on screen rather than the narration.
@@ -362,7 +381,23 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         show_line(client, line, false)?;
     }
     ensure_frame();
-    applied
+    applied.and(thinking)
+}
+
+/// Shows the thinking mark at the speaker the server says is writing a reply, if that speaker
+/// stands in this scene, and removes it otherwise.
+fn show_thinking(client: &Rc<RefCell<Client>>, view: &rpc::ViewMessage) -> Result<(), JsValue> {
+    let state = client.borrow();
+    let Some(stage) = state.live.tv.as_ref() else {
+        return Ok(());
+    };
+    let slot = presentation::replying_speaker(view).and_then(|name| {
+        stage
+            .figures()
+            .slot_named(&name)
+            .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
+    });
+    stage.figures().set_thinking(slot)
 }
 
 fn redraw(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
@@ -430,6 +465,10 @@ fn enter(
     set_stage(client, state_name(state))?;
     match (state, detail) {
         (StageState::LeavingScene, _) => {
+            // Nothing said in the beat being left follows into the next one.
+            if let Some(stage) = client.borrow().live.tv.as_ref() {
+                stage.figures().clear_bubbles()?;
+            }
             set_speaker(client, "")?;
             live_sfx::cancel_unstarted();
             live_sfx::play(Cue::SceneTransition, Duration::ZERO);
@@ -672,12 +711,21 @@ fn show_line(client: &Rc<RefCell<Client>>, line: &LineDetail, sound: bool) -> Re
     };
     let slot = match line.role {
         TableRole::Hero(index) => Some(ActorSlot::Hero(index)),
+        TableRole::Npc if line.conversational => stage
+            .figures()
+            .slot_named(&line.speaker)
+            .filter(|slot| matches!(slot, ActorSlot::Npc(_))),
         TableRole::Npc => stage.figures().npc_slot_for(&line.speaker),
         TableRole::Narrator => None,
     };
     let Some(slot) = slot else {
         return Ok(());
     };
+    if line.role == TableRole::Npc && line.kind == TableKind::Speech {
+        // The speaker's answer takes the place of the hero's words it answers.
+        stage.figures().clear_typed();
+        stage.set_speaker("character")?;
+    }
     let kind = match (line.kind, line.role) {
         (TableKind::Action, _) => BubbleKind::Action,
         (TableKind::Speech, TableRole::Hero(_)) => BubbleKind::Typed,
@@ -738,6 +786,7 @@ pub(super) fn voice_started(speaker: Option<&str>, text: &str) {
                     role: TableRole::Npc,
                     kind: TableKind::Speech,
                     text: text.to_owned(),
+                    conversational: false,
                 },
                 false,
             )

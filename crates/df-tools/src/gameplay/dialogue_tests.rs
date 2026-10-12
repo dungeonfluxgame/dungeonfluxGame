@@ -162,6 +162,7 @@ impl RunningActor {
             qualification_inputs: Some(Vec::new()),
             qualification_joins: Some(Vec::new()),
             completion_retry: None,
+            session: Default::default(),
             completion_observer,
         };
         let (handoff, receive) = std::sync::mpsc::sync_channel::<actor::Actor>(1);

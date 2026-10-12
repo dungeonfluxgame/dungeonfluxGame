@@ -22,6 +22,10 @@ mod qualification_verdict;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod music_score;
+#[cfg(any(target_arch = "wasm32", test))]
+mod reconnect;
+#[cfg(any(target_arch = "wasm32", test))]
+mod sound_switch;
 mod speech_clip;
 mod voice_line;
 

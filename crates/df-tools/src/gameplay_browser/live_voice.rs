@@ -7,16 +7,16 @@
 //!
 //! Browsers refuse audio until the page has had a user gesture, so the display shows one
 //! small "Enable sound" control until a click or key press, then a mute toggle that is
-//! remembered for the tab. While a clip plays the element holding its text gets the
-//! `speaking` class.
+//! kept only until the page reloads (a reload starts locked and the first press enables
+//! sound). While a clip plays the element holding its text gets the `speaking` class.
 use super::*;
+use crate::sound_switch::{Press, Sound, SoundSwitch};
 use crate::voice_line::{VoiceLine, display_lines};
 use std::collections::VecDeque;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{Blob, BlobPropertyBag, Event, EventTarget, HtmlAudioElement, Node, Response, Url};
 
 const VOICE_PATH: &str = "/gameplay/voice";
-const MUTED_KEY: &str = "df.voice.muted";
 const SPEAKING_CLASS: &str = "speaking";
 const SPOKEN_MEMORY: usize = 256;
 const MAXIMUM_CLIP_BYTES: u32 = 4 * 1024 * 1024;
@@ -35,13 +35,6 @@ const SPEAKER_PATHS: &str = "<path d=\"M11 5 6 9H3v6h3l5 4z\"/>";
 const WAVE_PATHS: &str =
     "<path d=\"M15.5 8.5a5 5 0 0 1 0 7\"/><path d=\"M18.5 5.5a9 9 0 0 1 0 13\"/>";
 const MUTE_PATHS: &str = "<path d=\"M16 9l6 6M22 9l-6 6\"/>";
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Sound {
-    Locked,
-    On,
-    Muted,
-}
 
 /// The clip being fetched or played.
 struct Playing {
@@ -69,8 +62,7 @@ struct Director {
     control: Element,
     icon: Element,
     label: Element,
-    unlocked: bool,
-    muted: bool,
+    switch: SoundSwitch,
     /// Lines of the newest accepted view; older views' queued lines are discarded.
     latest: Vec<VoiceLine>,
     queue: VecDeque<VoiceLine>,
@@ -86,11 +78,7 @@ thread_local! {static DIRECTOR:RefCell<Option<Shared>>=const{RefCell::new(None)}
 
 impl Director {
     fn sound(&self) -> Sound {
-        match (self.unlocked, self.muted) {
-            (false, _) => Sound::Locked,
-            (true, false) => Sound::On,
-            (true, true) => Sound::Muted,
-        }
+        self.switch.sound()
     }
 
     fn render_control(&self) {
@@ -203,7 +191,13 @@ pub(super) fn effects_gate() -> Option<EffectsGate> {
 
 /// `None` while audio is still locked, otherwise whether the viewer muted sound.
 pub(super) fn effects_muted() -> Option<bool> {
-    with_director(|state| state.unlocked.then_some(state.muted)).flatten()
+    with_director(|state| {
+        state
+            .switch
+            .is_unlocked()
+            .then_some(state.switch.is_muted())
+    })
+    .flatten()
 }
 
 /// Called once per newly applied view. Voice is best effort: a failure here marks the
@@ -278,8 +272,7 @@ fn create(document: &Document) -> Result<Shared, JsValue> {
         control: control.clone(),
         icon,
         label,
-        unlocked: false,
-        muted: stored_mute(),
+        switch: SoundSwitch::new(),
         latest: Vec::new(),
         queue: VecDeque::new(),
         spoken: VecDeque::new(),
@@ -322,29 +315,30 @@ fn on_gesture(shared: &Shared, event: &Event) {
         .target()
         .and_then(|target| target.dyn_into::<Node>().ok())
         .is_some_and(|target| shared.borrow().control.contains(Some(&target)));
-    if !inside_control {
-        unlock(shared);
+    if inside_control {
+        return;
+    }
+    let first = shared.borrow_mut().switch.gesture_elsewhere();
+    if first {
+        start_unlocked(shared);
     }
 }
 
 fn on_control(shared: &Shared, _event: &Event) {
     // Read the state first: a borrow held across the match would still be live when the
     // arms borrow mutably, which aborts the whole client.
-    let sound = shared.borrow().sound();
-    match sound {
-        Sound::Locked => unlock(shared),
-        Sound::On => set_muted(shared, true),
-        Sound::Muted => set_muted(shared, false),
+    let pressed = shared.borrow_mut().switch.press();
+    match pressed {
+        Press::Unlocked => start_unlocked(shared),
+        Press::Muted => apply_mute(shared, true),
+        Press::Unmuted => apply_mute(shared, false),
     }
 }
 
-fn unlock(shared: &Shared) {
+/// Audio was just unlocked by a gesture: play the unlock clip inside it and start speaking.
+fn start_unlocked(shared: &Shared) {
     {
         let mut state = shared.borrow_mut();
-        if state.unlocked {
-            return;
-        }
-        state.unlocked = true;
         state.render_control();
         state.audio.set_src(UNLOCK_CLIP);
         // Playing inside the gesture is what unlocks the element; a browser that refuses
@@ -360,11 +354,10 @@ fn unlock(shared: &Shared) {
     pump(shared);
 }
 
-fn set_muted(shared: &Shared, muted: bool) {
+/// The switch already holds the new mute choice; stop or restart the voice to match it.
+fn apply_mute(shared: &Shared, muted: bool) {
     let stopped = {
         let mut state = shared.borrow_mut();
-        state.muted = muted;
-        let _stored = store_mute(muted);
         state.play_id += 1;
         if muted {
             let _paused = state.audio.pause();
@@ -454,7 +447,7 @@ fn refused(shared: &Shared, id: u64, refusal: &JsValue) {
         if state.play_id != id {
             return;
         }
-        state.unlocked = false;
+        state.switch.refused();
         state.render_control();
         let released = state.current.take();
         if let Some(playing) = &released {
@@ -566,19 +559,4 @@ async fn fetch_clip(key: &str) -> Result<String, JsValue> {
     options.set_type("audio/mpeg");
     let blob = Blob::new_with_u8_array_sequence_and_options(&js_sys::Array::of1(&bytes), &options)?;
     Url::create_object_url_with_blob(&blob)
-}
-
-/// The remembered mute choice of this tab. Unavailable storage means "not muted".
-fn stored_mute() -> bool {
-    web_sys::window()
-        .and_then(|window| window.session_storage().ok().flatten())
-        .and_then(|storage| storage.get_item(MUTED_KEY).ok().flatten())
-        .is_some_and(|value| value == "1")
-}
-
-fn store_mute(muted: bool) -> Result<(), JsValue> {
-    let storage = web_sys::window()
-        .and_then(|window| window.session_storage().ok().flatten())
-        .ok_or_else(|| JsValue::from_str("session storage unavailable"))?;
-    storage.set_item(MUTED_KEY, if muted { "1" } else { "0" })
 }

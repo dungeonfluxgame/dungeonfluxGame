@@ -90,7 +90,7 @@ impl Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("dialogue actor queue full"))?;
-        tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+        tokio::time::timeout(super::timing::active().reply, wait)
             .await
             .map_err(|_| Status::deadline_exceeded("retain the confirmed operation for lookup"))?
             .map_err(|_| Status::unavailable("dialogue actor stopped"))?
@@ -117,10 +117,13 @@ impl rpc::dialogue_service_server::DialogueService for Service {
             DialogueReply::Raw(mut response, npc) => {
                 // The model call runs here, off the actor thread; on any failure the
                 // response is exactly the classification the actor produced.
-                if let Some(context) = npc
-                    && let Some(reply) = self.npc_voice.converse(context, &self.table_log).await
-                {
-                    response.npc_reply = reply;
+                if let Some(context) = npc {
+                    // Every screen shows the speaker thinking until the reply (or the lack of
+                    // one) is in; the mark clears when this scope ends.
+                    let _thinking = self.table_log.reply_pending(&context.speaker);
+                    if let Some(reply) = self.npc_voice.converse(context, &self.table_log).await {
+                        response.npc_reply = reply;
+                    }
                 }
                 Ok(Response::new(response))
             }
