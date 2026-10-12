@@ -553,7 +553,7 @@ fn tactical_monster_unarmed_attacks_do_not_inherit_named_weapon_actions() {
             finesse_dexterity: false,
             knockout: false,
             savage_attacker: false,
-            use_mastery: true,
+            use_mastery: false,
         };
         let action = Action::Attack {
             target: 1,
@@ -603,7 +603,7 @@ fn tactical_scout_multiattack_admits_only_its_named_actions() {
         finesse_dexterity: false,
         knockout: false,
         savage_attacker: false,
-        use_mastery: true,
+        use_mastery: false,
     };
     let action = Action::Attack {
         target: 1,
@@ -953,7 +953,7 @@ fn tactical_ammunition_collection_requires_a_living_capable_actor_after_combat()
         finesse_dexterity: false,
         knockout: false,
         savage_attacker: false,
-        use_mastery: true,
+        use_mastery: false,
     };
     state = fixed_step(
         &state,
@@ -1042,7 +1042,7 @@ fn tactical_natural_attacks_need_no_hands_and_are_never_dropped_items() {
         finesse_dexterity: false,
         knockout: false,
         savage_attacker: false,
-        use_mastery: true,
+        use_mastery: false,
     };
     let mut rolls = vec![dice.record(20, &src, 2), dice.record(6, &src, 3)];
     rolls[0].value = 15;

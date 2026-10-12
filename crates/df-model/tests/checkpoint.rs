@@ -1770,6 +1770,7 @@ fn duplicate_encounter_identity_cannot_preserve_conflicting_turn_state() {
         active_turn: Some(entity(4)),
         objectives: vec![],
         combat_policy: content(),
+        tactical: None,
     };
     supplied.encounters.push(encounter.clone());
     assert!(checkpoint(supplied.clone()).is_ok());

@@ -255,7 +255,7 @@ fn ensure_host(
     Ok(host)
 }
 
-fn party_portrait(view: &LiveView<'_>, own: &rpc::CharacterSheet) -> &'static str {
+fn party_portrait<'a>(view: &'a LiveView<'_>, own: &rpc::CharacterSheet) -> &'a str {
     sheet::portrait_token(&view.journey.party, own)
 }
 

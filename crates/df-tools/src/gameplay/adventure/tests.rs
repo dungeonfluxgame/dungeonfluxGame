@@ -331,27 +331,19 @@ fn every_compiled_creature_has_table_parity_and_loader_disclosure() {
             &serde_json::to_vec(&generated.tuning).unwrap(),
         )
         .unwrap();
-        if creature.exact {
-            assert!(
-                loaded.departures.is_empty(),
-                "{}: {:?}",
-                creature.id,
-                loaded.departures
-            );
-        } else {
-            assert_eq!(
-                loaded.departures,
-                vec![format!("antagonist.simplified:{}", creature.id)]
-            );
-        }
+        // Tactical source profiles implement the complete T01 stat blocks; legacy
+        // one-weapon fidelity flags no longer describe their mechanical authority.
+        assert!(loaded.tuning.tactical.is_some());
+        assert_eq!(loaded.departures, ["tactical.cover-centre-line"]);
         let mut tampered = generated.tuning.clone();
-        tampered.bandit.hit_points += 1;
-        let loaded = super::super::pack::load_from_bytes(
-            &serde_json::to_vec(&generated.pack).unwrap(),
-            &serde_json::to_vec(&tampered).unwrap(),
-        )
-        .unwrap();
-        assert!(loaded.departures.iter().any(|d| d == "bandit.hit_points"));
+        tampered.hero.armor_class += 1;
+        assert!(
+            super::super::pack::load_from_bytes(
+                &serde_json::to_vec(&generated.pack).unwrap(),
+                &serde_json::to_vec(&tampered).unwrap(),
+            )
+            .is_err()
+        );
     }
 }
 
@@ -1140,39 +1132,37 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// The SHA-256 of pack, tuning and record of three fixed seeds as the generator wrote them
-/// before the content rating existed (with `GenerateOptions::default()`).
-/// Pack and record were re-pinned when every pack gained its `beat_script`: with that one key
-/// removed, each pack was byte-identical to the earlier pin.
+/// Current tactical pack, encounter tuning, and disclosed-cover record pins.
+/// PLAY-T02 intentionally changes fight/rest text and activates source encounters.
 const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
-            "072519d1e82c29c030e6788b77af55483ff477e1290f8ffbe9e5952692cf70cb",
-            "fd318025d2d7b016708169b59777687fe1f7b630a3b70eb2715dad37af962933",
-            "361f636fa76c82a4e273329497cba49b312156cd8676484f66f6bad1de477c9e",
+            "6c712a452151cd563087b25b4f4db8c6b12aa4a22faab8334de7e054781cc65f",
+            "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
+            "0dba8a28fd5cacf7920d2961ed1c728a1b0b74d5b5c8d456bd054bc4ed294c2e",
         ],
     ),
     (
         0xdaa66d325ccc5aac,
         [
-            "80a4f6aa32d5b1ecbe68ab33a5e2e43ecb6697e5c62a499df1b91001e6c01e44",
-            "6e122920b8921cd08441ec5c13360ac3898742e2d143a16e0c8a8d678d367ace",
-            "271687ec628726da615bedf09dc0f1f8f1e4aa120642b3ba5cd723c2490b29ed",
+            "3439dfadef74fc3e1dae7feda47a4abe782e8cba02a7ed5d2cd043522b754fb0",
+            "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
+            "3de932b187523f698599c113682b1e82d9ee84965bbdf06f6039cab40e2d09bc",
         ],
     ),
     (
         0x11a25cdccc7d808f,
         [
-            "2c75bec4abecef0694322db9b71f6bf826b7161641ed6c520f9377008eebb705",
-            "d29e661273c6de6896f5723c824099989ad0b023d8f9085a5f9bc73cbb5450d7",
-            "e29d6e92be544df554cfd88ef7480fd8a2aa5737ea2b0400b7f1781b272817a8",
+            "701d607820e81326cec219c8f7f5da8b9849e4bcd2dcde7f3a34f607e7398968",
+            "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
+            "0c8c749b3db74f437c29aace78a9ae6f9c1c1c8aeb9e10080c8913ee2b3f1bbc",
         ],
     ),
 ];
 
 #[test]
-fn restrained_generation_is_byte_identical_to_the_tables_before_the_content_rating() {
+fn restrained_generation_matches_current_tactical_document_pins() {
     let tables = tables();
     for (seed, [pack, tuning, record]) in RESTRAINED_GOLDEN {
         let documents = generate(
@@ -1184,10 +1174,10 @@ fn restrained_generation_is_byte_identical_to_the_tables_before_the_content_rati
         .unwrap()
         .documents(true)
         .unwrap();
-        let scripted = String::from_utf8_lossy(&documents.pack).contains("\"beat_script\"");
         assert_eq!(sha256(&documents.pack), pack, "{seed:#x} pack");
         assert_eq!(sha256(&documents.tuning), tuning, "{seed:#x} tuning");
         assert_eq!(sha256(&documents.record), record, "{seed:#x} record");
+        assert!(super::record::reload(&documents).is_ok());
     }
 }
 

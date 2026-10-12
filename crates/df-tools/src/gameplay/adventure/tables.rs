@@ -418,23 +418,23 @@ impl Tables {
         for (key, expected) in [
             (
                 "combat_mech",
-                "Both heroes are within 5 feet of {ant.the}, and everyone fights in the open: no surprise, cover or movement. This encounter uses nonlethal melee attacks.",
+                "Combat uses the server-selected grid layout, source movement, range, cover and optional opportunity reactions. Heroes at 0 HP follow dying and death-save rules; enemies may die.",
             ),
             (
                 "victory_mech",
-                "{ant.short|cap} falls unconscious with 1 HP. {story} {ant.pos|cap} Short Rest has begun; campaign time has not completed it.",
+                "The opposing combatants are defeated. {story} Dying heroes still need their timed death saves; victory does not wake or heal them.",
             ),
             (
                 "victory_rested",
-                "{ant.short|cap} was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Knocked-out creatures are awake with 1 HP, still Prone; their held weapons remain dropped. The original victory and {patron.first}'s unresolved journey remain.",
+                "The opposition was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived. The original victory and {patron.first}'s unresolved journey remain.",
             ),
             (
                 "defeat_mech",
-                "Both heroes are unconscious with 1 HP after nonlethal attacks. {story} Their Short Rests have begun; campaign time has not completed them.",
+                "The party has been defeated. {story} Heroes at 0 HP follow timed death saves; defeat does not restore hit points or held weapons.",
             ),
             (
                 "defeat_rested",
-                "Both heroes were defeated by nonlethal attacks. An uninterrupted hour has passed without Hit Point Dice or healing. They awaken with 1 HP, still Prone, and their held weapons remain dropped. That rest does not change the original defeat.",
+                "The party was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived. That rest does not change the original defeat.",
             ),
         ] {
             let table = self.prose.get(key).ok_or_else(|| {
@@ -684,6 +684,34 @@ impl Tables {
             }
         }
         for ant in &self.antagonists.entries {
+            if let Some(tactical) = &ant.tactical {
+                let total = tactical
+                    .enemies
+                    .iter()
+                    .map(|enemy| u16::from(enemy.count))
+                    .sum::<u16>();
+                if !(2..=4).contains(&total)
+                    || tactical.enemies.is_empty()
+                    || tactical.enemies.len() > 4
+                    || tactical.enemies.iter().any(|enemy| {
+                        enemy.count == 0
+                            || enemy.ammunition > 100
+                            || df_rules::tactical::CombatantSpec::creature(
+                                1,
+                                &enemy.srd_id,
+                                df_rules::tactical::Cell(0, 0),
+                                enemy.ammunition,
+                            )
+                            .is_err()
+                    })
+                {
+                    return Err(invalid(
+                        "antagonists.json",
+                        &format!("tables.antagonists.{}.tactical", ant.id),
+                        "two to four source combatants with bounded ammunition",
+                    ));
+                }
+            }
             let row = df_rules::SRD_521_CREATURES
                 .iter()
                 .find(|c| c.id == ant.id)

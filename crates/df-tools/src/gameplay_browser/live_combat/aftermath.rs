@@ -27,7 +27,22 @@ fn member_key(index: usize, member: &rpc::PartyMemberView) -> String {
 }
 
 fn condition(member: &rpc::PartyMemberView) -> &'static str {
-    if !member.character_ready {
+    if member
+        .conditions
+        .iter()
+        .any(|condition| condition == "dead")
+    {
+        "Dead"
+    } else if member.hit_points == 0
+        && member
+            .conditions
+            .iter()
+            .any(|condition| condition == "stable")
+    {
+        "Stable at 0 HP"
+    } else if member.hit_points == 0 && member.unconscious {
+        "Dying"
+    } else if !member.character_ready {
         "Creating a hero"
     } else if member.unconscious {
         "Unconscious"
@@ -91,7 +106,13 @@ pub(super) fn present_display(
                 current: member.hit_points,
                 maximum: member.maximum_hit_points,
             }),
-            portrait: Some(if index == 0 { "hero-1" } else { "hero-2" }),
+            portrait: Some(
+                member
+                    .portrait
+                    .strip_prefix("portrait-")
+                    .filter(|_| !member.portrait.is_empty())
+                    .unwrap_or(if index == 0 { "hero-1" } else { "hero-2" }),
+            ),
         })
         .collect();
     host.set_attribute("data-outcome", &outcome_word(view).to_lowercase())?;
@@ -231,6 +252,18 @@ pub(super) fn present_rest(
             }
         }),
     };
+    if let Some(existing) = host.query_selector(":scope > .aftermath-tactical-controls")? {
+        existing.remove();
+    }
+    let extra =
+        crate::gameplay_browser::node(&document, host, "div", "aftermath-tactical-controls", "")?;
+    for offer in view
+        .offers
+        .iter()
+        .filter(|offer| offer.action_kind == rpc::GameplayActionKind::EndTurn as i32)
+    {
+        crate::gameplay_browser::action_button(client, &extra, offer.clone())?;
+    }
     let mounted = match &client.borrow().combat.mounted {
         Some(Mounted::Rest(surface)) => Some(Rc::clone(surface)),
         _ => None,

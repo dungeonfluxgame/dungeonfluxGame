@@ -135,6 +135,7 @@ impl Fixture {
             active_turn: Some(entity(4)),
             objectives: vec![content()],
             combat_policy: content(),
+            tactical: None,
         });
         let mut event = fact(7, 0);
         event.audience = audience;

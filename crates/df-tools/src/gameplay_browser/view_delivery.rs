@@ -126,7 +126,7 @@ impl GameplayViews {
             _ => return Err(ViewDeliveryError::WrongAudience),
         };
         let journey = journey.ok_or(ViewDeliveryError::InvalidProjection)?;
-        if journey.party.len() > 2 || offer_count > 4 {
+        if journey.party.len() > 2 || offer_count > 12 {
             return Err(ViewDeliveryError::InvalidProjection);
         }
         Ok(self.views.accept(generation, scope.binding, revision, view))

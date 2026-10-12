@@ -24,6 +24,7 @@
             1
           ],
           "id": "bandit",
+          "tactical": {"enemies": [{"srd_id": "bandit", "count": 3, "ammunition": 20}]},
           "label": "Bandit",
           "srd": {
             "name": "Bandit",
@@ -146,6 +147,7 @@
             2
           ],
           "id": "cultist",
+          "tactical": {"enemies": [{"srd_id": "cultist", "count": 3, "ammunition": 0}]},
           "label": "Cultist",
           "srd": {
             "name": "Cultist",
@@ -265,6 +267,7 @@
             3
           ],
           "id": "guard",
+          "tactical": {"enemies": [{"srd_id": "guard", "count": 2, "ammunition": 0}]},
           "label": "Guard",
           "srd": {
             "name": "Guard",
@@ -386,6 +389,7 @@
             4
           ],
           "id": "goblin-warrior",
+          "tactical": {"enemies": [{"srd_id": "goblin-warrior", "count": 2, "ammunition": 20}]},
           "label": "Goblin Warrior",
           "srd": {
             "name": "Goblin Warrior",
@@ -506,6 +510,7 @@
             5
           ],
           "id": "kobold-warrior",
+          "tactical": {"enemies": [{"srd_id": "kobold-warrior", "count": 3, "ammunition": 0}]},
           "label": "Kobold Warrior",
           "srd": {
             "name": "Kobold Warrior",
@@ -627,6 +632,7 @@
             6
           ],
           "id": "skeleton",
+          "tactical": {"enemies": [{"srd_id": "skeleton", "count": 2, "ammunition": 20}]},
           "label": "Skeleton",
           "srd": {
             "name": "Skeleton",
@@ -714,6 +720,7 @@
             7
           ],
           "id": "zombie",
+          "tactical": {"enemies": [{"srd_id": "zombie", "count": 2, "ammunition": 0}]},
           "label": "Zombie",
           "srd": {
             "name": "Zombie",
@@ -799,6 +806,7 @@
             8
           ],
           "id": "wolf",
+          "tactical": {"enemies": [{"srd_id": "wolf", "count": 2, "ammunition": 0}]},
           "label": "Wolf",
           "srd": {
             "name": "Wolf",
@@ -885,6 +893,7 @@
             9
           ],
           "id": "giant-rat",
+          "tactical": {"enemies": [{"srd_id": "giant-rat", "count": 3, "ammunition": 0}]},
           "label": "Giant Rat",
           "srd": {
             "name": "Giant Rat",
@@ -974,6 +983,7 @@
             10
           ],
           "id": "giant-weasel",
+          "tactical": {"enemies": [{"srd_id": "giant-weasel", "count": 3, "ammunition": 0}]},
           "label": "Giant Weasel",
           "srd": {
             "name": "Giant Weasel",
@@ -1061,6 +1071,7 @@
             11
           ],
           "id": "mastiff",
+          "tactical": {"enemies": [{"srd_id": "mastiff", "count": 3, "ammunition": 0}]},
           "label": "Mastiff",
           "srd": {
             "name": "Mastiff",
@@ -1148,6 +1159,7 @@
             12
           ],
           "id": "scout",
+          "tactical": {"enemies": [{"srd_id": "scout", "count": 1, "ammunition": 20}, {"srd_id": "bandit", "count": 1, "ammunition": 20}]},
           "label": "Scout",
           "srd": {
             "name": "Scout",

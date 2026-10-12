@@ -34,7 +34,7 @@ struct ActorText {
     badge: String,
     status: &'static str,
     hit_points: Option<CombatHitPoints>,
-    portrait: &'static str,
+    portrait: String,
     resources: Vec<(&'static str, String)>,
 }
 struct OfferText {
@@ -55,8 +55,9 @@ struct RollText {
     verdict: (&'static str, CombatTone),
 }
 struct Text {
-    keyart: Option<&'static str>,
+    keyart: Option<String>,
     title: String,
+    location: String,
     narration: String,
     connection: &'static str,
     notice: &'static str,
@@ -102,12 +103,30 @@ fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Opt
             active = Some(key.clone());
         }
         // Participants are the party in join order followed by the opposing creature.
-        let portrait = match index.checked_sub(view.journey.party.len()) {
-            Some(_) => "bandit",
-            None if index == 0 => "hero-1",
-            None => "hero-2",
+        let portrait = if !member.portrait.is_empty() {
+            member
+                .portrait
+                .strip_prefix("portrait-")
+                .unwrap_or(&member.portrait)
+                .to_owned()
+        } else {
+            match index.checked_sub(view.journey.party.len()) {
+                Some(_) => "bandit",
+                None if index == 0 => "hero-1",
+                None => "hero-2",
+            }
+            .to_owned()
         };
         let mut resources = Vec::new();
+        if let Some(cell) = &member.cell {
+            resources.push((
+                "Cell",
+                format!("Column {}, row {}", cell.col + 1, cell.row + 1),
+            ));
+        }
+        if !member.conditions.is_empty() {
+            resources.push(("Conditions", member.conditions.join(", ")));
+        }
         if let Some(own) = own
             && own_matches == 1
             && own.name == member.name
@@ -128,7 +147,22 @@ fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Opt
                 || "?".to_owned(),
                 |initial| initial.to_uppercase().collect(),
             ),
-            status: if !member.character_ready {
+            status: if member
+                .conditions
+                .iter()
+                .any(|condition| condition == "dead")
+            {
+                "Dead"
+            } else if member.hit_points == 0
+                && member
+                    .conditions
+                    .iter()
+                    .any(|condition| condition == "stable")
+            {
+                "Stable at 0 HP"
+            } else if member.hit_points == 0 && member.unconscious {
+                "Dying"
+            } else if !member.character_ready {
                 "Creating a hero"
             } else if member.unconscious {
                 "Unconscious"
@@ -173,13 +207,20 @@ fn rolls(combat: &rpc::CombatView) -> Vec<RollText> {
                 key: format!("roll-{index}"),
                 label: format!("{} attacks {}", outcome.actor_name, outcome.target_name),
                 value: outcome.attack_die.to_string(),
-                explanation: format!(
-                    "d20 {} {:+} = {} vs AC {}",
-                    outcome.attack_die,
-                    outcome.attack_modifier,
-                    outcome.attack_total,
-                    outcome.target_armor_class
-                ),
+                explanation: if outcome.target_armor_class == 0 {
+                    format!(
+                        "d20 {} {:+} = {}",
+                        outcome.attack_die, outcome.attack_modifier, outcome.attack_total
+                    )
+                } else {
+                    format!(
+                        "d20 {} {:+} = {} vs AC {}",
+                        outcome.attack_die,
+                        outcome.attack_modifier,
+                        outcome.attack_total,
+                        outcome.target_armor_class
+                    )
+                },
                 source: format!(
                     "{damage} · {} has {} HP left{knockout}",
                     outcome.target_name, outcome.target_hit_points
@@ -241,6 +282,14 @@ fn offered_input(group: &rpc::JourneyGroup) -> Option<&str> {
 
 fn offers(state: &Client, view: &LiveView<'_>, blocked: bool) -> Result<Vec<OfferText>, JsValue> {
     let mut result = Vec::new();
+    if view
+        .journey
+        .combat
+        .as_ref()
+        .is_some_and(|combat| !combat.layout_id.is_empty())
+    {
+        return Ok(result);
+    }
     for (index, offer) in view.offers.iter().enumerate() {
         let kind = rpc::GameplayActionKind::try_from(offer.action_kind).ok();
         let (key, explanation) = match kind {
@@ -325,10 +374,15 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
     let keyart = active
         .as_deref()
         .and_then(|key| actors.iter().find(|actor| actor.key == key))
-        .map(|actor| actor.portrait);
+        .map(|actor| actor.portrait.clone());
     Ok(Text {
         keyart,
         title: view.scene.title.clone(),
+        location: if view.scene.place.is_empty() {
+            combat.location_id.replace('-', " ")
+        } else {
+            view.scene.place.clone()
+        },
         narration: view.narration.to_owned(),
         connection: if state.connection.is_some() {
             "The server rolls and resolves every action"
@@ -381,7 +435,7 @@ fn with_view<T>(text: &Text, operation: impl FnOnce(&CombatPhaseView<'_>) -> T) 
             status: actor.status,
             resources,
             hit_points: actor.hit_points,
-            portrait: Some(actor.portrait),
+            portrait: Some(&actor.portrait),
         })
         .collect();
     let offers: Vec<CombatOffer<'_>> = text
@@ -417,7 +471,7 @@ fn with_view<T>(text: &Text, operation: impl FnOnce(&CombatPhaseView<'_>) -> T) 
         art: CombatArt::Harbor,
         chapter: "Combat",
         title: &text.title,
-        location: "The Lantern Wharf · Greyhaven harbor",
+        location: &text.location,
         narration: &text.narration,
         connection: text.connection,
         notice: text.notice,
@@ -486,8 +540,9 @@ pub(super) fn present(
     if let Some(surface) = mounted {
         with_view(&text, |view| surface.update(binding, presentation, view))
             .map_err(|_| render_error(client, "combat-update"))?;
-        publish_keyart(&document, surface.root(), text.keyart)?;
+        publish_keyart(&document, surface.root(), text.keyart.as_deref())?;
         publish_initiative(&document, surface.root(), role, view)?;
+        publish_tactical_controls(client, surface.root(), view)?;
         return Ok(());
     }
     let surface = with_view(&text, |view| {
@@ -509,10 +564,94 @@ pub(super) fn present(
             }
         })
         .map_err(|_| render_error(client, "combat-intent"))?;
-    publish_keyart(&document, surface.root(), text.keyart)?;
+    publish_keyart(&document, surface.root(), text.keyart.as_deref())?;
     publish_initiative(&document, surface.root(), role, view)?;
+    publish_tactical_controls(client, surface.root(), view)?;
     host.insert_before(surface.root(), host.first_child().as_ref())?;
     client.borrow_mut().combat.mounted = Some(Mounted::Combat(Rc::new(surface)));
+    Ok(())
+}
+
+/// The mounted fight uses the same bounded server-offer controls as the other phone phases.
+fn publish_tactical_controls(
+    client: &Rc<RefCell<Client>>,
+    root: &Element,
+    view: &LiveView<'_>,
+) -> Result<(), JsValue> {
+    use crate::gameplay_browser::{action_button, node};
+    let existing = root.query_selector(":scope > .tactical-controls")?;
+    let Some(combat) = view
+        .journey
+        .combat
+        .as_ref()
+        .filter(|combat| !combat.layout_id.is_empty() && client.borrow().role == "player")
+    else {
+        if let Some(existing) = existing {
+            existing.remove();
+        }
+        return Ok(());
+    };
+    let document = client.borrow().document.clone();
+    let controls = match existing {
+        Some(existing) => {
+            existing.set_text_content(None);
+            existing
+        }
+        None => node(&document, root, "div", "tactical-controls", "")?,
+    };
+    if let Some(budget) = &combat.own_budget {
+        node(
+            &document,
+            &controls,
+            "p",
+            "turn-budget",
+            &format!(
+                "Movement {} ft · Action {} · Bonus {} · Reaction {}",
+                budget.movement_ft,
+                if budget.action { "ready" } else { "spent" },
+                if budget.bonus_action {
+                    "ready"
+                } else {
+                    "spent"
+                },
+                if budget.reaction { "ready" } else { "spent" }
+            ),
+        )?;
+    }
+    if let Some(ammunition) = &combat.own_ammunition {
+        node(
+            &document,
+            &controls,
+            "p",
+            "ammunition",
+            &format!("Arrows {} · Bolts {}", ammunition.arrows, ammunition.bolts),
+        )?;
+    }
+    for offer in view.offers {
+        let mut offer = offer.clone();
+        for group in &mut offer.input_groups {
+            for option in &mut group.options {
+                if let Some(target) = combat
+                    .legal_targets
+                    .iter()
+                    .find(|target| target.option_id == option.option_id)
+                {
+                    option.label = format!(
+                        "{} · {} cover · {}{}",
+                        option.label,
+                        target.cover,
+                        target.range_reason,
+                        if target.disadvantage {
+                            " · disadvantage"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+            }
+        }
+        action_button(client, &controls, offer)?;
+    }
     Ok(())
 }
 

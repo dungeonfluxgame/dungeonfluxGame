@@ -3,6 +3,7 @@
 mod build;
 mod map;
 mod resolve;
+mod snapshot;
 mod state;
 mod weapons;
 
@@ -29,6 +30,7 @@ pub const DEPARTURES: &[&str] = &["tactical.cover-centre-line"];
 pub enum RuleError {
     Capacity,
     MapData,
+    SnapshotData,
     DuplicateId,
     DuplicateCell,
     OutOfBounds,

@@ -23,7 +23,7 @@ use df_types::{MemberId, OperationId, RecoveryEpoch, SessionId};
 use tokio::runtime::Handle;
 use tokio_postgres::Client;
 
-use crate::checkpoint_codec::{STORAGE_CODEC_VERSION, encode_checkpoint};
+use crate::checkpoint_codec::encode_checkpoint;
 use crate::native_scope::{AuthKeyMapping, DatabaseBindingVerifier};
 
 pub enum LocalRejectedLookup {
@@ -646,6 +646,13 @@ async fn initialize_with_adventure(
             class: RepositoryError::InvalidCandidate,
         })?;
     let schema = i32::from(checkpoint.schema());
+    let checkpoint_codec =
+        crate::checkpoint_codec::checkpoint_storage_version(&bytes).map_err(|_| {
+            DemoInitializationError {
+                stage: "checkpoint_encoding",
+                class: RepositoryError::InvalidCandidate,
+            }
+        })?;
     transaction
         .execute(
             crate::sql::INSERT_CHECKPOINT,
@@ -656,7 +663,7 @@ async fn initialize_with_adventure(
                 &sequence,
                 &basis.run.as_bytes().as_slice(),
                 &schema,
-                &STORAGE_CODEC_VERSION,
+                &checkpoint_codec,
                 &bytes,
             ],
         )

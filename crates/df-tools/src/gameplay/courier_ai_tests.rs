@@ -974,7 +974,7 @@ fn edited_courier_clue_is_recorded_and_only_revealed_to_its_recipient() {
     content["courier_clue"] = clue.into();
     let loaded = crate::gameplay::pack::load_from_bytes(
         &serde_json::to_vec(&content).unwrap(),
-        include_bytes!("../../../../content/harbor-journey/tuning.json"),
+        include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
     )
     .unwrap();
     crate::gameplay::pack::with_test_pack(loaded, || {

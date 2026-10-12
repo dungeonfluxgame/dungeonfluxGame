@@ -16,7 +16,7 @@ fn invalid<T>() -> Result<T, RepositoryError> {
 pub(super) fn marker(offer: &str) -> Result<ContentReference, RepositoryError> {
     model::content(&format!("{OFFER_PREFIX}{offer}"))
 }
-fn choice<'a>(
+pub(super) fn choice<'a>(
     state: &'a GameState,
     decision: &'a AcceptedDecision,
 ) -> Result<Option<(&'a GameFact, &'a str, MemberId)>, RepositoryError> {
@@ -447,6 +447,36 @@ pub(super) fn select(
 ) -> Result<BeatOffer, RepositoryError> {
     beat_script::with_script(|script| {
         let beat = script.current(current.state())?;
+        if journey::tactical::present(current.state()) && journey::tactical::combat_action(action) {
+            let source = if beat.kind == BeatKind::Fight {
+                beat
+            } else {
+                if action != rpc::GameplayActionKind::EndTurn
+                    || !journey::tactical::dying(current.state())?
+                {
+                    return invalid();
+                }
+                script
+                    .beats
+                    .iter()
+                    .find(|beat| beat.kind == BeatKind::Fight)
+                    .ok_or(RepositoryError::InvalidCandidate)?
+            };
+            let source_kind = if matches!(
+                action,
+                rpc::GameplayActionKind::SecondWind | rpc::GameplayActionKind::EndTurn
+            ) {
+                action
+            } else {
+                rpc::GameplayActionKind::GreatswordAttack
+            };
+            return source
+                .offers
+                .iter()
+                .find(|offer| offer.effect.action() == source_kind)
+                .cloned()
+                .ok_or(RepositoryError::InvalidCandidate);
+        }
         let mut submitted = choices
             .iter()
             .filter(|(group, _)| group.as_str() == CHOICE_GROUP);
@@ -470,7 +500,10 @@ pub(super) fn matches_id(
     id: &str,
 ) -> Result<bool, RepositoryError> {
     beat_script::with_script(|script| {
-        if script.is_canonical() {
+        if script.is_canonical()
+            || (journey::tactical::present(current.state())
+                && journey::tactical::combat_action(action))
+        {
             return Ok(id == journey::offer_id(current, action));
         }
         Ok(script
@@ -486,7 +519,11 @@ pub(super) fn view_offers(
 ) -> Result<Vec<(rpc::GameplayActionKind, String, String)>, RepositoryError> {
     let available = journey::offered(current, member)?;
     beat_script::with_script(|script| {
-        if script.is_canonical() {
+        if script.is_canonical()
+            || (journey::tactical::present(current.state())
+                && (journey::phase(current)? == rpc::JourneyPhase::Combat
+                    || journey::tactical::dying(current.state())?))
+        {
             return Ok(available
                 .into_iter()
                 .map(|(kind, label)| (kind, label, journey::offer_id(current, kind)))
@@ -512,6 +549,23 @@ pub(super) fn action_label(
     id: &str,
     kind: rpc::GameplayActionKind,
 ) -> Result<String, RepositoryError> {
+    if journey::tactical::enabled() && journey::tactical::combat_action(kind) {
+        return Ok(match kind {
+            rpc::GameplayActionKind::GreatswordAttack => "Attack",
+            rpc::GameplayActionKind::Move => "Move",
+            rpc::GameplayActionKind::Dash => "Dash",
+            rpc::GameplayActionKind::Dodge => "Dodge",
+            rpc::GameplayActionKind::Disengage => "Disengage",
+            rpc::GameplayActionKind::SecondWind => "Second Wind",
+            rpc::GameplayActionKind::EndTurn => "End turn",
+            rpc::GameplayActionKind::OpportunityAttack => "Opportunity attack",
+            rpc::GameplayActionKind::DeclineReaction => "Decline opportunity attack",
+            rpc::GameplayActionKind::Stand => "Stand up",
+            rpc::GameplayActionKind::PickUpWeapon => "Pick up weapon",
+            _ => return Err(RepositoryError::InvalidCandidate),
+        }
+        .to_owned());
+    }
     beat_script::with_script(|script| {
         if script.is_canonical() {
             return Ok(pack::offer_label(kind));
@@ -639,4 +693,34 @@ pub(super) fn validate_encounter_choices(
         return invalid();
     }
     Ok(())
+}
+
+/// Resolve the selected fight-start transition before the durable fight beat is installed.
+pub(super) fn fight_scene(
+    current: &Checkpoint,
+    selected: &BeatOffer,
+) -> Result<pack::Scene, RepositoryError> {
+    beat_script::with_script(|script| {
+        let beat = script.current(current.state())?;
+        let fight = beat
+            .transitions
+            .iter()
+            .find(|transition| {
+                transition.trigger
+                    == BeatTrigger::Offer {
+                        offer: selected.id.clone(),
+                    }
+            })
+            .and_then(|transition| script.find(&transition.target))
+            .filter(|beat| beat.kind == BeatKind::Fight)
+            .ok_or(RepositoryError::InvalidCandidate)?;
+        match &fight.scene_variant {
+            Some(id) => script
+                .scenes
+                .get(id)
+                .cloned()
+                .ok_or(RepositoryError::InvalidCandidate),
+            None => Ok(pack::scene(fight.scene)),
+        }
+    })
 }

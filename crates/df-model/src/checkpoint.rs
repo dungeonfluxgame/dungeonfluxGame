@@ -519,6 +519,16 @@ pub struct NarrativeState {
     pub remaining_budget: u64,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TacticalSnapshot {
+    pub schema: u16,
+    pub source_revision: RevisionLabel,
+    pub scene_digest: ContentDigest,
+    pub scene: Vec<u8>,
+    pub layout: RevisionLabel,
+    pub actors: Vec<(u32, EntityId)>,
+    pub state: Vec<u8>,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EncounterState {
     pub id: RecordId,
     pub definition: ContentReference,
@@ -527,6 +537,7 @@ pub struct EncounterState {
     pub active_turn: Option<EntityId>,
     pub objectives: Vec<ContentReference>,
     pub combat_policy: ContentReference,
+    pub tactical: Option<TacticalSnapshot>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivityWindow {
@@ -1407,6 +1418,27 @@ fn validate_state(
         fact(*id)?;
     }
     for x in &state.encounters {
+        if let Some(tactical) = &x.tactical {
+            require(tactical.schema == 1, CheckpointError::UnsupportedSchema)?;
+            count!(&tactical.actors);
+            require(
+                !tactical.scene.is_empty()
+                    && tactical.scene.len() <= 1024 * 1024
+                    && !tactical.state.is_empty()
+                    && tactical.state.len() <= 1024 * 1024
+                    && tactical.actors.len() == x.participants.len(),
+                CheckpointError::Capacity,
+            )?;
+            unique(tactical.actors.iter().map(|(id, _)| *id))?;
+            unique(tactical.actors.iter().map(|(_, entity)| *entity))?;
+            require(
+                tactical
+                    .actors
+                    .iter()
+                    .all(|(id, entity)| *id != 0 && x.participants.contains(entity)),
+                CheckpointError::InvalidReference,
+            )?;
+        }
         content(&x.definition)?;
         content(&x.combat_policy)?;
         count!(&x.participants);
@@ -1575,6 +1607,7 @@ macro_rules! no_heap {
 }
 no_heap!(
     bool,
+    u8,
     u16,
     u32,
     u64,
@@ -1663,7 +1696,8 @@ record_heap!(ObligationAgreement; source, source_policy);
 record_heap!(ObligationTransition; source, source_policy);
 record_heap!(Obligation; definition, terms, agreement, transition);
 record_heap!(NarrativeState; definition, active_beats, completed_beats, open_threads, accepted_facts);
-record_heap!(EncounterState; definition, participants, turn_order, objectives, combat_policy);
+record_heap!(TacticalSnapshot; source_revision, scene, layout, actors, state);
+record_heap!(EncounterState; definition, participants, turn_order, objectives, combat_policy, tactical);
 record_heap!(ActivityWindow; observed_facts);
 record_heap!(TempoState; policy, fatigue);
 record_heap!(PresentationDemand; definition, audience, causal_facts);

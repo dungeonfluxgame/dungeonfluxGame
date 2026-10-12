@@ -180,6 +180,7 @@ pub struct FrameView<'a> {
     /// Far to near, so alpha blending is correct.
     pub figures: Vec<FigureView>,
     pub highlight: Option<&'a Highlight>,
+    pub tactical_highlights: &'a [Highlight],
     pub projectiles: Vec<ProjectileView>,
     /// The layout in play and the grid with its obstacles applied.
     pub layout: Option<&'a Layout>,
@@ -211,6 +212,7 @@ pub struct Stage {
     queue: VecDeque<Beat>,
     pending_tokens: Option<Vec<Token>>,
     highlight: Option<Highlight>,
+    tactical_highlights: Vec<Highlight>,
     hud: HudState,
     floats: Vec<FloatingText>,
     flash: Option<Flash>,
@@ -254,6 +256,7 @@ impl Stage {
             queue: VecDeque::new(),
             pending_tokens: None,
             highlight: None,
+            tactical_highlights: Vec::new(),
             hud: HudState::default(),
             floats: Vec::new(),
             flash: None,
@@ -311,7 +314,10 @@ impl Stage {
         let runtime = &self.tokens[index];
         let event = SoundEvent {
             kind,
-            voice: voice_for(runtime.token.side, runtime.token.figure.as_deref()),
+            voice: runtime
+                .token
+                .voice
+                .unwrap_or_else(|| voice_for(runtime.token.side, runtime.token.figure.as_deref())),
             surface: self.scene.surface,
             token: token.clone(),
             rate,
@@ -447,6 +453,19 @@ impl Stage {
 
     /// Replaces the set of combatants. While a beat is playing, the new set is held and applied
     /// when the stage goes idle so a late view cannot teleport a figure mid-step.
+    /// Render the server's legal movement and target plan; this makes no legality decision.
+    pub fn set_tactical_highlights(&mut self, reachable: Vec<Cell>, targets: Vec<Cell>) {
+        self.tactical_highlights = vec![
+            Highlight {
+                kind: super::model::HighlightKind::Attack,
+                cells: targets,
+            },
+            Highlight {
+                kind: super::model::HighlightKind::Move,
+                cells: reachable,
+            },
+        ];
+    }
     pub fn set_tokens(&mut self, tokens: Vec<Token>) {
         if self.is_busy() {
             self.pending_tokens = Some(tokens);
@@ -1035,6 +1054,7 @@ impl Stage {
             fade: self.rig.transition_fade(),
             figures,
             highlight: self.highlight.as_ref(),
+            tactical_highlights: &self.tactical_highlights,
             projectiles: self
                 .projectiles
                 .iter()
@@ -1365,6 +1385,7 @@ mod tests {
             }),
             statuses: Vec::new(),
             attack: crate::battle::model::AttackStyle::Melee,
+            voice: None,
         }
     }
 
@@ -2064,6 +2085,7 @@ mod tests {
             figure: None,
             portrait: None,
             attack: crate::battle::model::AttackStyle::Melee,
+            voice: None,
             cell: None,
             statuses: Vec::new(),
         };
@@ -2110,6 +2132,7 @@ mod tests {
             figure: None,
             portrait: None,
             attack: crate::battle::model::AttackStyle::Melee,
+            voice: None,
             cell,
             statuses: Vec::new(),
         };
@@ -2299,6 +2322,7 @@ mod tests {
             figure: None,
             portrait: None,
             attack: crate::battle::model::AttackStyle::Melee,
+            voice: None,
             cell: None,
             statuses: Vec::new(),
         };

@@ -54,6 +54,9 @@ pub(super) const COMPILED_ITEMS: &[&str] = &[
     "travelers-clothes",
     "gold-piece",
     "scimitar",
+    "studded-leather-armor",
+    "longbow",
+    "shortsword",
 ];
 /// Compiled items that may be configured as a weapon.
 const COMPILED_WEAPONS: &[&str] = &[
@@ -360,6 +363,9 @@ pub(super) struct TuningFile {
     pub(super) hero: HeroTuning,
     pub(super) bandit: BanditTuning,
     pub(super) combat: CombatTuning,
+    /// Absence retains the immutable legacy adjacent-fight profile for existing packs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) tactical: Option<TacticalEncounterTuning>,
     pub(super) rest: RestTuning,
     pub(super) narrative: NarrativeTuning,
     /// Missing section explicitly selects the shipped presentation profile.
@@ -453,6 +459,19 @@ pub(super) struct CombatTuning {
     pub(super) critical_threshold: u8,
     /// Combat log entries sent to clients.
     pub(super) combat_log_entries: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TacticalEncounterTuning {
+    pub(super) enemies: Vec<TacticalEnemy>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TacticalEnemy {
+    pub(super) srd_id: String,
+    pub(super) count: u8,
+    pub(super) ammunition: u16,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -888,7 +907,14 @@ pub(super) fn load_from_bytes(
         .map_err(PackError::Script)?;
     validate_tuning(&tuning)?;
     validate_cross_references(&pack, &tuning)?;
-    let departures = departures(&pack, &tuning);
+    let mut departures = departures(&pack, &tuning);
+    if tuning.tactical.is_some() {
+        departures.extend(
+            df_rules::tactical::DEPARTURES
+                .iter()
+                .map(|departure| (*departure).to_owned()),
+        );
+    }
     let source_scene_assets = pack
         .scenes
         .iter()
@@ -1139,6 +1165,74 @@ fn placeholders_are_defined(text: &str, allowed: &[&str]) -> bool {
 // ---------------------------------------------------------------------------------------------
 
 fn validate_tuning(tuning: &TuningFile) -> Result<(), PackError> {
+    if let Some(tactical) = &tuning.tactical {
+        let mut total = 0_u16;
+        if tactical.enemies.is_empty() || tactical.enemies.len() > 4 {
+            return Err(malformed(
+                SourceFile::Tuning,
+                "tactical.enemies",
+                "one to four source enemy groups",
+            ));
+        }
+        for enemy in &tactical.enemies {
+            if !(1..=4).contains(&enemy.count)
+                || enemy.ammunition > 100
+                || df_rules::tactical::CombatantSpec::creature(
+                    3,
+                    &enemy.srd_id,
+                    df_rules::tactical::Cell(0, 0),
+                    enemy.ammunition,
+                )
+                .is_err()
+            {
+                return Err(malformed(
+                    SourceFile::Tuning,
+                    "tactical.enemies",
+                    "supported SRD source ids, count 1..4 and ammunition 0..100",
+                ));
+            }
+            total += u16::from(enemy.count);
+        }
+        if total > 4 {
+            return Err(malformed(
+                SourceFile::Tuning,
+                "tactical.enemies",
+                "at most four enemies",
+            ));
+        }
+        let baseline = df_rules::local_journey::SRD_521_BASELINE;
+        let hero = &tuning.hero;
+        if hero.armor_class != 17
+            || hero.proficiency_bonus != 2
+            || hero.base_hit_points != 11
+            || hero.background_bonus.strength != 2
+            || hero.background_bonus.constitution != 1
+            || hero.second_wind.uses_max != 2
+            || hero.second_wind.die_sides != 10
+            || hero.second_wind.flat_bonus != 1
+            || hero.second_wind.recharge_per_short_rest != 1
+            || hero.weapon.item != "greatsword"
+            || hero.weapon.damage_dice != 2
+            || hero.weapon.damage_sides != 6
+            || tuning.combat.round_ticks != 6
+            || tuning.combat.critical_threshold != 20
+            || tuning.rest.short_rest_seconds != 3600
+            || hero.ability_arrays.len() != baseline.creation.ability_arrays.len()
+            || hero.ability_arrays.iter().any(|array| {
+                !baseline
+                    .creation
+                    .ability_arrays
+                    .iter()
+                    .any(|source| source.id == array.id && source.scores == array.scores)
+            })
+        {
+            return Err(malformed(
+                SourceFile::Tuning,
+                "tactical",
+                "tactical fights require the supported SRD hero profiles and six-second rounds",
+            ));
+        }
+    }
     const FILE: SourceFile = SourceFile::Tuning;
     identifier(FILE, "pack", &tuning.pack)?;
     validate_tempo(tuning.tempo)?;
@@ -2145,10 +2239,13 @@ fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<String> {
     ];
     let mut departures: Vec<String> = checks
         .into_iter()
-        .filter(|(differs, _)| *differs)
+        .filter(|(differs, key)| {
+            *differs && !(tuning.tactical.is_some() && key.starts_with("bandit."))
+        })
         .map(|(_, key)| key.to_owned())
         .collect();
-    if let Some(creature) = creature
+    if tuning.tactical.is_none()
+        && let Some(creature) = creature
         && !creature.exact
     {
         departures.push(format!("antagonist.simplified:{}", creature.id));
@@ -2218,12 +2315,135 @@ pub(super) fn with_creation<T>(
     })
 }
 
+#[derive(Deserialize)]
+struct ArcherPackage {
+    creation: CreationPack,
+    equipment: Vec<EquipmentRow>,
+    #[serde(flatten)]
+    _source_fields: BTreeMap<String, serde::de::IgnoredAny>,
+}
+fn archer_package() -> Result<ArcherPackage, df_rules::local_journey::JourneyRuleError> {
+    serde_json::from_str(df_rules::tactical::ARCHER_CREATION_JSON)
+        .map_err(|_| df_rules::local_journey::JourneyRuleError::InvalidRules)
+}
+pub(super) struct BuildPackage {
+    pub(super) id: String,
+    pub(super) label: String,
+    choices: Vec<(String, String)>,
+}
+pub(super) fn build_packages()
+-> Result<Vec<BuildPackage>, df_rules::local_journey::JourneyRuleError> {
+    let mut packages = with_content(|pack| {
+        pack.creation
+            .groups
+            .iter()
+            .find(|group| group.id == "array")
+            .map(|group| {
+                group
+                    .options
+                    .iter()
+                    .map(|array| BuildPackage {
+                        id: format!("melee-{}", array.id),
+                        label: format!("{} · Greatsword and Defense", array.label),
+                        choices: vec![("array".to_owned(), array.id.clone())],
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .ok_or(df_rules::local_journey::JourneyRuleError::InvalidRules)
+    })?;
+    for package in &mut packages {
+        for key in ["equipment", "style-masteries"] {
+            let value = with_content(|pack| {
+                pack.creation
+                    .groups
+                    .iter()
+                    .find(|group| group.id == key)
+                    .and_then(|group| group.options.first())
+                    .map(|option| option.id.clone())
+            })
+            .ok_or(df_rules::local_journey::JourneyRuleError::InvalidRules)?;
+            package.choices.push((key.to_owned(), value));
+        }
+    }
+    let source = archer_package()?;
+    let mut choices = Vec::new();
+    for key in ["array", "equipment", "style-masteries"] {
+        let group = source
+            .creation
+            .groups
+            .iter()
+            .find(|group| group.id == key)
+            .ok_or(df_rules::local_journey::JourneyRuleError::InvalidRules)?;
+        let [option] = group.options.as_slice() else {
+            return Err(df_rules::local_journey::JourneyRuleError::InvalidRules);
+        };
+        choices.push((key.to_owned(), option.id.clone()));
+    }
+    packages.push(BuildPackage {
+        id: "archer".to_owned(),
+        label: "Longbow and Archery · Fighter B + Soldier B".to_owned(),
+        choices,
+    });
+    Ok(packages)
+}
+pub(super) fn archer_equipment()
+-> Result<Vec<EquipmentRow>, df_rules::local_journey::JourneyRuleError> {
+    Ok(archer_package()?.equipment)
+}
 pub(super) fn validate_character(
     name: &str,
     choices: &[(&str, &str)],
 ) -> Result<df_rules::local_journey::LegalCharacter, df_rules::local_journey::JourneyRuleError> {
+    use df_rules::local_journey::JourneyRuleError as Error;
+    let mut expanded = Vec::new();
+    let mut package = None;
+    let mut portrait = None;
+    for &(group, value) in choices {
+        if group == "build-package" {
+            if package.replace(value).is_some() {
+                return Err(Error::InvalidChoice);
+            }
+        } else if group == "portrait" {
+            if portrait.replace(value).is_some()
+                || !["portrait-hero-1", "portrait-hero-2", "portrait-hero-3"].contains(&value)
+            {
+                return Err(Error::InvalidChoice);
+            }
+        } else {
+            expanded.push((group.to_owned(), value.to_owned()));
+        }
+    }
+    if let Some(package) = package {
+        if !active().is_some_and(|loaded| loaded.tuning.tactical.is_some())
+            || expanded
+                .iter()
+                .any(|(key, _)| ["array", "equipment", "style-masteries"].contains(&key.as_str()))
+        {
+            return Err(Error::InvalidChoice);
+        }
+        let selected = build_packages()?
+            .into_iter()
+            .find(|candidate| candidate.id == package)
+            .ok_or(Error::InvalidChoice)?;
+        expanded.extend(selected.choices);
+    }
+    let borrowed = expanded
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    let archer = borrowed
+        .iter()
+        .any(|(key, value)| *key == "array" && *value == "dexterous");
+    if archer {
+        if package != Some("archer") {
+            return Err(Error::InvalidChoice);
+        }
+        return df_rules::tactical::validate_archer(name, &borrowed)
+            .map(|build| build.character().clone())
+            .map_err(|_| Error::InvalidChoice);
+    }
     let allowed = with_content(|pack| {
-        choices.iter().all(|(group, option)| {
+        borrowed.iter().all(|(group, option)| {
             let list = match *group {
                 "alignment" => Some(&pack.creation.pick_lists.alignment),
                 "language-1" | "language-2" => Some(&pack.creation.pick_lists.language),
@@ -2244,9 +2464,9 @@ pub(super) fn validate_character(
         })
     });
     if !allowed {
-        return Err(df_rules::local_journey::JourneyRuleError::InvalidChoice);
+        return Err(Error::InvalidChoice);
     }
-    with_creation(|rules| df_rules::local_journey::validate_character(rules, name, choices))
+    with_creation(|rules| df_rules::local_journey::validate_character(rules, name, &borrowed))
 }
 
 pub(super) fn combat() -> df_rules::local_journey::CombatRules {

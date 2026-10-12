@@ -733,7 +733,9 @@ impl Renderer {
         let highlighted = |cell: crate::battle::Cell| {
             frame
                 .highlight
-                .filter(|highlight| highlight.cells.contains(&cell))
+                .into_iter()
+                .chain(frame.tactical_highlights.iter())
+                .find(|highlight| highlight.cells.contains(&cell))
                 .map(|highlight| highlight.kind)
         };
         // Obstacles that are gaps draw as a dark void; props get a soft contact shadow.

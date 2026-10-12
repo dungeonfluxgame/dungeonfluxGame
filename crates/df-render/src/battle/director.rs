@@ -1017,6 +1017,7 @@ mod tests {
             hit_points: None,
             statuses: Vec::new(),
             attack: AttackStyle::Melee,
+            voice: None,
         }
     }
 
