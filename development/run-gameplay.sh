@@ -15,6 +15,10 @@ fi
 if test "${DF_GAMEPLAY_VOICE_CASTING+x}" != x; then
   export DF_GAMEPLAY_VOICE_CASTING="$ROOT/content/voice-casting.json"
 fi
+# Content rating (mature by default, or restrained): passed through only when the user set it.
+if test "${DF_GAMEPLAY_CONTENT_RATING+x}" = x; then
+  export DF_GAMEPLAY_CONTENT_RATING
+fi
 export RUSTUP_HOME="$ARTIFACT_ROOT/cache/rustup"
 export CARGO_HOME="$ARTIFACT_ROOT/cache/cargo"
 export CARGO_TARGET_DIR=${DUNGEONFLUX_BUILD_ROOT:-$ARTIFACT_ROOT/build/play}

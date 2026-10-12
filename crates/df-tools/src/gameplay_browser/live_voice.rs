@@ -24,7 +24,7 @@ const MAXIMUM_CLIP_BYTES: u32 = 4 * 1024 * 1024;
 const UNLOCK_CLIP: &str =
     "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
 // Sized for a TV seen from across a room: the label never drops below 24px.
-const CONTROL_STYLE: &str = "position:fixed;right:2.4vw;bottom:2.6vh;z-index:40;display:flex;\
+const CONTROL_STYLE: &str = "position:fixed;right:2.4vw;top:2.6vh;z-index:40;display:flex;\
 align-items:center;gap:.6em;min-height:2.4em;padding:.45em 1em;border-radius:999px;\
 border:1px solid rgba(223,185,116,.55);background:rgba(8,15,23,.78);color:#efe6ce;\
 font:clamp(24px,1.35vw,34px) \"Iowan Old Style\",\"Palatino Linotype\",Palatino,Georgia,serif;\
@@ -239,6 +239,12 @@ pub(super) fn observe(client: &Rc<RefCell<Client>>) {
             let _marked = root.set_attribute("data-voice", "unavailable");
         }
     }
+}
+
+/// Creates the shared sound control on `root` without any view, for the battlefield preview:
+/// the same unlock gesture and mute toggle then govern the effects there too.
+pub(super) fn attach(document: &Document, root: &Element) -> Result<(), JsValue> {
+    director(document, root).map(|_| ())
 }
 
 fn director(document: &Document, root: &Element) -> Result<Shared, JsValue> {
@@ -473,18 +479,28 @@ fn abandon(shared: &Shared, id: u64) {
 fn finish(shared: &Shared) {
     let over = shared.borrow_mut().current.take();
     if let Some(playing) = over {
+        let character = playing.line.is_npc();
         playing.release();
+        live_motion::voice_over(character);
     }
-    live_motion::voice_over();
     pump(shared);
 }
 
 fn on_playing(shared: &Shared, _event: &Event) {
-    let mut state = shared.borrow_mut();
-    let url = state.audio.current_src();
-    if !state.plays(&url) {
-        return;
+    let line = {
+        let state = shared.borrow();
+        let url = state.audio.current_src();
+        if !state.plays(&url) {
+            return;
+        }
+        state.current.as_ref().map(|current| current.line.clone())
+    };
+    // The display follows the voice: the line's speaker takes the screen as its audio starts,
+    // before the speaking mark looks for the element that shows the words.
+    if let Some(line) = &line {
+        live_motion::voice_started(line.speaker(), &line.text);
     }
+    let mut state = shared.borrow_mut();
     let element = state
         .current
         .as_ref()

@@ -133,6 +133,11 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "you will regret",
         "you'll regret",
         "make you talk",
+        "gut you",
+        "cut your throat",
+        "slit your throat",
+        "torture you",
+        "make you bleed",
         "threaten",
         "talk or",
         "i will end you",
@@ -164,6 +169,9 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "your eyes",
         "your smile",
         "fancy you",
+        "sexy",
+        "bed with me",
+        "come to bed",
         "wink",
     ]) {
         Approach::Flirting

@@ -1,7 +1,7 @@
 {
   "schema": "df-adventure-tables/1",
   "file": "chapter-types",
-  "description": "Sixteen chapter types. intended = combat/social/exploration percentages the story form implies. v1 = native (the engine plays it as written), faked (played as the single fixed shape, with this chapter's labels and framing), no (needs engine work). beat maps the type onto the single playable shape. on_victory/on_defeat bias the next chapter's type.",
+  "description": "Sixteen chapter types. Beat scripts define scene flow: mystery investigates and parley can conclude without combat; other types retain the canonical journey. Intended pillars describe the story form; needs retain future capability gaps. on_victory/on_defeat bias the next chapter after successful or unsuccessful progress.",
   "capability_names": [
     "skill checks with DCs",
     "multiple enemies",

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::{
     super::{
-        adventure::dossier::{Attitude, Dossier},
+        adventure::dossier::{Attitude, Dossier, Effect},
         imagery::{ImageKey, Imagery},
         npc_dossier_tests::{adventure, member as hero},
         scene_mood::{Expression, Mood},
@@ -47,6 +47,8 @@ fn stage(revision: u64) -> Stage {
 fn dossier() -> Dossier {
     let mut dossier = adventure(7).dossiers[0].clone();
     dossier.starting_attitude = Attitude::Indifferent;
+    // The generator's temperaments move between releases; the tests pin the one they need.
+    dossier.temperament.flirting.effect = Effect::Warm;
     dossier
 }
 
@@ -427,6 +429,9 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                         speaking: true,
                         live_sprite: String::new(),
                     }],
+                    rules_note: String::new(),
+                    place: String::new(),
+                    location_id: String::new(),
                     live_backdrop: String::new(),
                 }),
                 journey: Some(rpc::JourneyView {
@@ -580,6 +585,49 @@ fn a_sprite_overlay_applies_only_to_the_cutout_it_was_made_from() {
     let mut after = before.clone();
     living.apply(&mut after);
     assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn an_expression_is_made_from_the_art_the_stage_shows_for_that_character() {
+    let directory = std::env::temp_dir().join(format!("df-living-art-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    for name in [
+        "sprite-ant-bandit.webp",
+        "figure-ant-bandit.webp",
+        "sprite-patron-innkeeper.webp",
+    ] {
+        std::fs::write(directory.join(name), name.as_bytes()).unwrap();
+    }
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    let inner = Arc::new(Inner {
+        references: ReferenceStore::new(directory),
+        imagery: Imagery::disabled(ImageryOff::Qualification),
+        social: inner.social.clone(),
+        rating: ContentRating::Mature,
+        timing: timing(),
+        state: Mutex::new(State::new(timing())),
+        wake: watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    // An antagonist has a full-body twin and the stage shows it wherever feet are on screen.
+    let figure = inner
+        .load_figure("assets/ui/generated/sprite-ant-bandit")
+        .await
+        .unwrap();
+    assert_eq!(&figure.bytes[..], b"figure-ant-bandit.webp");
+    // A patron has only the knees-up cut-out.
+    let cutout = inner
+        .load_figure("assets/ui/generated/sprite-patron-innkeeper")
+        .await
+        .unwrap();
+    assert_eq!(&cutout.bytes[..], b"sprite-patron-innkeeper.webp");
+    assert!(
+        inner
+            .load_figure("assets/ui/generated/sprite-patron-missing")
+            .await
+            .is_err()
+    );
 }
 
 #[test]

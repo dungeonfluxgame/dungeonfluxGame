@@ -9,6 +9,7 @@
 //! A cue can be scheduled a short time ahead on the audio clock (the dice land after the
 //! rattle), so a sequence needs no timers. A later view cancels cues that have not started.
 use super::*;
+use df_render::battle::{ALL_CLIPS, ContentRating, SoundEvent, VariationPicker};
 use std::{collections::HashMap, time::Duration};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{AudioBuffer, AudioBufferSourceNode, AudioContext, GainNode, Response};
@@ -19,7 +20,9 @@ const MAXIMUM_EFFECT_BYTES: u32 = 2 * 1024 * 1024;
 /// drop to this fraction while a clip is speaking.
 const DUCKED_VOLUME: f32 = 0.3;
 const LOG_ATTRIBUTE: &str = "data-sfx-log";
-const LOG_LIMIT: usize = 40;
+/// A whole fight's worth of footsteps, weapon and voice events fits.
+const LOG_LIMIT: usize = 160;
+const LOG_COUNT_ATTRIBUTE: &str = "data-sfx-count";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum Cue {
@@ -36,6 +39,8 @@ pub(super) enum Cue {
     DefeatToll,
     BubblePop,
     HealChime,
+    /// A combat clip from the battlefield's pack, named by file.
+    Clip(&'static str),
 }
 
 impl Cue {
@@ -70,6 +75,7 @@ impl Cue {
             Self::DefeatToll => "defeat-toll",
             Self::BubblePop => "bubble-pop",
             Self::HealChime => "heal-chime",
+            Self::Clip(name) => name,
         }
     }
 
@@ -98,11 +104,15 @@ struct Engine {
     /// Cues scheduled on the audio clock: the node and its start time.
     scheduled: Vec<(AudioBufferSourceNode, f64)>,
     log: Vec<&'static str>,
+    logged: u64,
 }
 
 thread_local! {
     static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) };
     static UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The 3D battlefield is staging the blows, so the flat view's hit and miss sounds stay quiet.
+    static BATTLEFIELD_OWNS_COMBAT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PICKER: RefCell<VariationPicker> = RefCell::new(VariationPicker::new(0x9e37_79b9));
 }
 
 impl Engine {
@@ -114,13 +124,26 @@ impl Engine {
             document: document.clone(),
             context,
             master,
-            buffers: Cue::ALL.iter().map(|cue| (*cue, Loaded::Loading)).collect(),
+            buffers: Cue::ALL
+                .iter()
+                .copied()
+                .chain(ALL_CLIPS.iter().map(|name| Cue::Clip(name)))
+                .map(|cue| (cue, Loaded::Loading))
+                .collect(),
             scheduled: Vec::new(),
             log: Vec::new(),
+            logged: 0,
         })
     }
 
-    fn schedule(&mut self, cue: Cue, delay: Duration, ducked: bool) -> Result<(), JsValue> {
+    fn schedule(
+        &mut self,
+        cue: Cue,
+        delay: Duration,
+        ducked: bool,
+        gain: f32,
+        rate: f32,
+    ) -> Result<(), JsValue> {
         let Some(Loaded::Ready(buffer)) = self.buffers.get(&cue) else {
             return Ok(());
         };
@@ -128,10 +151,11 @@ impl Engine {
         self.scheduled.retain(|(_, start)| *start > now);
         let source = self.context.create_buffer_source()?;
         source.set_buffer(Some(buffer));
+        source.playback_rate().set_value(rate.clamp(0.5, 2.0));
         let level = self.context.create_gain()?;
         level
             .gain()
-            .set_value(cue.volume() * if ducked { DUCKED_VOLUME } else { 1.0 });
+            .set_value(cue.volume() * gain * if ducked { DUCKED_VOLUME } else { 1.0 });
         source.connect_with_audio_node(&level)?;
         level.connect_with_audio_node(&self.master)?;
         let start = now + delay.as_secs_f64();
@@ -161,8 +185,10 @@ impl Engine {
             self.log.remove(0);
         }
         self.log.push(cue.name());
+        self.logged += 1;
         if let Some(element) = self.document.document_element() {
             let _marked = element.set_attribute(LOG_ATTRIBUTE, &self.log.join(" "));
+            let _counted = element.set_attribute(LOG_COUNT_ATTRIBUTE, &self.logged.to_string());
         }
     }
 }
@@ -209,6 +235,9 @@ pub(super) fn sync() {
         for cue in Cue::ALL {
             spawn_local(load(cue));
         }
+        for name in ALL_CLIPS {
+            spawn_local(load(Cue::Clip(name)));
+        }
     }
 }
 
@@ -248,6 +277,14 @@ async fn fetch_decode(cue: Cue) -> Result<AudioBuffer, JsValue> {
 /// Plays `cue` after `delay`, unless sound is locked or muted or the tab is hidden, in which
 /// case the cue is dropped. Failure to schedule is silence by design.
 pub(super) fn play(cue: Cue, delay: Duration) {
+    play_shaped(cue, delay, 1.0, 1.0);
+}
+
+/// As [`play`] with a level and a playback speed (above 1 raises the pitch).
+fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32) {
+    if matches!(cue, Cue::Hit | Cue::Miss) && BATTLEFIELD_OWNS_COMBAT.with(std::cell::Cell::get) {
+        return;
+    }
     let Some(gate) = live_voice::effects_gate() else {
         return;
     };
@@ -259,8 +296,29 @@ pub(super) fn play(cue: Cue, delay: Duration) {
         if engine.document.hidden() {
             return;
         }
-        let _scheduled = engine.schedule(cue, delay, gate.narrating);
+        let _scheduled = engine.schedule(cue, delay, gate.narrating, gain, rate);
     });
+}
+
+/// Plays one battlefield sound at this moment: picks among the event's clips without repeating
+/// the last, at the event's level and pitch. Gated exactly like every other effect (silent
+/// before the unlock, when muted or hidden, and quieter under narration).
+pub(super) fn play_event(event: &SoundEvent, rating: ContentRating) {
+    let Some(clip) = PICKER.with(|picker| picker.borrow_mut().pick(event.clips(rating))) else {
+        return;
+    };
+    play_shaped(
+        Cue::Clip(clip),
+        Duration::ZERO,
+        event.kind.gain(),
+        event.rate,
+    );
+}
+
+/// While the 3D battlefield stages blows, the flat view's own hit and miss sounds are left out
+/// (the battlefield plays the weapon and voice sounds at the moment of each blow).
+pub(super) fn set_battlefield_owns_combat(owns: bool) {
+    BATTLEFIELD_OWNS_COMBAT.with(|flag| flag.set(owns));
 }
 
 /// Drops every cue of earlier views that has not started yet.

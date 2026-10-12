@@ -8,7 +8,6 @@ use df_protocol::common as rpc;
 const LINE_LIMIT: usize = 90;
 /// The fixed class of the two playable heroes; the server offers no other.
 pub(crate) const HERO_ROLE: &str = "Dwarf Fighter";
-const DM_NAME: &str = "Dungeon Master";
 const GENERATED: &str = "/assets/ui/generated";
 
 /// How the encounter looks in one view.
@@ -23,6 +22,7 @@ pub(crate) enum CombatStage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CombatSnapshot {
     pub(crate) stage: CombatStage,
+    phase: i32,
     rolls: Vec<u64>,
     active: String,
 }
@@ -36,6 +36,8 @@ pub(crate) struct Transitions {
     pub(crate) turn_changed: bool,
     /// The fight ended in this view: `Some(true)` for a victory.
     pub(crate) finished: Option<bool>,
+    /// The story's first scene replaced the room: its title card is shown.
+    pub(crate) story_begun: bool,
 }
 
 fn fnv(parts: &[&[u8]]) -> u64 {
@@ -84,6 +86,7 @@ pub(crate) fn snapshot(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -
     let Some(combat) = journey.combat.as_ref() else {
         return CombatSnapshot {
             stage: CombatStage::Absent,
+            phase: journey.phase,
             rolls: Vec::new(),
             active: String::new(),
         };
@@ -98,6 +101,7 @@ pub(crate) fn snapshot(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -
     };
     CombatSnapshot {
         stage,
+        phase: journey.phase,
         rolls: combat.outcomes.iter().map(fingerprint).collect(),
         active: if combat.finished {
             String::new()
@@ -124,6 +128,125 @@ pub(crate) fn transitions(previous: Option<&CombatSnapshot>, next: &CombatSnapsh
             (CombatStage::Fighting, CombatStage::Finished { victory }) => Some(victory),
             _ => None,
         },
+        story_begun: previous.phase == rpc::JourneyPhase::Room as i32
+            && next.phase == rpc::JourneyPhase::Opening as i32,
+    }
+}
+
+/// The longest sub-line a card or the lobby lede carries.
+const LEDE_CHARACTERS: usize = 120;
+
+/// The first sentence of `text`, ended by a full stop, a question mark or an exclamation mark.
+/// Generated narration can open with a long sentence, so one that would overrun a line is cut
+/// at its last clause break within the limit.
+pub(crate) fn first_sentence(text: &str) -> String {
+    let end = text
+        .char_indices()
+        .find(|&(index, character)| {
+            matches!(character, '.' | '!' | '?')
+                && text[index + character.len_utf8()..].starts_with(' ')
+        })
+        .map_or(text.len(), |(index, character)| {
+            index + character.len_utf8()
+        });
+    let sentence = &text[..end];
+    if sentence.chars().count() <= LEDE_CHARACTERS {
+        return sentence.to_owned();
+    }
+    let clause_end = sentence
+        .char_indices()
+        .filter(|&(index, character)| {
+            let characters = sentence[..index].chars().count();
+            matches!(character, ',' | ';' | ':') && (40..=LEDE_CHARACTERS).contains(&characters)
+        })
+        .map(|(index, _)| index)
+        .next_back();
+    match clause_end {
+        Some(index) => format!("{}.", sentence[..index].trim_end()),
+        None => sentence.to_owned(),
+    }
+}
+
+/// Which card the display shows over the dimmed painting.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CardKind {
+    /// The adventure's title when the story begins.
+    Title,
+    /// A fight won.
+    Victory,
+    /// A fight lost.
+    Defeat,
+}
+
+/// One hero named on the closing card.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CardHero {
+    pub(crate) name: String,
+    pub(crate) role: String,
+    /// Served path of the hero's small portrait.
+    pub(crate) portrait: String,
+}
+
+/// The text of a title or closing card. Only words the accepted view already carries (the
+/// scene's title and place, the first sentence of its narration, the heroes' names) and the
+/// fixed kicker of the card appear on it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Card {
+    pub(crate) kind: CardKind,
+    pub(crate) kicker: String,
+    pub(crate) headline: String,
+    pub(crate) subline: String,
+    pub(crate) place: String,
+    pub(crate) heroes: Vec<CardHero>,
+}
+
+/// The card shown when the story begins: the opening scene's title, one evocative line and
+/// the place.
+pub(crate) fn title_card(scene: &rpc::GameplayScene, narration: &str) -> Card {
+    Card {
+        kind: CardKind::Title,
+        kicker: "A tale begins".to_owned(),
+        headline: scene.title.clone(),
+        subline: first_sentence(narration),
+        place: scene.place.clone(),
+        heroes: Vec::new(),
+    }
+}
+
+/// The card shown when a fight is won or lost: it names the heroes who played.
+pub(crate) fn closing_card(
+    journey: &rpc::JourneyView,
+    scene: &rpc::GameplayScene,
+    narration: &str,
+    victory: bool,
+) -> Card {
+    Card {
+        kind: if victory {
+            CardKind::Victory
+        } else {
+            CardKind::Defeat
+        },
+        kicker: if victory {
+            "The tale continues"
+        } else {
+            "The heroes fall"
+        }
+        .to_owned(),
+        headline: scene.title.clone(),
+        subline: first_sentence(narration),
+        place: scene.place.clone(),
+        heroes: journey
+            .party
+            .iter()
+            .enumerate()
+            .take(2)
+            .filter(|(_, member)| member.character_ready)
+            .map(|(index, member)| CardHero {
+                name: member.name.clone(),
+                role: HERO_ROLE.to_owned(),
+                portrait: format!("{GENERATED}/portrait-hero-{}", index + 1),
+            })
+            .collect(),
     }
 }
 
@@ -162,9 +285,12 @@ pub(crate) fn scene_family(scene_asset: &str) -> SceneFamily {
 pub(crate) enum ActorSlot {
     /// The party member at this position, standing at the left or right edge.
     Hero(usize),
-    /// The one non-player character in focus: the speaker, or the foe in combat.
-    Npc,
+    /// A non-player character of the scene's cast, by position in the server's cast list.
+    Npc(usize),
 }
+
+/// How many non-player figures the stage can hold; a longer cast list shows its first ones.
+pub(crate) const MAX_NPCS: usize = 3;
 
 /// One character standing in the scene.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -172,7 +298,9 @@ pub(crate) struct StageActor {
     pub(crate) slot: ActorSlot,
     pub(crate) name: String,
     pub(crate) role: String,
-    /// Served path of the small portrait; the cut-out and 2:3 portrait names derive from it.
+    /// Served path of the transparent cut-out; empty when the server named none.
+    pub(crate) sprite: String,
+    /// Served path of the small portrait; the 2:3 portrait name derives from it.
     pub(crate) portrait: String,
     pub(crate) hit_points: Option<(u32, u32)>,
     /// Speaking now, or acting on this turn.
@@ -201,24 +329,6 @@ pub(crate) fn imagery_url(path: &str) -> Option<String> {
     plain.then(|| path.to_owned())
 }
 
-// PLAY-L01: the expression variant the scene's cast gives the named character, if any.
-fn live_sprite_of(scene: &rpc::GameplayScene, name: &str) -> Option<String> {
-    scene
-        .cast
-        .iter()
-        .find(|actor| actor.name == name)
-        .and_then(|actor| imagery_url(&actor.live_sprite))
-}
-
-/// Generated portrait stem of a speaker the art pack names by role.
-pub(crate) fn known_portrait_stem(name: &str) -> Option<&'static str> {
-    match name {
-        "Courier" => Some("portrait-courier"),
-        "Bandit" => Some("portrait-bandit"),
-        _ => None,
-    }
-}
-
 fn hit_points(member: &rpc::PartyMemberView) -> Option<(u32, u32)> {
     (member.maximum_hit_points > 0).then_some((member.hit_points, member.maximum_hit_points))
 }
@@ -229,12 +339,12 @@ fn is_down(member: &rpc::PartyMemberView) -> bool {
 }
 
 /// The characters standing in the scene this view shows: both heroes once their characters
-/// are ready, the speaker the view names, and the foe while a fight is on.
+/// are ready, and the scene's cast exactly as the server sends it.
 ///
-/// SERVER CAST SWITCH POINT: when the server adds a per-scene cast to the view, replace the
-/// body of this function with a mapping of that list. A character that stays after the
-/// speaker line moves on is the consumer's job (`live_stage` remembers the last non-player
-/// character until the scene changes); the function itself only reports this view.
+/// SERVER CAST SWITCH POINT: this function and [`cast_of`] are the one place the stage's cast
+/// is derived. The cast is the server's `GameplayScene.cast` (sprite, portrait and who is
+/// speaking); only the fight's hit points and turn marker are joined from the combat
+/// participants of the same view, by name.
 pub(crate) fn scene_cast(view: &rpc::ViewMessage) -> Vec<StageActor> {
     let (journey, scene) = match &view.audience {
         Some(rpc::view_message::Audience::Display(display)) => {
@@ -270,6 +380,7 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
             slot: ActorSlot::Hero(index),
             name: member.name.clone(),
             role: HERO_ROLE.to_owned(),
+            sprite: format!("{GENERATED}/sprite-hero-{}", index + 1),
             portrait: format!("{GENERATED}/portrait-hero-{}", index + 1),
             hit_points: hit_points(member),
             speaking: fighting && member.active_turn,
@@ -277,42 +388,42 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
             live_sprite: None,
         })
         .collect();
-    let speaker_portrait = asset_url(&scene.speaker_portrait);
-    if fighting {
-        let foe = journey
-            .combat
-            .as_ref()
-            .and_then(|combat| combat.participants.get(journey.party.len()));
-        if let Some(foe) = foe {
-            cast.push(StageActor {
-                slot: ActorSlot::Npc,
-                name: foe.name.clone(),
-                role: String::new(),
-                portrait: speaker_portrait
-                    .unwrap_or_else(|| format!("{GENERATED}/portrait-bandit")),
-                hit_points: hit_points(foe),
-                speaking: foe.active_turn,
-                down: foe.maximum_hit_points > 0 && foe.hit_points == 0,
-                live_sprite: None,
-            });
-        }
-    } else if !journey.speaker.is_empty() && !journey.dialogue.is_empty() {
-        let portrait = speaker_portrait.or_else(|| {
-            known_portrait_stem(&journey.speaker).map(|stem| format!("{GENERATED}/{stem}"))
-        });
-        if let Some(portrait) = portrait {
-            cast.push(StageActor {
-                slot: ActorSlot::Npc,
-                name: journey.speaker.clone(),
-                role: String::new(),
-                portrait,
-                hit_points: None,
-                speaking: true,
-                down: false,
-                live_sprite: live_sprite_of(scene, &journey.speaker),
-            });
-        }
-    }
+    let participants = journey
+        .combat
+        .as_ref()
+        .map_or(&[][..], |combat| &combat.participants[..]);
+    let heroes = journey.party.len();
+    cast.extend(
+        scene
+            .cast
+            .iter()
+            .take(MAX_NPCS)
+            .enumerate()
+            .map(|(position, actor)| {
+                let participant = participants
+                    .iter()
+                    .skip(heroes)
+                    .find(|participant| participant.name == actor.name);
+                StageActor {
+                    slot: ActorSlot::Npc(position),
+                    name: actor.name.clone(),
+                    role: String::new(),
+                    sprite: asset_url(&actor.sprite).unwrap_or_default(),
+                    portrait: asset_url(&actor.portrait).unwrap_or_default(),
+                    hit_points: participant.and_then(hit_points),
+                    speaking: if fighting {
+                        participant.is_some_and(|participant| participant.active_turn)
+                    } else {
+                        actor.speaking
+                    },
+                    down: participant.is_some_and(|participant| {
+                        participant.maximum_hit_points > 0 && participant.hit_points == 0
+                    }),
+                    // PLAY-L01: the server's generated expression variant of this cut-out.
+                    live_sprite: imagery_url(&actor.live_sprite),
+                }
+            }),
+    );
     cast
 }
 
@@ -322,7 +433,6 @@ pub(crate) enum TableRole {
     /// The party member at this position of the view's party list.
     Hero(usize),
     Npc,
-    #[allow(dead_code, reason = "reserved for the server feed's narrator lines")]
     Narrator,
 }
 
@@ -335,8 +445,8 @@ pub(crate) enum TableKind {
 /// One short line the whole room can follow.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TableLine {
-    /// Stable identity of the line. Consumers show a line once per sequence. Derived lines
-    /// use a content hash; the server feed will carry its own increasing sequence.
+    /// The server's increasing sequence. Consumers show a line once per sequence, so a redraw
+    /// of the same view never repeats it.
     pub(crate) sequence: u64,
     pub(crate) speaker: String,
     pub(crate) role: TableRole,
@@ -361,11 +471,9 @@ fn clamp_line(text: &str) -> String {
     format!("{}…", kept.trim_end())
 }
 
-fn roll_line(party: &[rpc::PartyMemberView], outcome: &rpc::CombatOutcome) -> TableLine {
-    let role = party
-        .iter()
-        .position(|member| member.name == outcome.actor_name)
-        .map_or(TableRole::Npc, TableRole::Hero);
+/// A short phrase for a roll of the combat window, used only when the table log has no line
+/// for the attacker yet.
+pub(crate) fn action_text(outcome: &rpc::CombatOutcome) -> String {
     let target = &outcome.target_name;
     let mut text = if outcome.hit && outcome.critical {
         format!("lands a critical blow on {target} for {}", outcome.damage)
@@ -379,62 +487,78 @@ fn roll_line(party: &[rpc::PartyMemberView], outcome: &rpc::CombatOutcome) -> Ta
     if outcome.knocked_out {
         text.push_str(" — down!");
     }
-    TableLine {
-        sequence: fingerprint(outcome),
-        speaker: outcome.actor_name.clone(),
-        role,
-        kind: TableKind::Action,
-        text,
-    }
+    text
 }
 
-/// The table lines one audience view justifies, oldest first.
+/// The line the scene itself opens with: its speaker's words, which the server's table log does
+/// not carry because they belong to the scene, not to anything said at the table. Its identity
+/// is a hash of the scene and the line, so it is shown once per scene and survives a redraw.
+fn scene_line(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) -> Option<TableLine> {
+    let text = journey.dialogue.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let title = scene.map_or("", |scene| scene.title.as_str());
+    let (speaker, role) = if journey.speaker.is_empty() {
+        ("", TableRole::Narrator)
+    } else {
+        (journey.speaker.as_str(), TableRole::Npc)
+    };
+    Some(TableLine {
+        sequence: fnv(&[title.as_bytes(), speaker.as_bytes(), text.as_bytes()]),
+        speaker: speaker.to_owned(),
+        role,
+        kind: TableKind::Speech,
+        text: text.to_owned(),
+    })
+}
+
+/// The table lines of one audience view, oldest first: the scene's own speaker line, then the
+/// server's public table log.
 ///
-/// Today these are derived from the view itself: the scene speaker's current line is an NPC
-/// speech line and every roll of the combat window is an action line, attributed only by
-/// names the view already carries. A choice that cannot be attributed produces no line.
-/// The private clue is never read.
-///
-/// SERVER FEED SWITCH POINT: when the server adds a public table feed to the view, replace
-/// the body of this function with a mapping of that feed (keeping its own `sequence`); the
-/// consumers in `live_motion` depend only on this signature.
+/// SERVER FEED SWITCH POINT: this is the one place the feed is read; consumers in
+/// `live_motion` depend only on this signature. A log line whose role or kind the server left
+/// unspecified is skipped. The private clue is never read.
 pub(crate) fn table_lines(view: &rpc::ViewMessage) -> Vec<TableLine> {
-    let journey = match &view.audience {
-        Some(rpc::view_message::Audience::Display(display)) => display.journey.as_ref(),
-        Some(rpc::view_message::Audience::Player(player)) => player.journey.as_ref(),
-        None => None,
+    let (journey, scene) = match &view.audience {
+        Some(rpc::view_message::Audience::Display(display)) => {
+            (display.journey.as_ref(), display.scene.as_ref())
+        }
+        Some(rpc::view_message::Audience::Player(player)) => {
+            (player.journey.as_ref(), player.scene.as_ref())
+        }
+        None => (None, None),
     };
     let Some(journey) = journey else {
         return Vec::new();
     };
-    let mut lines = Vec::new();
-    if let Some(combat) = journey.combat.as_ref() {
-        lines.extend(
-            combat
-                .outcomes
-                .iter()
-                .map(|outcome| roll_line(&journey.party, outcome)),
-        );
-    }
-    if !journey.dialogue.is_empty() {
-        let speaker = if journey.speaker.is_empty() {
-            DM_NAME
-        } else {
-            journey.speaker.as_str()
+    scene_line(journey, scene)
+        .into_iter()
+        .chain(logged_lines(journey))
+        .collect()
+}
+
+fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> + '_ {
+    journey.table_log.iter().filter_map(|line| {
+        let role = match rpc::TableRole::try_from(line.role).ok()? {
+            rpc::TableRole::Hero => TableRole::Hero(usize::try_from(line.hero_index).ok()?),
+            rpc::TableRole::Npc => TableRole::Npc,
+            rpc::TableRole::Narrator => TableRole::Narrator,
+            rpc::TableRole::Unspecified => return None,
         };
-        lines.push(TableLine {
-            sequence: fnv(&[speaker.as_bytes(), journey.dialogue.as_bytes()]),
-            speaker: speaker.to_owned(),
-            role: if journey.speaker.is_empty() {
-                TableRole::Narrator
-            } else {
-                TableRole::Npc
-            },
-            kind: TableKind::Speech,
-            text: journey.dialogue.trim().to_owned(),
-        });
-    }
-    lines
+        let kind = match rpc::TableKind::try_from(line.kind).ok()? {
+            rpc::TableKind::Action => TableKind::Action,
+            rpc::TableKind::Speech => TableKind::Speech,
+            rpc::TableKind::Unspecified => return None,
+        };
+        Some(TableLine {
+            sequence: line.sequence,
+            speaker: line.speaker.clone(),
+            role,
+            kind,
+            text: line.text.trim().to_owned(),
+        })
+    })
 }
 
 #[cfg(test)]
@@ -570,28 +694,132 @@ mod tests {
         assert!(!transitions(Some(&first), &first).turn_changed);
     }
 
+    fn server_line(
+        sequence: u64,
+        speaker: &str,
+        role: rpc::TableRole,
+        hero_index: u32,
+        kind: rpc::TableKind,
+        text: &str,
+    ) -> rpc::TableLine {
+        rpc::TableLine {
+            sequence,
+            speaker: speaker.to_owned(),
+            role: role as i32,
+            hero_index,
+            kind: kind as i32,
+            text: text.to_owned(),
+        }
+    }
+
     #[test]
-    fn table_lines_attribute_rolls_by_party_name_and_clamp_text() {
+    fn table_lines_read_the_server_log_with_its_own_sequence() {
+        let mut shown = journey(rpc::JourneyPhase::Combat, false, vec![]);
+        shown.table_log = vec![
+            server_line(
+                4,
+                "Thrain",
+                rpc::TableRole::Hero,
+                1,
+                rpc::TableKind::Speech,
+                &"x".repeat(200),
+            ),
+            server_line(
+                5,
+                "Perrin",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Action,
+                "misses Thrain",
+            ),
+            server_line(
+                6,
+                "",
+                rpc::TableRole::Narrator,
+                0,
+                rpc::TableKind::Speech,
+                "  The door creaks.  ",
+            ),
+            server_line(
+                7,
+                "Nobody",
+                rpc::TableRole::Unspecified,
+                0,
+                rpc::TableKind::Speech,
+                "dropped",
+            ),
+        ];
+        let lines = table_lines(&view(shown));
+        assert_eq!(lines.len(), 3, "an empty scene line adds nothing");
+        assert_eq!(lines[0].sequence, 4);
+        assert_eq!(lines[0].role, TableRole::Hero(1));
+        assert_eq!(lines[0].kind, TableKind::Speech);
+        assert!(lines[0].short_text().chars().count() <= LINE_LIMIT);
+        assert_eq!(lines[1].role, TableRole::Npc);
+        assert_eq!(lines[1].kind, TableKind::Action);
+        assert_eq!(lines[2].role, TableRole::Narrator);
+        assert_eq!(lines[2].text, "The door creaks.");
+    }
+
+    #[test]
+    fn the_scene_speaker_line_leads_the_log_once_per_scene() {
         let mut shown = journey(
             rpc::JourneyPhase::Combat,
             false,
-            vec![
-                outcome("Brakka", "Perrin", 13, true),
-                outcome("Perrin", "Thrain", 4, false),
-            ],
+            vec![outcome("Brakka", "Perrin", 13, true)],
         );
         shown.speaker = "Courier".to_owned();
-        shown.dialogue = "x".repeat(200);
+        shown.dialogue = "Quick.".to_owned();
+        shown.table_log = vec![server_line(
+            2,
+            "Brakka",
+            rpc::TableRole::Hero,
+            0,
+            rpc::TableKind::Speech,
+            "Easy now.",
+        )];
+        let lines = table_lines(&view(shown.clone()));
+        assert_eq!(lines.len(), 2, "a roll is not a table line by itself");
+        assert_eq!(lines[0].speaker, "Courier");
+        assert_eq!(lines[0].role, TableRole::Npc);
+        assert_eq!(lines[0].kind, TableKind::Speech);
+        assert_eq!(lines[1].sequence, 2);
+        // The same line in another scene is a new line; in the same scene, the same one.
+        assert_eq!(table_lines(&view(shown.clone()))[0], lines[0]);
+        let other_scene = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    journey: Some(shown),
+                    scene: Some(rpc::GameplayScene {
+                        title: "Elsewhere".to_owned(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert_ne!(table_lines(&other_scene)[0].sequence, lines[0].sequence);
+    }
+
+    #[test]
+    fn a_line_with_no_named_speaker_is_the_narrators() {
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.dialogue = "A bell tolls.".to_owned();
         let lines = table_lines(&view(shown));
-        assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0].role, TableRole::Hero(0));
-        assert_eq!(lines[0].kind, TableKind::Action);
-        assert_eq!(lines[0].text, "strikes at Perrin — hit for 6");
-        assert_eq!(lines[1].role, TableRole::Npc);
-        assert_eq!(lines[1].text, "swings at Thrain and misses");
-        assert_eq!(lines[2].kind, TableKind::Speech);
-        assert!(lines[2].short_text().chars().count() <= LINE_LIMIT);
-        assert_ne!(lines[0].sequence, lines[1].sequence);
+        assert_eq!(lines[0].role, TableRole::Narrator);
+    }
+
+    #[test]
+    fn action_text_describes_a_roll_by_its_result() {
+        assert_eq!(
+            action_text(&outcome("Brakka", "Perrin", 13, true)),
+            "strikes at Perrin — hit for 6"
+        );
+        assert_eq!(
+            action_text(&outcome("Perrin", "Thrain", 4, false)),
+            "swings at Thrain and misses"
+        );
     }
 
     #[test]
@@ -609,13 +837,25 @@ mod tests {
         assert!(table_lines(&player).is_empty());
     }
 
-    fn view_with_scene(journey: rpc::JourneyView, speaker_portrait: &str) -> rpc::ViewMessage {
+    fn actor(id: &str, name: &str, speaking: bool) -> rpc::SceneActor {
+        rpc::SceneActor {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            role: rpc::SceneRole::Patron as i32,
+            sprite: format!("assets/ui/generated/sprite-{id}"),
+            portrait: format!("assets/ui/generated/portrait-{id}"),
+            speaking,
+            live_sprite: String::new(),
+        }
+    }
+
+    fn view_with_cast(journey: rpc::JourneyView, cast: Vec<rpc::SceneActor>) -> rpc::ViewMessage {
         rpc::ViewMessage {
             audience: Some(rpc::view_message::Audience::Display(
                 rpc::DisplayGameplayView {
                     journey: Some(journey),
                     scene: Some(rpc::GameplayScene {
-                        speaker_portrait: speaker_portrait.to_owned(),
+                        cast,
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -626,25 +866,34 @@ mod tests {
     }
 
     #[test]
-    fn the_cast_has_ready_heroes_the_speaker_and_the_foe() {
+    fn the_cast_is_the_ready_heroes_then_the_servers_cast_with_its_art_and_speaker() {
         let mut talking = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
         talking.combat = None;
         talking.party[0].character_ready = true;
         talking.party[0].maximum_hit_points = 13;
         talking.party[0].hit_points = 13;
-        talking.speaker = "Courier".to_owned();
-        talking.dialogue = "Quickly now.".to_owned();
-        let cast = scene_cast(&view_with_scene(
+        let cast = scene_cast(&view_with_cast(
             talking,
-            "assets/ui/generated/portrait-courier",
+            vec![
+                actor("patron", "Fenn", true),
+                actor("villain", "Perrin", false),
+            ],
         ));
-        assert_eq!(cast.len(), 2);
+        assert_eq!(cast.len(), 3);
         assert_eq!(cast[0].slot, ActorSlot::Hero(0));
         assert_eq!(cast[0].hit_points, Some((13, 13)));
-        assert_eq!(cast[1].slot, ActorSlot::Npc);
-        assert_eq!(cast[1].portrait, "/assets/ui/generated/portrait-courier");
+        assert_eq!(cast[0].sprite, "/assets/ui/generated/sprite-hero-1");
+        assert_eq!(cast[1].slot, ActorSlot::Npc(0));
+        assert_eq!(cast[1].name, "Fenn");
+        assert_eq!(cast[1].sprite, "/assets/ui/generated/sprite-patron");
+        assert_eq!(cast[1].portrait, "/assets/ui/generated/portrait-patron");
         assert!(cast[1].speaking);
+        assert_eq!(cast[2].slot, ActorSlot::Npc(1));
+        assert!(!cast[2].speaking);
+    }
 
+    #[test]
+    fn a_fight_takes_the_foes_hit_points_and_turn_from_the_combat_by_name() {
         let mut fight = journey(rpc::JourneyPhase::Combat, false, vec![]);
         fight.combat.as_mut().unwrap().participants = vec![
             rpc::PartyMemberView {
@@ -663,20 +912,113 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let cast = scene_cast(&view_with_scene(fight, ""));
+        let cast = scene_cast(&view_with_cast(
+            fight,
+            vec![
+                actor("patron", "Fenn", true),
+                actor("villain", "Perrin", false),
+            ],
+        ));
+        let patron = &cast[0];
+        assert_eq!(patron.name, "Fenn");
+        assert!(!patron.speaking, "in a fight only the active turn is lit");
         let foe = cast.last().unwrap();
         assert_eq!(foe.name, "Perrin");
-        assert_eq!(foe.portrait, "/assets/ui/generated/portrait-bandit");
+        assert_eq!(foe.hit_points, Some((5, 11)));
         assert!(foe.speaking);
     }
 
     #[test]
-    fn a_speaker_without_art_is_not_drawn() {
+    fn the_stage_holds_at_most_three_cast_members_and_art_outside_assets_is_dropped() {
+        let mut crowd: Vec<rpc::SceneActor> = (0..5)
+            .map(|number| actor(&format!("a{number}"), &format!("Name {number}"), false))
+            .collect();
+        crowd[0].sprite = "https://example.com/x".to_owned();
         let mut talking = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
         talking.combat = None;
-        talking.speaker = "Stranger".to_owned();
-        talking.dialogue = "Hello.".to_owned();
-        assert!(scene_cast(&view_with_scene(talking, "")).is_empty());
+        let cast = scene_cast(&view_with_cast(talking, crowd));
+        assert_eq!(cast.len(), MAX_NPCS);
+        assert_eq!(cast[0].sprite, "");
+    }
+
+    #[test]
+    fn the_story_beginning_is_the_room_giving_way_to_the_opening() {
+        let room = snapshot(&journey(rpc::JourneyPhase::Room, false, vec![]), &scene());
+        let opening = snapshot(
+            &journey(rpc::JourneyPhase::Opening, false, vec![]),
+            &scene(),
+        );
+        let dialogue = snapshot(
+            &journey(rpc::JourneyPhase::Dialogue, false, vec![]),
+            &scene(),
+        );
+        assert!(transitions(Some(&room), &opening).story_begun);
+        assert!(!transitions(Some(&opening), &dialogue).story_begun);
+        assert!(!transitions(Some(&opening), &opening).story_begun);
+        assert!(
+            !transitions(None, &opening).story_begun,
+            "a reload shows no card"
+        );
+    }
+
+    #[test]
+    fn the_title_card_uses_only_what_the_view_carries() {
+        let opening = rpc::GameplayScene {
+            title: "A Parcel for Nolan".to_owned(),
+            place: "The Salt Quay".to_owned(),
+            ..Default::default()
+        };
+        let card = title_card(
+            &opening,
+            "Gulls mutter in the rigging of sleeping boats. A merchant hurries out.",
+        );
+        assert_eq!(card.kind, CardKind::Title);
+        assert_eq!(card.headline, "A Parcel for Nolan");
+        assert_eq!(
+            card.subline,
+            "Gulls mutter in the rigging of sleeping boats."
+        );
+        assert_eq!(card.place, "The Salt Quay");
+        assert!(card.heroes.is_empty());
+    }
+
+    #[test]
+    fn the_closing_card_names_the_ready_heroes_and_the_outcome() {
+        let mut ended = journey(rpc::JourneyPhase::Complete, true, vec![]);
+        ended.party[0].character_ready = true;
+        ended.party[1].character_ready = true;
+        let closing = rpc::GameplayScene {
+            title: "The Bell Remembers".to_owned(),
+            ..Default::default()
+        };
+        let won = closing_card(&ended, &closing, "The bandit yields. Peace returns.", true);
+        assert_eq!(won.kind, CardKind::Victory);
+        assert_eq!(won.headline, "The Bell Remembers");
+        assert_eq!(won.subline, "The bandit yields.");
+        let names: Vec<&str> = won.heroes.iter().map(|hero| hero.name.as_str()).collect();
+        assert_eq!(names, ["Brakka", "Thrain"]);
+        assert_eq!(
+            won.heroes[1].portrait,
+            "/assets/ui/generated/portrait-hero-2"
+        );
+        let lost = closing_card(&ended, &closing, "Darkness.", false);
+        assert_eq!(lost.kind, CardKind::Defeat);
+        assert_ne!(lost.kicker, won.kicker);
+        ended.party[1].character_ready = false;
+        assert_eq!(closing_card(&ended, &closing, "x", true).heroes.len(), 1);
+    }
+
+    #[test]
+    fn first_sentence_stops_at_the_sentence_or_the_last_clause_break_within_the_limit() {
+        assert_eq!(first_sentence("One. Two."), "One.");
+        assert_eq!(first_sentence("No full stop"), "No full stop");
+        let long = format!(
+            "{}, and then something else entirely that runs on and on and on and on and on.",
+            "A".repeat(60)
+        );
+        let cut = first_sentence(&long);
+        assert!(cut.chars().count() <= LEDE_CHARACTERS + 1, "{cut}");
+        assert!(cut.ends_with('.'));
     }
 
     #[test]

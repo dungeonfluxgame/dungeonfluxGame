@@ -71,7 +71,8 @@ pub(in crate::gameplay) fn current(
                 Some(entity(BANDIT).map_err(NativeTargetError::State)?)
             }
             rpc::GameplayActionKind::SecondWind | rpc::GameplayActionKind::ShortRest => Some(actor),
-            rpc::GameplayActionKind::CreateCharacter
+            rpc::GameplayActionKind::ExamineHarborSeal
+            | rpc::GameplayActionKind::CreateCharacter
             | rpc::GameplayActionKind::BeginStory
             | rpc::GameplayActionKind::EndTurn => None,
             _ => return Err(NativeTargetError::UnsupportedAction),

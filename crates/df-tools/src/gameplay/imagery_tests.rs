@@ -1302,7 +1302,7 @@ mod settings {
     use std::env::VarError::NotPresent;
 
     use super::super::super::startup_configuration::{
-        ImageryInputs, ImagerySettings, imagery_settings, install_content_rating,
+        ImageryInputs, ImagerySettings, imagery_settings,
     };
     use super::*;
 
@@ -1416,16 +1416,5 @@ mod settings {
         let mut unknown = inputs();
         unknown.model = Ok("gpt-image-2.5-sunburst; rm -rf".to_owned());
         assert!(settings(unknown).is_err());
-    }
-
-    #[test]
-    fn the_content_rating_defaults_to_mature_and_an_unknown_value_is_refused() {
-        assert_eq!(
-            install_content_rating(Err(NotPresent)).unwrap(),
-            ContentRating::Mature
-        );
-        assert!(install_content_rating(Ok("explicit".to_owned())).is_err());
-        assert_eq!(ContentRating::default(), ContentRating::Mature);
-        assert_eq!(ContentRating::Restrained.label(), "restrained");
     }
 }

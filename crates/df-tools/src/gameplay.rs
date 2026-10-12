@@ -2,6 +2,14 @@
 //! membership, not production bootstrap. The action and its outcome use generated RPC.
 mod actor;
 mod adventure;
+mod beat_script;
+mod beat_script_runtime;
+#[cfg(test)]
+mod beat_script_tests;
+#[cfg(test)]
+mod beat_script_variety_tests;
+#[cfg(test)]
+mod content_rating_live_tests;
 mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
@@ -118,7 +126,7 @@ impl Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
-        let viewed = tokio::time::timeout(Duration::from_secs(5), wait)
+        let viewed = tokio::time::timeout(Duration::from_secs(20), wait)
             .await
             .map_err(|_| Status::deadline_exceeded("gameplay view deadline"))?
             .map_err(|_| Status::unavailable("gameplay actor stopped"))?;
@@ -164,7 +172,7 @@ impl rpc::action_service_server::ActionService for Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
-        let outcome = tokio::time::timeout(Duration::from_secs(5), wait)
+        let outcome = tokio::time::timeout(Duration::from_secs(20), wait)
             .await
             .map_err(|_| Status::deadline_exceeded("retain your gameplay operation for lookup"))?
             .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
@@ -483,6 +491,13 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         startup_configuration::SessionSettings::qualification()
     };
+    if interactive {
+        let rating = startup_configuration::content_rating_setting(std::env::var(
+            "DF_GAMEPLAY_CONTENT_RATING",
+        ))?;
+        startup_configuration::install_content_rating(rating)?;
+        println!("{}", rating.startup_line());
+    }
     let storyteller = std::sync::Arc::new(if interactive {
         let mode = startup_configuration::storyteller_mode(
             startup_configuration::StorytellerInputs::from_environment(),
@@ -870,9 +885,11 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     };
     let repository_options = NativeRepositoryOptions {
         transaction_bounds: NativeTransactionBounds {
-            transaction: Duration::from_secs(2),
-            rollback: Duration::from_millis(250),
-            driver_join: Duration::from_secs(2),
+            // Generous so a commit that is slow on a busy machine finishes instead of
+            // leaving its outcome unknown and the session fenced.
+            transaction: Duration::from_secs(12),
+            rollback: Duration::from_secs(2),
+            driver_join: Duration::from_secs(5),
         },
         codec_limits: codec,
         maximum_receipt_bytes: 4096,
@@ -1027,10 +1044,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => social::SocialLedger::none(),
     };
-    // Living scenes: server-generated scene art that follows the story's mood. The content
-    // rating is read here, once, and shared with the rest of the server.
-    let rating =
-        startup_configuration::install_content_rating(std::env::var("DF_GAMEPLAY_CONTENT_RATING"))?;
+    // Living scenes: server-generated scene art that follows the story's mood, under the
+    // server's one content rating.
+    let rating = startup_configuration::content_rating();
     let imagery_settings = if interactive {
         startup_configuration::imagery_settings(
             startup_configuration::ImageryInputs::from_environment(),
@@ -1514,5 +1530,17 @@ async fn join_grant_driver(
 }
 
 fn database_config() -> Result<tokio_postgres::Config, io::Error> {
-    startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))
+    let mut configuration =
+        startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))?;
+    // PLAY-L01 harness knob: a private PostgreSQL on its own port (evaluation runs must not share
+    // the launcher's instance). Unset keeps the launcher's port; an invalid value is refused.
+    if let Ok(port) = std::env::var("DF_GAMEPLAY_DEMO_DATABASE_PORT") {
+        let port = port
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port >= 1024)
+            .ok_or_else(|| io::Error::other("DF_GAMEPLAY_DEMO_DATABASE_PORT invalid"))?;
+        configuration.port(port);
+    }
+    Ok(configuration)
 }

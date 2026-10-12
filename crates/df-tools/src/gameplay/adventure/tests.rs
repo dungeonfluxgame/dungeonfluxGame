@@ -306,6 +306,7 @@ fn every_compiled_creature_has_table_parity_and_loader_disclosure() {
             42,
             GenerateOptions {
                 rules_mode: RulesMode::CustomAllowed,
+                ..GenerateOptions::default()
             },
             &forced,
         )
@@ -1125,4 +1126,173 @@ fn dossiers_are_stored_with_the_adventure_and_an_adventure_saved_without_them_st
     tampered["dossiers"] = serde_json::json!([dossier]);
     documents.record = serde_json::to_vec_pretty(&tampered).unwrap();
     assert!(record::reload(&documents).is_err());
+}
+
+fn options(rating: ContentRating) -> GenerateOptions {
+    GenerateOptions {
+        rating,
+        ..GenerateOptions::default()
+    }
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// The SHA-256 of pack, tuning and record of three fixed seeds as the generator wrote them
+/// before the content rating existed (with `GenerateOptions::default()`).
+/// Pack and record were re-pinned when every pack gained its `beat_script`: with that one key
+/// removed, each pack was byte-identical to the earlier pin.
+const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
+    (
+        0x3c6ef378dd81de97,
+        [
+            "072519d1e82c29c030e6788b77af55483ff477e1290f8ffbe9e5952692cf70cb",
+            "fd318025d2d7b016708169b59777687fe1f7b630a3b70eb2715dad37af962933",
+            "361f636fa76c82a4e273329497cba49b312156cd8676484f66f6bad1de477c9e",
+        ],
+    ),
+    (
+        0xdaa66d325ccc5aac,
+        [
+            "80a4f6aa32d5b1ecbe68ab33a5e2e43ecb6697e5c62a499df1b91001e6c01e44",
+            "6e122920b8921cd08441ec5c13360ac3898742e2d143a16e0c8a8d678d367ace",
+            "271687ec628726da615bedf09dc0f1f8f1e4aa120642b3ba5cd723c2490b29ed",
+        ],
+    ),
+    (
+        0x11a25cdccc7d808f,
+        [
+            "2c75bec4abecef0694322db9b71f6bf826b7161641ed6c520f9377008eebb705",
+            "d29e661273c6de6896f5723c824099989ad0b023d8f9085a5f9bc73cbb5450d7",
+            "e29d6e92be544df554cfd88ef7480fd8a2aa5737ea2b0400b7f1781b272817a8",
+        ],
+    ),
+];
+
+#[test]
+fn restrained_generation_is_byte_identical_to_the_tables_before_the_content_rating() {
+    let tables = tables();
+    for (seed, [pack, tuning, record]) in RESTRAINED_GOLDEN {
+        let documents = generate(
+            &tables,
+            seed,
+            options(ContentRating::Restrained),
+            &ForcedEntries::new(),
+        )
+        .unwrap()
+        .documents(true)
+        .unwrap();
+        let scripted = String::from_utf8_lossy(&documents.pack).contains("\"beat_script\"");
+        assert_eq!(sha256(&documents.pack), pack, "{seed:#x} pack");
+        assert_eq!(sha256(&documents.tuning), tuning, "{seed:#x} tuning");
+        assert_eq!(sha256(&documents.record), record, "{seed:#x} record");
+    }
+}
+
+#[test]
+fn mature_generation_is_deterministic_differs_from_restrained_and_reloads() {
+    let tables = tables();
+    for (seed, _) in RESTRAINED_GOLDEN {
+        let mature = |tables: &Tables| {
+            generate(
+                tables,
+                seed,
+                options(ContentRating::Mature),
+                &ForcedEntries::new(),
+            )
+            .unwrap()
+        };
+        let (first, second) = (mature(&tables), mature(&tables));
+        let (a, b) = (
+            first.documents(true).unwrap(),
+            second.documents(true).unwrap(),
+        );
+        assert_eq!(
+            (&a.pack, &a.tuning, &a.record),
+            (&b.pack, &b.tuning, &b.record)
+        );
+        assert_eq!(first.dossiers, second.dossiers);
+
+        let restrained = generate(
+            &tables,
+            seed,
+            options(ContentRating::Restrained),
+            &ForcedEntries::new(),
+        )
+        .unwrap();
+        assert_ne!(
+            first.pack, restrained.pack,
+            "{seed:#x}: the fight reads differently"
+        );
+        assert_ne!(
+            first.tables_revision, restrained.tables_revision,
+            "a mature adventure records the overlay in its revision"
+        );
+        assert_ne!(
+            first.dossiers[0].tables_revision,
+            restrained.dossiers[0].tables_revision
+        );
+        assert_eq!(
+            first.facts["loc.id"], restrained.facts["loc.id"],
+            "the same story"
+        );
+        assert_eq!(first.facts["ant.id"], restrained.facts["ant.id"]);
+        assert_eq!(first.tuning, restrained.tuning, "mechanics are never rated");
+        let (loaded, record) = record::reload(&a).unwrap();
+        assert_eq!(loaded.pack, first.pack);
+        assert_eq!(record.tables_revision(), first.tables_revision);
+    }
+}
+
+#[test]
+fn a_thousand_mature_seeds_validate_within_every_bound() {
+    let tables = tables();
+    for seed in 0..1000 {
+        let adventure = generate(
+            &tables,
+            seed,
+            options(ContentRating::Mature),
+            &ForcedEntries::new(),
+        )
+        .unwrap_or_else(|error| panic!("seed {seed}: {error}"));
+        record::reload(&adventure.documents(true).unwrap())
+            .unwrap_or_else(|error| panic!("seed {seed}: {error}"));
+    }
+}
+
+#[test]
+fn the_fight_and_its_aftermath_are_darker_when_mature_and_still_nonlethal() {
+    let tables = tables();
+    let scene_text = |rating| {
+        let mut text = String::new();
+        for seed in 0..300 {
+            let adventure =
+                generate(&tables, seed, options(rating), &ForcedEntries::new()).unwrap();
+            for scene in &adventure.pack.scenes {
+                text.push_str(&format!(
+                    "{} {} {}\n",
+                    scene.title, scene.narration, scene.dialogue
+                ));
+            }
+        }
+        text.to_lowercase()
+    };
+    let (mature, restrained) = (
+        scene_text(ContentRating::Mature),
+        scene_text(ContentRating::Restrained),
+    );
+    for word in ["blood", "bleed", "damn", "gnaw", "split lip"] {
+        assert!(mature.contains(word), "mature text has {word}");
+        assert!(!restrained.contains(word), "restrained text has no {word}");
+    }
+    // The rules decide the fight: nobody dies in either rating's narration of it.
+    let words: std::collections::BTreeSet<&str> = mature
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    for word in ["dies", "die", "slain", "killed", "kills", "dead", "corpse"] {
+        assert!(!words.contains(word), "{word}");
+    }
 }

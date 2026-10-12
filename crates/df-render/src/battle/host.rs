@@ -18,6 +18,7 @@ use super::{
     },
     hud::Hud,
     scene_file::{BattleScene, SplatFormat, SplatLayer},
+    sound::SoundEvent,
     splat::{
         ProceduralGround, SogLoader, SogMeta, SogPlanes, SplatCloud, SplatFileLoader, SplatLoader,
         SplatTransform,
@@ -61,6 +62,8 @@ struct Inner {
     revealed: bool,
     frames: u64,
     stats_every: u64,
+    /// Where the stage's sounds go, at the frame they happen. Without one they are dropped.
+    sound_sink: Option<Rc<dyn Fn(SoundEvent)>>,
 }
 
 /// The animation-frame closure, shared so the loop can reschedule itself and `dispose` can drop it.
@@ -118,6 +121,7 @@ impl BattleStage {
                 revealed: false,
                 frames: 0,
                 stats_every: 60,
+                sound_sink: None,
             })),
             frame_callback: Rc::new(RefCell::new(None)),
         }
@@ -201,6 +205,7 @@ impl BattleStage {
             revealed: false,
             frames: 0,
             stats_every: 30,
+            sound_sink: None,
         }));
         let callback: FrameCallback = Rc::new(RefCell::new(None));
         {
@@ -229,6 +234,12 @@ impl BattleStage {
             Availability::Available => Some(operation(&mut inner.stage)),
             Availability::Unavailable(_) => None,
         }
+    }
+
+    /// Sends the stage's combat sounds to `sink` the moment their timeline steps happen. The sink
+    /// runs inside the frame callback and must not call back into the stage.
+    pub fn set_sound_sink(&self, sink: Rc<dyn Fn(SoundEvent)>) {
+        self.inner.borrow_mut().sound_sink = Some(sink);
     }
 
     /// Stops the loop and removes everything the stage added. Safe to call more than once.
@@ -300,6 +311,11 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     state
         .stage
         .update(Duration::from_secs_f64(delta_ms / 1000.0));
+    for event in state.stage.take_sounds() {
+        if let Some(sink) = &state.sound_sink {
+            sink(event);
+        }
+    }
 
     let (Some(canvas), Some(renderer)) = (&state.canvas, &mut state.renderer) else {
         return;

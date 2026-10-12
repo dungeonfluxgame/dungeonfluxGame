@@ -4726,6 +4726,899 @@
         "attempts": 1
       },
       "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "status-blinded",
+      "path": "assets/ui/generated/status-blinded.webp",
+      "kind": "status-icon",
+      "bytes": 19720,
+      "sha256": "0556fbf6ae05a5c90599f5a3eafd66af7c5d2b995fbaa3b8ff155f092fb6f430",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-blinded.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Create ONE production DungeonFlux fantasy tabletop STATUS EFFECT ICON. Style references: the three supplied approved gold icons, used only for antique-gold painted metal material, bold beveled stroke weight, warm edge highlights and level of detail. Match their gold treatment faithfully. Required presentation: square composition, a dark navy circular rounded medallion with a simple thick antique-gold rim and restrained warm rim glow, centered with generous transparent margin. Genuine alpha transparency everywhere outside medallion and its slight glow; opaque dark navy inside. One large bold simple symbol occupying about 70 percent of the medallion interior, instantly readable at 48 pixels across a TV room. Painted antique-gold line and fill, subtle brushed surface texture, warm highlights and dark recessed shading as references; gold and navy dominate. Accent color confined to a restrained portion of the symbol. No lettering, text, numerals, watermark, extra symbols, ornamental clutter, gore or identifiable real person. Render highest quality available. Output square PNG, intended final size 512x512. Subject: a single broad almond-shaped eye crossed across its pupil by a thick horizontal blindfold cloth band. The eye contour remains unmistakable above and below the band. Restrained pale-grey cloth accent in the band. Distinct blindfold, no jagged crack.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-charmed",
+      "path": "assets/ui/generated/status-charmed.webp",
+      "kind": "status-icon",
+      "bytes": 18848,
+      "sha256": "f366bbf325c4c05778dd7102655e36f1fa8907c19a60af9a8cd07888db6b1d23",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-charmed.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Create ONE production DungeonFlux fantasy tabletop STATUS EFFECT ICON. Style references: the three supplied approved gold icons, used only for antique-gold painted metal material, bold beveled stroke weight, warm edge highlights and level of detail. Match their gold treatment faithfully. Required presentation: square composition, a dark navy circular rounded medallion with a simple thick antique-gold rim and restrained warm rim glow, centered with generous transparent margin. Genuine alpha transparency everywhere outside medallion and its slight glow; opaque dark navy inside. One large bold simple symbol occupying about 70 percent of the medallion interior, instantly readable at 48 pixels across a TV room. Painted antique-gold line and fill, subtle brushed surface texture, warm highlights and dark recessed shading as references; gold and navy dominate. Accent color confined to a restrained portion of the symbol. No lettering, text, numerals, watermark, extra symbols, ornamental clutter, gore or identifiable real person. Render highest quality available. Output square PNG, intended final size 512x512. Subject: a single large heart caught in one broad curling ribbon that loops around it. Restrained muted rose accent on heart's inset face, gold edge and gold ribbon. Keep heart silhouette unmistakable and ribbon simple. Match the navy medallion and rim of the additional generated status-blinded reference exactly, while changing only the central symbol.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-deafened",
+      "path": "assets/ui/generated/status-deafened.webp",
+      "kind": "status-icon",
+      "bytes": 22148,
+      "sha256": "a69bd69ec0eb4f804dadd1ca31fa0ca7e3e9f77752de3d1547b81cbc7ce757af",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-deafened.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Create ONE production DungeonFlux fantasy tabletop STATUS EFFECT ICON. Style references: the three supplied approved gold icons, used only for antique-gold painted metal material, bold beveled stroke weight, warm edge highlights and level of detail. Match their gold treatment faithfully. Required presentation: square composition, a dark navy circular rounded medallion with a simple thick antique-gold rim and restrained warm rim glow, centered with generous transparent margin. Genuine alpha transparency everywhere outside medallion and its slight glow; opaque dark navy inside. One large bold simple symbol occupying about 70 percent of the medallion interior, instantly readable at 48 pixels across a TV room. Painted antique-gold line and fill, subtle brushed surface texture, warm highlights and dark recessed shading as references; gold and navy dominate. Accent color confined to a restrained portion of the symbol. No lettering, text, numerals, watermark, extra symbols, ornamental clutter, gore or identifiable real person. Render highest quality available. Output square PNG, intended final size 512x512. Subject: one large stylized human ear in profile, with a simple sound wave beside it crossed by one bold diagonal bar. Restrained pale-grey accent within barred wave. Ear is main silhouette; no eye. Match the navy medallion and rim of the additional generated status-blinded reference exactly, while changing only the central symbol.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-exhaustion",
+      "path": "assets/ui/generated/status-exhaustion.webp",
+      "kind": "status-icon",
+      "bytes": 18340,
+      "sha256": "0ea5ee0458b384b1c16a897a12f36c15918122551f9ca52dbc9d2355cc3e770d",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-exhaustion.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Create ONE production DungeonFlux fantasy tabletop STATUS EFFECT ICON. Style references: the three supplied approved gold icons, used only for antique-gold painted metal material, bold beveled stroke weight, warm edge highlights and level of detail. Match their gold treatment faithfully. Required presentation: square composition, a dark navy circular rounded medallion with a simple thick antique-gold rim and restrained warm rim glow, centered with generous transparent margin. Genuine alpha transparency everywhere outside medallion and its slight glow; opaque dark navy inside. One large bold simple symbol occupying about 70 percent of the medallion interior, instantly readable at 48 pixels across a TV room. Painted antique-gold line and fill, subtle brushed surface texture, warm highlights and dark recessed shading as references; gold and navy dominate. Accent color confined to a restrained portion of the symbol. No lettering, text, numerals, watermark, extra symbols, ornamental clutter, gore or identifiable real person. Render highest quality available. Output square PNG, intended final size 512x512. Subject: one short guttering candle stub with a drooping bent flame, uneven wax lip and just two thick wax drips. Restrained dull amber accent inside small drooping flame. Bold candle silhouette, no candleholder or extra objects. Match the navy medallion and rim of the additional generated status-blinded reference exactly, while changing only the central symbol.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-frightened",
+      "path": "assets/ui/generated/status-frightened.webp",
+      "kind": "status-icon",
+      "bytes": 21738,
+      "sha256": "e19b1fa63038f27a1198ebb2166c99122cc1db084a1ba50be6c66ce85635e47e",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-frightened.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Create ONE production DungeonFlux fantasy tabletop STATUS EFFECT ICON. Style references: the three supplied approved gold icons, used only for antique-gold painted metal material, bold beveled stroke weight, warm edge highlights and level of detail. Match their gold treatment faithfully. Required presentation: square composition, a dark navy circular rounded medallion with a simple thick antique-gold rim and restrained warm rim glow, centered with generous transparent margin. Genuine alpha transparency everywhere outside medallion and its slight glow; opaque dark navy inside. One large bold simple symbol occupying about 70 percent of the medallion interior, instantly readable at 48 pixels across a TV room. Painted antique-gold line and fill, subtle brushed surface texture, warm highlights and dark recessed shading as references; gold and navy dominate. Accent color confined to a restrained portion of the symbol. No lettering, text, numerals, watermark, extra symbols, ornamental clutter, gore or identifiable real person. Render highest quality available. Output square PNG, intended final size 512x512. Subject: one wide startled almond-shaped eye with a large round pupil and ONE bold jagged crack suspended above it. Restrained violet accent in iris and crack inset. Eye fully visible, no blindfold or crossing band. Match the navy medallion and rim of the additional generated status-blinded reference exactly, while changing only the central symbol.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-grappled",
+      "path": "assets/ui/generated/status-grappled.webp",
+      "kind": "status-icon",
+      "bytes": 20962,
+      "sha256": "2f0a98f47b2a79d1881dc09f56507577e1ee5b251095e76c6cfcce00fa5e79b7",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-grappled.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Create ONE production DungeonFlux fantasy tabletop STATUS EFFECT ICON. Style references: the three supplied approved gold icons, used only for antique-gold painted metal material, bold beveled stroke weight, warm edge highlights and level of detail. Match their gold treatment faithfully. Required presentation: square composition, a dark navy circular rounded medallion with a simple thick antique-gold rim and restrained warm rim glow, centered with generous transparent margin. Genuine alpha transparency everywhere outside medallion and its slight glow; opaque dark navy inside. One large bold simple symbol occupying about 70 percent of the medallion interior, instantly readable at 48 pixels across a TV room. Painted antique-gold line and fill, subtle brushed surface texture, warm highlights and dark recessed shading as references; gold and navy dominate. Accent color confined to a restrained portion of the symbol. No lettering, text, numerals, watermark, extra symbols, ornamental clutter, gore or identifiable real person. Render highest quality available. Output square PNG, intended final size 512x512. Subject: one large stylized hand tightly gripping a vertical forearm, four bold curved fingers wrapping visibly around the forearm. Clean symbolic anatomy, no full person. Restrained ochre accent on forearm inset; gold hand and edges. Match the navy medallion and rim of the additional generated status-blinded reference exactly, while changing only the central symbol.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-incapacitated",
+      "path": "assets/ui/generated/status-incapacitated.webp",
+      "kind": "status-icon",
+      "bytes": 19642,
+      "sha256": "0c92aa99e8f2151ef7121787eda3f4ce610da8f23adb11cb50986b6d54ebba13",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-incapacitated.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Create ONE production DungeonFlux fantasy tabletop STATUS EFFECT ICON. Style references: the three supplied approved gold icons, used only for antique-gold painted metal material, bold beveled stroke weight, warm edge highlights and level of detail. Match their gold treatment faithfully. Required presentation: square composition, a dark navy circular rounded medallion with a simple thick antique-gold rim and restrained warm rim glow, centered with generous transparent margin. Genuine alpha transparency everywhere outside medallion and its slight glow; opaque dark navy inside. One large bold simple symbol occupying about 70 percent of the medallion interior, instantly readable at 48 pixels across a TV room. Painted antique-gold line and fill, subtle brushed surface texture, warm highlights and dark recessed shading as references; gold and navy dominate. Accent color confined to a restrained portion of the symbol. No lettering, text, numerals, watermark, extra symbols, ornamental clutter, gore or identifiable real person. Render highest quality available. Output square PNG, intended final size 512x512. Subject: a generic symbolic head and shoulders slumped forward diagonally, head hanging down onto one shoulder, with three small simple circling stars above head. Restrained pale blue accents inside stars. Bold filled gold bust; no facial details or identifiable person. Match the navy medallion and rim of the additional generated status-blinded reference exactly, while changing only the central symbol.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-invisible",
+      "path": "assets/ui/generated/status-invisible.webp",
+      "kind": "status-icon",
+      "bytes": 20474,
+      "sha256": "2fd3346d9c623a73ec4f2a2f22eec6c6a9bf3ab4d7226395a5d4244fefbfdd16",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-invisible.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Create ONE production DungeonFlux fantasy tabletop STATUS EFFECT ICON. Style references: the three supplied approved gold icons, used only for antique-gold painted metal material, bold beveled stroke weight, warm edge highlights and level of detail. Match their gold treatment faithfully. Required presentation: square composition, a dark navy circular rounded medallion with a simple thick antique-gold rim and restrained warm rim glow, centered with generous transparent margin. Genuine alpha transparency everywhere outside medallion and its slight glow; opaque dark navy inside. One large bold simple symbol occupying about 70 percent of the medallion interior, instantly readable at 48 pixels across a TV room. Painted antique-gold line and fill, subtle brushed surface texture, warm highlights and dark recessed shading as references; gold and navy dominate. Accent color confined to a restrained portion of the symbol. No lettering, text, numerals, watermark, extra symbols, ornamental clutter, gore or identifiable real person. Render highest quality available. Output square PNG, intended final size 512x512. Subject: a generic hooded cloaked silhouette drawn ONLY as a thick dashed outline. Navy interior empty: no face, body fill, hands, eyes or solid clothing. Large widely spaced gold dashes outlining hood and broad cloak; restrained pale cyan inset highlights on dashes. No stars or lightning. Match the navy medallion and rim of the additional generated status-blinded reference exactly, while changing only the central symbol.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-paralyzed",
+      "path": "assets/ui/generated/status-paralyzed.webp",
+      "kind": "status-icon",
+      "bytes": 21056,
+      "sha256": "f46b5dc408a2ae78c847655db1638ce93317711fb8cdebcfc3d54f9655ba01d4",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-paralyzed.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Create ONE production DungeonFlux fantasy tabletop STATUS EFFECT ICON. Style references: the three supplied approved gold icons, used only for antique-gold painted metal material, bold beveled stroke weight, warm edge highlights and level of detail. Match their gold treatment faithfully. Required presentation: square composition, a dark navy circular rounded medallion with a simple thick antique-gold rim and restrained warm rim glow, centered with generous transparent margin. Genuine alpha transparency everywhere outside medallion and its slight glow; opaque dark navy inside. One large bold simple symbol occupying about 70 percent of the medallion interior, instantly readable at 48 pixels across a TV room. Painted antique-gold line and fill, subtle brushed surface texture, warm highlights and dark recessed shading as references; gold and navy dominate. Accent color confined to a restrained portion of the symbol. No lettering, text, numerals, watermark, extra symbols, ornamental clutter, gore or identifiable real person. Render highest quality available. Output square PNG, intended final size 512x512. Subject: one rigid generic standing silhouette with straight arms and legs, bound by two bold zigzag lightning bolts crossing its torso. Gold filled symbolic figure, no facial detail or identifiable person. Restrained electric-blue cores inside gold-bordered lightning. Straight immobile posture; no cloak or stars. Match the navy medallion and rim of the additional generated status-blinded reference exactly, while changing only the central symbol.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-blessed",
+      "path": "assets/ui/generated/status-blessed.webp",
+      "kind": "status-icon",
+      "bytes": 22698,
+      "sha256": "f1cbbf8a3b9beab0ad45b92964665cd8ded1314c41c8d630f4ed9ce5a969b682",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-blessed.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux status-effect icon for a TV tabletop game. Create one square PNG icon. Input images are STYLE REFERENCES ONLY: match the approved shield, magnifier and wind-heart antique-gold paint, beveled gold lines and fill, aged texture, warm subtle glow and bold stroke weight. Match the fourth reference's circular dark navy medallion, simple thick beveled antique-gold rim, framing, scale and texture exactly. SUBJECT: a radiant RISING SUN: a large half-disc sun visibly emerging above a short straight horizon line, with five broad rays above and beside the half-disc. A small two-branch laurel sits below the horizon; one coherent bold emblem. The sun must be a half-disc above horizon, not a full floating circle. Accent colour: warm gold-white. Gold-and-navy language dominates; the accent colour stays restrained inside the symbol. One simple unmistakable bold emblem, centered at about 65% of medallion diameter, with broad forms and sparse detail instantly readable from across a room at 48 pixels. Medallion about 90% of square canvas, generous transparent margin. Output 512x512 PNG with true transparent alpha outside circular medallion including all corners. Navy only inside medallion. No text, letters, numerals, watermark, real-person likeness, gore, extra ornaments or opaque exterior background. Highest available rendering quality.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-bloodied",
+      "path": "assets/ui/generated/status-bloodied.webp",
+      "kind": "status-icon",
+      "bytes": 22372,
+      "sha256": "7cdf2f661c352eef1a49fab1d0b21a1f8281bc07d8a66f9792232f1874cba0d1",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-bloodied.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux status-effect icon for a TV tabletop game. Create one square PNG icon. Input images are STYLE REFERENCES ONLY: match the approved shield, magnifier and wind-heart antique-gold paint, beveled gold lines and fill, aged texture, warm subtle glow and bold stroke weight. Match the fourth reference's circular dark navy medallion, simple thick beveled antique-gold rim, framing, scale and texture exactly. SUBJECT: a large cracked shield with a single small crimson-red drop in front of its lower half; the drop is symbolic, no gore. Accent colour: crimson. Gold-and-navy language dominates; the accent colour stays restrained inside the symbol. One simple unmistakable bold emblem, centered at about 65% of medallion diameter, with broad forms and sparse detail instantly readable from across a room at 48 pixels. Medallion about 90% of square canvas, generous transparent margin. Output 512x512 PNG with true transparent alpha outside circular medallion including all corners. Navy only inside medallion. No text, letters, numerals, watermark, real-person likeness, gore, extra ornaments or opaque exterior background. Highest available rendering quality.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-burning",
+      "path": "assets/ui/generated/status-burning.webp",
+      "kind": "status-icon",
+      "bytes": 21636,
+      "sha256": "356f4ea4b843f13ef6eec4a9e802d0f5e95cd89b478296c4ed0b6319939ceb6f",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-burning.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux status-effect icon for a TV tabletop game. Create one square PNG icon. Input images are STYLE REFERENCES ONLY: match the approved shield, magnifier and wind-heart antique-gold paint, beveled gold lines and fill, aged texture, warm subtle glow and bold stroke weight. Match the fourth reference's circular dark navy medallion, simple thick beveled antique-gold rim, framing, scale and texture exactly. SUBJECT: a single large bold orange flame curling up one side of the navy medallion, clear teardrop flame tongues and a broad curved base. Accent colour: orange. Gold-and-navy language dominates; the accent colour stays restrained inside the symbol. One simple unmistakable bold emblem, centered at about 65% of medallion diameter, with broad forms and sparse detail instantly readable from across a room at 48 pixels. Medallion about 90% of square canvas, generous transparent margin. Output 512x512 PNG with true transparent alpha outside circular medallion including all corners. Navy only inside medallion. No text, letters, numerals, watermark, real-person likeness, gore, extra ornaments or opaque exterior background. Highest available rendering quality.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-petrified",
+      "path": "assets/ui/generated/status-petrified.webp",
+      "kind": "status-icon",
+      "bytes": 20556,
+      "sha256": "c576ff9ffc36d203db23500fd06080d082052a639637fb7d478c88b6a7f4f78a",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-petrified.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux status-effect icon for a TV tabletop game. Create one square PNG icon: a cracked stone bust, restrained stone-grey accent. Style references: the three supplied approved icons are reference images only; closely match their painted antique-gold raised line and fill, bevel highlights, subtle aged texture, warm glow, simple bold contours and stroke weight. Place the single bust symbol on a dark navy round medallion with a thick antique-gold beveled rim. Consistent polished fantasy game UI. Bust is generic sculpted stone, head and shoulders, with two large clear cracks, no real-person likeness. Gold-and-navy dominates, grey inside bust. Centered bold silhouette, symbol occupies about 65% of the medallion, sparse detail readable at 48 pixels. Medallion occupies 90% of canvas, generous transparent margin. Output 512x512 PNG, true transparent alpha outside circular medallion, including corners; navy is only inside medallion. No text, letters, numerals, watermark, extra objects, gore or opaque exterior background. Highest available rendering quality.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-poisoned",
+      "path": "assets/ui/generated/status-poisoned.webp",
+      "kind": "status-icon",
+      "bytes": 19088,
+      "sha256": "de48f21d9910c10aa18ac477667c611c85daef45f3d57820281b9ce4f8e409aa",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-poisoned.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux status-effect icon for a TV tabletop game. Create one square PNG icon. Input images are STYLE REFERENCES ONLY: match the approved shield, magnifier and wind-heart antique-gold paint, beveled gold lines and fill, aged texture, warm subtle glow and bold stroke weight. Match the fourth reference's circular dark navy medallion, simple thick beveled antique-gold rim, framing, scale and texture exactly. SUBJECT: a large sickly-green droplet above a small skull-shaped potion vial, without gore. Accent colour: sickly green. Gold-and-navy language dominates; the accent colour stays restrained inside the symbol. One simple unmistakable bold emblem, centered at about 65% of medallion diameter, with broad forms and sparse detail instantly readable from across a room at 48 pixels. Medallion about 90% of square canvas, generous transparent margin. Output 512x512 PNG with true transparent alpha outside circular medallion including all corners. Navy only inside medallion. No text, letters, numerals, watermark, real-person likeness, gore, extra ornaments or opaque exterior background. Highest available rendering quality.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-prone",
+      "path": "assets/ui/generated/status-prone.webp",
+      "kind": "status-icon",
+      "bytes": 18142,
+      "sha256": "6f50286f28ae0b284d182f536351f2366b2328eb401b9c9fb22b1262911e13f2",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-prone.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux status-effect icon for a TV tabletop game. Create one square PNG icon. Input images are STYLE REFERENCES ONLY: match the approved shield, magnifier and wind-heart antique-gold paint, beveled gold lines and fill, aged texture, warm subtle glow and bold stroke weight. Match the fourth reference's circular dark navy medallion, simple thick beveled antique-gold rim, framing, scale and texture exactly. SUBJECT: a simple generic human silhouette lying completely flat horizontally on a bold ground line, head on left and straight body and legs extending right. Accent colour: ochre. Gold-and-navy language dominates; the accent colour stays restrained inside the symbol. One simple unmistakable bold emblem, centered at about 65% of medallion diameter, with broad forms and sparse detail instantly readable from across a room at 48 pixels. Medallion about 90% of square canvas, generous transparent margin. Output 512x512 PNG with true transparent alpha outside circular medallion including all corners. Navy only inside medallion. No text, letters, numerals, watermark, real-person likeness, gore, extra ornaments or opaque exterior background. Highest available rendering quality.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-restrained",
+      "path": "assets/ui/generated/status-restrained.webp",
+      "kind": "status-icon",
+      "bytes": 23078,
+      "sha256": "2ef86f5531ca5e2a187238c70bda9002723f7cf9dcb0cd4583c64099076e14bd",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-restrained.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux status-effect icon for a TV tabletop game. Create one square PNG icon. Input images are STYLE REFERENCES ONLY: match the approved shield, magnifier and wind-heart antique-gold paint, beveled gold lines and fill, aged texture, warm subtle glow and bold stroke weight. Match the fourth reference's circular dark navy medallion, simple thick beveled antique-gold rim, framing, scale and texture exactly. SUBJECT: a simple generic head-and-torso silhouette with two thick crossed iron-grey chains forming an X over its torso; large unmistakable chain links. Accent colour: iron grey. Gold-and-navy language dominates; the accent colour stays restrained inside the symbol. One simple unmistakable bold emblem, centered at about 65% of medallion diameter, with broad forms and sparse detail instantly readable from across a room at 48 pixels. Medallion about 90% of square canvas, generous transparent margin. Output 512x512 PNG with true transparent alpha outside circular medallion including all corners. Navy only inside medallion. No text, letters, numerals, watermark, real-person likeness, gore, extra ornaments or opaque exterior background. Highest available rendering quality.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-stunned",
+      "path": "assets/ui/generated/status-stunned.webp",
+      "kind": "status-icon",
+      "bytes": 22326,
+      "sha256": "380481bcf24c890c0fa9e3c2bd2ab1aa39bcde0a3c68ae7cf19344ac809cdccf",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-stunned.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux status-effect icon for a TV tabletop game. Create one square PNG icon. Input images are STYLE REFERENCES ONLY: match the approved shield, magnifier and wind-heart antique-gold paint, beveled gold lines and fill, aged texture, warm subtle glow and bold stroke weight. Match the fourth reference's circular dark navy medallion, simple thick beveled antique-gold rim, framing, scale and texture exactly. SUBJECT: a simple generic head silhouette surrounded above by a ring of three large spinning five-point stars with a curved orbit stroke. Accent colour: yellow. Gold-and-navy language dominates; the accent colour stays restrained inside the symbol. One simple unmistakable bold emblem, centered at about 65% of medallion diameter, with broad forms and sparse detail instantly readable from across a room at 48 pixels. Medallion about 90% of square canvas, generous transparent margin. Output 512x512 PNG with true transparent alpha outside circular medallion including all corners. Navy only inside medallion. No text, letters, numerals, watermark, real-person likeness, gore, extra ornaments or opaque exterior background. Highest available rendering quality.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-unconscious",
+      "path": "assets/ui/generated/status-unconscious.webp",
+      "kind": "status-icon",
+      "bytes": 21206,
+      "sha256": "4bfccb227dca5e26c3db344f4be2f25a52a046b4fb72c8391b23e48e4c854930",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-unconscious.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux status-effect icon for a TV tabletop game. Create one square PNG icon. Input images are STYLE REFERENCES ONLY: match the approved shield, magnifier and wind-heart antique-gold paint, beveled gold lines and fill, aged texture, warm subtle glow and bold stroke weight. Match the fourth reference's circular dark navy medallion, simple thick beveled antique-gold rim, framing, scale and texture exactly. SUBJECT: one large closed eye with a downward-curved eyelid and three bold rising sleep curls above it; no head. The eyelid and all three curls have clearly visible DEEP BLUE ENAMEL INTERIORS surrounded by thick antique-gold outlines; blue must be inside the symbol, not only the medallion background. Exactly three soft S-shaped curls without dots, no punctuation. Accent colour: deep blue. Gold-and-navy language dominates; the accent colour stays restrained inside the symbol. One simple unmistakable bold emblem, centered at about 65% of medallion diameter, with broad forms and sparse detail instantly readable from across a room at 48 pixels. Medallion about 90% of square canvas, generous transparent margin. Output 512x512 PNG with true transparent alpha outside circular medallion including all corners. Navy only inside medallion. No text, letters, numerals, watermark, real-person likeness, gore, extra ornaments or opaque exterior background. Highest available rendering quality.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-concentrating",
+      "path": "assets/ui/generated/status-concentrating.webp",
+      "kind": "status-icon",
+      "bytes": 21628,
+      "sha256": "0875e92de52a3094e91ea236af213becdfc0784b8438b323958d8fa669d0af15",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-concentrating.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: one DungeonFlux status effect icon for a fantasy tabletop game on TV. Reference images are style references only: match their painted antique-gold bevels, substantial gold strokes, softly brushed texture, warm edge light and restrained glow exactly. Place the symbol on a dark navy circular rounded medallion with a simple substantial antique-gold rim; keep this exact medallion consistent across this nine-icon set. Centered square composition, medallion fills 88% of frame. Highest available visual polish. One bold simple symbolic emblem, instantly readable when reduced to 48 pixels, generous negative space, heavy strokes like the references, minimal fine detail. Antique gold and deep navy dominate; use the stated accent sparingly inside the symbol. Genuine transparent alpha outside the medallion, including corners; no opaque canvas or shadow rectangle. No text, letters, numerals, watermark, real person identity, gore, tiny decorative marks or extra symbols. Deliver a square PNG intended for final 512x512 dimensions. Subject: one calm still eye inside a broad spiral of two focus rings; restrained teal iris accent.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-cover",
+      "path": "assets/ui/generated/status-cover.webp",
+      "kind": "status-icon",
+      "bytes": 18550,
+      "sha256": "6bf301c6b5ab4b546348881d177b41751aa602d4bbda164a4645e7ad16051980",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-cover.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: one DungeonFlux status effect icon for a fantasy tabletop game on TV. Reference images are style references only: match their painted antique-gold bevels, substantial gold strokes, softly brushed texture, warm edge light and restrained glow exactly. Place the symbol on a dark navy circular rounded medallion with a simple substantial antique-gold rim; keep this exact medallion consistent across this nine-icon set. Centered square composition, medallion fills 88% of frame. Highest available visual polish. One bold simple symbolic emblem, instantly readable when reduced to 48 pixels, generous negative space, heavy strokes like the references, minimal fine detail. Antique gold and deep navy dominate; use the stated accent sparingly inside the symbol. Genuine transparent alpha outside the medallion, including corners; no opaque canvas or shadow rectangle. No text, letters, numerals, watermark, real person identity, gore, tiny decorative marks or extra symbols. Deliver a square PNG intended for final 512x512 dimensions. Subject: one anonymous figure silhouette crouched behind a substantial low wall segment, head and one shoulder visible over wall; restrained steel blue on the wall.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-cursed",
+      "path": "assets/ui/generated/status-cursed.webp",
+      "kind": "status-icon",
+      "bytes": 19804,
+      "sha256": "dd108e07a68cac5ca4f82f5d89966eec238b4a7a9a08cd3d3bedddb3a340829a",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-cursed.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: one DungeonFlux status effect icon for a fantasy tabletop game on TV. Reference images are style references only: match their painted antique-gold bevels, substantial gold strokes, softly brushed texture, warm edge light and restrained glow exactly. Place the symbol on a dark navy circular rounded medallion with a simple substantial antique-gold rim; keep this exact medallion consistent across this nine-icon set. Centered square composition, medallion fills 88% of frame. Highest available visual polish. One bold simple symbolic emblem, instantly readable when reduced to 48 pixels, generous negative space, heavy strokes like the references, minimal fine detail. Antique gold and deep navy dominate; use the stated accent sparingly inside the symbol. Genuine transparent alpha outside the medallion, including corners; no opaque canvas or shadow rectangle. No text, letters, numerals, watermark, real person identity, gore, tiny decorative marks or extra symbols. Deliver a square PNG intended for final 512x512 dimensions. Subject: a downturned crescent (horns pointing downward) entwined with one broad thorn spiral; restrained dark violet accent inside the crescent.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-dodging",
+      "path": "assets/ui/generated/status-dodging.webp",
+      "kind": "status-icon",
+      "bytes": 20460,
+      "sha256": "18fea8812e865aeda92ba8463e9b00c037df6f444a63d3cd545fc41f59182f72",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-dodging.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: one DungeonFlux status effect icon for a fantasy tabletop game on TV. Reference images are style references only: match their painted antique-gold bevels, substantial gold strokes, softly brushed texture, warm edge light and restrained glow exactly. Place the symbol on a dark navy circular rounded medallion with a simple substantial antique-gold rim; keep this exact medallion consistent across this nine-icon set. Centered square composition, medallion fills 88% of frame. Highest available visual polish. One bold simple symbolic emblem, instantly readable when reduced to 48 pixels, generous negative space, heavy strokes like the references, minimal fine detail. Antique gold and deep navy dominate; use the stated accent sparingly inside the symbol. Genuine transparent alpha outside the medallion, including corners; no opaque canvas or shadow rectangle. No text, letters, numerals, watermark, real person identity, gore, tiny decorative marks or extra symbols. Deliver a square PNG intended for final 512x512 dimensions. Subject: a simple anonymous figure silhouette dramatically leaning aside with three bold motion streaks; restrained pale blue accent inside silhouette.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-dying",
+      "path": "assets/ui/generated/status-dying.webp",
+      "kind": "status-icon",
+      "bytes": 18596,
+      "sha256": "28948904af7bdacaac108111dbcae46c2362d689575342ef54ea14395ed16156",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-dying.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: one DungeonFlux status effect icon for a fantasy tabletop game on TV. Reference images are style references only: match their painted antique-gold bevels, substantial gold strokes, softly brushed texture, warm edge light and restrained glow exactly. Place the symbol on a dark navy circular rounded medallion with a simple substantial antique-gold rim; keep this exact medallion consistent across this nine-icon set. Centered square composition, medallion fills 88% of frame. Highest available visual polish. One bold simple symbolic emblem, instantly readable when reduced to 48 pixels, generous negative space, heavy strokes like the references, minimal fine detail. Antique gold and deep navy dominate; use the stated accent sparingly inside the symbol. Genuine transparent alpha outside the medallion, including corners; no opaque canvas or shadow rectangle. No text, letters, numerals, watermark, real person identity, gore, tiny decorative marks or extra symbols. Deliver a square PNG intended for final 512x512 dimensions. Subject: one broad hourglass nearly fully elapsed, with the upper chamber EMPTY except for exactly three tiny last gold grains near the narrow neck; last three grains falling through the neck, and accumulated gold sand low in the bottom chamber. One small heart visibly inset in the lower chamber, pale muted rose-red heart accent. The empty upper chamber must be deep navy with NO gold mound, NO broad sand fill, so time has almost completely run out. Keep hourglass and heart bold and instantly readable at 48 pixels.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-hidden",
+      "path": "assets/ui/generated/status-hidden.webp",
+      "kind": "status-icon",
+      "bytes": 22262,
+      "sha256": "c852126e7606a973d9804d63c0de8a5b0765823dd355aaea28c08429ae4f21ff",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-hidden.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: one DungeonFlux status effect icon for a fantasy tabletop game on TV. Reference images are style references only: match their painted antique-gold bevels, substantial gold strokes, softly brushed texture, warm edge light and restrained glow exactly. Place the symbol on a dark navy circular rounded medallion with a simple substantial antique-gold rim; keep this exact medallion consistent across this nine-icon set. Centered square composition, medallion fills 88% of frame. Highest available visual polish. One bold simple symbolic emblem, instantly readable when reduced to 48 pixels, generous negative space, heavy strokes like the references, minimal fine detail. Antique gold and deep navy dominate; use the stated accent sparingly inside the symbol. Genuine transparent alpha outside the medallion, including corners; no opaque canvas or shadow rectangle. No text, letters, numerals, watermark, real person identity, gore, tiny decorative marks or extra symbols. Deliver a square PNG intended for final 512x512 dimensions. Subject: one hooded head half concealed behind one large leaf; restrained forest green inside the leaf.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-inspired",
+      "path": "assets/ui/generated/status-inspired.webp",
+      "kind": "status-icon",
+      "bytes": 18980,
+      "sha256": "806cd07ecad6902c9a27355d7783f7e6e69b6a0d49f5075afce5bdf53ba3e99e",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-inspired.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: one DungeonFlux status effect icon for a fantasy tabletop game on TV. Reference images are style references only: match their painted antique-gold bevels, substantial gold strokes, softly brushed texture, warm edge light and restrained glow exactly. Place the symbol on a dark navy circular rounded medallion with a simple substantial antique-gold rim; keep this exact medallion consistent across this nine-icon set. Centered square composition, medallion fills 88% of frame. Highest available visual polish. One bold simple symbolic emblem, instantly readable when reduced to 48 pixels, generous negative space, heavy strokes like the references, minimal fine detail. Antique gold and deep navy dominate; use the stated accent sparingly inside the symbol. Genuine transparent alpha outside the medallion, including corners; no opaque canvas or shadow rectangle. No text, letters, numerals, watermark, real person identity, gore, tiny decorative marks or extra symbols. Deliver a square PNG intended for final 512x512 dimensions. Subject: one bright eight-point star above an open palm; restrained gold-white light in star center.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-marked",
+      "path": "assets/ui/generated/status-marked.webp",
+      "kind": "status-icon",
+      "bytes": 21560,
+      "sha256": "6ed13aa5169d5c8a708a2d0f71df5f70c13e8d3898ded82c289c6001ce96516e",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-marked.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: one DungeonFlux status effect icon for a fantasy tabletop game on TV. Reference images are style references only: match their painted antique-gold bevels, substantial gold strokes, softly brushed texture, warm edge light and restrained glow exactly. Place the symbol on a dark navy circular rounded medallion with a simple substantial antique-gold rim; keep this exact medallion consistent across this nine-icon set. Centered square composition, medallion fills 88% of frame. Highest available visual polish. One bold simple symbolic emblem, instantly readable when reduced to 48 pixels, generous negative space, heavy strokes like the references, minimal fine detail. Antique gold and deep navy dominate; use the stated accent sparingly inside the symbol. Genuine transparent alpha outside the medallion, including corners; no opaque canvas or shadow rectangle. No text, letters, numerals, watermark, real person identity, gore, tiny decorative marks or extra symbols. Deliver a square PNG intended for final 512x512 dimensions. Subject: one thick target reticle centered over a small anonymous head-and-shoulders silhouette; restrained amber in target center.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "status-raging",
+      "path": "assets/ui/generated/status-raging.webp",
+      "kind": "status-icon",
+      "bytes": 20290,
+      "sha256": "6c68c626e13701125c8d6da22030ade20eb80d9deea1ed9f6a6a09e6ff17f698",
+      "dimensions": [
+        256,
+        256
+      ],
+      "synthetic": true,
+      "source_file": "status-raging.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset: one DungeonFlux status effect icon for a fantasy tabletop game on TV. Reference images are style references only: match their painted antique-gold bevels, substantial gold strokes, softly brushed texture, warm edge light and restrained glow exactly. Place the symbol on a dark navy circular rounded medallion with a simple substantial antique-gold rim; keep this exact medallion consistent across this nine-icon set. Centered square composition, medallion fills 88% of frame. Highest available visual polish. One bold simple symbolic emblem, instantly readable when reduced to 48 pixels, generous negative space, heavy strokes like the references, minimal fine detail. Antique gold and deep navy dominate; use the stated accent sparingly inside the symbol. Genuine transparent alpha outside the medallion, including corners; no opaque canvas or shadow rectangle. No text, letters, numerals, watermark, real person identity, gore, tiny decorative marks or extra symbols. Deliver a square PNG intended for final 512x512 dimensions. Subject: one stylised snarling mouth with bold flared brow lines above it, a graphic emblem not a full face; restrained deep red inside the mouth. Family suitable, no gore.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-barrels",
+      "path": "assets/ui/generated/prop-barrels.webp",
+      "kind": "prop",
+      "bytes": 86942,
+      "sha256": "85ae3195c698b3e3c38bc885fd0ed8de3a7774caebbe16c5d57b2b119cd60b42",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-barrels.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-bookshelf",
+      "path": "assets/ui/generated/prop-bookshelf.webp",
+      "kind": "prop",
+      "bytes": 72568,
+      "sha256": "8f3e4d5c18554a606d1d3257972183f3deb8e9d0879da9b3bb296f9611ec512c",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-bookshelf.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-boulder",
+      "path": "assets/ui/generated/prop-boulder.webp",
+      "kind": "prop",
+      "bytes": 102022,
+      "sha256": "1eaf05e066686c1aa2bd03ecf1dcc0e2321de3e3e832883dae3dc00a3c87be1a",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-boulder.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-brazier",
+      "path": "assets/ui/generated/prop-brazier.webp",
+      "kind": "prop",
+      "bytes": 43922,
+      "sha256": "565f96bca832b896192a6d756d060a94321d5386d4ce2e598ca3c4be52481be3",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-brazier.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-cart",
+      "path": "assets/ui/generated/prop-cart.webp",
+      "kind": "prop",
+      "bytes": 48154,
+      "sha256": "bc683aea9ed2f5b627fbaab13edfeaf52bffbd86a810a0ef83f4bf0f85b484ba",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-cart.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-crates",
+      "path": "assets/ui/generated/prop-crates.webp",
+      "kind": "prop",
+      "bytes": 75698,
+      "sha256": "1e212ed644d7064ed4ce09a74f6532ded20e732293bc1b44dc7012910eb26b9a",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-crates.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-fallen-log",
+      "path": "assets/ui/generated/prop-fallen-log.webp",
+      "kind": "prop",
+      "bytes": 69324,
+      "sha256": "6d1a3d17fc6cb8ad84e0e1bd859bab7c5be7d25c2ab7e59cb5e7470da2882689",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-fallen-log.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-fence",
+      "path": "assets/ui/generated/prop-fence.webp",
+      "kind": "prop",
+      "bytes": 74896,
+      "sha256": "735d3d7212da2f72459bdd8172979750398ff1850a87a569e67f8d5f3ff26824",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-fence.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-gravestone",
+      "path": "assets/ui/generated/prop-gravestone.webp",
+      "kind": "prop",
+      "bytes": 66492,
+      "sha256": "098fe9dbef6c7561316b3bbe872e303df1b481a307ebb3bf13cc8374c4c1be80",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-gravestone.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-hay-bales",
+      "path": "assets/ui/generated/prop-hay-bales.webp",
+      "kind": "prop",
+      "bytes": 64868,
+      "sha256": "bc8106373c0b6800e19cbca52aeaa8df230f8e3fd1b70bec2aeb53047f301133",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-hay-bales.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-market-stall",
+      "path": "assets/ui/generated/prop-market-stall.webp",
+      "kind": "prop",
+      "bytes": 46222,
+      "sha256": "9dae1dbbd0a2b5d819603fc5f65ec6d7c1456aa4e4e61a94c9c2b6af5ab9d4bc",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-market-stall.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-rope-nets",
+      "path": "assets/ui/generated/prop-rope-nets.webp",
+      "kind": "prop",
+      "bytes": 91126,
+      "sha256": "7d25437ff0a98a07aecf54fe3e663a9d7495f5e7f1d39cf05ae599c2d8a378a6",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-rope-nets.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-snow-rocks",
+      "path": "assets/ui/generated/prop-snow-rocks.webp",
+      "kind": "prop",
+      "bytes": 75442,
+      "sha256": "ae8dbf1e3317b9ad84132ae5cfc6ac05e0049a2b33eab4263012c7c254e84276",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-snow-rocks.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-stone-pillar",
+      "path": "assets/ui/generated/prop-stone-pillar.webp",
+      "kind": "prop",
+      "bytes": 35268,
+      "sha256": "66a8c8cc689b3926d4581c52c6815be8dd7bb6c94e95ebed65c787c03cf75550",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-stone-pillar.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-tree-stump",
+      "path": "assets/ui/generated/prop-tree-stump.webp",
+      "kind": "prop",
+      "bytes": 74228,
+      "sha256": "a4ffdbd6b16ab16c8c4f671c2ba2449588a502eb2d8323df84ededeccfd265e2",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-tree-stump.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "prop-well",
+      "path": "assets/ui/generated/prop-well.webp",
+      "kind": "prop",
+      "bytes": 51504,
+      "sha256": "912b122435bbb2602f3b004affaa36501b4139ab450ebb1d16192bce3abe0293",
+      "dimensions": [
+        512,
+        512
+      ],
+      "synthetic": true,
+      "source_file": "prop-well.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-hero-3",
+      "path": "assets/ui/generated/sprite-hero-3.webp",
+      "kind": "sprite",
+      "bytes": 302010,
+      "sha256": "de54cc8df172b5897c0b4698b5f7480ca725e223cad503caa1cd01631465b1d6",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-hero-3.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "figure-hero-3",
+      "path": "assets/ui/generated/figure-hero-3.webp",
+      "kind": "figure",
+      "bytes": 167810,
+      "sha256": "3a7867b168e258e5555cf38968d7c3c01c9a1262860a11bb73ada1d779bd91d1",
+      "dimensions": [
+        683,
+        1024
+      ],
+      "synthetic": true,
+      "source_file": "figure-hero-3.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "portrait-hero-3-full",
+      "path": "assets/ui/generated/portrait-hero-3-full.webp",
+      "kind": "portrait",
+      "bytes": 418358,
+      "sha256": "ebc814bd334a616539c5641ceca0b9f85ecbe1d8eac569f0c96713e2f5db2491",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "synthetic": true,
+      "source_file": "portrait-hero-3-full.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "portrait-hero-3",
+      "path": "assets/ui/generated/portrait-hero-3.webp",
+      "kind": "portrait",
+      "bytes": 162434,
+      "sha256": "4a9e3f52773f23eac43d22ec386cac18361b6ce43c326c47d0d58ebcba69cf45",
+      "dimensions": [
+        768,
+        768
+      ],
+      "synthetic": true,
+      "source_file": "portrait-hero-3.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
     }
   ]
 }

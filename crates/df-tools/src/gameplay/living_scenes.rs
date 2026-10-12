@@ -341,9 +341,27 @@ fn role_of(role: pack::CastRole) -> CharacterRole {
 fn facts_of(stage: &Stage, social: &SocialLedger) -> SceneFacts {
     pack::with_content(|content| {
         let wanted = stage.scene_asset.trim_start_matches('/');
-        let scene = content.scenes.iter().find(|scene| {
-            scene.asset.trim_start_matches('/') == wanted && scene.title == stage.title
-        });
+        let matches = |scene: &&pack::Scene, asset: &str| {
+            asset.trim_start_matches('/') == wanted && scene.title == stage.title
+        };
+        // The pack's own scenes first, then the scenes a beat script gives its peaceful beats
+        // (their painting may be replaced by the adventure's own art for that variant).
+        let overrides = pack::active().map(|loaded| loaded.script_scene_assets.clone());
+        let scene = content
+            .scenes
+            .iter()
+            .find(|scene| matches(scene, &scene.asset))
+            .or_else(|| {
+                content.beat_script.as_ref().and_then(|script| {
+                    script.scenes.iter().find_map(|(id, scene)| {
+                        let asset = overrides
+                            .as_ref()
+                            .and_then(|assets| assets.get(id))
+                            .unwrap_or(&scene.asset);
+                        matches(&scene, asset).then_some(scene)
+                    })
+                })
+            });
         let Some(scene) = scene else {
             return SceneFacts {
                 place: None,
@@ -710,12 +728,26 @@ impl Inner {
             .map_err(|_| ImageFailure::InvalidRequest)
     }
 
+    /// The art the stage shows for this character: the full-body twin of the cut-out where there
+    /// is one (every non-player character stands with their feet on screen), otherwise the
+    /// cut-out. The expression is made from that art so it replaces it in place, floor contact
+    /// and framing included.
+    async fn load_figure(&self, sprite: &str) -> Result<ReferenceImage, ImageFailure> {
+        let stem = sprite.rsplit('/').next().unwrap_or(sprite);
+        if let Some(name) = stem.strip_prefix("sprite-")
+            && let Ok(figure) = self.load(format!("figure-{name}")).await
+        {
+            return Ok(figure);
+        }
+        self.load(sprite.to_owned()).await
+    }
+
     async fn render_expression(
         &self,
         member: &Member,
         face: Face,
     ) -> Result<ImageKey, ImageFailure> {
-        let sprite = self.load(member.sprite.clone()).await?;
+        let sprite = self.load_figure(&member.sprite).await?;
         let prompt = cast_expression(
             self.rating,
             CharacterFacts {

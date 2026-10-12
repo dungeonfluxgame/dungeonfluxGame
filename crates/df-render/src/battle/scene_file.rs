@@ -14,11 +14,19 @@ use serde::Deserialize;
 use super::{
     camera::{CameraPose, PoseError, ShotName},
     grid::{Cell, Grid, GridError},
+    layout::{Cover, Layout, LayoutError, Obstacle},
     math::Vec3,
+    sound::Surface,
     theme::Theme,
 };
 
-pub const SCHEMA_VERSION: u32 = 1;
+/// The current schema. Version 1 files (no layouts, no surface) still load.
+pub const SCHEMA_VERSION: u32 = 2;
+const OLDEST_SCHEMA_VERSION: u32 = 1;
+/// The grid extent the authored `tactical` and `combat_est` cameras frame without being moved
+/// back; larger grids push those two shots back in proportion.
+const FRAMED_WIDTH_M: f32 = 12.0;
+const FRAMED_DEPTH_M: f32 = 9.0;
 /// The only place a splat scene may be fetched from.
 pub const SPLAT_ROUTE_PREFIX: &str = "/assets/splat/";
 
@@ -34,6 +42,10 @@ pub enum SceneFileError {
     CameraUnknown(String),
     Layer(&'static str),
     Splat(&'static str),
+    Surface(String),
+    /// Layouts or a surface in a version 1 file.
+    NeedsSchemaTwo(&'static str),
+    Layout(LayoutError),
 }
 
 #[derive(Deserialize)]
@@ -49,6 +61,42 @@ struct FileScene {
     cameras: BTreeMap<String, FilePose>,
     #[serde(default)]
     splat: Option<FileSplat>,
+    /// What the ground is made of, for footsteps: `wood`, `dirt` or `stone`.
+    #[serde(default)]
+    surface: Option<String>,
+    #[serde(default)]
+    layouts: Vec<FileLayout>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileLayout {
+    id: String,
+    label: String,
+    #[serde(default)]
+    obstacles: Vec<FileObstacle>,
+    #[serde(default)]
+    difficult: Vec<[i32; 2]>,
+    spawns: FileSpawns,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileObstacle {
+    id: String,
+    kind: String,
+    cells: Vec<[i32; 2]>,
+    blocks_movement: bool,
+    cover: String,
+    sprite: String,
+    height_m: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileSpawns {
+    heroes: Vec<[i32; 2]>,
+    enemies: Vec<[i32; 2]>,
 }
 
 #[derive(Deserialize)]
@@ -170,6 +218,9 @@ pub struct BattleScene {
     pub grid: Grid,
     pub cameras: BTreeMap<ShotName, CameraPose>,
     pub splat: Option<SplatLayer>,
+    pub surface: Surface,
+    /// Empty for a version 1 file, in which case figures stand on the derived formation.
+    pub layouts: Vec<Layout>,
 }
 
 fn stem_ok(stem: &str) -> bool {
@@ -188,8 +239,14 @@ fn positive(value: f32, maximum: f32) -> bool {
 pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
     let file: FileScene =
         serde_json::from_str(json).map_err(|error| SceneFileError::Json(error.to_string()))?;
-    if file.schema != SCHEMA_VERSION {
+    if !(OLDEST_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&file.schema) {
         return Err(SceneFileError::Schema(file.schema));
+    }
+    if file.schema < 2 && !file.layouts.is_empty() {
+        return Err(SceneFileError::NeedsSchemaTwo("layouts"));
+    }
+    if file.schema < 2 && file.surface.is_some() {
+        return Err(SceneFileError::NeedsSchemaTwo("surface"));
     }
     if !stem_ok(&file.location_id) {
         return Err(SceneFileError::Identifier("location_id"));
@@ -251,6 +308,14 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         }
     }
     let splat = file.splat.map(validate_splat).transpose()?;
+    let surface = match file.surface.as_deref() {
+        None => Surface::default(),
+        Some(key) => {
+            Surface::from_key(key).ok_or_else(|| SceneFileError::Surface(key.to_owned()))?
+        }
+    };
+    let layouts = convert_layouts(file.layouts, &grid)?;
+    frame_for_grid(&mut cameras, &grid);
     Ok(BattleScene {
         location_id: file.location_id,
         title: file.title,
@@ -272,7 +337,71 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         grid,
         cameras,
         splat,
+        surface,
+        layouts,
     })
+}
+
+/// Pushes the wide shots back when the grid is bigger than the authored framing covers, so a
+/// 14 by 10 field fits the frame the way an 8 by 6 one does.
+fn frame_for_grid(cameras: &mut BTreeMap<ShotName, CameraPose>, grid: &Grid) {
+    let width = grid.cols() as f32 * grid.cell_m();
+    let depth = grid.rows() as f32 * grid.cell_m();
+    let scale = (width / FRAMED_WIDTH_M)
+        .max(depth / FRAMED_DEPTH_M)
+        .max(1.0);
+    for shot in [ShotName::Tactical, ShotName::CombatEst] {
+        if let Some(pose) = cameras.get_mut(&shot) {
+            pose.distance *= scale;
+        }
+    }
+}
+
+fn convert_layouts(files: Vec<FileLayout>, grid: &Grid) -> Result<Vec<Layout>, SceneFileError> {
+    let cell = |[col, row]: &[i32; 2]| Cell::new(*col, *row);
+    let mut layouts: Vec<Layout> = Vec::with_capacity(files.len());
+    for file in files {
+        if !stem_ok(&file.id) {
+            return Err(SceneFileError::Layout(LayoutError::Identifier(file.id)));
+        }
+        if file.label.trim().is_empty() || file.label.len() > 60 {
+            return Err(SceneFileError::Layout(LayoutError::Identifier(file.label)));
+        }
+        if layouts.iter().any(|known| known.id == file.id) {
+            return Err(SceneFileError::Layout(LayoutError::DuplicateLayout(
+                file.id,
+            )));
+        }
+        let mut obstacles = Vec::with_capacity(file.obstacles.len());
+        for obstacle in file.obstacles {
+            if !stem_ok(&obstacle.id) || !stem_ok(&obstacle.kind) || !stem_ok(&obstacle.sprite) {
+                return Err(SceneFileError::Layout(LayoutError::Identifier(obstacle.id)));
+            }
+            let cover = Cover::from_key(&obstacle.cover).ok_or_else(|| {
+                SceneFileError::Layout(LayoutError::Identifier(obstacle.cover.clone()))
+            })?;
+            obstacles.push(Obstacle {
+                id: obstacle.id,
+                kind: obstacle.kind,
+                cells: obstacle.cells.iter().map(cell).collect(),
+                blocks_movement: obstacle.blocks_movement,
+                cover,
+                sprite: obstacle.sprite,
+                height_m: obstacle.height_m,
+            });
+        }
+        let layout = Layout {
+            id: file.id,
+            label: file.label,
+            obstacles,
+            difficult: file.difficult.iter().map(cell).collect(),
+            heroes: file.spawns.heroes.iter().map(cell).collect(),
+            enemies: file.spawns.enemies.iter().map(cell).collect(),
+        };
+        layout.validate(grid).map_err(SceneFileError::Layout)?;
+        layouts.push(layout);
+    }
+    Ok(layouts)
 }
 
 fn validate_splat(splat: FileSplat) -> Result<SplatLayer, SceneFileError> {
@@ -335,6 +464,38 @@ pub fn embedded_ids() -> impl Iterator<Item = &'static str> {
     EMBEDDED.iter().map(|(id, _)| *id)
 }
 
+/// Which battle scene a fight is staged in, and why if it is not the fight's own location.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SceneChoice {
+    pub scene_id: &'static str,
+    /// `None` when the location has its own scene; otherwise `fallback:<location id>` (or
+    /// `fallback:none` when the view carried no location), recorded on the page for diagnosis.
+    pub fallback_reason: Option<String>,
+}
+
+/// The battle scene for an adventure location id (`GameplayScene.location_id`). Everything
+/// is keyed by the location, never by the painting: the story art for a fight can be any
+/// `scene-place-*` or `scene-dest-*` picture and no longer names the place.
+pub fn resolve_scene(location_id: &str) -> SceneChoice {
+    match embedded_ids().find(|id| *id == location_id) {
+        Some(scene_id) => SceneChoice {
+            scene_id,
+            fallback_reason: None,
+        },
+        None => SceneChoice {
+            scene_id: DEFAULT_SCENE_ID,
+            fallback_reason: Some(format!(
+                "fallback:{}",
+                if location_id.is_empty() {
+                    "none"
+                } else {
+                    location_id
+                }
+            )),
+        },
+    }
+}
+
 /// Loads an embedded scene by location id.
 pub fn load_embedded(location_id: &str) -> Option<Result<BattleScene, SceneFileError>> {
     EMBEDDED
@@ -373,6 +534,42 @@ mod tests {
     }
 
     #[test]
+    fn every_adventure_location_resolves_to_its_own_battle_scene() {
+        let table: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../content/adventure-tables/locations.json"
+        ))
+        .unwrap();
+        let entries = table["tables"]["locations"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 8);
+        for entry in entries {
+            let id = entry["id"].as_str().unwrap();
+            let choice = resolve_scene(id);
+            assert_eq!(choice.scene_id, id);
+            assert_eq!(choice.fallback_reason, None, "{id} must not fall back");
+            assert_eq!(
+                load_embedded(choice.scene_id).unwrap().unwrap().location_id,
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_or_missing_location_falls_back_and_records_why() {
+        let unknown = resolve_scene("moonbase-alpha");
+        assert_eq!(unknown.scene_id, DEFAULT_SCENE_ID);
+        assert_eq!(
+            unknown.fallback_reason.as_deref(),
+            Some("fallback:moonbase-alpha")
+        );
+        let missing = resolve_scene("");
+        assert_eq!(missing.scene_id, DEFAULT_SCENE_ID);
+        assert_eq!(missing.fallback_reason.as_deref(), Some("fallback:none"));
+        // The fight's painting is not a location: a story art stem does not select a scene.
+        let painting = resolve_scene("scene-dest-orrery-library-forecourt");
+        assert!(painting.fallback_reason.is_some());
+    }
+
+    #[test]
     fn embedded_scene_ids_cover_the_location_table() {
         let table = include_str!("../../../../content/adventure-tables/locations.json");
         for id in LOCATIONS {
@@ -393,8 +590,8 @@ mod tests {
     #[test]
     fn unknown_schema_versions_and_fields_are_rejected() {
         assert_eq!(
-            rejects(|v| v["schema"] = 2.into()),
-            SceneFileError::Schema(2)
+            rejects(|v| v["schema"] = 3.into()),
+            SceneFileError::Schema(3)
         );
         assert!(matches!(
             rejects(|v| v["surprise"] = true.into()),
@@ -463,6 +660,157 @@ mod tests {
         assert!(matches!(
             with_splat("https://example.com/x.splat"),
             Err(SceneFileError::Splat(_))
+        ));
+    }
+
+    #[test]
+    fn every_location_has_three_distinct_valid_layouts_that_play_differently() {
+        let mut total = 0;
+        for id in LOCATIONS.into_iter().chain([DEFAULT_SCENE_ID]) {
+            let scene = load_embedded(id).unwrap().unwrap();
+            assert!(
+                scene.layouts.len() >= 3,
+                "{id}: {} layouts",
+                scene.layouts.len()
+            );
+            total += scene.layouts.len();
+            let signature = |layout: &Layout| {
+                let mut cells: Vec<_> = layout
+                    .obstacles
+                    .iter()
+                    .flat_map(|obstacle| obstacle.cells.clone())
+                    .collect();
+                cells.sort();
+                cells
+            };
+            let mut seen = Vec::new();
+            for layout in &scene.layouts {
+                assert!(layout.heroes.len() >= 4 && layout.enemies.len() >= 4);
+                assert_eq!(layout.validate(&scene.grid), Ok(()), "{id}/{}", layout.id);
+                let shape = signature(layout);
+                assert!(
+                    !seen.contains(&shape),
+                    "{id}/{} repeats another layout",
+                    layout.id
+                );
+                seen.push(shape);
+            }
+            let ids: std::collections::BTreeSet<_> = scene.layouts.iter().map(|l| &l.id).collect();
+            assert_eq!(ids.len(), scene.layouts.len(), "{id}: unique layout ids");
+        }
+        assert!(total >= 27);
+    }
+
+    #[test]
+    fn grid_sizes_vary_from_eight_by_six_up_to_fourteen_by_ten() {
+        let sizes: std::collections::BTreeSet<(u32, u32)> = LOCATIONS
+            .into_iter()
+            .chain([DEFAULT_SCENE_ID])
+            .map(|id| {
+                let scene = load_embedded(id).unwrap().unwrap();
+                (scene.grid.cols(), scene.grid.rows())
+            })
+            .collect();
+        assert!(sizes.len() >= 6, "{sizes:?}");
+        assert!(sizes.contains(&(8, 6)) && sizes.contains(&(14, 10)));
+        assert!(
+            sizes
+                .iter()
+                .all(|(c, r)| (8..=14).contains(c) && (6..=10).contains(r))
+        );
+    }
+
+    #[test]
+    fn every_location_declares_its_ground_surface() {
+        let surfaces: Vec<(&str, Surface)> = [
+            ("salt-quay", Surface::Wood),
+            ("reedmoor-boardwalk", Surface::Wood),
+            ("orrery-library", Surface::Wood),
+            ("pinewood-trail", Surface::Dirt),
+            ("thistledown-farm", Surface::Dirt),
+            ("lamplit-market", Surface::Stone),
+            ("rookhill-gate", Surface::Stone),
+            ("windward-pass", Surface::Stone),
+        ]
+        .into();
+        for (id, surface) in surfaces {
+            assert_eq!(load_embedded(id).unwrap().unwrap().surface, surface, "{id}");
+        }
+    }
+
+    #[test]
+    fn the_wide_shots_pull_back_for_bigger_grids_and_not_for_the_authored_size() {
+        let library = load_embedded("orrery-library").unwrap().unwrap();
+        let quay = load_embedded("harbor-journey").unwrap().unwrap();
+        let tactical = |scene: &BattleScene| scene.cameras[&ShotName::Tactical].distance;
+        assert_eq!(tactical(&quay), 15.0);
+        assert!(tactical(&library) > 15.0 * 1.3);
+        let focus = |scene: &BattleScene| scene.cameras[&ShotName::TurnFocus].distance;
+        assert_eq!(
+            focus(&library),
+            focus(&quay),
+            "close shots follow the figure instead"
+        );
+    }
+
+    fn v1() -> serde_json::Value {
+        let mut value = base();
+        value["schema"] = 1.into();
+        let object = value.as_object_mut().unwrap();
+        object.remove("layouts");
+        object.remove("surface");
+        value
+    }
+
+    #[test]
+    fn a_version_one_file_still_loads_with_no_layouts() {
+        let scene = parse(&v1().to_string()).unwrap();
+        assert!(scene.layouts.is_empty());
+        assert_eq!(scene.surface, Surface::Stone);
+    }
+
+    #[test]
+    fn layouts_and_a_surface_need_schema_two() {
+        let mut with_layouts = v1();
+        with_layouts["layouts"] = base()["layouts"].clone();
+        assert_eq!(
+            parse(&with_layouts.to_string()),
+            Err(SceneFileError::NeedsSchemaTwo("layouts"))
+        );
+        let mut with_surface = v1();
+        with_surface["surface"] = "wood".into();
+        assert_eq!(
+            parse(&with_surface.to_string()),
+            Err(SceneFileError::NeedsSchemaTwo("surface"))
+        );
+    }
+
+    #[test]
+    fn a_bad_surface_cover_spawn_or_cut_field_is_rejected() {
+        assert!(matches!(
+            rejects(|v| v["surface"] = "lava".into()),
+            SceneFileError::Surface(_)
+        ));
+        assert!(matches!(
+            rejects(|v| v["layouts"][0]["obstacles"][0]["cover"] = "full".into()),
+            SceneFileError::Layout(LayoutError::Identifier(_))
+        ));
+        assert!(matches!(
+            rejects(|v| v["layouts"][0]["spawns"]["heroes"] = serde_json::json!([[1, 1]])),
+            SceneFileError::Layout(LayoutError::TooFewSpawns(_))
+        ));
+        assert!(matches!(
+            rejects(|v| v["layouts"][1] = v["layouts"][0].clone()),
+            SceneFileError::Layout(LayoutError::DuplicateLayout(_))
+        ));
+        // A full-width wall of crates cuts every hero off from every enemy.
+        let wall: Vec<[i32; 2]> = (0..10).map(|col| [col, 3]).collect();
+        assert!(matches!(
+            rejects(|v| v["layouts"][0]["obstacles"] = serde_json::json!([{
+                "id": "wall", "kind": "crate", "cells": wall, "blocks_movement": true,
+                "cover": "half", "sprite": "prop-crates", "height_m": 1.0
+            }])),
+            SceneFileError::Layout(LayoutError::Unreachable(..))
         ));
     }
 }

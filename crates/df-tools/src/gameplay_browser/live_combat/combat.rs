@@ -487,6 +487,7 @@ pub(super) fn present(
         with_view(&text, |view| surface.update(binding, presentation, view))
             .map_err(|_| render_error(client, "combat-update"))?;
         publish_keyart(&document, surface.root(), text.keyart)?;
+        publish_initiative(&document, surface.root(), role, view)?;
         return Ok(());
     }
     let surface = with_view(&text, |view| {
@@ -509,8 +510,52 @@ pub(super) fn present(
         })
         .map_err(|_| render_error(client, "combat-intent"))?;
     publish_keyart(&document, surface.root(), text.keyart)?;
+    publish_initiative(&document, surface.root(), role, view)?;
     host.insert_before(surface.root(), host.first_child().as_ref())?;
     client.borrow_mut().combat.mounted = Some(Mounted::Combat(Rc::new(surface)));
+    Ok(())
+}
+
+/// The player's own initiative roll, large at the top of the phone's combat screen while the
+/// fight opens ("Initiative 14 + 1 = 15 \u{2014} you act 2nd"). It is an extra child of the
+/// surface root, which the surface never touches; it fades itself out and is removed as soon as
+/// anyone has acted. Nothing is shown when the view carries no recorded roll for the player.
+fn publish_initiative(
+    document: &web_sys::Document,
+    root: &Element,
+    role: &str,
+    view: &LiveView<'_>,
+) -> Result<(), JsValue> {
+    if role != "player" {
+        return Ok(());
+    }
+    let existing = root.query_selector(":scope > .live-initiative")?;
+    let line = view.journey.combat.as_ref().and_then(|combat| {
+        let own = view.journey.own_character.as_ref()?;
+        let opening = combat.outcomes.is_empty() && combat.round <= 1 && !combat.finished;
+        let roll = combat
+            .initiative
+            .iter()
+            .find(|roll| roll.name == own.name)
+            .filter(|_| opening)?;
+        Some(df_render::battle::initiative_line(
+            roll.die,
+            roll.modifier,
+            roll.total,
+            roll.order,
+        ))
+    });
+    match (line, existing) {
+        (Some(line), None) => {
+            let banner = document.create_element("div")?;
+            banner.set_class_name("live-initiative");
+            banner.set_attribute("role", "status")?;
+            banner.set_text_content(Some(&line));
+            root.append_child(&banner)?;
+        }
+        (None, Some(banner)) => banner.remove(),
+        _ => {}
+    }
     Ok(())
 }
 

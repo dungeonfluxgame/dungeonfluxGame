@@ -7,6 +7,7 @@ mod live_exploration;
 mod live_lobby;
 mod live_motion;
 mod live_music;
+mod live_rules;
 mod live_screens;
 mod live_sfx;
 mod live_stage;
@@ -274,7 +275,7 @@ fn operation() -> Result<rpc::OperationId, String> {
 }
 fn request<T>(body: T, credential: &str) -> Result<tonic::Request<T>, String> {
     let mut request = tonic::Request::new(body);
-    request.set_timeout(std::time::Duration::from_secs(5));
+    request.set_timeout(std::time::Duration::from_secs(25));
     request.metadata_mut().insert(
         "x-df-local-binding",
         credential
@@ -439,7 +440,7 @@ fn join_room(client: Rc<RefCell<Client>>) {
                 .max_decoding_message_size(8192)
                 .max_encoding_message_size(8192);
             let mut request = tonic::Request::new(body);
-            request.set_timeout(std::time::Duration::from_secs(5));
+            request.set_timeout(std::time::Duration::from_secs(25));
             let reply = rooms
                 .join(request)
                 .await

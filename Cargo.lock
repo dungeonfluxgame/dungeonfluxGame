@@ -652,6 +652,8 @@ dependencies = [
  "df-content",
  "df-model",
  "df-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -162,8 +162,11 @@ fn list_seeds_for_the_live_conversations() {
         let [patron, _, enemy] = &adventure.dossiers[..] else {
             continue;
         };
-        let withheld =
-            super::npc_dossier::Withheld::new(patron, adventure.pack.secret_terms.clone());
+        let withheld = super::npc_dossier::Withheld::new(
+            patron,
+            adventure.pack.secret_terms.clone(),
+            super::startup_configuration::content_rating(),
+        );
         if patron.starting_attitude == super::adventure::dossier::Attitude::Indifferent
             && withheld
                 .safe_lines(&patron.knowledge.says_when_trusted)
