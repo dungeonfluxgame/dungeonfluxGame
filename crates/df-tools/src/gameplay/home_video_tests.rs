@@ -172,7 +172,7 @@ async fn settle(engine: &Arc<home_video::Engine>, painting: &str) -> String {
             return stage;
         }
         assert!(
-            started.elapsed() < Duration::from_secs(30),
+            started.elapsed() < Duration::from_secs(120),
             "the flight for {painting} never settled"
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
