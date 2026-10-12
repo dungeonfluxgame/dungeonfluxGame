@@ -1,8 +1,8 @@
 use super::{
     ForcedEntries, GenerateOptions, GeneratedAdventure, Tables, TablesError,
     dossier::{
-        AntagonistFact, Binding, CastMember, Dossier, DossierError, DossierFacts, Gender, Group,
-        NpcRole, StakeFact, Topic, mentions_term, roll_dossiers, sentence_count,
+        AntagonistFact, AuthoredLine, Binding, CastMember, Dossier, DossierError, DossierFacts,
+        Gender, Group, NpcRole, StakeFact, Topic, mentions_term, roll_dossiers, sentence_count,
     },
     dossier_render::render_dossier,
     dossier_tables::{DossierTables, FILES},
@@ -113,6 +113,7 @@ fn facts_from(tables: &Tables, adventure: &GeneratedAdventure) -> DossierFacts {
         faction: None,
         secret_id: f["secret.id"].clone(),
         secret_terms: vec![f["secret.fact"].clone(), f["secret.confirm"].clone()],
+        authored: super::dossier_cast::authored_lines(&adventure.pack.scenes),
     }
 }
 /// The same adventure with the campaign layer present: a villain, a faction and a lieutenant.
@@ -312,7 +313,16 @@ fn every_role_gets_a_complete_dossier_for_real_adventures() {
                 assert!(!dossier.story_tie.text.is_empty());
                 assert!(!dossier.knowledge.says_freely.is_empty());
                 assert!(!dossier.knowledge.says_when_trusted.is_empty());
-                assert_eq!(dossier.knowledge.never_says.len(), 2);
+                // The shame and the adventure's secret, then any authored line withheld for a
+                // secret term.
+                let never = &dossier.knowledge.never_says;
+                assert_eq!(never[0].source, "flaw_shame");
+                assert_eq!(never[1].source, "adventure_secret");
+                assert!(
+                    never[2..]
+                        .iter()
+                        .all(|item| item.source.ends_with("_secret"))
+                );
                 assert_eq!(dossier.prepared_answers.len(), Topic::ALL.len());
                 for (topic, answer) in &dossier.prepared_answers {
                     let sentences = sentence_count(answer);
@@ -702,13 +712,147 @@ fn dossiers_round_trip_through_the_adventure_record_format() {
     assert_eq!(dossiers, back);
     assert!(text.contains("\"says_when_trusted\""));
 }
+#[test]
+fn no_speaker_is_ignorant_of_a_line_the_scenes_authored_for_them_across_200_seeds() {
+    let chapter = chapter_tables();
+    let tables = dossier_tables();
+    let mut checked = 0;
+    for index in 0..200 {
+        let generated = adventure(&chapter, seed(index));
+        for facts in [
+            facts_from(&chapter, &generated),
+            campaign_facts(&chapter, &generated),
+        ] {
+            let dossiers = roll_dossiers(&tables, &facts, generated.seed).unwrap();
+            for dossier in &dossiers {
+                for line in facts
+                    .authored
+                    .iter()
+                    .filter(|line| line.speaker == dossier.name)
+                {
+                    checked += 1;
+                    assert!(!line.text.ends_with('?'), "{}", line.text);
+                    let known = dossier
+                        .knowledge
+                        .says_freely
+                        .iter()
+                        .chain(&dossier.knowledge.says_when_trusted)
+                        .map(|item| item.text.as_str())
+                        .chain(
+                            dossier
+                                .knowledge
+                                .never_says
+                                .iter()
+                                .map(|item| item.text.as_str()),
+                        )
+                        .any(|text| text == line.text);
+                    assert!(known, "{} is ignorant of: {}", dossier.name, line.text);
+                }
+            }
+        }
+    }
+    assert!(checked > 200, "only {checked} authored lines were checked");
+}
+
+/// The saved 2026-10-12 run's adventure (Kestrel asks the party to warn Jorun before dawn).
+#[test]
+fn kestrel_of_the_saved_run_knows_who_jorun_is_and_why_dawn_matters() {
+    let chapter = chapter_tables();
+    let tables = dossier_tables();
+    let generated = adventure(&chapter, 0xf4ec_5005_1a50_89bf);
+    let facts = facts_from(&chapter, &generated);
+    let dossiers = roll_dossiers(&tables, &facts, generated.seed).unwrap();
+    let kestrel = dossiers
+        .iter()
+        .find(|dossier| dossier.name == "Kestrel")
+        .expect("the saved run's patron is Kestrel");
+    let freely: Vec<&str> = kestrel
+        .knowledge
+        .says_freely
+        .iter()
+        .map(|item| item.text.as_str())
+        .collect();
+    assert!(
+        freely
+            .iter()
+            .any(|text| text.contains("warn Jorun before dawn")),
+        "{freely:?}"
+    );
+    assert!(
+        freely.iter().any(|text| text.starts_with("Jorun is ")),
+        "{freely:?}"
+    );
+    // The reply-time guard never withholds the names the scenes speak, and the destination
+    // is spoken without its article.
+    let spoken = crate::gameplay::npc_reply::spoken_names(&generated.pack);
+    assert!(spoken.iter().any(|name| name == "Jorun"), "{spoken:?}");
+    assert!(spoken.iter().any(|name| name == "Net Loft"), "{spoken:?}");
+}
+
+#[test]
+fn the_patron_knows_her_errand_from_her_authored_lines_and_the_contact_identity() {
+    let chapter = chapter_tables();
+    let tables = dossier_tables();
+    let generated = adventure(&chapter, 0x3c6e_f378_dd81_de97);
+    let facts = facts_from(&chapter, &generated);
+    let dossiers = roll_dossiers(&tables, &facts, generated.seed).unwrap();
+    let patron = dossiers
+        .iter()
+        .find(|dossier| matches!(dossier.role, NpcRole::Patron))
+        .unwrap();
+    let contact = facts
+        .cast
+        .iter()
+        .find(|member| matches!(member.role, NpcRole::Contact))
+        .unwrap();
+    let freely = &patron.knowledge.says_freely;
+    let identity = freely
+        .iter()
+        .find(|item| item.source == "identity_line")
+        .expect("the patron names who the contact is");
+    assert!(identity.text.contains(&contact.name), "{}", identity.text);
+    assert!(
+        identity.text.contains(&facts.destination),
+        "{}",
+        identity.text
+    );
+    // Every statement the patron makes in an authored scene is something she says freely here.
+    let spoken: Vec<&AuthoredLine> = facts
+        .authored
+        .iter()
+        .filter(|line| line.speaker == patron.name)
+        .collect();
+    assert!(!spoken.is_empty(), "the scenes give the patron lines");
+    for line in spoken {
+        assert!(
+            freely
+                .iter()
+                .any(|item| item.source == "authored_line" && item.text == line.text),
+            "{}",
+            line.text
+        );
+    }
+    // The adventure's own secret never reaches a public tier, however the errand is told.
+    for item in freely {
+        for forbidden in &patron.knowledge.never_says {
+            for term in &forbidden.terms {
+                assert!(!mentions_term(&item.text, term), "{}: {term}", item.text);
+            }
+        }
+    }
+}
+
 /// Prints the sheets the handoff quotes: `cargo test ... print_review_sheets -- --ignored --nocapture`.
 #[test]
 #[ignore = "prints review sheets for people; asserts nothing"]
 fn print_review_sheets() {
     let chapter = chapter_tables();
     let tables = dossier_tables();
-    for seed in [0x3c6ef378dd81de97u64, 0x5816609d5d59f515] {
+    for seed in [
+        0x3c6ef378dd81de97u64,
+        0x5816609d5d59f515,
+        0xf4ec50051a5089bf,
+    ] {
         let generated = adventure(&chapter, seed);
         let facts = facts_from(&chapter, &generated);
         println!(

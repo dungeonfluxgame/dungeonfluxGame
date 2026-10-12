@@ -53,6 +53,8 @@ to do, it nudges toward the offered choices. Plain and brief.";
 pub(super) struct StoryFacts {
     clue: String,
     secret_terms: Vec<String>,
+    /// Names the authored scenes already speak to the whole table; never withheld.
+    public_names: Vec<String>,
     speakers: Vec<SpeakerProfile>,
 }
 
@@ -61,6 +63,7 @@ impl StoryFacts {
         Self {
             clue: pack.courier_clue.clone(),
             secret_terms: pack.secret_terms.clone(),
+            public_names: spoken_names(pack),
             speakers: pack.speakers.clone(),
         }
     }
@@ -405,7 +408,9 @@ fn sanitize_player_words(typed: &str) -> String {
 }
 
 /// The pack's explicit secret terms the whole room has not already seen; a pack that lists none
-/// falls back to the proper names in its clue text.
+/// falls back to the proper names in its clue text. The speakers' names and the destination are
+/// not secret even when the pack lists them: the authored scenes say them aloud, and an NPC
+/// talking about her errand must be able to name them.
 fn unheard_secret_terms(story: &StoryFacts, public: &str) -> Vec<String> {
     if story.secret_terms.is_empty() {
         return secret_terms(&story.clue, public);
@@ -415,8 +420,36 @@ fn unheard_secret_terms(story: &StoryFacts, public: &str) -> Vec<String> {
         .secret_terms
         .iter()
         .filter(|term| !contains_whole_word(&public, &term.to_lowercase()))
+        .filter(|term| {
+            !story
+                .public_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(term))
+        })
         .cloned()
         .collect()
+}
+
+/// The names the authored scenes speak aloud: every speaker and the destination without its
+/// article ("the Net Loft" is spoken as "Net Loft").
+pub(super) fn spoken_names(pack: &PackFile) -> Vec<String> {
+    let mut names: Vec<String> = pack
+        .speakers
+        .iter()
+        .map(|speaker| speaker.name.clone())
+        .collect();
+    if let Some(label) = &pack.destination_label {
+        let article = label
+            .get(..4)
+            .is_some_and(|start| start.eq_ignore_ascii_case("the "));
+        names.push(if article {
+            label[4..].to_owned()
+        } else {
+            label.clone()
+        });
+    }
+    names.retain(|name| !name.trim().is_empty());
+    names
 }
 
 /// Proper names in the clue (runs of capitalized words after the first word of a sentence), minus anything the whole room already sees in `public`.
@@ -775,10 +808,29 @@ mod tests {
     const CLUE: &str = "The courier quietly tells you: the sealed packet is addressed to Vell at the Harbor Inn. Keep its destination between you.";
 
     /// A pack from before the explicit lists: only the clue text is known.
+    #[test]
+    fn the_names_the_scenes_speak_aloud_are_not_withheld_but_the_secret_phrase_still_is() {
+        let story = StoryFacts {
+            clue: CLUE.to_owned(),
+            secret_terms: vec![
+                "Net Loft".to_owned(),
+                "Jorun".to_owned(),
+                "false trail".to_owned(),
+            ],
+            public_names: vec!["Jorun".to_owned(), "Net Loft".to_owned()],
+            speakers: Vec::new(),
+        };
+        assert_eq!(
+            unheard_secret_terms(&story, "A quiet room."),
+            vec!["false trail".to_owned()]
+        );
+    }
+
     fn story() -> StoryFacts {
         StoryFacts {
             clue: CLUE.to_owned(),
             secret_terms: Vec::new(),
+            public_names: Vec::new(),
             speakers: Vec::new(),
         }
     }
@@ -788,6 +840,7 @@ mod tests {
         StoryFacts {
             clue: CLUE.to_owned(),
             secret_terms: vec!["Vell".to_owned(), "Harbor Inn".to_owned()],
+            public_names: Vec::new(),
             speakers: vec![
                 SpeakerProfile {
                     name: "Courier".to_owned(),

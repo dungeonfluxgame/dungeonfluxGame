@@ -856,6 +856,8 @@ fn impact(client: &Rc<RefCell<Client>>, roll: &RollDetail) -> Result<(), JsValue
     if let Some(target) = figures.slot_named(&roll.target) {
         if roll.hit || roll.grazed {
             figures.fx(target, Fx::Hit, Duration::ZERO, 1)?;
+            // PLAY-H01: the shake is sized by the share of the bar the blow took.
+            figures.health_blow(target, roll.damage, roll.critical, false)?;
             let (text, kind) = if roll.critical {
                 (format!("-{}!", roll.damage), FloatKind::Critical)
             } else {

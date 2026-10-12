@@ -124,12 +124,39 @@ The startup line prints both file revisions; departures from SRD values show
 `CUSTOM RULES` there and a `+custom-<revision>` suffix on the in-game rules label.
 Saved games refuse changed revisions; start a new database after editing either file.
 
-For LAN access, set the listen address
-and allowed origin to your machine's IP:
+### Phones on the network (`--lan`, join QR code)
+
+`development/run-gameplay.sh --lan` listens on every interface (`DF_GAMEPLAY_LISTEN=0.0.0.0:63309`
+unless you set it) and works out this machine's LAN address (`ipconfig getifaddr en0`, then
+`en1`). Phones then join through `http://<that address>:63309`. If no LAN address is found the
+server stays on loopback and says so. Without `--lan` nothing changes: the join link is on this
+machine only. PostgreSQL stays bound to loopback either way.
+
+The home screen's "Players join here" panel shows a QR code beside the room code. Scanning it
+opens the join page with the room already filled in; the room code stays on screen for typing.
+During play the shared display shows no join chrome, so late joiners use the room code.
+The server's startup prints `JOIN url=<join link> qr=/gameplay/join-qr.svg`; the QR code itself
+is served at `/gameplay/join-qr.svg`.
+
+The setting behind it, for another address (a router name, or a machine you reach differently):
+
+- `DF_GAMEPLAY_PUBLIC_URL=http://<host>[:port]` is the base address phones use. It must be
+  `http` or `https` with a host and an optional port, and nothing after the port (no path, query
+  or fragment). Anything else refuses startup. Unset, the base is the listener's own address,
+  and a wildcard listener (`0.0.0.0`) is reached through loopback. The public origin is an
+  allowed origin, so a phone on that address is accepted exactly as the loopback origin is.
+  `DF_GAMEPLAY_ALLOWED_ORIGINS` still applies for other origins.
 
 ```sh
-DF_GAMEPLAY_LISTEN=0.0.0.0:63309 DF_GAMEPLAY_ALLOWED_ORIGINS=http://<this-machine-ip>:63309 development/run-gameplay.sh
+DF_GAMEPLAY_PUBLIC_URL=http://192.168.0.24:63309 DF_GAMEPLAY_LISTEN=0.0.0.0:63309 development/run-gameplay.sh
 ```
+
+Who may join: the local preview has no accounts. Anyone on the same network who has the room
+code can join and take a seat. This is a local demonstration, so keep it to a network you trust
+and treat the room code as the only password.
+
+Speech input needs HTTPS or `localhost`: browsers grant the microphone only there. On a plain
+`http://` LAN address a phone can type its lines but cannot speak them (see Speech input below).
 
 ### Content rating (mature by default)
 
@@ -249,7 +276,7 @@ and stop), `&shot=<tactical|combat_est|turn_focus|impact|ko|victory>`, `&orbit`,
 `&cam=<target x,y,z>,<distance>,<yaw>,<pitch>,<fov>` and, for benchmarks, `&fixed` with
 `&budget=<splats>`, `&minc=<min contribution>`, `&sscale=<0.25-1>` and `&rscale=<0.25-1>`; `&fps=<24|30>` sets the
 presentation rate, and `&dbg=<bits>` (with `&fixed`) turns on debugging views: 1 draws the scan without writing
-its depth (shows what occlusion hides), 2 skips the scan, 4 skips the post pass, 8 shows the scan's depth as grey.
+its depth (shows what occlusion hides), 2 skips the scan, 4 skips the post pass, 8 shows the scan's depth as grey, 16 turns off the figures' ground margin.
 
 Fitting a new scan or area is done with the native authoring tool, which reads the finest
 on-disk level, estimates the ground height field from the splats and marks cells a figure cannot

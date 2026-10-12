@@ -21,6 +21,8 @@ use std::{cell::Cell, time::Duration};
 use web_sys::Event;
 
 pub(super) const GENERATED: &str = "/assets/ui/generated";
+// PLAY-Q01: the server's QR code of the join link (see gameplay/join_link.rs).
+const JOIN_QR: &str = "/gameplay/join-qr.svg";
 const PARTY_SLOTS: usize = 2;
 const TAGLINE: &str = "AI dungeon master for fifth-edition fantasy";
 const DM_AVATAR: &str = "/assets/concept-art/dm-avatar.webp";
@@ -52,6 +54,8 @@ pub(super) struct TvModel {
     pub(super) speaker: Option<TvSpeaker>,
     pub(super) room_code: String,
     pub(super) join_label: String,
+    // PLAY-Q01: the host the room code is typed at, named in the join hint.
+    pub(super) join_host: String,
     pub(super) join_path: String,
     pub(super) party: Vec<TvMember>,
     pub(super) art: String,
@@ -120,6 +124,8 @@ pub(super) struct TvStage {
     speaker_line: Element,
     code: Element,
     link: Element,
+    // PLAY-Q01: the join hint, which names the host for the room code.
+    hint: Element,
     roster_slot: Element,
     party_bar: Element,
     party: Element,
@@ -222,7 +228,13 @@ impl TvStage {
         let lobby_row = node(document, &safe, "section", "tv-lobby-row", "")?;
         let join = node(document, &lobby_row, "aside", "tv-panel tv-join", "")?;
         node(document, &join, "div", "tv-label", "Players join here")?;
-        let code_box = node(document, &join, "div", "tv-code-box", "")?;
+        // PLAY-Q01: the code's QR code sits beside the room code on its own light tile.
+        let join_row = node(document, &join, "div", "tv-join-row", "")?;
+        let qr = node(document, &join_row, "figure", "tv-qr", "")?;
+        let qr_image = node(document, &qr, "img", "tv-qr-image", "")?;
+        qr_image.set_attribute("src", JOIN_QR)?;
+        qr_image.set_attribute("alt", "QR code: scan it to open the join page")?;
+        let code_box = node(document, &join_row, "div", "tv-code-box", "")?;
         node(
             document,
             &code_box,
@@ -233,13 +245,7 @@ impl TvStage {
         let code = node(document, &code_box, "div", "tv-code room-code", "")?;
         let link = node(document, &join, "a", "tv-url join-link", "")?;
         link.set_attribute("target", "_blank")?;
-        node(
-            document,
-            &join,
-            "p",
-            "tv-hint",
-            "Open the link on your phone to join",
-        )?;
+        let hint = node(document, &join, "p", "tv-hint", "")?;
         let roster = node(document, &lobby_row, "section", "tv-panel tv-roster", "")?;
         node(document, &roster, "div", "tv-label", "Your party")?;
         let gathered = node(
@@ -328,6 +334,7 @@ impl TvStage {
             speaker_line,
             code,
             link,
+            hint,
             roster_slot,
             party_bar,
             party,
@@ -502,6 +509,11 @@ impl TvStage {
         self.code.set_text_content(Some(&model.room_code));
         self.link.set_text_content(Some(&model.join_label));
         self.link.set_attribute("href", &model.join_path)?;
+        // PLAY-Q01
+        self.hint.set_text_content(Some(&format!(
+            "Scan to join, or enter the room code at {}",
+            model.join_host
+        )));
         match &model.speaker {
             Some(speaker) if !lobby => {
                 set_hidden(&self.speaker, false)?;

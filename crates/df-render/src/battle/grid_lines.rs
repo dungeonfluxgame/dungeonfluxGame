@@ -144,6 +144,24 @@ pub fn grid_words(
     words
 }
 
+/// How far along the line of sight (metres from the eye) a figure standing on the play plane is
+/// tested for depth: its own distance, or where the line of sight crosses `margin_m` above the
+/// plane if that is nearer. Ground up to the margin never hides the figure; taller things in front
+/// of it still do. This is the CPU twin of `standing_depth` in the shaders, kept for testing.
+pub fn standing_distance_m(
+    eye_height_m: f32,
+    plane_m: f32,
+    margin_m: f32,
+    direction_y: f32,
+    own_distance_m: f32,
+) -> f32 {
+    if direction_y < -0.0001 {
+        own_distance_m.min((eye_height_m - (plane_m + margin_m)) / -direction_y)
+    } else {
+        own_distance_m
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +241,40 @@ mod tests {
         const { assert!(HIGHLIGHT_BOOST > 1.0) };
         const { assert!(CENTRE_FADE_START_M < CENTRE_FADE_END_M) };
         const { assert!(QUAD_MARGIN_M > HALO_WIDTH_M * 2.0) };
+    }
+
+    #[test]
+    fn standing_figures_are_pulled_forward_at_the_feet_only() {
+        // Camera 10 m up looking down 30 degrees at a figure 20 m away along the line of sight.
+        let direction_y = -(30.0_f32.to_radians()).sin();
+        let eye = 10.0;
+        let own = eye / -direction_y;
+        // Feet (height 0): pulled toward the camera by margin / sin(30) = twice the margin.
+        let feet = standing_distance_m(eye, 0.0, 0.6, direction_y, own);
+        assert!((own - feet - 1.2).abs() < 1e-4, "{own} {feet}");
+        // A pixel on the figure 0.6 m up (the margin) or higher is not moved.
+        let head_own = (eye - 1.5) / -direction_y;
+        assert_eq!(
+            standing_distance_m(eye, 0.0, 0.6, direction_y, head_own),
+            head_own
+        );
+        // Without a margin (painted grounds) nothing moves.
+        assert_eq!(standing_distance_m(eye, 0.0, 0.0, direction_y, own), own);
+        // Looking up or level: unchanged.
+        assert_eq!(standing_distance_m(eye, 0.0, 0.6, 0.2, own), own);
+    }
+
+    #[test]
+    fn a_wall_nearer_than_the_margin_crossing_still_hides_the_figure() {
+        let direction_y = -(30.0_f32.to_radians()).sin();
+        let eye = 10.0;
+        let own = eye / -direction_y;
+        let tested = standing_distance_m(eye, 0.0, 0.6, direction_y, own);
+        // Ground at 0.3 m above the plane at this pixel is further than the margin crossing.
+        let ground = (eye - 0.3) / -direction_y;
+        assert!(tested <= ground, "turf does not hide the feet");
+        // A palisade face crossing the line of sight 1.4 m up is nearer: it hides the figure.
+        let palisade = (eye - 1.4) / -direction_y;
+        assert!(palisade < tested, "a tall occluder still hides the feet");
     }
 }
