@@ -9,8 +9,8 @@
 use serde_json::Value;
 
 use super::speech_text::{
-    REPEAT_MIN_WORDS, content_words, coverage, is_denial, normalised, sentence_key, sentences,
-    words,
+    REPEAT_MIN_WORDS, content_sequence, content_words, coverage, is_denial, is_flat_dodge,
+    normalised, sentence_key, sentences, words,
 };
 
 /// The most sentences a spoken reply may have.
@@ -54,6 +54,9 @@ pub(super) struct Transcript {
     pub(super) colour_lines: Vec<String>,
     /// Every line the dossier lets the speaker say freely about themselves and the errand.
     pub(super) own_lines: Vec<String>,
+    /// The standing answer to romance, repeated word for word every time by design: the
+    /// clause-reuse check never flags it. Older records predate it.
+    pub(super) courtship: String,
     pub(super) exchanges: Vec<Exchange>,
 }
 
@@ -105,6 +108,11 @@ impl Transcript {
             style_phrases: strings(speaker.get("style_phrases")?),
             colour_lines: strings(speaker.get("colour_lines")?),
             own_lines: strings(speaker.get("own_lines")?),
+            courtship: speaker
+                .get("courtship")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
             exchanges,
         })
     }
@@ -191,11 +199,75 @@ fn finding(check: &'static str, exchange: usize, detail: impl Into<String>) -> F
     }
 }
 
+/// Phrases by which a reply reads the phone's menu aloud instead of answering in character.
+const MENU_PATTERNS: [&str; 5] = [
+    "ask me what troubles me",
+    "ask what troubles me",
+    "offer your help",
+    "ask me about this place",
+    "what to click",
+];
+
+/// What the exchange's menu offered, as the recorded facts kept it.
+fn menu_labels(facts: &Value) -> Vec<String> {
+    facts
+        .get("offered_choices")
+        .map(strings)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|label| words(label).len() >= 2)
+        .collect()
+}
+
+/// The menu wording the reply recites, if any: a recorded choice label or a stock menu
+/// phrase. A person talking names no menus.
+fn menu_recital(reply: &str, facts: &Value) -> Option<String> {
+    for label in menu_labels(facts) {
+        if contains_term(reply, &label) {
+            return Some(label);
+        }
+    }
+    MENU_PATTERNS
+        .iter()
+        .find(|pattern| contains_term(reply, pattern))
+        .map(|pattern| (*pattern).to_owned())
+}
+
+/// Terms of address that wear out: at most about one reply in four may use one.
+const TERMS_OF_ADDRESS: [&str; 4] = ["friend", "chief", "mate", "stranger"];
+/// Content words in a row that make a reused clause.
+const CLAUSE_WORDS: usize = 4;
+
+/// The content-word clauses of `text`, minus the standing courtship answer, which is
+/// repeated word for word every time by design.
+fn fresh_clauses(text: &str, courted: &std::collections::BTreeSet<String>) -> Vec<String> {
+    let mut clauses = Vec::new();
+    for part in sentences(text) {
+        let sequence = content_sequence(&part);
+        if sequence.len() < CLAUSE_WORDS {
+            continue;
+        }
+        for window in sequence.windows(CLAUSE_WORDS) {
+            let clause = window.join(" ");
+            if !courted.contains(&clause) {
+                clauses.push(clause);
+            }
+        }
+    }
+    clauses
+}
+
 /// Runs every check on one conversation.
 pub(super) fn check(transcript: &Transcript) -> Vec<Finding> {
     let mut found = Vec::new();
     let mut seen: Vec<(usize, String)> = Vec::new();
     let mut admissions = 0;
+    let mut heard: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let courted: std::collections::BTreeSet<String> = content_sequence(&transcript.courtship)
+        .windows(CLAUSE_WORDS)
+        .map(|window| window.join(" "))
+        .collect();
+    let mut addressed: [usize; TERMS_OF_ADDRESS.len()] = [0; TERMS_OF_ADDRESS.len()];
     for (index, exchange) in transcript.exchanges.iter().enumerate() {
         let number = index + 1;
         let reply = &exchange.reply;
@@ -218,6 +290,23 @@ pub(super) fn check(transcript: &Transcript) -> Vec<Finding> {
                 format!("{} characters", reply.chars().count()),
             ));
         }
+        if reply.contains(';') {
+            found.push(finding(
+                "literary_punctuation",
+                number,
+                "a semicolon is writing, not talking",
+            ));
+        }
+        if reply.contains(':') {
+            found.push(finding(
+                "literary_punctuation",
+                number,
+                "a colon-led list is writing, not talking",
+            ));
+        }
+        if let Some(menu) = menu_recital(reply, &exchange.facts) {
+            found.push(finding("menu_recital", number, menu));
+        }
         if let Some(first) = parts.first() {
             if is_denial(first) && answer_offered(&exchange.facts) && !transcript.deflects {
                 found.push(finding(
@@ -234,6 +323,26 @@ pub(super) fn check(transcript: &Transcript) -> Vec<Finding> {
             }
         }
         admissions += parts.iter().filter(|part| is_denial(part)).count().min(1);
+        // A flat dodge refuses without saying what is known, guessing, or naming who would
+        // know: in character, specific and once per topic is owed instead.
+        for part in &parts {
+            if is_flat_dodge(part) {
+                found.push(finding("flat_refusal", number, part.clone()));
+            }
+        }
+        // No clause from the speaker's own earlier replies, courtship aside.
+        let clauses = fresh_clauses(reply, &courted);
+        if let Some(clause) = clauses.iter().find(|clause| heard.contains(*clause)) {
+            found.push(finding("repeated_clause", number, clause.clone()));
+        }
+        for clause in clauses {
+            heard.insert(clause);
+        }
+        for (index, term) in TERMS_OF_ADDRESS.iter().enumerate() {
+            if contains_term(reply, term) {
+                addressed[index] += 1;
+            }
+        }
         for part in &parts {
             if words(part).len() >= REPEAT_MIN_WORDS {
                 let key = sentence_key(part);
@@ -302,6 +411,18 @@ pub(super) fn check(transcript: &Transcript) -> Vec<Finding> {
             0,
             format!("{admissions} replies"),
         ));
+    }
+    // A term of address wears out: at most about one reply in four may use one.
+    let replies = transcript.exchanges.len();
+    let allowed = (replies + 3) / 4;
+    for (index, term) in TERMS_OF_ADDRESS.iter().enumerate() {
+        if addressed[index] > allowed {
+            found.push(finding(
+                "overused_address",
+                0,
+                format!("{term} in {} of {replies} replies", addressed[index]),
+            ));
+        }
     }
     if transcript.holds_private_clue
         && !transcript.exchanges.iter().any(|exchange| {

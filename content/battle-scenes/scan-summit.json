@@ -180,8 +180,9 @@
     "orient_deg": [8.98, 0, 18.27],
     "offset_y": -1.31,
     "translate": [4.0, 0.0, 4.1],
-    "levels": [1, 3],
-    "max_splats": 2500000,
+    "levels": [0, 3],
+    "max_splats": 3850000,
+    "detail_radius_m": 6.0,
     "depth_bias_m": 0.6,
     "clip": {
       "above_m": 7.0,

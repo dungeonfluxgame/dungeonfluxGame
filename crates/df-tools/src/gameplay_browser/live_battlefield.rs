@@ -1320,6 +1320,9 @@ pub(super) struct RollSummary {
     pub(super) turn_start: bool,
     /// The cells the attacker walks from and to before this blow, when the turn includes a move.
     pub(super) walk: Option<(GridCell, GridCell)>,
+    /// The target's hit points after this blow, from the outcome itself: the strike shows
+    /// exactly this when it lands, never the newest view's later state.
+    pub(super) target_hp_after: u32,
     pub(super) card: Option<RollCard>,
 }
 
@@ -1364,6 +1367,15 @@ struct Live {
     shown_prompt: Option<String>,
     /// When `pending_cues` last grew, so a cue stream that never arrives cannot hold the label.
     pending_at: f64,
+    /// The line the conductor is playing (label, text), kept so a line that opens before the
+    /// stage mounts still lands on the loading splash once it does.
+    pending_caption: Option<(String, String)>,
+    /// The last beat sequence the display finished presenting: the feed is truncated to it,
+    /// so health cards and downed poses never show a blow that has not landed on screen.
+    presented_seq: u64,
+    /// Per resolved outcome `(sequence, target name, damage, hit points after)`, oldest
+    /// first: what the truncation winds the newest view's hit points back from.
+    beat_hp: Vec<(u64, String, u32, u32)>,
 }
 
 thread_local! {
@@ -1385,6 +1397,9 @@ thread_local! {
         reaction: None,
         shown_prompt: None,
         pending_at: 0.0,
+        pending_caption: None,
+        presented_seq: 0,
+        beat_hp: Vec::new(),
     });
 }
 
@@ -1463,7 +1478,7 @@ fn layout_key(view: &LiveView<'_>, snapshot: &CombatSnapshot) -> String {
 
 /// SWITCH POINT (content rating). `mature` unless the page says `restrained` (the server's
 /// `DF_GAMEPLAY_CONTENT_RATING` setting will write `data-content-rating` on the document element).
-fn content_rating() -> battle::ContentRating {
+pub(super) fn content_rating() -> battle::ContentRating {
     web_sys::window()
         .and_then(|window| window.document())
         .and_then(|document| document.document_element())
@@ -1480,7 +1495,7 @@ thread_local! {
 }
 
 /// Copies the server's combat projection into plain data. No outcome is decided here.
-fn voice_set(key: &str) -> Option<battle::VoiceSet> {
+pub(super) fn voice_set(key: &str) -> Option<battle::VoiceSet> {
     use battle::VoiceSet as V;
     match key {
         "hero-male" => Some(V::HeroMale),
@@ -1704,6 +1719,20 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
                 })
                 .collect();
         }
+        if let Some(combat) = &view.journey.combat {
+            live.beat_hp = combat
+                .outcomes
+                .iter()
+                .map(|outcome| {
+                    (
+                        outcome.sequence,
+                        outcome.target_name.clone(),
+                        outcome.damage,
+                        outcome.target_hit_points,
+                    )
+                })
+                .collect();
+        }
         live.latest = Some(snapshot);
         let idle = matches!(live.phase, Phase::Idle);
         if idle {
@@ -1863,6 +1892,10 @@ fn start_mount(
             if available {
                 live.stage = Some(stage);
             }
+            // A line that opened while the stage mounted lands on the splash now.
+            if let (Some(stage), Some((label, text))) = (&live.stage, &live.pending_caption) {
+                stage.set_splash_caption(Some((label, text)));
+            }
             available
         });
         if keep {
@@ -1927,6 +1960,37 @@ fn sync() {
                     .and_then(cell_of)
             {
                 member.cell = Some(cell);
+            }
+        }
+        if !live.begun_live {
+            // One clock: the feed is truncated to the presented sequence. A combatant shows
+            // the hit points of its last presented outcome; with none presented yet, the
+            // damage of its unpresented outcomes is added back. The strike beat itself
+            // carries the exact figure for the moment it lands.
+            let presented_seq = live.presented_seq;
+            for member in &mut shown.members {
+                let mut shown_hp = None;
+                let mut add_back = 0u32;
+                for (sequence, target, damage, after) in &live.beat_hp {
+                    if *target != member.name {
+                        continue;
+                    }
+                    if *sequence <= presented_seq {
+                        shown_hp = Some(*after);
+                    } else {
+                        add_back = add_back.saturating_add(*damage);
+                    }
+                }
+                match shown_hp {
+                    Some(hit_points) => member.hit_points = hit_points,
+                    None if add_back > 0 => {
+                        member.hit_points = member
+                            .hit_points
+                            .saturating_add(add_back)
+                            .min(member.maximum_hit_points);
+                    }
+                    None => {}
+                }
             }
         }
         if live.begun_live {
@@ -2017,6 +2081,13 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                 .map(|at| live.held_moves.remove(at)),
             _ => None,
         };
+        if state == "rolling" {
+            // Counted here, not when the view was accepted: a blow the director's catch-up
+            // rule skips never reaches this stream, so the count always drains back to zero
+            // and the holds below always release.
+            live.pending_cues += 1;
+            live.pending_at = now_ms();
+        }
         if state == "impact" {
             live.pending_cues = live.pending_cues.saturating_sub(1);
             if live.pending_cues == 0 {
@@ -2037,13 +2108,9 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
         else {
             return;
         };
-        let after = guard.latest.as_ref().and_then(|snapshot| {
-            snapshot
-                .members
-                .iter()
-                .find(|member| member.name == roll.target)
-                .map(|member| member.hit_points)
-        });
+        // The outcome's own figure, not the newest snapshot's: later blows may already be
+        // resolved there, and the card must change only when this hit lands.
+        let after = Some(roll.target_hp_after);
         stage.with_stage(|stage| {
             let id_of = |name: &str| {
                 stage
@@ -2062,6 +2129,9 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                     // gave it, then the attack. Dropped, not fatal: the queue is bounded and the
                     // view sync still lands.
                     if roll.turn_start {
+                        // The label names this attacker now, with its card: it must not wait
+                        // behind the previous blow's draining beats.
+                        stage.show_turn_now(Some(attacker.clone()));
                         let _ = stage.stage(Beat::TurnStart {
                             actor: attacker.clone(),
                         });
@@ -2182,6 +2252,45 @@ fn splat_streaming(live: &Live) -> bool {
     })
 }
 
+/// The display finished presenting beat `sequence`: the feed may now show its results.
+/// A change re-syncs once (at most once per beat), so cards land with the beat.
+pub(super) fn set_presented(sequence: u64) {
+    let changed = LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        if sequence <= live.presented_seq {
+            // A new fight restarts the sequence; a lower value with nothing staged is it.
+            if sequence == 0 {
+                live.presented_seq = 0;
+            }
+            return false;
+        }
+        live.presented_seq = sequence;
+        true
+    });
+    if changed {
+        sync();
+    }
+}
+
+/// Whether blows accepted by the cue stream are still waiting to finish on it.
+pub(super) fn has_pending() -> bool {
+    LIVE.with(|live| live.borrow().pending_cues > 0)
+}
+
+/// The coherent catch-up jump: cut every playing and queued stage beat and land on the
+/// newest token state at once, then feed it. Nothing is replayed on any layer.
+pub(super) fn jump_to_latest() {
+    LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        live.pending_cues = 0;
+        live.held_moves.clear();
+        if let Some(stage) = &live.stage {
+            let _cut = stage.with_stage(|stage| stage.skip_to_idle());
+        }
+    });
+    sync();
+}
+
 /// Whether the battlefield is still showing beats (or its effects): the next blow's dice wait.
 pub(super) fn is_busy() -> bool {
     LIVE.with(|live| {
@@ -2212,15 +2321,6 @@ pub(super) fn hold_move(name: &str, from: GridCell) {
 /// Where the newest accepted view stands everyone (see `Live::accepted_cells`).
 pub(super) fn accept_cells(cells: &std::collections::HashMap<String, GridCell>) {
     LIVE.with(|live| live.borrow_mut().accepted_cells.clone_from(cells));
-}
-
-/// `count` outcomes of an accepted view are waiting to be shown one after another.
-pub(super) fn expect_cues(count: usize) {
-    LIVE.with(|live| {
-        let mut live = live.borrow_mut();
-        live.pending_cues += count;
-        live.pending_at = now_ms();
-    });
 }
 
 /// Nothing is waiting any more (a restart, or the fight is over): holds are released.
@@ -2292,10 +2392,25 @@ pub(super) fn end_speech(line_id: u64) {
     });
 }
 
+/// The line the conductor is playing, for the fight's loading splash: the newest opened line
+/// (the Dungeon Master label or the speaker's name with the words) shows below the progress
+/// bar until the line closes or the splash goes. A no-op without a stage; the battlefield's
+/// own bubbles open only once figures stand, so nothing ever doubles.
+pub(super) fn splash_caption(label: &str, text: &str, showing: bool) {
+    LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        live.pending_caption = showing.then(|| (label.to_owned(), text.to_owned()));
+        if let Some(stage) = &live.stage {
+            stage.set_splash_caption(if showing { Some((label, text)) } else { None });
+        }
+    });
+}
+
 fn reset_fight(live: &mut Live) {
     live.accepted_cells.clear();
     live.reaction = None;
     live.shown_prompt = None;
+    live.pending_caption = None;
     live.held_moves.clear();
     live.pending_cues = 0;
     live.initiative_pending = false;

@@ -1,13 +1,13 @@
 //! The held file is the capability. Dropping it never retires an ambiguous record.
+use crate::file_identity::{self, FileIdentity, same};
 use std::{
     env,
     error::Error,
     ffi::OsString,
     fmt,
-    fs::{self, File, Metadata, OpenOptions},
+    fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     net::SocketAddr,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -139,28 +139,25 @@ impl PreviewConfiguration {
             return Err(PreviewError::InvalidLabel("native build ID"));
         }
         let root = canonical_directory(&self.root)?;
-        if root != self.root || !attempt_root(&root, &self.attempt)? {
+        if !file_identity::canonical_equals(&root, &self.root)
+            || !attempt_root(&root, &self.attempt)?
+        {
             return Err(PreviewError::InvalidRoot);
         }
         let web_root = canonical_directory(&web_root)?;
         if web_root.starts_with(&root) || root.starts_with(&web_root) {
             return Err(PreviewError::InvalidRoot);
         }
-        let root_identity = fs::metadata(&root)?;
+        let root_identity = file_identity::snapshot_path(&root)?;
         let record = self.record(address, &web_root, native_build)?;
         let path = root.join(RECORD_NAME);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)?;
+        let mut file = file_identity::create_record_exclusive(&path)?;
         // Any partial write remains ambiguous; startup never announces readiness.
         file.write_all(&record)?;
         file.sync_all()?;
-        let file_identity = file.metadata()?;
-        if !same_file(&root_identity, &fs::metadata(&root)?)
-            || !same_file(&file_identity, &fs::symlink_metadata(&path)?)
+        let file_identity = file_identity::snapshot_file(&file)?;
+        if !same(&root_identity, &file_identity::snapshot_path(&root)?)
+            || !same(&file_identity, &file_identity::snapshot_path(&path)?)
         {
             return Err(PreviewError::RecordChanged);
         }
@@ -228,38 +225,31 @@ fn attempt_root(root: &Path, attempt: &str) -> Result<bool, PreviewError> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| workspace.join("artifacts"));
     let temporary_root = artifacts.join("tmp");
-    if fs::canonicalize(&temporary_root)? != temporary_root {
+    let canonical_temporary = fs::canonicalize(&temporary_root)?;
+    if !file_identity::canonical_equals(&canonical_temporary, &temporary_root) {
         return Ok(false);
     }
-    let namespace = temporary_root.join(attempt);
+    // Compare in canonical form on every platform: `root` arrives canonicalized,
+    // which is the verbatim form on Windows.
+    let namespace = canonical_temporary.join(attempt);
     if root == namespace || !root.starts_with(&namespace) {
         return Ok(false);
     }
     for directory in [namespace.as_path(), root] {
-        let metadata = fs::symlink_metadata(directory)?;
-        if !metadata.is_dir() || metadata.mode() & 0o777 != 0o700 {
+        let identity = file_identity::snapshot_path(directory)?;
+        if !identity.is_dir() || !identity.mode_equals(0o700) {
             return Ok(false);
         }
     }
     Ok(true)
 }
 
-fn same_file(expected: &Metadata, observed: &Metadata) -> bool {
-    observed.is_file() == expected.is_file()
-        && observed.is_dir() == expected.is_dir()
-        && !observed.file_type().is_symlink()
-        && expected.dev() == observed.dev()
-        && expected.ino() == observed.ino()
-        && expected.uid() == observed.uid()
-        && expected.mode() == observed.mode()
-}
-
 // No Clone and no Drop deletion: only an orderly serving scope may consume this.
 pub(super) struct PreviewRegistration {
     file: File,
     path: PathBuf,
-    root_identity: Metadata,
-    file_identity: Metadata,
+    root_identity: FileIdentity,
+    file_identity: FileIdentity,
     record: Vec<u8>,
 }
 
@@ -273,19 +263,19 @@ impl PreviewRegistration {
 
     fn release_file(mut self) -> Result<(), PreviewError> {
         let root = self.path.parent().ok_or(PreviewError::InvalidRoot)?;
-        if fs::canonicalize(root)? != root
-            || !same_file(&self.root_identity, &fs::symlink_metadata(root)?)
+        if !file_identity::canonical_equals(&fs::canonicalize(root)?, root)
+            || !same(&self.root_identity, &file_identity::snapshot_path(root)?)
         {
             return Err(PreviewError::RecordChanged);
         }
-        let observed = match fs::symlink_metadata(&self.path) {
-            Ok(metadata) => metadata,
+        let observed = match file_identity::snapshot_path(&self.path) {
+            Ok(identity) => identity,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Err(PreviewError::RecordMissing);
             }
             Err(error) => return Err(error.into()),
         };
-        if !same_file(&self.file_identity, &observed) || observed.len() > RECORD_LIMIT as u64 {
+        if !same(&self.file_identity, &observed) || observed.len() > RECORD_LIMIT as u64 {
             return Err(PreviewError::RecordChanged);
         }
         self.file.seek(SeekFrom::Start(0))?;
@@ -296,7 +286,10 @@ impl PreviewRegistration {
         // Exact equality recognizes only the finite, validated serialization that
         // this capability wrote. Trailing, malformed, or changed fields all refuse.
         if record != self.record
-            || !same_file(&self.file_identity, &fs::symlink_metadata(&self.path)?)
+            || !same(
+                &self.file_identity,
+                &file_identity::snapshot_path(&self.path)?,
+            )
         {
             return Err(PreviewError::RecordChanged);
         }
@@ -308,10 +301,10 @@ impl PreviewRegistration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        os::unix::fs::{DirBuilderExt, symlink},
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // Symlink and mode assertions are Unix-only cases.
+    #[cfg(unix)]
+    use std::os::unix::fs::{DirBuilderExt, symlink};
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
 
@@ -321,7 +314,15 @@ mod tests {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        // Directory modes are a Unix-only property.
+        #[cfg(unix)]
+        {
+            fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            fs::DirBuilder::new().create(&root).unwrap();
+        }
         root
     }
 
@@ -441,7 +442,14 @@ mod tests {
 
     #[test]
     fn identical_replacement_missing_symlink_and_drop_stay_ambiguous() {
-        for kind in ["replacement", "missing", "symlink", "drop", "root"] {
+        // The symlink swap and the root swap (a directory rename while the
+        // record file is open) are Unix-only cases; the other swaps keep
+        // running on Windows.
+        #[cfg(unix)]
+        let kinds = ["replacement", "missing", "symlink", "drop", "root"];
+        #[cfg(not(unix))]
+        let kinds = ["replacement", "missing", "drop"];
+        for kind in kinds {
             let root = root();
             let owner = registration(&root);
             let path = root.join(RECORD_NAME);
@@ -453,13 +461,18 @@ mod tests {
             }
             if kind == "root" {
                 fs::rename(&root, root.with_extension("old")).unwrap();
+                // Directory modes are a Unix-only property.
+                #[cfg(unix)]
                 fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+                #[cfg(not(unix))]
+                fs::DirBuilder::new().create(&root).unwrap();
                 fs::write(&path, &record).unwrap();
             } else {
                 fs::remove_file(&path).unwrap();
                 if kind == "replacement" {
                     fs::write(&path, &record).unwrap();
                 }
+                #[cfg(unix)]
                 if kind == "symlink" {
                     let target = root.join("foreign");
                     fs::write(&target, &record).unwrap();
@@ -500,17 +513,21 @@ mod tests {
             );
             assert!(!root.join(RECORD_NAME).exists());
         }
-        let alias = root.with_extension("alias");
-        symlink(&root, &alias).unwrap();
-        assert!(
-            configuration(alias)
-                .register_file(
-                    PathBuf::from(env!("CARGO_MANIFEST_DIR")),
-                    "127.0.0.1:43195".parse().unwrap(),
-                    "native"
-                )
-                .is_err()
-        );
+        // Registering through a symlinked root is a Unix-only case.
+        #[cfg(unix)]
+        {
+            let alias = root.with_extension("alias");
+            symlink(&root, &alias).unwrap();
+            assert!(
+                configuration(alias)
+                    .register_file(
+                        PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+                        "127.0.0.1:43195".parse().unwrap(),
+                        "native"
+                    )
+                    .is_err()
+            );
+        }
         let mut wrong_owner = configuration(root.clone());
         wrong_owner.attempt = "foreign".into();
         assert!(
@@ -525,6 +542,8 @@ mod tests {
         assert!(!root.join(RECORD_NAME).exists());
     }
 
+    // POSIX `/`-rooted paths are not absolute on Windows.
+    #[cfg(unix)]
     #[test]
     fn utf8_path_limit_is_measured_before_debug_escaping() {
         let at_limit = format!("/{}", "x".repeat(4095));
@@ -533,6 +552,8 @@ mod tests {
         assert!(path_text(Path::new("relative")).is_err());
     }
 
+    // The 16 KiB boundary math assumes POSIX `/`-rooted paths and escaping.
+    #[cfg(unix)]
     #[test]
     fn serialized_record_accepts_exactly_16_kib_and_refuses_one_more_byte() {
         let configuration = configuration(PathBuf::from(format!("/{}", "\\".repeat(4095))));

@@ -26,6 +26,15 @@ export TMPDIR=${DUNGEONFLUX_TMP_ROOT:-$ARTIFACT_ROOT/tmp/play}
 export PATH="$CARGO_HOME/bin:$PATH"
 PG=${DUNGEONFLUX_POSTGRES_BIN:-$ARTIFACT_ROOT/build/postgres-g05/install/bin}
 PLAY="$ARTIFACT_ROOT/tmp/play"
+RUN_DIR="$PLAY/run"
+STOP_FILE="$RUN_DIR/stop.request"
+# Windows under Git Bash reports MINGW64/MSYS/CYGWIN here; the game and
+# PostgreSQL binaries are native Windows programs with a `.exe` suffix.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) WINDOWS=1 ;;
+  *) WINDOWS=0 ;;
+esac
+if test "$WINDOWS" -eq 1; then EXE=.exe; else EXE=; fi
 # Storyteller (text model): export only OPENAI_API_KEY from the gitignored .env, never echoed.
 if test -z "${OPENAI_API_KEY:-}" && test -f "$ROOT/.env"; then
   OPENAI_API_KEY=$(sed -n 's/^OPENAI_API_KEY=//p' "$ROOT/.env" | head -n 1 | tr -d "\"'\r")
@@ -91,13 +100,13 @@ if test -n "$CAMPAIGN"; then
   cd "$ROOT"
   if test "$NO_BUILD" -eq 0; then cargo build --offline --locked -j 3 -p df-tools --bin df-transport-fixture; fi
   if test "$CAMPAIGN_STATUS" -eq 1; then
-    "$CARGO_TARGET_DIR/debug/df-transport-fixture" --campaign-status "$CAMPAIGN"
+    "$CARGO_TARGET_DIR/debug/df-transport-fixture$EXE" --campaign-status "$CAMPAIGN"
     exit 0
   fi
   if test -n "$CAMPAIGN_SEED"; then
-    CAMPAIGN_SELECTION=$("$CARGO_TARGET_DIR/debug/df-transport-fixture" --campaign-run "$CAMPAIGN" "$DF_GAMEPLAY_ADVENTURE_TABLES" "$CAMPAIGN_SEED")
+    CAMPAIGN_SELECTION=$("$CARGO_TARGET_DIR/debug/df-transport-fixture$EXE" --campaign-run "$CAMPAIGN" "$DF_GAMEPLAY_ADVENTURE_TABLES" "$CAMPAIGN_SEED")
   else
-    CAMPAIGN_SELECTION=$("$CARGO_TARGET_DIR/debug/df-transport-fixture" --campaign-run "$CAMPAIGN" "$DF_GAMEPLAY_ADVENTURE_TABLES")
+    CAMPAIGN_SELECTION=$("$CARGO_TARGET_DIR/debug/df-transport-fixture$EXE" --campaign-run "$CAMPAIGN" "$DF_GAMEPLAY_ADVENTURE_TABLES")
   fi
   DATABASE=$(printf '%s\n' "$CAMPAIGN_SELECTION" | sed -n '1s/^DATABASE=//p')
   printf '%s\n' "$CAMPAIGN_SELECTION" | sed '1d'
@@ -119,10 +128,23 @@ if test "${#DATABASE}" -gt 63 || test "$DATABASE" = df_gameplay_demo_; then
 fi
 
 if test ! -x "$CARGO_HOME/bin/cargo"; then echo "missing cargo: $CARGO_HOME/bin/cargo" >&2; exit 1; fi
-if ! command -v lsof >/dev/null 2>&1; then echo 'missing lsof: required to check listening ports' >&2; exit 1; fi
+# lsof is absent on Windows, where netstat reports the owning PID instead.
+if command -v lsof >/dev/null 2>&1; then HAVE_LSOF=1; else HAVE_LSOF=0; fi
+if test "$HAVE_LSOF" -eq 0 && ! command -v netstat >/dev/null 2>&1; then
+  echo 'missing lsof and netstat: required to check listening ports' >&2; exit 1
+fi
+port_listener() {
+  # Prints what holds a listening TCP port, or nothing when it is free.
+  if test "$HAVE_LSOF" -eq 1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null || true
+  else
+    netstat -ano 2>/dev/null | grep -E "[:.]$1[[:space:]]" | grep LISTENING || true
+  fi
+}
 if test "$NO_BUILD" -eq 0; then
   if test ! -x "$CARGO_HOME/bin/wasm-bindgen"; then echo "missing wasm-bindgen: $CARGO_HOME/bin/wasm-bindgen" >&2; exit 1; fi
-  WASM_BINDGEN_VERSION=$("$CARGO_HOME/bin/wasm-bindgen" --version)
+  # Native Windows tools print CRLF; strip it before comparing.
+  WASM_BINDGEN_VERSION=$("$CARGO_HOME/bin/wasm-bindgen" --version | tr -d '\r')
   if test "$WASM_BINDGEN_VERSION" != 'wasm-bindgen 0.2.129'; then echo "wrong wasm-bindgen version: expected wasm-bindgen 0.2.129, found $WASM_BINDGEN_VERSION" >&2; exit 1; fi
 fi
 for PG_TOOL in initdb pg_ctl createdb psql pg_isready; do
@@ -134,9 +156,20 @@ done
 if test "$LAN" -eq 1; then
   LAN_ADDRESS=
   if test "${DF_GAMEPLAY_PUBLIC_URL+x}" != x; then
-    LAN_ADDRESS=$(ipconfig getifaddr en0 2>/dev/null || true)
-    if test -z "$LAN_ADDRESS"; then LAN_ADDRESS=$(ipconfig getifaddr en1 2>/dev/null || true); fi
-    if test -z "$LAN_ADDRESS"; then echo 'no LAN address on en0 or en1: the server stays on loopback and phones cannot join' >&2; fi
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*)
+        # First private IPv4 from Windows ipconfig (CRLF stripped).
+        LAN_ADDRESS=$(ipconfig 2>/dev/null | tr -d '\r' | awk '/IPv4 Address/ {print $NF}' | grep -E '^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)' | head -n 1 || true)
+        ;;
+      Linux*)
+        LAN_ADDRESS=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+        ;;
+      *)
+        LAN_ADDRESS=$(ipconfig getifaddr en0 2>/dev/null || true)
+        if test -z "$LAN_ADDRESS"; then LAN_ADDRESS=$(ipconfig getifaddr en1 2>/dev/null || true); fi
+        ;;
+    esac
+    if test -z "$LAN_ADDRESS"; then echo 'no LAN address found: the server stays on loopback and phones cannot join' >&2; fi
   fi
   if test -n "$LAN_ADDRESS" || test "${DF_GAMEPLAY_PUBLIC_URL+x}" = x; then
     if test "${DF_GAMEPLAY_LISTEN+x}" != x; then export DF_GAMEPLAY_LISTEN=0.0.0.0:63309; fi
@@ -149,28 +182,38 @@ fi
 
 LISTEN=${DF_GAMEPLAY_LISTEN:-127.0.0.1:63309}
 GAME_PORT=${LISTEN##*:}
-GAME_HOLDER=$(lsof -nP -iTCP:"$GAME_PORT" -sTCP:LISTEN 2>/dev/null || true)
+GAME_HOLDER=$(port_listener "$GAME_PORT")
 if test -n "$GAME_HOLDER"; then
   echo "game port $GAME_PORT is already in use:" >&2
   echo "$GAME_HOLDER" >&2
   exit 1
 fi
 
-PG_HOLDER=$(lsof -nP -iTCP:55517 -sTCP:LISTEN 2>/dev/null || true)
+PG_HOLDER=$(port_listener 55517)
 PG_ALREADY_RUNNING=0
 if test -n "$PG_HOLDER"; then
-  case "$PG_HOLDER" in
-    *postgres*)
-      if "$PG/pg_ctl" -D "$PLAY/pgdata" status >/dev/null 2>&1; then PG_ALREADY_RUNNING=1
-      else echo 'PostgreSQL port 55517 is held by another process:' >&2; echo "$PG_HOLDER" >&2; exit 1
-      fi
-      ;;
-    *) echo 'PostgreSQL port 55517 is held by another process:' >&2; echo "$PG_HOLDER" >&2; exit 1 ;;
-  esac
+  if test "$HAVE_LSOF" -eq 1; then
+    case "$PG_HOLDER" in
+      *postgres*)
+        if "$PG/pg_ctl" -D "$PLAY/pgdata" status >/dev/null 2>&1; then PG_ALREADY_RUNNING=1
+        else echo 'PostgreSQL port 55517 is held by another process:' >&2; echo "$PG_HOLDER" >&2; exit 1
+        fi
+        ;;
+      *) echo 'PostgreSQL port 55517 is held by another process:' >&2; echo "$PG_HOLDER" >&2; exit 1 ;;
+    esac
+  elif "$PG/pg_ctl" -D "$PLAY/pgdata" status >/dev/null 2>&1; then
+    # netstat names no process, so our own running cluster is the decider.
+    PG_ALREADY_RUNNING=1
+  else
+    echo 'PostgreSQL port 55517 is held by another process:' >&2; echo "$PG_HOLDER" >&2; exit 1
+  fi
 fi
 
 mkdir -p "$TMPDIR" "$PLAY"
 chmod 700 "$PLAY"
+mkdir -p "$RUN_DIR"
+chmod 700 "$RUN_DIR"
+rm -f "$STOP_FILE"
 
 # Home video (PLAY-V10): take only the fal key from the ignored .env, never printing it.
 if test -z "${FAL_KEY:-}" && test -f "$ROOT/.env"; then
@@ -204,7 +247,7 @@ if test "$NO_BUILD" -eq 0; then
   fi
 fi
 
-if test ! -x "$CARGO_TARGET_DIR/debug/df-transport-fixture"; then echo "missing gameplay server binary: $CARGO_TARGET_DIR/debug/df-transport-fixture" >&2; exit 1; fi
+if test ! -x "$CARGO_TARGET_DIR/debug/df-transport-fixture$EXE"; then echo "missing gameplay server binary: $CARGO_TARGET_DIR/debug/df-transport-fixture$EXE" >&2; exit 1; fi
 if test ! -d "$CARGO_TARGET_DIR/play-web" || test -z "$(find "$CARGO_TARGET_DIR/play-web" -type f -print -quit)"; then echo "missing gameplay web files: $CARGO_TARGET_DIR/play-web" >&2; exit 1; fi
 
 SERVER_PID=
@@ -215,7 +258,16 @@ cleanup() {
   if test "$CLEANED" -eq 1; then return; fi
   CLEANED=1
   if test -n "$SERVER_PID" && kill -0 "$SERVER_PID" 2>/dev/null; then
-    kill -INT "$SERVER_PID" 2>/dev/null || true
+    : > "$STOP_FILE"
+    STOP_WAIT=0
+    while kill -0 "$SERVER_PID" 2>/dev/null && test "$STOP_WAIT" -lt 20; do
+      sleep 1
+      STOP_WAIT=$((STOP_WAIT + 1))
+    done
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+      echo 'Graceful stop timed out; hard kill means the game will not be resumable for five minutes.' >&2
+      kill -KILL "$SERVER_PID" 2>/dev/null || true
+    fi
     wait "$SERVER_PID" 2>/dev/null || true
   fi
   if test "$PG_STARTED" -eq 1; then "$PG/pg_ctl" -D "$PLAY/pgdata" -m fast -w stop || true; fi
@@ -233,8 +285,15 @@ if test "$PG_ALREADY_RUNNING" -eq 0; then
   if test ! -d "$PLAY/pgdata"; then
     "$PG/initdb" -D "$PLAY/pgdata" -U df_gameplay_demo_admin_20261004 --auth-host=trust --auth-local=trust -E UTF8 --locale=C
   fi
-  mkdir -p "$PLAY/sock"
-  "$PG/pg_ctl" -D "$PLAY/pgdata" -l "$PLAY/postgres.log" -o "-p 55517 -h 127.0.0.1 -k $PLAY/sock -c max_connections=120" -w start
+  # The game connects over TCP, so on Windows the Unix socket directory is
+  # left out: its path would not survive Git Bash quoting into `-o` anyway.
+  if test "$WINDOWS" -eq 1; then
+    PG_SOCKET_OPTS=
+  else
+    mkdir -p "$PLAY/sock"
+    PG_SOCKET_OPTS=" -k $PLAY/sock"
+  fi
+  "$PG/pg_ctl" -D "$PLAY/pgdata" -l "$PLAY/postgres.log" -o "-p 55517 -h 127.0.0.1$PG_SOCKET_OPTS -c max_connections=120" -w start
   PG_STARTED=1
 fi
 
@@ -255,8 +314,10 @@ elif test "$DF_GAMEPLAY_ADVENTURE" = harbor; then
 else
   echo "To resume this game later: development/run-gameplay.sh --no-build --database $DATABASE"
 fi
-DF_GAMEPLAY_DEMO_DATABASE=$DATABASE "$CARGO_TARGET_DIR/debug/df-transport-fixture" --gameplay-demo "$CARGO_TARGET_DIR/play-web" "$ROOT/assets/ui" &
+DF_GAMEPLAY_DEMO_DATABASE=$DATABASE DF_GAMEPLAY_STOP_FILE="$STOP_FILE" "$CARGO_TARGET_DIR/debug/df-transport-fixture$EXE" --gameplay-demo "$CARGO_TARGET_DIR/play-web" "$ROOT/assets/ui" &
 SERVER_PID=$!
 wait "$SERVER_PID" || SERVER_STATUS=$?
+SERVER_ENDED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+echo "Server ended at $SERVER_ENDED_AT with exit code $SERVER_STATUS"
 SERVER_PID=
 exit "$SERVER_STATUS"

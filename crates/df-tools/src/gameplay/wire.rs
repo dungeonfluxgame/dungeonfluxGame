@@ -808,6 +808,51 @@ pub(super) fn project_journey(
             .into_iter()
             .flat_map(|accepted| accepted.combat)
             .collect::<Vec<_>>();
+        // The Dungeon Master closing line for a finished fight, picked deterministically
+        // from the full recorded history (before the log window below keeps only the last
+        // blows). Victory is every enemy down to zero; anything else finished is a defeat.
+        let finished = encounter.active_turn.is_none();
+        let closing_lines = if finished {
+            let heroes: std::collections::HashSet<&str> =
+                party.iter().map(|member| member.name.as_str()).collect();
+            let mut last_hp: std::collections::HashMap<&str, u32> =
+                std::collections::HashMap::new();
+            let mut attacks = 0u32;
+            let mut kills = 0u32;
+            for outcome in &outcomes {
+                if !matches!(
+                    rpc::OutcomeKind::try_from(outcome.kind),
+                    Ok(rpc::OutcomeKind::Attack | rpc::OutcomeKind::OpportunityAttack)
+                ) {
+                    continue;
+                }
+                attacks += 1;
+                last_hp.insert(outcome.target_name.as_str(), outcome.target_hit_points);
+                if outcome.knocked_out && !heroes.contains(outcome.target_name.as_str()) {
+                    kills += 1;
+                }
+            }
+            let victory = participants
+                .iter()
+                .filter(|member| member.side == 2)
+                .all(|member| last_hp.get(member.name.as_str()).is_some_and(|hp| *hp == 0));
+            super::fight_lines::closing(victory, attacks, kills)
+        } else {
+            Vec::new()
+        };
+        // One clock: every resolved outcome carries its place in the fight's recorded
+        // history (1-based, stable across views because decisions are append-only), so the
+        // display presents beats in exactly this order and the pacing gate can release the
+        // next actor only past beats the table has had time to see.
+        let latest_sequence = u64::try_from(outcomes.len()).unwrap_or(u64::MAX);
+        let outcomes: Vec<rpc::CombatOutcome> = outcomes
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut outcome)| {
+                outcome.sequence = u64::try_from(index).unwrap_or(u64::MAX) + 1;
+                outcome
+            })
+            .collect();
         let (outcomes, move_outcomes, death_save_outcomes) = journey::tactical::split_outcomes(
             outcomes,
             usize::from(super::pack::combat().combat_log_entries),
@@ -826,7 +871,12 @@ pub(super) fn project_journey(
             outcomes,
             move_outcomes,
             death_save_outcomes,
-            finished: encounter.active_turn.is_none(),
+            closing_lines,
+            latest_sequence,
+            // Filled by the pacing gate (`TableLog::attach`) per audience; an unattributed
+            // projection (tests) reads as fully released.
+            released_sequence: latest_sequence,
+            finished,
             source_revision: model::source_revision(),
             active_participant_id: encounter
                 .active_turn

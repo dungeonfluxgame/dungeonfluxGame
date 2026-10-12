@@ -74,7 +74,6 @@ fn validate_qualification_root(
     base: &std::path::Path,
     supplied: Option<&std::ffi::OsStr>,
 ) -> Result<std::path::PathBuf, io::Error> {
-    use std::os::unix::fs::PermissionsExt;
     let supplied = supplied
         .and_then(std::ffi::OsStr::to_str)
         .ok_or_else(|| io::Error::other("courier NPC qualification root missing or non-Unicode"))?;
@@ -92,22 +91,15 @@ fn validate_qualification_root(
     required(
         base.is_absolute()
             && candidate.parent() == Some(base)
-            && supplied == format!("{}/{name}", base.display())
+            && supplied == format!("{}{}{}", base.display(), std::path::MAIN_SEPARATOR, name)
             && !digits.is_empty()
             && digits.len() <= 4
             && digits.bytes().all(|byte| byte.is_ascii_digit())
             && (1..=9999).contains(&attempt),
     )?;
-    let base_metadata = std::fs::symlink_metadata(base)?;
-    let candidate_metadata = std::fs::symlink_metadata(candidate)?;
-    required(
-        base_metadata.is_dir()
-            && !base_metadata.file_type().is_symlink()
-            && base_metadata.permissions().mode() & 0o777 == 0o700
-            && candidate_metadata.is_dir()
-            && !candidate_metadata.file_type().is_symlink()
-            && candidate_metadata.permissions().mode() & 0o777 == 0o700,
-    )?;
+    let base_identity = crate::file_identity::snapshot_path(base)?;
+    let candidate_identity = crate::file_identity::snapshot_path(candidate)?;
+    required(base_identity.is_private_dir() && candidate_identity.is_private_dir())?;
     Ok(candidate.to_path_buf())
 }
 
@@ -917,10 +909,12 @@ pub(super) fn closed(phase: Phase, remaining: u16) -> Result<(), io::Error> {
 #[cfg(test)]
 mod path_admission_tests {
     use super::validate_qualification_root;
-    use std::{
-        ffi::{OsStr, OsString},
-        os::unix::fs::{PermissionsExt, symlink},
-    };
+    use std::ffi::{OsStr, OsString};
+    // Directory modes and symlinks are Unix-only cases.
+    #[cfg(unix)]
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStringExt;
 
     #[test]
     fn only_existing_private_direct_attempt_children_are_admitted() {
@@ -934,10 +928,13 @@ mod path_admission_tests {
         );
         let base = std::env::temp_dir().join(unique);
         std::fs::create_dir(&base).unwrap();
+        // Directory modes are a Unix-only property.
+        #[cfg(unix)]
         std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
         for name in ["attempt-03", "attempt-04"] {
             let child = base.join(name);
             std::fs::create_dir(&child).unwrap();
+            #[cfg(unix)]
             std::fs::set_permissions(&child, std::fs::Permissions::from_mode(0o700)).unwrap();
             assert_eq!(
                 validate_qualification_root(&base, Some(child.as_os_str())).unwrap(),
@@ -946,6 +943,7 @@ mod path_admission_tests {
         }
         let nested = base.join("other");
         std::fs::create_dir(&nested).unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o700)).unwrap();
         let wrong_parent = nested.join("attempt-03");
         std::fs::create_dir(&wrong_parent).unwrap();
@@ -968,14 +966,25 @@ mod path_admission_tests {
         assert!(
             validate_qualification_root(&base, Some(base.join("attempt-05").as_os_str())).is_err()
         );
-        symlink(base.join("attempt-03"), base.join("attempt-06")).unwrap();
-        assert!(
-            validate_qualification_root(&base, Some(base.join("attempt-06").as_os_str())).is_err()
-        );
+        // The symlinked child is a Unix-only case.
+        #[cfg(unix)]
+        {
+            symlink(base.join("attempt-03"), base.join("attempt-06")).unwrap();
+            assert!(
+                validate_qualification_root(&base, Some(base.join("attempt-06").as_os_str()))
+                    .is_err()
+            );
+        }
         assert!(validate_qualification_root(&base, None).is_err());
         assert!(validate_qualification_root(&base, Some(OsStr::new(""))).is_err());
+        // Non-Unicode input is built per platform: an invalid UTF-8 byte on
+        // Unix, a lone surrogate on Windows.
+        #[cfg(unix)]
         use std::os::unix::ffi::OsStringExt;
+        #[cfg(unix)]
         let non_unicode = OsString::from_vec(vec![0xff]);
+        #[cfg(windows)]
+        let non_unicode = OsString::from_wide(&[0xD800]);
         assert!(validate_qualification_root(base.as_path(), Some(&non_unicode)).is_err());
         std::fs::remove_dir_all(&base).unwrap();
     }

@@ -28,6 +28,7 @@ fn transcript(exchanges: Vec<Exchange>) -> Transcript {
         style_phrases: Vec::new(),
         colour_lines: Vec::new(),
         own_lines: Vec::new(),
+        courtship: String::new(),
         exchanges,
     }
 }
@@ -122,7 +123,8 @@ fn a_sentence_said_twice_in_one_conversation_is_found() {
         ),
     ]);
     let findings = check(&repeated);
-    assert_eq!(checks_of(&findings), ["repeated_sentence"]);
+    // A repeated sentence repeats its clauses too: both findings fire.
+    assert_eq!(checks_of(&findings), ["repeated_clause", "repeated_sentence"]);
     assert_eq!(findings[0].exchange, 2);
 }
 
@@ -287,12 +289,13 @@ fn the_recorded_conversations_after_the_fix_hold_every_hard_rule() {
     // set, since a reader judges them; every other rule must hold in every conversation.
     let mut soft = 0;
     let mut fallbacks = 0;
+    let mut hard: Vec<String> = Vec::new();
     for (name, conversation) in &after {
         for finding in check(conversation) {
             if matches!(finding.check, "autobiography" | "local_lore_or_saying") {
                 soft += 1;
             } else {
-                panic!("{name}: {finding:?}");
+                hard.push(format!("{name}: {finding:?}"));
             }
         }
         fallbacks += conversation
@@ -301,6 +304,7 @@ fn the_recorded_conversations_after_the_fix_hold_every_hard_rule() {
             .filter(|exchange| !exchange.from_model)
             .count();
     }
+    assert!(hard.is_empty(), "{hard:?}");
     assert!(soft <= 2, "{soft} soft findings");
     assert!(
         fallbacks <= 1,
@@ -355,4 +359,137 @@ fn check_the_transcripts_of_a_live_run() {
         total == 0 || std::env::var("DF_N06_STRICT").is_err(),
         "{total} finding(s)"
     );
+}
+
+#[test]
+fn written_punctuation_in_a_reply_is_found() {
+    let semicolon = transcript(vec![exchange(
+        "Why do you need two strangers?",
+        "I gave my word, and I mean to keep it; a fight avoided is a victory.",
+        with_answer(),
+    )]);
+    assert_eq!(checks_of(&check(&semicolon)), ["literary_punctuation"]);
+
+    let colon = transcript(vec![exchange(
+        "What lies between the gate and Maren?",
+        "Three things, plainly: the road, the gate and the night.",
+        with_answer(),
+    )]);
+    assert_eq!(checks_of(&check(&colon)), ["literary_punctuation"]);
+
+    let spoken = transcript(vec![exchange(
+        "Why do you need two strangers?",
+        "I gave my word. I mean to keep it. Will you walk with me?",
+        with_answer(),
+    )]);
+    assert!(check(&spoken).is_empty());
+}
+
+#[test]
+fn a_reply_that_recites_the_menu_is_found() {
+    let labelled = transcript(vec![exchange(
+        "What is this worth to you? Name your price.",
+        "I will not put a price on a promise. Ask me what troubles me, or offer your help.",
+        json!({"answer_from": ["I will not put a price on a promise."],
+               "offered_choices": ["Ask what troubles me", "Offer your help"]}),
+    )]);
+    assert_eq!(checks_of(&check(&labelled)), ["menu_recital"]);
+
+    let clean = transcript(vec![exchange(
+        "What is this worth to you? Name your price.",
+        "I will not put a price on a promise. Every coin I have is spoken for.",
+        json!({"answer_from": ["I will not put a price on a promise."],
+               "offered_choices": ["Ask what troubles me", "Offer your help"]}),
+    )]);
+    assert!(check(&clean).is_empty());
+}
+
+#[test]
+fn a_flat_dodge_is_found_and_a_reasoned_refusal_is_not() {
+    let dodge = transcript(vec![exchange(
+        "Do you have children? Anyone waiting at home?",
+        "That is a question for another time.",
+        json!({}),
+    )]);
+    assert_eq!(checks_of(&check(&dodge)), ["flat_refusal"]);
+
+    let elsewhere = transcript(vec![exchange(
+        "And your children, what are their names?",
+        "I cannot speak to names. My mind is elsewhere just now.",
+        json!({}),
+    )]);
+    assert_eq!(checks_of(&check(&elsewhere)), ["flat_refusal"]);
+
+    let reasoned = transcript(vec![exchange(
+        "When did you last lie with someone? Be honest with me.",
+        "I buried the one I loved. Do not ask that of me.",
+        json!({}),
+    )]);
+    assert!(check(&reasoned).is_empty());
+}
+
+#[test]
+fn a_clause_lifted_from_an_earlier_reply_is_found() {
+    let repeated = transcript(vec![
+        exchange(
+            "Where is the coffer?",
+            "I keep the coffer wrapped and out of sight.",
+            json!({}),
+        ),
+        exchange(
+            "Show it to me.",
+            "I keep the coffer wrapped and out of sight, I swear.",
+            json!({}),
+        ),
+    ]);
+    let findings = check(&repeated);
+    assert_eq!(checks_of(&findings), ["repeated_clause"]);
+    assert_eq!(findings[0].exchange, 2);
+}
+
+#[test]
+fn the_standing_answer_to_romance_may_repeat_but_nothing_else_may() {
+    let courtship = "I am spoken for and glad of it, truly and always.";
+    let first = "No. I am spoken for and glad of it, truly and always.";
+    let second = "I am spoken for and glad of it, truly and always, I swear.";
+    let mut excused = transcript(vec![
+        exchange("Come with me?", first, json!({})),
+        exchange("Only for a drink?", second, json!({})),
+    ]);
+    excused.courtship = courtship.to_owned();
+    assert!(check(&excused).is_empty());
+
+    let flagged = transcript(vec![
+        exchange("Come with me?", first, json!({})),
+        exchange("Only for a drink?", second, json!({})),
+    ]);
+    let findings = check(&flagged);
+    assert_eq!(checks_of(&findings), ["repeated_clause"]);
+}
+
+#[test]
+fn a_term_of_address_in_more_than_one_reply_in_four_is_found() {
+    let often = transcript(vec![
+        exchange("Where?", "Aye, friend. The road is watched.", json!({})),
+        exchange(
+            "By whom?",
+            "Goblins, friend. More than I can count.",
+            json!({}),
+        ),
+        exchange("Truly?", "Truly. Keep your blade loose, friend.", json!({})),
+        exchange("And then?", "Then we walk, and quickly.", json!({})),
+        exchange("After that?", "After that we rest, if we live.", json!({})),
+    ]);
+    let findings = check(&often);
+    assert_eq!(checks_of(&findings), ["overused_address"]);
+    assert_eq!(findings[0].exchange, 0);
+
+    let sparing = transcript(vec![
+        exchange("Where?", "Aye, friend. The road is watched.", json!({})),
+        exchange("By whom?", "Goblins. More than I can count.", json!({})),
+        exchange("Truly?", "Truly. Keep your blade loose.", json!({})),
+        exchange("And then?", "Then we walk, and quickly.", json!({})),
+        exchange("After that?", "After that we rest, if we live.", json!({})),
+    ]);
+    assert!(check(&sparing).is_empty());
 }

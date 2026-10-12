@@ -50,6 +50,91 @@ const ARROW_STICK_SECONDS: f32 = 0.9;
 pub enum StageError {
     UnknownToken(TokenId),
     QueueFull,
+    /// The beat would move or attack with a figure that is down; bodies do not act.
+    ActorDown(TokenId),
+}
+
+/// The one nominal beat-duration table, read by this stage's own planning constants and
+/// by the server's presentation pacing bound (both targets compile this crate). Each
+/// entry sums the very `director` durations the beat plan is built from, so the bound
+/// cannot drift from what the stage plays; the display's ack is the primary release
+/// signal and these numbers are only the fallback for a missing or frozen display.
+pub mod beat_timing {
+    use super::director::{
+        DICE_READ, DICE_TUMBLE, DRAW_RELEASE, FALL, FALL_DELAY, FINISHING_DELAY,
+        FINISHING_HOLD, FLIGHT, FOCUS_HOLD, FOCUS_PAN, IMPACT_HOLD, LEAN_TOTAL, LUNGE,
+        MAX_APPROACH, MIN_STEP, SETTLE_PAN, STEP, STOP, WINDUP_PUSH,
+    };
+    use std::time::Duration;
+
+    fn ms(duration: Duration) -> u64 {
+        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn walk_pace_ms(squares: u32) -> u64 {
+        if squares == 0 || STEP * squares <= MAX_APPROACH {
+            return ms(STEP);
+        }
+        ms((MAX_APPROACH / squares).max(MIN_STEP))
+    }
+
+    /// A server-resolved move of `squares` cells: frame, walk, settle (`plan_move`).
+    pub fn move_ms(squares: u32) -> u64 {
+        let squares = squares.max(1);
+        ms(FOCUS_PAN + FOCUS_HOLD) + walk_pace_ms(squares) * u64::from(squares) + 400
+            + ms(SETTLE_PAN)
+    }
+
+    /// A turn opening (the lean toward the acting figure) and, the same length, a
+    /// reaction prompt held over the two figures.
+    pub fn turn_ms() -> u64 {
+        ms(LEAN_TOTAL)
+    }
+
+    /// One blow as the adapter stages it: approach (focus pan + wind-up push), strike to
+    /// contact, the impact hold on a hit, the fall when the target drops, and the settle
+    /// back to the wide shot. A dropping blow ends on its finishing hold instead.
+    pub fn blow_ms(ranged: bool, hit: bool, downed: bool) -> u64 {
+        let approach = ms(FOCUS_PAN + WINDUP_PUSH);
+        let (contact, swing_end) = if ranged {
+            let contact = DRAW_RELEASE + FLIGHT;
+            (ms(contact), ms(contact + LUNGE))
+        } else {
+            (ms(super::director::LUNGE_CONTACT), ms(LUNGE))
+        };
+        if downed {
+            return approach + contact + ms(FALL_DELAY + FINISHING_DELAY + FINISHING_HOLD);
+        }
+        approach
+            + swing_end
+            + 220
+            + if hit { ms(IMPACT_HOLD) } else { 0 }
+            + ms(SETTLE_PAN)
+            + 200
+    }
+
+    /// A death saving throw: the die tumbles, is read, and the table takes it in.
+    pub fn death_save_ms() -> u64 {
+        ms(DICE_TUMBLE + DICE_READ + STOP)
+    }
+
+    /// A fall with no finishing treatment (a hero drops): contact to body at rest.
+    pub fn fall_ms() -> u64 {
+        ms(FALL_DELAY + FALL)
+    }
+}
+
+/// The token a beat would move or attack with, when it has one. Turn focus, heals and
+/// initiative have no acting token for this purpose: a downed figure may still be
+/// focused (its death save), healed and struck — it just never acts.
+fn acting_token(beat: &Beat) -> Option<&TokenId> {
+    match beat {
+        Beat::Attack { attacker, .. }
+        | Beat::Approach { attacker, .. }
+        | Beat::Strike { attacker, .. } => Some(attacker),
+        Beat::Move { actor, .. } => Some(actor),
+        Beat::TurnStart { .. } | Beat::Heal { .. } | Beat::Initiative { .. } => None,
+    }
 }
 
 struct Walk {
@@ -632,6 +717,14 @@ impl Stage {
         }
     }
 
+    /// Names the combatant whose turn the cue stream just reached, at once: its label, roll
+    /// card and walk arrive together at the rolling cue, so the label must not wait behind
+    /// the previous blow's draining beats. Later beats restate the same active figure.
+    pub fn show_turn_now(&mut self, active: Option<TokenId>) {
+        self.server_active = active.clone();
+        self.hud.active = active;
+    }
+
     /// A question the server is waiting on, shown where the turn label is; `None` clears it.
     pub fn set_prompt(&mut self, prompt: Option<String>) {
         self.hud.prompt = prompt;
@@ -844,7 +937,10 @@ impl Stage {
             {
                 Some(runtime) => {
                     if runtime.token.cell != incoming.cell {
-                        if had_figures {
+                        // A downed figure is placed, never walked: bodies do not move.
+                        let laid_low = runtime.downed
+                            || incoming.hit_points.is_some_and(|hp| hp.current == 0);
+                        if had_figures && !laid_low {
                             moves.push((incoming.id.clone(), runtime.token.cell, incoming.cell));
                         } else {
                             runtime.position = centre;
@@ -885,6 +981,8 @@ impl Stage {
             }
         }
         for (actor, from, to) in moves {
+            // A figure the newest view lays low never walks: its cell is already the new
+            // one in its token, and `stage` refuses the beat, so it simply lies there.
             let _ = self.stage(Beat::Move { actor, from, to });
         }
     }
@@ -897,6 +995,37 @@ impl Stage {
                 self.tokens[index].hp_hold_s = Some(HP_HOLD_SECONDS);
             }
         }
+    }
+
+    /// Cuts every playing and queued beat and lands on the newest token state at once:
+    /// the display's coherent catch-up jump. Pending hit points and statuses apply here,
+    /// figures fall where the newest view puts them, and the stage is idle afterwards so
+    /// the next token sync lands immediately. Nothing is replayed.
+    pub fn skip_to_idle(&mut self) {
+        self.queue.clear();
+        self.playing = None;
+        self.initiative_playing = false;
+        self.playing_move = false;
+        self.celebration = None;
+        self.pending_roll_card = None;
+        self.hud.roll_card = None;
+        self.floats.clear();
+        self.projectiles.clear();
+        for runtime in &mut self.tokens {
+            runtime.hp_hold_s = None;
+            runtime.walk = None;
+            runtime.anim = None;
+            if let Some(pending) = runtime.pending_hp.take() {
+                runtime.show_hp(Some(pending));
+                runtime.downed = pending.current == 0;
+            }
+            if let Some(status) = runtime.pending_status.take() {
+                runtime.server_status = status;
+            }
+            runtime.position = self.grid.cell_centre(runtime.token.cell);
+        }
+        self.hud.active.clone_from(&self.server_active);
+        self.rest_dirty = true;
     }
 
     /// Queues a resolved beat for staging.
@@ -927,6 +1056,17 @@ impl Stage {
         if let Some(id) = missing {
             return Err(StageError::UnknownToken(id));
         }
+        // A downed figure neither moves nor attacks: a beat that would stage it as the
+        // actor is refused (and counted at play time for beats queued before it fell).
+        // Being struck, healed or focused for its death save is still staged.
+        if let Some(actor) = acting_token(&beat)
+            && self
+                .tokens
+                .iter()
+                .any(|runtime| &runtime.token.id == actor && runtime.downed)
+        {
+            return Err(StageError::ActorDown(actor.clone()));
+        }
         if self.queue.len() >= MAX_QUEUED_BEATS {
             return Err(StageError::QueueFull);
         }
@@ -949,6 +1089,17 @@ impl Stage {
 
     fn start_next(&mut self) {
         while let Some(beat) = self.queue.pop_front() {
+            // A beat queued before its actor fell must not move the body when its turn
+            // comes: drop it here as well as refusing it in `stage`.
+            if let Some(actor) = acting_token(&beat)
+                && self
+                    .tokens
+                    .iter()
+                    .any(|runtime| &runtime.token.id == actor && runtime.downed)
+            {
+                self.dropped_beats += 1;
+                continue;
+            }
             match director::plan(&self.grid, &self.resting_tokens(), &beat) {
                 Ok(timeline) => {
                     self.initiative_playing = matches!(beat, Beat::Initiative { .. });
@@ -998,6 +1149,7 @@ impl Stage {
             self.hud.active.clone_from(&self.server_active);
         }
         self.advance_celebration(real_dt);
+        let showing_beats = self.is_showing_beats();
         let mut footfalls = Vec::new();
         for runtime in &mut self.tokens {
             if runtime.hp_hold_s.is_none() {
@@ -1016,7 +1168,11 @@ impl Stage {
             for _ in 0..advance_runtime(runtime, dt) {
                 footfalls.push(runtime.token.id.clone());
             }
-            if let Some(left) = runtime.hp_hold_s {
+            // The hold's clock runs only while no beats are showing: while earlier
+            // beats play, this blow is still coming, so its bar must not drop early.
+            if !showing_beats
+                && let Some(left) = runtime.hp_hold_s
+            {
                 if left <= dt {
                     // The blow never reached the screen: let the bar catch up with the server.
                     runtime.hp_hold_s = None;
@@ -2557,6 +2713,141 @@ mod tests {
         assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 5);
         run(&mut stage, HP_HOLD_SECONDS + 1.0);
         assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 2);
+    }
+
+    #[test]
+    fn a_held_bar_does_not_expire_while_earlier_beats_are_still_showing() {
+        let mut stage = stage();
+        let enemy = TokenId::new("enemy");
+        stage.hold_hit_points([&enemy]);
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 4), 12),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 2),
+        ]);
+        // A long earlier beat plays: the hold's clock must not run under it, however
+        // long the queue ahead of this blow lasts.
+        stage
+            .stage(Beat::Move {
+                actor: TokenId::new("ally"),
+                from: Cell::new(5, 4),
+                to: Cell::new(5, 2),
+            })
+            .unwrap();
+        run(&mut stage, 2.0);
+        assert!(stage.is_busy());
+        assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 5);
+    }
+
+    #[test]
+    fn a_downed_figure_never_moves_or_attacks_but_can_be_struck_and_healed() {
+        let mut arena = stage();
+        arena.stage(killing_blow()).unwrap();
+        run(&mut arena, 30.0);
+        assert!(figure(&arena, "enemy").downed);
+        let enemy = TokenId::new("enemy");
+        let hero = TokenId::new("hero");
+        assert_eq!(
+            arena.stage(Beat::Move {
+                actor: enemy.clone(),
+                from: Cell::new(4, 1),
+                to: Cell::new(4, 3),
+            }),
+            Err(StageError::ActorDown(enemy.clone()))
+        );
+        assert_eq!(
+            arena.stage(Beat::Attack {
+                attacker: enemy.clone(),
+                target: hero.clone(),
+                result: AttackResult::Miss,
+                target_hit_points_after: None,
+            }),
+            Err(StageError::ActorDown(enemy.clone()))
+        );
+        // Struck and healed remain legal for a body on the ground.
+        assert!(
+            arena
+                .stage(Beat::Strike {
+                    attacker: hero.clone(),
+                    target: enemy.clone(),
+                    result: AttackResult::Miss,
+                    target_hit_points_after: None,
+                })
+                .is_ok()
+        );
+        // A token update that both moves and downs a figure places it without a walk.
+        let mut fresh = stage();
+        fresh.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 4), 12),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(6, 1), 0),
+        ]);
+        assert!(!fresh.is_busy(), "no walk beat for the fallen figure");
+        let fallen = figure(&fresh, "enemy");
+        assert!(fallen.downed);
+    }
+
+    #[test]
+    fn skip_to_idle_lands_every_layer_on_the_newest_state_at_once() {
+        let mut stage = stage();
+        stage.stage(killing_blow()).unwrap();
+        run(&mut stage, 0.5);
+        assert!(stage.is_busy());
+        stage.skip_to_idle();
+        assert!(!stage.is_busy());
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 4), 12),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 0),
+        ]);
+        let enemy = figure(&stage, "enemy");
+        assert_eq!(enemy.hit_points.unwrap().current, 0);
+        assert!(enemy.downed);
+    }
+
+    #[test]
+    fn beat_timing_matches_the_plans_the_stage_actually_plays() {
+        // The nominal table the server's pacing bound reads must stay within a beat's
+        // settle of the timelines this stage plans from the same constants.
+        let stage = stage();
+        let tokens = stage.resting_tokens();
+        let attack = director::plan(
+            &stage.grid,
+            &tokens,
+            &Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Hit {
+                    damage: 2,
+                    critical: false,
+                    downed: false,
+                },
+                target_hit_points_after: Some(3),
+            },
+        )
+        .unwrap();
+        let planned_ms = u64::try_from(attack.duration.as_millis()).unwrap();
+        let nominal_ms = beat_timing::blow_ms(false, true, false);
+        assert!(
+            planned_ms.abs_diff(nominal_ms) <= 1_600,
+            "planned {planned_ms} ms vs nominal {nominal_ms} ms"
+        );
+        let walk = director::plan(
+            &stage.grid,
+            &tokens,
+            &Beat::Move {
+                actor: TokenId::new("ally"),
+                from: Cell::new(5, 4),
+                to: Cell::new(5, 2),
+            },
+        )
+        .unwrap();
+        let planned_ms = u64::try_from(walk.duration.as_millis()).unwrap();
+        assert!(
+            planned_ms.abs_diff(beat_timing::move_ms(2)) <= 600,
+            "planned {planned_ms} ms vs nominal {} ms",
+            beat_timing::move_ms(2)
+        );
     }
 
     #[test]

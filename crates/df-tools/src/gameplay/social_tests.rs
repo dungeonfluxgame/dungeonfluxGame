@@ -448,3 +448,43 @@ fn a_question_at_the_end_of_a_reply_is_remembered_so_the_next_does_not_end_with_
     );
     assert!(ledger.conversation(hero, &dossier, "opening").last_asked);
 }
+
+#[test]
+fn a_snapshot_restores_standings_and_voiced_lines_in_memory_and_in_the_file() {
+    let dossier = patron(Attitude::Indifferent);
+    let directory = directory("snapshot");
+    let ledger =
+        SocialLedger::open(vec![dossier.clone()], "0x01", Some(directory.clone())).unwrap();
+    let hero = member(11);
+    ledger.remember_offered(hero, &dossier, &["line:origin_line".to_owned()]);
+    ledger.save().unwrap();
+    let saved = ledger.snapshot();
+
+    ledger.remember_offered(hero, &dossier, &["line:rumour_line:0".to_owned()]);
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        classify_keywords("Thank you, we will help you."),
+        "Thank you, we will help you.",
+        "Then we have a deal.",
+    );
+    assert_eq!(ledger.voiced_for(hero).len(), 1);
+    assert_eq!(ledger.voiced_for(hero)[0].1.len(), 2);
+
+    ledger.restore_snapshot(&saved).unwrap();
+
+    let told = ledger.voiced_for(hero);
+    assert_eq!(told.len(), 1);
+    assert_eq!(told[0].1, vec!["line:origin_line".to_owned()]);
+    assert_eq!(
+        ledger.standing(hero, &dossier).attitude,
+        Attitude::Indifferent
+    );
+    assert!(ledger.voiced_for(member(12)).is_empty());
+
+    let reloaded =
+        SocialLedger::open(vec![dossier.clone()], "0x01", Some(directory.clone())).unwrap();
+    assert_eq!(reloaded.voiced_for(hero), told);
+    fs::remove_dir_all(directory).unwrap();
+}

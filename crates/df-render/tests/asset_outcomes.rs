@@ -22,6 +22,8 @@ use df_types::{
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
 use std::fs;
+// Scratch directory modes are a Unix-only property.
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -200,7 +202,10 @@ impl Fixture {
             std::process::id(),
             NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
         ));
+        #[cfg(unix)]
         fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        #[cfg(not(unix))]
+        fs::DirBuilder::new().create(&root).unwrap();
         let store = NativeFileStore::new(&root, PNG.len() as u64).unwrap();
         let authority = Authority {
             published: RefCell::new(None),

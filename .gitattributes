@@ -1,0 +1,3 @@
+# Keep text files LF on checkout: a CRLF checkout breaks the development shell
+# scripts and the format gate on Windows.
+* text=auto eol=lf

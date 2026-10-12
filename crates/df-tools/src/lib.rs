@@ -4,9 +4,15 @@ mod browser;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod build_set;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod dev_cli;
+#[cfg(not(target_arch = "wasm32"))]
+mod file_identity;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gameplay;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runtime;
 #[cfg(target_arch = "wasm32")]
 mod gameplay_browser;
 #[cfg(all(target_arch = "wasm32", feature = "public-scene-delivery-fixture"))]
@@ -36,6 +42,9 @@ mod live_art;
 mod plate_layout;
 #[cfg(any(target_arch = "wasm32", test))]
 mod presentation;
+// FIGHT-001: pure dice-face plan shared by the TV overlay and the phone mini, unit-tested.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod dice_roll;
 #[cfg(any(target_arch = "wasm32", test))]
 mod speech_capture;
 // PLAY-H01: the one definition of the health tiers, shared by the server and both clients.

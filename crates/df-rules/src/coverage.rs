@@ -53,6 +53,7 @@ const MAP: &str = "crates/df-rules/src/tactical/map.rs";
 const INVARIANTS: &str = "crates/df-combat/tests/rules_invariants.rs";
 const AUDIT: &str = "crates/df-combat/tests/support/rules_audit.rs";
 const CHECK: &str = "crates/df-rules/src/ability_check.rs";
+const INFLUENCE: &str = "crates/df-rules/src/influence.rs";
 const LOCAL: &str = "crates/df-rules/src/local_journey.rs";
 const CREATURES: &str = "crates/df-rules/src/srd_creatures.rs";
 
@@ -369,13 +370,17 @@ pub const ROWS: &[Row] = &[
     Row {
         planning: "R14",
         family: "Social interaction",
-        rules: No,
+        rules: Yes,
         live: Partial,
-        native_test: Partial,
+        native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "NPC attitude (hostile, indifferent, friendly) and model-written replies exist at the story layer; the Influence action and its checks are not rules in df-rules",
-        evidence: &[],
+        note: "Influence action with willing/hesitant/unwilling, DC 15 or Intelligence, attitude Advantage/Disadvantage, the 24-hour retry wait, an approach-to-skill table and table-ready explanations in df-rules; word quality as an Advantage/Disadvantage source is the disclosed house rule influence.word-quality-advantage; nothing calls it yet, so NPC replies still come from the story layer",
+        evidence: &[
+            (INFLUENCE, "pub fn resolve"),
+            (INFLUENCE, "WORD_QUALITY_RULE_ID"),
+            (INFLUENCE, "APPROACH_SKILLS"),
+        ],
         browser_scripts: &["converse.mjs", "talk.mjs"],
     },
 ];

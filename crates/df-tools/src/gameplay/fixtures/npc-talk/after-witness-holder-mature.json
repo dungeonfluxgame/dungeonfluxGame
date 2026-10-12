@@ -57,7 +57,7 @@
   {
    "n": 1,
    "hero_words": "Kelbin, about what you told me quietly. Say more about it.",
-   "reply": "The coffer must reach Tomas Whitlock at the Windward Waystation. There is a quicker way to finish the journey, through a gap most travelers miss; keep that knowledge between us.",
+   "reply": "The coffer must reach Tomas Whitlock at the Windward Waystation. There is a quicker way to finish the journey, through a gap most travelers miss. Keep that knowledge between us.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -89,7 +89,7 @@
   {
    "n": 3,
    "hero_words": "And the other way you hinted at. How do I find it?",
-   "reply": "Ask whoever you meet on the way after the Windward Waystation by name; a friendly mention opens doors there. I need the iron coffer carried there, and there is no one else I can ask.",
+   "reply": "Ask whoever you meet on the way after the Windward Waystation by name. A friendly mention opens doors there. I need the iron coffer carried there, and there is no one else I can ask.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -122,7 +122,7 @@
   {
    "n": 5,
    "hero_words": "What should I do first?",
-   "reply": "First, pledge your help or press on to the waystation; either way, ask after it by name when you meet someone on the road. There is a quicker route through a gap most travelers miss\u2014shall I tell you how to find it?",
+   "reply": "First, pledge your help or press on to the waystation. Either way, ask after it by name when you meet someone on the road. There is a quicker route through a gap most travelers miss\u2014shall I tell you how to find it?",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",

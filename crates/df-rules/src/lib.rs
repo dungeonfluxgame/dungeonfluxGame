@@ -9,6 +9,7 @@ pub use explanation::RuleExplanation;
 
 pub mod ability_check;
 pub mod current_responses;
+pub mod influence;
 pub mod preconditions;
 
 pub mod local_journey;

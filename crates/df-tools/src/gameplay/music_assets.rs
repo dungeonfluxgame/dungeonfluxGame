@@ -18,16 +18,39 @@ use std::{io, path::Path};
 const MAXIMUM_TRACK_BYTES: u64 = 6 * 1024 * 1024;
 const MIME: &str = "audio/mpeg";
 const CACHE_CONTROL: &str = "public, max-age=3600";
-/// Layers, stingers and ambient beds the music director may ask for.
+/// Layers, stingers and ambient beds the music director may ask for: the main suite, one
+/// alternate take per main-suite layer (`-b`), the battle (`b-`) and finale (`c-`) suites, and
+/// three takes per stinger (`-2`, `-3`). Names and the player scheme live in `music_score`;
+/// a file that is not on disk is simply not served and the browser plays without it.
 const TRACK_NAMES: &[&str] = &[
     "score-bed",
     "score-motif",
     "score-tension",
     "score-combat",
+    "score-bed-b",
+    "score-motif-b",
+    "score-tension-b",
+    "score-combat-b",
+    "b-score-bed",
+    "b-score-motif",
+    "b-score-tension",
+    "b-score-combat",
+    "c-score-bed",
+    "c-score-motif",
+    "c-score-tension",
+    "c-score-combat",
     "sting-reveal",
     "sting-combat",
     "sting-victory",
     "sting-defeat",
+    "sting-reveal-2",
+    "sting-combat-2",
+    "sting-victory-2",
+    "sting-defeat-2",
+    "sting-reveal-3",
+    "sting-combat-3",
+    "sting-victory-3",
+    "sting-defeat-3",
     "amb-harbour",
     "amb-market",
     "amb-forest",
@@ -134,6 +157,27 @@ mod tests {
         assert_eq!(absent.status(), StatusCode::NOT_FOUND);
         let unlisted = get_path(&mut router, "/assets/music/other", HeaderMap::new()).await;
         assert_eq!(unlisted.status(), StatusCode::NOT_FOUND);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn alternate_and_suite_tracks_are_served_when_present_and_skipped_when_absent() {
+        let directory = scratch("alternates");
+        std::fs::write(directory.join("score-motif-b.mp3"), b"alternate take").unwrap();
+        std::fs::write(directory.join("b-score-bed.mp3"), b"battle suite").unwrap();
+        let mut router = router(&directory).unwrap();
+
+        let alternate =
+            get_path(&mut router, "/assets/music/score-motif-b", HeaderMap::new()).await;
+        assert_eq!(alternate.status(), StatusCode::OK);
+        let suite = get_path(&mut router, "/assets/music/b-score-bed", HeaderMap::new()).await;
+        assert_eq!(suite.status(), StatusCode::OK);
+        let not_yet_made =
+            get_path(&mut router, "/assets/music/c-score-bed", HeaderMap::new()).await;
+        assert_eq!(not_yet_made.status(), StatusCode::NOT_FOUND);
+        let base_still_served =
+            get_path(&mut router, "/assets/music/score-bed", HeaderMap::new()).await;
+        assert_eq!(base_still_served.status(), StatusCode::NOT_FOUND);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

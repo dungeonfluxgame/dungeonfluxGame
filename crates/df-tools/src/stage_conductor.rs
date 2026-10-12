@@ -263,6 +263,24 @@ impl<D: Clone> Conductor<D> {
         self.battle
     }
 
+    /// The last beat sequence the cue sequencer finished presenting (one clock).
+    pub(crate) fn presented_sequence(&self) -> u64 {
+        self.director.presented_sequence()
+    }
+
+    /// The recent beat phases with their start and end times, for the debug record.
+    pub(crate) fn beat_log(
+        &self,
+    ) -> &std::collections::VecDeque<crate::stage_director::BeatRecord> {
+        self.director.beat_log()
+    }
+
+    /// The cue sequencer has nothing playing and nothing queued (a Roll waiting for the
+    /// battlefield does not count as idle).
+    pub(crate) fn director_idle(&self) -> bool {
+        self.director.is_idle()
+    }
+
     /// Whether a 3D battlefield will show the next fight (WebGPU is present).
     pub(crate) fn set_battlefield_expected(&mut self, expected: bool) {
         self.battlefield_expected = expected;
@@ -673,10 +691,13 @@ impl<D: Clone> Conductor<D> {
     /// battlefield has shown its finishing shot out (see [`Self::release_exit`]).
     fn submit_outcome(&mut self, now_ms: u64, mut diff: ViewDiff<D>, out: &mut Vec<Command<D>>) {
         if diff.banner.is_some() && diff.scene_changed {
+            let memorable = diff.memorable;
             let blow = ViewDiff {
                 roll: diff.roll.take(),
                 impact: diff.impact.take(),
                 defeat: diff.defeat.take(),
+                memorable,
+                sequence: diff.sequence,
                 ..ViewDiff::default()
             };
             self.held_exit = Some(diff);
@@ -697,7 +718,9 @@ impl<D: Clone> Conductor<D> {
         if self.held_exit.is_none() {
             return;
         }
-        if self.director.state() != StageState::Idle {
+        // Truly idle: `state()` alone reads Idle while the finishing Roll still waits for
+        // the battlefield, which once let the transition and fanfare precede the blow.
+        if !self.director.is_idle() {
             self.exit_waiting_since_ms = None;
             return;
         }
@@ -1012,6 +1035,25 @@ impl<D: Clone> Conductor<D> {
                 detail: run.line.detail.clone(),
             });
         }
+    }
+
+    /// Installs the lines that belong to the beat now starting: a blow's cries when its
+    /// dice roll, the closing line when the banner rises. The beat owns the stage, so a
+    /// line still speaking yields to it; lines of beats that never start are never
+    /// installed, so a skipped blow stays silent.
+    pub(crate) fn install_beat(
+        &mut self,
+        now_ms: u64,
+        script: Vec<ScriptLine<D>>,
+    ) -> Vec<Command<D>> {
+        let mut out = Vec::new();
+        if script.is_empty() {
+            return out;
+        }
+        self.close_all(now_ms, FIGHT_LINE_FADE_MS, &mut out);
+        self.install_more(script, now_ms, &mut out);
+        self.step(now_ms, &mut out);
+        out
     }
 
     fn set_line(
@@ -1673,9 +1715,57 @@ mod tests {
             )
         }
 
+        /// Steps the bare conductor without voice signals.
         fn focus(&self) -> Option<LineState> {
             self.conductor.focus_line().map(|(_, state)| state)
         }
+    }
+
+    #[test]
+    fn beat_lines_open_with_their_beat_and_yield_to_the_next() {
+        let mut conductor = TestConductor::new();
+        conductor.set_sound(false);
+        let _ = conductor.restart(0, plain(Vec::new(), Vec::new()));
+        // Lines of a beat that never starts are never installed: nothing reaches the
+        // screen for a silenced beat.
+        assert!(conductor.install_beat(0, Vec::new()).is_empty());
+        let installed = conductor.install_beat(0, vec![line("first cry", false, None)]);
+        assert!(
+            installed.iter().any(|command| matches!(
+                command,
+                Command::Line {
+                    state: LineState::Opening,
+                    detail: "first cry",
+                    ..
+                }
+            )),
+            "the beat's cry opens with the beat"
+        );
+        // The next beat takes the stage while the first cry is still speaking: the old
+        // line closes and the new one opens, never overlapping.
+        let taken = conductor.install_beat(1_000, vec![line("second cry", false, None)]);
+        assert!(
+            taken.iter().any(|command| matches!(
+                command,
+                Command::Line {
+                    state: LineState::Closing,
+                    detail: "first cry",
+                    ..
+                }
+            )),
+            "the speaking cry yields to the new beat"
+        );
+        assert!(
+            taken.iter().any(|command| matches!(
+                command,
+                Command::Line {
+                    state: LineState::Opening,
+                    detail: "second cry",
+                    ..
+                }
+            )),
+            "the new beat's cry opens"
+        );
     }
 
     fn opening_script() -> Vec<ScriptLine<&'static str>> {

@@ -1088,6 +1088,11 @@ mod tests {
                 .expect("a scan scene has a splat layer");
             assert_eq!(layer.format, SplatFormat::Lod, "{id}");
             assert!(layer.url.ends_with("/v1/lod-meta.json"), "{id}");
+            assert_eq!(
+                layer.levels.map(|(finest, _)| finest),
+                Some(0),
+                "{id} authors its finest tier for LOD 0 play areas"
+            );
             let attribution = scene.attribution.as_ref().expect("scans name their source");
             if scene.distribution == Distribution::PrivateTestOnly {
                 private += 1;

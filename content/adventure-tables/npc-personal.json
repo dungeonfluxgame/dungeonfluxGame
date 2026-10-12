@@ -1,0 +1,127 @@
+{
+  "schema": "df-npc-tables/1",
+  "file": "npc-personal",
+  "description": "Who an NPC is off duty: partner, children, home, service behind the role label, everyday opinions, openness to courtship, lay facts about the errand's own things, and how each other cast member is known. Every entry is one speakable first-person sentence. Slots partner, child, child2, age, age2 name rolled kin; other and other_role name one other cast member. tied-* courtship fits an NPC with a living partner, free-* one without. Martial service entries fit soldier-like role labels, the rest fit everyone else. Original prose.",
+  "tables": {
+    "partner": {"die": 6, "entries": [
+      {"faces": [1, 1], "id": "wed-lodger", "text": "I am married to {partner}, and we keep a room together."},
+      {"faces": [2, 2], "id": "sweetheart", "text": "{partner} and I are sweet on each other, though we keep separate roofs."},
+      {"faces": [3, 3], "id": "promised", "text": "I am promised to {partner}, when this trouble passes."},
+      {"faces": [4, 4], "id": "widowed", "text": "I buried {partner} three winters back. I still set down two cups."},
+      {"faces": [5, 5], "id": "none-loner", "text": "There is no one waiting for me. There never has been."},
+      {"faces": [6, 6], "id": "none-left", "text": "{partner} left years ago, and good riddance. I manage alone."}
+    ]},
+    "children": {"die": 6, "entries": [
+      {"faces": [1, 1], "id": "none", "text": "I have no children. That is the whole of it."},
+      {"faces": [2, 2], "id": "one-small", "text": "I have one, {child}, aged {age}."},
+      {"faces": [3, 3], "id": "one-grown", "text": "{child} is grown and gone, with babes of their own."},
+      {"faces": [4, 4], "id": "two", "text": "Two. {child}, aged {age}, and {child2}, aged {age2}."},
+      {"faces": [5, 5], "id": "lost", "text": "I had a little one once. The fever winter took them."},
+      {"faces": [6, 6], "id": "none-duckling", "text": "No young of my own, but {child} follows me about like a duckling."}
+    ]},
+    "given_names": {"die": 20, "entries": [
+      {"faces": [1, 1], "id": "ada", "speakers": ["person"], "text": "Ada"},
+      {"faces": [2, 2], "id": "bram", "speakers": ["person"], "text": "Bram"},
+      {"faces": [3, 3], "id": "cora", "speakers": ["person"], "text": "Cora"},
+      {"faces": [4, 4], "id": "dunstan", "speakers": ["person"], "text": "Dunstan"},
+      {"faces": [5, 5], "id": "elswyth", "speakers": ["person"], "text": "Elswyth"},
+      {"faces": [6, 6], "id": "fenwick", "speakers": ["person"], "text": "Fenwick"},
+      {"faces": [7, 7], "id": "gisela", "speakers": ["person"], "text": "Gisela"},
+      {"faces": [8, 8], "id": "harlan", "speakers": ["person"], "text": "Harlan"},
+      {"faces": [9, 9], "id": "isla", "speakers": ["person"], "text": "Isla"},
+      {"faces": [10, 10], "id": "merritt", "speakers": ["person"], "text": "Merritt"},
+      {"faces": [11, 11], "id": "nib", "speakers": ["goblinoid"], "text": "Nib"},
+      {"faces": [12, 12], "id": "skree", "speakers": ["goblinoid"], "text": "Skree"},
+      {"faces": [13, 13], "id": "grub", "speakers": ["goblinoid"], "text": "Grub"},
+      {"faces": [14, 14], "id": "snag", "speakers": ["goblinoid"], "text": "Snag"},
+      {"faces": [15, 15], "id": "pob", "speakers": ["goblinoid"], "text": "Pob"},
+      {"faces": [16, 16], "id": "titch", "speakers": ["goblinoid"], "text": "Titch"},
+      {"faces": [17, 17], "id": "ratt", "speakers": ["goblinoid"], "text": "Ratt"},
+      {"faces": [18, 18], "id": "muck", "speakers": ["goblinoid"], "text": "Muck"},
+      {"faces": [19, 19], "id": "zib", "speakers": ["goblinoid"], "text": "Zib"},
+      {"faces": [20, 20], "id": "og", "speakers": ["goblinoid"], "text": "Og"}
+    ]},
+    "child_ages": {"die": 8, "entries": [
+      {"faces": [1, 1], "id": "three", "text": "three"},
+      {"faces": [2, 2], "id": "four", "text": "four"},
+      {"faces": [3, 3], "id": "six", "text": "six"},
+      {"faces": [4, 4], "id": "eight", "text": "eight"},
+      {"faces": [5, 5], "id": "ten", "text": "ten"},
+      {"faces": [6, 6], "id": "twelve", "text": "twelve"},
+      {"faces": [7, 7], "id": "fourteen", "text": "fourteen"},
+      {"faces": [8, 8], "id": "sixteen", "text": "sixteen"}
+    ]},
+    "homes": {"die": 8, "entries": [
+      {"faces": [1, 1], "id": "chandlery-room", "text": "I keep a room above the chandlery, when I am in town."},
+      {"faces": [2, 2], "id": "gatehouse-cot", "text": "These nights it is a cot in the gatehouse. It suits me."},
+      {"faces": [3, 3], "id": "sister-floor", "text": "I sleep on my sister's floor and mend her shutters for rent."},
+      {"faces": [4, 4], "id": "widow-spare", "text": "A widow lets me her spare room. I chop her wood for it."},
+      {"faces": [5, 5], "id": "moored-boat", "text": "I live aboard a moored boat that leaks a little. I love it."},
+      {"faces": [6, 6], "id": "market-garret", "text": "My garret looks over {location}. I hear the market wake."},
+      {"faces": [7, 7], "id": "temple-floor", "text": "The temple lets me a pallet on cold nights. I sweep for it."},
+      {"faces": [8, 8], "id": "third-from-well", "text": "My door is the third from the well in {location}. Knock loud."}
+    ]},
+    "service": {"die": 20, "entries": [
+      {"faces": [1, 1], "id": "martial-grey-lances", "text": "I carried a spear for the Grey Lances on the Ashen Marches. I made corporal before a bad winter sent me home."},
+      {"faces": [2, 2], "id": "martial-ferry-guard", "text": "I stood six years with the ferry guard at Gallow Crossing. I left when the tolls turned mean."},
+      {"faces": [3, 3], "id": "martial-border-levy", "text": "The border levy took me at seventeen. I walked home at twenty with a limp and a pension of thanks."},
+      {"faces": [4, 4], "id": "martial-militia-drum", "text": "I drummed for the town militia through two sieges. I still hate the sound of drums."},
+      {"faces": [5, 5], "id": "martial-caravan-blade", "text": "I rode blade for a spice caravan three summers. The road taught me more than any captain."},
+      {"faces": [6, 6], "id": "martial-keep-garrison", "text": "I held a wall in the keep garrison at Thornfell. Four years, one battle, and I dream of neither."},
+      {"faces": [7, 7], "id": "martial-scout-ranks", "text": "I scouted for the northern ranks and was thanked with scars. I mustered out when my knee gave."},
+      {"faces": [8, 8], "id": "martial-harbour-watch", "text": "I walked the harbour watch for nine years. Smugglers, storms, and one fire I will not speak of."},
+      {"faces": [9, 9], "id": "martial-levy-cook", "text": "I cooked for a levy company on campaign. An army marches on stew, and I made the stew."},
+      {"faces": [10, 10], "id": "martial-signal-tower", "text": "I kept a signal tower on the cliffs for five years. Lonely work, and I was good at it."},
+      {"faces": [11, 11], "id": "trade-took-up-role", "text": "I never wore a uniform. I took up {role} when my father died, and it took me."},
+      {"faces": [12, 12], "id": "trade-apprenticed-late", "text": "I never wore a uniform. I apprenticed late and learned slow, and I am still learning."},
+      {"faces": [13, 13], "id": "trade-bought-tools", "text": "I never wore a uniform. I bought my tools with ferry wages and never looked back."},
+      {"faces": [14, 14], "id": "trade-mother-taught", "text": "I never wore a uniform. My mother taught me {role}, and hers before her."},
+      {"faces": [15, 15], "id": "trade-failed-clerk", "text": "I never wore a uniform. I failed as a clerk and was happier for it."},
+      {"faces": [16, 16], "id": "trade-followed-trade", "text": "I never wore a uniform. I followed the {role} trade downriver and stayed."},
+      {"faces": [17, 17], "id": "trade-plague-year", "text": "I never wore a uniform. The plague year made me {role_a}, and no one argued."},
+      {"faces": [18, 18], "id": "trade-won-place", "text": "I never wore a uniform. I won my place at {destination} in a wager and kept it by work."},
+      {"faces": [19, 19], "id": "trade-ran-from-farm", "text": "I never wore a uniform. I ran from a farm to {location} and never ran again."},
+      {"faces": [20, 20], "id": "trade-married-into", "text": "I never wore a uniform. I married into {role} work and widowed out of it, then back in."}
+    ]},
+    "opinions": {"die": 8, "entries": [
+      {"faces": [1, 1], "id": "dark-ale", "text": "Ale should be dark and the night darker. That is my whole philosophy."},
+      {"faces": [2, 2], "id": "weather-evening", "text": "I say the weather turns by evening. It always does."},
+      {"faces": [3, 3], "id": "market-prices", "text": "Market prices are robbery, but the gossip is free. I go for the gossip."},
+      {"faces": [4, 4], "id": "dogs-judge", "text": "Dogs judge folk better than priests do. I trust a dog's welcome."},
+      {"faces": [5, 5], "id": "bells-nap", "text": "A bell at noon means nap time. I did not make the rule, I only keep it."},
+      {"faces": [6, 6], "id": "rain-plans", "text": "Rain ruins plans and saves crops. I take it as it comes."},
+      {"faces": [7, 7], "id": "early-bed", "text": "Early to bed keeps a body honest. Late risers are plotting something."},
+      {"faces": [8, 8], "id": "work-hands", "text": "Idle hands find trouble. Mine found it twice before breakfast once."}
+    ]},
+    "courtship": {"die": 6, "entries": [
+      {"faces": [1, 1], "id": "tied-spoken", "text": "I am spoken for, and glad of it. {partner} has my word."},
+      {"faces": [2, 2], "id": "tied-wasted", "text": "Flattery is wasted on me. I belong to {partner}."},
+      {"faces": [3, 3], "id": "free-grieving", "text": "I buried the one I loved. Do not ask that of me."},
+      {"faces": [4, 4], "id": "free-shy", "text": "I would not know what to do with a sweetheart. Truly."},
+      {"faces": [5, 5], "id": "free-closed", "text": "I have no room in my life for that. Do not press me."},
+      {"faces": [6, 6], "id": "free-open", "text": "I am free, and not blind. But the errand comes first."}
+    ]},
+    "errand_lore": {"die": 8, "entries": [
+      {"faces": [1, 1], "id": "lore-carried", "text": "I have carried {stake} in my own hands. It is heavier than it looks."},
+      {"faces": [2, 2], "id": "lore-wrapped", "text": "I keep {stake} wrapped and out of sight. Eyes are everywhere."},
+      {"faces": [3, 3], "id": "lore-road", "text": "The road to {destination} is the only part I know by heart."},
+      {"faces": [4, 4], "id": "lore-watch", "text": "I have stood watch over {stake} three nights running."},
+      {"faces": [5, 5], "id": "lore-once", "text": "I saw {antagonist_the} once, at a distance, and once was plenty."},
+      {"faces": [6, 6], "id": "foe-heard", "text": "I heard them asking after {stake} at the inn. Plain as day."},
+      {"faces": [7, 7], "id": "foe-wants", "text": "Whatever {antagonist} wants with {stake}, it will not ask twice."},
+      {"faces": [8, 8], "id": "foe-sleeps", "text": "They say {antagonist_the} never sleeps. I believe it."}
+    ]},
+    "cast_close": {"die": 4, "entries": [
+      {"faces": [1, 1], "id": "trust-in-this", "text": "{other} is the one person I trust in this. The why of it is mine to keep."},
+      {"faces": [2, 2], "id": "years-back", "text": "{other} and I go back years. That is all I will say of it."},
+      {"faces": [3, 3], "id": "ask-them", "text": "Ask {other} about me. You will hear no ill."},
+      {"faces": [4, 4], "id": "through-trouble", "text": "I met {other} through this very trouble, and I would stand by them."}
+    ]},
+    "cast_passing": {"die": 4, "entries": [
+      {"faces": [1, 1], "id": "sight-name", "text": "I know {other} by sight and by name. We never had words until now."},
+      {"faces": [2, 2], "id": "runs-errands", "text": "{other} runs errands through {location}. That is how we met."},
+      {"faces": [3, 3], "id": "owes-drink", "text": "{other} owes me a drink, and I owe them one back. Nothing more."},
+      {"faces": [4, 4], "id": "nodding", "text": "{other} and I are nodding acquaintances. Nothing against them."}
+    ]}
+  }
+}

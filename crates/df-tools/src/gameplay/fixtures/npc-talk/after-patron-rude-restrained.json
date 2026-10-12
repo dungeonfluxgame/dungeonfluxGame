@@ -53,7 +53,7 @@
   {
    "n": 1,
    "hero_words": "Quit stalling. What do you want from us?",
-   "reply": "I want my word to remain worth more than any coin, and I want to get home to my old dog before he decides I\u2019ve abandoned him; that\u2019s the plain truth of it.",
+   "reply": "I want my word to remain worth more than any coin, and I want to get home to my old dog before he decides I\u2019ve abandoned him. That\u2019s the plain truth of it.",
    "from_model": true,
    "approach": "other",
    "attitude_before": "indifferent",
@@ -69,7 +69,7 @@
   {
    "n": 2,
    "hero_words": "That tells me nothing. Who is Perrin Marlow, and why should I care?",
-   "reply": "Perrin\u2019s an old friend of mine, a watch sergeant at the Tidewatch Lamp Room, and he\u2019s holding a sack of precious seed-grain for me; without it, my little garden\u2019s only a tale with a hungry ending.",
+   "reply": "Perrin\u2019s an old friend of mine, a watch sergeant at the Tidewatch Lamp Room, and he\u2019s holding a sack of precious seed-grain for me. Without it, my little garden\u2019s only a tale with a hungry ending.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "indifferent",
@@ -85,7 +85,7 @@
   {
    "n": 3,
    "hero_words": "You are wasting my time. What is out on the road?",
-   "reply": "The harbor-master\u2019s lamp burns until the last boat is in, then goes dark; the Tidewatch Lamp Room keeps odd hours, so knock twice and wait. I would not ask this of you if I had anyone else I could trust.",
+   "reply": "The harbor-master\u2019s lamp burns until the last boat is in, then goes dark. The Tidewatch Lamp Room keeps odd hours, so knock twice and wait. I would not ask this of you if I had anyone else I could trust.",
    "from_model": true,
    "approach": "insult",
    "attitude_before": "indifferent",
@@ -102,7 +102,7 @@
   {
    "n": 4,
    "hero_words": "Pathetic. Is that really all you know?",
-   "reply": "No; collecting it alone has grown dangerous, and I won\u2019t sleep easy until the sack is inside the Tidewatch Lamp Room. Somebody\u2019s been asking after it at every inn between the Salt Quay and the Lamp Room.",
+   "reply": "No. Collecting it alone has grown dangerous, and I won\u2019t sleep easy until the sack is inside the Tidewatch Lamp Room. Somebody\u2019s been asking after it at every inn between the Salt Quay and the Lamp Room.",
    "from_model": true,
    "approach": "insult",
    "attitude_before": "indifferent",
@@ -119,7 +119,7 @@
   {
    "n": 5,
    "hero_words": "Fine. Where do we go?",
-   "reply": "The Tidewatch Lamp Room; follow me there, and ask Perrin what he knows. I can\u2019t tell you what waits on the road, but I\u2019ll not go alone.",
+   "reply": "The Tidewatch Lamp Room. Follow me there, and ask Perrin what he knows. I can\u2019t tell you what waits on the road, but I\u2019ll not go alone.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "hostile",

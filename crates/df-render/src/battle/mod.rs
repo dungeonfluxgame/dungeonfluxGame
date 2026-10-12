@@ -81,6 +81,7 @@ pub use splat::{
 };
 pub use stage::{
     CoverPip, FigureView, FlashView, FrameView, ImpactEvent, ProjectileView, Stage, StageError,
+    beat_timing,
 };
 pub use status::{
     Resolved, Status, StatusPose, StatusSet, derived_from_view, icon_statuses, pose_for, resolve,

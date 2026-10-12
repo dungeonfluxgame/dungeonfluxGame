@@ -4727,52 +4727,62 @@ fn observe_administrator_identity_before_close(
     pid: i32,
     backend_start: &str,
 ) -> Result<(), RepositoryError> {
-    use std::io::{Read, Write};
-    use std::os::unix::net::UnixStream;
-    if pid <= 0
-        || pid == 80873
-        || backend_start.is_empty()
-        || backend_start.len() > 96
-        || backend_start.contains(['\n', '\r'])
+    // The administrator handshake runs over a Unix-domain socket, which
+    // stable std only provides on Unix; without it the identity is unavailable.
+    #[cfg(not(unix))]
     {
-        return Err(RepositoryError::InvalidReceipt);
-    }
-    let path = std::env::var("DUNGEONFLUX_I01_ADMIN_IDENTITY_SOCKET")
-        .map_err(|_| RepositoryError::Unavailable)?;
-    if path.is_empty() || path.len() > 100 {
+        let _ = (pid, backend_start);
         return Err(RepositoryError::Unavailable);
     }
-    let mut stream = UnixStream::connect(path).map_err(|_| RepositoryError::Unavailable)?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    let report = format!("READY {pid} {backend_start}\n");
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .map_err(|_| RepositoryError::Unavailable)?;
-    stream
-        .write_all(report.as_bytes())
-        .map_err(|_| RepositoryError::Unavailable)?;
-    let expected = format!("OBSERVED {pid} {backend_start}\n");
-    let mut acknowledgement = vec![0_u8; expected.len()];
-    let mut received = 0;
-    while received < acknowledgement.len() {
-        let remaining = deadline
-            .checked_duration_since(std::time::Instant::now())
-            .ok_or(RepositoryError::Unavailable)?;
-        stream
-            .set_read_timeout(Some(remaining))
+    #[cfg(unix)]
+    {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+        if pid <= 0
+            || pid == 80873
+            || backend_start.is_empty()
+            || backend_start.len() > 96
+            || backend_start.contains(['\n', '\r'])
+        {
+            return Err(RepositoryError::InvalidReceipt);
+        }
+        let path = std::env::var("DUNGEONFLUX_I01_ADMIN_IDENTITY_SOCKET")
             .map_err(|_| RepositoryError::Unavailable)?;
-        let count = stream
-            .read(&mut acknowledgement[received..])
-            .map_err(|_| RepositoryError::Unavailable)?;
-        if count == 0 {
+        if path.is_empty() || path.len() > 100 {
             return Err(RepositoryError::Unavailable);
         }
-        received += count;
+        let mut stream = UnixStream::connect(path).map_err(|_| RepositoryError::Unavailable)?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let report = format!("READY {pid} {backend_start}\n");
+        stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .map_err(|_| RepositoryError::Unavailable)?;
+        stream
+            .write_all(report.as_bytes())
+            .map_err(|_| RepositoryError::Unavailable)?;
+        let expected = format!("OBSERVED {pid} {backend_start}\n");
+        let mut acknowledgement = vec![0_u8; expected.len()];
+        let mut received = 0;
+        while received < acknowledgement.len() {
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .ok_or(RepositoryError::Unavailable)?;
+            stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|_| RepositoryError::Unavailable)?;
+            let count = stream
+                .read(&mut acknowledgement[received..])
+                .map_err(|_| RepositoryError::Unavailable)?;
+            if count == 0 {
+                return Err(RepositoryError::Unavailable);
+            }
+            received += count;
+        }
+        if acknowledgement != expected.as_bytes() {
+            return Err(RepositoryError::InvalidReceipt);
+        }
+        Ok(())
     }
-    if acknowledgement != expected.as_bytes() {
-        return Err(RepositoryError::InvalidReceipt);
-    }
-    Ok(())
 }
 
 // ROOT starts a separate fresh owned cluster with exactly one durability

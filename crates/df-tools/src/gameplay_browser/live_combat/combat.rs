@@ -53,6 +53,11 @@ struct RollText {
     explanation: String,
     source: String,
     verdict: (&'static str, CombatTone),
+    /// The server's kept d20 face for the phone's small die; `None` marks no natural.
+    die_face: Option<u8>,
+    /// The resting-frame art behind the small die's number, once the dice manifest has
+    /// loaded; the badge reads as before until then.
+    die_rest: Option<String>,
 }
 struct Text {
     keyart: Option<String>,
@@ -249,6 +254,14 @@ fn rolls(combat: &rpc::CombatView) -> Vec<RollText> {
                 } else {
                     ("Miss", CombatTone::Failure)
                 },
+                die_face: u8::try_from(outcome.attack_die)
+                    .ok()
+                    .filter(|face| (1..=20).contains(face)),
+                die_rest: crate::gameplay_browser::live_dice::rest_url_for(
+                    outcome.attack_die,
+                    &outcome.faces,
+                    outcome.roll_mode,
+                ),
             }
         })
         .collect()
@@ -386,6 +399,9 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         .as_ref()
         .is_some_and(|own| Some(own.name.as_str()) == active_name);
     let blocked = state.busy || (state.last_request.is_some() && !state.last_confirmed);
+    // One clock: while the display is still presenting resolved beats the server withholds
+    // offers; the phone says so instead of inviting an action the TV has not reached.
+    let resolving = combat.released_sequence < combat.latest_sequence;
     let keyart = active
         .as_deref()
         .and_then(|key| actors.iter().find(|actor| actor.key == key))
@@ -410,12 +426,16 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
             "Shared battle view"
         },
         turn_label: match (combat.finished, active_name) {
+            _ if resolving && !combat.finished => {
+                format!("Round {} · On the TV now…", combat.round)
+            }
             (true, _) | (_, None) => format!("Round {} · Encounter resolved", combat.round),
             (false, Some(_)) if own_turn => format!("Round {} · Your turn", combat.round),
             (false, Some(name)) => format!("Round {} · {name}'s turn", combat.round),
         },
         active,
         action_empty: match (player, active_name) {
+            (true, _) if resolving => "Watch the TV: the last action is playing out.".to_owned(),
             (false, _) => "Actions appear on each player's device.".to_owned(),
             (true, Some(name)) => format!("Waiting for {name}…"),
             (true, None) => "The encounter is resolved.".to_owned(),
@@ -476,6 +496,8 @@ fn with_view<T>(text: &Text, operation: impl FnOnce(&CombatPhaseView<'_>) -> T) 
             value: &roll.value,
             explanation: &roll.explanation,
             source: &roll.source,
+            die_face: roll.die_face,
+            die_rest: roll.die_rest.as_deref(),
             verdict: Some(CombatVerdict {
                 label: roll.verdict.0,
                 tone: roll.verdict.1,

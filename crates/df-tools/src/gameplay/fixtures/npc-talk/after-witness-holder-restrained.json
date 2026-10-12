@@ -88,7 +88,7 @@
   {
    "n": 3,
    "hero_words": "And the other way you hinted at. How do I find it?",
-   "reply": "Ask whoever you meet on the way after the Windward Waystation by name; a friendly mention may open doors there. I need the iron coffer carried there, and there is no one else I can ask.",
+   "reply": "Ask whoever you meet on the way after the Windward Waystation by name. A friendly mention may open doors there. I need the iron coffer carried there, and there is no one else I can ask.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",

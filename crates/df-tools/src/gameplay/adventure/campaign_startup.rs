@@ -374,8 +374,9 @@ pub(crate) fn create_campaign_cache(
         std::fs::remove_dir_all(&staging)
             .map_err(|_| CampaignStartupError::Run("remove owned staging"))?;
     }
-    std::fs::File::open(parent)
-        .and_then(|file| file.sync_all())
+    // Directory handles cannot be flushed this way on Windows, where this is a
+    // documented no-op; on Unix it is unchanged.
+    crate::file_identity::sync_directory(parent)
         .map_err(|_| CampaignStartupError::Run("sync cache parent"))?;
     Ok(())
 }

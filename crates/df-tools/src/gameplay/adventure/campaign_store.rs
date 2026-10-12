@@ -239,9 +239,9 @@ impl CampaignStore {
         file.sync_all().map_err(|e| ioe("sync file", e))?;
         drop(file);
         fs::rename(&staging, &target).map_err(|e| ioe("rename", e))?;
-        File::open(parent)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| ioe("sync directory", e))
+        // Directory handles cannot be flushed this way on Windows, where this
+        // is a documented no-op; on Unix it is unchanged.
+        crate::file_identity::sync_directory(parent).map_err(|e| ioe("sync directory", e))
     }
     fn identities(&self, record: &CampaignRecord) -> Result<(), StoreError> {
         for chapter in &record.chapters {

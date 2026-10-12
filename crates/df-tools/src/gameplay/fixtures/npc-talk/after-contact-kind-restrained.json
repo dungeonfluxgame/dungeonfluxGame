@@ -51,7 +51,7 @@
   {
    "n": 1,
    "hero_words": "Thank you for seeing us, Corwin. Garrick spoke well of you.",
-   "reply": "Garrick sent word that you\u2019d come for the steady lantern; don\u2019t blame him for that. And speaking well of me is no more than my due, though I\u2019d rather you tell me what you need.",
+   "reply": "Garrick sent word that you\u2019d come for the steady lantern. Don\u2019t blame him for that. And speaking well of me is no more than my due, though I\u2019d rather you tell me what you need.",
    "from_model": true,
    "approach": "flattery",
    "attitude_before": "hostile",
@@ -81,7 +81,7 @@
   {
    "n": 3,
    "hero_words": "I am sorry you carry this. Who is behind the trouble?",
-   "reply": "I have watched the road for days, and I trust very few faces on it. I\u2019ve kept everything ready on my side; I\u2019m a watch sergeant at the Reading Gallery.",
+   "reply": "I have watched the road for days, and I trust very few faces on it. I\u2019ve kept everything ready on my side. I\u2019m a watch sergeant at the Reading Gallery.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "hostile",

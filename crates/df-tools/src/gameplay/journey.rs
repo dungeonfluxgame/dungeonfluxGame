@@ -1902,10 +1902,7 @@ fn sample_face(sides: u32) -> Result<u32, RepositoryError> {
     }
     for _ in 0..16 {
         let mut bytes = [0_u8; 1];
-        use std::io::Read;
-        std::fs::File::open("/dev/urandom")
-            .and_then(|mut source| source.read_exact(&mut bytes))
-            .map_err(|_| RepositoryError::Unavailable)?;
+        model::fill_os_entropy(&mut bytes).map_err(|_| RepositoryError::Unavailable)?;
         let [byte] = bytes;
         let bucket = 256 - (256 % sides);
         if u32::from(byte) < bucket {

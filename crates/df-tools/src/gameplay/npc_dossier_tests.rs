@@ -126,7 +126,6 @@ fn facts_for(
         recent: &[],
         scene_title: "The Opening",
         scripted_line: "Please. I cannot do this alone.",
-        choices: &["Ask what is wrong"],
         words,
         withheld: &withheld_of(adventure, dossier),
         later_lines: &[],
@@ -607,10 +606,17 @@ async fn an_injected_instruction_is_only_speech(tag: &str) {
         injected_text.contains(hostile_line),
         "it is passed along as speech to react to"
     );
+    let facts: serde_json::Value = serde_json::from_str(&facts_of_request(&injected_text)).unwrap();
+    let player = facts["player"].to_string();
+    let in_player = player.matches("pirate").count();
+    assert!(
+        in_player >= 1,
+        "speech to react to lives in the player object"
+    );
     assert_eq!(
         injected_text.matches("pirate").count(),
-        1,
-        "only inside the player's words"
+        in_player,
+        "untrusted words live nowhere else in the prompt"
     );
 
     // A reply that goes along with it is refused, and the character answers instead.
@@ -1141,6 +1147,7 @@ fn fallback_of(
             offered,
         },
     )
+    .0
 }
 
 /// Facts for one line typed to a dossier at a given point in the conversation.
@@ -1151,7 +1158,7 @@ fn conversation_facts(
     words: &str,
     conversation: &Conversation,
 ) -> (serde_json::Value, Vec<npc_facts::Offered>) {
-    facts(&Inputs {
+    let (facts, offered, _) = facts(&Inputs {
         dossier,
         name: &dossier.name,
         hero: "Brannoch",
@@ -1159,13 +1166,13 @@ fn conversation_facts(
         recent: &[],
         scene_title: "The Opening",
         scripted_line: "",
-        choices: &[],
         words,
         withheld: &withheld_of(adventure, dossier),
         conversation,
         later_lines: &[],
         clue: npc_dossier::Clue::Absent,
-    })
+    });
+    (facts, offered)
 }
 
 fn friendly() -> Standing {
@@ -1375,7 +1382,7 @@ fn with_the_text_model_off_the_chosen_lines_answer_and_none_repeats() {
         };
         let (_, offered) =
             conversation_facts(&adventure, &dossier, friendly(), line, &conversation);
-        let answer = fallback(
+        let (answer, key) = fallback(
             &dossier,
             friendly(),
             line,
@@ -1393,8 +1400,50 @@ fn with_the_text_model_off_the_chosen_lines_answer_and_none_repeats() {
             assert!(answer.starts_with(&first.text), "{answer}");
         }
         voiced.extend(offered.iter().map(|line| line.key.clone()));
+        voiced.extend(key);
         said.push(answer);
     }
+}
+
+#[test]
+fn with_the_text_model_off_a_pressed_topic_is_never_answered_twice() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let dossier = adventure.dossiers[0].clone();
+    let withheld = withheld_of(&adventure, &dossier);
+    let mut voiced: Vec<String> = Vec::new();
+    let mut answers: Vec<String> = Vec::new();
+    for index in 0..3 {
+        let conversation = Conversation {
+            exchange: u32::try_from(index).unwrap() + 1,
+            voiced: voiced.clone(),
+            ..Conversation::default()
+        };
+        let (_, offered) = conversation_facts(
+            &adventure,
+            &dossier,
+            friendly(),
+            "What are you hiding from me?",
+            &conversation,
+        );
+        let (answer, key) = fallback(
+            &dossier,
+            friendly(),
+            "What are you hiding from me?",
+            Approach::Question,
+            &withheld,
+            &npc_dossier::Memory {
+                conversation: &conversation,
+                said: &answers,
+                offered: &offered,
+            },
+        );
+        answers.push(answer);
+        voiced.extend(offered.iter().map(|line| line.key.clone()));
+        voiced.extend(key);
+    }
+    assert!(answers[0] != answers[1], "{answers:?}");
+    assert!(answers[1] != answers[2], "{answers:?}");
+    assert!(answers[0] != answers[2], "{answers:?}");
 }
 
 /// The view of a hero in the opening scene who was (or was not) whispered the adventure's clue.
@@ -1537,11 +1586,60 @@ fn the_reply_rules_fit_the_storytellers_guidance_limit_in_both_ratings() {
     }
 }
 
-/// The answer without the hook a fallback reply may end with, so the prepared words can be
-/// compared whatever hook the exchange drew.
+/// The prepared words of a fallback reply, for comparison. The fallback no longer appends a
+/// hook, so this is the text itself.
 fn spoken_part(text: &str) -> &str {
-    npc_dossier::FALLBACK_HOOKS
+    text
+}
+
+#[test]
+fn a_several_part_question_lists_its_parts_and_no_menu_choices() {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "Name him. Who was this friend, how did he die, and who is Maren to you?",
+    );
+    let parts = ask.facts["player"]["question_parts"]
+        .as_array()
+        .expect("the facts list the question's parts");
+    assert_eq!(parts.len(), 3, "{parts:?}");
+    assert_eq!(ask.facts["offered_choices"], json!([]));
+}
+
+#[test]
+fn a_claim_that_breaks_the_errand_is_flagged_for_denial() {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let dossier = adventure.dossiers[0].clone();
+    let errand = dossier
+        .knowledge
+        .says_freely
         .iter()
-        .find_map(|hook| text.strip_suffix(hook))
-        .map_or(text, str::trim_end)
+        .find(|item| item.source == "errand_line")
+        .map(|item| item.text.clone())
+        .expect("the patron says something of the errand");
+    let word = super::speech_text::content_words(&errand)
+        .into_iter()
+        .next()
+        .expect("the errand line carries a content word");
+    let ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        &format!("We heard someone burned the {word} years ago. Explain that."),
+    );
+    assert_eq!(ask.facts["hero_claims_against_errand"], json!(true));
+}
+
+#[test]
+fn an_ordinary_question_is_not_flagged_as_breaking_the_errand() {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "Who was the old friend you swore to?",
+    );
+    assert!(ask.facts.get("hero_claims_against_errand").is_none());
 }

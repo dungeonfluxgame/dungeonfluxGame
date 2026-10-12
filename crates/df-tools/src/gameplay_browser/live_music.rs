@@ -3,27 +3,37 @@
 //! The browser decides no story: for every accepted display view `music_score::tempo_of` turns
 //! what the server already shows into a phase and intensity, and this module plays the
 //! server-provided score (`/assets/music/<track>`) accordingly. Four sample-aligned loops
-//! (bed, motif, tension, combat) start together on one Web Audio clock and only their gains
-//! move, smoothly, as the tempo rises and releases. A location ambience loops beside them, and
-//! one-shot stingers land on the next beat. Phones never reach this module.
+//! (bed, motif, tension, combat) start together on one Web Audio clock; which of them sound
+//! changes per arrangement epoch while their gains follow the tempo. A location ambience loops
+//! beside them, and one-shot stingers land on the next beat, rotating takes. Phones never reach
+//! this module.
 //!
 //! Sound follows the one shared state of `live_voice`: nothing is requested or heard before its
-//! unlock gesture, its mute control silences the music too, and music ducks while a voice clip
-//! plays. A hidden tab suspends the audio clock and, on return, the mix jumps to the present
-//! rather than replaying what happened. The music volume (0 to 1) is read from
-//! `sessionStorage` under `df.music.volume`. A debug snapshot of the mix is kept in the
+//! unlock gesture, its mute control silences the music too, and music ducks under every
+//! presented line — a voice clip on the air, or a caption-only line the scene line machine is
+//! showing (read off the stage root's `data-line-state`, so that module is untouched) — and
+//! shallow under big sound effects (read from the effects engine's `data-sfx-*` attributes).
+//! A hidden tab suspends the audio clock and, on return, the mix jumps to the present rather
+//! than replaying what happened. The music volume (0 to 1) is read from `sessionStorage`
+//! under `df.music.volume`. Score, ambience and stingers run on separate buses into one music
+//! master with a limiter on the sum. A debug snapshot of the mix is kept in the
 //! `data-music-state` attribute of the display root.
 use super::*;
 use crate::music_score::{
-    CueMemory, DUCK_ATTACK_SECONDS, DUCK_DECIBELS, DUCK_RELEASE_SECONDS, Facts, LAYER_TRACKS,
-    LOOP_SECONDS, Outcome, Phase, Stinger, Tempo, effective_phase, facts_of, mix_for, next_beat,
-    stinger_between, tempo_of,
+    ARRANGE_SECONDS, Bed, CueMemory, DUCK_LINE_ATTACK_SECONDS, DUCK_RELEASE_SECONDS,
+    DUCK_SFX_ATTACK_SECONDS, DUCK_SFX_DECIBELS, DUCK_SFX_HOLD_SECONDS, DUCK_SFX_RELEASE_SECONDS,
+    Facts, LAYER_TRACKS, LINE_BUSY_SCALE, LINE_FILTER_HERTZ, LOOP_SECONDS, Outcome, Phase,
+    SOMBRE_FILTER_HERTZ, STINGER_TAKES, Stinger, Suite, TRANSITION_SECONDS, Tempo, VOICE_LUFS,
+    arrangement_for, arrangements_for, bubble_hold_ms, colour_for, duck_decibels, effective_phase,
+    facts_of, gain_for_decibels, gap_hold_active, layer_track, line_presenting, mix_for,
+    mix_level_lufs, next_beat, next_take, stinger_between, stinger_track, suite_for, tempo_of,
+    unvoiced_hold_ms,
 };
 use gloo_timers::callback::Interval;
 use std::collections::{HashMap, HashSet, VecDeque};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{
-    AudioBuffer, AudioBufferSourceNode, AudioContext, AudioContextState, AudioParam,
+    AudioBuffer, AudioBufferSourceNode, AudioContext, AudioContextState, AudioNode, AudioParam,
     AudioScheduledSourceNode, BiquadFilterNode, BiquadFilterType, Event, GainNode, Response,
 };
 
@@ -33,7 +43,9 @@ const VOLUME_KEY: &str = "df.music.volume";
 const DEFAULT_VOLUME: f32 = 0.85;
 const STATE_ATTRIBUTE: &str = "data-music-state";
 const MAXIMUM_TRACK_BYTES: u32 = 6 * 1024 * 1024;
-const TICK_MILLIS: u32 = 100;
+/// Housekeeping runs this often: a new line is found within one tick, and the line-duck ramp
+/// (80 ms) then lands fully down inside 150 ms of the voice starting.
+const TICK_MILLIS: u32 = 50;
 /// Layers start this far ahead of the audio clock so all four are scheduled before they begin.
 const START_LEAD_SECONDS: f64 = 0.15;
 const MASTER_SECONDS: f64 = 0.4;
@@ -45,12 +57,39 @@ const AMBIENT_LEVEL: f32 = 0.5;
 const STINGER_LEVEL: f32 = 0.8;
 const MINIMUM_GAIN_STEP: f32 = 0.002;
 const FIRED_MEMORY: usize = 8;
+/// Duck down/up edges kept in the debug snapshot, oldest first.
+const DUCK_LOG_MEMORY: usize = 8;
+/// Suite or take change: the new voices start exactly on the next loop boundary while the old
+/// ones fade out across it, so a chapter change is a crossfade, never a cut and never a gap.
+const SWAP_CROSSFADE_SECONDS: f64 = 4.0;
+const MINIMUM_FILTER_HERTZ: f32 = 400.0;
+const MAXIMUM_FILTER_HERTZ: f32 = 18_000.0;
+/// Limiter on the music sum: stacked layers plus a stinger cannot clip the room.
+const LIMITER_THRESHOLD_DB: f32 = -12.0;
+const LIMITER_KNEE_DB: f32 = 20.0;
+const LIMITER_RATIO: f32 = 6.0;
+const LIMITER_ATTACK_SECONDS: f32 = 0.003;
+const LIMITER_RELEASE_SECONDS: f32 = 0.25;
+/// The effects engine's diagnostic attributes, read here so `live_sfx` needs no hook: the count
+/// says an effect played, the trailing log name says whether it was a big one.
+const SFX_COUNT_ATTRIBUTE: &str = "data-sfx-count";
+const SFX_LOG_ATTRIBUTE: &str = "data-sfx-log";
+/// A big sound effect earns the music a short shallow dip. Names are `live_sfx` cue names.
+const BIG_SFX: &[&str] = &[
+    "critical",
+    "victory-fanfare",
+    "defeat-toll",
+    "scene-transition",
+    "party-gathered",
+];
 
 /// Everything the mixer sets at one moment; a change of any field starts a glide.
 #[derive(Clone, Copy, PartialEq)]
 struct Applied {
     layers: [f32; 4],
     ambient: f32,
+    score_bus: f32,
+    stinger_bus: f32,
     filter_hertz: f32,
     master: f32,
     duck: f32,
@@ -62,20 +101,38 @@ struct Ambient {
     source: AudioBufferSourceNode,
 }
 
-/// The audio graph: layers -> low-pass -> duck -> master, with the ambience and stingers
-/// joining at the duck so all of it yields to narration.
+/// One looping layer voice: its own gain lets a suite or take swap crossfade voice by voice
+/// while the shared layer bus keeps the mix target. Which track each voice plays is tracked on
+/// the director (`layer_tracks`), so the voice carries only its nodes.
+struct LayerVoice {
+    node: AudioBufferSourceNode,
+    gain: GainNode,
+}
+
+/// The audio graph: layers -> low-pass -> score bus -> duck -> music master -> limiter, with
+/// the ambience bus and the stinger bus joining at the duck so all of it yields to narration
+/// and big effects, and the limiter keeps the stacked sum from clipping.
 struct Graph {
     context: AudioContext,
     master: GainNode,
+    // Wired once at creation and never re-read: the field is the reference that keeps the node
+    // alive for the page's lifetime.
+    #[allow(dead_code)]
+    music_master: GainNode,
+    #[allow(dead_code)]
+    sum_limiter: AudioNode,
     duck: GainNode,
     filter: BiquadFilterNode,
     layers: [GainNode; 4],
+    #[allow(dead_code)]
+    score_bus: GainNode,
+    stinger_bus: GainNode,
     ambient_bus: GainNode,
     ambient: Option<Ambient>,
     /// Audio-clock time the four layers started together; the beat grid hangs from it.
     started_at: Option<f64>,
     /// Kept so the looping sources stay referenced for the page's lifetime.
-    sources: Vec<AudioBufferSourceNode>,
+    voices: Vec<LayerVoice>,
 }
 
 struct Latest {
@@ -105,6 +162,48 @@ struct Director {
     cues: CueMemory,
     connection: u64,
     listeners: Vec<Closure<dyn FnMut(Event)>>,
+    /// Session seed for the arrangement choice and the alternate-take pick.
+    seed: u64,
+    /// Whether this session prefers the `-b` layer takes where their files exist.
+    layer_alternate: bool,
+    /// The layer tracks actually looping, if the layers have started.
+    layer_tracks: Option<[&'static str; 4]>,
+    /// Current arrangement epoch on the audio clock, and the voicing in use.
+    epoch: Option<u64>,
+    arrangement: usize,
+    arrange_phase: Option<Phase>,
+    arrange_bed: Option<Bed>,
+    /// Place colour and suite in use, for the debug snapshot.
+    colour: &'static str,
+    suite: Suite,
+    /// Last take position played per stinger, in `Stinger::ALL` order.
+    stinger_takes: [Option<usize>; 4],
+    /// Last effects counter seen; a jump means an effect played since the last tick.
+    sfx_count: Option<u64>,
+    /// Wall-clock milliseconds until which the shallow effects dip holds.
+    sfx_dip_until: f64,
+    /// Wall-clock milliseconds of the last tick with any line signal up: the duck holds
+    /// while this is fresher than the gap bound, so back-to-back lines never pump the music.
+    line_seen_ms: Option<f64>,
+    /// Wall-clock milliseconds until which a newly seen caption line holds at least the
+    /// display's own minimum dwell, even if its machine already moved on.
+    caption_floor_until: f64,
+    /// The stage root's `data-line-id` last seen, to spot a new line for the caption floor.
+    last_line_id: Option<String>,
+    /// The action call-out nodes standing on the last tick: only a newly appeared node
+    /// retriggers the hold, because faded ones stay in the DOM (and a repeated cry is a new
+    /// node even when its text matches, so node identity, not text, is the edge).
+    action_nodes: Vec<Element>,
+    /// Why the duck sits where it does: `voice`, `caption`, `sfx` or `none`.
+    duck_reason: &'static str,
+    /// The last duck down/up edges with wall-clock timestamps, oldest first.
+    duck_log: VecDeque<String>,
+    /// This housekeeping step's own cost and its maximum, in milliseconds: the duck cannot
+    /// start sooner than a step runs.
+    tick_ms: f64,
+    tick_ms_max: f64,
+    /// Effective phase the mix last glided toward; a change lengthens the rise.
+    last_phase: Option<Phase>,
 }
 
 type Shared = Rc<RefCell<Director>>;
@@ -122,8 +221,26 @@ fn failure_text(error: &JsValue) -> String {
         .unwrap_or_else(|| "browser audio error".to_owned())
 }
 
-fn duck_gain() -> f32 {
-    10_f32.powf(DUCK_DECIBELS / 20.0)
+/// The limiter on the music sum. Built through untyped calls because the crate's web-sys
+/// feature list (owned by another worker's `Cargo.toml`, which this task must not edit) has no
+/// `DynamicsCompressor` binding yet; the handoff proposes that one-line cleanup.
+fn sum_limiter(context: &AudioContext) -> Result<AudioNode, JsValue> {
+    let create: js_sys::Function =
+        js_sys::Reflect::get(context, &JsValue::from_str("createDynamicsCompressor"))?
+            .dyn_into()?;
+    let node: AudioNode = create.call0(context)?.dyn_into()?;
+    for (name, value) in [
+        ("threshold", LIMITER_THRESHOLD_DB),
+        ("knee", LIMITER_KNEE_DB),
+        ("ratio", LIMITER_RATIO),
+        ("attack", LIMITER_ATTACK_SECONDS),
+        ("release", LIMITER_RELEASE_SECONDS),
+    ] {
+        let param: AudioParam =
+            js_sys::Reflect::get(&node, &JsValue::from_str(name))?.dyn_into()?;
+        param.set_value(value);
+    }
+    Ok(node)
 }
 
 /// Starts a smooth change of `param` to `to`. The current value is pinned first so a ramp that
@@ -151,6 +268,24 @@ fn glide(
     param.cancel_scheduled_values(now)?;
     param.set_value_at_time(param.value(), now)?;
     param.linear_ramp_to_value_at_time(to, now + seconds)?;
+    Ok(())
+}
+
+/// A new layer voice fades in from the loop boundary it starts on: silence until then, full
+/// across the swap crossfade. Anchored at `boundary`, not at now.
+fn fade_voice_in(gain: &AudioParam, boundary: f64) -> Result<(), JsValue> {
+    gain.set_value_at_time(0.0, boundary)?;
+    gain.linear_ramp_to_value_at_time(1.0, boundary + SWAP_CROSSFADE_SECONDS)?;
+    Ok(())
+}
+
+/// An old layer voice holds its level until the loop boundary, then fades out across the same
+/// crossfade its replacement fades in across.
+fn fade_voice_out(gain: &AudioParam, now: f64, boundary: f64) -> Result<(), JsValue> {
+    gain.cancel_scheduled_values(now)?;
+    gain.set_value_at_time(gain.value(), now)?;
+    gain.set_value_at_time(1.0, boundary)?;
+    gain.linear_ramp_to_value_at_time(0.0, boundary + SWAP_CROSSFADE_SECONDS)?;
     Ok(())
 }
 
@@ -186,15 +321,23 @@ fn looping_source(
 impl Graph {
     fn new() -> Result<Self, JsValue> {
         let context = AudioContext::new()?;
+        let sum_limiter = sum_limiter(&context)?;
+        sum_limiter.connect_with_audio_node(&context.destination())?;
+        let music_master = context.create_gain()?;
+        music_master.gain().set_value(1.0);
+        music_master.connect_with_audio_node(&sum_limiter)?;
         let master = context.create_gain()?;
         master.gain().set_value(0.0);
-        master.connect_with_audio_node(&context.destination())?;
+        master.connect_with_audio_node(&music_master)?;
         let duck = context.create_gain()?;
         duck.connect_with_audio_node(&master)?;
         let filter = context.create_biquad_filter()?;
         filter.set_type(BiquadFilterType::Lowpass);
         filter.frequency().set_value(1_400.0);
-        filter.connect_with_audio_node(&duck)?;
+        let score_bus = context.create_gain()?;
+        score_bus.gain().set_value(1.0);
+        filter.connect_with_audio_node(&score_bus)?;
+        score_bus.connect_with_audio_node(&duck)?;
         let layers = [
             silent_gain(&context, &filter)?,
             silent_gain(&context, &filter)?,
@@ -202,16 +345,23 @@ impl Graph {
             silent_gain(&context, &filter)?,
         ];
         let ambient_bus = silent_gain(&context, &duck)?;
+        let stinger_bus = context.create_gain()?;
+        stinger_bus.gain().set_value(1.0);
+        stinger_bus.connect_with_audio_node(&duck)?;
         Ok(Self {
             context,
             master,
+            music_master,
+            sum_limiter,
             duck,
             filter,
             layers,
+            score_bus,
+            stinger_bus,
             ambient_bus,
             ambient: None,
             started_at: None,
-            sources: Vec::new(),
+            voices: Vec::new(),
         })
     }
 
@@ -284,6 +434,8 @@ impl Director {
             self.speaking = sound.speaking;
         }
         self.volume = stored_volume();
+        self.watch_sfx();
+        self.watch_line();
         let hidden = self.document.hidden();
         if self.enabled && self.graph.is_none() {
             self.graph = Some(Graph::new()?);
@@ -305,23 +457,193 @@ impl Director {
             self.resync = true;
         }
         let wanted = self.tracks_to_fetch();
-        self.try_start_layers()?;
+        self.ensure_layers()?;
         self.apply_bed()?;
         self.retarget()?;
         self.publish();
         Ok(wanted)
     }
 
+    /// A jump in the effects engine's counter means an effect played since the last tick; a big
+    /// one (by its logged cue name) holds the shallow dip open. First sight only adopts the
+    /// counter so a page load never dips.
+    fn watch_sfx(&mut self) {
+        let element = self.document.document_element();
+        let count = element
+            .as_ref()
+            .and_then(|element| element.get_attribute(SFX_COUNT_ATTRIBUTE))
+            .and_then(|value| value.parse::<u64>().ok());
+        let Some(seen) = count else {
+            return;
+        };
+        let Some(known) = self.sfx_count else {
+            self.sfx_count = Some(seen);
+            return;
+        };
+        if seen <= known {
+            return;
+        }
+        self.sfx_count = Some(seen);
+        let big = element
+            .as_ref()
+            .and_then(|element| element.get_attribute(SFX_LOG_ATTRIBUTE))
+            .is_some_and(|log| {
+                log.split(' ')
+                    .next_back()
+                    .is_some_and(|last| BIG_SFX.contains(&last))
+            });
+        if big {
+            self.sfx_dip_until = js_sys::Date::now() + DUCK_SFX_HOLD_SECONDS * 1_000.0;
+        }
+    }
+
+    /// A line is being presented when the scene line machine says so on the stage root (the
+    /// narrator's box, every character's and hero's bubble, fight cries and commentary, and
+    /// the loading-screen mirror all run this same machine: no role is exempt), while a hero
+    /// holds push-to-talk (the speech-intent loader), or while a fresh action or roll-readout
+    /// bubble stands. Attribute presence only; line text is never read. Every active tick
+    /// retriggers the hold, so back-to-back lines never pump; a newly seen line additionally
+    /// floors the hold at the display's own minimum dwell.
+    fn watch_line(&mut self) {
+        let now = js_sys::Date::now();
+        let stage = self.document.query_selector(".tv-stage").ok().flatten();
+        let machine = stage
+            .as_ref()
+            .and_then(|root| root.get_attribute("data-line-state"))
+            .is_some_and(|state| line_presenting(&state));
+        let line_id = stage
+            .as_ref()
+            .and_then(|root| root.get_attribute("data-line-id"));
+        // Action call-outs outside the line machine fade by CSS but stay in the DOM, so bare
+        // presence would latch the duck on: only a newly appeared bubble retriggers, and it
+        // holds for the bubble's own `--hold` dwell from its inline style (machine-driven
+        // bubbles carry no style; the machine already covers those).
+        let mut fresh_action = false;
+        let mut standing = Vec::new();
+        if let Ok(bubbles) = self
+            .document
+            .query_selector_all(".tv-bubble[data-kind=\"action\"]")
+        {
+            for index in 0..bubbles.length() {
+                let element = bubbles
+                    .item(index)
+                    .and_then(|node| node.dyn_into::<Element>().ok());
+                let Some(element) = element else {
+                    continue;
+                };
+                if !self
+                    .action_nodes
+                    .iter()
+                    .any(|known| known.is_same_node(Some(&element)))
+                {
+                    fresh_action = true;
+                    let hold = element
+                        .get_attribute("style")
+                        .and_then(|style| bubble_hold_ms(&style));
+                    if let Some(hold) = hold {
+                        self.caption_floor_until = self.caption_floor_until.max(now + hold);
+                    }
+                }
+                standing.push(element);
+            }
+        }
+        self.action_nodes = standing;
+        let push_to_talk = self
+            .document
+            .query_selector(".tv-intent[data-intent=\"speaking\"]")
+            .ok()
+            .flatten()
+            .is_some();
+        if line_id != self.last_line_id {
+            self.last_line_id = line_id.clone();
+            if line_id.is_some() {
+                self.caption_floor_until = now + f64::from(unvoiced_hold_ms(""));
+            }
+        }
+        if machine || fresh_action || push_to_talk {
+            self.line_seen_ms = Some(now);
+        }
+    }
+
+    /// Remembers a duck down/up edge with its wall-clock timestamp, so a check can assert the
+    /// duck against the line's own start and end. Capped; the oldest edge falls off.
+    fn note_duck(&mut self, reason: &'static str) {
+        if reason == self.duck_reason {
+            return;
+        }
+        let now = js_sys::Date::now() as u64;
+        let edge = if reason == "none" {
+            format!("up {}->none @{now}", self.duck_reason)
+        } else {
+            match &self.last_line_id {
+                Some(id) => format!("down {reason} line {id} @{now}"),
+                None => format!("down {reason} @{now}"),
+            }
+        };
+        if self.duck_log.len() >= DUCK_LOG_MEMORY {
+            self.duck_log.pop_front();
+        }
+        self.duck_log.push_back(edge);
+        self.duck_reason = reason;
+    }
+
+    /// The suite the current view asks for: combat chapters get the battle suite, a decided
+    /// outcome the finale suite, everything else the main suite.
+    fn wanted_suite(&self) -> Suite {
+        self.latest.as_ref().map_or(Suite::Main, |latest| {
+            suite_for(latest.facts.in_combat, latest.facts.outcome)
+        })
+    }
+
+    /// The four layer tracks for the wanted suite and this session's take pick.
+    fn wanted_layer_tracks(&self) -> [&'static str; 4] {
+        let suite = self.wanted_suite();
+        [
+            layer_track(suite, 0, self.layer_alternate),
+            layer_track(suite, 1, self.layer_alternate),
+            layer_track(suite, 2, self.layer_alternate),
+            layer_track(suite, 3, self.layer_alternate),
+        ]
+    }
+
+    /// The tracks actually looped per layer: the wanted take, or the main-suite base when that
+    /// file is absent. `None` while the choice still depends on a fetch in flight.
+    fn resolved_layer_tracks(&self) -> Option<[&'static str; 4]> {
+        let wanted = self.wanted_layer_tracks();
+        let mut resolved = wanted;
+        for (index, track) in wanted.iter().enumerate() {
+            if self.buffers.contains_key(track) {
+                continue;
+            }
+            if !self.missing.contains(track) {
+                return None;
+            }
+            let base = LAYER_TRACKS[index];
+            if self.buffers.contains_key(base) || self.missing.contains(&base) {
+                resolved[index] = base;
+            } else {
+                return None;
+            }
+        }
+        Some(resolved)
+    }
+
     /// Layers first (they start together), then the location ambience, then the stingers.
+    /// Stinger takes all ride along: rotation needs them loaded, and a file that is not on
+    /// disk is recorded once and never requested again.
     fn tracks_to_fetch(&mut self) -> Vec<&'static str> {
         if !self.enabled {
             return Vec::new();
         }
         let bed = self.latest.as_ref().map(|latest| latest.facts.bed.track());
-        let wanted = LAYER_TRACKS
-            .into_iter()
-            .chain(bed)
-            .chain(Stinger::ALL.map(Stinger::track));
+        let layers = self.wanted_layer_tracks();
+        let mut wanted: Vec<&'static str> = layers.into_iter().chain(LAYER_TRACKS).collect();
+        for kind in Stinger::ALL {
+            for take in 0..STINGER_TAKES {
+                wanted.push(stinger_track(kind, take));
+            }
+        }
+        wanted.extend(bed);
         let mut fresh = Vec::new();
         for track in wanted {
             if self.requested.insert(track) {
@@ -331,31 +653,73 @@ impl Director {
         fresh
     }
 
-    fn try_start_layers(&mut self) -> Result<(), JsValue> {
+    /// Starts the layers together on one clock, then keeps them on the suite the story asks
+    /// for: a suite or take change starts new voices exactly on the next loop boundary while
+    /// the old ones fade out across it. No cut, no gap; every voice stays on the bar grid.
+    fn ensure_layers(&mut self) -> Result<(), JsValue> {
+        let Some(resolved) = self.resolved_layer_tracks() else {
+            return Ok(());
+        };
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.layer_tracks.is_none() {
+            let Some(graph) = self.graph.as_mut() else {
+                return Ok(());
+            };
+            if graph.started_at.is_some() {
+                return Ok(());
+            }
+            let when = graph.context.current_time() + START_LEAD_SECONDS;
+            for (index, track) in resolved.iter().enumerate() {
+                let Some(buffer) = self.buffers.get(track) else {
+                    continue;
+                };
+                let gain = silent_gain(&graph.context, &graph.layers[index])?;
+                gain.gain().set_value(1.0);
+                let source = looping_source(&graph.context, buffer, &gain, Some(LOOP_SECONDS))?;
+                source.start_with_when(when)?;
+                graph.voices.push(LayerVoice { node: source, gain });
+            }
+            graph.started_at = Some(when);
+            self.layer_tracks = Some(resolved);
+            self.suite = self.wanted_suite();
+            return Ok(());
+        }
+        if self.layer_tracks == Some(resolved) {
+            return Ok(());
+        }
         let Some(graph) = self.graph.as_mut() else {
             return Ok(());
         };
-        let settled = LAYER_TRACKS
-            .iter()
-            .all(|track| self.buffers.contains_key(track) || self.missing.contains(track));
-        if graph.started_at.is_some() || !self.enabled || !settled {
-            return Ok(());
+        let now = graph.context.current_time();
+        let start = graph.started_at.unwrap_or(now);
+        let elapsed = (now - start).max(0.0);
+        let mut boundary = start + (elapsed / LOOP_SECONDS).ceil() * LOOP_SECONDS;
+        if boundary - now < SWAP_CROSSFADE_SECONDS + START_LEAD_SECONDS {
+            boundary += LOOP_SECONDS;
         }
-        let when = graph.context.current_time() + START_LEAD_SECONDS;
-        for (index, track) in LAYER_TRACKS.iter().enumerate() {
+        let retiring = graph.voices.len();
+        for (index, track) in resolved.iter().enumerate() {
             let Some(buffer) = self.buffers.get(track) else {
                 continue;
             };
-            let source = looping_source(
-                &graph.context,
-                buffer,
-                &graph.layers[index],
-                Some(LOOP_SECONDS),
-            )?;
-            source.start_with_when(when)?;
-            graph.sources.push(source);
+            let gain = silent_gain(&graph.context, &graph.layers[index])?;
+            let source = looping_source(&graph.context, buffer, &gain, Some(LOOP_SECONDS))?;
+            source.start_with_when(boundary)?;
+            fade_voice_in(&gain.gain(), boundary)?;
+            graph.voices.push(LayerVoice { node: source, gain });
         }
-        graph.started_at = Some(when);
+        for voice in &graph.voices[..retiring] {
+            fade_voice_out(&voice.gain.gain(), now, boundary)?;
+            AudioScheduledSourceNode::stop_with_when(
+                &voice.node,
+                boundary + SWAP_CROSSFADE_SECONDS + 0.1,
+            )?;
+        }
+        graph.voices.drain(..retiring);
+        self.layer_tracks = Some(resolved);
+        self.suite = self.wanted_suite();
         Ok(())
     }
 
@@ -411,9 +775,29 @@ impl Director {
         Ok(())
     }
 
-    /// Glides every layer, the ambience, the filter, the duck and the master toward the mix the
-    /// current tempo asks for.
+    /// Glides every layer, the ambience, the buses, the filter, the duck and the master
+    /// toward the mix the current tempo asks for: the phase table, thinned by the current
+    /// arrangement voicing, coloured by place or fight, with a lengthened rise when the phase
+    /// itself changed so a fight starts as a crossfade, not a cut.
     fn retarget(&mut self) -> Result<(), JsValue> {
+        // The duck reason first, before the graph borrows below: a presented line always wins
+        // over an effect, so a big hit mid-line never bounces the music back up. A clip on
+        // the air is `voice`; a line the machine shows without one is `caption`.
+        let now_ms = js_sys::Date::now();
+        let line_hold = self
+            .line_seen_ms
+            .is_some_and(|seen| gap_hold_active(now_ms - seen))
+            || now_ms < self.caption_floor_until;
+        let reason = if self.speaking {
+            "voice"
+        } else if line_hold {
+            "caption"
+        } else if now_ms < self.sfx_dip_until {
+            "sfx"
+        } else {
+            "none"
+        };
+        self.note_duck(reason);
         let (Some(graph), Some(latest)) = (self.graph.as_ref(), self.latest.as_ref()) else {
             return Ok(());
         };
@@ -423,21 +807,85 @@ impl Director {
         let phase = effective_phase(latest.tempo, held);
         let sombre = latest.facts.outcome == Some(Outcome::Defeat);
         let mix = mix_for(phase, latest.tempo.intensity, sombre);
+        let colour = colour_for(latest.facts.bed, latest.facts.in_combat);
+        if let Some(started_at) = graph.started_at {
+            let elapsed = (graph.context.current_time() - started_at).max(0.0);
+            let epoch = (elapsed / ARRANGE_SECONDS) as u64;
+            let key_changed =
+                self.arrange_phase != Some(phase) || self.arrange_bed != Some(latest.facts.bed);
+            if self.epoch != Some(epoch) || key_changed {
+                let previous = (!key_changed).then_some(self.arrangement);
+                self.arrangement =
+                    arrangement_for(phase, latest.facts.bed, self.seed, epoch, previous);
+                self.epoch = Some(epoch);
+                self.arrange_phase = Some(phase);
+                self.arrange_bed = Some(latest.facts.bed);
+            }
+        }
+        let scales = arrangements_for(phase)
+            .get(self.arrangement)
+            .map_or([1.0; 4], |state| state.scales);
+        let table = mix.layers.in_track_order();
+        let mut layers = [
+            table[0] * scales[0] * colour.layers[0],
+            table[1] * scales[1] * colour.layers[1],
+            table[2] * scales[2] * colour.layers[2],
+            table[3] * scales[3] * colour.layers[3],
+        ];
+        let mut filter_hertz = (mix.filter_hertz * colour.filter_scale)
+            .clamp(MINIMUM_FILTER_HERTZ, MAXIMUM_FILTER_HERTZ);
+        if sombre {
+            filter_hertz = filter_hertz.min(SOMBRE_FILTER_HERTZ);
+        }
+        // The depth follows what is actually playing: a battle dips heavier than a scene.
+        let depth = duck_decibels(self.suite);
+        let (duck, duck_rise, duck_fall) = match reason {
+            "sfx" => (
+                gain_for_decibels(DUCK_SFX_DECIBELS),
+                DUCK_SFX_RELEASE_SECONDS,
+                DUCK_SFX_ATTACK_SECONDS,
+            ),
+            "none" => (1.0, DUCK_RELEASE_SECONDS, DUCK_LINE_ATTACK_SECONDS),
+            _ => (
+                gain_for_decibels(depth),
+                DUCK_RELEASE_SECONDS,
+                DUCK_LINE_ATTACK_SECONDS,
+            ),
+        };
+        // Thin the mix under speech as well as dropping its level: the low-pass closes over
+        // the consonant band and the two busiest layers halve, so words stay clear even in a
+        // full battle mix. An effects-only dip thins nothing.
+        if reason == "voice" || reason == "caption" {
+            filter_hertz = filter_hertz.min(LINE_FILTER_HERTZ);
+            layers[2] *= LINE_BUSY_SCALE;
+            layers[3] *= LINE_BUSY_SCALE;
+        }
+        self.colour = colour.name;
         let target = Applied {
             layers: if graph.started_at.is_some() {
-                mix.layers.in_track_order()
+                layers
             } else {
                 [0.0; 4]
             },
-            ambient: mix.ambient * AMBIENT_LEVEL,
-            filter_hertz: mix.filter_hertz,
+            ambient: mix.ambient * AMBIENT_LEVEL * colour.ambient_scale,
+            score_bus: 1.0,
+            stinger_bus: 1.0,
+            filter_hertz,
             master: if self.enabled { self.volume } else { 0.0 },
-            duck: if self.speaking { duck_gain() } else { 1.0 },
+            duck,
         };
         let previous = self.applied;
         if previous == Some(target) && !self.resync {
+            self.last_phase = Some(phase);
             return Ok(());
         }
+        // A phase change (into/out of a fight, a scene change, the end of the adventure)
+        // lengthens the rise into a crossfade; deliberate fast drops keep their own fall.
+        let rise = if self.last_phase != Some(phase) {
+            mix.rise_seconds.max(TRANSITION_SECONDS)
+        } else {
+            mix.rise_seconds
+        };
         let now = graph.context.current_time();
         let resync = self.resync;
         for (index, layer) in graph.layers.iter().enumerate() {
@@ -446,7 +894,7 @@ impl Director {
                 previous.map(|applied| applied.layers[index]),
                 target.layers[index],
                 now,
-                mix.rise_seconds,
+                rise,
                 mix.fall_seconds,
                 resync,
             )?;
@@ -456,7 +904,7 @@ impl Director {
             previous.map(|applied| applied.ambient),
             target.ambient,
             now,
-            mix.rise_seconds,
+            rise,
             mix.fall_seconds,
             resync,
         )?;
@@ -483,23 +931,21 @@ impl Director {
             previous.map(|applied| applied.duck),
             target.duck,
             now,
-            DUCK_RELEASE_SECONDS,
-            DUCK_ATTACK_SECONDS,
+            duck_rise,
+            duck_fall,
             resync,
         )?;
         self.applied = Some(target);
+        self.last_phase = Some(phase);
         self.resync = false;
         Ok(())
     }
 
-    /// Plays a stinger on the next beat. One that cannot play now (sound off, hidden tab,
-    /// track not loaded) is skipped, never queued: an old flourish would be wrong later.
+    /// Plays a stinger on the next beat, rotating takes so the same one never plays twice
+    /// running while another is loaded. One that cannot play now (sound off, hidden tab, no
+    /// take loaded) is skipped, never queued: an old flourish would be wrong later.
     fn play_stinger(&mut self, stinger: Stinger) -> Result<(), JsValue> {
         let Some(graph) = self.graph.as_ref() else {
-            return Ok(());
-        };
-        let track = stinger.track();
-        let Some(buffer) = self.buffers.get(track) else {
             return Ok(());
         };
         if !self.enabled
@@ -508,14 +954,31 @@ impl Director {
         {
             return Ok(());
         }
+        let index = stinger_index(stinger);
+        let mut loaded = Vec::new();
+        for take in 0..STINGER_TAKES {
+            let track = stinger_track(stinger, take);
+            if self.buffers.contains_key(track) {
+                loaded.push(track);
+            }
+        }
+        if loaded.is_empty() {
+            return Ok(());
+        }
+        let position = next_take(self.stinger_takes[index], loaded.len());
+        let track = loaded[position];
+        let Some(buffer) = self.buffers.get(track) else {
+            return Ok(());
+        };
         let when = next_beat(graph.context.current_time(), graph.started_at);
         let gain = graph.context.create_gain()?;
         gain.gain().set_value(STINGER_LEVEL);
-        gain.connect_with_audio_node(&graph.duck)?;
+        gain.connect_with_audio_node(&graph.stinger_bus)?;
         let source = graph.context.create_buffer_source()?;
         source.set_buffer(Some(buffer));
         source.connect_with_audio_node(&gain)?;
         source.start_with_when(when)?;
+        self.stinger_takes[index] = Some(position);
         if self.fired.len() >= FIRED_MEMORY {
             self.fired.pop_front();
         }
@@ -523,7 +986,9 @@ impl Director {
         Ok(())
     }
 
-    /// The read-only debug snapshot: phase, intensity, target gains, bed, ducking.
+    /// The read-only debug snapshot: phase, intensity, target gains, buses, arrangement,
+    /// colour, suite, takes, bed and ducking. A harness can check the whole mix from here
+    /// without listening.
     fn publish(&mut self) {
         let latest = self.latest.as_ref();
         let gains = self.applied.map_or_else(
@@ -539,11 +1004,51 @@ impl Director {
                 )
             },
         );
+        let buses = self.applied.map_or_else(
+            || "null".to_owned(),
+            |applied| {
+                format!(
+                    "{{\"score\":{},\"ambient\":{},\"stinger\":{},\"duck\":{},\"master\":{}}}",
+                    applied.score_bus,
+                    applied.ambient,
+                    applied.stinger_bus,
+                    applied.duck,
+                    applied.master
+                )
+            },
+        );
+        let arrangement = self.arrange_phase.map(|phase| {
+            arrangements_for(phase)
+                .get(self.arrangement)
+                .map_or("unknown", |state| state.name)
+        });
+        let takes = self
+            .stinger_takes
+            .iter()
+            .map(|take| take.map_or("null".to_owned(), |take| take.to_string()))
+            .collect::<Vec<_>>()
+            .join(",");
+        // The duck gain sounding right now, sampled off the parameter (the buses carry the
+        // target it is gliding toward), and the computed score level beside the voice level, so
+        // a check asserts the 12 dB bar without listening.
+        let duck_now = self
+            .graph
+            .as_ref()
+            .map(|graph| (graph.duck.gain().value() * 1_000.0).round() / 1_000.0)
+            .unwrap_or(1.0);
+        let music_db = self
+            .applied
+            .map(|applied| mix_level_lufs(applied.layers))
+            .unwrap_or(f32::NEG_INFINITY);
+        let duck_log = list(self.duck_log.iter().map(String::as_str));
         let snapshot = format!(
             "{{\"sound\":{},\"context\":{},\"phase\":{},\"intensity\":{},\"sequence\":{},\"cue\":{},\
-\"gains\":{gains},\"filter_hertz\":{},\"master\":{},\"bed\":{},\"bed_playing\":{},\
-\"layers_started\":{},\"ducked\":{},\"volume\":{},\"loaded\":{},\"missing\":{},\
-\"stingers\":{},\"error\":{}}}",
+\"gains\":{gains},\"buses\":{buses},\"filter_hertz\":{},\"master\":{},\"bed\":{},\"bed_playing\":{},\
+\"layers_started\":{},\"layers_playing\":{},\"suite\":{},\"arrangement\":{},\"colour\":{},\
+\"alternate_takes\":{},\"stinger_takes\":[{takes}],\"ducked\":{},\"duck_reason\":{},\
+\"duck_now\":{duck_now},\"music_db\":{},\"voice_db\":{:.1},\"duck_log\":{duck_log},\
+\"tick_ms\":{:.1},\"tick_ms_max\":{:.1},\
+\"sfx_count\":{},\"volume\":{},\"loaded\":{},\"missing\":{},\"stingers\":{},\"error\":{}}}",
             text(if self.enabled { "on" } else { "off" }),
             text(self.graph.as_ref().map_or("none", Graph::state_name)),
             optional_text(latest.map(|latest| latest.tempo.phase.name())),
@@ -562,7 +1067,18 @@ impl Director {
             self.graph
                 .as_ref()
                 .is_some_and(|graph| graph.started_at.is_some()),
-            self.speaking,
+            list(self.layer_tracks.iter().flatten().copied()),
+            text(self.suite.name()),
+            optional_text(arrangement),
+            text(self.colour),
+            self.layer_alternate,
+            self.duck_reason != "none",
+            text(self.duck_reason),
+            finite_float(music_db),
+            VOICE_LUFS,
+            self.tick_ms,
+            self.tick_ms_max,
+            optional_number(self.sfx_count),
             self.volume,
             self.buffers.len(),
             list(self.missing.iter().copied()),
@@ -576,12 +1092,38 @@ impl Director {
     }
 }
 
+/// `Stinger::ALL` order, matching `Director::stinger_takes`.
+fn stinger_index(stinger: Stinger) -> usize {
+    match stinger {
+        Stinger::Reveal => 0,
+        Stinger::Combat => 1,
+        Stinger::Victory => 2,
+        Stinger::Defeat => 3,
+    }
+}
+
 /// A JSON string literal (the browser escapes it).
 fn text(value: &str) -> String {
     js_sys::JSON::stringify(&JsValue::from_str(value))
         .ok()
         .and_then(|literal| literal.as_string())
         .unwrap_or_else(|| "null".to_owned())
+}
+
+/// A finite level in LUFS with one decimal, or null when there is no level (silence).
+fn finite_float(value: f32) -> String {
+    if value.is_finite() {
+        format!("{value:.1}")
+    } else {
+        "null".to_owned()
+    }
+}
+
+/// Wall-clock milliseconds on the page clock; 0 when the clock is unavailable.
+fn performance_now() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map_or(0.0, |performance| performance.now())
 }
 
 fn optional_text(value: Option<&str>) -> String {
@@ -655,6 +1197,9 @@ fn director(document: &Document, root: &Element) -> Result<Shared, JsValue> {
 }
 
 fn create(document: &Document, root: &Element) -> Result<Shared, JsValue> {
+    // One seed per page: the arrangement rotation and the alternate-take pick vary session to
+    // session, while the pure rules stay unit-testable with controlled seeds.
+    let seed = js_sys::Date::now() as u64;
     let shared = Rc::new(RefCell::new(Director {
         document: document.clone(),
         root: root.clone(),
@@ -675,6 +1220,27 @@ fn create(document: &Document, root: &Element) -> Result<Shared, JsValue> {
         cues: CueMemory::default(),
         connection: 0,
         listeners: Vec::new(),
+        seed,
+        layer_alternate: seed % 2 == 1,
+        layer_tracks: None,
+        epoch: None,
+        arrangement: 0,
+        arrange_phase: None,
+        arrange_bed: None,
+        colour: "none",
+        suite: Suite::Main,
+        stinger_takes: [None; 4],
+        sfx_count: None,
+        sfx_dip_until: 0.0,
+        line_seen_ms: None,
+        caption_floor_until: 0.0,
+        last_line_id: None,
+        action_nodes: Vec::new(),
+        duck_reason: "none",
+        duck_log: VecDeque::new(),
+        tick_ms: 0.0,
+        tick_ms_max: 0.0,
+        last_phase: None,
     }));
     for name in ["pointerdown", "keydown", "click"] {
         let weak = Rc::downgrade(&shared);
@@ -722,6 +1288,7 @@ fn on_gesture(shared: &Shared) {
 }
 
 fn tick(shared: &Shared) {
+    let started = performance_now();
     let Ok(mut state) = shared.try_borrow_mut() else {
         return;
     };
@@ -732,6 +1299,8 @@ fn tick(shared: &Shared) {
             Vec::new()
         }
     };
+    state.tick_ms = performance_now() - started;
+    state.tick_ms_max = state.tick_ms_max.max(state.tick_ms);
     drop(state);
     for track in wanted {
         spawn_local(load(Rc::clone(shared), track));

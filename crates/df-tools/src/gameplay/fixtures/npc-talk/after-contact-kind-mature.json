@@ -81,7 +81,7 @@
   {
    "n": 3,
    "hero_words": "I am sorry you carry this. Who is behind the trouble?",
-   "reply": "I have no name to give you; I\u2019ve watched the road for days, and I trust very few faces on it. I\u2019m a watch sergeant at the Reading Gallery, and I\u2019ve kept everything ready on my side.",
+   "reply": "I have no name to give you. I\u2019ve watched the road for days, and I trust very few faces on it. I\u2019m a watch sergeant at the Reading Gallery, and I\u2019ve kept everything ready on my side.",
    "from_model": true,
    "approach": "kindness",
    "attitude_before": "hostile",
@@ -97,7 +97,7 @@
   {
    "n": 4,
    "hero_words": "We will do our best. What should we look out for?",
-   "reply": "I saw two riders come through the Orrery Library before dawn, looking over their shoulders; neither stopped to eat. What do you make of that?",
+   "reply": "I saw two riders come through the Orrery Library before dawn, looking over their shoulders. Neither stopped to eat. What do you make of that?",
    "from_model": true,
    "approach": "question",
    "attitude_before": "indifferent",

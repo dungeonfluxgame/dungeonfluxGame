@@ -176,6 +176,7 @@ impl RunningActor {
             qualification_inputs: Some(Vec::new()),
             qualification_joins: Some(Vec::new()),
             completion_retry: None,
+            dev_history: None,
             session: Default::default(),
             completion_observer,
         };

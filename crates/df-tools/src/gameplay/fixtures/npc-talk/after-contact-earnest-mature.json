@@ -51,7 +51,7 @@
   {
    "n": 1,
    "hero_words": "Perrin? Liora sent us. What have you got for us?",
-   "reply": "Liora sent word you would come for the seed sack. Do not blame Liora; she only passed along the message.",
+   "reply": "Liora sent word you would come for the seed sack. Do not blame Liora. She only passed along the message.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -81,7 +81,7 @@
   {
    "n": 3,
    "hero_words": "Who is making trouble out here?",
-   "reply": "I can\u2019t name anyone making trouble. Most of what\u2019s said about the giant weasel is exaggerated, though not all of it; trouble on the road is likeliest when the light is worst. I\u2019ve watched the road for days, and I trust very few faces on it.",
+   "reply": "I can\u2019t name anyone making trouble. Most of what\u2019s said about the giant weasel is exaggerated, though not all of it, and trouble on the road is likeliest when the light is worst. I\u2019ve watched the road for days, and I trust very few faces on it.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -97,7 +97,7 @@
   {
    "n": 4,
    "hero_words": "What would you do in our place?",
-   "reply": "I would take the road toward the Tidewatch Lamp Room an hour before dawn; it is quietest then. If trouble comes, it will come when the light is worst, so keep watch.",
+   "reply": "I would take the road toward the Tidewatch Lamp Room an hour before dawn. It is quietest then. If trouble comes, it will come when the light is worst, so keep watch.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",

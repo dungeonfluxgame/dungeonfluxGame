@@ -51,7 +51,7 @@
   {
    "n": 1,
    "hero_words": "Perrin? Liora sent us. What have you got for us?",
-   "reply": "Liora sent word you\u2019d come for the seed sack, Brakka. Please don\u2019t blame her; she only passed along the message.",
+   "reply": "Liora sent word you\u2019d come for the seed sack, Brakka. Please don\u2019t blame her. She only passed along the message.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -81,7 +81,7 @@
   {
    "n": 3,
    "hero_words": "Who is making trouble out here?",
-   "reply": "A giant weasel has turned up; folk around the Salt Quay have started locking their doors early. I serve as watch sergeant at the Tidewatch Lamp Room.",
+   "reply": "A giant weasel has turned up. Folk around the Salt Quay have started locking their doors early. I serve as watch sergeant at the Tidewatch Lamp Room.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -97,7 +97,7 @@
   {
    "n": 4,
    "hero_words": "What would you do in our place?",
-   "reply": "I\u2019d take heart that you came; you have friends here now, whether you wanted them or not. The road toward the Tidewatch Lamp Room is quietest an hour before dawn, and if trouble comes it will come when the light is worst.",
+   "reply": "I\u2019d take heart that you came. You have friends here now, whether you wanted them or not. The road toward the Tidewatch Lamp Room is quietest an hour before dawn, and if trouble comes it will come when the light is worst.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -113,7 +113,7 @@
   {
    "n": 5,
    "hero_words": "Where do we go from here?",
-   "reply": "I can\u2019t say more about the way ahead. A short rest is the next step; after that, speak with Liora about the seed sack.",
+   "reply": "I can\u2019t say more about the way ahead. A short rest is the next step. After that, speak with Liora about the seed sack.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",

@@ -24,6 +24,9 @@ const HOME: &str = include_str!("live_home.css");
 const HEALTH: &str = include_str!("live_health.css");
 // PLAY-V09: the scene plate that replaces the painting and the cut-outs.
 const PLATE: &str = include_str!("live_plate.css");
+// VICTORY-001: the held victory/defeat screen and the end card own their moment:
+// no stage chrome shows through or overlaps them. Loaded after the stage rules.
+const ENDINGS: &str = include_str!("live_endings.css");
 
 /// Adds the live screen rules once; a second call on the same page is a no-op.
 pub(super) fn install(document: &Document) -> Result<(), JsValue> {
@@ -35,7 +38,7 @@ pub(super) fn install(document: &Document) -> Result<(), JsValue> {
     let style = document.create_element("style")?;
     style.set_attribute("data-live-theme", "")?;
     style.set_text_content(Some(&format!(
-        "{LEGACY}\n{PLAYER}\n{TV}\n{JOIN}\n{MOTION}\n{STAGE}\n{IMAGERY}\n{HEALTH}\n{HOME}\n{PLATE}"
+        "{LEGACY}\n{PLAYER}\n{TV}\n{JOIN}\n{MOTION}\n{STAGE}\n{IMAGERY}\n{HEALTH}\n{HOME}\n{PLATE}\n{ENDINGS}"
     )));
     let host = match document.query_selector("head")? {
         Some(head) => head,

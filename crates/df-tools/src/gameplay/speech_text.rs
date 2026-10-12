@@ -77,6 +77,17 @@ pub(super) fn shared_words(a: &str, b: &str) -> usize {
     a.intersection(&b).count()
 }
 
+/// The meaning-carrying words of `text` in order (see [`content_words`]), for finding a
+/// clause one reply lifts from an earlier one. Transcript checks only.
+#[cfg(test)]
+pub(super) fn content_sequence(text: &str) -> Vec<String> {
+    words(text)
+        .into_iter()
+        .filter(|word| word.chars().count() >= 3 && !FILLER_WORDS.contains(&word.as_str()))
+        .map(|word| word.trim_end_matches('s').to_owned())
+        .collect()
+}
+
 /// The fraction of `of`'s meaning-carrying words that `within` also uses.
 pub(super) fn coverage(of: &str, within: &str) -> f64 {
     let wanted = content_words(of);
@@ -87,7 +98,7 @@ pub(super) fn coverage(of: &str, within: &str) -> f64 {
     wanted.iter().filter(|word| present.contains(*word)).count() as f64 / wanted.len() as f64
 }
 
-const DENIAL_PHRASES: [&str; 20] = [
+const DENIAL_PHRASES: [&str; 26] = [
     "i don't know",
     "i do not know",
     "i didn't know",
@@ -108,6 +119,12 @@ const DENIAL_PHRASES: [&str; 20] = [
     "i cannot speak",
     "i know nothing",
     "that name is not part",
+    "a question for another time",
+    "nothing more to add",
+    "my mind's elsewhere",
+    "my mind is elsewhere",
+    "my thoughts are elsewhere",
+    "my thoughts keep",
 ];
 
 /// Whether the sentence says the speaker does not know or will not tell.
@@ -116,6 +133,27 @@ pub(super) fn is_denial(sentence: &str) -> bool {
     DENIAL_PHRASES
         .iter()
         .any(|phrase| sentence.contains(phrase))
+}
+
+/// Flat dodges that refuse without saying anything: what the speaker knows, a guess, or
+/// who would know is owed instead. A subset of [`is_denial`], named for the transcript
+/// checks and the reply rules.
+#[cfg(test)]
+const FLAT_DODGES: [&str; 6] = [
+    "a question for another time",
+    "nothing more to add",
+    "my mind's elsewhere",
+    "my mind is elsewhere",
+    "my thoughts are elsewhere",
+    "my thoughts keep",
+];
+
+/// Whether the sentence is one of the flat dodges in [`FLAT_DODGES`]. Transcript
+/// checks only.
+#[cfg(test)]
+pub(super) fn is_flat_dodge(sentence: &str) -> bool {
+    let sentence = normalised(sentence);
+    FLAT_DODGES.iter().any(|phrase| sentence.contains(phrase))
 }
 
 /// A sentence reduced to its words, for deciding whether two sentences are the same.
@@ -130,8 +168,17 @@ pub(super) enum SpokenRule {
     SentencesAtMost(usize),
     /// The first sentence may not say the speaker does not know or cannot tell.
     NoDenialFirst,
+    /// No sentence may say the speaker does not know or cannot tell: they already said so
+    /// once in this conversation, and now steer to what they know instead.
+    NoDenial,
     /// No sentence of four or more words may repeat one of these earlier sentences.
     NoRepeat(Vec<String>),
+    /// No semicolons: a person talking does not speak in balanced written clauses.
+    NoSemicolons,
+    /// No colons: no colon-led lists or explanations, which read as prose, not speech.
+    NoColons,
+    /// No sentence may carry more than this many words: one breath, one thought.
+    SentenceWordsAtMost(usize),
 }
 
 impl SpokenRule {
@@ -148,6 +195,12 @@ impl SpokenRule {
                 .then_some(
                     "the first sentence denied knowing; answer first from the facts you were given",
                 ),
+            Self::NoDenial => parts
+                .iter()
+                .any(|part| is_denial(part))
+                .then_some(
+                    "you already said you do not know once in this conversation; steer to what you know",
+                ),
             Self::NoRepeat(earlier) => {
                 let known: BTreeSet<String> = earlier
                     .iter()
@@ -160,6 +213,78 @@ impl SpokenRule {
                     .any(|part| known.contains(&sentence_key(part)))
                     .then_some("a sentence repeated something already said; say something new")
             }
+            Self::NoSemicolons => text
+                .contains(';')
+                .then_some("a semicolon is writing, not talking; use short sentences"),
+            Self::NoColons => text
+                .contains(':')
+                .then_some("a colon-led list is writing, not talking; say it plainly"),
+            Self::SentenceWordsAtMost(most) => parts
+                .iter()
+                .any(|part| words(part).len() > *most)
+                .then_some("a sentence ran too long for one breath; split it"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_semicolon_fails_the_spoken_register() {
+        let rule = SpokenRule::NoSemicolons;
+        assert!(
+            rule.violation(
+                "I gave my word to someone dear, and I mean to keep it; a fight avoided is a victory"
+            )
+            .is_some()
+        );
+        assert!(
+            rule.violation("I gave my word. I mean to keep it.")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_colon_fails_the_spoken_register() {
+        let rule = SpokenRule::NoColons;
+        assert!(
+            rule.violation("Three things, plainly: what lies ahead tonight")
+                .is_some()
+        );
+        assert!(
+            rule.violation("Three things. Tell me what lies ahead.")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_second_denial_in_one_conversation_fails() {
+        let rule = SpokenRule::NoDenial;
+        assert!(
+            rule.violation("I can't say who watches the road. Ask the watch.")
+                .is_some()
+        );
+        assert!(
+            rule.violation("No word on that. The road is watched, though.")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_sentence_too_long_for_one_breath_fails() {
+        let rule = SpokenRule::SentenceWordsAtMost(25);
+        assert!(
+            rule.violation(
+                "I have lived in sight of the gate all my life and I know what it looks like \
+                     when something is wrong and tonight it does look wrong indeed"
+            )
+            .is_some()
+        );
+        assert!(
+            rule.violation("I know this gate. Tonight something is wrong.")
+                .is_none()
+        );
     }
 }

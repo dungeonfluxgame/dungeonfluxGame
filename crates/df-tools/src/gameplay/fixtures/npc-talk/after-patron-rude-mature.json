@@ -53,7 +53,7 @@
   {
    "n": 1,
    "hero_words": "Quit stalling. What do you want from us?",
-   "reply": "I want your word, Vex; it is the one coin I carry that cannot be forged, so I spend it carefully. My old dog is waiting at home, and he has opinions about how late I am getting back.",
+   "reply": "I want your word, Vex. It is the one coin I carry that cannot be forged, so I spend it carefully. My old dog is waiting at home, and he has opinions about how late I am getting back.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "indifferent",
@@ -69,7 +69,7 @@
   {
    "n": 2,
    "hero_words": "That tells me nothing. Who is Perrin Marlow, and why should I care?",
-   "reply": "Perrin is an old friend of mine, a watch sergeant at the Tidewatch Lamp Room, and he\u2019s holding a sack of precious seed-grain for me; if you care whether I get it back, that\u2019s why his name matters.",
+   "reply": "Perrin is an old friend of mine, a watch sergeant at the Tidewatch Lamp Room, and he\u2019s holding a sack of precious seed-grain for me. If you care whether I get it back, that\u2019s why his name matters.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "indifferent",
@@ -85,7 +85,7 @@
   {
    "n": 3,
    "hero_words": "You are wasting my time. What is out on the road?",
-   "reply": "I can tell you the harbor-master's lamp burns until the last boat is in, then goes out; the Tidewatch Lamp Room keeps odd hours, so knock twice and wait, for doors have their own tempers. I would not ask this of you if there were anyone else I could trust with it.",
+   "reply": "I can tell you the harbor-master's lamp burns until the last boat is in, then goes out. The Tidewatch Lamp Room keeps odd hours, so knock twice and wait, for doors have their own tempers. I would not ask this of you if there were anyone else I could trust with it.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "indifferent",
@@ -102,7 +102,7 @@
   {
    "n": 4,
    "hero_words": "Pathetic. Is that really all you know?",
-   "reply": "No; collecting it alone has become dangerous, and I will sleep again only once the seed sack is inside the Tidewatch Lamp Room. Somebody has been asking after it at every inn between the Salt Quay and the Lamp Room.",
+   "reply": "No. Collecting it alone has become dangerous, and I will sleep again only once the seed sack is inside the Tidewatch Lamp Room. Somebody has been asking after it at every inn between the Salt Quay and the Lamp Room.",
    "from_model": true,
    "approach": "insult",
    "attitude_before": "indifferent",
@@ -119,7 +119,7 @@
   {
    "n": 5,
    "hero_words": "Fine. Where do we go?",
-   "reply": "We go to the Tidewatch Lamp Room, then; come with me, Vex, and let me lead you there.",
+   "reply": "We go to the Tidewatch Lamp Room, then. Come with me, Vex, and let me lead you there.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "indifferent",

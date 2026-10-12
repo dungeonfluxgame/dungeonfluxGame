@@ -645,9 +645,10 @@ impl TvStage {
             caption.set_attribute("data-line-id", &id.to_string())?;
             caption.set_attribute("data-line-state", state.name())?;
         }
+        // VICTORY-001: a finished line stays on screen until the next scene's
+        // entry clears it (see `clear_narration` on `SceneState::Entering`), so
+        // the narrator box never sits empty while the table waits.
         if state == LineState::Done {
-            // A finished line leaves nothing behind for the next scene's first frame to show.
-            self.narration.set_text_content(None);
             self.narration.remove_attribute("title")?;
         }
         match state {

@@ -13,7 +13,6 @@ use df_types::{
     BuildIdentity, MemberId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision,
 };
 use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::sync::OnceLock;
 
 pub(super) const SOURCE: &[u8] = b"SRD5.2.1 page6 D20 Tests Ability Checks; https://media.dndbeyond.com/compendium-images/srd/5.2/SRD_CC_v5.2.1.pdf; Wizards of the Coast LLC; CC BY 4.0; normal single-d20 check only";
@@ -480,13 +479,25 @@ pub(super) fn initial() -> Result<Checkpoint, RepositoryError> {
 
 pub(super) fn random<const N: usize>() -> Result<[u8; N], RepositoryError> {
     let mut bytes = [0; N];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut file| file.read_exact(&mut bytes))
-        .map_err(|_| RepositoryError::Unavailable)?;
+    fill_os_entropy(&mut bytes).map_err(|_| RepositoryError::Unavailable)?;
     if N > 1 && bytes.iter().all(|byte| *byte == 0) {
         return Err(RepositoryError::Unavailable);
     }
     Ok(bytes)
+}
+
+/// Fills `bytes` from the operating system's cryptographic random source.
+#[cfg(unix)]
+pub(super) fn fill_os_entropy(bytes: &mut [u8]) -> std::io::Result<()> {
+    use std::io::Read;
+    std::fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(bytes))
+}
+
+// Windows has no `/dev/urandom`, so entropy comes from the operating system's
+// cryptographic random source through the `getrandom` crate instead.
+#[cfg(windows)]
+pub(super) fn fill_os_entropy(bytes: &mut [u8]) -> std::io::Result<()> {
+    getrandom::getrandom(bytes).map_err(|error| std::io::Error::other(format!("{error:?}")))
 }
 fn draw_d20() -> Result<u8, RepositoryError> {
     // Reject the final incomplete bucket; modulo of all 256 byte values is biased.

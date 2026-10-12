@@ -3,7 +3,7 @@ use std::{
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     num::NonZeroU16,
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
@@ -836,6 +836,109 @@ pub(super) fn load_extra_assets(
             Err(error) => return Err(error),
         }
     }
+    for asset in load_dice_assets(&dice_dir(asset_root))? {
+        if loaded
+            .iter()
+            .any(|existing: &super::public_assets::ExtraAsset| existing.url == asset.url)
+        {
+            continue;
+        }
+        total += asset.bytes.len();
+        if total > MAXIMUM_EXTRA_ASSET_TOTAL_BYTES {
+            return Err(io::Error::other("owned asset total bound refused"));
+        }
+        loaded.push(asset);
+    }
+    Ok(loaded)
+}
+
+/// Dice-roll clips the display plays over a fight. The directory's own
+/// `dice-rolls.json` manifest names exactly the clip files the game serves,
+/// extensionless at `/assets/ui/generated/dice/<stem>` with the clip's media
+/// type (a request *with* an extension matches no route, by the same rule that
+/// hid the drawn die's image). Nothing the manifest does not name is read or
+/// routed. This is the field contract a future clip delivery must keep: per
+/// clip `webm`, `key_mp4` and `rest_image` file names, `rest_ms`, `face_center`,
+/// `face_corners`, `face_rotation_deg`, and the top-level `key_color`.
+/// A missing manifest serves nothing (the display falls back to the roll card);
+/// an unreadable or invalid one refuses startup.
+const DICE_MANIFEST_FILE: &str = "dice-rolls.json";
+const DICE_URL_PREFIX: &str = "/assets/ui/generated/dice/";
+/// Development override for the dice clip directory: placeholder clips live
+/// outside `assets/` and must never be mistaken for delivered assets. Unset in
+/// production, when clips load from `<asset_root>/generated/dice/`.
+const DICE_DIR_ENVIRONMENT: &str = "DF_GAMEPLAY_DICE_DIR";
+/// The manifest names clip files; only these media types are ever served.
+const DICE_EXTENSIONS: [(&str, &str); 4] = [
+    ("webm", "video/webm"),
+    ("mp4", "video/mp4"),
+    ("webp", "image/webp"),
+    ("json", "application/json"),
+];
+
+fn dice_dir(asset_root: &Path) -> PathBuf {
+    std::env::var(DICE_DIR_ENVIRONMENT)
+        .ok()
+        .filter(|dir| !dir.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| asset_root.join("generated/dice"))
+}
+
+pub(super) fn load_dice_assets(
+    dice: &Path,
+) -> Result<Vec<super::public_assets::ExtraAsset>, io::Error> {
+    let invalid = || io::Error::other("dice manifest invalid");
+    let manifest = match std::fs::read_to_string(dice.join(DICE_MANIFEST_FILE)) {
+        Ok(manifest) => manifest,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&manifest).map_err(|_| invalid())?;
+    let Some(clips) = parsed.get("clips").and_then(|clips| clips.as_array()) else {
+        return Err(invalid());
+    };
+    let mut names = Vec::new();
+    for clip in clips {
+        for key in ["webm", "key_mp4", "rest_image"] {
+            match clip.get(key).and_then(|name| name.as_str()) {
+                Some(name) => names.push(name),
+                None => return Err(invalid()),
+            }
+        }
+    }
+    names.push(DICE_MANIFEST_FILE);
+    let mut loaded = Vec::new();
+    for name in names {
+        let file = Path::new(name);
+        // The manifest names flat files only: no directories, no traversal.
+        if file.file_name().and_then(|base| base.to_str()) != Some(name) {
+            return Err(invalid());
+        }
+        let extension = file
+            .extension()
+            .and_then(|some| some.to_str())
+            .unwrap_or("");
+        let Some(mime) = DICE_EXTENSIONS
+            .iter()
+            .find(|(known, _)| *known == extension)
+            .map(|(_, mime)| *mime)
+        else {
+            return Err(invalid());
+        };
+        let Some(stem) = file.file_stem().and_then(|some| some.to_str()) else {
+            return Err(invalid());
+        };
+        match super::bounded_asset(dice.join(file), MAXIMUM_EXTRA_ASSET_BYTES) {
+            Ok(bytes) => loaded.push(super::public_assets::ExtraAsset {
+                url: format!("{DICE_URL_PREFIX}{stem}"),
+                mime,
+                bytes,
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    loaded.sort_by(|first, second| first.url.cmp(&second.url));
     Ok(loaded)
 }
 
@@ -994,11 +1097,12 @@ pub(super) fn battle_fps(input: Result<String, VarError>) -> Result<u32, io::Err
 
 /// The largest `DF_GAMEPLAY_SPLAT_LOD` accepted.
 const MAXIMUM_SPLAT_LOD: u32 = 3;
-/// The default tier of a streamed scan: 1, the second largest, not the largest.
-const DEFAULT_SPLAT_LOD: u32 = 1;
+/// The default tier of a streamed scan: 0, the largest the scene authors (SPLAT-002 owner
+/// decision: battle scans draw at level 0 because coarser tiers read as muddy).
+const DEFAULT_SPLAT_LOD: u32 = 0;
 
 /// `DF_GAMEPLAY_SPLAT_LOD`: which tier of a streamed scan the battlefield draws as its finest, 0 to
-/// 3 (default 1). 0 is the largest tier the scene authors for the scan, 1 the next one down. Anything
+/// 3 (default 0). 0 is the largest tier the scene authors for the scan, 1 the next one down. Anything
 /// else is refused at startup rather than silently replaced.
 pub(super) fn splat_lod(input: Result<String, VarError>) -> Result<u32, io::Error> {
     let Some(value) = optional(input)? else {
@@ -1009,7 +1113,7 @@ pub(super) fn splat_lod(input: Result<String, VarError>) -> Result<u32, io::Erro
         .ok()
         .filter(|level| *level <= MAXIMUM_SPLAT_LOD && value == level.to_string())
         .ok_or_else(|| {
-            io::Error::other("DF_GAMEPLAY_SPLAT_LOD invalid: use 0, 1, 2 or 3 (default 1)")
+            io::Error::other("DF_GAMEPLAY_SPLAT_LOD invalid: use 0, 1, 2 or 3 (default 0)")
         })
 }
 
@@ -1389,6 +1493,43 @@ mod tests {
                 ("/assets/ui/generated/sfx/hit", "audio/mpeg"),
             ]
         );
+    }
+
+    #[test]
+    fn dice_assets_serve_exactly_what_the_manifest_names() {
+        let root = std::env::temp_dir().join(format!("df-dice-assets-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("dice-rolls.json"),
+            r##"{"key_color":"#ff00ff","clips":[{"id":1,"webm":"roll-1.webm","key_mp4":"roll-1-key.mp4","rest_image":"roll-1-rest.webp","rest_ms":1200,"face_center":[0.5,0.5],"face_corners":[[0.4,0.4],[0.6,0.4],[0.5,0.6]],"face_rotation_deg":0.0}]}"##,
+        )
+        .unwrap();
+        std::fs::write(root.join("roll-1.webm"), b"webm").unwrap();
+        std::fs::write(root.join("roll-1-key.mp4"), b"mp4").unwrap();
+        std::fs::write(root.join("roll-1-rest.webp"), b"webp").unwrap();
+        std::fs::write(root.join("unlisted.webm"), b"no").unwrap();
+        let loaded = load_dice_assets(&root).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        let served: Vec<(&str, &str)> = loaded
+            .iter()
+            .map(|asset| (asset.url.as_str(), asset.mime))
+            .collect();
+        assert_eq!(
+            served,
+            [
+                ("/assets/ui/generated/dice/dice-rolls", "application/json"),
+                ("/assets/ui/generated/dice/roll-1", "video/webm"),
+                ("/assets/ui/generated/dice/roll-1-key", "video/mp4"),
+                ("/assets/ui/generated/dice/roll-1-rest", "image/webp"),
+            ]
+        );
+        // A missing manifest serves nothing; an invalid one refuses startup.
+        let missing = std::env::temp_dir().join(format!("df-dice-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&missing).unwrap();
+        assert!(load_dice_assets(&missing).unwrap().is_empty());
+        std::fs::write(missing.join("dice-rolls.json"), b"{nope").unwrap();
+        assert!(load_dice_assets(&missing).is_err());
+        std::fs::remove_dir_all(&missing).unwrap();
     }
 
     #[test]
@@ -2162,9 +2303,9 @@ mod adventure_settings_tests {
     }
 
     #[test]
-    fn the_splat_lod_is_1_by_default_and_only_0_to_3_are_accepted() {
+    fn the_splat_lod_is_0_by_default_and_only_0_to_3_are_accepted() {
         let set = |value: &str| Ok::<_, VarError>(value.to_owned());
-        assert_eq!(splat_lod(Err(VarError::NotPresent)).unwrap(), 1);
+        assert_eq!(splat_lod(Err(VarError::NotPresent)).unwrap(), 0);
         for (text, level) in [("0", 0), ("1", 1), ("2", 2), ("3", 3)] {
             assert_eq!(splat_lod(set(text)).unwrap(), level);
         }

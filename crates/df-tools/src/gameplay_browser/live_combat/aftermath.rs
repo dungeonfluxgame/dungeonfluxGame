@@ -116,6 +116,11 @@ pub(super) fn present_display(
         })
         .collect();
     host.set_attribute("data-outcome", &outcome_word(view).to_lowercase())?;
+    host.set_attribute(
+        "data-narrative",
+        crate::presentation::narrative_tier(view.narration),
+    )?;
+
     let aftermath = EncounterAftermathView {
         generation: revision.epoch().get(),
         revision: presentation.sequence(),

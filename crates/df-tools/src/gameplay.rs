@@ -18,6 +18,9 @@ mod courier_process_qualification;
 mod dialogue;
 #[cfg(test)]
 mod dialogue_tests;
+// DEVCTL-001: development-only agent control surface (off by default).
+mod dev_control;
+mod fight_lines;
 mod health_faces;
 mod home_theme;
 #[cfg(test)]
@@ -303,6 +306,30 @@ impl rpc::session_service_server::SessionService for Service {
         );
         Ok(Response::new(Box::pin(stream)))
     }
+
+    /// The shared display reports the last combat beat it finished presenting. The
+    /// report can only advance the pacing gate's released sequence; the actor ignores
+    /// reports from any credential but the display's.
+    async fn report_presented(
+        &self,
+        request: Request<rpc::PresentedRequest>,
+    ) -> Result<Response<rpc::PresentedResponse>, Status> {
+        let credential = credential(&request)?;
+        let sequence = request.into_inner().sequence;
+        let (reply, wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::Presented {
+                credential,
+                sequence,
+                reply,
+            })
+            .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+        let released_sequence = tokio::time::timeout(timing::active().reply, wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("gameplay presented deadline"))?
+            .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
+        Ok(Response::new(rpc::PresentedResponse { released_sequence }))
+    }
 }
 /// Completes when the published scene art changes; a service without living scenes (or whose
 /// channel has closed) never completes.
@@ -514,7 +541,9 @@ async fn credits() -> Html<&'static str> {
 /// length is set, and prints one `READY` line. A qualification flag as the fourth
 /// argument keeps the fixed loopback address, 290-second limit, and small connection,
 /// stream, and call bounds the qualification harnesses were written against.
-pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn serve(
+    #[cfg(windows)] mut console_stop: tokio::sync::watch::Receiver<bool>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(command) = std::env::args_os().nth(1)
         && (command == "--campaign-run" || command == "--campaign-status")
     {
@@ -776,6 +805,22 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         println!("ROOM {}", loaded.pack.room_code);
         pack::install(loaded)?;
     }
+    let stop_file = std::env::var_os("DF_GAMEPLAY_STOP_FILE").map(|base| {
+        let mut path = std::path::PathBuf::from(base);
+        path.push(format!("{}.stop", run_identity));
+        path
+    });
+    if let Some(path) = &stop_file {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        println!("STOP_REQUEST file={}", path.display());
+    }
     // The join code encodes the room code the pack above has fixed, before anything is started.
     let join_qr = join_link::JoinQr::for_room(&journey::room_code())
         .map_err(|_| io::Error::other("join QR code refused"))?;
@@ -827,6 +872,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     };
     let recovery =
         model::recovery().map_err(|_| io::Error::other("source recovery inventory invalid"))?;
+    // DEVCTL-001: admitted references for development candidate rebuilds. Used
+    // only when the control surface is on; otherwise dropped unused.
+    let dev_recovery = recovery.clone();
     let fence = model::random::<16>().map_err(|_| io::Error::other("native fence unavailable"))?;
     let player_credential =
         model::random::<32>().map_err(|_| io::Error::other("local grant unavailable"))?;
@@ -1157,8 +1205,49 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         (None, None)
     };
+    let table_log = if interactive {
+        table_log::TableLog::new()
+    } else {
+        table_log::TableLog::disabled()
+    };
+    // A generated adventure's NPCs have backstories and feelings about each hero; the harbor
+    // pack and adventures saved before dossiers existed have none and keep today's behaviour.
+    let social = match &generated_adventure {
+        Some(prepared) if !prepared.record.dossiers.is_empty() => {
+            println!(
+                "ADVENTURE npc dossiers={} (attitude saved in {})",
+                prepared.record.dossiers.len(),
+                prepared.directory.display()
+            );
+            social::SocialLedger::open(
+                prepared.record.dossiers.clone(),
+                &prepared.record.seed,
+                Some(prepared.directory.clone()),
+            )
+            .map_err(|error| io::Error::other(error.to_string()))?
+        }
+        _ => social::SocialLedger::none(),
+    };
+    // DEVCTL-001: back/forward ring shared with the development surface (and the
+    // owner's publication hook). Empty and unwired unless the surface is on.
+    let dev_history =
+        std::sync::Arc::new(std::sync::Mutex::new(dev_control::history::History::new()));
     let (publication, intent_notifications) = actor::Publication::new(updates.clone());
-    let publication = publication.with_campaign(campaign_observer.clone());
+    let mut publication = publication.with_campaign(campaign_observer.clone());
+    // DEVCTL-001: the history bundle for the control surface; the publication
+    // hook and the session owner share it only when the surface is on.
+    // Otherwise no history is kept anywhere. The checkpoint travels with the
+    // table-log floor and the social snapshot, so a rewind restores all of
+    // it or none.
+    let dev_bundle = dev_control::Bundle {
+        history: dev_history,
+        table: table_log.clone(),
+        social: social.clone(),
+    };
+    let dev_on = dev_control::setting_on(settings.listen).unwrap_or(false);
+    if dev_on {
+        publication = publication.with_history(dev_bundle.clone());
+    }
     let courier_reductions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let owner = match DurableOwner::new(
         repository,
@@ -1183,29 +1272,6 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .or(restart_budget)
         .or(rest_budget)
         .or(settings.call_budget);
-    let table_log = if interactive {
-        table_log::TableLog::new()
-    } else {
-        table_log::TableLog::disabled()
-    };
-    // A generated adventure's NPCs have backstories and feelings about each hero; the harbor
-    // pack and adventures saved before dossiers existed have none and keep today's behaviour.
-    let social = match &generated_adventure {
-        Some(prepared) if !prepared.record.dossiers.is_empty() => {
-            println!(
-                "ADVENTURE npc dossiers={} (attitude saved in {})",
-                prepared.record.dossiers.len(),
-                prepared.directory.display()
-            );
-            social::SocialLedger::open(
-                prepared.record.dossiers.clone(),
-                &prepared.record.seed,
-                Some(prepared.directory.clone()),
-            )
-            .map_err(|error| io::Error::other(error.to_string()))?
-        }
-        _ => social::SocialLedger::none(),
-    };
     // Living scenes: server-generated scene art that follows the story's mood, under the
     // server's one content rating.
     let rating = startup_configuration::content_rating();
@@ -1269,7 +1335,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         tempo,
         owner,
         table_log: table_log.clone(),
-        social,
+        social: social.clone(),
+        // DEVCTL-001: the rewind entry refresh handle, set only when on.
+        dev_history: dev_on.then(|| dev_bundle.history.clone()),
         table_settings,
         dialogue: dialogue::DialogueState::default(),
         bootstrap_credential: player_credential,
@@ -1384,9 +1452,21 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         streams: Arc::new(Semaphore::new(settings.max_watch_streams)),
         voice: voice.clone(),
         npc_voice: Arc::new(npc_reply::NpcVoice::new(storyteller)),
-        table_log,
+        // DEVCTL-001: cloned, not moved: the control surface takes one below.
+        table_log: table_log.clone(),
         living,
     };
+    // DEVCTL-001: the agent control surface. Off by default: with the setting
+    // off this returns no routes and touches nothing (no file, no behaviour).
+    let dev_control = dev_control::setup(
+        service.clone(),
+        display_credential,
+        settings.listen,
+        &database,
+        &std::env::current_dir()?,
+        dev_recovery,
+        dev_bundle.clone(),
+    )?;
     let (incoming_sender, incoming) =
         NativeIncoming::bounded(NonZeroUsize::new(4).ok_or("invalid native incoming bound")?)?;
     let grpc = tonic::transport::Server::builder()
@@ -1431,7 +1511,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         splat_lod,
         battle_grid,
     };
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/gameplay", get(both))
         .route("/gameplay/player", get(room::player_page))
         .route("/gameplay/display", get(display))
@@ -1463,6 +1543,11 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             settings.allowed_origins.clone().into(),
         ))
         .merge(join_link::router(join_qr));
+    // DEVCTL-001: merged only when the surface is on; otherwise the game
+    // router is exactly what it was.
+    if let Some(routes) = dev_control.router {
+        router = router.merge(routes);
+    }
     let npc = npc_phase.map(|phase| {
         tokio::spawn(courier_npc_qualification::run(
             service.clone(),
@@ -1550,18 +1635,68 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             journey::room_code(),
             journey::room_code()
         );
+        // DEVCTL-001: the one startup line for the control surface. The token
+        // itself is never printed; the client reads the file.
+        if let Some(line) = &dev_control.startup_line {
+            println!("{line}");
+        }
     }
+    // DEVCTL-001: an authenticated POST /dev/shutdown ends the serve loop here,
+    // so the teardown below releases the owner lease and the database resumes
+    // immediately. With the surface off the sender is gone and this arm waits
+    // forever.
+    let mut dev_shutdown = dev_control.shutdown.clone();
+    let mut task_panic = None;
+    let mut stop_poll = tokio::time::interval(Duration::from_secs(1));
+    stop_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    #[cfg(unix)]
+    let termination = async { terminate.recv().await };
+    #[cfg(not(unix))]
+    let termination = std::future::pending::<Option<()>>();
+    #[cfg(windows)]
+    let console_stopped = async {
+        while !*console_stop.borrow() {
+            if console_stop.changed().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(windows))]
+    let console_stopped = std::future::pending::<()>();
     let outcome: Result<(), Box<dyn std::error::Error>> = {
         tokio::select! {
             result=grpc=>result.map_err(Into::into),result=axum::serve(listener,router)=>result.map_err(Into::into),
             result=tokio::signal::ctrl_c()=>result.map_err(Into::into),
+            _=console_stopped=>Ok(()),
+            _=termination=>Ok(()),
+            _=async {
+                loop {
+                    stop_poll.tick().await;
+                    if stop_file.as_ref().is_some_and(|path| path.is_file()) {
+                        break;
+                    }
+                }
+            }=>Ok(()),
             _=async{match settings.session{Some(session)=>tokio::time::sleep(session).await,None=>std::future::pending().await}}=>Ok(()),
+            _=async move {
+                while !*dev_shutdown.borrow() {
+                    if dev_shutdown.changed().await.is_err() {
+                        std::future::pending::<()>().await;
+                    }
+                }
+            }=>Ok(()),
         }
     };
     let qualification_outcome = if let Some((cancel, task)) = qualification {
         let _ = cancel.send(());
         match task.await {
             Ok(result) => result,
+            Err(error) if error.is_panic() => {
+                task_panic = Some(error.into_panic());
+                Err(io::Error::other("qualification consumer panicked"))
+            }
             Err(_) => Err(io::Error::other("qualification consumer did not finish")),
         }
     } else {
@@ -1570,7 +1705,11 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let courier_outcome = if let Some(mut task) = courier {
         match tokio::time::timeout(Duration::from_secs(47), &mut task).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(io::Error::other("courier process consumer panicked")),
+            Ok(Err(error)) if error.is_panic() => {
+                task_panic.get_or_insert_with(|| error.into_panic());
+                Err(io::Error::other("courier process consumer panicked"))
+            }
+            Ok(Err(_)) => Err(io::Error::other("courier process consumer cancelled")),
             Err(_) => {
                 task.abort();
                 let joined = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
@@ -1587,8 +1726,14 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let restart_outcome = if let Some(mut task) = restart {
         match tokio::time::timeout(Duration::from_secs(47), &mut task).await {
             Ok(Ok(result)) => result,
+            Ok(Err(error)) if error.is_panic() => {
+                task_panic.get_or_insert_with(|| error.into_panic());
+                Err(io::Error::other(
+                    "restart consumer panicked; cleanup required",
+                ))
+            }
             Ok(Err(_)) => Err(io::Error::other(
-                "restart consumer panicked; cleanup required",
+                "restart consumer cancelled; cleanup required",
             )),
             Err(_) => {
                 task.abort();
@@ -1606,7 +1751,13 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let rest_outcome = if let Some(mut task) = rest {
         match tokio::time::timeout(Duration::from_secs(47), &mut task).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(io::Error::other("rest consumer panicked; cleanup required")),
+            Ok(Err(error)) if error.is_panic() => {
+                task_panic.get_or_insert_with(|| error.into_panic());
+                Err(io::Error::other("rest consumer panicked; cleanup required"))
+            }
+            Ok(Err(_)) => Err(io::Error::other(
+                "rest consumer cancelled; cleanup required",
+            )),
             Err(_) => {
                 task.abort();
                 let joined = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
@@ -1623,8 +1774,14 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let npc_outcome = if let Some(mut task) = npc {
         match tokio::time::timeout(Duration::from_secs(47), &mut task).await {
             Ok(Ok(result)) => result,
+            Ok(Err(error)) if error.is_panic() => {
+                task_panic.get_or_insert_with(|| error.into_panic());
+                Err(io::Error::other(
+                    "courier NPC consumer panicked; cleanup required",
+                ))
+            }
             Ok(Err(_)) => Err(io::Error::other(
-                "courier NPC consumer panicked; cleanup required",
+                "courier NPC consumer cancelled; cleanup required",
             )),
             Err(_) => {
                 task.abort();
@@ -1642,7 +1799,11 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let inn_outcome = if let Some(mut task) = inn {
         match tokio::time::timeout(Duration::from_secs(47), &mut task).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(io::Error::other("inn consumer panicked; cleanup required")),
+            Ok(Err(error)) if error.is_panic() => {
+                task_panic.get_or_insert_with(|| error.into_panic());
+                Err(io::Error::other("inn consumer panicked; cleanup required"))
+            }
+            Ok(Err(_)) => Err(io::Error::other("inn consumer cancelled; cleanup required")),
             Err(_) => {
                 task.abort();
                 let joined = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
@@ -1668,6 +1829,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     }
     drained.map_err(|_| io::Error::other("gameplay actor drain failed"))?;
     released.map_err(|_| io::Error::other("gameplay exact-fence release failed"))?;
+    if interactive {
+        println!("SESSION ownership released");
+    }
     closed.map_err(|_| io::Error::other("gameplay repository close failed"))?;
     grant_closed.map_err(|_| io::Error::other("gameplay grant close failed"))?;
     courier_committed?;
@@ -1677,6 +1841,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     rest_outcome?;
     npc_outcome?;
     inn_outcome?;
+    if let Some(payload) = task_panic {
+        std::panic::resume_unwind(payload);
+    }
     if let Some(phase) = npc_phase {
         courier_npc_qualification::closed(phase, remaining)?;
     }

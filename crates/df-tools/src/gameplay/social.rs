@@ -25,6 +25,7 @@
 use std::{
     collections::BTreeMap,
     fs, io,
+    mem::size_of,
     path::PathBuf,
     sync::{Arc, Mutex, PoisonError},
 };
@@ -468,20 +469,11 @@ pub(super) struct Conversation {
 }
 
 /// Whether an NPC's line says she does not know or will not say. It reads the reply text, so
-/// it counts the honest "I don't know" that the rules allow once per conversation.
+/// it counts the honest "I don't know" that the rules allow once per conversation. One
+/// definition of a denial ([`super::speech_text::is_denial`]) decides everywhere: the prompt
+/// rules, the speaking checks and this memory agree on what counted.
 pub(super) fn admits_not_knowing(line: &str) -> bool {
-    let lowered = line.to_lowercase().replace('\u{2019}', "'");
-    const PHRASES: [&str; 8] = [
-        "i don't know",
-        "i do not know",
-        "i can't say",
-        "i cannot say",
-        "i can't tell",
-        "i cannot tell",
-        "i couldn't say",
-        "no idea",
-    ];
-    PHRASES.iter().any(|phrase| lowered.contains(phrase))
+    super::speech_text::is_denial(line)
 }
 
 /// The outcome of recording one exchange.
@@ -550,6 +542,36 @@ pub(super) struct ExchangeRecord {
     pub(super) effect: Effect,
     pub(super) attitude: Attitude,
     pub(super) opposes: bool,
+}
+
+/// The standings and conversations of one saved moment, carried by the
+/// development back/forward ring (DEVCTL-001) because the sidecar file keeps
+/// no revision history of its own.
+#[derive(Clone, Debug, Default)]
+pub(super) struct SocialSnapshot {
+    relationships: BTreeMap<(MemberId, String), Relationship>,
+}
+
+impl SocialSnapshot {
+    pub(super) fn retained_heap_bytes(&self) -> Option<usize> {
+        let mut bytes = self
+            .relationships
+            .len()
+            .checked_mul(size_of::<((MemberId, String), Relationship)>())?;
+        for ((_, npc), relationship) in &self.relationships {
+            bytes = bytes.checked_add(npc.capacity())?;
+            bytes = bytes.checked_add(
+                relationship
+                    .voiced
+                    .capacity()
+                    .checked_mul(size_of::<String>())?,
+            )?;
+            for key in &relationship.voiced {
+                bytes = bytes.checked_add(key.capacity())?;
+            }
+        }
+        Some(bytes)
+    }
 }
 
 /// The standings and conversations of one run, and the dossiers that start them.
@@ -652,6 +674,38 @@ impl SocialLedger {
         self.relationships
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Snapshots every standing and conversation for a development rewind
+    /// (DEVCTL-001): the sidecar file has no revision history, so the back /
+    /// forward ring carries the saved moment's copy and restores all of it.
+    pub(super) fn snapshot(&self) -> SocialSnapshot {
+        SocialSnapshot {
+            relationships: self.lock().clone(),
+        }
+    }
+
+    /// Restores a snapshot taken by [`Self::snapshot`], in memory and in the
+    /// sidecar file, so a rewound hero no longer knows lines from the future.
+    /// Blocking file write like [`Self::save`]: call it from a blocking context
+    /// (the session owner thread already blocks on durable commits there).
+    pub(super) fn restore_snapshot(&self, snapshot: &SocialSnapshot) -> Result<(), SocialError> {
+        *self.lock() = snapshot.relationships.clone();
+        self.save()
+    }
+
+    /// What each present NPC has already told this hero: `(npc id, voiced keys)`,
+    /// the same keys `social.json` keeps. Read surface for `dev state`, with room
+    /// for the leads notes surface to join it later.
+    pub(super) fn voiced_for(&self, member: MemberId) -> Vec<(String, Vec<String>)> {
+        let mut told: Vec<(String, Vec<String>)> = self
+            .lock()
+            .iter()
+            .filter(|((owner, _), _)| *owner == member)
+            .map(|((_, npc), relationship)| (npc.clone(), relationship.voiced.clone()))
+            .collect();
+        told.sort();
+        told
     }
 
     /// How this NPC feels about this hero right now.
@@ -882,6 +936,8 @@ fn read_saved(file: &PathBuf) -> Result<SavedFile, SocialError> {
 
 /// Writes a temporary file beside `file`, flushes it, renames it over `file` and flushes the
 /// directory, so a crash leaves the old state or the new one, never a torn file.
+/// Directory handles cannot be flushed this way on Windows, where the directory
+/// flush is a documented no-op; on Unix it is unchanged.
 fn write_atomically(file: &PathBuf, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
     let directory = file
@@ -892,7 +948,7 @@ fn write_atomically(file: &PathBuf, bytes: &[u8]) -> io::Result<()> {
     staged.write_all(bytes)?;
     staged.sync_all()?;
     fs::rename(&staging, file)?;
-    fs::File::open(directory)?.sync_all()
+    crate::file_identity::sync_directory(directory)
 }
 
 #[cfg(test)]

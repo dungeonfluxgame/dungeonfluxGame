@@ -23,12 +23,13 @@ use std::{
 };
 
 /// Files in revision order.
-pub(crate) const FILES: [&str; 5] = [
+pub(crate) const FILES: [&str; 6] = [
     "npc-background.json",
     "npc-character.json",
     "npc-ties.json",
     "npc-knowledge.json",
     "npc-social.json",
+    "npc-personal.json",
 ];
 const SCHEMA: &str = "df-npc-tables/1";
 const DICE: [u8; 6] = [4, 6, 8, 10, 12, 20];
@@ -39,7 +40,7 @@ const MAX_SHORT: usize = 40;
 /// Slots a trait, tie or knowledge template may use.
 /// Errand lines a friendly speaker (patron or contact) says it knows.
 pub(super) const ERRAND_LINES: usize = 2;
-const BASE_SLOTS: [&str; 16] = [
+const BASE_SLOTS: [&str; 21] = [
     "name",
     "role",
     "role_a",
@@ -56,6 +57,11 @@ const BASE_SLOTS: [&str; 16] = [
     "faction",
     "other",
     "other_role",
+    "partner",
+    "child",
+    "child2",
+    "age",
+    "age2",
 ];
 /// Slots a prepared-answer frame may use; each names one line the NPC may say freely.
 const FRAME_SLOTS: [&str; 13] = [
@@ -281,6 +287,24 @@ pub(super) struct KnowledgeTables {
     /// Key phrases for each secret id in `secrets.json`, on top of the rendered secret text.
     pub(super) secret_keywords: BTreeMap<String, Vec<String>>,
 }
+/// Who the NPC is off duty: kin, home, service, opinions, courtship, lay lore about
+/// the errand's own things, and how each other cast member is known. All plain
+/// first-person lines; `given_names` and `child_ages` are word pools for the kin slots.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Personal {
+    pub(super) partner: Table<Profile>,
+    pub(super) children: Table<Profile>,
+    pub(super) given_names: Table<Profile>,
+    pub(super) child_ages: Table<Profile>,
+    pub(super) homes: Table<Profile>,
+    pub(super) service: Table<Profile>,
+    pub(super) opinions: Table<Profile>,
+    pub(super) courtship: Table<Profile>,
+    pub(super) errand_lore: Table<Profile>,
+    pub(super) cast_close: Table<Profile>,
+    pub(super) cast_passing: Table<Profile>,
+}
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Attitudes {
@@ -346,6 +370,7 @@ pub(crate) struct DossierTables {
     pub(super) ties: Ties,
     pub(super) knowledge: KnowledgeTables,
     pub(super) social: Social,
+    pub(super) personal: Personal,
 }
 
 fn invalid(file: &str, path: &str, reason: impl Into<String>) -> TablesError {
@@ -595,7 +620,7 @@ fn requires_campaign(slots: &[&str]) -> bool {
 }
 
 impl DossierTables {
-    /// Read and validate the five restrained dossier files from a directory.
+    /// Read and validate the six restrained dossier files from a directory.
     pub(crate) fn load(directory: &Path) -> Result<Self, TablesError> {
         Self::load_variant(directory, None)
     }
@@ -643,6 +668,7 @@ impl DossierTables {
             ties: document(files, FILES[2])?,
             knowledge: document(files, FILES[3])?,
             social: document(files, FILES[4])?,
+            personal: document(files, FILES[5])?,
         };
         tables.validate()?;
         Ok(tables)
@@ -804,6 +830,19 @@ impl DossierTables {
                 check_short(knowledge, "tables.secret_keywords", keyword)?;
             }
         }
+        let personal = "npc-personal";
+        let p = &self.personal;
+        check_profiles(personal, "partner", &p.partner, plain, &tags)?;
+        check_profiles(personal, "children", &p.children, plain, &tags)?;
+        check_profiles(personal, "given_names", &p.given_names, plain, &tags)?;
+        check_profiles(personal, "child_ages", &p.child_ages, plain, &tags)?;
+        check_profiles(personal, "homes", &p.homes, plain, &tags)?;
+        check_profiles(personal, "service", &p.service, plain, &tags)?;
+        check_profiles(personal, "opinions", &p.opinions, plain, &tags)?;
+        check_profiles(personal, "courtship", &p.courtship, plain, &tags)?;
+        check_profiles(personal, "errand_lore", &p.errand_lore, plain, &tags)?;
+        check_profiles(personal, "cast_close", &p.cast_close, plain, &tags)?;
+        check_profiles(personal, "cast_passing", &p.cast_passing, plain, &tags)?;
         self.validate_social(&tags)?;
         self.validate_coverage()
     }

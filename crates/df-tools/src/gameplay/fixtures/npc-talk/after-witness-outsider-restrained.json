@@ -87,7 +87,7 @@
   {
    "n": 3,
    "hero_words": "Is there a quicker way to get there?",
-   "reply": "The way runs through the Windward Pass; I would not linger there. Ask after the Windward Waystation by name first, and mention it kindly. Tomas is a watch sergeant there.",
+   "reply": "The way runs through the Windward Pass, and I would not linger there. Ask after the Windward Waystation by name first, and mention it kindly. Tomas is a watch sergeant there.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",

@@ -96,7 +96,7 @@
     },
     "styles": {"die": 20, "entries": [
       {"faces": [1, 1], "id": "plain-short", "length": "short", "vocabulary": "plain, small words; says only what is meant", "tic": "ends a point with a flat 'That's the lot.'", "opener": "Right.", "closer": "That's the lot."},
-      {"faces": [2, 2], "id": "rolling-warm", "length": "long", "vocabulary": "homely and affectionate; calls people 'friend'", "tic": "circles back to the start of a thought", "opener": "Now then, friend.", "closer": "There you are.", "tags": ["warm", "slow"]},
+      {"faces": [2, 2], "id": "rolling-warm", "length": "long", "vocabulary": "homely and affectionate; seldom uses terms of address", "tic": "circles back to the start of a thought", "opener": "Now then.", "closer": "There you are.", "tags": ["warm", "slow"]},
       {"faces": [3, 3], "id": "clipped-formal", "length": "medium", "vocabulary": "exact and formal; complete sentences, no slang", "tic": "begins corrections with 'To be exact.'", "opener": "To be exact.", "closer": "That is all.", "tags": ["formal"]},
       {"faces": [4, 4], "id": "dry-wit", "length": "medium", "vocabulary": "understatement and dry asides", "tic": "adds a one-word verdict such as 'Naturally.'", "opener": "Well.", "closer": "Naturally.", "tags": ["playful"]},
       {"faces": [5, 5], "id": "hurried-run", "length": "short", "vocabulary": "words in a rush; half-finished sentences", "tic": "apologises mid-sentence", "opener": "Quickly now.", "closer": "Sorry, sorry.", "tags": ["hurried", "nervous"]},
@@ -162,7 +162,7 @@
       {"faces": [3, 3], "id": "takes-it-promises-nothing", "effect": "warm", "text": "takes it at once and promises nothing", "speak": "Thank you. I will note your generosity. I will note nothing else."},
       {"faces": [4, 4], "id": "haggles", "tags": ["playful"], "effect": "steady", "text": "haggles for more", "speak": "Is that all? You can do better than that."},
       {"faces": [5, 5], "id": "pushes-it-back", "tags": ["nervous"], "effect": "steady", "text": "is embarrassed and pushes it back", "speak": "Oh, no. No, I could not. Please, take it back."},
-      {"faces": [6, 6], "id": "pays-in-trivia", "effect": "warm", "text": "accepts, then offers a harmless scrap of gossip in return", "speak": "Well, since you are so generous: the baker's cat has had kittens again."},
+      {"faces": [6, 6], "id": "pays-in-trivia", "effect": "warm", "text": "accepts, then offers a harmless scrap of gossip in return", "speak": "Well, since you are so generous. The baker's cat has had kittens again."},
       {"faces": [7, 7], "id": "asks-what-for", "tags": ["calm"], "effect": "steady", "text": "asks what it is meant to buy before deciding", "speak": "What exactly is this meant to buy?"},
       {"faces": [8, 8], "id": "give-it-to-others", "tags": ["warm"], "effect": "warm", "text": "tells them to give it to someone who needs it more", "speak": "Give it to someone who needs it. I am not short."}
     ]},

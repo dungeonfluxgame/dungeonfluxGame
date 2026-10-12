@@ -3,13 +3,13 @@ use super::{
     SelectedSet, VisibleSet, compare_identity, content_parts, hex, parse_digest, parse_identity,
     role_limit, safe_relative,
 };
+use crate::file_identity::{self, FileIdentity, same};
 use df_types::BuildIdentity;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
-    fs::{self, File, Metadata, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -39,59 +39,51 @@ fn unique(prefix: &str) -> String {
     )
 }
 
-fn same(expected: &Metadata, observed: &Metadata) -> bool {
-    expected.dev() == observed.dev()
-        && expected.ino() == observed.ino()
-        && expected.uid() == observed.uid()
-        && expected.mode() == observed.mode()
-        && expected.is_file() == observed.is_file()
-        && expected.is_dir() == observed.is_dir()
-        && !observed.file_type().is_symlink()
-        && (!expected.is_file()
-            || (expected.len() == observed.len()
-                && observed.nlink() == 1
-                && expected.mtime() == observed.mtime()
-                && expected.mtime_nsec() == observed.mtime_nsec()
-                && expected.ctime() == observed.ctime()
-                && expected.ctime_nsec() == observed.ctime_nsec()))
+fn canonical_directory(path: &Path, mode: u32) -> Result<FileIdentity> {
+    if !path.is_absolute() || path.as_os_str().len() > 4096 {
+        return Err(BuildSetError::UnsafePath);
+    }
+    if !file_identity::canonical_equals(&fs::canonicalize(path)?, path) {
+        return Err(BuildSetError::UnsafePath);
+    }
+    let identity = file_identity::snapshot_path(path)?;
+    if !identity.is_dir() || identity.is_symlink() || !identity.mode_equals(mode) {
+        return Err(BuildSetError::UnsafePath);
+    }
+    Ok(identity)
 }
 
-fn canonical_directory(path: &Path, mode: u32) -> Result<Metadata> {
-    if !path.is_absolute() || path.as_os_str().len() > 4096 || fs::canonicalize(path)? != path {
+fn regular(path: &Path, maximum: u64) -> Result<FileIdentity> {
+    if !path.is_absolute() || path.as_os_str().len() > 4096 {
         return Err(BuildSetError::UnsafePath);
     }
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() || metadata.mode() & 0o777 != mode {
+    if !file_identity::canonical_equals(&fs::canonicalize(path)?, path) {
         return Err(BuildSetError::UnsafePath);
     }
-    Ok(metadata)
-}
-
-fn regular(path: &Path, maximum: u64) -> Result<Metadata> {
-    if !path.is_absolute() || path.as_os_str().len() > 4096 || fs::canonicalize(path)? != path {
+    let identity = file_identity::snapshot_path(path)?;
+    if !identity.is_file() || identity.is_symlink() || identity.links() != 1 {
         return Err(BuildSetError::UnsafePath);
     }
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink() != 1 {
-        return Err(BuildSetError::UnsafePath);
-    }
-    if metadata.len() > maximum {
+    if identity.len() > maximum {
         return Err(BuildSetError::Limit);
     }
-    Ok(metadata)
+    Ok(identity)
 }
 
-fn open_regular(path: &Path, maximum: u64) -> Result<(File, Metadata)> {
+fn open_regular(path: &Path, maximum: u64) -> Result<(File, FileIdentity)> {
     let before = regular(path, maximum)?;
     let file = File::open(path)?;
-    if !same(&before, &file.metadata()?) || !same(&before, &fs::symlink_metadata(path)?) {
+    let after_open = file_identity::snapshot_file(&file)?;
+    if !same(&before, &after_open) || !same(&before, &file_identity::snapshot_path(path)?) {
         return Err(BuildSetError::OwnershipChanged);
     }
     Ok((file, before))
 }
 
-fn finish_read(path: &Path, file: &File, before: &Metadata) -> Result<()> {
-    if !same(before, &file.metadata()?) || !same(before, &fs::symlink_metadata(path)?) {
+fn finish_read(path: &Path, file: &File, before: &FileIdentity) -> Result<()> {
+    if !same(before, &file_identity::snapshot_file(file)?)
+        || !same(before, &file_identity::snapshot_path(path)?)
+    {
         return Err(BuildSetError::OwnershipChanged);
     }
     Ok(())
@@ -137,16 +129,16 @@ pub(super) fn observe_file(path: &Path, maximum: u64) -> Result<(u64, [u8; 32])>
 
 fn inside(root: &Path, relative: &str) -> Result<PathBuf> {
     safe_relative(relative)?;
-    let root_metadata = fs::symlink_metadata(root)?;
+    let root_identity = file_identity::snapshot_path(root)?;
     let mut path = root.to_path_buf();
     for component in Path::new(relative).components() {
         path.push(component.as_os_str());
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink()
-            || metadata.dev() != root_metadata.dev()
-            || metadata.uid() != root_metadata.uid()
-            || (!metadata.is_file() && !metadata.is_dir())
-            || (metadata.is_file() && metadata.nlink() != 1)
+        let identity = file_identity::snapshot_path(&path)?;
+        if identity.is_symlink()
+            || identity.volume() != root_identity.volume()
+            || identity.owner() != root_identity.owner()
+            || (!identity.is_file() && !identity.is_dir())
+            || (identity.is_file() && identity.links() != 1)
         {
             return Err(BuildSetError::UnsafePath);
         }
@@ -155,7 +147,7 @@ fn inside(root: &Path, relative: &str) -> Result<PathBuf> {
 }
 
 fn tree(root: &Path, files: &BTreeSet<String>, immutable: bool) -> Result<()> {
-    let root_metadata = fs::symlink_metadata(root)?;
+    let root_identity = file_identity::snapshot_path(root)?;
     let mut directories = BTreeSet::from([String::from("web/assets")]);
     for name in files {
         safe_relative(name)?;
@@ -175,36 +167,29 @@ fn tree(root: &Path, files: &BTreeSet<String>, immutable: bool) -> Result<()> {
                 return Err(BuildSetError::Limit);
             }
             let path = entry?.path();
-            let relative = path
-                .strip_prefix(root)
-                .map_err(|_| BuildSetError::UnsafePath)?
-                .to_str()
-                .ok_or(BuildSetError::UnsafePath)?
-                .to_owned();
+            let relative =
+                file_identity::relative_name(root, &path).ok_or(BuildSetError::UnsafePath)?;
             safe_relative(&relative)?;
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink()
-                || metadata.dev() != root_metadata.dev()
-                || metadata.uid() != root_metadata.uid()
+            let identity = file_identity::snapshot_path(&path)?;
+            if identity.is_symlink()
+                || identity.volume() != root_identity.volume()
+                || identity.owner() != root_identity.owner()
             {
                 return Err(BuildSetError::UnsafePath);
             }
-            if metadata.is_dir() {
-                if !directories.contains(&relative)
-                    || (immutable && metadata.mode() & 0o777 != 0o500)
-                {
+            if identity.is_dir() {
+                if !directories.contains(&relative) || (immutable && !identity.mode_equals(0o500)) {
                     return Err(BuildSetError::ComponentClosure);
                 }
                 pending.push(path);
-            } else if metadata.is_file() && metadata.nlink() == 1 {
+            } else if identity.is_file() && identity.links() == 1 {
                 if !files.contains(&relative)
                     || (immutable
-                        && metadata.mode() & 0o777
-                            != if relative == "native/df-transport-fixture" {
-                                0o500
-                            } else {
-                                0o400
-                            })
+                        && !identity.mode_equals(if relative == "native/df-transport-fixture" {
+                            0o500
+                        } else {
+                            0o400
+                        }))
                 {
                     return Err(BuildSetError::ComponentClosure);
                 }
@@ -282,7 +267,7 @@ pub(super) fn seal(input: &Path, expected: &BuildIdentity) -> Result<Manifest> {
     };
     manifest.validate()?;
     verify_parts(input, &manifest, false)?;
-    if !same(&before, &fs::symlink_metadata(input)?) {
+    if !same(&before, &file_identity::snapshot_path(input)?) {
         return Err(BuildSetError::OwnershipChanged);
     }
     Ok(manifest)
@@ -294,21 +279,17 @@ pub(super) fn write_sealed(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     let parent = path.parent().ok_or(BuildSetError::UnsafePath)?;
     canonical_directory(parent, 0o700)?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?;
+    let mut file = file_identity::create_file_exclusive(path)?;
     file.write_all(bytes)?;
-    file.set_permissions(fs::Permissions::from_mode(0o400))?;
+    file_identity::set_mode(path, 0o400)?;
     file.sync_all()?;
-    File::open(parent)?.sync_all()?;
+    file_identity::sync_directory(parent)?;
     Ok(())
 }
 
 struct Root {
     path: PathBuf,
-    identity: Metadata,
+    identity: FileIdentity,
 }
 
 impl Root {
@@ -319,8 +300,8 @@ impl Root {
         })
     }
     fn check(&self) -> Result<()> {
-        if !same(&self.identity, &fs::symlink_metadata(&self.path)?)
-            || fs::canonicalize(&self.path)? != self.path
+        if !same(&self.identity, &file_identity::snapshot_path(&self.path)?)
+            || !file_identity::canonical_equals(&fs::canonicalize(&self.path)?, &self.path)
         {
             return Err(BuildSetError::OwnershipChanged);
         }
@@ -331,8 +312,8 @@ impl Root {
 pub(super) struct Publisher {
     root: Root,
     lock: File,
-    lock_identity: Metadata,
-    sets_identity: Metadata,
+    lock_identity: FileIdentity,
+    sets_identity: FileIdentity,
 }
 
 impl Publisher {
@@ -340,49 +321,44 @@ impl Publisher {
         if !path.is_absolute() || path.as_os_str().len() > 4096 {
             return Err(BuildSetError::UnsafePath);
         }
-        match fs::DirBuilder::new().mode(0o700).create(path) {
+        match file_identity::create_dir(path) {
             Ok(()) => (),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
             Err(e) => return Err(e.into()),
         }
         let root = Root::open(path)?;
         let lock_path = path.join("publisher.lock");
-        let lock = match OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&lock_path)
-        {
+        let lock = match file_identity::create_file_exclusive(&lock_path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 let before = regular(&lock_path, 0)?;
                 let file = OpenOptions::new().read(true).write(true).open(&lock_path)?;
-                if !same(&before, &file.metadata()?) {
+                if !same(&before, &file_identity::snapshot_file(&file)?) {
                     return Err(BuildSetError::OwnershipChanged);
                 }
                 file
             }
             Err(error) => return Err(error.into()),
         };
-        let lock_identity = lock.metadata()?;
-        if lock_identity.uid() != root.identity.uid()
-            || lock_identity.mode() & 0o777 != 0o600
+        let lock_identity = file_identity::snapshot_file(&lock)?;
+        if lock_identity.owner() != root.identity.owner()
+            || !lock_identity.mode_equals(0o600)
             || !lock_identity.is_file()
-            || lock_identity.nlink() != 1
-            || !same(&lock_identity, &fs::symlink_metadata(&lock_path)?)
+            || lock_identity.links() != 1
+            || !same(&lock_identity, &file_identity::snapshot_path(&lock_path)?)
         {
             return Err(BuildSetError::OwnershipChanged);
         }
         lock.try_lock().map_err(|_| BuildSetError::PublisherBusy)?;
         let sets = path.join("sets");
-        match fs::DirBuilder::new().mode(0o700).create(&sets) {
-            Ok(()) => File::open(path)?.sync_all()?,
+        match file_identity::create_dir(&sets) {
+            Ok(()) => file_identity::sync_directory(path)?,
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
             Err(e) => return Err(e.into()),
         }
         let sets_identity = canonical_directory(&sets, 0o700)?;
-        if sets_identity.uid() != root.identity.uid() || sets_identity.dev() != root.identity.dev()
+        if sets_identity.owner() != root.identity.owner()
+            || sets_identity.volume() != root.identity.volume()
         {
             return Err(BuildSetError::OwnershipChanged);
         }
@@ -398,16 +374,16 @@ impl Publisher {
 
     fn check(&self) -> Result<()> {
         self.root.check()?;
-        if !same(&self.lock_identity, &self.lock.metadata()?)
-            || !same(
-                &self.lock_identity,
-                &fs::symlink_metadata(self.root.path.join("publisher.lock"))?,
-            )
-            || !same(
-                &self.sets_identity,
-                &fs::symlink_metadata(self.root.path.join("sets"))?,
-            )
-        {
+        if !same(
+            &self.lock_identity,
+            &file_identity::snapshot_file(&self.lock)?,
+        ) || !same(
+            &self.lock_identity,
+            &file_identity::snapshot_path(&self.root.path.join("publisher.lock"))?,
+        ) || !same(
+            &self.sets_identity,
+            &file_identity::snapshot_path(&self.root.path.join("sets"))?,
+        ) {
             return Err(BuildSetError::OwnershipChanged);
         }
         Ok(())
@@ -443,44 +419,42 @@ impl Publisher {
             select(&self.root.path, id)?;
         } else {
             let staging = self.root.path.join(unique("stage"));
-            fs::DirBuilder::new().mode(0o700).create(&staging)?;
+            file_identity::create_dir(&staging)?;
             for (index, part) in manifest.parts.iter().enumerate() {
                 copy_part(input, &staging, part, index, step)?;
             }
             let path = staging.join("manifest.txt");
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(path)?;
+            let mut file = file_identity::create_file_exclusive(&path)?;
             file.write_all(bytes)?;
             step(Phase::ManifestWritten)?;
-            file.set_permissions(fs::Permissions::from_mode(0o400))?;
+            file_identity::set_mode(&path, 0o400)?;
             file.sync_all()?;
             step(Phase::ManifestSynced)?;
+            // A directory cannot be renamed on Windows while a file inside it
+            // is open, so the staged manifest handle closes here; harmless on Unix.
+            drop(file);
             freeze_directories(&staging)?;
-            if !same(&input_identity, &fs::symlink_metadata(input)?) {
+            if !same(&input_identity, &file_identity::snapshot_path(input)?) {
                 return Err(BuildSetError::OwnershipChanged);
             }
             self.check()?;
             // Darwin requires the moved directory to remain writable for rename.
             // Only this held publication owner writes sets. The target is never replaced.
             fs::rename(&staging, &destination)?;
-            fs::set_permissions(&destination, fs::Permissions::from_mode(0o500))?;
-            File::open(&destination)?.sync_all()?;
+            file_identity::set_mode(&destination, 0o500)?;
+            file_identity::sync_directory(&destination)?;
             verify_parts(&destination, &manifest, true)?;
-            File::open(self.root.path.join("sets"))?.sync_all()?;
+            file_identity::sync_directory(&self.root.path.join("sets"))?;
             step(Phase::SetPlaced)?;
         }
         let path = self.root.path.join(unique("current"));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)?;
+        let mut file = file_identity::create_file_exclusive(&path)?;
         file.write_all(format!("DF-CURRENT-BUILD-V1\n{}\n", hex(&id)).as_bytes())?;
-        file.set_permissions(fs::Permissions::from_mode(0o400))?;
+        file_identity::set_mode(&path, 0o400)?;
         file.sync_all()?;
+        // The reference is renamed below; its handle closes here for the same
+        // Windows reason as the staged manifest above.
+        drop(file);
         self.check()?;
         if !reference_unchanged(&previous, &current_record(&self.root.path)?) {
             return Err(BuildSetError::OwnershipChanged);
@@ -497,7 +471,7 @@ impl Publisher {
         }
         let completed: Result<()> = (|| {
             step(Phase::AfterReferenceRename)?;
-            File::open(&self.root.path)?.sync_all()?;
+            file_identity::sync_directory(&self.root.path)?;
             step(Phase::AfterReferenceSync)?;
             self.check()?;
             Ok(())
@@ -533,15 +507,8 @@ fn copy_part(
     let (mut reader, before) = open_regular(&source, role_limit(part)?)?;
     let target = staging.join(&part.path);
     let parent = target.parent().ok_or(BuildSetError::UnsafePath)?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(parent)?;
-    let mut writer = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(target)?;
+    file_identity::create_dir_all(parent)?;
+    let mut writer = file_identity::create_file_exclusive(&target)?;
     step(Phase::FileCreated(index))?;
     let mut hash = Sha256::new();
     let mut len = 0_u64;
@@ -564,11 +531,7 @@ fn copy_part(
         return Err(BuildSetError::DigestMismatch);
     }
     step(Phase::FileWritten(index))?;
-    writer.set_permissions(fs::Permissions::from_mode(if part.role == "native" {
-        0o500
-    } else {
-        0o400
-    }))?;
+    file_identity::set_mode(&target, if part.role == "native" { 0o500 } else { 0o400 })?;
     writer.sync_all()?;
     step(Phase::FileSynced(index))?;
     Ok(())
@@ -583,7 +546,7 @@ fn freeze_directories(root: &Path) -> Result<()> {
         }
         for entry in fs::read_dir(&directory)? {
             let path = entry?.path();
-            if fs::symlink_metadata(&path)?.is_dir() {
+            if file_identity::snapshot_path(&path)?.is_dir() {
                 pending.push(path);
             }
         }
@@ -591,16 +554,16 @@ fn freeze_directories(root: &Path) -> Result<()> {
     }
     for path in directories.into_iter().rev() {
         if path != root {
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o500))?;
+            file_identity::set_mode(&path, 0o500)?;
         }
-        File::open(path)?.sync_all()?;
+        file_identity::sync_directory(&path)?;
     }
     Ok(())
 }
 
 struct Reference {
     bytes: Vec<u8>,
-    identity: Metadata,
+    identity: FileIdentity,
 }
 
 fn reference_unchanged(expected: &Option<Reference>, observed: &Option<Reference>) -> bool {
@@ -616,10 +579,10 @@ fn current_record(root: &Path) -> Result<Option<Reference>> {
     match fs::symlink_metadata(&path) {
         Ok(_) => {
             let (mut file, identity) = open_regular(&path, REFERENCE_LIMIT as u64)?;
-            let root_identity = fs::symlink_metadata(root)?;
-            if identity.uid() != root_identity.uid()
-                || identity.dev() != root_identity.dev()
-                || identity.mode() & 0o777 != 0o400
+            let root_identity = file_identity::snapshot_path(root)?;
+            if identity.owner() != root_identity.owner()
+                || identity.volume() != root_identity.volume()
+                || !identity.mode_equals(0o400)
             {
                 return Err(BuildSetError::OwnershipChanged);
             }
@@ -662,14 +625,16 @@ fn reference_id(bytes: &[u8]) -> Result<[u8; 32]> {
 pub(super) fn select(root: &Path, id: [u8; 32]) -> Result<SelectedSet> {
     let owner = Root::open(root)?;
     let sets = root.join("sets");
-    let sets_metadata = canonical_directory(&sets, 0o700)?;
-    if sets_metadata.dev() != owner.identity.dev() || sets_metadata.uid() != owner.identity.uid() {
+    let sets_identity = canonical_directory(&sets, 0o700)?;
+    if sets_identity.volume() != owner.identity.volume()
+        || sets_identity.owner() != owner.identity.owner()
+    {
         return Err(BuildSetError::UnsafePath);
     }
     let directory = sets.join(hex(&id));
     let directory_identity = canonical_directory(&directory, 0o500)?;
-    if directory_identity.dev() != owner.identity.dev()
-        || directory_identity.uid() != owner.identity.uid()
+    if directory_identity.volume() != owner.identity.volume()
+        || directory_identity.owner() != owner.identity.owner()
     {
         return Err(BuildSetError::UnsafePath);
     }
@@ -681,7 +646,10 @@ pub(super) fn select(root: &Path, id: [u8; 32]) -> Result<SelectedSet> {
     let manifest = Manifest::parse(&bytes)?;
     verify_parts(&directory, &manifest, true)?;
     owner.check()?;
-    if !same(&directory_identity, &fs::symlink_metadata(&directory)?) {
+    if !same(
+        &directory_identity,
+        &file_identity::snapshot_path(&directory)?,
+    ) {
         return Err(BuildSetError::OwnershipChanged);
     }
     Ok(SelectedSet {

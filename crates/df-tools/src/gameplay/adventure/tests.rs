@@ -1156,13 +1156,15 @@ fn sha256(bytes: &[u8]) -> String {
 /// matched the pin above this change, the pack minus its `beat_script` was byte-identical to the
 /// new one, and the tuning hash is unchanged. The end-card narrations were reworded once more
 /// (no sentence starts with a lower-case stake) and re-pinned the same way (tuning unchanged).
+/// DIALOGUE-001 M1 fixed one colon in a `npc-social.json` bribe fallback line (spoken register),
+/// so the dossier tables revision and the record hashes moved; pack and tuning are unchanged.
 const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
             "575733f0349983b147b0cbc9511a3aa0b9cf7ed9244076dded9f97afae2f4bef",
             "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
-            "03838919d2a5d5f262e361d2dc7367a91709d8f945ee105ce6eab2651b3efb23",
+            "d77a1808daa1ae3b5d1850d12723588e79ed213c88919d1bdd16e6e608b4f101",
         ],
     ),
     (
@@ -1170,7 +1172,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "94829369c00648864f8c968fb01b5f9736b8504197404813bae399c2b34e44c8",
             "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
-            "36a302524da8bf5c8ac9fef4e9189542806ae750ae7761fd87f7d7505521e00d",
+            "7fce455081039808cbd863149c3a3f3e094cf495ed9163c9346b727bc23e1154",
         ],
     ),
     (
@@ -1178,7 +1180,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "f281627efc12c4dd8fccdc14cadd747ffdf77bbf1ee17ddb06d0cb14ef728674",
             "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
-            "4a8255c3fbcb61eda81a312f95a1d1a3cd7622b10eb2b7c9e510fc838c7a6a6c",
+            "189f87832fb80a54e82d9493c526be095c2135a457b4f6e2e4f8993c3ab82c80",
         ],
     ),
 ];

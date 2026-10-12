@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "kit": "DungeonFlux dice roll clips",
+  "generator": "render_dice.py: analytic CG icosahedron render (numpy + Pillow rasteriser); no model, no provider",
+  "script": "artifacts/tmp/dicevideo-a3/render_dice.py",
+  "script_sha256": "d5f6ce7af4add5da731e849c55dd03d903a68476cb692dd99c88474a8f896d55",
+  "generation_date": "2026-10-12",
+  "post_processing": "ffmpeg libvpx-vp9 yuva420p (WebM with alpha); Pillow composite over #FF00FF + ffmpeg libx264 yuv420p (key MP4); Pillow lossless WebP (rest)",
+  "key_color": "#FF00FF",
+  "assets": [
+    {
+      "name": "roll-1.webm",
+      "path": "assets/ui/generated/dice/roll-1.webm",
+      "bytes": 199475,
+      "sha256": "887718ab6b144ca46ae148010529bc0406c1838d640a2e5f284fafe4c0c3b437",
+      "kind": "clip-alpha"
+    },
+    {
+      "name": "roll-1-key.mp4",
+      "path": "assets/ui/generated/dice/roll-1-key.mp4",
+      "bytes": 114009,
+      "sha256": "7dbb59d089e40f08889aef043ef984f70ac3b99fcff33d66e2fb60062f7bda88",
+      "kind": "clip-key"
+    },
+    {
+      "name": "roll-1-rest.webp",
+      "path": "assets/ui/generated/dice/roll-1-rest.webp",
+      "bytes": 45566,
+      "sha256": "3337330c088e2248d13e9d99b91810be0375fff14cea659fb087bdc1388a7f01",
+      "kind": "rest-still"
+    },
+    {
+      "name": "roll-2.webm",
+      "path": "assets/ui/generated/dice/roll-2.webm",
+      "bytes": 215535,
+      "sha256": "d456bc7db407ffc3fb95d64273dd3417260bcfe45543792a41c844c72a791b4f",
+      "kind": "clip-alpha"
+    },
+    {
+      "name": "roll-2-key.mp4",
+      "path": "assets/ui/generated/dice/roll-2-key.mp4",
+      "bytes": 119310,
+      "sha256": "d635a290e47f95ed39de8a7a220fee99308f4fd4ece43af0110d0797bd69b413",
+      "kind": "clip-key"
+    },
+    {
+      "name": "roll-2-rest.webp",
+      "path": "assets/ui/generated/dice/roll-2-rest.webp",
+      "bytes": 45048,
+      "sha256": "5a417f6d85f02ac36f00be397515caa04b507a498096c2b72e7df797d3587f76",
+      "kind": "rest-still"
+    },
+    {
+      "name": "roll-3.webm",
+      "path": "assets/ui/generated/dice/roll-3.webm",
+      "bytes": 181269,
+      "sha256": "4106c99c43e6f8781a8e348544f574271b7c032a2b076011097b70fdd83bf88a",
+      "kind": "clip-alpha"
+    },
+    {
+      "name": "roll-3-key.mp4",
+      "path": "assets/ui/generated/dice/roll-3-key.mp4",
+      "bytes": 98993,
+      "sha256": "950beaef5e776d14b9c5d7bb1bf85b2a9440dab97d1b31fe4f3450a6e30c53c6",
+      "kind": "clip-key"
+    },
+    {
+      "name": "roll-3-rest.webp",
+      "path": "assets/ui/generated/dice/roll-3-rest.webp",
+      "bytes": 46038,
+      "sha256": "1ebd9decafa729f22b4cb0f848a2513e1d3c00202d542f6b3044d7a0891534b9",
+      "kind": "rest-still"
+    },
+    {
+      "name": "dice-rolls.json",
+      "path": "assets/ui/generated/dice/dice-rolls.json",
+      "bytes": 2272,
+      "sha256": "d79ad1105f0e1c235af946307b0852397a84ba233971530593ed6f2c2aaa935c",
+      "kind": "manifest"
+    }
+  ]
+}

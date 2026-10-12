@@ -1,7 +1,9 @@
 #[path = "tempo.rs"]
 pub(super) mod tempo;
 
-use df_model::checkpoint::{Checkpoint, EffectId, GameInput};
+use df_model::checkpoint::{
+    Checkpoint, CommandInput, EffectId, GameCommand, GameInput, ReferenceInventory,
+};
 use df_observe::OperationContext;
 use df_persistence::local_demo_scope::{
     LocalDemoAuthority, LocalDemoRole, LocalDemoScopeIssuer, LocalRejectedLookup,
@@ -101,10 +103,28 @@ pub(super) enum Call {
         kind: rpc::ComposeKind,
         reply: oneshot::Sender<Result<(), tonic::Status>>,
     },
+    /// The shared display's presentation report: the last combat beat sequence it has
+    /// finished presenting. Presentation only, like Presence: it updates the in-memory
+    /// pacing gate in the table log, never commits and never moves a revision. Only the
+    /// display credential's reports count; any other caller's are ignored.
+    Presented {
+        credential: [u8; 32],
+        sequence: u64,
+        reply: oneshot::Sender<Result<u64, tonic::Status>>,
+    },
     /// Which current room member a player binding belongs to (speech input).
     SpeechMember {
         credential: [u8; 32],
         reply: oneshot::Sender<Result<df_types::MemberId, tonic::Status>>,
+    },
+    /// A development control jump (DEVCTL-001 milestones 2/3): restore,
+    /// back/forward or a validated state override. Reduced on the owner thread
+    /// through the same compare-and-swap, receipt and publication path as
+    /// player decisions; only the development surface constructs it.
+    Dev {
+        credential: [u8; 32],
+        order: Box<super::dev_control::commands::DevOrder>,
+        reply: oneshot::Sender<Result<super::dev_control::commands::DevResult, tonic::Status>>,
     },
 }
 impl ActorInput for Call {
@@ -125,7 +145,9 @@ impl ActorInput for Call {
                 ),
             Self::QualificationInputs { .. }
             | Self::SpeechMember { .. }
-            | Self::Presence { .. } => Some(0),
+            | Self::Presence { .. }
+            | Self::Presented { .. } => Some(0),
+            Self::Dev { order, .. } => order.retained_heap_bytes(),
             Self::Dialogue { request, .. } => Some(request.retained_heap_bytes()),
             Self::Submit { request, .. } => {
                 let character_bytes = if let Some(character) = &request.character {
@@ -177,6 +199,11 @@ pub(super) struct Publication {
     updates: watch::Sender<Checkpoint>,
     intents: std::sync::mpsc::SyncSender<()>,
     campaign: Option<super::adventure::campaign_completion::CompletionObserver>,
+    /// Development history bundle (DEVCTL-001 milestone 2): every committed
+    /// checkpoint travels with the actor-side state the checkpoint does not
+    /// carry, so a rewind restores all of it or none. Set only when the
+    /// development surface is on; otherwise no history is kept.
+    dev: Option<super::dev_control::Bundle>,
 }
 impl Publication {
     pub(super) fn new(updates: watch::Sender<Checkpoint>) -> (Self, std::sync::mpsc::Receiver<()>) {
@@ -186,6 +213,7 @@ impl Publication {
                 updates,
                 intents,
                 campaign: None,
+                dev: None,
             },
             receiver,
         )
@@ -195,6 +223,10 @@ impl Publication {
         observer: Option<super::adventure::campaign_completion::CompletionObserver>,
     ) -> Self {
         self.campaign = observer;
+        self
+    }
+    pub(super) fn with_history(mut self, bundle: super::dev_control::Bundle) -> Self {
+        self.dev = Some(bundle);
         self
     }
     pub(super) fn publish(&mut self, checkpoint: &Checkpoint) {
@@ -216,6 +248,19 @@ impl PublicationOwner<NativeScope<LocalDemoAuthority>> for Publication {
         self.publish(checkpoint);
         if let Some(observer) = &self.campaign {
             observer.observe(checkpoint);
+        }
+        // Development history keeps every committed moment (bounded ring)
+        // so back/forward steps count decisions, player and dev alike. The
+        // checkpoint travels with the actor-side state it does not carry, so
+        // a rewind restores all of it or none.
+        if let Some(bundle) = &self.dev
+            && let Ok(mut history) = bundle.history.lock()
+        {
+            history.record(super::dev_control::history::SavedMoment {
+                checkpoint: checkpoint.clone(),
+                table_floor: bundle.table.position(),
+                social: bundle.social.snapshot(),
+            });
         }
         Ok(())
     }
@@ -383,6 +428,9 @@ pub(super) struct Actor {
     pub qualification_inputs: Option<Vec<QualificationInput>>,
     pub qualification_joins: Option<Vec<QualificationJoin>>,
     pub completion_retry: Option<CompletionRetry>,
+    /// Development back/forward ring for refreshing a rewind's history entry
+    /// (DEVCTL-001 milestone 2). Set only when the surface is on.
+    pub dev_history: Option<std::sync::Arc<std::sync::Mutex<super::dev_control::history::History>>>,
     #[cfg(test)]
     pub completion_observer: Option<CompletionObserver>,
 }
@@ -922,6 +970,202 @@ impl Actor {
         )))
     }
 
+    /// One development jump (DEVCTL-001 milestones 2/3), reduced on the owner
+    /// thread: builds the candidate from the owner's own current checkpoint
+    /// and commits it through the same compare-and-swap, receipt and
+    /// publication path as player decisions, so the database, the checkpoint
+    /// and every connected screen stay consistent. Refused while fenced or
+    /// when the seat has no hero yet; the commit is scoped as table operation
+    /// through the given admitted seat, and the scope binds a spoken marker
+    /// carrying the dev note (never submitted as a player action).
+    pub(super) fn dev(
+        &mut self,
+        credential: &[u8; 32],
+        order: super::dev_control::commands::DevOrder,
+    ) -> Result<super::dev_control::commands::DevResult, tonic::Status> {
+        use super::dev_control::{candidate, commands};
+        if self.session_lost() {
+            return Err(session_lost_status());
+        }
+        require_readable(self.fenced)?;
+        if self.issuer.authenticate(credential).map_err(unavailable)? != LocalDemoRole::Player {
+            return Err(tonic::Status::permission_denied(
+                "development jumps need a seated player binding",
+            ));
+        }
+        let principal = self.issuer.principal(credential).map_err(unavailable)?;
+        let member = df_types::MemberId::from_bytes(&principal)
+            .map_err(|_| tonic::Status::permission_denied("member binding invalid"))?;
+        let current = self.owner.checkpoint().clone();
+        let next = current
+            .basis()
+            .revision
+            .next_sequence()
+            .map_err(|_| tonic::Status::failed_precondition("revision sequence exhausted"))?;
+        let policy = current
+            .state()
+            .decisions
+            .last()
+            .map(|decision| decision.source_policy.clone())
+            .ok_or_else(|| tonic::Status::failed_precondition("no decisions committed yet"))?;
+        let operation = loop {
+            let bytes = model::random::<16>().map_err(unavailable)?;
+            if let Ok(operation) = df_types::OperationId::from_bytes(&bytes) {
+                break operation;
+            }
+        };
+        let restore_moment = match &order.job {
+            commands::DevJob::Restore { moment, .. } => Some(moment.clone()),
+            _ => None,
+        };
+        let change = match &order.job {
+            commands::DevJob::Restore { moment, what } => candidate::Change::Restore {
+                saved: Box::new(moment.checkpoint.clone()),
+                what: what.clone(),
+            },
+            commands::DevJob::HitPoints { member, value } => {
+                let member = df_types::MemberId::from_bytes(member)
+                    .map_err(|_| tonic::Status::invalid_argument("hero member invalid"))?;
+                candidate::Change::HitPoints {
+                    member,
+                    value: *value,
+                }
+            }
+            commands::DevJob::Budget { value, cap } => candidate::Change::Budget {
+                value: *value,
+                cap: *cap,
+            },
+        };
+        let inventory = ReferenceInventory {
+            rules: &order.inventory.rules,
+            content: &order.inventory.content,
+            resources: &order.inventory.resources,
+            assets: &order.inventory.assets,
+        };
+        let built = candidate::build(
+            &current,
+            &change,
+            next,
+            operation,
+            policy,
+            order.job.note(),
+            inventory,
+            order.inventory.limits,
+        )
+        .map_err(tonic::Status::failed_precondition)?;
+        let speaker = current
+            .state()
+            .characters
+            .iter()
+            .find(|character| character.owner == member)
+            .map(|character| character.entity)
+            .ok_or_else(|| {
+                tonic::Status::failed_precondition("this seat has no hero yet; create one first")
+            })?;
+        let input = GameInput::Game(CommandInput {
+            basis: current.basis(),
+            observed_revision: current.basis().revision,
+            operation,
+            member,
+            command: GameCommand::Speak {
+                speaker,
+                text: order.job.note(),
+                conversation: None,
+            },
+        });
+        let fingerprint: [u8; 32] = Sha256::digest(order.job.note().as_bytes()).into();
+        let scope = self
+            .issuer
+            .issue(
+                credential,
+                model::random().map_err(unavailable)?,
+                fingerprint,
+                input,
+                model::pins().map_err(unavailable)?,
+            )
+            .map_err(unavailable)?;
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        let is_restore = restore_moment.is_some();
+        let committed = if is_restore {
+            self.owner
+                .commit_owner_rewind(&scope, &built.candidate, &context)
+        } else {
+            self.owner
+                .commit_owner_candidate(&scope, &built.candidate, &context)
+        };
+        match committed {
+            SubmissionOutcome::Confirmed(receipt) => {
+                if !self.owner.is_current() {
+                    self.fence();
+                }
+                // A rewind restores the actor-side state the checkpoint does
+                // not carry on the same owner critical section, right after
+                // the commit it belongs to (never before: a failed commit
+                // must not move the table or the ledger). The history entry
+                // the publication hook just recorded is then refreshed with
+                // the rewound state, so back/forward from here stays exact.
+                if let Some(moment) = restore_moment {
+                    self.table_log.rewind_to(moment.table_floor);
+                    if let Err(error) = self.social.restore_snapshot(&moment.social) {
+                        self.fence();
+                        record_unavailable("authority", &format!("social rewind: {error}"));
+                        return Err(authority_unavailable());
+                    }
+                }
+                let revision = receipt.basis().revision;
+                self.table_log.push(
+                    "table",
+                    rpc::TableRole::Narrator,
+                    0,
+                    rpc::TableKind::Action,
+                    &format!(
+                        "Development {}: {} → {}",
+                        order.job.note(),
+                        built.before,
+                        built.after
+                    ),
+                );
+                // The recorded moment keeps the commit's own lines: the
+                // publication hook runs before table lines are pushed.
+                self.refresh_dev_moment();
+                Ok(commands::DevResult {
+                    epoch: revision.epoch().get(),
+                    sequence: revision.sequence(),
+                    before: built.before,
+                    after: built.after,
+                })
+            }
+            SubmissionOutcome::OperationConflict => Err(tonic::Status::failed_precondition(
+                "development operation conflict; retry the command",
+            )),
+            SubmissionOutcome::ExpiredOrIndeterminate => Err(tonic::Status::failed_precondition(
+                "development operation expired; retry the command",
+            )),
+            SubmissionOutcome::LookupRequired => {
+                self.fence();
+                Err(unavailable(RepositoryError::UnresolvedCommit))
+            }
+            SubmissionOutcome::Refused(error) => Err(match error {
+                RepositoryError::StaleEpoch
+                | RepositoryError::StaleFence
+                | RepositoryError::ExpiredOwner
+                | RepositoryError::RevisionConflict => {
+                    self.fence();
+                    unavailable(error)
+                }
+                RepositoryError::InvalidCandidate | RepositoryError::InputBinding => {
+                    tonic::Status::failed_precondition(format!(
+                        "development candidate refused: {error:?}"
+                    ))
+                }
+                _ => unavailable(error),
+            }),
+        }
+    }
+
     pub(super) fn submit(
         &mut self,
         credential: [u8; 32],
@@ -1126,6 +1370,9 @@ impl Actor {
                 let replayed = replaying_uncertain || committed.basis().revision <= prior_revision;
                 if !replayed {
                     self.record_table_action(member, &request, &accepted);
+                    // The recorded moment keeps the commit's own lines: the
+                    // publication hook runs before table lines are pushed.
+                    self.refresh_dev_moment();
                 }
                 if committed.basis().revision > prior_revision
                     && self.owner.is_current()
@@ -1270,6 +1517,17 @@ impl Actor {
             action_kind: rpc::GameplayActionKind::DefendCourier as i32,
             ..Default::default()
         })
+    }
+
+    /// Refreshes the newest history entry's actor-side state after a commit's
+    /// own table lines land (DEVCTL-001 milestone 2). No-op unless the
+    /// development surface is on.
+    fn refresh_dev_moment(&self) {
+        if let Some(history) = &self.dev_history
+            && let Ok(mut history) = history.lock()
+        {
+            history.refresh_latest_aux(self.table_log.position(), self.social.snapshot());
+        }
     }
 
     fn record_table_action(
@@ -1417,6 +1675,20 @@ impl Actor {
         self.table_log.set_composing(index, kind);
         Ok(())
     }
+
+    /// A presentation report from the shared display. Only the display credential's
+    /// reports advance the pacing gate; a player credential's report is ignored (it
+    /// learns the current released sequence and nothing changes).
+    fn presented(&mut self, credential: &[u8; 32], sequence: u64) -> Result<u64, tonic::Status> {
+        if self.session_lost() {
+            return Err(session_lost_status());
+        }
+        let role = self.issuer.authenticate(credential).map_err(unavailable)?;
+        if role != LocalDemoRole::Display {
+            return Ok(self.table_log.released_sequence());
+        }
+        Ok(self.table_log.report_presented_at(sequence, Instant::now()))
+    }
 }
 
 impl Reducer<Call> for Actor {
@@ -1430,6 +1702,14 @@ impl Reducer<Call> for Actor {
                 reply,
             } => {
                 let _delivered = reply.send(self.presence(&credential, kind));
+                return;
+            }
+            Call::Presented {
+                credential,
+                sequence,
+                reply,
+            } => {
+                let _delivered = reply.send(self.presented(&credential, sequence));
                 return;
             }
             other => other,
@@ -1473,7 +1753,12 @@ impl Reducer<Call> for Actor {
                         "finite demonstration call budget exhausted",
                     )));
                 }
-                Call::Presence { .. } => {}
+                Call::Dev { reply, .. } => {
+                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
+                        "finite demonstration call budget exhausted",
+                    )));
+                }
+                Call::Presence { .. } | Call::Presented { .. } => {}
             }
             return;
         }
@@ -1547,7 +1832,16 @@ impl Reducer<Call> for Actor {
                     self.dialogue_member(&credential)
                 }))
                 .is_ok(),
-            Call::Presence { .. } => true,
+            Call::Dev {
+                credential,
+                order,
+                reply,
+            } => reply
+                .send(after_grant_reconnect(reconnected, || {
+                    self.dev(&credential, *order)
+                }))
+                .is_ok(),
+            Call::Presence { .. } | Call::Presented { .. } => true,
         };
         span.finish_unmeasured(if delivered {
             "actor_outcome_delivered"

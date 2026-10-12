@@ -62,7 +62,7 @@ pub(crate) const STYLES: &str = r#"
 .df-combat .combat-roll{display:grid;grid-template-columns:66px 1fr;column-gap:16px;padding:0 0 15px;margin:0 0 15px;border-bottom:1px solid #b7a48240}
 .df-combat .combat-roll:last-child{border-bottom:0;margin:0;padding-bottom:0}
 .df-combat .combat-roll h3{grid-column:2;font:13px/1.5 system-ui,sans-serif;color:#f0dfbd;letter-spacing:.3px}
-.df-combat .combat-roll-value{grid-column:1;grid-row:1 / span 4;display:grid;place-items:center;align-self:center;aspect-ratio:1;margin:0;border:1px solid #e4c084;clip-path:polygon(25% 0,75% 0,100% 25%,100% 75%,75% 100%,25% 100%,0 75%,0 25%);background:linear-gradient(140deg,#86633373,#171c15);font:36px/1 Georgia,serif;color:#ffe0a3;text-shadow:0 2px 5px #000}
+.df-combat .combat-roll-value{grid-column:1;grid-row:1 / span 4;display:grid;place-items:center;align-self:center;aspect-ratio:1;margin:0;border:1px solid #e4c084;clip-path:polygon(25% 0,75% 0,100% 25%,100% 75%,75% 100%,25% 100%,0 75%,0 25%);background:linear-gradient(140deg,#86633373,#171c15);background-size:cover;background-position:center;background-repeat:no-repeat;font:36px/1 Georgia,serif;color:#ffe0a3;text-shadow:0 2px 5px #000}
 .df-combat .combat-roll-explanation{grid-column:2;font:12px/1.6 system-ui,sans-serif;color:#e1d6bf;margin:5px 0}
 .df-combat .combat-roll-source{grid-column:2;font:11px/1.6 system-ui,sans-serif;color:#b8ad97;margin:3px 0 0}
 .df-combat .combat-hp{position:relative;height:18px;margin:8px 0 0;border:1px solid #d9b77a59;border-radius:9px;background:#0a0e0b;overflow:hidden}
@@ -75,6 +75,10 @@ pub(crate) const STYLES: &str = r#"
 .df-combat .combat-roll-verdict[data-tone=failure]{background:linear-gradient(#963a2e,#65261f);color:#ffe3dc}
 .df-combat .combat-roll:first-child{grid-template-columns:104px 1fr}
 .df-combat .combat-roll:first-child .combat-roll-value{font-size:54px;box-shadow:0 0 28px #e0b87766}
+/* FIGHT-001: the Latest-roll badge is the small die: a natural 20 reads bright gold, a
+natural 1 ember, ordinary faces keep the parchment number. */
+.df-combat .combat-roll-value[data-nat="20"]{color:#ffedbe;border-color:#ffe9b0;box-shadow:0 0 28px #ffe9b080}
+.df-combat .combat-roll-value[data-nat="1"]{color:#eda37e;border-color:#d96a4b}
 .df-combat .combat-roll:first-child h3{font-size:15px}
 .df-combat .combat-offer[data-kind=choice] button{display:flex;justify-content:space-between;align-items:center;gap:12px;text-align:left;background:#1a211b;border-color:#c19d6055}
 .df-combat .combat-offer[data-kind=choice] button:after{content:'Off';flex:none;min-width:52px;padding:2px 10px;border:1px solid #b5aa8799;border-radius:12px;font:700 11px/1.7 system-ui,sans-serif;letter-spacing:1px;text-align:center;text-transform:uppercase;color:#cfc6b0}

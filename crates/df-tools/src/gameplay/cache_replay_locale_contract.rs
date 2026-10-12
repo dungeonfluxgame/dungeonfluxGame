@@ -1265,7 +1265,9 @@ fn retain_wire(case: &str, role: &str, side: &str, bytes: &[u8], status: &str) {
             Err(e) => panic!("wire witness retention: {e}"),
         }
     }
-    File::open(&dir).unwrap().sync_all().unwrap();
+    // Directory handles cannot be flushed this way on Windows, where this is a
+    // documented no-op; on Unix it is unchanged.
+    crate::file_identity::sync_directory(&dir).unwrap();
     println!(
         "full-wire {case} {role} {side} {status} {} {hash} {build}",
         bytes.len()

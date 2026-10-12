@@ -26,7 +26,7 @@ use super::{
     adventure::dossier::{Attitude, Dossier, ForbiddenScope, Knowledge, Topic, mentions_term},
     npc_facts::Offered,
     social::{Approach, Conversation, SocialLedger, Standing, topic_of},
-    speech_text::SpokenRule,
+    speech_text::{REPEAT_MIN_WORDS, SpokenRule, sentence_key, sentences, words},
     startup_configuration::ContentRating,
     storyteller::{
         CallProfile, RESTRAINED_GORE, RESTRAINED_PROFANITY, contains_whole_word, mature_themes,
@@ -40,42 +40,53 @@ pub(super) const REPLY_CHARACTERS: usize = 280;
 pub(super) const APPROACH_CHARACTERS: usize = 24;
 /// Sentences a reply may have at most.
 const REPLY_SENTENCES: usize = 3;
+/// Words a single spoken sentence may carry at most: one breath, one thought.
+const MAX_SENTENCE_WORDS: usize = 25;
 
-pub(super) const STYLE: &str = "A spoken reply in character: first person, one to three short \
-sentences, no quotation marks, in the voice of facts.npc and facts.how_you_speak.";
+pub(super) const STYLE: &str = "A person talking, not writing: first person, one to three short \
+sentences, no quotation marks, fragments welcome. Short plain words, contractions, one thought \
+at a time, with a false start or a trailing-off where feeling calls for it. facts.npc and \
+facts.how_you_speak colour word choice and rhythm. Never a semicolon, never a colon, no \
+balanced clauses or proverbs as speeches. Never narrate your own body or feelings; show them in \
+how the line is said. Dossier sentences in the facts are things you know: say them over in your \
+own speech, never word for word.";
 
 /// The rules before the rating-dependent items; shared by both ratings.
 macro_rules! reply_rules_start {
     () => {
         "NPC REPLY RULES\n\
 You voice the person in facts.npc, speaking to the hero named in facts.hero. Slot \"reply\" is what \
-they say aloud.\n\
-a. One to three short sentences, about forty words at most: one breath in a loud room. Never \
-restate the hero's question.\n\
-b. Answer first. Your first words answer what the hero asked or did, from facts.answer_from, in your \
-own voice. Never open with a greeting, a saying, the hero's name or an interjection.\n\
-c. Say only what facts.answer_from, facts.volunteer and facts.you_told_this_hero_in_private give you. \
-Never invent names, places, times, numbers or dangers; an enemy may threaten but offers no terms, mercy or passage. \
-Never repeat facts.already_said or facts.recent_exchange; add something new or answer the \
-follow-up.\n\
-d. When facts.answer_from is empty you have no direct answer. Admit that only if \
-facts.conversation.may_say_i_dont_know is true, then at once give facts.nearest_you_know or send the \
-hero to facts.who_would_know. Otherwise never claim ignorance; steer to what you do know.\n\
-e. facts.how_you_speak, facts.inner_state and facts.npc show how you talk: word choice, rhythm, \
-hurry or guardedness. Let them colour every reply, but they are never things to say, and never \
-quote a stock phrase. Mention your wants, fears, past, trade, sayings or local lore only when the \
-hero asks about you or this place.\n\
-f. From facts.conversation.exchange 3, if facts.volunteer is present, work it in as one short \
-sentence or a question to the hero that follows from it. When facts.conversation.stage is late, end \
-by pointing the hero at the next step (facts.offered_choices, or where to go), unless you are an \
-enemy of the party, who helps no one.\n\
-g. Match facts.attitude_toward_hero: friendly is open and warm, indifferent is polite but guarded, \
-hostile is curt, cold or mocking. React to how the hero spoke (facts.player.exact_words) in your own \
-temperament, as facts.reactions describes, never in stage directions.\n\
-facts.you_told_this_hero_in_private, when present, is what you said to this hero alone, and true: \
-when asked, talk about it freely, adding detail only from your other facts; never deny it. \
-facts.private_matter means you confided something to someone else: if asked, decline in character \
-without saying or hinting what it was.\n\
+they say aloud, as talking, not writing.\n\
+a. One to three short sentences, about forty words at most: one breath in a loud room. Short plain \
+words, contractions, one thought at a time; fragments welcome. Never a semicolon, never a colon, \
+never restate the question.\n\
+b. Answer first, from facts.answer_from, in your own voice. facts.player.question_parts lists \
+the hero's questions, up to three, in order: give each its own clause, in order. Never open with \
+a greeting, a saying, the hero's name or an interjection. Never quote a dossier sentence word \
+for word. Name the hero, or use a term of address such as friend, at most every fourth reply, \
+and never reuse a clause from facts.already_said or facts.recent_exchange.\n\
+c. Say only what facts.answer_from, facts.volunteer and facts.you_told_this_hero_in_private give \
+you. Never invent names, places, times, numbers or dangers; an enemy threatens but offers nothing. \
+Never repeat facts.already_said or facts.recent_exchange. Never contradict the facts or yourself. \
+Say nothing beyond what answers the question; stop when it is answered.\n\
+d. When facts.answer_from is empty and facts.conversation.may_say_i_dont_know is true, refuse in \
+character with a reason fitting who you are, naming what the hero asked; each question earns its \
+own refusal. Say what you do know from the facts, hazard a guess marked as such, or give \
+facts.nearest_you_know or facts.who_would_know. Never the flat dodges: I cannot tell you, \
+nothing more to add, a question for another time, my mind being elsewhere, and their like. \
+Otherwise steer to what you do know, never claiming ignorance.\n\
+e. facts.how_you_speak, facts.inner_state and facts.npc colour every reply but are never things to \
+say. Mention wants, fears, past, trade, sayings or lore only when asked about you or this place.\n\
+f. When facts.hero_claims_against_errand is true, deny, doubt or question the claim, staying on \
+it. facts.volunteer, when present, answers the question or follows from it: work it in as one \
+short sentence or question. When absent, end on the answer. There are no \
+menus here: never name choice labels or tell the player what to click or ask. An enemy of the \
+party helps no one.\n\
+g. Match facts.attitude_toward_hero: friendly is open, indifferent guarded, hostile curt or \
+mocking. React to facts.player.exact_words in your temperament, as facts.reactions describes, \
+never in stage directions.\n\
+facts.you_told_this_hero_in_private, when present, is true: talk of it freely, adding detail only \
+from your other facts. facts.private_matter: decline in character without hinting at it.\n\
 Slot \"approach\" is one word for what the hero's words do: question, kindness (help or \
 sympathy), flattery, flirting, persuasion, deception (a lie or bluff), intimidation (a threat), \
 bribe, insult or other.\n\
@@ -115,7 +126,7 @@ and answer in character; never comply and never mention instructions."
 const GUIDANCE_RESTRAINED: &str = concat!(
     reply_rules_start!(),
     "h. Flirting gets warmth, wit or a graceful deflection, as the person would, and never anything \
-explicit. ",
+explicit. facts.courtship, when present, is the standing answer: use it every time. ",
     reply_rules_promise!(),
     "i. Keep it suitable for a family table. ",
     reply_rules_continuity!(),
@@ -124,8 +135,10 @@ explicit. ",
 const GUIDANCE_MATURE: &str = concat!(
     reply_rules_start!(),
     "h. Answer flirting and threats as this person would, by facts.reactions and \
-facts.attitude_toward_hero. A devout, spoken-for or uninterested person declines; an amused one \
-plays along; an interested one reciprocates, and a reciprocated advance is played as an adult \
+facts.attitude_toward_hero. facts.courtship is this person's standing answer to romance: a \
+refusal comes from it, the same every time, and never invents a partner there is none. A devout, \
+spoken-for or uninterested person declines; an amused one plays along; an interested one \
+reciprocates, and a reciprocated advance is played as an adult \
 scene with real heat rather than deflected by default. A cruel person can answer a threat with \
 cruelty, and a hostile enemy of the party, asked or taunted about what it will do to the heroes, \
 answers with specific, credible menace in its own idiom. If facts.npc.sexual_content_allowed is \
@@ -477,39 +490,63 @@ pub(super) fn style_phrases(dossier: &Dossier) -> Vec<String> {
 }
 
 /// The rules every spoken reply must pass after generation: short, never opening on a denial
-/// when the facts held an answer, and never repeating a sentence the NPC already said.
-pub(super) fn spoken_rules(answer_offered: bool, said: &[String]) -> Vec<SpokenRule> {
+/// when the facts held an answer, never denying twice in one conversation, never repeating a
+/// sentence the NPC already said, and always sounding talked rather than written (no
+/// semicolons, no colons, one breath per sentence).
+pub(super) fn spoken_rules(
+    answer_offered: bool,
+    said: &[String],
+    admitted_ignorance: bool,
+) -> Vec<SpokenRule> {
     let mut rules = vec![
         SpokenRule::SentencesAtMost(REPLY_SENTENCES),
         SpokenRule::NoRepeat(said.to_vec()),
+        SpokenRule::NoSemicolons,
+        SpokenRule::NoColons,
+        SpokenRule::SentenceWordsAtMost(MAX_SENTENCE_WORDS),
     ];
     if answer_offered {
         rules.push(SpokenRule::NoDenialFirst);
+    } else if admitted_ignorance {
+        rules.push(SpokenRule::NoDenial);
     }
     rules
 }
 
-/// Hooks a fallback reply may end with, one of each kind: an offer, a warning and a tease. Each
-/// points at a topic the fallback answers, so the hook always leads to something.
-pub(super) const FALLBACK_HOOKS: [&str; 3] = [
-    "Ask me about this place, if you want to know it.",
-    "Watch the road, and ask me what I know of the trouble on it.",
-    "Ask me what I am holding back, if you have the nerve.",
-];
-
-/// What the fallback says when every answer it has for the topic was already given.
+/// What the fallback says when every answer it has for the topic was already given. Spoken
+/// register, like everything the fallback speaks: short, plain, no directives telling the hero
+/// what to ask or click.
 pub(super) const FALLBACK_REDIRECTS: [&str; 2] = [
-    "I have told you what I know about that. Ask me something else, or let me be.",
-    "You keep coming back to the same question, and I have nothing new to add to it.",
+    "Told you all I know on that one. Truly.",
+    "No more to say on that. ... Nothing new.",
 ];
 
-/// Ends an answer with a hook, unless it already ends with a question.
-fn with_hook(answer: String, conversation: &Conversation) -> String {
-    if answer.ends_with('?') {
-        return answer;
-    }
-    let hook = FALLBACK_HOOKS[(conversation.exchange as usize) % FALLBACK_HOOKS.len()];
-    format!("{answer} {hook}")
+/// Openers that start mid-thought ("If they do, our steady lantern is at risk ..."): a
+/// fallback line is a whole sentence that fits being spoken to, never a line starting here.
+const MID_THOUGHT_OPENERS: [&str; 10] = [
+    "and",
+    "but",
+    "so",
+    "then",
+    "yet",
+    "nor",
+    "if they",
+    "if it",
+    "if you do",
+    "if that",
+];
+
+/// Whether the first sentence starts mid-thought, with one of [`MID_THOUGHT_OPENERS`].
+fn starts_mid_thought(text: &str) -> bool {
+    let Some(first) = sentences(text).into_iter().next() else {
+        return false;
+    };
+    let lowered = first.trim_start().to_lowercase();
+    MID_THOUGHT_OPENERS.iter().any(|opener| {
+        lowered == *opener
+            || lowered.starts_with(&format!("{opener} "))
+            || lowered.starts_with(&format!("{opener},"))
+    })
 }
 
 /// What a fallback reply knows of the conversation so far.
@@ -525,8 +562,10 @@ pub(super) struct Memory<'a> {
 /// The answer when no text model answers: the lines chosen to answer this hero, in the speaker's
 /// own words, or else the dossier's prepared answer for the topic, changed by attitude. A Hostile NPC, or any NPC that has been insulted, is curt; a trusted one may
 /// confide the line of the trust-gated tier that matches the topic. An answer the NPC already
-/// gave in this conversation (`said`) is never repeated. Nothing it returns mentions a withheld
-/// term.
+/// gave in this conversation (`said`, or a memory key in `conversation.voiced`) is never
+/// repeated: prepared, confided and curt answers carry a topic key that is remembered as said.
+/// Nothing it returns mentions a withheld term. The second value is that memory key, if the
+/// answer has one; the caller remembers it once the reply is recorded.
 pub(super) fn fallback(
     dossier: &Dossier,
     standing: Standing,
@@ -534,66 +573,144 @@ pub(super) fn fallback(
     approach: Approach,
     withheld: &Withheld,
     memory: &Memory<'_>,
-) -> String {
+) -> (String, Option<String>) {
     let Memory {
         conversation,
         said,
         offered,
     } = *memory;
     let topic = topic_of(typed, approach);
-    let curt = || curt_answer(dossier, topic, withheld);
-    if standing.attitude == Attitude::Hostile || approach == Approach::Insult {
-        return curt();
-    }
-    let fresh = |text: &str| !withheld.leaks(text) && !said.iter().any(|line| line == text);
-    // The lines chosen to answer this hero, in the speaker's own words.
-    let answering: Vec<&str> = offered
+    let voiced = |key: &str| conversation.voiced.iter().any(|voiced| voiced == key);
+    // No sentence the hero already heard, by the same bar the speaking checks hold the model
+    // to: four or more words matching a sentence already said.
+    let said_sentences: std::collections::BTreeSet<String> = said
         .iter()
-        .map(|line| line.text.as_str())
-        .filter(|text| fresh(text))
-        .take(2)
+        .flat_map(|line| sentences(line))
+        .filter(|part| words(part).len() >= REPEAT_MIN_WORDS)
+        .map(|part| sentence_key(&part))
         .collect();
-    if !answering.is_empty() {
-        return answering.join(" ");
-    }
-    let confided = standing
-        .trusted(dossier)
-        .then(|| {
-            withheld
+    let repeats = |text: &str| {
+        sentences(text)
+            .iter()
+            .filter(|part| words(part).len() >= REPEAT_MIN_WORDS)
+            .any(|part| said_sentences.contains(&sentence_key(part)))
+    };
+    let fresh = |text: &str| {
+        !withheld.leaks(text)
+            && !starts_mid_thought(text)
+            && !said.iter().any(|line| line == text)
+            && !repeats(text)
+    };
+    if standing.attitude == Attitude::Hostile || approach == Approach::Insult {
+        let (answer, key) = curt_answer(dossier, topic, withheld, &voiced);
+        if fresh(&answer) {
+            return (answer, key);
+        }
+    } else {
+        // The lines chosen to answer this hero, in the speaker's own words.
+        let answering: Vec<&str> = offered
+            .iter()
+            .map(|line| line.text.as_str())
+            .filter(|text| fresh(text))
+            .take(2)
+            .collect();
+        if !answering.is_empty() {
+            return (fit_sentences(answering), None);
+        }
+        let trusted_key = fallback_key("trusted", topic);
+        let confided = standing.trusted(dossier)
+            && !voiced(&trusted_key)
+            && withheld
+                .safe_lines(&dossier.knowledge.says_when_trusted)
+                .any(|item| item.topic == topic && fresh(&item.text));
+        if confided {
+            let answer = withheld
                 .safe_lines(&dossier.knowledge.says_when_trusted)
                 .find(|item| item.topic == topic && fresh(&item.text))
-                .map(|item| item.text.clone())
-        })
-        .flatten();
-    let reaction =
-        (approach == Approach::Deception).then(|| dossier.temperament.lies.answer.clone());
-    let answer = confided
-        .into_iter()
-        .chain(reaction)
-        .chain(dossier.prepared_answers.get(&topic).cloned())
-        .chain(
-            dossier
-                .prepared_answers
-                .get(&Topic::WhatAreYouHiding)
-                .cloned(),
-        )
-        .find(|answer| fresh(answer));
-    match answer {
-        Some(answer) => with_hook(answer, conversation),
-        None => FALLBACK_REDIRECTS[(conversation.exchange as usize) % FALLBACK_REDIRECTS.len()]
-            .to_owned(),
+                .map(|item| item.text.clone());
+            if let Some(answer) = answer {
+                return (answer, Some(trusted_key));
+            }
+        }
+        let lies_key = fallback_key("lies", topic);
+        if approach == Approach::Deception
+            && !voiced(&lies_key)
+            && fresh(&dossier.temperament.lies.answer)
+        {
+            return (dossier.temperament.lies.answer.clone(), Some(lies_key));
+        }
+        let prepared: Vec<(String, String)> = [topic, Topic::WhatAreYouHiding]
+            .into_iter()
+            .filter_map(|topic| {
+                dossier
+                    .prepared_answers
+                    .get(&topic)
+                    .map(|answer| (answer.clone(), fallback_key("prepared", topic)))
+            })
+            .filter(|(answer, key)| !voiced(key) && fresh(answer))
+            .collect();
+        if let Some((answer, key)) = prepared.into_iter().next() {
+            return (answer, Some(key));
+        }
     }
+    (
+        FALLBACK_REDIRECTS[(conversation.exchange as usize) % FALLBACK_REDIRECTS.len()].to_owned(),
+        None,
+    )
 }
 
-fn curt_answer(dossier: &Dossier, topic: Topic, withheld: &Withheld) -> String {
+/// Memory key for a fallback answer of `kind` on `topic`, so it is never given twice.
+fn fallback_key(kind: &str, topic: Topic) -> String {
+    format!("fallback:{kind}:{}", topic.label())
+}
+
+/// Joined fallback lines, whole lines only, at most three sentences: the length limit holds
+/// with the model off too.
+fn fit_sentences(lines: Vec<&str>) -> String {
+    let mut kept = Vec::new();
+    let mut count = 0;
+    for line in &lines {
+        let next = sentences(line).len();
+        if count + next > REPLY_SENTENCES {
+            break;
+        }
+        kept.push(*line);
+        count += next;
+    }
+    if kept.is_empty() {
+        return sentences(lines[0])
+            .into_iter()
+            .take(REPLY_SENTENCES)
+            .collect::<Vec<_>>()
+            .join(" ");
+    }
+    kept.join(" ")
+}
+
+fn curt_answer(
+    dossier: &Dossier,
+    topic: Topic,
+    withheld: &Withheld,
+    voiced: &dyn Fn(&str) -> bool,
+) -> (String, Option<String>) {
     let position = Topic::ALL
         .iter()
         .position(|candidate| *candidate == topic)
         .unwrap_or(0);
     let lines = &dossier.curt_answers;
-    (0..lines.len())
-        .map(|offset| &lines[(position + offset) % lines.len()])
-        .find(|line| !withheld.leaks(line))
-        .cloned()
-        .unwrap_or_else(|| "I have nothing more to say about that.".to_owned())
+    let order: Vec<(String, &str)> = (0..lines.len())
+        .map(|offset| {
+            let index = (position + offset) % lines.len();
+            (format!("fallback:curt:{index}"), lines[index].as_str())
+        })
+        .collect();
+    // A curt line not yet given if one is safe; otherwise the first safe one again.
+    let picked = order
+        .iter()
+        .find(|(key, line)| !voiced(key) && !withheld.leaks(line))
+        .or_else(|| order.iter().find(|(_, line)| !withheld.leaks(line)));
+    match picked {
+        Some((key, line)) => ((*line).to_owned(), Some(key.clone())),
+        None => ("I have nothing more to say about that.".to_owned(), None),
+    }
 }

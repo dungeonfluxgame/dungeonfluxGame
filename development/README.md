@@ -128,6 +128,55 @@ The startup line prints both file revisions; departures from SRD values show
 `CUSTOM RULES` there and a `+custom-<revision>` suffix on the in-game rules label.
 Saved games refuse changed revisions; start a new database after editing either file.
 
+### Development control surface (dev CLI, DEVCTL-001 milestone 1)
+
+Agents drive the running game from the command line instead of clicking through
+browser tabs: `df-transport-fixture dev ...` talks to a control surface inside
+the game server. Every game action travels the same owner admission, validation,
+rules and commit path a phone uses, as a seated player; refusals report the
+server's own reason. Output is one JSON document per command on stdout
+(`--pretty` for people); errors are JSON on stderr with a non-zero exit code;
+the tool never prompts. `dev describe` lists every command and its output shape.
+
+Start the server with `DF_GAMEPLAY_DEV_CONTROL=on` (off by default). It prints
+one `DEV CONTROL on url=... token_file=...` line; the client reads the bearer
+token from that file (`--token-file`, or `DF_DEV_CONTROL_TOKEN_FILE`) and the
+server URL (`--server`, or `DF_DEV_CONTROL_URL`). Ten-line session:
+
+```sh
+dev script setup-two-heroes.txt   # join 1, join 2, create 1 Brynn, create 2 Neris
+dev act Brynn begin
+dev say Brynn 'Courier, who sent you with that packet?'
+dev act Brynn ask                 # with DF_GAMEPLAY_TEST_FIGHT=2 the fight starts
+dev state                         # room, phase, seats, sheets, fight, offers, revision
+dev act Neris move --cell c5r4
+dev act Neris attack --target 'Bandit 2' --weapon javelin
+dev view --as tv                   # exactly the TV view (no offers, no private sheets)
+dev view --as Neris                # exactly her phone view (offers, own sheet)
+dev log                            # the table log; dev checkpoint save <name> names a point
+```
+
+Safety rules: the surface is development-only and loopback-only (a non-loopback
+listener needs a second explicit setting or startup is refused); the token is
+never printed; with the setting off there is no route, no file and no behaviour
+change. Names beat ids wherever unambiguous (hero names, cells as `c5r6`,
+weapons and foes by name); there is no free-text action. `dev shutdown` stops
+the server cleanly so its database resumes immediately.
+
+Checkpoint `save`/`list` work; `restore`, `back`, `forward` and `override`
+are temporarily disabled server-side (clean `unavailable`, sessions stay
+usable). Going back needs an owner-supported rewind: committing a past
+state's content with the current history chains passes the commit gate but
+fails the view projection's content/chain checks, bricking every owner view
+(observed live; see the DEVCTL-001 handoff). `dev describe` marks them
+`DISABLED`; building them back is a coordinator-routed engine task.
+
+Timing note: right after a commit the owner can serve a player view with no
+offers for several seconds (projection lag, worse on a loaded box) before
+the projection catches up. The CLI re-reads an empty offer list for up to
+~12 s inside `act`/`create`; scripts should still pause a beat between
+dependent combat commands rather than firing back-to-back.
+
 ### Phones on the network (`--lan`, join QR code)
 
 `development/run-gameplay.sh --lan` listens on every interface (`DF_GAMEPLAY_LISTEN=0.0.0.0:63309`
@@ -262,6 +311,28 @@ The startup line says what was decided, for example `HOME VIDEO on model=... bud
 `HOME VIDEO off (no FAL_KEY)`. Each paid call is logged with its time, model and price. Nothing
 waits on the video: a pending, failed, or refused loop leaves the still on screen.
 
+### Music (adaptive score)
+
+The shared display plays an adaptive score from `assets/music/*.mp3`, served at
+`/assets/music/<track>`. Four sample-aligned loops (bed, motif, tension, combat: 16 bars of 4/4
+at 84 BPM in D minor, 45.714 s) start together on one Web Audio clock; which of them sound
+changes per 8-bar arrangement epoch (never repeating the last voicing; quiet scenes may rest on
+ambience alone), coloured per place or fight (filter, balance, ambience level), with one
+location ambience beside them and one-shot stingers on the next beat, rotating takes. Score,
+ambience and stingers run on separate buses into one music master with a limiter on the sum.
+Music ducks deep (-9 dB) under narration and shallow (-3 dB, short hold) under big sound
+effects; phase changes (into/out of a fight, scene changes, the end of the adventure) glide
+over at least 3 seconds, and suite changes crossfade on the next loop boundary. Nothing plays
+before the "Enable sound" gesture; the mute control silences everything; a hidden tab suspends
+and resyncs without replaying; the volume key (`df.music.volume`) still works. The whole mix
+is checkable without listening in the display root's `data-music-state` attribute (bus levels,
+arrangement, colour, suite, takes, duck reason).
+
+The track list is ready for alternates that do not exist yet (`score-*-b` takes, `b-`/`c-`
+battle/finale suites, `sting-*-2`/`-3` takes): a file that is not on disk is simply not served
+and the browser plays without it. See `artifacts/tmp/music-a1/new-material.md` for what to
+generate next, in priority order, with the loop-alignment requirements each file must meet.
+
 ## Real Gaussian-splat scans as battle scenes
 
 Real photogrammetry scans (streamed level-of-detail SOG scenes from superspl.at: `lod-meta.json`
@@ -293,10 +364,10 @@ downloaded) and point the server at it.
   later. `data-battlefield-stats` reports `fps_target`, `fps_presented`, `fps_divisor`,
   `display_hz` and `cost_ms`. The `#battle-preview` address takes `&fps=24` or `&fps=30`.
 - `DF_GAMEPLAY_SPLAT_LOD=<0-3>`: which level of a streamed scan the battlefield draws as its finest, counted
-  from the best level the scan has on disk (the scene file's `levels`): 0 is the best on disk, 1 (the default) the
+  from the best level the scan has on disk (the scene file's `levels`): 0 (the default) is the best on disk, 1 the
   second best, and so on, never past the scene's coarsest. A scan stores its own levels (each about half the splats of
-  the one before); the village scan has 11 and only levels 3 to 10 are downloaded, so its 0 is the scan's own level 3
-  and its 1 the scan's level 4; the other scans have 4 and levels 1 to 3 are downloaded. The chosen level is drawn
+  the one before); the village scan has 11 and levels 0 to 10 are downloaded, so its 0 is the scan's own level 0;
+  the other scans have 4 and levels 0 to 3 are downloaded. The chosen level is drawn
   complete out to as far from the grid as the splat budget allows (up to 60 m); only beyond that does the level step
   coarser with distance, so there is no thinner ring just past the play area. Nothing is thinned, down-scaled or blurred
   on top while the frame time holds. Any other value refuses startup. The `#battle-preview` address takes `&lod=<0-3>`.

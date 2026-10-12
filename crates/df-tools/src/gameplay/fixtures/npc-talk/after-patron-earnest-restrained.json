@@ -88,7 +88,7 @@
   {
    "n": 3,
    "hero_words": "Who or what might stand in our way on the road to Windward Waystation?",
-   "reply": "I cannot name who might stand in your way. The road runs through the Windward Pass, and I would not linger there; ask after the Windward Waystation by name, since a friendly mention opens doors. I need the iron coffer carried there, and there is no one else I can ask.",
+   "reply": "I cannot name who might stand in your way, but the road runs through the Windward Pass, and I would not linger there. Ask after the Windward Waystation by name, since a friendly mention opens doors. I need the iron coffer carried there, and there is no one else I can ask.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",

@@ -3,9 +3,11 @@ use filesystem::{Phase, Publisher, resolve, seal};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    os::unix::fs::{DirBuilderExt, PermissionsExt, symlink},
     sync::atomic::{AtomicUsize, Ordering},
 };
+// Unix-only file properties (modes, symlinks) keep their assertions on Unix.
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
@@ -39,11 +41,19 @@ fn identity_bytes(identity: &BuildIdentity) -> Vec<u8> {
 }
 
 fn directory(path: &Path) {
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)
-        .unwrap();
+    // Directory modes are a Unix-only property.
+    #[cfg(unix)]
+    {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
+            .unwrap();
+    }
+    #[cfg(not(unix))]
+    {
+        fs::DirBuilder::new().recursive(true).create(path).unwrap();
+    }
 }
 
 fn candidate(base: &Path, generation: usize) -> (PathBuf, Manifest) {
@@ -305,13 +315,20 @@ fn publication_recovery_boundary() {
     ] {
         assert!(safe_relative(path).is_err());
     }
-    for kind in ["extra", "missing", "symlink", "hardlink", "oversized"] {
+    // Creating a symlink is a Unix-only case; the other mutations keep running
+    // on Windows.
+    #[cfg(unix)]
+    let kinds = ["extra", "missing", "symlink", "hardlink", "oversized"];
+    #[cfg(not(unix))]
+    let kinds = ["extra", "missing", "hardlink", "oversized"];
+    for kind in kinds {
         let f = Fixture::new();
         let previous = f.current();
         let target = f.input.join("web/assets/map.png");
         match kind {
             "extra" => fs::write(f.input.join("web/extra"), b"extra").unwrap(),
             "missing" => fs::remove_file(&target).unwrap(),
+            #[cfg(unix)]
             "symlink" => {
                 fs::remove_file(&target).unwrap();
                 symlink(f.input.join("web/df_tools.js"), &target).unwrap();
@@ -424,19 +441,25 @@ fn publication_recovery_boundary() {
             "missing-reference" => fs::remove_file(reference).unwrap(),
             "torn-reference" => rewrite(&reference, b"DF-CURRENT-BUILD-V1\npartial\n"),
             "missing-manifest" => {
+                // Published-set modes are a Unix-only property; removal alone
+                // still exercises the missing-file refusal on Windows.
+                #[cfg(unix)]
                 fs::set_permissions(&selected.directory, fs::Permissions::from_mode(0o700))
                     .unwrap();
                 fs::remove_file(selected.directory.join("manifest.txt")).unwrap();
+                #[cfg(unix)]
                 fs::set_permissions(&selected.directory, fs::Permissions::from_mode(0o500))
                     .unwrap();
             }
             "missing-component" => {
+                #[cfg(unix)]
                 fs::set_permissions(
                     selected.directory.join("web"),
                     fs::Permissions::from_mode(0o700),
                 )
                 .unwrap();
                 fs::remove_file(selected.directory.join("web/df_tools.js")).unwrap();
+                #[cfg(unix)]
                 fs::set_permissions(
                     selected.directory.join("web"),
                     fs::Permissions::from_mode(0o500),
@@ -452,7 +475,14 @@ fn publication_recovery_boundary() {
             assert!(!f.root.join("current").exists());
         }
     }
-    for kind in ["reference", "lock", "root"] {
+    // Swapping the held root mid-publish needs a Unix directory rename while
+    // its lock file is open; the other two sabotage cases keep running on
+    // Windows.
+    #[cfg(unix)]
+    let kinds = ["reference", "lock", "root"];
+    #[cfg(not(unix))]
+    let kinds = ["reference", "lock"];
+    for kind in kinds {
         let f = Fixture::new();
         let previous = f.current();
         let (input, manifest) = candidate(&f.base, 2);
@@ -463,6 +493,8 @@ fn publication_recovery_boundary() {
                     "reference" => {
                         let replacement = f.root.join("replacement");
                         fs::write(&replacement, &previous).unwrap();
+                        // Reference modes are a Unix-only property.
+                        #[cfg(unix)]
                         fs::set_permissions(&replacement, fs::Permissions::from_mode(0o400))
                             .unwrap();
                         fs::rename(replacement, f.root.join("current")).unwrap();
@@ -470,12 +502,14 @@ fn publication_recovery_boundary() {
                     "lock" => {
                         fs::rename(f.root.join("publisher.lock"), f.root.join("old-lock")).unwrap();
                         fs::write(f.root.join("publisher.lock"), b"").unwrap();
+                        #[cfg(unix)]
                         fs::set_permissions(
                             f.root.join("publisher.lock"),
                             fs::Permissions::from_mode(0o600),
                         )
                         .unwrap();
                     }
+                    #[cfg(unix)]
                     "root" => {
                         fs::rename(&f.root, f.base.join("retained-root")).unwrap();
                         directory(&f.root);
@@ -493,16 +527,23 @@ fn publication_recovery_boundary() {
             assert_eq!(f.current(), previous);
         }
     }
-    let alias_fixture = Fixture::new();
-    let alias = alias_fixture.base.join("alias");
-    symlink(&alias_fixture.root, &alias).unwrap();
-    assert!(Publisher::acquire(&alias).is_err());
-    assert!(resolve(&alias).is_err());
+    // Resolving through a symlinked root is a Unix-only case.
+    #[cfg(unix)]
+    {
+        let alias_fixture = Fixture::new();
+        let alias = alias_fixture.base.join("alias");
+        symlink(&alias_fixture.root, &alias).unwrap();
+        assert!(Publisher::acquire(&alias).is_err());
+        assert!(resolve(&alias).is_err());
+    }
 }
 
 fn rewrite(path: &Path, bytes: &[u8]) {
+    // File modes are a Unix-only property; on Windows the bytes alone change.
+    #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(path, bytes).unwrap();
+    #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o400)).unwrap();
 }
 

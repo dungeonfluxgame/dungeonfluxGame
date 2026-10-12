@@ -3,6 +3,7 @@ mod dialogue_recovery;
 mod live_battlefield;
 mod live_chrome;
 mod live_combat;
+mod live_dice;
 mod live_exploration;
 mod live_health;
 mod live_home;
@@ -61,6 +62,9 @@ struct Client {
     first_attack: Option<rpc::SubmitActionRequest>,
     last_confirmed: bool,
     action: Option<ActionClient>,
+    /// A clone of the watch's session client for one-way unary reports (the display's
+    /// presentation report); set with the watch connection, cleared with it.
+    sessions: Option<SessionClient>,
     connection: Option<RpcConnection<SessionClient>>,
     watch_abort: Option<AbortHandle>,
     callbacks: Vec<Callback>,
@@ -344,6 +348,7 @@ fn retire_transport(client: &mut Client) {
         connection.close();
     }
     client.action.take();
+    client.sessions.take();
     client.generation += 1;
     client.busy = false;
 }
@@ -785,6 +790,7 @@ fn connect(client: Rc<RefCell<Client>>) {
                         .max_encoding_message_size(RPC_MESSAGE_BYTES),
                 );
                 state.dialogue.bind(channel);
+                state.sessions = Some(sessions.clone());
                 state.connection = Some(connection);
             }
             // Reconnect refreshes local input/busy state from the retained snapshot.
@@ -835,6 +841,7 @@ fn connect(client: Rc<RefCell<Client>>) {
                 connection.close();
             }
             owned.borrow_mut().action.take();
+            owned.borrow_mut().sessions.take();
             owned.borrow_mut().dialogue.retire_transport();
             // Redraw so the recovery controls reflect the lost connection.
             let redrawn = redraw_current(&owned);
@@ -1804,6 +1811,7 @@ fn new_client(
         first_attack: None,
         last_confirmed: false,
         action: None,
+        sessions: None,
         connection: None,
         watch_abort: None,
         callbacks: Vec::new(),

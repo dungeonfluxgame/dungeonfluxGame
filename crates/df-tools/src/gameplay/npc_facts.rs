@@ -33,8 +33,10 @@ use super::{
 /// The exchange from which a trusted confidence is released, and a line is volunteered.
 const RELEASE_FROM_EXCHANGE: u32 = 2;
 const VOLUNTEER_FROM_EXCHANGE: u32 = 3;
-/// How many lines answer one reply at most.
-const ANSWER_LINES: usize = 2;
+/// How many lines answer one reply at most: one per part of a several-part question.
+const ANSWER_LINES: usize = 3;
+/// How many parts of a several-part question the facts list, at most.
+const QUESTION_PARTS: usize = 3;
 /// A statement shorter than this is an exclamation, not something the speaker knows.
 const MINIMUM_STATEMENT_WORDS: usize = 4;
 /// How many already-said lines are shown, most recent last.
@@ -69,7 +71,6 @@ pub(super) struct Inputs<'a> {
     pub(super) recent: &'a [(bool, String)],
     pub(super) scene_title: &'a str,
     pub(super) scripted_line: &'a str,
-    pub(super) choices: &'a [&'a str],
     pub(super) words: &'a str,
     pub(super) withheld: &'a Withheld,
     /// What this hero and NPC have already said in the conversation.
@@ -94,9 +95,8 @@ enum Kind {
 
 fn kind_of(source: &str) -> Kind {
     match source {
-        "identity_line" | "authored_line" | "errand_line" | "private_clue" | "released_line" => {
-            Kind::Errand
-        }
+        "identity_line" | "authored_line" | "errand_line" | "private_clue" | "released_line"
+        | "lore_line" => Kind::Errand,
         "rumour_line" | "hint_line" | "stand_down_line" | "world_line" => Kind::Danger,
         "place_line" | "place_line2" => Kind::Place,
         _ => Kind::Yourself,
@@ -215,12 +215,28 @@ struct Ask {
     danger: bool,
     private: bool,
     topic: Topic,
+    /// An approach-driven topic (courtship, threat, bribe): lines on that topic answer.
+    directed: Option<Topic>,
+    /// An open question that asks what to do next ("anything else?", "what should I do
+    /// first?"): the errand answers it. Any other open question is small talk.
+    task: bool,
 }
 
 fn read_ask(typed: &str) -> Ask {
     let lowered = normalised(typed);
     let has = |phrases: &[&str]| phrases.iter().any(|phrase| lowered.contains(phrase));
     let topic = topic_of(typed, classify_keywords(typed));
+    // Leading-space stems so "son" does not match "person", "war" does not match "warm".
+    let directed = match topic {
+        Topic::ComplimentOrFlirt | Topic::Threat | Topic::Bribe => Some(topic),
+        _ if has(&[
+            "lover", "flirt", "seduc", "to bed", "kiss", "charm", "marry me",
+        ]) =>
+        {
+            Some(Topic::ComplimentOrFlirt)
+        }
+        _ => None,
+    };
     Ask {
         about_you: has(&[
             "who are you",
@@ -231,6 +247,33 @@ fn read_ask(typed: &str) -> Ask {
             "your life",
             "your story",
             "your family",
+            "family",
+            "children",
+            "child",
+            " kid",
+            "kids",
+            " son",
+            "sons",
+            "daughter",
+            "wife",
+            "husband",
+            "married",
+            "marry",
+            "partner",
+            "sweetheart",
+            "wedding",
+            "parents",
+            "mother",
+            "father",
+            "brother",
+            "sister",
+            " home",
+            "where do you live",
+            "where you live",
+            "house",
+            " lodg",
+            " live",
+            " living",
             "grew up",
             "where are you from",
             "how did you end up",
@@ -244,6 +287,23 @@ fn read_ask(typed: &str) -> Ask {
             "what do you do",
             "your job",
             "your work",
+            "your service",
+            " serve",
+            " served",
+            " soldier",
+            " war",
+            " army",
+            " unit",
+            " rank",
+            "how do you know",
+            "do you know",
+            "know him",
+            "know her",
+            "know them",
+            "old friend",
+            "friends with",
+            "your friend",
+            "opinion",
             "personally",
             "have you ever",
         ]),
@@ -304,12 +364,37 @@ fn read_ask(typed: &str) -> Ask {
             "you said",
         ]),
         topic,
+        directed,
+        task: has(&[
+            "anything else",
+            "what else",
+            "tell me more",
+            "go on",
+            "should",
+            "need",
+            "expect",
+            "next",
+            "first",
+            "plan",
+            "watch for",
+            "look out",
+            "ahead",
+        ]),
     }
+}
+
+/// Whether the hero's words are small talk: an open question (nothing topical asked) that is
+/// not asking what to do next. Small talk is answered briefly from the speaker's own life
+/// and opinions, never with an errand line.
+fn small_talk(ask: &Ask) -> bool {
+    !(ask.about_you || ask.place || ask.danger || ask.private || ask.directed.is_some())
+        && !ask.task
 }
 
 /// How well a line answers the hero's words; a line that cannot answer them scores zero or less.
 fn score(line: &Line, ask: &Ask, typed: &str) -> i32 {
     let shared = i32::try_from(shared_words(typed, &line.text)).unwrap_or(0);
+    let talk = small_talk(ask);
     let kind = match line.kind {
         Kind::Errand if ask.about_you && line.key.contains(":identity_line:") => 6,
         Kind::Errand if line.key.contains(":authored_line:") => 4,
@@ -323,6 +408,9 @@ fn score(line: &Line, ask: &Ask, typed: &str) -> i32 {
         // An enemy asked what it wants or why gives its motive before its biography.
         Kind::Yourself if ask.about_you && line.key.contains(":motive_line:") => 7,
         Kind::Yourself if ask.about_you => 4,
+        // Small talk draws on opinions first, then the rest of the speaker's own life.
+        Kind::Yourself if talk && line.key.contains(":opinion_line:") => 6,
+        Kind::Yourself if talk => 3,
         Kind::Yourself => -100,
     };
     // A question about the speaker is answered by the line on that very topic ("who are you"
@@ -338,6 +426,107 @@ fn score(line: &Line, ask: &Ask, typed: &str) -> i32 {
         0
     };
     shared * 8 + kind + topic + private
+}
+
+/// Words that mark a question, for splitting "who ..., how ..., and who ..." into parts.
+const QUESTION_WORDS: [&str; 12] = [
+    "who", "what", "where", "when", "why", "how", "which", "whose", "name", "tell", "explain",
+    "describe",
+];
+
+/// Words by which a hero's claim breaks with the errand: the book burned, the friend dead.
+const BREAK_WORDS: [&str; 14] = [
+    "burned",
+    "burnt",
+    "destroyed",
+    "lost",
+    "sold",
+    "stole",
+    "stolen",
+    "dead",
+    "died",
+    "killed",
+    "took",
+    "taken",
+    "nothing",
+    "never",
+];
+
+/// Splits `chunk` on `separator` when both sides still ask something (each side keeps an
+/// interrogative or at least three words); otherwise the chunk stays whole.
+fn split_clause(chunk: &str, separator: &str) -> Vec<String> {
+    let split: Vec<String> = chunk.split(separator).map(str::to_owned).collect();
+    if split.len() < 2 {
+        return split;
+    }
+    let asks = |text: &str| {
+        let spoken = words(text);
+        spoken
+            .iter()
+            .any(|word| QUESTION_WORDS.contains(&word.as_str()))
+            || spoken.len() >= 3
+    };
+    if split.iter().all(|part| asks(part)) {
+        split
+    } else {
+        vec![chunk.to_owned()]
+    }
+}
+
+/// One clause of a chunk that asks more than one thing ("who ..., how ..., and who ...").
+fn split_clauses(chunk: &str) -> Vec<String> {
+    let spoken = words(chunk);
+    let interrogatives = spoken
+        .iter()
+        .filter(|word| QUESTION_WORDS.contains(&word.as_str()))
+        .count();
+    if interrogatives < 2 {
+        return vec![chunk.to_owned()];
+    }
+    let mut parts = vec![chunk.to_owned()];
+    for separator in [", and ", " and ", ", "] {
+        let mut split = Vec::new();
+        for part in &parts {
+            split.extend(split_clause(part, separator));
+        }
+        parts = split;
+    }
+    parts
+}
+
+/// The parts of what the hero said, up to three: sentences first, then the clauses of a
+/// sentence that asks more than one thing. The reply answers each part in order.
+pub(super) fn question_parts(typed: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    for sentence in sentences(typed) {
+        for chunk in sentence.split(';') {
+            parts.extend(split_clauses(chunk));
+        }
+    }
+    parts
+        .into_iter()
+        .map(|part| part.trim().trim_end_matches(',').trim().to_owned())
+        .filter(|part| !part.is_empty())
+        .take(QUESTION_PARTS)
+        .collect()
+}
+
+/// Whether the hero's words break with the errand the speaker can tell: a claim word (burned,
+/// dead, nothing) sharing a content word with the errand or danger lines. Asking after the
+/// private whisper is not a break.
+fn claims_against_errand(inputs: &Inputs<'_>, ask: &Ask, lines: &[Line]) -> bool {
+    if ask.private {
+        return false;
+    }
+    let spoken = words(inputs.words);
+    let breaks = BREAK_WORDS
+        .iter()
+        .any(|word| spoken.iter().any(|spoken| spoken == word));
+    breaks
+        && lines.iter().any(|line| {
+            matches!(line.kind, Kind::Errand | Kind::Danger)
+                && shared_words(inputs.words, &line.text) > 0
+        })
 }
 
 /// The lines chosen for one reply.
@@ -358,7 +547,7 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a
     ranked.sort_by_key(|(points, order, _)| (std::cmp::Reverse(*points), *order));
     // A question with no topic and no shared words is an open one ("what now?"): the best lines
     // answer it. Otherwise every line chosen must itself touch the question.
-    let topical = ask.about_you || ask.place || ask.danger || ask.private;
+    let topical = ask.about_you || ask.place || ask.danger || ask.private || ask.directed.is_some();
     let touches = |line: &Line| {
         shared_words(inputs.words, &line.text) > 0
             || matches!(
@@ -375,20 +564,42 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a
             )
             || (ask.private && line.key.starts_with("private:"))
             || (ask.about_you && line.topic == ask.topic)
+            || ask.directed.is_some_and(|topic| line.topic == topic)
     };
     let open = !topical
         && ranked
             .first()
             .is_some_and(|(_, _, line)| shared_words(inputs.words, &line.text) == 0);
+    let taken = |answer: &[&Line], line: &Line| answer.iter().any(|taken| taken.key == line.key);
     let mut answer: Vec<&Line> = Vec::new();
-    for (_, _, line) in &ranked {
-        if answer.len() < ANSWER_LINES && (answer.is_empty() || open || touches(line)) {
+    // One line per part of a several-part question, in the parts' order: the best-ranked fresh
+    // line that shares a content word with the part. A part with no line of its own is left
+    // for the reply to refuse in character.
+    for part in question_parts(inputs.words) {
+        if answer.len() >= ANSWER_LINES {
+            break;
+        }
+        if let Some((_, _, line)) = ranked
+            .iter()
+            .find(|(_, _, line)| !taken(&answer, line) && shared_words(&part, &line.text) > 0)
+        {
             answer.push(line);
         }
     }
+    for (_, _, line) in &ranked {
+        if answer.len() >= ANSWER_LINES {
+            break;
+        }
+        if !taken(&answer, line) && (answer.is_empty() || open || touches(line)) {
+            answer.push(line);
+        }
+    }
+    // An unvoiced line is volunteered only when it answers the question (small talk gets
+    // none), or when the hero asks an open "what next": never padding bolted onto an answer.
     let volunteer = (inputs.conversation.exchange >= VOLUNTEER_FROM_EXCHANGE)
         .then(|| best_to_tell(&fresh, &answer))
-        .flatten();
+        .flatten()
+        .filter(|line| (open && ask.task) || touches(line));
     let nearest = answer
         .is_empty()
         .then(|| best_to_tell(&fresh, &[]))
@@ -439,11 +650,13 @@ fn who_would_know(dossier: &Dossier, withheld: &Withheld) -> Option<String> {
         .map(|item| item.text.clone())
 }
 
-/// What the model is shown about the NPC and the hero, and the lines this reply offers. The
-/// offered lines count as said once the reply is recorded and uses them. See the module
-/// documentation for how lines are chosen; `withheld` also drops any line that mentions one of
-/// its secrets.
-pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>) {
+/// What the model is shown about the NPC and the hero, the lines this reply offers, and
+/// every line already said to this hero, uncapped. The offered lines count as said once the
+/// reply is recorded and uses them. See the module documentation for how lines are chosen;
+/// `withheld` also drops any line that mentions one of its secrets. The facts sent to the
+/// model carry only the most recent of the said lines; the full list is for the speaking
+/// checks, so nothing already spoken anywhere in the conversation is repeated.
+pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
     let dossier = inputs.dossier;
     let withheld = inputs.withheld;
     let conversation = inputs.conversation;
@@ -472,19 +685,10 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>) {
         .filter(|(_, text)| !withheld.leaks_secret(text))
         .map(|(hero, text)| json!({"from": if *hero { inputs.hero } else { inputs.name }, "said": text}))
         .collect();
-    // The next steps the story offers, as labels, and only when the conversation is ready to end:
-    // earlier they pull every answer toward "pledge your help". Rules wording after the dot
-    // ("Short Rest \u{b7} 1 hour") is not something a character says, and an enemy of the party
-    // points nobody anywhere.
-    let choices: Vec<&str> = inputs
-        .choices
-        .iter()
-        .copied()
-        .filter(|choice| !withheld.leaks_secret(choice))
-        .map(|choice| choice.split('\u{b7}').next().unwrap_or(choice).trim())
-        .filter(|choice| !choice.is_empty())
-        .filter(|_| stage_of(conversation.exchange) == "late" && !dossier.role.opposes_party())
-        .collect();
+    // Menu choice labels are never shown to the model: a reply that names them reads the
+    // phone's menu aloud instead of answering in character. The facts carry an empty list so
+    // the prompt cannot reach for one.
+    let choices: Vec<&str> = Vec::new();
 
     let mut inner = serde_json::Map::new();
     if let Some(want) = kept(&dossier.want.text) {
@@ -494,6 +698,12 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>) {
         inner.insert("fear".to_owned(), json!(fear));
     }
 
+    // The standing answer to romance: who (if anyone) holds this heart, in this NPC's own
+    // words. Refusals come from it, the same every time; the model never invents a partner.
+    let courtship = withheld
+        .safe_lines(&dossier.knowledge.says_freely)
+        .find(|item| item.source == "courtship_line")
+        .map(|item| item.text.clone());
     let mut facts = json!({
         "npc": {
             "name": inputs.name,
@@ -517,6 +727,13 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>) {
         "player": {
             "hero_name": inputs.hero,
             "exact_words": withheld.redact(inputs.words),
+            // The hero's questions, up to three, in order: the reply answers each in turn.
+            // Part of the player's own speech, redacted like it, so untrusted words live
+            // nowhere else in the prompt.
+            "question_parts": question_parts(inputs.words)
+                .iter()
+                .map(|part| withheld.redact(part))
+                .collect::<Vec<_>>(),
         },
         "offered_choices": choices,
         "listener_knowledge": "Say only what these facts allow; your own confidences, when \
@@ -534,6 +751,12 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>) {
     if let Some(line) = selection.nearest {
         facts["nearest_you_know"] = json!(line.text);
     }
+    if let Some(line) = courtship {
+        facts["courtship"] = json!(line);
+    }
+    if claims_against_errand(inputs, &ask, &lines) {
+        facts["hero_claims_against_errand"] = json!(true);
+    }
     if selection.answer.is_empty()
         && let Some(who) = who_would_know(dossier, withheld)
     {
@@ -549,10 +772,10 @@ will not say what it was, what it was about, or that it holds any detail."
         }
         Clue::Absent => {}
     }
-    let said: Vec<&str> = lines
+    let said: Vec<String> = lines
         .iter()
         .filter(|line| line.said)
-        .map(|line| line.text.as_str())
+        .map(|line| line.text.clone())
         .collect();
     if !said.is_empty() {
         let from = said.len().saturating_sub(SAID_LINES);
@@ -577,7 +800,7 @@ will not say what it was, what it was about, or that it holds any detail."
             text: line.text.clone(),
         })
         .collect();
-    (facts, offered)
+    (facts, offered, said)
 }
 
 fn stage_of(exchange: u32) -> &'static str {
@@ -585,5 +808,44 @@ fn stage_of(exchange: u32) -> &'static str {
         0..=2 => "early",
         3..=4 => "middle",
         _ => "late",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_several_part_question_splits_into_parts_in_order_capped_at_three() {
+        assert_eq!(
+            question_parts(
+                "Name him. Who was this friend, how did he die, and who is Maren to you?"
+            ),
+            [
+                "Name him.".to_owned(),
+                "Who was this friend".to_owned(),
+                "how did he die".to_owned(),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_single_question_stays_whole() {
+        assert_eq!(
+            question_parts("Why do you need two strangers?"),
+            vec!["Why do you need two strangers?".to_owned()]
+        );
+        assert_eq!(
+            question_parts("Hand me the book now, old man, or I take it from you."),
+            vec!["Hand me the book now, old man, or I take it from you.".to_owned()]
+        );
+    }
+
+    #[test]
+    fn at_most_three_parts_are_listed() {
+        assert_eq!(
+            question_parts("Who sent you? What did they promise? When will they come? Why?").len(),
+            QUESTION_PARTS
+        );
     }
 }

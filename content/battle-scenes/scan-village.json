@@ -163,7 +163,7 @@
     "rot_y_deg": 180.0,
     "offset_y": -4.03,
     "translate": [-10.0, 0.0, -14.9],
-    "levels": [3, 10],
+    "levels": [0, 10],
     "max_splats": 2500000,
     "depth_bias_m": 0.25,
     "clip": {

@@ -70,7 +70,46 @@ pub(crate) fn display_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine
         });
     }
     lines.extend(conversation_reply(display));
+    lines.extend(fight_lines(display));
     lines
+}
+
+/// A battle cry or Dungeon Master fight line as a speakable line, in outcome order with
+/// the finished fight's closing line last. Hero cries are voiced as their named speaker
+/// (the cast falls back to the neutral voice for speakers with no entry); empty text is
+/// never spoken. Both sides share this definition with the stage script, so the browser
+/// can only voice a line the server registered.
+pub(crate) fn fight_voice_line(line: &rpc::FightLine) -> Option<VoiceLine> {
+    if line.text.trim().is_empty() {
+        return None;
+    }
+    let role = match rpc::TableRole::try_from(line.role) {
+        Ok(rpc::TableRole::Narrator) => NARRATOR_ROLE.to_owned(),
+        Ok(rpc::TableRole::Hero) | Ok(rpc::TableRole::Npc) if !line.speaker.trim().is_empty() => {
+            format!("{NPC_ROLE_PREFIX}{}", line.speaker.trim())
+        }
+        _ => return None,
+    };
+    Some(VoiceLine {
+        role,
+        text: line.text.clone(),
+    })
+}
+
+fn fight_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine> {
+    let Some(journey) = display.journey.as_ref() else {
+        return Vec::new();
+    };
+    let Some(combat) = journey.combat.as_ref() else {
+        return Vec::new();
+    };
+    combat
+        .outcomes
+        .iter()
+        .flat_map(|outcome| outcome.lines.iter())
+        .chain(combat.closing_lines.iter())
+        .filter_map(fight_voice_line)
+        .collect()
 }
 
 /// The speaker's reply to a hero's typed words, while it is still the last thing said at the
@@ -225,6 +264,76 @@ mod tests {
             })
         );
         assert_eq!(lines.len(), 3);
+    }
+
+    fn fight_display() -> rpc::DisplayGameplayView {
+        let cry = rpc::FightLine {
+            role: rpc::TableRole::Hero as i32,
+            hero_index: 0,
+            speaker: "Brynn".to_owned(),
+            text: "Take that!".to_owned(),
+        };
+        let closing = rpc::FightLine {
+            role: rpc::TableRole::Narrator as i32,
+            hero_index: 0,
+            speaker: String::new(),
+            text: "The fight is won.".to_owned(),
+        };
+        rpc::DisplayGameplayView {
+            journey: Some(rpc::JourneyView {
+                combat: Some(rpc::CombatView {
+                    outcomes: vec![rpc::CombatOutcome {
+                        lines: vec![cry],
+                        ..Default::default()
+                    }],
+                    closing_lines: vec![closing],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fight_cries_and_closing_lines_are_voiced_after_the_scene_lines() {
+        let lines = display_lines(&fight_display());
+
+        assert_eq!(
+            lines,
+            vec![
+                VoiceLine {
+                    role: "npc:Brynn".to_owned(),
+                    text: "Take that!".to_owned()
+                },
+                VoiceLine {
+                    role: "narrator".to_owned(),
+                    text: "The fight is won.".to_owned()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn fight_lines_without_text_or_speaker_are_not_voiced() {
+        assert_eq!(
+            fight_voice_line(&rpc::FightLine {
+                role: rpc::TableRole::Npc as i32,
+                hero_index: 0,
+                speaker: String::new(),
+                text: "Raaagh!".to_owned(),
+            }),
+            None
+        );
+        assert_eq!(
+            fight_voice_line(&rpc::FightLine {
+                role: rpc::TableRole::Narrator as i32,
+                hero_index: 0,
+                speaker: String::new(),
+                text: "   ".to_owned(),
+            }),
+            None
+        );
     }
 
     #[test]

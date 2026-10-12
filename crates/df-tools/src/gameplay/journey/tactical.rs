@@ -442,6 +442,83 @@ fn cover_label(cover: tactical_rules::Cover) -> &'static str {
         tactical_rules::Cover::Total => "total",
     }
 }
+/// The fight's attacks so far, in server order: earlier ops from the decision history,
+/// then this op's already-recorded attacks. Only public outcome data feeds line picks.
+fn prior_attacks(
+    state: &GameState,
+    heroes: &std::collections::HashSet<String>,
+    done: &[super::super::fight_lines::AttackFact],
+) -> Result<Vec<super::super::fight_lines::AttackFact>, RepositoryError> {
+    use super::super::fight_lines::AttackFact;
+    let mut prior = Vec::new();
+    for decision in &state.decisions {
+        if decision.source_policy.as_str() != THREAD_POLICY {
+            continue;
+        }
+        for outcome in accepted(decision)?.combat {
+            if !matches!(
+                rpc::OutcomeKind::try_from(outcome.kind),
+                Ok(rpc::OutcomeKind::Attack | rpc::OutcomeKind::OpportunityAttack)
+            ) {
+                continue;
+            }
+            prior.push(AttackFact {
+                attacker: outcome.actor_name.clone(),
+                attacker_hero: heroes.contains(&outcome.actor_name),
+                target: outcome.target_name.clone(),
+                target_hero: heroes.contains(&outcome.target_name),
+                hit: outcome.hit,
+                critical: outcome.critical,
+                damage: outcome.damage,
+                target_down: outcome.knocked_out,
+                target_hp: outcome.target_hit_points,
+            });
+        }
+    }
+    prior.extend(done.iter().cloned());
+    Ok(prior)
+}
+
+/// The cry pool family of one combatant: heroes cry from the hero pools by their chosen
+/// portrait, enemies from the enemy pools by creature kind. Mirrors the voice families
+/// the participant views carry for effort, pain and fall sounds.
+fn cry_pool(state: &GameState, battle: &Battle, actor: u32, hero: bool) -> &'static str {
+    if hero {
+        let female = state
+            .characters
+            .iter()
+            .find(|character| canonical(state, actor).is_ok_and(|who| character.entity == who))
+            .and_then(|character| {
+                character
+                    .choices
+                    .iter()
+                    .find(|choice| choice.offer.as_str() == "portrait")
+            })
+            .is_some_and(|choice| {
+                matches!(
+                    choice.selected.as_str(),
+                    "portrait-hero-2" | "portrait-hero-3"
+                )
+            });
+        return if female { "hero-female" } else { "hero-male" };
+    }
+    let kind = battle
+        .actor(actor)
+        .map(|combatant| combatant.spec().kind)
+        .unwrap_or(tactical_rules::CreatureKind::Bandit);
+    match kind {
+        tactical_rules::CreatureKind::Goblin | tactical_rules::CreatureKind::Kobold => {
+            "small-creature"
+        }
+        tactical_rules::CreatureKind::Wolf
+        | tactical_rules::CreatureKind::GiantRat
+        | tactical_rules::CreatureKind::GiantWeasel
+        | tactical_rules::CreatureKind::Mastiff => "beast",
+        tactical_rules::CreatureKind::Skeleton | tactical_rules::CreatureKind::Zombie => "undead",
+        _ => "humanoid",
+    }
+}
+
 /// The public record of one accepted resolution, in the order it happened: squares entered
 /// with their cost, attacks with the distance and mode that made them legal, Death Saving
 /// Throws with the running counts. A reaction attack happens before the move it interrupts.
@@ -451,15 +528,72 @@ fn record_outcomes(
     opportunity: bool,
     outcomes: &mut Vec<rpc::CombatOutcome>,
 ) -> Result<(), RepositoryError> {
+    use super::super::fight_lines::{AttackFact, CurrentAttack, FightSoFar};
     if !opportunity {
         record_moves(state, result, outcomes)?;
     }
+    // Heroes in combatant order, matching party order, so hero cries carry their stage slot.
+    let mut heroes: Vec<String> = Vec::new();
+    for combatant in result.battle.combatants() {
+        if combatant.side() != Side::Heroes {
+            continue;
+        }
+        heroes.push(name(state, canonical(state, combatant.id())?)?);
+    }
+    let hero_set: std::collections::HashSet<String> = heroes.iter().cloned().collect();
+    let mut enemies: Vec<String> = Vec::new();
+    for combatant in result.battle.combatants() {
+        if combatant.side() == Side::Heroes {
+            continue;
+        }
+        enemies.push(name(state, canonical(state, combatant.id())?)?);
+    }
+    let mut done: Vec<AttackFact> = Vec::new();
     for attack in &result.attacks {
         let actor = canonical(state, attack.actor)?;
         let target = canonical(state, attack.target)?;
+        let actor_name = name(state, actor)?;
+        let target_name = name(state, target)?;
+        let actor_hero = hero_set.contains(&actor_name);
+        let health = result.battle.actor(attack.target).map_err(bad)?.health();
+        let target_hp = u32::from(health.hit_points);
+        let target_max_hp = u32::from(health.maximum);
+        let fact = AttackFact {
+            attacker: actor_name.clone(),
+            attacker_hero: actor_hero,
+            target: target_name.clone(),
+            target_hero: hero_set.contains(&target_name),
+            hit: attack.hit,
+            critical: attack.critical,
+            damage: u32::from(attack.damage),
+            target_down: attack.knocked_out,
+            target_hp,
+        };
+        let so_far = FightSoFar {
+            prior: prior_attacks(state, &hero_set, &done)?,
+            enemy_names: enemies.clone(),
+        };
+        let mut lines = super::super::fight_lines::select(
+            &CurrentAttack {
+                fact: fact.clone(),
+                attacker_pool: cry_pool(state, &result.battle, attack.actor, actor_hero),
+                die: attack.selected,
+                total: attack.selected as i32 + i32::from(attack.modifier),
+                target_max_hp,
+            },
+            &so_far,
+        );
+        for line in &mut lines {
+            if line.role == rpc::TableRole::Hero as i32
+                && let Some(index) = heroes.iter().position(|hero| *hero == line.speaker)
+            {
+                line.hero_index = u32::try_from(index).unwrap_or(0);
+            }
+        }
+        done.push(fact);
         outcomes.push(rpc::CombatOutcome {
-            actor_name: name(state, actor)?,
-            target_name: name(state, target)?,
+            actor_name,
+            target_name,
             attack_die: attack.selected,
             attack_modifier: i32::from(attack.modifier),
             attack_total: attack.selected as i32 + i32::from(attack.modifier),
@@ -505,6 +639,7 @@ fn record_outcomes(
                 )
                 .collect(),
             cover: cover_label(attack.cover).to_owned(),
+            lines,
             ..Default::default()
         });
     }
@@ -2726,6 +2861,85 @@ pub(super) mod tests {
             }));
         });
     }
+    /// A recorded fight speaks the same cries and closing line when it is played again:
+    /// line picks are deterministic in the recorded fight data.
+    #[test]
+    fn a_recorded_fight_says_the_same_lines_twice() {
+        use df_persistence::local_demo_scope::{DISPLAY, LocalDemoRole as R};
+        fn spoken(finished: &Checkpoint) -> (Vec<(i32, u32, String, String)>, Vec<String>) {
+            let mut lines = Vec::new();
+            for decision in &finished.state().decisions {
+                let Ok(receipt) = accepted(decision) else {
+                    continue;
+                };
+                for outcome in receipt.combat {
+                    for line in outcome.lines {
+                        lines.push((
+                            line.role,
+                            line.hero_index,
+                            line.speaker.clone(),
+                            line.text.clone(),
+                        ));
+                    }
+                }
+            }
+            let display = MemberId::from_bytes(&DISPLAY).unwrap();
+            let view = wire::journey_view(finished, R::Display, display).unwrap();
+            let closing = match view.audience {
+                Some(rpc::view_message::Audience::Display(view)) => view
+                    .journey
+                    .and_then(|journey| journey.combat)
+                    .map(|combat| {
+                        combat
+                            .closing_lines
+                            .iter()
+                            .map(|line| line.text.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                _ => panic!("a display view carries the finished fight"),
+            };
+            (lines, closing)
+        }
+        with_live(|| {
+            let first = spoken(&play_fight(fight(true), 8, None, None).0);
+            let second = spoken(&play_fight(fight(true), 8, None, None).0);
+            assert_eq!(first, second, "the same fight says the same lines twice");
+            assert!(!first.0.is_empty(), "the fight speaks its cries");
+            assert!(
+                !first.1.is_empty(),
+                "the finished fight has a closing line on the display"
+            );
+            let mut chars = 0usize;
+            for (role, hero_index, speaker, text) in first
+                .0
+                .iter()
+                .map(|(role, index, speaker, text)| (*role, *index, speaker.clone(), text.clone()))
+            {
+                assert!(
+                    !text.contains('{') && !text.contains('}'),
+                    "no placeholders survive: {text}"
+                );
+                assert!(
+                    text.chars().count() <= super::super::super::fight_lines::MAXIMUM_LINE_CHARS,
+                    "a cry fits its beat: {text}"
+                );
+                if role == rpc::TableRole::Hero as i32 {
+                    assert!(hero_index < 2, "a hero cry names its party slot");
+                    assert!(!speaker.is_empty(), "a hero cry names its speaker");
+                }
+                chars += text.chars().count();
+            }
+            for text in &first.1 {
+                chars += text.chars().count();
+            }
+            assert!(
+                chars <= 4_000,
+                "one fight's lines stay inside the narrator budget: {chars} chars"
+            );
+        });
+    }
+
     #[test]
     fn three_enemy_fight_views_fit_the_rpc_message_bound_for_each_seat() {
         let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(

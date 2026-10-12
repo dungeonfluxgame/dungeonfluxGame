@@ -1,0 +1,212 @@
+/* Victory, defeat, aftermath and end-card composition (VICTORY-001).
+ *
+ * The held victory/defeat screen and the end card are their own moments: while
+ * the aftermath screen is up, none of the story stage (plate, cut-out figures,
+ * figure bubbles, thinking marks, establishing titles) may show through or
+ * overlap it; under the end card the scene chrome stays hidden. The aftermath
+ * narrative is never cut with an ellipsis: its size follows the
+ * `data-narrative` tier the screen sets from the text length.
+ *
+ * Specificity note: these rules must beat the combat-screen overrides in
+ * live_combat/style.rs (injected later into the head) and the fight-staging
+ * compositing in live_fx.css and live_stage.css, so every rule below carries
+ * the stage-plus-screen scope rather than relying on source order. `!important`
+ * appears only where the rule it replaces already uses it. */
+
+.tv-stage:has(.live-screen[data-screen=aftermath]) :is(.tv-plate, .tv-figures, .tv-establish, .tv-lower, .tv-bigcard) {
+  display: none;
+}
+
+/* The closing line is spoken in the continuation, not on the held screen: no
+ * bubble or thinking mark may hang over the victory/defeat composition, and
+ * the story paragraph stays legible even while a line is voiced. */
+.tv-stage:has(.live-screen[data-screen=aftermath]) :is(.tv-bubble, .tv-intent) {
+  display: none;
+}
+
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath .aftermath-narrative {
+  /* Important: the stage dims story text while a character speaks, but the
+   * held screen has no bubble to hand the words to, so they stay legible. */
+  color: #eee2ca !important;
+  text-shadow: 0 2px 14px #000 !important;
+}
+
+/* The held screen enters as one composed moment, not piecemeal. */
+@keyframes df-aftermath-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath {
+  animation: df-aftermath-in 0.6s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath {
+    animation: none;
+  }
+}
+
+/* The story uses the full column: the grid's implicit column would size to the
+ * headline's content and stack the paragraph into a tall tower, pushing the
+ * party row off the screen. An explicit width (not auto margins) keeps the
+ * centred block from shrink-wrapping again. */
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath {
+  grid-template-columns: minmax(0, 1fr);
+  /* The fight-staging rules narrow this screen for the composited stage; the
+   * held screen fills its own column instead. The painting stack repeats the
+   * rest backdrop from live_combat/style.rs (same scene-asset variable and
+   * combat-art fallback) so the held screen keeps its backdrop. */
+  background:
+    linear-gradient(180deg, #05080a70 0, transparent 22%, transparent 40%, #05080ac4 66%, #05080af2),
+    var(--asset-scene-courier-road) center 38% / cover,
+    url('/assets/concept-art/combat-harbor-docks-wide-lanterns.webp') center 38% / cover,
+    #0b0f0c;
+}
+
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath .aftermath-story {
+  justify-self: center;
+  width: min(100%, 72vw, 1500px);
+  max-width: min(72vw, 1500px);
+  margin: 0;
+}
+
+/* Each hero's state after the fight is part of the held screen; the
+ * fight-staging rules hide this list for the composited stage. */
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath .aftermath-party {
+  display: grid;
+}
+
+/* The held screen is centred and full-width: the composited stage keeps the
+ * words in a left column clear of its figures, but there are no figures here.
+ * Important, like the rule it replaces. */
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath .aftermath-narrative,
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath .aftermath-lower {
+  max-width: none !important;
+  margin-right: 0;
+  text-align: center;
+}
+
+/* The whole closing paragraph is always shown: the screen, not the text, adapts. */
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath .aftermath-narrative {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath][data-narrative=short] .df-aftermath .aftermath-narrative {
+  font-size: calc(var(--u) * 1.9);
+  line-height: 1.4;
+}
+
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath][data-narrative=full] .df-aftermath .aftermath-narrative {
+  font-size: calc(var(--u) * 1.5);
+  line-height: 1.35;
+}
+
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath][data-narrative=long] .df-aftermath .aftermath-narrative {
+  font-size: calc(var(--u) * 1.32);
+  line-height: 1.3;
+}
+
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath][data-narrative=epic] .df-aftermath .aftermath-narrative {
+  font-size: calc(var(--u) * 1.25);
+  line-height: 1.3;
+}
+
+/* A long closing keeps the party row compact so nothing overlaps. */
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath]:is([data-narrative=long], [data-narrative=epic]) .df-aftermath .aftermath-member {
+  padding: calc(var(--u) * 0.5) calc(var(--u) * 1.1);
+}
+
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath]:is([data-narrative=long], [data-narrative=epic]) .df-aftermath h1 {
+  font-size: calc(var(--u) * 3);
+}
+
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath]:is([data-narrative=long], [data-narrative=epic]) .df-aftermath .aftermath-chapter {
+  margin-bottom: calc(var(--u) * 0.3);
+}
+
+/* The party's decision is offered on the held screen: the scene-state machine
+ * hides the chip row until every line is told, but the aftermath screen is a
+ * later moment whose choices are already on the table. Choice hints off (or no
+ * choices) still hide the row. */
+.tv-stage:has(.live-screen[data-screen=aftermath]):not([data-chips='0']):not([data-chips=off]) .tv-choices {
+  /* Display, not just opacity: the fight staging hides this row while its
+   * figures stand in combat arrangement, but the held screen has no figures. */
+  display: flex;
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.5s ease;
+}
+
+/* The held screen stays up through card transitions: the scene-change rules
+ * fade every live screen during interstitial/title/closing beats, which would
+ * blank the victory while its closing card shows. */
+.tv-stage:has(.live-screen[data-screen=aftermath]):is([data-stage=interstitial], [data-stage=title], [data-stage=closing]) .live-screen[data-screen=aftermath] {
+  opacity: 1;
+}
+
+/* The chip row sits over the screen's foot: the composition leaves its room
+ * so the options never cover the party. */
+.tv-stage:has(.live-screen[data-screen=aftermath]):not([data-chips='0']):not([data-chips=off]) .live-screen[data-screen=aftermath] .df-aftermath {
+  padding-bottom: calc(4.5vh + var(--u) * 6);
+}
+
+/* The fight's rules note is stale once the fight is over; the decision labels
+ * carry what the table needs. */
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .rules-note {
+  display: none;
+}
+
+/* Defeat is its own look: the same composition under a colder, dimmer light. */
+.tv-stage:has(.live-screen[data-screen=aftermath][data-outcome=defeat]) .live-screen[data-screen=aftermath] .df-aftermath {
+  background:
+    linear-gradient(180deg, #0a050acc 0, transparent 30%, transparent 45%, #0a050ae6 75%, #0a050a),
+    var(--asset-scene-courier-road) center 38% / cover,
+    url('/assets/concept-art/combat-harbor-docks-wide-lanterns.webp') center 38% / cover,
+    #0b0f0c;
+}
+
+.tv-stage:has(.live-screen[data-screen=aftermath][data-outcome=defeat]) .live-screen[data-screen=aftermath] .df-aftermath .aftermath-chapter {
+  color: #f0c0b2;
+}
+
+/* ---------- the end card: one title, no scene chrome beneath it ----------
+ * The scene's opening title (.tv-establish) never shows behind the end card's
+ * own title; the thinking mark (.tv-intent), the scene title (.tv-headline)
+ * and the party strip (.tv-partybar) stay hidden under it. */
+.tv-stage[data-ended] :is(.tv-headline, .tv-establish, .tv-partybar, .tv-intent) {
+  display: none;
+}
+
+/* The end card waits for the last spoken line: while the scene machine is still
+ * presenting, the card holds back instead of cutting the final line off, then
+ * fades in once nothing is left to say. An unknown machine state (a reload
+ * straight onto the ending) shows the card at once; the backstop shows it
+ * anyway after twenty seconds so a stalled line machine can never withhold
+ * the ending. */
+.tv-stage[data-ended][data-scene-state]:not([data-scene-state=awaiting-choice]) .tv-bigcard {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.7s ease, visibility 0s;
+  animation: df-endcard-backstop 1s linear 20s forwards;
+}
+
+@keyframes df-endcard-backstop {
+  to {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tv-stage[data-ended][data-scene-state]:not([data-scene-state=awaiting-choice]) .tv-bigcard {
+    animation-duration: 0.01s;
+  }
+}

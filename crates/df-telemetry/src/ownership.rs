@@ -1,14 +1,67 @@
 use df_observe::TelemetryError;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File, Metadata, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Component, Path, PathBuf},
 };
 #[cfg(target_os = "macos")]
 const NOFOLLOW: i32 = 0x100;
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const NOFOLLOW: i32 = 0x20000;
+/// Stable Win32 flag values for no-follow opens that can also open directories.
+/// The identity fields themselves come from the `winapi-util` safe wrapper.
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+#[cfg(unix)]
+fn is_link(metadata: &Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(windows)]
+fn is_link(metadata: &Metadata) -> bool {
+    // Any reparse point (symlink, junction) is treated as a symlink is.
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(unix)]
+fn is_hardlinked(_path: &Path, metadata: &Metadata) -> bool {
+    metadata.is_file() && metadata.nlink() != 1
+}
+
+#[cfg(windows)]
+fn is_hardlinked(path: &Path, metadata: &Metadata) -> bool {
+    if !metadata.is_file() {
+        return false;
+    }
+    // The stable standard library exposes no link count here, so it is read
+    // from a no-follow handle; an unreadable count refuses fail-closed.
+    let handle = OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path);
+    let links = handle
+        .as_ref()
+        .ok()
+        .and_then(|file| winapi_util::file::information(file).ok())
+        .map(|information| information.number_of_links());
+    links != Some(1)
+}
+
+#[cfg(windows)]
+fn is_open_reparse_point(file: &File) -> bool {
+    winapi_util::file::information(file)
+        .map(|information| information.file_attributes() as u32 & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+        .unwrap_or(true)
+}
 const MARKER: &[u8] = b"df-telemetry native synthetic owned root v1\n";
 pub(crate) struct OwnedRoot {
     pub path: PathBuf,
@@ -25,10 +78,7 @@ pub(crate) fn safe_path(path: &Path) -> Result<(), TelemetryError> {
         }
         prefix.push(component);
         match fs::symlink_metadata(&prefix) {
-            Ok(metadata)
-                if metadata.file_type().is_symlink()
-                    || (metadata.is_file() && metadata.nlink() != 1) =>
-            {
+            Ok(metadata) if is_link(&metadata) || is_hardlinked(&prefix, &metadata) => {
                 return Err(TelemetryError::ForeignRoot);
             }
             Ok(_) => (),
@@ -44,19 +94,47 @@ pub(crate) fn open_file(
     create_new: bool,
 ) -> Result<File, TelemetryError> {
     safe_path(path)?;
-    OpenOptions::new()
+    #[cfg(unix)]
+    let file = OpenOptions::new()
         .read(true)
         .write(write)
         .create_new(create_new)
         .custom_flags(NOFOLLOW)
         .mode(0o600)
         .open(path)
-        .map_err(|_| TelemetryError::Io)
+        .map_err(|_| TelemetryError::Io)?;
+    #[cfg(windows)]
+    let file = {
+        // Created with inherited ACLs and never followed through a link: refuse
+        // what was opened when it is a reparse point.
+        let file = OpenOptions::new()
+            .read(true)
+            .write(write)
+            .create_new(create_new)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|_| TelemetryError::Io)?;
+        if is_open_reparse_point(&file) {
+            return Err(TelemetryError::ForeignRoot);
+        }
+        file
+    };
+    Ok(file)
 }
 pub(crate) fn sync_directory(path: &Path) -> Result<(), TelemetryError> {
-    open_file(path, false, false)?
-        .sync_all()
-        .map_err(|_| TelemetryError::Io)
+    #[cfg(unix)]
+    {
+        open_file(path, false, false)?
+            .sync_all()
+            .map_err(|_| TelemetryError::Io)
+    }
+    // A directory handle cannot be flushed this way on Windows: documented
+    // no-op. Durability there rests on file syncs and the checks that remain.
+    #[cfg(windows)]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 impl OwnedRoot {
     pub fn open(path: &Path) -> Result<Self, TelemetryError> {
@@ -87,9 +165,14 @@ impl OwnedRoot {
             Err(_) => return Err(TelemetryError::Io),
         };
         if new {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-                .map_err(|_| TelemetryError::Io)?;
+            // Created with inherited ACLs on Windows, where modes have no
+            // counterpart and the read-only attribute must stay off.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+                    .map_err(|_| TelemetryError::Io)?;
+            }
             let mut marker = open_file(&path.join("OWNER"), true, true)?;
             marker.write_all(MARKER).map_err(|_| TelemetryError::Io)?;
             marker.sync_all().map_err(|_| TelemetryError::Io)?;

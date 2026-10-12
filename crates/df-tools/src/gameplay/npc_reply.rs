@@ -30,8 +30,8 @@ use super::{
     speech_text::{coverage, sentences},
     startup_configuration::content_rating,
     storyteller::{
-        CallProfile, Expression, Slot, Storyteller, age_group, contains_whole_word,
-        sexual_content_allowed,
+        CallProfile, Expression, Slot, Storyteller, StorytellerError, age_group,
+        contains_whole_word, sexual_content_allowed,
     },
     table_log::TableLog,
 };
@@ -46,10 +46,12 @@ const WINDOW: Duration = Duration::from_secs(60);
 const USED_COVERAGE: f64 = 0.45;
 
 const STYLE: &str = "A spoken line in character, in the first person, with no quotation marks, \
-shaped by facts.npc (role, voice). It deflects only what facts.forbidden or the scene hides; when \
+shaped by facts.npc (role, voice). Short plain words, one thought at a time, never a semicolon \
+or a colon. It deflects only what facts.forbidden or the scene hides; when \
 the hero was told the secret, it speaks of it plainly and quietly instead. An enemy taunts, \
-threatens or bargains and never helps. It never promises mechanical results. When asked what \
-to do, it nudges toward the offered choices. Plain and brief.";
+threatens or bargains and never helps. It never promises mechanical results. There are no menus \
+in this room, only people talking: never name choice labels and never tell the player what to \
+click or ask. Plain and brief.";
 
 /// What the pack says about the story that a reply needs: the private clue, the phrases that
 /// give it away and who each speaking character is.
@@ -153,9 +155,42 @@ pub(super) struct Exchange {
     pub(super) approach: Approach,
     /// False when the dossier's prepared answer replied instead of the text model.
     pub(super) from_model: bool,
+    /// Why the model reply never spoke, when it did not. Closed vocabulary, never reply text.
+    pub(super) fallback: Option<FallbackReason>,
     pub(super) shift: Option<Shift>,
     /// The reply spoke of what was whispered to this hero alone, so only this hero was shown it.
     pub(super) private: bool,
+}
+
+/// Why a model reply never spoke. Closed vocabulary for the one server line each fallback
+/// prints; it never carries reply text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FallbackReason {
+    /// The storyteller is off: no call was made.
+    ModelOff,
+    /// The member talked past the reply bounds (six a minute): no call was made.
+    RateLimited,
+    /// The per-run token budget could not cover the call.
+    BudgetExhausted,
+    /// The model call failed, timed out, or the request was malformed.
+    CallFailed,
+    /// The model answered, but its reply broke a rule on both attempts.
+    ReplyRejected,
+    /// The model answered, but the reply was empty.
+    EmptyReply,
+}
+
+impl FallbackReason {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::ModelOff => "model_off",
+            Self::RateLimited => "rate_limited",
+            Self::BudgetExhausted => "budget_exhausted",
+            Self::CallFailed => "call_failed",
+            Self::ReplyRejected => "reply_rejected",
+            Self::EmptyReply => "empty_reply",
+        }
+    }
 }
 
 /// Who a typed line is for: the one on-stage NPC the words name, otherwise whoever is
@@ -289,7 +324,7 @@ impl NpcReplyContext {
         };
         let conversation = social.conversation(member, dossier, scene_key);
         let later_lines = story.later_lines(scene_key);
-        let (mut facts, offered) = npc_dossier::facts(&Inputs {
+        let (mut facts, offered, said_lines) = npc_dossier::facts(&Inputs {
             dossier,
             name: &actor.name,
             hero: &hero.name,
@@ -297,7 +332,6 @@ impl NpcReplyContext {
             recent: &recent,
             scene_title: &scene.title,
             scripted_line: scripted,
-            choices: &choices,
             words: &words,
             withheld: &withheld,
             conversation: &conversation,
@@ -311,19 +345,17 @@ impl NpcReplyContext {
                 Value::String(line) => !line.is_empty(),
                 _ => false,
             });
-        // Everything the speaker has already said to this hero: what a new reply must not repeat.
-        let said: Vec<String> = recent
+        // Everything the speaker has already said to this hero: what a new reply must not
+        // repeat. The prompt carries only the most recent of the dossier lines; the checks
+        // use the whole scene, so a line from ten exchanges back is not said again.
+        let mut said: Vec<String> = recent
             .iter()
             .filter(|(from_hero, _)| !from_hero)
             .map(|(_, text)| text.clone())
-            .chain(
-                facts["already_said"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|line| line.as_str().map(str::to_owned)),
-            )
+            .chain(said_lines)
             .collect();
+        said.sort();
+        said.dedup();
         add_character_limits(
             &mut facts,
             story
@@ -404,7 +436,9 @@ impl NpcReplyContext {
             },
             "npc_current_scripted_line": journey.dialogue,
             "player": {"hero_name": hero.name, "exact_words": words},
-            "offered_choices": choices,
+            // Menu labels stay out of the facts: a reply that names them reads the phone's
+            // menu aloud instead of answering in character.
+            "offered_choices": Vec::<&str>::new(),
         });
         add_character_limits(&mut facts, profile);
         // Typed conversation is public table talk, so the secret's terms stay forbidden for
@@ -735,6 +769,14 @@ impl NpcVoice {
                 ("social.private", exchange.private.to_string()),
             ],
         );
+        // One line per fallback, closed vocabulary, never reply text: today nothing records
+        // why a prepared line spoke instead of the model.
+        if let Some(reason) = exchange.fallback {
+            span.event(
+                "social.fallback",
+                &[("social.reason", reason.label().to_owned())],
+            );
+        }
         span.finish_unmeasured("replied");
         Some(exchange.text)
     }
@@ -747,31 +789,38 @@ impl NpcVoice {
     ) -> Option<Exchange> {
         let modeled = self.model_dialogue(&context).await;
         let turn = context.turn.as_ref()?;
-        let from_model = modeled.is_some();
-        let (text, approach) = match modeled {
-            Some((reply, approach)) => (
+        let (text, approach, fallback) = match modeled {
+            Ok((reply, approach)) => (
                 reply,
                 approach.unwrap_or_else(|| classify_keywords(&context.typed_words)),
+                None,
             ),
-            None => {
+            Err(reason) => {
                 let approach = classify_keywords(&context.typed_words);
-                (
-                    npc_dossier::fallback(
-                        &turn.dossier,
-                        turn.standing,
-                        &context.typed_words,
-                        approach,
-                        &turn.withheld,
-                        &npc_dossier::Memory {
-                            conversation: &turn.conversation,
-                            said: &turn.said,
-                            offered: &turn.offered,
-                        },
-                    ),
+                let (answer, answer_key) = npc_dossier::fallback(
+                    &turn.dossier,
+                    turn.standing,
+                    &context.typed_words,
                     approach,
-                )
+                    &turn.withheld,
+                    &npc_dossier::Memory {
+                        conversation: &turn.conversation,
+                        said: &turn.said,
+                        offered: &turn.offered,
+                    },
+                );
+                // A prepared, confided or curt answer counts as said under its memory key.
+                if let Some(key) = answer_key {
+                    turn.ledger.remember_offered(
+                        context.member,
+                        &turn.dossier,
+                        std::slice::from_ref(&key),
+                    );
+                }
+                (answer, approach, Some(reason))
             }
         };
+        let from_model = fallback.is_none();
         // What was whispered to this hero alone is answered to this hero alone: the table sees
         // that the speaker murmured, not the words.
         let private = turn
@@ -840,6 +889,7 @@ impl NpcVoice {
             text,
             approach,
             from_model,
+            fallback,
             shift: recorded.shift,
             private,
         })
@@ -858,19 +908,22 @@ impl NpcVoice {
         .text
     }
 
-    /// The text model's in-character reply and its reading of the hero's approach. `None` when
-    /// the storyteller is off, the member is over its bounds, or the model failed, timed out or
-    /// broke a rule (a leak, a game number, or leaving character).
+    /// The text model's in-character reply and its reading of the hero's approach, or why
+    /// no model reply speaks: the storyteller is off, the member is over its bounds, the
+    /// call failed, or the reply broke a rule on both attempts.
     async fn model_dialogue(
         &self,
         context: &NpcReplyContext,
-    ) -> Option<(String, Option<Approach>)> {
-        let turn = context.turn.as_ref()?;
+    ) -> Result<(String, Option<Approach>), FallbackReason> {
+        let turn = context.turn.as_ref().ok_or(FallbackReason::CallFailed)?;
         let rating = content_rating();
         if !self.storyteller.is_on() {
-            return None;
+            return Err(FallbackReason::ModelOff);
         }
-        let _admission = self.limiter.admit(context.member, Instant::now())?;
+        let _admission = self
+            .limiter
+            .admit(context.member, Instant::now())
+            .ok_or(FallbackReason::RateLimited)?;
         let slots = reply_slots(turn);
         let values = self
             .storyteller
@@ -882,15 +935,23 @@ impl NpcVoice {
                 profile: npc_dossier::profile(rating),
             })
             .await
-            .ok()?;
-        let reply = strip_outer_quotes(values.get("reply")?);
-        if reply.is_empty() {
-            return None;
-        }
+            .map_err(|error| match error {
+                StorytellerError::Off => FallbackReason::ModelOff,
+                StorytellerError::BudgetExhausted => FallbackReason::BudgetExhausted,
+                StorytellerError::Rejected(_) => FallbackReason::ReplyRejected,
+                StorytellerError::InvalidRequest(_)
+                | StorytellerError::DeadlineExceeded
+                | StorytellerError::Provider(_) => FallbackReason::CallFailed,
+            })?;
+        let reply = values
+            .get("reply")
+            .map(|reply| strip_outer_quotes(reply))
+            .filter(|reply| !reply.is_empty())
+            .ok_or(FallbackReason::EmptyReply)?;
         let approach = values
             .get("approach")
             .and_then(|word| Approach::parse(word));
-        Some((reply, approach))
+        Ok((reply, approach))
     }
 
     pub(super) async fn reply(&self, context: NpcReplyContext) -> Option<String> {
@@ -924,7 +985,11 @@ pub(super) fn reply_slots(turn: &Turn) -> [Slot; 2] {
     [
         Slot::new("reply", npc_dossier::REPLY_CHARACTERS)
             .withholding(refused)
-            .speaking(npc_dossier::spoken_rules(turn.answer_offered, &turn.said)),
+            .speaking(npc_dossier::spoken_rules(
+                turn.answer_offered,
+                &turn.said,
+                turn.conversation.admitted_ignorance,
+            )),
         Slot::new("approach", npc_dossier::APPROACH_CHARACTERS),
     ]
 }
@@ -1062,10 +1127,7 @@ mod tests {
             facts["npc_current_scripted_line"],
             "Please. I cannot do this alone."
         );
-        assert_eq!(
-            facts["offered_choices"],
-            json!(["Ask the courier what he knows"])
-        );
+        assert_eq!(facts["offered_choices"], json!([] as [String; 0]));
         assert_eq!(facts["forbidden"], json!(["Vell", "Harbor Inn", "Inn"]));
         assert!(
             facts

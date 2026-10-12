@@ -7,7 +7,13 @@
 .battlefield[data-ready]{transition:opacity .6s ease}
 .battlefield[data-closing]{opacity:0;transition:opacity .7s ease}
 .bf-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
-.bf-hud{position:absolute;inset:0;pointer-events:none}
+.bf-hud{position:absolute;inset:0;pointer-events:none;z-index:2}
+/* FIGHT-001 dice seat: the visible d20 lives inside the battlefield container while it is
+mounted (dice on the stage root would hide behind this overlay). Stacking inside the
+container, lowest first: canvas (auto), the dice (z 1), the HUD with its roll card, turn
+label, health plates, target tag and overlays (z 2), speech bubbles (z 6). The full page
+order is stated in live_tv.css. */
+.battlefield .tv-dice{z-index:1}
 
 .bf-top{position:absolute;top:calc(var(--u)*2.2);left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*.5);text-align:center;transition:opacity .6s ease}
 .bf-title{margin:0;font-size:calc(var(--u)*2.3);font-weight:400;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);text-shadow:0 3px 22px #000}
@@ -105,6 +111,12 @@
 .bf-splash-track{width:calc(30*var(--u,1vw));height:calc(.38*var(--u,1vw));min-height:2px;background:#e8cb9426;border-radius:9px;overflow:hidden}
 .bf-splash-bar{display:block;height:100%;width:100%;background:linear-gradient(90deg,#b98b4a,#f2d9a0);transform-origin:0 50%;transform:scaleX(0);transition:transform .25s ease-out;box-shadow:0 0 10px #e8cb9488}
 .bf-splash-note{font-size:calc(1.35*var(--u,1vw));letter-spacing:.2em;text-transform:uppercase;opacity:.72;min-height:1.4em}
+/* Read-along caption: the Dungeon Master label (or the speaker's name) with the line being
+spoken, below the bar so it never covers the place or the progress. Hidden when no line is open. */
+.bf-splash-caption{max-width:72vw;text-align:center}
+.bf-splash-caption[hidden]{display:none}
+.bf-splash-caption-label{font-size:calc(1.3*var(--u,1vw));font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:#e8cb94;margin-bottom:calc(.5*var(--u,1vw))}
+.bf-splash-caption-text{font-size:calc(2*var(--u,1vw));line-height:1.35;color:#f7efdc;text-wrap:balance}
 
 /* Speech bubble: who is speaking, anchored to the figure with a tail to its head. */
 .bf-speech{position:absolute;inset:0;z-index:6;pointer-events:none;opacity:0;transition:opacity .25s ease}

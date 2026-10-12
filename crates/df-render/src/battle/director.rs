@@ -20,20 +20,22 @@ use super::{
 };
 
 /// The camera settles on a turn's shot over this long, then holds a beat before anything moves.
-const FOCUS_PAN: Duration = Duration::from_millis(800);
-const FOCUS_HOLD: Duration = Duration::from_millis(150);
+/// (`pub(crate)` durations in this block are read by `stage::beat_timing`, the one nominal
+/// beat-duration table the server's pacing bound and this stage share.)
+pub(crate) const FOCUS_PAN: Duration = Duration::from_millis(800);
+pub(crate) const FOCUS_HOLD: Duration = Duration::from_millis(150);
 /// A turn begins with the wide shot leaning toward its figure and out again: in, a beat, out.
 const LEAN_IN: Duration = Duration::from_millis(550);
 const LEAN_HOLD: Duration = Duration::from_millis(150);
 const LEAN_OUT: Duration = Duration::from_millis(800);
-const LEAN_TOTAL: Duration = Duration::from_millis(1500);
+pub(crate) const LEAN_TOTAL: Duration = Duration::from_millis(1500);
 /// The slow push-in on the wind-up, which ends before the attack starts: the camera is at rest at
 /// contact.
-const WINDUP_PUSH: Duration = Duration::from_millis(380);
-const STEP: Duration = Duration::from_millis(260);
-const SETTLE_PAN: Duration = Duration::from_millis(1300);
+pub(crate) const WINDUP_PUSH: Duration = Duration::from_millis(380);
+pub(crate) const STEP: Duration = Duration::from_millis(260);
+pub(crate) const SETTLE_PAN: Duration = Duration::from_millis(1300);
 const FINISHING_PUSH: Duration = Duration::from_millis(3200);
-const FINISHING_HOLD: Duration = Duration::from_millis(3600);
+pub(crate) const FINISHING_HOLD: Duration = Duration::from_millis(3600);
 pub const LUNGE: Duration = Duration::from_millis(460);
 pub const LUNGE_CONTACT: Duration = Duration::from_millis(170);
 pub const RECOIL: Duration = Duration::from_millis(420);
@@ -45,15 +47,15 @@ pub const DRAW: Duration = Duration::from_millis(600);
 /// How long the arrow takes from the bow to the target.
 pub const FLIGHT: Duration = Duration::from_millis(400);
 /// The slowest a long walk is staged, so a far approach does not stall the fight.
-const MAX_APPROACH: Duration = Duration::from_millis(1800);
-const MIN_STEP: Duration = Duration::from_millis(150);
+pub(crate) const MAX_APPROACH: Duration = Duration::from_millis(1800);
+pub(crate) const MIN_STEP: Duration = Duration::from_millis(150);
 /// The fall's body lands on the ground this far into the fall animation.
 pub const READY: Duration = Duration::from_millis(700);
 pub const FALL_LANDS: Duration = Duration::from_millis(560);
 /// Extra time the impact shot stays up after a hit that deals damage.
 pub const IMPACT_HOLD: Duration = Duration::from_millis(1800);
-const FALL_DELAY: Duration = Duration::from_millis(380);
-const FINISHING_DELAY: Duration = Duration::from_millis(560);
+pub(crate) const FALL_DELAY: Duration = Duration::from_millis(380);
+pub(crate) const FINISHING_DELAY: Duration = Duration::from_millis(560);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Anim {
@@ -343,8 +345,8 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
 
 /// Gap between one combatant's die and the next, and how long a die tumbles.
 const DICE_STAGGER: Duration = Duration::from_millis(280);
-const DICE_TUMBLE: Duration = Duration::from_millis(800);
-const DICE_READ: Duration = Duration::from_millis(700);
+pub(crate) const DICE_TUMBLE: Duration = Duration::from_millis(800);
+pub(crate) const DICE_READ: Duration = Duration::from_millis(700);
 /// One roll-call stop is about a second; the whole roll-call never runs past this.
 pub const STOP: Duration = Duration::from_millis(1000);
 pub const MAX_ROLL_CALL: Duration = Duration::from_millis(7000);

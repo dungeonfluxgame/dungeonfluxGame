@@ -25,6 +25,15 @@ const MAXIMUM_CLIP_BYTES: u32 = 4 * 1024 * 1024;
 /// A zero-length WAV played inside the first gesture so Safari lets this element play later.
 const UNLOCK_CLIP: &str =
     "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+/// How long past its own length a clip may hold the audio element before the watchdog releases
+/// it, counts the stall and lets the next line play. A clip that never starts gets
+/// `WATCH_UNSTARTED_MS`; one whose length the browser never reported gets `WATCH_UNKNOWN_MS`.
+/// All three stay above the conductor's own bounds (it moves a line on after 2.5 s without a
+/// start and past a playing clip at its length plus 3 s), so the watchdog only fires when the
+/// conductor's clock itself stopped driving the line.
+const WATCH_MARGIN_MS: u32 = 5_000;
+const WATCH_UNSTARTED_MS: u32 = 15_000;
+const WATCH_UNKNOWN_MS: u32 = 30_000;
 // Sized for a TV seen from across a room: the label never drops below 24px.
 const CONTROL_STYLE: &str = "position:fixed;right:2.4vw;top:2.6vh;z-index:40;display:flex;\
 align-items:center;gap:.6em;min-height:2.4em;padding:.45em 1em;border-radius:999px;\
@@ -51,6 +60,8 @@ struct Current {
     url: String,
     /// `Started` was reported (the `playing` event repeats after buffering).
     started: bool,
+    /// The watchdog generation watching it; only the newest generation may release it.
+    watch: u64,
 }
 
 struct Director {
@@ -62,6 +73,14 @@ struct Director {
     clips: HashMap<LineId, Clip>,
     current: Option<Current>,
     listeners: Vec<Closure<dyn FnMut(Event)>>,
+    /// One-shot watchdog timers, one per played clip; only the newest generation can match.
+    watches: Vec<Closure<dyn FnMut()>>,
+    /// The watchdog generation handed out so far.
+    watch_seq: u64,
+    /// Clips that ever reported `Started`: a refusal after one is an interruption, not a lock.
+    plays_started: u64,
+    /// Clips the watchdog released; read by checks on `data-voice-stalls`.
+    stalls: u32,
 }
 
 type Shared = Rc<RefCell<Director>>;
@@ -80,6 +99,9 @@ impl Director {
             Sound::Muted => ("muted", "", MUTE_PATHS, "Unmute narration"),
         };
         let _marked = self.control.set_attribute("data-voice-state", state);
+        let _stalled = self
+            .control
+            .set_attribute("data-voice-stalls", &self.stalls.to_string());
         let _named = self.control.set_attribute("aria-label", name);
         let _titled = self.control.set_attribute("title", name);
         self.label.set_text_content(Some(label));
@@ -213,6 +235,10 @@ fn create(document: &Document) -> Result<Shared, JsValue> {
         clips: HashMap::new(),
         current: None,
         listeners: Vec::new(),
+        watches: Vec::new(),
+        watch_seq: 0,
+        plays_started: 0,
+        stalls: 0,
     }));
     shared.borrow().render_control();
     listen(&shared, audio.as_ref(), "playing", on_playing)?;
@@ -372,13 +398,22 @@ pub(super) fn play(id: LineId) {
         let mut state = shared.borrow_mut();
         match state.clips.remove(&id) {
             Some(Clip::Ready(url)) => {
+                // A clip the conductor already moved past still sits on the element (its cancel
+                // never arrived, or its end signal was lost): its bytes are freed and it reports
+                // nothing more, so the new clip starts from a clean element.
+                if let Some(orphan) = state.current.take() {
+                    Director::release(&orphan.url);
+                }
+                state.watch_seq += 1;
+                let watch = state.watch_seq;
                 state.audio.set_src(&url);
                 state.current = Some(Current {
                     id,
                     url,
                     started: false,
+                    watch,
                 });
-                Some(state.audio.play())
+                Some((watch, state.audio.play()))
             }
             Some(other) => {
                 state.clips.insert(id, other);
@@ -388,13 +423,66 @@ pub(super) fn play(id: LineId) {
         }
     };
     match started {
-        Some(Ok(promise)) => spawn_local(async move {
-            if let Err(refusal) = JsFuture::from(promise).await {
-                refused(&shared, id, &refusal);
-            }
-        }),
-        Some(Err(refusal)) => refused(&shared, id, &refusal),
+        Some((watch, Ok(promise))) => {
+            arm_watch(&shared, id, watch, WATCH_UNSTARTED_MS);
+            spawn_local(async move {
+                if let Err(refusal) = JsFuture::from(promise).await {
+                    refused(&shared, id, &refusal);
+                }
+            });
+        }
+        Some((_, Err(refusal))) => refused(&shared, id, &refusal),
         None => signal_later(id, ClipSignal::Error),
+    }
+}
+
+/// Watches one play for `bound_ms`: unless a newer play supersedes it, a clip still on the
+/// element then has overrun its own length plus a margin (or never started at all). It is
+/// released, the stall is counted where checks can read it, and the line runs on reading time
+/// so the next line plays. The timer lives with the director; if the window is gone the
+/// conductor's own bounds still move the line on.
+fn arm_watch(shared: &Shared, id: LineId, watch: u64, bound_ms: u32) {
+    let weak = Rc::downgrade(shared);
+    let callback = Closure::wrap(Box::new(move || {
+        if let Some(shared) = weak.upgrade() {
+            watch_fired(&shared, id, watch);
+        }
+    }) as Box<dyn FnMut()>);
+    let bound = i32::try_from(bound_ms).unwrap_or(i32::MAX);
+    let scheduled = web_sys::window().and_then(|window| {
+        window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                callback.as_ref().unchecked_ref(),
+                bound,
+            )
+            .ok()
+    });
+    if scheduled.is_some() {
+        shared.borrow_mut().watches.push(callback);
+    }
+}
+
+/// The watchdog for one play fired: if that clip is still on the element, it overran. Stop it,
+/// free it, count the stall and report an error so the conductor moves on to the next line.
+fn watch_fired(shared: &Shared, id: LineId, watch: u64) {
+    let overran = {
+        let mut state = shared.borrow_mut();
+        let overran = state
+            .current
+            .as_ref()
+            .is_some_and(|current| current.id == id && current.watch == watch);
+        if overran {
+            let _paused = state.audio.pause();
+            state.stalls += 1;
+            state.render_control();
+            state.current.take()
+        } else {
+            None
+        }
+    };
+    if let Some(current) = overran {
+        Director::release(&current.url);
+        live_motion::clip_signal(current.id, ClipSignal::Error);
     }
 }
 
@@ -420,14 +508,17 @@ pub(super) fn cancel(id: LineId) {
     }
 }
 
-/// A play call the browser refused: if it was the autoplay policy the control comes back and
-/// sound is off again; either way the line runs on reading time.
+/// A play call the browser refused: the line runs on reading time. A refusal before any
+/// clip ever started is the autoplay policy, so the control comes back and sound is off until
+/// the next gesture. A refusal after clips have played is an interruption (a raced cancel, a
+/// backgrounded tab, a busy device): sound stays on for the lines behind it, and the next play
+/// recovers on its own. One transient refusal must never silence the rest of the session.
 fn refused(shared: &Shared, id: LineId, refusal: &JsValue) {
     let blocked = js_sys::Reflect::get(refusal, &JsValue::from_str("name"))
         .ok()
         .and_then(|name| name.as_string())
         .is_some_and(|name| name == "NotAllowedError");
-    let released = {
+    let (released, relocked) = {
         let mut state = shared.borrow_mut();
         if !state
             .current
@@ -436,16 +527,18 @@ fn refused(shared: &Shared, id: LineId, refusal: &JsValue) {
         {
             return;
         }
-        if blocked {
+        // Only a policy block before the first audible clip re-locks the switch.
+        let relocked = blocked && state.plays_started == 0;
+        if relocked {
             state.switch.refused();
             state.render_control();
         }
-        state.current.take()
+        (state.current.take(), relocked)
     };
     if let Some(current) = released {
         Director::release(&current.url);
     }
-    if blocked {
+    if relocked {
         live_motion::sound_changed(false);
     }
     live_motion::clip_signal(id, ClipSignal::Error);
@@ -456,7 +549,7 @@ fn on_playing(shared: &Shared, _event: &Event) {
         let mut state = shared.borrow_mut();
         let url = state.audio.current_src();
         let seconds = state.audio.duration();
-        match state.current.as_mut() {
+        let started = match state.current.as_mut() {
             Some(current) if current.url == url && !current.started => {
                 current.started = true;
                 let duration_ms = (seconds.is_finite() && seconds > 0.0)
@@ -464,9 +557,28 @@ fn on_playing(shared: &Shared, _event: &Event) {
                 Some((current.id, duration_ms))
             }
             _ => None,
+        };
+        // From here the clip is bounded by its own length plus a margin; the unstarted
+        // watch is superseded by this generation.
+        if let Some((id, duration_ms)) = started {
+            state.plays_started += 1;
+            state.watch_seq += 1;
+            let watch = state.watch_seq;
+            if let Some(current) = state.current.as_mut()
+                && current.id == id
+            {
+                current.watch = watch;
+            }
+            Some((id, watch, duration_ms))
+        } else {
+            None
         }
     };
-    if let Some((id, duration_ms)) = reported {
+    if let Some((id, watch, duration_ms)) = reported {
+        let bound = duration_ms.map_or(WATCH_UNKNOWN_MS, |length| {
+            length.saturating_add(WATCH_MARGIN_MS)
+        });
+        arm_watch(shared, id, watch, bound);
         live_motion::clip_signal(id, ClipSignal::Started { duration_ms });
     }
 }

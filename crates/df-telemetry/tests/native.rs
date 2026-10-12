@@ -667,12 +667,17 @@ fn spool_sqlite_capacity_corruption_truncation_and_foreign_ownership_are_explici
         Err(TelemetryError::ForeignRoot)
     ));
     assert_eq!(fs::read(&alias).unwrap(), before);
-    let symlink = root("symlink");
-    std::os::unix::fs::symlink(&foreign, &symlink).unwrap();
-    assert!(matches!(
-        Store::open(&symlink, TelemetryLimits::default(), None),
-        Err(TelemetryError::ForeignRoot)
-    ));
+    // Creating a symlink is a Unix-only case; link-count and foreign-root
+    // coverage above keeps running on Windows.
+    #[cfg(unix)]
+    {
+        let symlink = root("symlink");
+        std::os::unix::fs::symlink(&foreign, &symlink).unwrap();
+        assert!(matches!(
+            Store::open(&symlink, TelemetryLimits::default(), None),
+            Err(TelemetryError::ForeignRoot)
+        ));
+    }
 }
 #[test]
 fn read_only_filters_pagination_and_source_gaps_are_stable_during_ingestion() {

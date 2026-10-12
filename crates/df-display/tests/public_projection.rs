@@ -13,6 +13,8 @@ fn party_member(name: &str, id: &[u8]) -> PartyMemberView {
         active_turn: false,
         unconscious: false,
         participant_id: id.to_vec(),
+        // Later audit fields default; this fixture asserts only the earlier ones.
+        ..Default::default()
     }
 }
 
@@ -59,10 +61,14 @@ fn display_view() -> DisplayGameplayView {
                     source_revision: "private-outcome-revision".to_owned(),
                     actor_id: vec![0xC3; 16],
                     target_id: vec![0xD4; 16],
+                    // Later audit fields default; this fixture asserts only the earlier ones.
+                    ..Default::default()
                 }],
                 finished: false,
                 source_revision: "private-combat-revision".to_owned(),
                 active_participant_id: vec![0xE5; 16],
+                // Later audit fields default; this fixture asserts only the earlier ones.
+                ..Default::default()
             }),
             ..JourneyView::default()
         }),

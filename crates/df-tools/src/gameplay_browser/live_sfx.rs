@@ -285,8 +285,14 @@ pub(super) fn play(cue: Cue, delay: Duration) {
 
 /// As [`play`] with a level and a playback speed (above 1 raises the pitch).
 fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32) {
-    if matches!(cue, Cue::VictoryFanfare | Cue::DefeatToll) && ENDING_STING_PLAYED.take() {
-        return;
+    // One ending, one sting: the banner and the battlefield's finishing shot race, and
+    // whichever plays first latches so the other stays quiet. The latch resets when the
+    // next fight is entered.
+    if matches!(cue, Cue::VictoryFanfare | Cue::DefeatToll) {
+        if ENDING_STING_PLAYED.get() {
+            return;
+        }
+        ENDING_STING_PLAYED.set(true);
     }
     if matches!(cue, Cue::Hit | Cue::Miss) && BATTLEFIELD_OWNS_COMBAT.with(std::cell::Cell::get) {
         return;
@@ -310,10 +316,15 @@ fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32) {
 /// the last, at the event's level and pitch. Gated exactly like every other effect (silent
 /// before the unlock, when muted or hidden, and quieter under narration).
 pub(super) fn play_event(event: &SoundEvent, rating: ContentRating) {
+    // A stale finishing shot (played after the banner already stung, past the exit cap) stays
+    // quiet: one ending, one sting.
     if matches!(
         event.kind,
         df_render::battle::SoundKind::VictorySting | df_render::battle::SoundKind::DefeatSting
     ) {
+        if ENDING_STING_PLAYED.get() {
+            return;
+        }
         ENDING_STING_PLAYED.set(true);
     }
     let Some(clip) = PICKER.with(|picker| picker.borrow_mut().pick(event.clips(rating))) else {
@@ -325,6 +336,11 @@ pub(super) fn play_event(event: &SoundEvent, rating: ContentRating) {
         event.kind.gain(),
         event.rate,
     );
+}
+
+/// A fight was entered: the next ending may sting once.
+pub(super) fn reset_ending_sting() {
+    ENDING_STING_PLAYED.set(false);
 }
 
 /// While the 3D battlefield stages blows, the flat view's own hit and miss sounds are left out

@@ -82,6 +82,19 @@ pub(crate) fn is_victory(journey: &rpc::JourneyView) -> bool {
     !journey.dialogue.is_empty()
 }
 
+/// The display's type scale for the aftermath's closing paragraph, by its length in
+/// characters: the whole paragraph always shows (never an ellipsis), so longer text is
+/// set smaller (`live_endings.css` reads `data-narrative`). The bounds fit a 1080p
+/// ten-foot layout with the party row below the story.
+pub(crate) fn narrative_tier(narration: &str) -> &'static str {
+    match narration.chars().count() {
+        0..=450 => "short",
+        451..=900 => "full",
+        901..=1600 => "long",
+        _ => "epic",
+    }
+}
+
 pub(crate) fn snapshot(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> CombatSnapshot {
     let Some(combat) = journey.combat.as_ref() else {
         return CombatSnapshot {
@@ -1186,6 +1199,28 @@ mod tests {
             &scene(),
         );
         assert_eq!(transitions(Some(&fight), &over).finished, Some(false));
+    }
+
+    #[test]
+    fn a_short_closing_uses_the_largest_type() {
+        assert_eq!(narrative_tier(""), "short");
+        assert_eq!(narrative_tier(&"word ".repeat(90)[..450]), "short");
+    }
+
+    #[test]
+    fn longer_closings_step_down_without_ever_clipping() {
+        assert_eq!(narrative_tier(&"word ".repeat(91)[..451]), "full");
+        assert_eq!(narrative_tier(&"word ".repeat(180)[..900]), "full");
+        assert_eq!(narrative_tier(&"word ".repeat(181)[..901]), "long");
+        assert_eq!(narrative_tier(&"word ".repeat(320)[..1600]), "long");
+        assert_eq!(narrative_tier(&"word ".repeat(321)[..1601]), "epic");
+    }
+
+    #[test]
+    fn tiers_count_characters_not_bytes() {
+        let text = "é".repeat(450);
+        assert_eq!(narrative_tier(&text), "short");
+        assert_eq!(narrative_tier(&format!("{text}x")), "full");
     }
 
     #[test]

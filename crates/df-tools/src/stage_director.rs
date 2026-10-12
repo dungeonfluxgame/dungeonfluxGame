@@ -69,9 +69,26 @@ pub(crate) struct Cue<D> {
     detail: Option<D>,
     /// Part of the ending of a fight: kept, shortened, when the display falls behind.
     outcome: bool,
+    /// Never skipped by the catch-up rule: a death, a critical hit, the end of the fight.
+    keep: bool,
     short: bool,
     queued_ms: u64,
+    /// The server's beat sequence this cue belongs to (`CombatOutcome.sequence`); 0 is no beat.
+    sequence: u64,
 }
+
+/// One presented (or coherently skipped) phase of a beat, for the display's debug record:
+/// checks assert sync from these numbers instead of sleeping.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BeatRecord {
+    pub(crate) sequence: u64,
+    pub(crate) kind: &'static str,
+    pub(crate) start_ms: u64,
+    pub(crate) end_ms: u64,
+}
+
+/// How many beat records the debug log keeps.
+const BEAT_LOG_CAP: usize = 40;
 
 /// What the browser layer applies.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,6 +127,13 @@ pub(crate) struct ViewDiff<D> {
     /// Only the blow of an earlier turn that the same view resolved: dice, impact and fall, with
     /// no redraw of the view, which belongs to the newest turn.
     pub(crate) blow_only: bool,
+    /// This blow decided something the table must see even when behind: a critical hit or a
+    /// fall. Deaths and fight endings are always kept without this flag.
+    pub(crate) memorable: bool,
+    /// The server sequence of the blow this diff stages (`CombatOutcome.sequence`); 0 when the
+    /// view stages no beat. Beats present in this order and never twice: a diff at or below the
+    /// presented sequence has its blow cues dropped (see [`StageDirector::gate`]).
+    pub(crate) sequence: u64,
 }
 
 impl<D> ViewDiff<D> {
@@ -139,6 +163,8 @@ impl<D> Default for ViewDiff<D> {
             banner: None,
             closing: None,
             blow_only: false,
+            memorable: false,
+            sequence: 0,
         }
     }
 }
@@ -151,6 +177,7 @@ struct Active<D> {
     minimum_ms: u32,
     maximum_ms: u32,
     short: bool,
+    sequence: u64,
 }
 
 pub(crate) struct StageDirector<D> {
@@ -160,6 +187,33 @@ pub(crate) struct StageDirector<D> {
     battlefield_busy: bool,
     /// Since when the next blow has been waiting for the battlefield.
     waiting_since_ms: Option<u64>,
+    /// The last beat sequence finished presenting (or coherently skipped past). Only staged
+    /// sequences count: server beats the director never cues (a move walked inside a blow, a
+    /// death save) are covered by the next staged beat past them, or by true idle.
+    presented: u64,
+    /// The newest beat sequence any accepted view has carried.
+    latest: u64,
+    /// Every staged sequence of this fight, and the ones finished or skipped: `presented` is
+    /// the highest staged sequence with no unresolved staged sequence at or below it.
+    staged: std::collections::BTreeSet<u64>,
+    resolved: std::collections::BTreeSet<u64>,
+    beat_log: VecDeque<BeatRecord>,
+}
+
+fn phase_kind(state: StageState) -> &'static str {
+    match state {
+        StageState::Rolling => "rolling",
+        StageState::Impact => "impact",
+        StageState::Defeat => "defeat",
+        StageState::Healing => "healing",
+        StageState::Aftermath => "aftermath",
+        StageState::ClosingCard => "closing",
+        StageState::LeavingScene => "leaving",
+        StageState::Interstitial => "interstitial",
+        StageState::TitleCard => "title",
+        StageState::EnteringScene => "entering",
+        StageState::Idle => "idle",
+    }
 }
 
 /// The longest a blow waits for the battlefield to finish the one before it.
@@ -186,7 +240,87 @@ impl<D: Clone> StageDirector<D> {
             active: None,
             battlefield_busy: false,
             waiting_since_ms: None,
+            presented: 0,
+            latest: 0,
+            staged: std::collections::BTreeSet::new(),
+            resolved: std::collections::BTreeSet::new(),
+            beat_log: VecDeque::new(),
         }
+    }
+
+    /// The last beat sequence finished presenting (or coherently skipped past).
+    pub(crate) fn presented_sequence(&self) -> u64 {
+        self.presented
+    }
+
+    /// The recent beat phases with their start and end times, oldest first.
+    pub(crate) fn beat_log(&self) -> &VecDeque<BeatRecord> {
+        &self.beat_log
+    }
+
+    /// Nothing playing and nothing queued. `state()` alone reads Idle while a Roll waits for
+    /// the battlefield, which must not count as done (the fight's exit once fired then).
+    pub(crate) fn is_idle(&self) -> bool {
+        self.active.is_none() && self.queue.is_empty()
+    }
+
+    fn record(&mut self, record: BeatRecord) {
+        if self.beat_log.len() >= BEAT_LOG_CAP {
+            self.beat_log.pop_front();
+        }
+        self.beat_log.push_back(record);
+    }
+
+    /// Marks a staged sequence finished or skipped and recomputes `presented`: the highest
+    /// staged sequence with no unresolved staged sequence at or below it. A skipped middle
+    /// blow therefore never reports presented ahead of a blow still playing before it.
+    fn resolve(&mut self, sequence: u64) {
+        if sequence == 0 {
+            return;
+        }
+        self.resolved.insert(sequence);
+        let mut presented = self.presented;
+        for staged in &self.staged {
+            if *staged <= presented {
+                continue;
+            }
+            if self.resolved.contains(staged) {
+                presented = *staged;
+            } else {
+                break;
+            }
+        }
+        self.presented = presented;
+    }
+
+    fn reset_sequences(&mut self) {
+        self.presented = 0;
+        self.latest = 0;
+        self.staged.clear();
+        self.resolved.clear();
+        self.beat_log.clear();
+    }
+
+    /// The one-clock gate for a newly accepted view's blow: a new fight restarts the sequence;
+    /// a beat at or below the presented sequence (a duplicate view, a reconnect replay) loses
+    /// its blow cues so nothing is ever shown twice, while the rest of the view (its scene
+    /// change, its banner) still applies.
+    fn gate(&mut self, diff: &mut ViewDiff<D>) {
+        if diff.enters_combat {
+            self.reset_sequences();
+        }
+        if diff.sequence == 0 {
+            return;
+        }
+        self.latest = self.latest.max(diff.sequence);
+        if diff.sequence <= self.presented || self.resolved.contains(&diff.sequence) {
+            diff.roll = None;
+            diff.impact = None;
+            diff.defeat = None;
+            diff.sequence = 0;
+            return;
+        }
+        self.staged.insert(diff.sequence);
     }
 
     /// Whether the battlefield is still showing an earlier blow. A blow's dice wait for it, so
@@ -207,59 +341,114 @@ impl<D: Clone> StageDirector<D> {
     }
 
     /// Starts again at the current view with nothing queued: first view, reload, reconnect.
+    /// Queued beats are skipped coherently, so they count as presented: the redraw that
+    /// follows shows the newest state whole, on every layer at once.
     pub(crate) fn restart(&mut self) -> Vec<Command<D>> {
+        let skipped: Vec<u64> = self
+            .queue
+            .iter()
+            .map(|cue| cue.sequence)
+            .chain(self.active.iter().map(|active| active.sequence))
+            .filter(|sequence| *sequence != 0)
+            .collect();
         self.queue.clear();
         self.active = None;
         self.waiting_since_ms = None;
+        for sequence in skipped {
+            self.resolve(sequence);
+        }
         vec![Command::Render]
     }
 
-    fn cue(kind: CueKind, detail: Option<D>, now_ms: u64, outcome: bool) -> Cue<D> {
+    fn cue(kind: CueKind, detail: Option<D>, now_ms: u64, outcome: bool, sequence: u64) -> Cue<D> {
         Cue {
             kind,
             detail,
             outcome,
+            keep: false,
             short: false,
             queued_ms: now_ms,
+            sequence,
+        }
+    }
+
+    /// Marks what the catch-up rule may never skip: deaths, fight endings, and the blows the
+    /// caller flagged as memorable (a critical hit, a fall). Everything else may be shortened
+    /// first, then skipped, oldest first, when the display falls behind.
+    fn mark_unskippable(cues: &mut [Cue<D>], memorable: bool) {
+        for cue in cues.iter_mut() {
+            cue.keep = matches!(
+                cue.kind,
+                CueKind::Defeat | CueKind::Banner | CueKind::Closing
+            ) || (memorable && matches!(cue.kind, CueKind::Roll | CueKind::Impact));
         }
     }
 
     /// Queues the cues of a newly accepted view and returns what starts now.
-    pub(crate) fn on_view(&mut self, now_ms: u64, diff: ViewDiff<D>) -> Vec<Command<D>> {
+    pub(crate) fn on_view(&mut self, now_ms: u64, mut diff: ViewDiff<D>) -> Vec<Command<D>> {
         if diff.blow_only {
             return self.on_blow(now_ms, diff);
         }
+        self.gate(&mut diff);
+        let sequence = diff.sequence;
         let finishing = diff.banner.is_some();
-        let make = |kind, detail| Self::cue(kind, detail, now_ms, finishing);
+        let memorable = diff.memorable;
+        let make = |kind, detail| Self::cue(kind, detail, now_ms, finishing, sequence);
         let mut cues = Vec::new();
         if finishing || diff.scene_changed {
             // The results of the last blow come before the scene changes behind them.
             cues.extend(diff.roll.map(|d| make(CueKind::Roll, Some(d))));
             cues.extend(diff.impact.map(|d| make(CueKind::Impact, Some(d))));
             cues.extend(diff.defeat.map(|d| make(CueKind::Defeat, Some(d))));
-            cues.push(make(CueKind::Scene, diff.title.clone()));
-            cues.extend(diff.banner.map(|d| make(CueKind::Banner, Some(d))));
-            cues.extend(diff.closing.map(|d| make(CueKind::Closing, Some(d))));
+            cues.push(Self::cue(
+                CueKind::Scene,
+                diff.title.clone(),
+                now_ms,
+                finishing,
+                0,
+            ));
+            cues.extend(
+                diff.banner
+                    .map(|d| Self::cue(CueKind::Banner, Some(d), now_ms, finishing, 0)),
+            );
+            cues.extend(
+                diff.closing
+                    .map(|d| Self::cue(CueKind::Closing, Some(d), now_ms, finishing, 0)),
+            );
         } else {
-            cues.push(Self::cue(CueKind::Render, None, now_ms, false));
+            // One clock on the flat stage too: a view carrying a blow is redrawn only after
+            // the blow's impact, so no layer shows the result before the beat that causes it.
+            // A view with no blow redraws at once, as before.
+            let has_blow = diff.roll.is_some() || diff.impact.is_some() || diff.defeat.is_some();
+            if !has_blow {
+                cues.push(Self::cue(CueKind::Render, None, now_ms, false, 0));
+            }
             cues.extend(
                 diff.heal
-                    .map(|d| Self::cue(CueKind::Heal, Some(d), now_ms, false)),
+                    .map(|d| Self::cue(CueKind::Heal, Some(d), now_ms, false, sequence)),
             );
             // A blow is an outcome: when the display is behind it is shortened, never dropped.
             cues.extend(
                 diff.roll
-                    .map(|d| Self::cue(CueKind::Roll, Some(d), now_ms, true)),
+                    .map(|d| Self::cue(CueKind::Roll, Some(d), now_ms, true, sequence)),
             );
             cues.extend(
                 diff.impact
-                    .map(|d| Self::cue(CueKind::Impact, Some(d), now_ms, true)),
+                    .map(|d| Self::cue(CueKind::Impact, Some(d), now_ms, true, sequence)),
             );
             cues.extend(
                 diff.defeat
-                    .map(|d| Self::cue(CueKind::Defeat, Some(d), now_ms, true)),
+                    .map(|d| Self::cue(CueKind::Defeat, Some(d), now_ms, true, sequence)),
             );
+            if has_blow {
+                cues.push(Self::cue(CueKind::Render, None, now_ms, false, 0));
+                // Redraws coalesce: only the newest view is ever drawn, so an earlier queued
+                // redraw behind older blows would draw this same view too early (and inflate
+                // the queue past the catch-up cap, skipping blows that must play).
+                self.queue.retain(|cue| cue.kind != CueKind::Render);
+            }
         }
+        Self::mark_unskippable(&mut cues, memorable);
         self.queue.extend(cues);
         self.collapse_if_behind(now_ms);
         self.advance(now_ms)
@@ -267,12 +456,16 @@ impl<D: Clone> StageDirector<D> {
 
     /// Queues only the blow of a finishing view (dice, impact, fall): no redraw and no scene
     /// change. The scene change follows when the conductor says the blow has been seen out.
-    pub(crate) fn on_blow(&mut self, now_ms: u64, diff: ViewDiff<D>) -> Vec<Command<D>> {
-        let make = |kind, detail| Self::cue(kind, Some(detail), now_ms, true);
+    pub(crate) fn on_blow(&mut self, now_ms: u64, mut diff: ViewDiff<D>) -> Vec<Command<D>> {
+        self.gate(&mut diff);
+        let sequence = diff.sequence;
+        let make = |kind, detail| Self::cue(kind, Some(detail), now_ms, true, sequence);
+        let memorable = diff.memorable;
         let mut cues = Vec::new();
         cues.extend(diff.roll.map(|d| make(CueKind::Roll, d)));
         cues.extend(diff.impact.map(|d| make(CueKind::Impact, d)));
         cues.extend(diff.defeat.map(|d| make(CueKind::Defeat, d)));
+        Self::mark_unskippable(&mut cues, memorable);
         self.queue.extend(cues);
         self.collapse_if_behind(now_ms);
         self.advance(now_ms)
@@ -346,9 +539,92 @@ impl<D: Clone> StageDirector<D> {
             }
         }
         if dropped_render && !kept.iter().any(|cue| cue.kind == CueKind::Scene) {
-            kept.push(Self::cue(CueKind::Render, None, now_ms, false));
+            kept.push(Self::cue(CueKind::Render, None, now_ms, false, 0));
+        }
+        // Catch-up rule: the display may lag the server by at most LAG_LIMIT_MS (or QUEUE_CAP
+        // queued cues). Past that, every kept cue plays shortened, and skippable middle blows
+        // are dropped oldest-first so the queue converges on the newest server event instead of
+        // replaying an unbounded backlog. Never skipped: a death (Defeat), a critical hit or
+        // fall the caller flagged memorable, the end of the fight (Banner, Closing), and the
+        // newest blow, which is what the turn label, roll card, health bars and acting figure
+        // converge on.
+        let before: std::collections::BTreeSet<u64> = kept
+            .iter()
+            .map(|cue| cue.sequence)
+            .filter(|sequence| *sequence != 0)
+            .collect();
+        Self::skip_middle_blows(&mut kept);
+        // A skipped blow is jumped past coherently: it counts as presented once every earlier
+        // staged beat resolves, and the debug log says it was skipped, never replayed.
+        let after: std::collections::BTreeSet<u64> = kept
+            .iter()
+            .map(|cue| cue.sequence)
+            .filter(|sequence| *sequence != 0)
+            .collect();
+        for sequence in before.difference(&after) {
+            self.record(BeatRecord {
+                sequence: *sequence,
+                kind: "skipped",
+                start_ms: now_ms,
+                end_ms: now_ms,
+            });
+            self.resolve(*sequence);
         }
         self.queue = kept.into();
+    }
+
+    /// Drops every queued blow but the newest unless one of its cues is unskippable. Blows are
+    /// consecutive Roll/Impact/Defeat runs; a new blow starts at each Roll that follows an
+    /// Impact or Defeat, and any other cue ends a run.
+    fn skip_middle_blows(kept: &mut Vec<Cue<D>>) {
+        let mut blows: Vec<Vec<usize>> = Vec::new();
+        let mut current: Vec<usize> = Vec::new();
+        for (index, cue) in kept.iter().enumerate() {
+            if !matches!(cue.kind, CueKind::Roll | CueKind::Impact | CueKind::Defeat) {
+                if !current.is_empty() {
+                    blows.push(std::mem::take(&mut current));
+                }
+                continue;
+            }
+            let starts_new = matches!(cue.kind, CueKind::Roll)
+                && current
+                    .iter()
+                    .any(|&at| matches!(kept[at].kind, CueKind::Impact | CueKind::Defeat));
+            if starts_new {
+                blows.push(std::mem::take(&mut current));
+            }
+            current.push(index);
+        }
+        if !current.is_empty() {
+            blows.push(current);
+        }
+        if blows.len() < 2 {
+            return;
+        }
+        let last = blows.len() - 1;
+        let drop: std::collections::HashSet<usize> = blows
+            .iter()
+            .enumerate()
+            .filter(|(position, blow)| {
+                // The head of the queue without a Roll is the on-screen remainder of the blow
+                // already playing: it finishes instead of being cut mid-beat.
+                let head_remainder = blow
+                    .first()
+                    .is_some_and(|&at| !matches!(kept[at].kind, CueKind::Roll));
+                *position != last && !head_remainder && !blow.iter().any(|&at| kept[at].keep)
+            })
+            .flat_map(|(_, blow)| blow.iter().copied())
+            .collect();
+        if drop.is_empty() {
+            return;
+        }
+        let mut remaining = Vec::with_capacity(kept.len());
+        for (index, cue) in kept.drain(..).enumerate() {
+            if !drop.contains(&index) {
+                remaining.push(cue);
+            }
+        }
+        *kept = remaining;
     }
 
     fn begin(&mut self, now_ms: u64, cue: &Cue<D>, state: StageState) -> (Active<D>, Command<D>) {
@@ -381,6 +657,7 @@ impl<D: Clone> StageDirector<D> {
             minimum_ms,
             maximum_ms,
             short: cue.short,
+            sequence: cue.sequence,
         };
         let command = Command::Enter {
             state,
@@ -409,6 +686,18 @@ impl<D: Clone> StageDirector<D> {
                 // A late tick must not stretch the sequence: the next state starts when the
                 // previous one was due to end.
                 let ended_at = (ended.started_ms + u64::from(ended.maximum_ms)).min(now_ms);
+                if ended.sequence != 0 {
+                    self.record(BeatRecord {
+                        sequence: ended.sequence,
+                        kind: phase_kind(ended.state),
+                        start_ms: ended.started_ms,
+                        end_ms: ended_at,
+                    });
+                    // The beat is presented when its last queued phase ends.
+                    if !self.queue.iter().any(|cue| cue.sequence == ended.sequence) {
+                        self.resolve(ended.sequence);
+                    }
+                }
                 if let Some(next) = self.next_phase(&ended) {
                     self.start_phase(ended_at, next, &mut commands);
                     continue;
@@ -468,8 +757,10 @@ impl<D: Clone> StageDirector<D> {
                 kind: CueKind::Scene,
                 detail: ended.detail.clone(),
                 outcome: false,
+                keep: false,
                 short: ended.short,
                 queued_ms: ended.started_ms,
+                sequence: ended.sequence,
             },
             next,
         ))
@@ -799,6 +1090,120 @@ mod tests {
         assert_eq!(director.state(), StageState::Idle);
     }
 
+    /// A blow the caller flagged memorable: a critical hit with no fall.
+    fn hard_hit(label: &'static str) -> ViewDiff<&'static str> {
+        ViewDiff {
+            roll: Some(label),
+            impact: Some(label),
+            blow_only: true,
+            memorable: true,
+            ..ViewDiff::default()
+        }
+    }
+
+    fn rolling_labels(commands: &[Command<&'static str>]) -> Vec<&'static str> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::Enter {
+                    state: StageState::Rolling,
+                    detail: Some(label),
+                    ..
+                } => Some(*label),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn enters(commands: &[Command<&'static str>], state: StageState) -> usize {
+        commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    Command::Enter {
+                        state: entered,
+                        ..
+                    } if *entered == state
+                )
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_burst_of_enemy_outcomes_faster_than_staging_skips_middle_blows() {
+        let mut director = Director::new();
+        let labels = ["b0", "b1", "b2", "b3", "b4", "b5", "b6", "b7"];
+        let mut commands = Vec::new();
+        for (n, label) in labels.iter().enumerate() {
+            commands.extend(director.on_view((n as u64) * 100, blow(label)));
+        }
+        commands.extend(run(&mut director, 800, 12_000));
+        let staged = rolling_labels(&commands);
+        // The first blow was already on screen and the newest is what the table converges on.
+        assert_eq!(staged.first(), Some(&"b0"));
+        assert_eq!(staged.last(), Some(&"b7"));
+        // The backlog never replays in full: at most a few blows are staged, and the early
+        // middle blows are skipped.
+        assert!(
+            staged.len() <= 4,
+            "bounded replay, not the whole burst: {staged:?}"
+        );
+        for skipped in ["b1", "b2", "b3", "b4"] {
+            assert!(
+                !staged.contains(&skipped),
+                "obsolete middle blow {skipped} is skipped: {staged:?}"
+            );
+        }
+        assert_eq!(director.state(), StageState::Idle);
+    }
+
+    #[test]
+    fn a_turn_change_mid_beat_keeps_the_critical_hit_and_jumps_to_the_newest_turn() {
+        let mut director = Director::new();
+        let mut commands = director.on_view(0, blow("turn-a"));
+        commands.extend(director.on_view(100, blow("turn-b")));
+        commands.extend(director.on_view(200, hard_hit("turn-c")));
+        commands.extend(director.on_view(300, blow("turn-d")));
+        commands.extend(director.on_view(400, blow("turn-e")));
+        commands.extend(director.on_view(500, blow("turn-f")));
+        commands.extend(director.on_view(600, blow("turn-g")));
+        commands.extend(director.on_view(700, blow("turn-h")));
+        commands.extend(run(&mut director, 750, 14_000));
+        let staged = rolling_labels(&commands);
+        // The ordinary early turns are skipped, but the critical hit plays in order and the
+        // newest turn is always staged, so the label lands on the server's turn.
+        assert_eq!(staged.first(), Some(&"turn-a"));
+        assert_eq!(staged.last(), Some(&"turn-h"));
+        assert!(staged.contains(&"turn-c"), "critical hit kept: {staged:?}");
+        for skipped in ["turn-b", "turn-d", "turn-e"] {
+            assert!(
+                !staged.contains(&skipped),
+                "obsolete turn {skipped} skipped: {staged:?}"
+            );
+        }
+        assert_eq!(director.state(), StageState::Idle);
+    }
+
+    #[test]
+    fn a_fight_ending_while_beats_are_queued_plays_one_short_ending() {
+        let mut director = Director::new();
+        let labels = ["e0", "e1", "e2", "e3", "e4", "e5"];
+        let mut commands = Vec::new();
+        for (n, label) in labels.iter().enumerate() {
+            commands.extend(director.on_view((n as u64) * 100, blow(label)));
+        }
+        // The server ends the fight while blows are still queued: the killing blow plays, then
+        // exactly one banner and one closing card, in bounded time.
+        let mut end = killing_blow();
+        end.closing = Some("closing");
+        commands.extend(director.on_view(600, end));
+        commands.extend(run(&mut director, 650, 20_000));
+        assert_eq!(enters(&commands, StageState::Aftermath), 1);
+        assert_eq!(enters(&commands, StageState::ClosingCard), 1);
+        assert_eq!(director.state(), StageState::Idle);
+    }
+
     #[test]
     fn a_fallen_character_is_held_long_enough_for_the_table_to_see_the_blow() {
         let mut director = Director::new();
@@ -818,5 +1223,81 @@ mod tests {
         assert_eq!(director.state(), StageState::Defeat);
         run(&mut director, 4_300, 4_450);
         assert_eq!(director.state(), StageState::Idle);
+    }
+
+    fn sequenced_blow(sequence: u64, label: &'static str) -> ViewDiff<&'static str> {
+        ViewDiff {
+            roll: Some(label),
+            impact: Some(label),
+            sequence,
+            ..ViewDiff::default()
+        }
+    }
+
+    #[test]
+    fn presented_advances_only_when_the_beats_last_phase_ends() {
+        let mut director = Director::new();
+        director.on_view(0, sequenced_blow(3, "blow"));
+        assert_eq!(director.latest, 3);
+        assert_eq!(director.presented_sequence(), 0);
+        // The roll (1.15 s) ending is not the beat presented; the impact is still to come.
+        run(&mut director, 50, 1_200);
+        assert_eq!(director.presented_sequence(), 0);
+        run(&mut director, 1_250, 2_000);
+        assert_eq!(director.presented_sequence(), 3);
+        let kinds: Vec<&str> = director
+            .beat_log()
+            .iter()
+            .map(|record| record.kind)
+            .collect();
+        assert_eq!(kinds, ["rolling", "impact"]);
+        assert!(
+            director
+                .beat_log()
+                .iter()
+                .all(|record| record.sequence == 3)
+        );
+    }
+
+    #[test]
+    fn a_replayed_beat_is_never_staged_twice() {
+        let mut director = Director::new();
+        director.on_view(0, sequenced_blow(1, "first"));
+        run(&mut director, 50, 2_000);
+        assert_eq!(director.presented_sequence(), 1);
+        // The same view again (a duplicate, a reconnect): no roll is staged again.
+        let commands = director.on_view(2_100, sequenced_blow(1, "first"));
+        assert!(!states(&commands).iter().any(|state| state == "Rolling"));
+        run(&mut director, 2_150, 4_000);
+        assert_eq!(director.presented_sequence(), 1);
+        assert_eq!(director.beat_log().len(), 2);
+    }
+
+    #[test]
+    fn a_new_fight_restarts_the_sequence() {
+        let mut director = Director::new();
+        director.on_view(0, sequenced_blow(9, "old"));
+        run(&mut director, 50, 2_000);
+        assert_eq!(director.presented_sequence(), 9);
+        let mut opening = sequenced_blow(1, "new");
+        opening.enters_combat = true;
+        director.on_view(2_100, opening);
+        assert_eq!(director.latest, 1);
+        run(&mut director, 2_150, 4_500);
+        assert_eq!(director.presented_sequence(), 1);
+    }
+
+    #[test]
+    fn is_idle_is_false_while_a_roll_waits_for_the_battlefield() {
+        let mut director = Director::new();
+        director.set_battlefield_busy(true);
+        director.on_view(0, sequenced_blow(1, "held"));
+        // No state is active (the roll waits), yet the director is not done.
+        assert_eq!(director.state(), StageState::Idle);
+        assert!(!director.is_idle());
+        director.set_battlefield_busy(false);
+        run(&mut director, 50, 2_500);
+        assert!(director.is_idle());
+        assert_eq!(director.presented_sequence(), 1);
     }
 }

@@ -73,7 +73,7 @@
   {
    "n": 2,
    "hero_words": "Tell me about Tomas Whitlock. Can we trust them?",
-   "reply": "Tomas is a watch sergeant at the Windward Waystation. I swore to an old friend that the iron coffer would reach him; that is the trust I can speak to.",
+   "reply": "Tomas is a watch sergeant at the Windward Waystation. I swore to an old friend that the iron coffer would reach him. That is the trust I can speak to.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -89,7 +89,7 @@
   {
    "n": 3,
    "hero_words": "Who or what might stand in our way on the road to Windward Waystation?",
-   "reply": "The Windward Pass is the only trouble I can name; I would not linger there. Whoever you meet, ask after the Windward Waystation by name first\u2014a friendly mention opens doors. I need the iron coffer carried there, and there is no one else I can ask.",
+   "reply": "The Windward Pass is the only trouble I can name, and I would not linger there. Whoever you meet, ask after the Windward Waystation by name first\u2014a friendly mention opens doors. I need the iron coffer carried there, and there is no one else I can ask.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -106,7 +106,7 @@
   {
    "n": 4,
    "hero_words": "How long do we have, and what should we watch for?",
-   "reply": "I can give you no measure of how long; most tales of the guard are exaggerated, though not all. Tonight, I may not keep my word.",
+   "reply": "I can give you no measure of how long. Most tales of the guard are exaggerated, though not all. Tonight, I may not keep my word.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",

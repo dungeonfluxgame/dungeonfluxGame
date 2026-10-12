@@ -71,4 +71,64 @@ body:has(.tv-stage){overflow:hidden}
 .client.display>.live-toast{position:fixed;z-index:60;top:4.5vh;left:50%;transform:translateX(-50%);max-width:70vw;padding:calc(min(1vw,1.7778vh)*1) calc(min(1vw,1.7778vh)*1.6);background:#080f19f2;border:1px solid #c9a35f99;border-radius:10px;text-align:center}
 .client.display>.live-toast .feedback,.client.display>.live-toast .recovery-needed p{font-size:clamp(24px,calc(min(1vw,1.7778vh)*1.4),64px)}
 .client.display>.live-toast .tools{justify-content:center}
+
+/* FIGHT-001: the visible d20 roll over the fight, played from real video clips. One
+clip, or two different clips for advantage or disadvantage with the counted one large.
+The die tumbles, comes to rest, and at the clip's own rest time (--dice-rest, set per
+roll from the manifest) the server's number appears on the upward face, positioned,
+scaled and rotated from the manifest's face coordinates; then the roll card resolves.
+The number is only ever the server's. A shortened catch-up beat and reduced motion show
+the resting frame with the number at once; a roll whose clip is not ready shows the card
+and never waits. After the rest the die leaves (fade), and a new roll clears first, so
+an old number never stands on screen.
+Stacking order, lowest first: the flat stage paints its scene and figures at z 3 and
+below, the dice ride at z 3 (appended last, so above the figures), and every flat HUD
+card paints above them (roll panel z 4, narrator box and big cards z 7/8, bubbles z 9),
+so a die never covers a roll card, turn label, health card or bubble. The 3D battlefield
+is a fixed overlay at z 40 over the whole stage: while it is mounted the dice are hosted
+inside its container instead (see live_dice.rs), above its canvas and below its HUD
+(z 1 under .bf-hud z 2, set in live_battlefield.css) and its speech (z 6), so a die never
+covers its roll card, turn label, health plates or target tag either. The toast (z 60)
+and the loading splash (z 41) stay above everything. The overlay is DOM, so it is in
+front of the scene at every fight camera. */
+.tv-dice{position:absolute;left:50%;top:30%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:calc(var(--u)*3);z-index:3;pointer-events:none;animation:tv-dice-leave 320ms ease forwards;animation-delay:calc(var(--dice-rest,900ms) + 800ms)}
+@keyframes tv-dice-leave{to{opacity:0}}
+/* No background here: the drawn die (dark square) is gone; the clip paints the die. */
+.tv-die{position:relative;width:calc(var(--u)*13);height:calc(var(--u)*13)}
+.tv-die[data-kept="true"]{outline:calc(var(--u)*0.35) solid #e8cb94}
+.tv-die[data-kept="false"]{width:calc(var(--u)*8);height:calc(var(--u)*8);opacity:.72}
+.tv-die[data-nat="20"]{outline-color:#ffe9b0}
+.tv-die[data-nat="1"]{outline-color:#d96a4b}
+.tv-die-clip,.tv-die-canvas{position:absolute;inset:0;width:100%;height:100%}
+.tv-die-src{display:none}
+.tv-die-rest{position:absolute;inset:0;width:100%;height:100%;display:none}
+.tv-die[data-still] .tv-die-rest{display:block}
+.tv-die[data-stalled] .tv-die-clip,.tv-die[data-stalled] .tv-die-canvas{display:none}
+.tv-die[data-stalled] .tv-die-rest{display:block}
+.tv-die-num{position:absolute;display:flex;align-items:center;justify-content:center;color:var(--gold);font-family:var(--serif);line-height:1;opacity:0;text-shadow:0 2px 18px #000}
+.tv-die-num[data-settled]{opacity:1}
+.tv-die-num[data-nat="20"]{color:#ffe9b0}
+.tv-die-num[data-nat="1"]{color:#e08a63}
+/* Reduced motion without a media-query binding in the client: the probe element the
+client reads (see live_dice.rs). The rules below stay the backstop and hide any playing
+clip regardless of what the client decided. */
+.tv-motion-probe{position:absolute;width:0;height:0;overflow:hidden;pointer-events:none}
+@media (prefers-reduced-motion:reduce){.tv-motion-probe{width:7px}.tv-dice{animation:none}.tv-die-clip,.tv-die-canvas{display:none}.tv-die-rest{display:block!important}.tv-die-num{opacity:1!important}}
+/* FIGHT-001: on the flat stage the dice join the roll panel in flow, so they never cover
+its text and never hide behind it. The panel is a flex column; the dice ride centered
+above its entries. */
+.combat-roll-panel>.tv-dice{position:static;transform:none;z-index:auto;margin:0 auto calc(var(--u)*1)}
+/* FIGHT-001: the newest roll entry resolves with the landing, not before it. The tick
+alternates every staged roll (see mark_roll), so this restarts per roll; older entries
+are untouched. The delay follows the clip's own rest time (data-rest band, set per roll
+from the manifest); with no clip the entry resolves at once. TV only: the phone log
+stays instant. */
+.live-screen[data-role=display][data-roll-tick] .combat-roll-panel .combat-roll:first-of-type{animation:tv-roll-reveal 1ms linear var(--dice-card-delay,1ms) backwards}
+.live-screen[data-role=display][data-rest="1100"]{--dice-card-delay:1100ms}
+.live-screen[data-role=display][data-rest="1200"]{--dice-card-delay:1200ms}
+.live-screen[data-role=display][data-rest="1300"]{--dice-card-delay:1300ms}
+.live-screen[data-role=display][data-rest="1400"]{--dice-card-delay:1400ms}
+.live-screen[data-role=display][data-rest="1500"]{--dice-card-delay:1500ms}
+.live-screen[data-role=display][data-rest="1600"]{--dice-card-delay:1600ms}
+@keyframes tv-roll-reveal{from{visibility:hidden}to{visibility:visible}}
 .client.display>.live-toast .tools button{font-size:clamp(24px,calc(min(1vw,1.7778vh)*1.3),56px);min-height:56px}

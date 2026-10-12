@@ -24,6 +24,69 @@ pub(super) const PRESENCE_EXPIRY: Duration = Duration::from_secs(5);
 /// Hero seats a presence mark can name.
 const PRESENCE_HEROES: u32 = 2;
 
+/// The longest one commit may hold the phones without a display report, however many
+/// beats it resolved: a missing or frozen display can never block play past this
+/// bound. Per-beat fallback durations come from the one shared table the display's
+/// stage reads (`df_render::battle::beat_timing`); the display's report is the primary
+/// release signal and the timer only bounds its absence.
+const PACING_MAX_WAIT_MS: u64 = 20_000;
+/// Reports older than this no longer speak for a display: the slowest display that
+/// reported inside the window governs the release, so a closed or frozen tab stops
+/// governing once its reports age out.
+const ACK_WINDOW_MS: u64 = 1_500;
+
+/// The server-side presentation gate, as one typed state so "phones may act on beat N"
+/// and "beat N is still being shown" cannot both be recorded. Transitions happen only in
+/// [`TableLog::pacing_observe`] and [`TableLog::expire_pacing_at`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Pacing {
+    /// Every resolved beat has been released: phones may be offered the next action.
+    CaughtUp { released: u64 },
+    /// Beats `released + 1..=latest` are being presented; offers wait until `release_at`.
+    Presenting {
+        released: u64,
+        latest: u64,
+        stamped_at: Instant,
+        release_at: Instant,
+    },
+}
+
+impl Pacing {
+    fn released(self) -> u64 {
+        match self {
+            Self::CaughtUp { released } => released,
+            Self::Presenting { released, .. } => released,
+        }
+    }
+
+    /// The newest beat this state knows about; a view below it belongs to a new fight.
+    fn latest_known(self) -> u64 {
+        match self {
+            Self::CaughtUp { released } => released,
+            Self::Presenting { latest, .. } => latest,
+        }
+    }
+}
+
+/// How long one resolved outcome takes on the display, by kind, from the shared
+/// beat-timing table the display's stage plans from. A move is priced by its squares.
+fn beat_duration_ms(outcome: &rpc::CombatOutcome) -> u64 {
+    use df_render::battle::beat_timing;
+    match rpc::OutcomeKind::try_from(outcome.kind) {
+        Ok(rpc::OutcomeKind::Move) => {
+            beat_timing::move_ms(u32::try_from(outcome.path.len()).unwrap_or(1))
+        }
+        Ok(rpc::OutcomeKind::DeathSave | rpc::OutcomeKind::Recovery) => {
+            beat_timing::death_save_ms()
+        }
+        _ => beat_timing::blow_ms(
+            outcome.attack_style == 2,
+            outcome.hit || outcome.grazed,
+            outcome.knocked_out,
+        ),
+    }
+}
+
 /// One hero's live speech intent. Ephemeral: never stored in the game, never a revision.
 struct Composing {
     hero_index: u32,
@@ -46,6 +109,14 @@ struct Ring {
     composing: Vec<Composing>,
     /// A task is waiting to expire the earliest mark.
     reaper_armed: bool,
+    /// The fight presentation gate: which resolved beats the phones may act past.
+    pacing: Pacing,
+    /// A task is waiting for the pacing release time.
+    pacing_armed: bool,
+    /// Recent display presentation reports `(sequence, at)`, newest last. The slowest
+    /// report inside [`ACK_WINDOW_MS`] governs, so with several displays the slowest
+    /// visible one sets the pace and a silent one ages out.
+    acks: VecDeque<(u64, Instant)>,
 }
 
 pub(super) struct TableLog {
@@ -79,6 +150,9 @@ impl TableLog {
                 replying: Vec::new(),
                 composing: Vec::new(),
                 reaper_armed: false,
+                pacing: Pacing::CaughtUp { released: 0 },
+                pacing_armed: false,
+                acks: VecDeque::new(),
             }),
             wake: watch::channel(0).0,
         }
@@ -87,6 +161,38 @@ impl TableLog {
     /// Subscribes to appended lines; a change means "publish a fresh view".
     pub(super) fn subscribe(&self) -> watch::Receiver<u64> {
         self.wake.subscribe()
+    }
+
+    /// The first table sequence not yet assigned: the floor a development rewind
+    /// (DEVCTL-001) truncates back to.
+    pub(super) fn position(&self) -> u64 {
+        self.ring
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .next_sequence
+    }
+
+    /// Rewinds the public log to a floor taken by [`Self::position`]: drops every
+    /// line from the future, resets the sequence counter, clears stale display
+    /// presentation reports and releases the fight pacing gate, then wakes every
+    /// screen so each one shows the restored moment. Sequence floors are exact
+    /// even when the bounded line ring has wrapped, because sequences never
+    /// repeat within one owner lifetime.
+    pub(super) fn rewind_to(&self, floor: u64) {
+        if !self.enabled {
+            return;
+        }
+        let version = {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            ring.lines.retain(|line| line.sequence < floor);
+            ring.next_sequence = floor.min(ring.next_sequence);
+            ring.pacing = Pacing::CaughtUp { released: 0 };
+            ring.pacing_armed = false;
+            ring.acks.clear();
+            ring.version += 1;
+            ring.version + ring.presence_version
+        };
+        self.wake.send_replace(version);
     }
 
     /// A table setting changed: every screen gets one fresh view, though no line was said and the
@@ -294,6 +400,274 @@ impl TableLog {
         });
     }
 
+    /// Feeds one projected combat view to the pacing gate and returns `(released, arm_at)`:
+    /// the sequence phones may act past right now, and the instant to wake watchers at when
+    /// a release is pending. `durations` pairs each outcome's sequence with its nominal
+    /// presentation time. A latest sequence below the released one means a new fight
+    /// (sequences restart), so the gate resets instead of comparing across fights.
+    fn pacing_observe(
+        &self,
+        latest: u64,
+        durations: &[(u64, u64)],
+        now: Instant,
+    ) -> (u64, Option<Instant>) {
+        let window = |from: u64, to: u64| -> u64 {
+            durations
+                .iter()
+                .filter(|(seq, _)| *seq > from && *seq <= to)
+                .map(|(_, ms)| *ms)
+                .sum()
+        };
+        let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut pacing = ring.pacing;
+        if latest < pacing.latest_known() {
+            pacing = Pacing::CaughtUp { released: 0 };
+        }
+        // A due release lands first, so beats committed during the wait start a fresh
+        // wait of their own instead of extending one already served.
+        if let Pacing::Presenting {
+            latest: known,
+            release_at,
+            ..
+        } = pacing
+            && now >= release_at
+        {
+            pacing = Pacing::CaughtUp { released: known };
+        }
+        pacing = match pacing {
+            Pacing::CaughtUp { released } if latest <= released => {
+                Pacing::CaughtUp { released: latest }
+            }
+            Pacing::CaughtUp { released } => {
+                let wait = window(released, latest).min(PACING_MAX_WAIT_MS);
+                if wait == 0 {
+                    Pacing::CaughtUp { released: latest }
+                } else {
+                    Pacing::Presenting {
+                        released,
+                        latest,
+                        stamped_at: now,
+                        release_at: now + Duration::from_millis(wait),
+                    }
+                }
+            }
+            Pacing::Presenting {
+                released,
+                latest: known,
+                stamped_at,
+                release_at,
+            } => {
+                if latest <= known {
+                    Pacing::Presenting {
+                        released,
+                        latest: known,
+                        stamped_at,
+                        release_at,
+                    }
+                } else {
+                    let cap = stamped_at + Duration::from_millis(PACING_MAX_WAIT_MS);
+                    let extended = release_at + Duration::from_millis(window(known, latest));
+                    Pacing::Presenting {
+                        released,
+                        latest,
+                        stamped_at,
+                        release_at: extended.min(cap),
+                    }
+                }
+            }
+        };
+        ring.pacing = pacing;
+        let arm = match pacing {
+            Pacing::Presenting { release_at, .. } => Some(release_at),
+            Pacing::CaughtUp { .. } => {
+                ring.pacing_armed = false;
+                None
+            }
+        };
+        (pacing.released(), arm)
+    }
+
+    /// Releases beats whose presentation wait has elapsed; republishes so the phones are
+    /// offered the next action without waiting for another event. Returns the next
+    /// release instant when one remains.
+    fn expire_pacing_at(&self, now: Instant) -> Option<Instant> {
+        let (released_any, version, next) = {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            match ring.pacing {
+                Pacing::Presenting {
+                    latest, release_at, ..
+                } if now >= release_at => {
+                    ring.pacing = Pacing::CaughtUp { released: latest };
+                    ring.version += 1;
+                    (true, ring.version + ring.presence_version, None)
+                }
+                Pacing::Presenting { release_at, .. } => (false, 0, Some(release_at)),
+                Pacing::CaughtUp { .. } => (false, 0, None),
+            }
+        };
+        if next.is_none() {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            ring.pacing_armed = false;
+        }
+        if released_any {
+            self.wake.send_replace(version);
+        }
+        next
+    }
+
+    /// The sequence the pacing gate has released so far.
+    pub(super) fn released_sequence(&self) -> u64 {
+        self.ring
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pacing
+            .released()
+    }
+
+    /// The display finished presenting beat `sequence`. The report is clamped to the
+    /// beats actually pending (never behind released, never beyond latest) and can do
+    /// nothing but advance the released sequence; the slowest report inside the ack
+    /// window governs. Returns the released sequence after the report.
+    pub(super) fn report_presented_at(&self, sequence: u64, now: Instant) -> u64 {
+        if !self.enabled {
+            return sequence;
+        }
+        let (released, advanced, version) = {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            let Pacing::Presenting {
+                released,
+                latest,
+                stamped_at,
+                release_at,
+            } = ring.pacing
+            else {
+                return ring.pacing.released();
+            };
+            let clamped = sequence.clamp(released, latest);
+            ring.acks.push_back((clamped, now));
+            while ring.acks.len() > 64 {
+                ring.acks.pop_front();
+            }
+            let window = Duration::from_millis(ACK_WINDOW_MS);
+            ring.acks
+                .retain(|(_, at)| now.saturating_duration_since(*at) <= window);
+            let governing = ring
+                .acks
+                .iter()
+                .map(|(seq, _)| *seq)
+                .min()
+                .unwrap_or(released);
+            if governing <= released {
+                return released;
+            }
+            if governing >= latest {
+                ring.pacing = Pacing::CaughtUp { released: latest };
+                ring.acks.clear();
+            } else {
+                ring.pacing = Pacing::Presenting {
+                    released: governing,
+                    latest,
+                    stamped_at,
+                    release_at,
+                };
+            }
+            ring.version += 1;
+            (
+                governing.min(latest),
+                true,
+                ring.version + ring.presence_version,
+            )
+        };
+        if advanced {
+            self.wake.send_replace(version);
+        }
+        released
+    }
+
+    /// Applies the gate to one view about to be published: stamps the released sequence
+    /// on the combat view, withholds a player's offers while beats are unreleased, and
+    /// arms the release timer. The display is never gated; it presents the beats.
+    fn apply_pacing(self: &Arc<Self>, view: &mut rpc::ViewMessage) {
+        let combat = match view.audience.as_ref() {
+            Some(rpc::view_message::Audience::Player(player)) => player
+                .journey
+                .as_ref()
+                .and_then(|journey| journey.combat.as_ref()),
+            Some(rpc::view_message::Audience::Display(display)) => display
+                .journey
+                .as_ref()
+                .and_then(|journey| journey.combat.as_ref()),
+            None => None,
+        };
+        let Some(combat) = combat else {
+            return;
+        };
+        let latest = combat.latest_sequence;
+        let durations: Vec<(u64, u64)> = combat
+            .outcomes
+            .iter()
+            .chain(&combat.move_outcomes)
+            .chain(&combat.death_save_outcomes)
+            .filter(|outcome| outcome.sequence > 0)
+            .map(|outcome| (outcome.sequence, beat_duration_ms(outcome)))
+            .collect();
+        let (released, arm) = self.pacing_observe(latest, &durations, Instant::now());
+        let presenting = released < latest;
+        match view.audience.as_mut() {
+            Some(rpc::view_message::Audience::Player(player)) => {
+                if presenting {
+                    player.offers.clear();
+                    player.action_available = false;
+                }
+                if let Some(combat) = player
+                    .journey
+                    .as_mut()
+                    .and_then(|journey| journey.combat.as_mut())
+                {
+                    combat.released_sequence = released;
+                }
+            }
+            Some(rpc::view_message::Audience::Display(display)) => {
+                if let Some(combat) = display
+                    .journey
+                    .as_mut()
+                    .and_then(|journey| journey.combat.as_mut())
+                {
+                    combat.released_sequence = released;
+                }
+            }
+            None => {}
+        }
+        if let Some(at) = arm {
+            self.arm_pacing(at);
+        }
+    }
+
+    /// One task at a time waits for the pacing release, like the presence reaper.
+    fn arm_pacing(self: &Arc<Self>, deadline: Instant) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            if ring.pacing_armed {
+                return;
+            }
+            ring.pacing_armed = true;
+        }
+        let log = self.clone();
+        runtime.spawn(async move {
+            let mut deadline = deadline;
+            loop {
+                tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+                match log.expire_pacing_at(Instant::now()) {
+                    Some(next) => deadline = next,
+                    None => break,
+                }
+            }
+        });
+    }
+
     #[cfg(test)]
     pub(super) fn lines(&self) -> Vec<rpc::TableLine> {
         self.ring
@@ -305,11 +679,15 @@ impl TableLog {
             .collect()
     }
 
-    /// Adds the public feed to the view of either audience.
-    pub(super) fn attach(&self, view: &mut rpc::ViewMessage) {
+    /// Adds the public feed to the view of either audience. In a fight it also runs the
+    /// pacing gate: the view's combat releases only the beats whose presentation wait
+    /// has elapsed, and a phone's offers are withheld until then (the phone reads
+    /// `released_sequence < latest_sequence` as "resolving on the TV").
+    pub(super) fn attach(self: &Arc<Self>, view: &mut rpc::ViewMessage) {
         if !self.enabled {
             return;
         }
+        self.apply_pacing(view);
         let display = matches!(view.audience, Some(rpc::view_message::Audience::Display(_)));
         let journey = match view.audience.as_mut() {
             Some(rpc::view_message::Audience::Player(player)) => player.journey.as_mut(),
@@ -605,7 +983,7 @@ mod tests {
         );
     }
 
-    fn composing(log: &TableLog) -> Vec<(u32, i32)> {
+    fn composing(log: &Arc<TableLog>) -> Vec<(u32, i32)> {
         attached(log)
             .composing
             .iter()
@@ -706,7 +1084,7 @@ mod tests {
     fn a_phones_view_never_carries_or_moves_with_another_players_presence() {
         let log = TableLog::new();
         let now = Instant::now();
-        let player = |log: &TableLog| {
+        let player = |log: &Arc<TableLog>| {
             let mut view = rpc::ViewMessage {
                 audience: Some(rpc::view_message::Audience::Player(
                     rpc::PlayerGameplayView {
@@ -756,6 +1134,28 @@ mod tests {
     }
 
     #[test]
+    fn rewind_drops_future_lines_and_reuses_their_sequences() {
+        let log = TableLog::new();
+        speech(&log, "before");
+        let floor = log.position();
+        speech(&log, "future one");
+        speech(&log, "future two");
+        assert_eq!(log.lines().len(), 3);
+
+        log.rewind_to(floor);
+
+        let lines = log.lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "before");
+        assert_eq!(log.position(), floor);
+        speech(&log, "after");
+        let lines = log.lines();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1].sequence, floor);
+        assert_eq!(attached(&log).table_log.len(), 2);
+    }
+
+    #[test]
     fn lines_keep_their_order_with_increasing_sequence_and_the_ring_is_bounded() {
         let log = TableLog::new();
         for number in 0..30 {
@@ -787,7 +1187,7 @@ mod tests {
         }
     }
 
-    fn attached(log: &TableLog) -> rpc::JourneyView {
+    fn attached(log: &Arc<TableLog>) -> rpc::JourneyView {
         let mut view = display_view();
         log.attach(&mut view);
         match view.audience {
@@ -1103,5 +1503,192 @@ mod tests {
             "pledges their help to Kestrel"
         );
         assert_eq!(third_person("Trust you"), "trusts them");
+    }
+
+    fn fight_view(player_audience: bool, latest: u64, beats: &[(u64, bool)]) -> rpc::ViewMessage {
+        let outcomes = beats
+            .iter()
+            .map(|(sequence, knocked_out)| rpc::CombatOutcome {
+                sequence: *sequence,
+                knocked_out: *knocked_out,
+                kind: rpc::OutcomeKind::Attack as i32,
+                ..Default::default()
+            })
+            .collect();
+        let journey = rpc::JourneyView {
+            combat: Some(rpc::CombatView {
+                outcomes,
+                latest_sequence: latest,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let audience = if player_audience {
+            rpc::view_message::Audience::Player(rpc::PlayerGameplayView {
+                action_available: true,
+                offers: vec![rpc::GameplayActionOffer::default()],
+                journey: Some(journey),
+                ..Default::default()
+            })
+        } else {
+            rpc::view_message::Audience::Display(rpc::DisplayGameplayView {
+                journey: Some(journey),
+                ..Default::default()
+            })
+        };
+        rpc::ViewMessage {
+            audience: Some(audience),
+            ..Default::default()
+        }
+    }
+
+    fn player_offers(view: &rpc::ViewMessage) -> (bool, usize, u64, u64) {
+        match &view.audience {
+            Some(rpc::view_message::Audience::Player(player)) => {
+                let combat = player.journey.as_ref().unwrap().combat.as_ref().unwrap();
+                (
+                    player.action_available,
+                    player.offers.len(),
+                    combat.released_sequence,
+                    combat.latest_sequence,
+                )
+            }
+            _ => unreachable!("the test builds a player view"),
+        }
+    }
+
+    #[test]
+    fn pacing_holds_phone_offers_until_the_beats_have_been_presented() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        let durations = [(1, 1_800), (2, 1_800)];
+        // Legal walk: CaughtUp -> Presenting on new beats; still held mid-wait.
+        let (released, arm) = log.pacing_observe(2, &durations, now);
+        assert_eq!(released, 0);
+        assert_eq!(arm, Some(now + Duration::from_millis(3_600)));
+        let (released, _) = log.pacing_observe(2, &durations, now + Duration::from_millis(1_000));
+        assert_eq!(released, 0, "no early release");
+        // Illegal: expiring before the release instant releases nothing.
+        assert_eq!(
+            log.expire_pacing_at(now + Duration::from_millis(3_599)),
+            arm
+        );
+        // Legal: the due release lands and the gate is caught up at the newest beat.
+        assert_eq!(
+            log.expire_pacing_at(now + Duration::from_millis(3_600)),
+            None
+        );
+        let (released, arm) = log.pacing_observe(2, &durations, now + Duration::from_millis(3_600));
+        assert_eq!((released, arm), (2, None));
+    }
+
+    #[test]
+    fn pacing_extends_for_beats_committed_during_the_wait_but_is_bounded() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        let (released, _) = log.pacing_observe(1, &[(1, 10_000)], now);
+        assert_eq!(released, 0);
+        let (_, arm) = log.pacing_observe(3, &[(2, 10_000), (3, 10_000)], now);
+        assert_eq!(
+            arm,
+            Some(now + Duration::from_millis(PACING_MAX_WAIT_MS)),
+            "one stamped wait never exceeds the bound"
+        );
+        // A new fight restarts sequences; the gate resets instead of gating forever.
+        let (released, _) = log.pacing_observe(1, &[(1, 1_800)], now);
+        assert_eq!(released, 0);
+        assert_eq!(
+            log.expire_pacing_at(now + Duration::from_millis(1_800)),
+            None
+        );
+        let (released, _) =
+            log.pacing_observe(1, &[(1, 1_800)], now + Duration::from_millis(1_800));
+        assert_eq!(released, 1);
+    }
+
+    #[test]
+    fn display_reports_release_beats_and_the_slowest_in_the_window_governs() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        let durations = [(1, 9_000), (2, 9_000), (3, 9_000)];
+        let (released, _) = log.pacing_observe(3, &durations, now);
+        assert_eq!(released, 0);
+        // One display races ahead; another (older report in the window) is behind:
+        // the slowest governs, so nothing passes beat 1 yet.
+        assert_eq!(log.report_presented_at(1, now), 1);
+        assert_eq!(
+            log.report_presented_at(3, now + Duration::from_millis(400)),
+            1,
+            "the slow display's report inside the window still governs"
+        );
+        // Illegal reports are clamped, never obeyed past the pending beats.
+        assert_eq!(
+            log.report_presented_at(99, now + Duration::from_millis(500)),
+            1
+        );
+        // Once the slow report ages out of the window, fresh reports release fully —
+        // long before the timer bound, because the ack is the primary signal.
+        let later = now + Duration::from_millis(ACK_WINDOW_MS + 600);
+        assert_eq!(log.report_presented_at(3, later), 3);
+        let (released, arm) = log.pacing_observe(3, &durations, later);
+        assert_eq!(
+            (released, arm),
+            (3, None),
+            "caught up by ack, timer disarmed"
+        );
+        // A report with nothing presenting changes nothing.
+        assert_eq!(log.report_presented_at(3, later), 3);
+    }
+
+    #[test]
+    fn with_no_display_report_the_timer_bound_alone_releases() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        let durations = [(1, 60_000)];
+        let (released, arm) = log.pacing_observe(1, &durations, now);
+        assert_eq!(released, 0);
+        assert_eq!(
+            arm,
+            Some(now + Duration::from_millis(PACING_MAX_WAIT_MS)),
+            "the bound, not the nominal sum, caps a silent table"
+        );
+        assert_eq!(
+            log.expire_pacing_at(now + Duration::from_millis(PACING_MAX_WAIT_MS)),
+            None
+        );
+        let (released, _) = log.pacing_observe(
+            1,
+            &durations,
+            now + Duration::from_millis(PACING_MAX_WAIT_MS),
+        );
+        assert_eq!(released, 1);
+    }
+
+    #[test]
+    fn attach_withholds_a_players_offers_while_presenting_and_never_gates_the_display() {
+        let log = TableLog::new();
+        let mut view = fight_view(true, 2, &[(1, false), (2, true)]);
+        log.attach(&mut view);
+        assert_eq!(
+            player_offers(&view),
+            (false, 0, 0, 2),
+            "resolving: no offers, released behind latest"
+        );
+        // The display carries the same released stamp but nothing is stripped from it.
+        let mut display = fight_view(false, 2, &[(1, false), (2, true)]);
+        log.attach(&mut display);
+        match &display.audience {
+            Some(rpc::view_message::Audience::Display(display)) => {
+                let combat = display.journey.as_ref().unwrap().combat.as_ref().unwrap();
+                assert_eq!(combat.released_sequence, 0);
+                assert_eq!(combat.outcomes.len(), 2);
+            }
+            _ => unreachable!("the test builds a display view"),
+        }
+        // A view with no unpresented beats is offered at once.
+        let settled = TableLog::new();
+        let mut view = fight_view(true, 0, &[]);
+        settled.attach(&mut view);
+        assert_eq!(player_offers(&view), (true, 1, 0, 0));
     }
 }

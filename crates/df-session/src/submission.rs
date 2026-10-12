@@ -460,6 +460,222 @@ where
         }
     }
 
+    /// Commits an explicitly built candidate checkpoint as the next decision.
+    ///
+    /// The caller (a development control surface) builds the candidate from the
+    /// current checkpoint: same session, run and pins, revision exactly one
+    /// sequence ahead, history chains extended by exactly one new decision for
+    /// this operation. The candidate passes the same `validate_candidate` gate
+    /// every player decision passes, then travels the same retained lookup,
+    /// repository compare-and-swap, receipt checks and publication path as a
+    /// player commit, so fencing, watches, screens and the database stay
+    /// consistent. No engine rules run on the candidate: the caller owns its
+    /// content and records that provenance in the new decision itself.
+    ///
+    /// This mirrors the tail of `submit_scoped` below on purpose; the player
+    /// path is untouched. Keep the two in step.
+    pub fn commit_owner_candidate(
+        &mut self,
+        operation: &R::Scope,
+        candidate: &Checkpoint,
+        context: &OperationContext,
+    ) -> SubmissionOutcome {
+        let mut span = df_observe::begin(context, "session.commit_owner_candidate");
+        let result =
+            self.commit_candidate_scoped(operation, candidate, context, CommitMode::Extend);
+        span.finish_unmeasured(match &result {
+            SubmissionOutcome::Confirmed(_) => "confirmed",
+            SubmissionOutcome::OperationConflict => "operation_conflict",
+            SubmissionOutcome::LookupRequired => "lookup_required",
+            SubmissionOutcome::ExpiredOrIndeterminate => "expired_or_indeterminate",
+            SubmissionOutcome::Refused(_) => "refused",
+        });
+        result
+    }
+
+    /// Commits a development rewind (DEVCTL-001): a saved moment's full state
+    /// re-committed at the next revision. Same uncertainty, lookup, compare-and-swap,
+    /// receipt and publication path as [`Self::commit_owner_candidate`]; only the
+    /// chain validation differs: the restored chains must stand in a prefix
+    /// relationship with the current chains (back to an ancestor, or forward along
+    /// recorded history), never a mix of old content with newer chains.
+    pub fn commit_owner_rewind(
+        &mut self,
+        operation: &R::Scope,
+        candidate: &Checkpoint,
+        context: &OperationContext,
+    ) -> SubmissionOutcome {
+        let mut span = df_observe::begin(context, "session.commit_owner_rewind");
+        let result =
+            self.commit_candidate_scoped(operation, candidate, context, CommitMode::Rewind);
+        span.finish_unmeasured(match &result {
+            SubmissionOutcome::Confirmed(_) => "confirmed",
+            SubmissionOutcome::OperationConflict => "operation_conflict",
+            SubmissionOutcome::LookupRequired => "lookup_required",
+            SubmissionOutcome::ExpiredOrIndeterminate => "expired_or_indeterminate",
+            SubmissionOutcome::Refused(_) => "refused",
+        });
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn commit_candidate_scoped(
+        &mut self,
+        operation: &R::Scope,
+        candidate: &Checkpoint,
+        context: &OperationContext,
+        mode: CommitMode,
+    ) -> SubmissionOutcome {
+        let key = match self.capture_uncertainty_key(operation) {
+            Ok(key) => key,
+            Err(error) => return SubmissionOutcome::Refused(error),
+        };
+        if matches!(&self.cache, CacheState::Uncertain(unresolved) if unresolved == &key)
+            && let Err(error) = self.repository.recover_connection(context)
+        {
+            return SubmissionOutcome::Refused(error);
+        }
+        match self.repository.lookup_operation(operation, context) {
+            Ok(OperationLookup::Committed(receipt)) => {
+                if let Err(error) = self.check_receipt(&receipt, operation) {
+                    self.fence_uncertain(key);
+                    return SubmissionOutcome::Refused(error);
+                }
+                if matches!(&self.cache, CacheState::Current)
+                    && receipt.basis().revision > self.checkpoint.basis().revision
+                {
+                    self.cache = CacheState::ReloadRequired;
+                }
+                let can_reload = match &self.cache {
+                    CacheState::ReloadRequired => true,
+                    CacheState::Uncertain(unresolved) => unresolved == &key,
+                    CacheState::Current => false,
+                };
+                if can_reload {
+                    let _reload_outcome = self.reload(operation, context, Some(&receipt));
+                }
+                return SubmissionOutcome::Confirmed(receipt);
+            }
+            Ok(OperationLookup::Conflict) => return SubmissionOutcome::OperationConflict,
+            Ok(OperationLookup::InProgress) => {
+                self.fence_uncertain(key);
+                return SubmissionOutcome::LookupRequired;
+            }
+            Ok(OperationLookup::ExpiredOrIndeterminate) => {
+                self.fence_uncertain(key);
+                return SubmissionOutcome::ExpiredOrIndeterminate;
+            }
+            Ok(OperationLookup::NotRecorded) => {}
+            Err(error) => {
+                self.fence_uncertain(key);
+                return SubmissionOutcome::Refused(error);
+            }
+        }
+        if operation.is_lookup_only() {
+            self.fence_uncertain(key);
+            return SubmissionOutcome::LookupRequired;
+        }
+        if !matches!(&self.cache, CacheState::Current) {
+            return SubmissionOutcome::LookupRequired;
+        }
+        if operation.session() != self.checkpoint.basis().session {
+            return SubmissionOutcome::Refused(RepositoryError::InputBinding);
+        }
+        if self.checkpoint.basis().revision.next_sequence().is_err() {
+            return SubmissionOutcome::Refused(RepositoryError::SequenceExhausted);
+        }
+        let valid = match mode {
+            CommitMode::Extend => {
+                validate_candidate(&self.checkpoint, candidate, operation.operation()).is_ok()
+            }
+            CommitMode::Rewind => {
+                validate_rewind(&self.checkpoint, candidate, operation.operation()).is_ok()
+            }
+        };
+        if !valid {
+            return SubmissionOutcome::Refused(RepositoryError::InvalidCandidate);
+        }
+        let Some(decision) = candidate
+            .state()
+            .decisions
+            .iter()
+            .find(|d| d.operation == operation.operation())
+        else {
+            return SubmissionOutcome::Refused(RepositoryError::InvalidCandidate);
+        };
+        if receipt_retained_bytes(decision).is_none_or(|bytes| bytes > self.maximum_receipt_bytes) {
+            return SubmissionOutcome::Refused(RepositoryError::Capacity);
+        }
+        match self.repository.commit_decision(
+            operation,
+            candidate,
+            self.checkpoint.basis(),
+            context,
+        ) {
+            Ok(CommitOutcome::Confirmed(receipt)) => {
+                if self.check_receipt(&receipt, operation).is_err()
+                    || receipt.basis() != candidate.basis()
+                    || candidate
+                        .state()
+                        .decisions
+                        .iter()
+                        .find(|d| d.operation == operation.operation())
+                        != Some(receipt.decision())
+                {
+                    self.fence_uncertain(key);
+                    return SubmissionOutcome::LookupRequired;
+                }
+                self.checkpoint = candidate.clone();
+                let mut span = df_observe::begin(context, "session.publication");
+                span.finish_unmeasured(
+                    if self
+                        .publication
+                        .publish_committed(operation, &self.checkpoint)
+                        .is_ok()
+                    {
+                        "published"
+                    } else {
+                        "committed_publication_pending"
+                    },
+                );
+                let mut span = df_observe::begin(context, "session.intent_wakeup");
+                span.finish_unmeasured(
+                    if self.publication.wake_committed_intents(operation).is_ok() {
+                        "durable_intents_woken"
+                    } else {
+                        "durable_intents_pending"
+                    },
+                );
+                SubmissionOutcome::Confirmed(receipt)
+            }
+            Ok(CommitOutcome::PreviouslyCommitted(receipt)) => {
+                if let Err(error) = self.check_receipt(&receipt, operation) {
+                    self.fence_uncertain(key);
+                    return SubmissionOutcome::Refused(error);
+                }
+                self.cache = CacheState::ReloadRequired;
+                let _reload_outcome = self.reload(operation, context, Some(&receipt));
+                SubmissionOutcome::Confirmed(receipt)
+            }
+            Ok(CommitOutcome::Indeterminate) => {
+                self.fence_uncertain(key);
+                SubmissionOutcome::LookupRequired
+            }
+            Err(error) => {
+                if matches!(
+                    error,
+                    RepositoryError::StaleEpoch
+                        | RepositoryError::StaleFence
+                        | RepositoryError::ExpiredOwner
+                        | RepositoryError::RevisionConflict
+                ) {
+                    self.cache = CacheState::ReloadRequired;
+                }
+                SubmissionOutcome::Refused(error)
+            }
+        }
+    }
+
     fn submit(&mut self, item: &OwnedInput<R::Scope>) -> SubmissionOutcome {
         let mut span = df_observe::begin(&item.context, "session.submit");
         let result = self.submit_scoped(&item.operation, &item.input, &item.context);
@@ -652,6 +868,24 @@ where
     }
 }
 
+/// Which chain rule a commit must satisfy: player and override commits only
+/// extend history, while a development rewind re-commits a saved moment's full
+/// state (DEVCTL-001) and must satisfy the prefix rule in [`validate_rewind`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommitMode {
+    Extend,
+    Rewind,
+}
+
+/// How a rewind candidate's chains relate to the current chains, per chain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RewindDirection {
+    /// Restored chains are a strict-or-equal prefix: stepping (or staying).
+    Back,
+    /// Restored chains extend the current dev-stripped chains: re-applying.
+    Forward,
+}
+
 fn validate_candidate(
     current: &Checkpoint,
     candidate: &Checkpoint,
@@ -686,6 +920,105 @@ fn validate_candidate(
     }
     validate_retained_intents(current, candidate)?;
     Ok(())
+}
+
+/// Validates a development rewind candidate: the saved moment's full state
+/// re-committed at the next revision with exactly one appended dev decision.
+///
+/// The restored chains (minus that decision) must stand in a prefix
+/// relationship with the current chains — backwards to an ancestor, or forwards
+/// along recorded history after trailing `dev:*` decisions are stripped — for
+/// decisions, facts and draws in the same direction. Anything else (a mix of
+/// old content with newer chains, or a state from another history) is refused:
+/// the view projection jointly replays chains and content, so only a
+/// jointly-consistent past moment projects.
+fn validate_rewind(
+    current: &Checkpoint,
+    candidate: &Checkpoint,
+    operation: OperationId,
+) -> Result<(), RepositoryError> {
+    let expected = current.basis();
+    let next = expected
+        .revision
+        .next_sequence()
+        .map_err(|_| RepositoryError::SequenceExhausted)?;
+    let actual = candidate.basis();
+    if actual.session != expected.session
+        || actual.run != expected.run
+        || actual.revision != next
+        || current.pins() != candidate.pins()
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    let history = current.state();
+    let proposed = candidate.state();
+    let Some(dev) = proposed.decisions.last() else {
+        return Err(RepositoryError::InvalidCandidate);
+    };
+    if dev.operation != operation || dev.revision != next {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    if !dev_marked(&dev.semantic_output) {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    if !dev.facts.is_empty() || !dev.draws.is_empty() || !dev.effects.is_empty() {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    if proposed
+        .facts
+        .iter()
+        .any(|fact| fact.revision == next || fact.operation == operation)
+        || proposed
+            .draws
+            .iter()
+            .any(|draw| draw.operation == operation)
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    let base_decisions = &proposed.decisions[..proposed.decisions.len() - 1];
+    let core_decisions = strip_trailing_dev(&history.decisions);
+    let direction =
+        chain_direction(core_decisions, base_decisions).ok_or(RepositoryError::InvalidCandidate)?;
+    if chain_direction(&history.facts, &proposed.facts) != Some(direction)
+        || chain_direction(&history.draws, &proposed.draws) != Some(direction)
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    validate_retained_intents(current, candidate)?;
+    Ok(())
+}
+
+/// A dev decision carries a `dev:*` note in its semantic output, so player
+/// commits can never be routed through the rewind validation.
+fn dev_marked(semantic_output: &Option<String>) -> bool {
+    semantic_output
+        .as_deref()
+        .is_some_and(|note| note.starts_with("dev:"))
+}
+
+/// Trailing dev decisions stripped: stepping back lands on the last player
+/// state, and stepping forward extends it.
+fn strip_trailing_dev(decisions: &[AcceptedDecision]) -> &[AcceptedDecision] {
+    let mut core = decisions;
+    while core
+        .last()
+        .is_some_and(|decision| dev_marked(&decision.semantic_output))
+    {
+        core = &core[..core.len() - 1];
+    }
+    core
+}
+
+/// The prefix relationship between current chains and restored chains, if any.
+/// Equal chains count as [`RewindDirection::Back`] (a stay, not a fork).
+fn chain_direction<T: PartialEq>(current: &[T], restored: &[T]) -> Option<RewindDirection> {
+    if current.starts_with(restored) {
+        Some(RewindDirection::Back)
+    } else if restored.starts_with(current) {
+        Some(RewindDirection::Forward)
+    } else {
+        None
+    }
 }
 
 fn validate_retained_intents(
@@ -737,5 +1070,52 @@ where
                 std::sync::mpsc::TrySendError::Full(_) => "receipt_channel_contract_failure",
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod rewind_tests {
+    use super::*;
+
+    fn decision(note: Option<&str>) -> AcceptedDecision {
+        AcceptedDecision {
+            operation: df_types::OperationId::from_bytes(&[7; 16]).unwrap(),
+            revision: df_types::SessionRevision::new(df_types::RecoveryEpoch::new(1).unwrap(), 1),
+            facts: Vec::new(),
+            draws: Vec::new(),
+            effects: Vec::new(),
+            source_policy: df_types::RevisionLabel::new(Some("policy")).unwrap(),
+            semantic_output: note.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn chain_direction_names_back_forward_and_refuses_foreign() {
+        use RewindDirection::{Back, Forward};
+        let current = vec![1, 2, 3, 4];
+        assert_eq!(chain_direction(&current, &current[..2]), Some(Back));
+        assert_eq!(chain_direction(&current, &current), Some(Back));
+        assert_eq!(chain_direction(&current[..2], &current), Some(Forward));
+        assert_eq!(chain_direction::<u8>(&[], &[]), Some(Back));
+        assert_eq!(chain_direction(&[1, 2], &[1, 9]), None);
+        assert_eq!(chain_direction(&[1, 2], &[9, 1, 2]), None);
+    }
+
+    #[test]
+    fn dev_decisions_are_marked_and_stripped_from_the_tail_only() {
+        assert!(dev_marked(&Some("dev:restore:back 2".to_owned())));
+        assert!(!dev_marked(&Some("player note".to_owned())));
+        assert!(!dev_marked(&None));
+        let decisions = vec![
+            decision(None),
+            decision(Some("dev:restore:back 1")),
+            decision(Some("dev:restore:forward 1")),
+        ];
+        assert_eq!(strip_trailing_dev(&decisions).len(), 1);
+        let decisions = vec![decision(None), decision(Some("dev:override:hp=9"))];
+        assert_eq!(strip_trailing_dev(&decisions).len(), 1);
+        // A buried dev decision is history, not a tail: it stays.
+        let decisions = vec![decision(Some("dev:restore:back 1")), decision(None)];
+        assert_eq!(strip_trailing_dev(&decisions).len(), 2);
     }
 }

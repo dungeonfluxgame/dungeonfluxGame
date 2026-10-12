@@ -346,6 +346,13 @@ fn replay_exit_discards_replay_interval_and_preserves_recorded_anchor() {
 
 #[test]
 fn backwards_instant_refuses_without_consuming_a_later_valid_interval() {
+    // The Windows performance counter cannot order single nanoseconds: an
+    // earlier sub-tick instant reads back as zero elapsed instead of refusing.
+    // The same refusal property is exercised a million times larger there.
+    #[cfg(windows)]
+    let unit = Duration::from_nanos(1_000_000);
+    #[cfg(unix)]
+    let unit = Duration::from_nanos(1);
     let current = model::initial().unwrap();
     let admitted = policy(&current, 1_000_000_000);
     let origin = Instant::now();
@@ -359,41 +366,21 @@ fn backwards_instant_refuses_without_consuming_a_later_valid_interval() {
     )
     .unwrap();
     clock
-        .sample(
-            &current,
-            current.pins(),
-            after(origin, Duration::from_nanos(100)),
-            false,
-        )
+        .sample(&current, current.pins(), after(origin, unit * 100), false)
         .unwrap();
     assert_eq!(
-        clock.sample(
-            &current,
-            current.pins(),
-            after(origin, Duration::from_nanos(99)),
-            false
-        ),
+        clock.sample(&current, current.pins(), after(origin, unit * 99), false),
         Err(NativeClockError::BackwardsInstant)
     );
     assert_eq!(
         clock
-            .sample(
-                &current,
-                current.pins(),
-                after(origin, Duration::from_nanos(150)),
-                false
-            )
+            .sample(&current, current.pins(), after(origin, unit * 150), false)
             .unwrap()
             .elapsed,
-        Duration::from_nanos(150)
+        unit * 150
     );
     assert_eq!(
-        clock.rebind(
-            &current,
-            current.pins(),
-            after(origin, Duration::from_nanos(149)),
-            false
-        ),
+        clock.rebind(&current, current.pins(), after(origin, unit * 149), false),
         Err(NativeClockError::BackwardsInstant)
     );
 }

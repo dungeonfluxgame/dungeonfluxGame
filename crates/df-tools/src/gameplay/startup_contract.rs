@@ -1,34 +1,50 @@
 use super::{join_grant_driver, startup_configuration};
+// Symlink, mode and non-Unicode path construction below are Unix-only cases.
+#[cfg(unix)]
+use std::os::unix::{
+    ffi::OsStringExt,
+    fs::{DirBuilderExt, symlink},
+};
+#[cfg(windows)]
+use std::os::windows::ffi::OsStringExt;
 use std::{
     env::VarError,
     ffi::OsString,
-    fs,
     future::Future,
     io,
-    os::unix::{
-        ffi::OsStringExt,
-        fs::{DirBuilderExt, symlink},
-    },
-    path::{Path, PathBuf},
     pin::Pin,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll},
 };
 use tokio::sync::oneshot;
+// Only the Unix-gated fixture below needs filesystem paths and its counter.
+#[cfg(unix)]
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::atomic::AtomicUsize,
+};
 
+// The startup fixture lives under the author's macOS namespace, so the
+// fixture and every test that needs it only run on Unix.
+#[cfg(unix)]
 const ROOT: &str = "/Users/earlcameron/Desktop/dungeonflux/artifacts/tmp/server-d02-startup-contract-20261009-a1/native-fixtures-01";
+#[cfg(unix)]
 const PAYLOAD: &[u8] = b"startup contract byte-load fixture";
+#[cfg(unix)]
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(unix)]
 struct Fixture {
     root: PathBuf,
     web: PathBuf,
     assets: PathBuf,
 }
 
+#[cfg(unix)]
 impl Fixture {
     fn new() -> Self {
         let granted = PathBuf::from(
@@ -134,10 +150,16 @@ fn invalid_database_input_refuses_without_echoing_secret_or_mutating_environment
         assert_eq!(error.to_string(), "local demonstration database invalid");
         assert!(!error.to_string().contains("private-test-sentinel"));
     }
+    // Non-Unicode input is built per platform: an invalid UTF-8 byte on Unix,
+    // a lone surrogate on Windows.
+    #[cfg(unix)]
     let bytes = OsString::from_vec(vec![0xff]);
+    #[cfg(windows)]
+    let bytes = OsString::from_wide(&[0xD800]);
     assert!(startup_configuration::database_config(Err(VarError::NotUnicode(bytes))).is_err());
 }
 
+#[cfg(unix)] // Needs the author's macOS fixture root.
 #[test]
 fn all_five_required_assets_load_and_only_missing_inn_is_optional() {
     let fixture = Fixture::new();
@@ -159,6 +181,7 @@ fn all_five_required_assets_load_and_only_missing_inn_is_optional() {
     );
 }
 
+#[cfg(unix)] // Needs the author's macOS fixture root.
 #[test]
 fn each_missing_required_asset_refuses_the_actual_loader() {
     let fixture = Fixture::new();
@@ -173,6 +196,7 @@ fn each_missing_required_asset_refuses_the_actual_loader() {
     }
 }
 
+#[cfg(unix)] // Needs the author's macOS fixture root.
 #[test]
 fn each_required_asset_refuses_oversize_directory_and_symlink() {
     let fixture = Fixture::new();
@@ -196,6 +220,7 @@ fn each_required_asset_refuses_oversize_directory_and_symlink() {
     assert!(fixture.load().is_ok());
 }
 
+#[cfg(unix)] // Needs the author's macOS fixture root.
 #[test]
 fn optional_inn_refuses_oversize_directory_and_symlink_without_falling_back() {
     let fixture = Fixture::new();
@@ -217,6 +242,7 @@ fn optional_inn_refuses_oversize_directory_and_symlink_without_falling_back() {
     assert!(fixture.load().unwrap().inn.is_none());
 }
 
+#[cfg(unix)] // Needs the author's macOS fixture root.
 #[test]
 fn actual_byte_bound_accepts_exact_limit_and_refuses_one_more() {
     let fixture = Fixture::new();
@@ -292,6 +318,7 @@ async fn pending_grant_driver_is_polled_then_aborted_joined_and_dropped() {
     assert!(pending_driver_is_aborted_and_joined().await);
 }
 
+#[cfg(unix)] // Needs the author's macOS fixture root.
 #[tokio::test(flavor = "current_thread")]
 async fn whole_original_contract_consumes_actual_boundary_results_and_explicit_gaps() {
     let fixture = Fixture::new();

@@ -1,0 +1,99 @@
+{
+  "clips": [
+    {
+      "id": 1,
+      "webm": "roll-1.webm",
+      "key_mp4": "roll-1-key.mp4",
+      "rest_image": "roll-1-rest.webp",
+      "width": 512,
+      "height": 512,
+      "fps": 30,
+      "duration_ms": 2500,
+      "rest_ms": 1300,
+      "rest_frame": 39,
+      "face_center": [
+        0.4999000542112617,
+        0.49047118936645623
+      ],
+      "face_corners": [
+        [
+          0.5064689796531063,
+          0.3364327713356343
+        ],
+        [
+          0.64224940358936,
+          0.6163503493345805
+        ],
+        [
+          0.35347013030350233,
+          0.5280712918173779
+        ]
+      ],
+      "face_rotation_deg": 2.4418830324190393
+    },
+    {
+      "id": 2,
+      "webm": "roll-2.webm",
+      "key_mp4": "roll-2-key.mp4",
+      "rest_image": "roll-2-rest.webp",
+      "width": 512,
+      "height": 512,
+      "fps": 30,
+      "duration_ms": 2500,
+      "rest_ms": 1433,
+      "rest_frame": 43,
+      "face_center": [
+        0.5100426656197862,
+        0.47999275524666496
+      ],
+      "face_corners": [
+        [
+          0.5066659296994174,
+          0.3265750567890189
+        ],
+        [
+          0.6595630091031229,
+          0.5963118652186853
+        ],
+        [
+          0.3663943781827929,
+          0.5261626804956369
+        ]
+      ],
+      "face_rotation_deg": -1.2608811472223023
+    },
+    {
+      "id": 3,
+      "webm": "roll-3.webm",
+      "key_mp4": "roll-3-key.mp4",
+      "rest_image": "roll-3-rest.webp",
+      "width": 512,
+      "height": 512,
+      "fps": 30,
+      "duration_ms": 2500,
+      "rest_ms": 1200,
+      "rest_frame": 36,
+      "face_center": [
+        0.49001225671721377,
+        0.4999938922846113
+      ],
+      "face_corners": [
+        [
+          0.48457879492171163,
+          0.3452678992526763
+        ],
+        [
+          0.6416768158855031,
+          0.6147346384288643
+        ],
+        [
+          0.34625039507351935,
+          0.5490879928972153
+        ]
+      ],
+      "face_rotation_deg": -2.0112105830586433
+    }
+  ],
+  "key_color": "#FF00FF",
+  "face_rotation_note": "corners[0] is the face apex (highest on screen); corners run clockwise in screen coords; rotation_deg rotates an upright-drawn number about the centre so its up-axis points at the apex."
+}

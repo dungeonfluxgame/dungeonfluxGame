@@ -121,6 +121,10 @@ pub struct CombatRoll<'a> {
     pub source: &'a str,
     /// Optional outcome ribbon. The first supplied roll is styled as the latest roll.
     pub verdict: Option<CombatVerdict<'a>>,
+    /// The server's kept d20 face, so the value badge can mark a natural 20 or 1.
+    pub die_face: Option<u8>,
+    /// The resting-frame art behind the small die's number; `None` reads as before.
+    pub die_rest: Option<&'a str>,
 }
 #[derive(Clone, Copy)]
 pub struct CombatReaction<'a> {
@@ -1023,6 +1027,22 @@ mod browser {
                 if let Some(nodes) = rolls.get(roll.key) {
                     set_text(&nodes.label, roll.label);
                     set_text(&nodes.value, roll.value);
+                    nodes.value.set_attribute(
+                        "data-nat",
+                        match roll.die_face {
+                            Some(20) => "20",
+                            Some(1) => "1",
+                            _ => "mid",
+                        },
+                    )?;
+                    // The resting frame behind the number, small; machine-generated art
+                    // URL, so it is rendered but not text-validated with the words.
+                    match roll.die_rest {
+                        Some(rest) => nodes
+                            .value
+                            .set_attribute("style", &format!("background-image:url(\"{rest}\")"))?,
+                        None => nodes.value.remove_attribute("style")?,
+                    }
                     set_text(&nodes.explanation, roll.explanation);
                     set_text(&nodes.source, roll.source);
                     match &roll.verdict {
@@ -1336,6 +1356,8 @@ mod tests {
             explanation: "Server is resolving the save",
             source: "Supplied source",
             verdict: None,
+            die_face: None,
+            die_rest: None,
         }];
         let supplied = view(&actors, &[], &rolls);
         assert_eq!(supplied.validate(limits()), Ok(()));
@@ -1414,6 +1436,8 @@ mod tests {
                 label: " ",
                 tone: CombatTone::Success,
             }),
+            die_face: Some(17),
+            die_rest: None,
         }];
         assert_eq!(
             view(&[], &[], &rolls).validate(limits()),
@@ -1457,6 +1481,8 @@ mod tests {
                 explanation: "13 + 4",
                 source: "Server source",
                 verdict: None,
+                die_face: Some(17),
+                die_rest: None,
             },
             CombatRoll {
                 key: "same",
@@ -1465,6 +1491,8 @@ mod tests {
                 explanation: "12 + 2",
                 source: "Server source",
                 verdict: None,
+                die_face: Some(14),
+                die_rest: None,
             },
         ];
         assert_eq!(

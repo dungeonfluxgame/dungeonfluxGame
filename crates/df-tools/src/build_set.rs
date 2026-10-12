@@ -3,15 +3,14 @@ mod filesystem;
 #[cfg(test)]
 mod tests;
 
+use crate::file_identity;
 use df_types::{BuildIdentity, BuildIdentityError, BuildRevision, RevisionLabel};
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error as StdError,
     ffi::OsString,
     fmt, io,
-    os::unix::process::CommandExt,
     path::{Component, Path, PathBuf},
-    process::Command,
     sync::Arc,
 };
 
@@ -522,12 +521,18 @@ pub fn dispatch(arguments: &[OsString]) -> Result<CommandOutcome> {
             }
             let selected = filesystem::resolve(Path::new(root))?;
             let executable = selected.directory.join("native/df-transport-fixture");
-            let error = Command::new(executable)
-                .arg("--serve-selected")
-                .arg(&selected.root)
-                .arg(hex(&selected.id))
-                .arg(port.to_string())
-                .exec();
+            // The launcher holds no locks, unpublished state or serving futures
+            // here: `resolve` retains only validated bytes, so handing over to
+            // the selected executable unwinds nothing on either platform.
+            let error = file_identity::launch_selected(
+                &executable,
+                &[
+                    OsString::from("--serve-selected"),
+                    selected.root.into_os_string(),
+                    OsString::from(hex(&selected.id)),
+                    OsString::from(port.to_string()),
+                ],
+            );
             Err(error.into())
         }
         ["--serve-selected", root, id, port] => {

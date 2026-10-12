@@ -235,7 +235,7 @@ body:has(.tv-stage[data-tv-mode=combat])>main{min-height:0}
 @S[data-role=display][data-outcome=defeat] .df-aftermath .aftermath-chapter{background:var(--asset-ribbon-failure) center/100% 100% no-repeat}
 @S[data-role=display] .df-aftermath h1{font-size:calc(var(--u)*4.4);margin:0;text-shadow:0 4px 30px #000}
 @S[data-role=display] .df-aftermath h1::after{content:'';display:block;width:calc(var(--u)*34);height:calc(var(--u)*1.6);margin:calc(var(--u)*.5) auto 0;background:var(--asset-divider) center/contain no-repeat}
-@S[data-role=display] .df-aftermath .aftermath-narrative{margin:calc(var(--u)*.5) 0 0;font-size:calc(var(--u)*1.62);line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;text-shadow:0 2px 14px #000}
+@S[data-role=display] .df-aftermath .aftermath-narrative{margin:calc(var(--u)*.5) 0 0;font-size:calc(var(--u)*1.62);line-height:1.35;text-shadow:0 2px 14px #000}
 @S[data-role=display] .df-aftermath .aftermath-lower{display:flex;flex-direction:column-reverse;gap:calc(var(--u)*.9);max-width:none;width:100%;margin:calc(var(--u)*1.2) 0 0}
 @S[data-role=display] .df-aftermath .aftermath-lower>.aftermath-panel{padding:0;background:none;border:0;border-image:none;box-shadow:none}
 @S[data-role=display] .df-aftermath .aftermath-panel h2,@S[data-role=display] .df-aftermath .aftermath-next-context{display:none}

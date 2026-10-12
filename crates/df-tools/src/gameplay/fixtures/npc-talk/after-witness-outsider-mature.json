@@ -72,7 +72,7 @@
   {
    "n": 2,
    "hero_words": "Where does the iron coffer go, and who meets us there?",
-   "reply": "The iron coffer must go to the Windward Waystation; I swore to an old friend it would reach Tomas. I need you to carry it there.",
+   "reply": "The iron coffer must go to the Windward Waystation. I swore to an old friend it would reach Tomas. I need you to carry it there.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -88,7 +88,7 @@
   {
    "n": 3,
    "hero_words": "Is there a quicker way to get there?",
-   "reply": "The route runs through the Windward Pass; I would not linger there. Ask after the Windward Waystation by name first, and Tomas is its watch sergeant.",
+   "reply": "The route runs through the Windward Pass. I would not linger there. Ask after the Windward Waystation by name first, and Tomas is its watch sergeant.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",
@@ -105,7 +105,7 @@
   {
    "n": 4,
    "hero_words": "Why keep secrets from us? Who would stop us?",
-   "reply": "Tonight, I may not keep my word; most of what is said about the guard is exaggerated, though not all of it. Whoever you meet, ask after the Windward Waystation by name first; a friendly mention opens doors there.",
+   "reply": "Tonight, I may not keep my word. Most of what is said about the guard is exaggerated, though not all of it. Whoever you meet, ask after the Windward Waystation by name first, since a friendly mention opens doors there.",
    "from_model": true,
    "approach": "question",
    "attitude_before": "friendly",

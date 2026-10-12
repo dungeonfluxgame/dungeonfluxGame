@@ -304,6 +304,14 @@ pub(crate) struct Knowledge {
     /// Which line this is (also the prepared-answer slot name, for example "place_line").
     pub(crate) source: String,
     pub(crate) text: String,
+    /// Stable fact id, so a later feature (leads) can hang off one: the table and entry
+    /// that rolled it, for example "personal:partner:wed-lodger". Older saves predate it.
+    #[serde(default)]
+    pub(crate) id: String,
+    /// What the fact points at where that is obvious: another cast member's id, or one of
+    /// "stake", "destination", "location", "antagonist". Older saves predate it.
+    #[serde(default)]
+    pub(crate) about: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -803,6 +811,21 @@ fn spoken(context: &Context<'_>, profile: &Profile, table: &str) -> Result<Strin
     require(context.render(template), &context.member.id, table)
 }
 
+/// [`spoken`], with extra slots (rolled kin, or one other cast member).
+fn spoken_with(
+    context: &Context<'_>,
+    profile: &Profile,
+    table: &str,
+    extra: &BTreeMap<String, String>,
+) -> Result<String, DossierError> {
+    let template = spoken_template(profile).unwrap_or(&profile.text);
+    require(
+        context.render_with(template, extra),
+        &context.member.id,
+        table,
+    )
+}
+
 fn validate_facts(
     tables: &DossierTables,
     facts: &DossierFacts,
@@ -1018,6 +1041,10 @@ fn roll_one(
         errand.push(entry);
     }
 
+    // Who the speaker is off duty: rolled after everything above, so no earlier roll
+    // changes value. Kin names feed the kin slots before the lines that use them roll.
+    let personal = roll_personal(context, &mut roller, &tie_cast)?;
+
     let knowledge = knowledge_tiers(
         context,
         &Picks {
@@ -1037,6 +1064,7 @@ fn roll_one(
             world,
             errand,
         },
+        &personal,
         &story_tie,
         shame_text,
         shame_terms,
@@ -1180,10 +1208,171 @@ struct Picks<'t> {
     errand: Vec<&'t Profile>,
 }
 
+/// Whether the role label reads as a fighting trade, so the service history backs it: a
+/// retired soldier gets a unit, a war, a rank and a reason he left, not a civilian past.
+fn martial_trade(member: &CastMember) -> bool {
+    let label = member.role_label.to_lowercase();
+    let words: Vec<&str> = label
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let martial = words.iter().any(|word| {
+        matches!(
+            *word,
+            "soldier"
+                | "veteran"
+                | "sergeant"
+                | "guard"
+                | "watch"
+                | "captain"
+                | "scout"
+                | "warrior"
+                | "knight"
+                | "mercenary"
+                | "blade"
+                | "sentry"
+        )
+    });
+    martial
+        || ["veteran", "watch", "sergeant", "guard", "soldier"]
+            .iter()
+            .any(|word| member.archetype.contains(word))
+}
+
+/// Partner entry ids that leave the NPC with someone to be true to.
+const TIED_PARTNERS: [&str; 3] = ["wed-lodger", "sweetheart", "promised"];
+
+/// Who the NPC is off duty, rolled after everything above so no earlier roll changes
+/// value. `slots` names the rolled kin for the templates that use them.
+struct Personal<'t> {
+    slots: BTreeMap<String, String>,
+    partner: &'t Profile,
+    children: &'t Profile,
+    home: &'t Profile,
+    service: &'t Profile,
+    opinions: Vec<&'t Profile>,
+    courtship: &'t Profile,
+    lore: Vec<&'t Profile>,
+    /// One frame per other cast member: (their npc id, frame).
+    knowing: Vec<(String, &'t Profile)>,
+}
+
+impl Context<'_> {
+    /// Whether a personal-table entry fits, rendered with `extra` slots (kin, or one other
+    /// cast member) and held to the public audience: no secret or shame term is ever said.
+    fn personal_fits(&self, entry: &Profile, extra: &BTreeMap<String, String>) -> bool {
+        self.admitted(&entry.roles, &entry.speakers, &entry.foes)
+            && !entry.except.contains(&self.member.archetype)
+            && self
+                .render_with(&entry.text, extra)
+                .is_some_and(|text| self.permitted(&text, Audience::Public))
+    }
+}
+
+/// Roll the off-duty facts. Kin names roll first so the partner, child and age slots exist
+/// before the lines that name them; everything renders in the public audience.
+fn roll_personal<'t>(
+    context: &Context<'t>,
+    roller: &mut Roller<'_>,
+    tie_cast: &Option<String>,
+) -> Result<Personal<'t>, DossierError> {
+    let tables = &context.tables.personal;
+    let empty = BTreeMap::new();
+    let mut taken: Vec<String> = Vec::new();
+    let mut kin = |table_name: &str, table: &'t Table<Profile>| -> Result<String, DossierError> {
+        let entry = roller.pick(table_name, table, |entry| {
+            context.personal_fits(entry, &empty) && !taken.iter().any(|name| name == &entry.text)
+        })?;
+        taken.push(entry.text.clone());
+        Ok(entry.text.clone())
+    };
+    let partner_name = kin("personal_name_partner", &tables.given_names)?;
+    let child_name = kin("personal_name_child", &tables.given_names)?;
+    let child2_name = kin("personal_name_child2", &tables.given_names)?;
+    let mut slots = BTreeMap::new();
+    for (key, value) in [
+        ("partner", partner_name),
+        ("child", child_name),
+        ("child2", child2_name),
+    ] {
+        slots.insert(key.to_owned(), value);
+    }
+    for (key, table_name) in [("age", "personal_age"), ("age2", "personal_age2")] {
+        let entry = roller.pick(table_name, &tables.child_ages, |entry| {
+            context.personal_fits(entry, &empty)
+        })?;
+        slots.insert(key.to_owned(), entry.text.clone());
+    }
+    let fits = |entry: &Profile| context.personal_fits(entry, &slots);
+    let partner = roller.pick("personal_partner", &tables.partner, &fits)?;
+    let tied = TIED_PARTNERS.contains(&partner.id.as_str());
+    let children = roller.pick("personal_children", &tables.children, &fits)?;
+    let home = roller.pick("personal_home", &tables.homes, &fits)?;
+    let martial = martial_trade(context.member);
+    let service = roller.pick("personal_service", &tables.service, |entry| {
+        (entry.id.starts_with("martial-") == martial) && fits(entry)
+    })?;
+    let mut opinions = Vec::new();
+    for name in ["personal_opinion", "personal_opinion_more"] {
+        let entry = roller.pick(name, &tables.opinions, |entry| {
+            !opinions
+                .iter()
+                .any(|chosen: &&Profile| chosen.id == entry.id)
+                && fits(entry)
+        })?;
+        opinions.push(entry);
+    }
+    let courtship = roller.pick("personal_courtship", &tables.courtship, |entry| {
+        (entry.id.starts_with("tied-") == tied) && fits(entry)
+    })?;
+    let mut lore = Vec::new();
+    for name in ["personal_lore", "personal_lore_more"] {
+        let entry = roller.pick(name, &tables.errand_lore, |entry| {
+            !lore.iter().any(|chosen: &&Profile| chosen.id == entry.id) && fits(entry)
+        })?;
+        lore.push(entry);
+    }
+    // How each other cast member is known: a close frame for the tie-bound member (the
+    // secret stays secret; the acquaintance does not), a passing frame for the rest.
+    let mut knowing = Vec::new();
+    for other in context
+        .facts
+        .cast
+        .iter()
+        .filter(|other| other.id != context.member.id)
+    {
+        let close = tie_cast.as_deref() == Some(other.id.as_str());
+        let table = if close {
+            &tables.cast_close
+        } else {
+            &tables.cast_passing
+        };
+        let mut extra = slots.clone();
+        extra.insert("other".to_owned(), other.name.clone());
+        extra.insert("other_role".to_owned(), other.role_label.clone());
+        let frame = roller.pick("personal_knowing", table, |entry| {
+            context.personal_fits(entry, &extra)
+        })?;
+        knowing.push((other.id.clone(), frame));
+    }
+    Ok(Personal {
+        slots,
+        partner,
+        children,
+        home,
+        service,
+        opinions,
+        courtship,
+        lore,
+        knowing,
+    })
+}
+
 /// Sort what the NPC knows into what is said freely, what waits for trust and what is never said.
 fn knowledge_tiers(
     context: &Context<'_>,
     picks: &Picks<'_>,
+    personal: &Personal<'_>,
     story_tie: &StoryTie,
     shame_text: String,
     shame_terms: Vec<String>,
@@ -1192,6 +1381,8 @@ fn knowledge_tiers(
         topic: Topic::WhoAreYou,
         source: "origin_line".into(),
         text: format!("I was {}.", spoken(context, picks.origin, "origin")?),
+        id: String::new(),
+        about: None,
     }];
     let free_lines = [
         (
@@ -1236,6 +1427,8 @@ fn knowledge_tiers(
                 topic,
                 source: source.into(),
                 text: spoken(context, entry, table)?,
+                id: String::new(),
+                about: None,
             });
         }
     }
@@ -1244,6 +1437,8 @@ fn knowledge_tiers(
             topic: Topic::WhyThisMatters,
             source: "errand_line".into(),
             text: spoken(context, entry, "errand")?,
+            id: String::new(),
+            about: None,
         });
     }
     // The errand as the authored scenes state it: said freely, unless a secret term makes it
@@ -1278,13 +1473,120 @@ fn knowledge_tiers(
                 topic,
                 source: source.into(),
                 text,
+                id: String::new(),
+                about: None,
             });
         }
+    }
+    // Who the speaker is off duty: partner, children, home, service, opinions, courtship
+    // and lay lore about the errand's own things, each with a stable fact id (and what it
+    // points at where obvious) so a later feature can hang a lead off one. Rendered with
+    // the rolled kin slots; every line answers in the public audience.
+    let kin = &personal.slots;
+    let mut personal_line =
+        |topic: Topic, source: &str, table: &str, entry: &Profile, about: Option<String>| {
+            let text = spoken_with(context, entry, table, kin)?;
+            says_freely.push(Knowledge {
+                topic,
+                source: source.into(),
+                text,
+                id: format!("personal:{table}:{}", entry.id),
+                about,
+            });
+            Ok::<(), DossierError>(())
+        };
+    personal_line(
+        Topic::YourPast,
+        "family_line",
+        "partner",
+        personal.partner,
+        None,
+    )?;
+    personal_line(
+        Topic::YourPast,
+        "children_line",
+        "children",
+        personal.children,
+        None,
+    )?;
+    personal_line(
+        Topic::YourPast,
+        "home_line",
+        "homes",
+        personal.home,
+        Some("location".into()),
+    )?;
+    personal_line(
+        Topic::YourPast,
+        "service_line",
+        "service",
+        personal.service,
+        None,
+    )?;
+    for entry in &personal.opinions {
+        personal_line(
+            Topic::WhyThisMatters,
+            "opinion_line",
+            "opinions",
+            entry,
+            None,
+        )?;
+    }
+    personal_line(
+        Topic::ComplimentOrFlirt,
+        "courtship_line",
+        "courtship",
+        personal.courtship,
+        None,
+    )?;
+    for entry in &personal.lore {
+        // Lay facts about the errand's own things: what the stake is to him, the road he
+        // knows, what he has seen or heard of whoever hunts it.
+        let foe = entry.id.starts_with("foe-");
+        personal_line(
+            if foe {
+                Topic::TheAntagonist
+            } else {
+                Topic::WhyThisMatters
+            },
+            "lore_line",
+            "errand_lore",
+            entry,
+            Some(
+                if foe {
+                    "antagonist"
+                } else if entry.id == "lore-road" {
+                    "destination"
+                } else {
+                    "stake"
+                }
+                .into(),
+            ),
+        )?;
+    }
+    for (other, frame) in &personal.knowing {
+        // How one other cast member is known, safe to say: the secret stays secret.
+        let mut extra = kin.clone();
+        let member = context.facts.cast.iter().find(|member| member.id == *other);
+        if let Some(member) = member {
+            extra.insert("other".to_owned(), member.name.clone());
+            extra.insert("other_role".to_owned(), member.role_label.clone());
+        }
+        let text = spoken_with(context, frame, "cast_knowing", &extra)?;
+        says_freely.push(Knowledge {
+            topic: Topic::WhoAreYou,
+            source: "knowing_line".into(),
+            text,
+            id: format!("personal:knowing:{other}"),
+            about: Some(other.clone()),
+        });
     }
     let tie_line = Knowledge {
         topic: Topic::WhyThisMatters,
         source: "tie_line".into(),
         text: story_tie.speak.clone(),
+        id: String::new(),
+        about: None,
     };
     let mut says_when_trusted = Vec::new();
     if story_tie.public {
@@ -1313,6 +1615,8 @@ fn knowledge_tiers(
                 topic,
                 source: source.into(),
                 text: spoken(context, entry, table)?,
+                id: String::new(),
+                about: None,
             });
         }
     }

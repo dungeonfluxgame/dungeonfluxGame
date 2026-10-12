@@ -115,12 +115,17 @@ struct Inner {
     impact_sink: Option<Rc<dyn Fn(ImpactEvent)>>,
 }
 
-/// The loading splash: the place, the mark and a bar driven by the real chunk count.
+/// The loading splash: the place, the mark and a bar driven by the real chunk count, plus
+/// the line being spoken while it holds, so the table can read along with the narrator.
 struct SplashDom {
     root: Element,
     bar: Element,
     note: Element,
     note_text: String,
+    caption: Element,
+    caption_label: Element,
+    caption_text: Element,
+    caption_shown: bool,
 }
 
 const MARK_SVG: &str = "<svg viewBox=\"0 0 64 64\" aria-hidden=\"true\"><path d=\"M32 3 58 18v28L32 61 6 46V18Z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\"/><path d=\"M32 3 19 40h26ZM6 18l13 22M58 18 45 40M19 40l13 21 13-21\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linejoin=\"round\"/></svg>";
@@ -148,12 +153,22 @@ impl SplashDom {
         let bar = child(&track, "i", "bf-splash-bar", "")?;
         let note_text = splash::label(0, 0, false);
         let note = child(&root, "div", "bf-splash-note", &note_text)?;
+        // Below the bar, never over the place or the progress: the Dungeon Master label (or
+        // the speaker's name) with the line being spoken, in the story stage's own words.
+        let caption = child(&root, "div", "bf-splash-caption", "")?;
+        let _ = caption.set_attribute("hidden", "");
+        let caption_label = child(&caption, "div", "bf-splash-caption-label", "")?;
+        let caption_text = child(&caption, "div", "bf-splash-caption-text", "")?;
         host.append_child(&root)?;
         Ok(Self {
             root,
             bar,
             note,
             note_text,
+            caption,
+            caption_label,
+            caption_text,
+            caption_shown: false,
         })
     }
 
@@ -166,6 +181,29 @@ impl SplashDom {
         if text != self.note_text {
             self.note.set_text_content(Some(&text));
             self.note_text = text;
+        }
+    }
+
+    /// Shows the line being spoken (`None` clears it): the newest opened line until it closes
+    /// or the splash goes. Setting text never touches the gate, so the caption can neither
+    /// delay the battlefield nor hold the splash open.
+    fn set_caption(&mut self, caption: Option<(&str, &str)>) {
+        match caption {
+            Some((label, text)) => {
+                self.caption_label.set_text_content(Some(label));
+                self.caption_text.set_text_content(Some(text));
+                let _ = self.caption_text.set_attribute("title", text);
+                if !self.caption_shown {
+                    let _ = self.caption.remove_attribute("hidden");
+                    self.caption_shown = true;
+                }
+            }
+            None => {
+                if self.caption_shown {
+                    let _ = self.caption.set_attribute("hidden", "");
+                    self.caption_shown = false;
+                }
+            }
         }
     }
 }
@@ -403,6 +441,14 @@ impl BattleStage {
     /// and the figures placed. Until then the loading splash holds and nothing of the fight plays.
     pub fn is_resolved(&self) -> bool {
         self.inner.borrow().gate.resolved()
+    }
+
+    /// Shows the line being spoken on the loading splash (`None` clears it). A no-op once the
+    /// splash is gone. The caption follows the conductor's line, never the gate.
+    pub fn set_splash_caption(&self, caption: Option<(&str, &str)>) {
+        if let Some(dom) = self.inner.borrow_mut().splash.as_mut() {
+            dom.set_caption(caption);
+        }
     }
 
     /// How far the scan has got: chunks resident, chunks wanted and whether it is complete.
