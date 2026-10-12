@@ -416,6 +416,7 @@ dependencies = [
  "df-model",
  "df-rules",
  "df-types",
+ "serde_json",
 ]
 
 [[package]]

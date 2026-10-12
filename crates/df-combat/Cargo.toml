@@ -12,3 +12,4 @@ df-rules = { path = "../df-rules" }
 [dev-dependencies]
 df-content = { path = "../df-content" }
 df-engine = { path = "../df-engine" }
+serde_json = "1"

@@ -66,6 +66,48 @@ const SCENES: &[(&str, &[u8])] = &[
     ),
 ];
 
+/// The typed lighting fact of every scene the server holds (SRD 5.2.1 p302 Sunlight Sensitivity).
+/// The painted scenes are night or interior (checked against their backdrop paintings); the
+/// photographic Gaussian-splat scans are daylight. Scene files cannot carry it themselves: the
+/// renderer rejects unknown fields.
+const LIGHTING: &[(&str, tactical_rules::Lighting)] = &[
+    ("salt-quay", tactical_rules::Lighting::NightOrInterior),
+    ("pinewood-trail", tactical_rules::Lighting::NightOrInterior),
+    ("windward-pass", tactical_rules::Lighting::NightOrInterior),
+    ("lamplit-market", tactical_rules::Lighting::NightOrInterior),
+    ("rookhill-gate", tactical_rules::Lighting::NightOrInterior),
+    (
+        "reedmoor-boardwalk",
+        tactical_rules::Lighting::NightOrInterior,
+    ),
+    (
+        "thistledown-farm",
+        tactical_rules::Lighting::NightOrInterior,
+    ),
+    ("orrery-library", tactical_rules::Lighting::NightOrInterior),
+    ("harbor-journey", tactical_rules::Lighting::NightOrInterior),
+    ("scan-riverbed", tactical_rules::Lighting::Sunlight),
+    ("scan-village", tactical_rules::Lighting::Sunlight),
+    ("scan-valley-bridges", tactical_rules::Lighting::Sunlight),
+    ("scan-summit", tactical_rules::Lighting::Sunlight),
+];
+/// The rules map for authored scene bytes the server holds, with its lighting fact.
+fn scene_map(bytes: &[u8], layout: &str) -> Result<BattleMap, RepositoryError> {
+    let id = SCENES
+        .iter()
+        .find(|(_, held)| *held == bytes)
+        .map(|(id, _)| *id)
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    let lighting = LIGHTING
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map(|(_, lighting)| *lighting)
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    Ok(BattleMap::from_json(bytes, layout)
+        .map_err(bad)?
+        .with_lighting(lighting))
+}
+
 /// The scene every fight is staged on, when `DF_GAMEPLAY_BATTLE_SCENE` forces one. The server is
 /// the authority for the grid, so it chooses the layout from the scene that will be shown, not
 /// from the story location's own scene.
@@ -159,7 +201,7 @@ pub(super) fn read(state: &GameState) -> Result<Battle, RepositoryError> {
     {
         return Err(RepositoryError::InvalidCandidate);
     }
-    let map = BattleMap::from_json(&saved.scene, saved.layout.as_str()).map_err(bad)?;
+    let map = scene_map(&saved.scene, saved.layout.as_str())?;
     let battle = Battle::from_snapshot(map, &saved.state).map_err(bad)?;
     if battle.combatants().len() != saved.actors.len()
         || battle
@@ -317,11 +359,32 @@ fn store(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> 
         .state = battle.snapshot().map_err(bad)?;
     Ok(())
 }
-fn record_attacks(
+fn grid_cell(cell: tactical_rules::Cell) -> rpc::GridCell {
+    rpc::GridCell {
+        col: u32::from(cell.0),
+        row: u32::from(cell.1),
+    }
+}
+fn cover_label(cover: tactical_rules::Cover) -> &'static str {
+    match cover {
+        tactical_rules::Cover::None => "none",
+        tactical_rules::Cover::Half => "half (+2 AC)",
+        tactical_rules::Cover::ThreeQuarters => "three quarters (+5 AC)",
+        tactical_rules::Cover::Total => "total",
+    }
+}
+/// The public record of one accepted resolution, in the order it happened: squares entered
+/// with their cost, attacks with the distance and mode that made them legal, Death Saving
+/// Throws with the running counts. A reaction attack happens before the move it interrupts.
+fn record_outcomes(
     state: &GameState,
     result: &tactical_rules::Resolution,
+    opportunity: bool,
     outcomes: &mut Vec<rpc::CombatOutcome>,
 ) -> Result<(), RepositoryError> {
+    if !opportunity {
+        record_moves(state, result, outcomes)?;
+    }
     for attack in &result.attacks {
         let actor = canonical(state, attack.actor)?;
         let target = canonical(state, attack.target)?;
@@ -352,6 +415,92 @@ fn record_attacks(
             target_id: target.as_bytes().to_vec(),
             weapon: attack.weapon.id().to_owned(),
             attack_style: if attack.ranged { 2 } else { 1 },
+            distance_ft: attack.distance_ft,
+            kind: if opportunity {
+                rpc::OutcomeKind::OpportunityAttack
+            } else {
+                rpc::OutcomeKind::Attack
+            } as i32,
+            roll_mode: i32::from(attack.roll_mode),
+            faces: attack.faces.clone(),
+            reasons: attack
+                .advantage
+                .iter()
+                .map(|reason| format!("advantage: {}", reason_label(*reason)))
+                .chain(
+                    attack
+                        .disadvantage
+                        .iter()
+                        .map(|reason| format!("disadvantage: {}", reason_label(*reason))),
+                )
+                .collect(),
+            cover: cover_label(attack.cover).to_owned(),
+            ..Default::default()
+        });
+    }
+    if opportunity {
+        record_moves(state, result, outcomes)?;
+    }
+    for recovery in &result.recoveries {
+        let actor = canonical(state, recovery.actor)?;
+        outcomes.push(rpc::CombatOutcome {
+            actor_name: name(state, actor)?,
+            target_hit_points: 1,
+            source_revision: model::source_revision(),
+            actor_id: actor.as_bytes().to_vec(),
+            kind: rpc::OutcomeKind::Recovery as i32,
+            recovery_hours: recovery.hours,
+            ..Default::default()
+        });
+    }
+    for save in &result.death_saves {
+        let actor = canonical(state, save.actor)?;
+        use tactical_rules::DeathSaveResult as R;
+        outcomes.push(rpc::CombatOutcome {
+            actor_name: name(state, actor)?,
+            attack_die: save.die,
+            target_hit_points: u32::from(
+                result
+                    .battle
+                    .actor(save.actor)
+                    .map_err(bad)?
+                    .health()
+                    .hit_points,
+            ),
+            source_revision: model::source_revision(),
+            actor_id: actor.as_bytes().to_vec(),
+            kind: rpc::OutcomeKind::DeathSave as i32,
+            death_save_result: match save.result {
+                R::Success => rpc::DeathSaveResult::Success,
+                R::Failure => rpc::DeathSaveResult::Failure,
+                R::CriticalFailure => rpc::DeathSaveResult::CriticalFailure,
+                R::Stabilised => rpc::DeathSaveResult::Stabilised,
+                R::Died => rpc::DeathSaveResult::Died,
+                R::Revived => rpc::DeathSaveResult::Revived,
+            } as i32,
+            death_successes: u32::from(save.successes),
+            death_failures: u32::from(save.failures),
+            ..Default::default()
+        });
+    }
+    Ok(())
+}
+fn record_moves(
+    state: &GameState,
+    result: &tactical_rules::Resolution,
+    outcomes: &mut Vec<rpc::CombatOutcome>,
+) -> Result<(), RepositoryError> {
+    for step in &result.moves {
+        let actor = canonical(state, step.actor)?;
+        outcomes.push(rpc::CombatOutcome {
+            actor_name: name(state, actor)?,
+            source_revision: model::source_revision(),
+            actor_id: actor.as_bytes().to_vec(),
+            kind: rpc::OutcomeKind::Move as i32,
+            path: step.path.iter().copied().map(grid_cell).collect(),
+            cost_ft: u32::from(step.cost_ft),
+            remaining_ft: u32::from(step.remaining_ft),
+            ..Default::default()
         });
     }
     Ok(())
@@ -377,7 +526,12 @@ fn apply(
             .checked_add(6)
             .ok_or(RepositoryError::Capacity)?;
     }
-    record_attacks(state, &result, outcomes)?;
+    record_outcomes(
+        state,
+        &result,
+        matches!(action, Action::Opportunity { .. }),
+        outcomes,
+    )?;
     store(state, &result.battle)?;
     Ok(result.battle)
 }
@@ -550,7 +704,7 @@ pub(super) fn start(
         .layouts
         .get(index)
         .ok_or(RepositoryError::InvalidCandidate)?;
-    let map = BattleMap::from_json(bytes, &layout.id).map_err(bad)?;
+    let map = scene_map(bytes, &layout.id)?;
     let mut specs = Vec::new();
     let mut actors = Vec::new();
     for (index, character) in state.characters.iter().enumerate() {
@@ -1284,13 +1438,24 @@ pub(super) fn completion_source<'a>(
     Err(RepositoryError::InvalidCandidate)
 }
 
+/// A hero is at 0 hit points and not dead: dying (Death Saving Throws each round) or Stable
+/// (regains 1 hit point after 1d4 hours). Until each is resolved the party cannot rest or move on,
+/// and the only offer is the one that lets time pass.
 pub(in crate::gameplay) fn dying(state: &GameState) -> Result<bool, RepositoryError> {
-    Ok(read(state)?.combatants().iter().any(|actor| {
-        actor.side() == Side::Heroes
-            && actor.health().hit_points == 0
-            && !actor.health().dead
-            && !actor.health().stable
-    }))
+    Ok(read(state)?
+        .combatants()
+        .iter()
+        .any(|actor| actor.side() == Side::Heroes && at_zero(actor)))
+}
+fn at_zero(actor: &tactical_rules::Combatant) -> bool {
+    actor.health().hit_points == 0 && !actor.health().dead
+}
+/// True when a hero still needs Death Saving Throws, as opposed to waiting out stable recovery.
+pub(in crate::gameplay) fn needs_saves(state: &GameState) -> Result<bool, RepositoryError> {
+    Ok(read(state)?
+        .combatants()
+        .iter()
+        .any(|actor| actor.side() == Side::Heroes && at_zero(actor) && !actor.health().stable))
 }
 pub(super) fn aftermath(
     state: &mut GameState,
@@ -1300,6 +1465,37 @@ pub(super) fn aftermath(
     supplier: DiceSource<'_>,
 ) -> Result<(), RepositoryError> {
     let mut battle = read(state)?;
+    if !needs_saves(state)? {
+        // Only Stable heroes remain: 1d4 hours pass for each (SRD 5.2.1 p18).
+        let stable = battle
+            .combatants()
+            .iter()
+            .filter(|actor| actor.side() == Side::Heroes && at_zero(actor))
+            .map(|actor| actor.id())
+            .collect::<Vec<_>>();
+        for actor in stable {
+            let before = outcomes.len();
+            battle = apply(
+                state,
+                &battle,
+                actor,
+                &Action::StableRecovery,
+                operation,
+                (draws, outcomes),
+                supplier,
+            )?;
+            let hours = outcomes[before..]
+                .iter()
+                .map(|outcome| u64::from(outcome.recovery_hours))
+                .sum::<u64>();
+            state.logical_time.ticks = state
+                .logical_time
+                .ticks
+                .checked_add(hours * 3600)
+                .ok_or(RepositoryError::Capacity)?;
+        }
+        return Ok(());
+    }
     let count = battle.combatants().len();
     for _ in 0..count {
         let actor = battle
@@ -1524,6 +1720,56 @@ pub(in crate::gameplay) fn project_member(
     }
     Ok(())
 }
+/// Splits the recorded outcomes by kind and keeps the last `window` of each, so move and
+/// Death Saving Throw records never push attacks out of the log the displays already read.
+pub(in crate::gameplay) fn split_outcomes(
+    all: Vec<rpc::CombatOutcome>,
+    window: usize,
+) -> (
+    Vec<rpc::CombatOutcome>,
+    Vec<rpc::CombatOutcome>,
+    Vec<rpc::CombatOutcome>,
+) {
+    let mut attacks = Vec::new();
+    let mut moves = Vec::new();
+    let mut saves = Vec::new();
+    for outcome in all {
+        match rpc::OutcomeKind::try_from(outcome.kind) {
+            Ok(rpc::OutcomeKind::Move) => moves.push(outcome),
+            Ok(rpc::OutcomeKind::DeathSave | rpc::OutcomeKind::Recovery) => saves.push(outcome),
+            _ => attacks.push(outcome),
+        }
+    }
+    for list in [&mut attacks, &mut moves, &mut saves] {
+        let excess = list.len().saturating_sub(window);
+        list.drain(..excess);
+    }
+    (attacks, moves, saves)
+}
+/// The stat-block features of the creatures in this fight that the rules do not model, in the
+/// words the disclosed rules note carries. Empty when every feature is implemented.
+pub(in crate::gameplay) fn unmodelled_features_note(
+    state: &GameState,
+) -> Result<String, RepositoryError> {
+    let battle = read(state)?;
+    let mut ids: Vec<&'static str> = battle
+        .combatants()
+        .iter()
+        .filter_map(|actor| actor.spec().kind.srd_id())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut note = String::new();
+    for id in ids {
+        for row in df_rules::missing_features(id) {
+            note.push_str(&format!(
+                " Disclosed gap {id}: {} is not modelled ({}).",
+                row.name, row.note
+            ));
+        }
+    }
+    Ok(note)
+}
 pub(in crate::gameplay) fn project_combat(
     current: &Checkpoint,
     own: Option<EntityId>,
@@ -1538,6 +1784,19 @@ pub(in crate::gameplay) fn project_combat(
         .find(|(_, bytes)| *bytes == saved.scene.as_slice())
         .map(|(id, _)| (*id).to_owned())
         .ok_or(RepositoryError::InvalidCandidate)?;
+    for actor in battle.combatants() {
+        let health = actor.health();
+        if actor.side() == Side::Heroes && health.hit_points == 0 {
+            view.death_saves.push(rpc::DeathSaveState {
+                participant_id: canonical(state, actor.id())?.as_bytes().to_vec(),
+                name: name(state, canonical(state, actor.id())?)?,
+                successes: u32::from(health.death_successes),
+                failures: u32::from(health.death_failures),
+                stable: health.stable,
+                dead: health.dead,
+            });
+        }
+    }
     if let Some(&reactor) = battle.reaction_offers().first() {
         view.reaction_participant_id = canonical(state, reactor)?.as_bytes().to_vec();
     }
@@ -1606,13 +1865,7 @@ pub(in crate::gameplay) fn project_combat(
             view.legal_targets.push(rpc::LegalCombatTarget {
                 participant_id: canonical(state, target)?.as_bytes().to_vec(),
                 weapon: weapon.weapon.id().to_owned(),
-                cover: match cover {
-                    tactical_rules::Cover::None => "none",
-                    tactical_rules::Cover::Half => "half (+2 AC)",
-                    tactical_rules::Cover::ThreeQuarters => "three quarters (+5 AC)",
-                    tactical_rules::Cover::Total => "total",
-                }
-                .to_owned(),
+                cover: cover_label(cover).to_owned(),
                 range_reason: format!("{range}: {distance} ft"),
                 disadvantage: !disadvantage.is_empty() && advantage.is_empty(),
                 reasons: advantage
@@ -1695,6 +1948,7 @@ fn reason_label(reason: tactical_rules::AttackReason) -> &'static str {
         R::Sap => "attacker affected by Sap",
         R::Heavy => "Heavy weapon ability requirement",
         R::PackTactics => "Pack Tactics",
+        R::SunlightSensitivity => "Sunlight Sensitivity",
         R::Vex => "Vex mastery",
     }
 }
@@ -3155,11 +3409,19 @@ pub(super) mod tests {
                 &request(&disengaged, 10, K::Move, Some(&exit)),
                 &mut |_| panic!("Disengage prevents opportunity draw"),
             );
+            // The exit is recorded as a move with its path and cost, and nothing attacked it.
+            let recorded = accepted(exited.state().decisions.last().unwrap())
+                .unwrap()
+                .combat;
             assert!(
-                accepted(exited.state().decisions.last().unwrap())
-                    .unwrap()
-                    .combat
-                    .is_empty()
+                recorded
+                    .iter()
+                    .all(|outcome| outcome.kind == rpc::OutcomeKind::Move as i32)
+            );
+            assert!(
+                recorded
+                    .iter()
+                    .any(|outcome| outcome.cost_ft > 0 && !outcome.path.is_empty())
             );
         });
     }
@@ -3346,6 +3608,222 @@ pub(super) mod tests {
             );
         });
     }
+
+    /// The generated adventure of the live fight that left a hero dying after the party won: the
+    /// same seed, location and antagonist, three Kobold Warriors against the two heroes, with the
+    /// authored beat script of a generated pack (not the canonical harbour one).
+    fn live_generated_pack() -> pack::LoadedPack {
+        use crate::gameplay::adventure::{
+            ForcedEntries, GenerateOptions, RulesMode, Tables, generate,
+        };
+        let tables = Tables::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../content/adventure-tables")
+                .as_path(),
+        )
+        .unwrap();
+        let generated = generate(
+            &tables,
+            0x575f_4310_795c_c7a2,
+            GenerateOptions {
+                rules_mode: RulesMode::CustomAllowed,
+                ..GenerateOptions::default()
+            },
+            &ForcedEntries::from([
+                ("location".into(), "orrery-library".into()),
+                ("antagonist".into(), "kobold-warrior".into()),
+            ]),
+        )
+        .unwrap();
+        pack::load_from_bytes(
+            &serde_json::to_vec(&generated.pack).unwrap(),
+            &serde_json::to_vec(&generated.tuning).unwrap(),
+        )
+        .unwrap()
+    }
+    /// Searches seeds until the fight ends in victory with a hero at 0 hit points who is neither
+    /// stable nor dead. Run inside `with_test_pack`.
+    pub(in crate::gameplay::journey) fn victory_with_a_dying_hero() -> Checkpoint {
+        for seed in 1..600_u64 {
+            let (current, _, _) = play_fight(current_combat("escort-courier"), 8, None, Some(seed));
+            if victory(current.state()).unwrap() && dying(current.state()).unwrap() {
+                return current;
+            }
+        }
+        panic!("no seed ends in victory with a dying hero");
+    }
+    fn combat_view(current: &Checkpoint, member: MemberId) -> rpc::CombatView {
+        match wire::journey_view(
+            current,
+            df_persistence::local_demo_scope::LocalDemoRole::Player,
+            member,
+        )
+        .unwrap()
+        .audience
+        .unwrap()
+        {
+            rpc::view_message::Audience::Player(view) => view.journey.unwrap().combat.unwrap(),
+            _ => panic!("player audience"),
+        }
+    }
+    /// Names the step that refuses an aftermath press, when one does.
+    fn diagnose_refused_aftermath(
+        current: &Checkpoint,
+        member: MemberId,
+        input: &GameInput,
+    ) -> String {
+        use rpc::GameplayActionKind as K;
+        let GameInput::Game(command) = input else {
+            return "not a game input".into();
+        };
+        let GameCommand::ProposeAction {
+            action, targets, ..
+        } = &command.command
+        else {
+            return "not a proposal".into();
+        };
+        let selected = crate::gameplay::beat_script_runtime::select(current, K::EndTurn, &[]);
+        let validated = super::super::affordance::validate(current, member, action, targets);
+        let mut state = current.state().clone();
+        let (mut draws, mut outcomes) = (Vec::new(), Vec::new());
+        let staged = super::stage(
+            current,
+            command,
+            K::EndTurn,
+            &mut state,
+            &mut draws,
+            &mut outcomes,
+            &mut |_| Ok(12),
+        );
+        let phase = selected
+            .as_ref()
+            .map(|offer| super::super::phase_from_state(current, &state, &offer.id));
+        format!(
+            "select {:?}; affordance {validated:?}; tactical stage {staged:?}; phase_from_state {phase:?}",
+            selected.as_ref().map(|offer| offer.id.clone())
+        )
+    }
+    /// A won fight with a hero at 0 hit points was a dead end on the live table: the only offer,
+    /// "Advance 6 seconds", was refused. Time now advances by the rules (a Death Saving Throw per
+    /// round, then 1d4 hours for a Stable hero) until the hero is dead, stable and recovered, or
+    /// back on their feet, every step is accepted, every roll is in the view, and the table can
+    /// then rest or move on.
+    #[test]
+    fn a_won_fight_with_a_dying_hero_resolves_on_the_table_without_a_dead_end() {
+        use rpc::GameplayActionKind as K;
+        pack::with_test_pack(live_generated_pack(), || {
+            let won = victory_with_a_dying_hero();
+            let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let offers = offered(&won, first).unwrap();
+            assert_eq!(offers.len(), 1, "{offers:?}");
+            assert_eq!(offers[0].0, K::EndTurn);
+            assert!(offers[0].1.contains("death saves"));
+            let downed = read(won.state())
+                .unwrap()
+                .combatants()
+                .iter()
+                .find(|actor| actor.side() == Side::Heroes && actor.health().hit_points == 0)
+                .map(|actor| actor.id())
+                .unwrap();
+            for (face, dies, revives) in
+                [(15_u32, false, false), (2, true, false), (20, false, true)]
+            {
+                let mut current = won.clone();
+                let mut rolls = Vec::new();
+                let mut recovery_hours = 0;
+                for operation in 150..180_u8 {
+                    if !dying(current.state()).unwrap() {
+                        break;
+                    }
+                    let ticks = current.state().logical_time.ticks;
+                    let pressed = request(&current, operation, K::EndTurn, None);
+                    if let Ok(input) = wire::journey_input(&pressed, first, &current)
+                        && stage_with_supplier(&current, &input, &mut |sides| {
+                            Ok(if sides == 20 { face } else { 3 })
+                        })
+                        .is_err()
+                    {
+                        panic!(
+                            "aftermath press refused: {}",
+                            diagnose_refused_aftermath(&current, first, &input)
+                        );
+                    }
+                    current = submit(&current, first, &pressed, &mut |sides| {
+                        Ok(if sides == 20 { face } else { 3 })
+                    });
+                    assert!(current.state().logical_time.ticks > ticks);
+                    // What this press recorded, and that the view carries it.
+                    let recorded = accepted(current.state().decisions.last().unwrap())
+                        .unwrap()
+                        .combat;
+                    let view = combat_view(&current, first);
+                    for outcome in recorded.iter().filter(|outcome| {
+                        outcome.kind == rpc::OutcomeKind::DeathSave as i32
+                            || outcome.kind == rpc::OutcomeKind::Recovery as i32
+                    }) {
+                        assert!(
+                            view.death_save_outcomes.contains(outcome),
+                            "the view must carry every recorded roll"
+                        );
+                    }
+                    rolls.extend(
+                        recorded
+                            .iter()
+                            .filter(|outcome| outcome.kind == rpc::OutcomeKind::DeathSave as i32)
+                            .map(|outcome| {
+                                (
+                                    outcome.attack_die,
+                                    outcome.death_successes,
+                                    outcome.death_failures,
+                                )
+                            }),
+                    );
+                    recovery_hours += recorded
+                        .iter()
+                        .filter(|outcome| outcome.kind == rpc::OutcomeKind::Recovery as i32)
+                        .map(|outcome| outcome.recovery_hours)
+                        .max()
+                        .unwrap_or(0);
+                    assert!(view.outcomes.iter().all(|outcome| {
+                        outcome.kind != rpc::OutcomeKind::Move as i32
+                            && outcome.kind != rpc::OutcomeKind::DeathSave as i32
+                    }));
+                }
+                assert!(!dying(current.state()).unwrap(), "face {face}: still dying");
+                assert!(
+                    !rolls.is_empty(),
+                    "face {face}: no Death Saving Throw reached the view"
+                );
+                assert!(rolls.iter().all(|(die, _, _)| *die == face));
+                let healed = read(current.state())
+                    .unwrap()
+                    .actor(downed)
+                    .unwrap()
+                    .health();
+                assert_eq!(healed.dead, dies, "face {face}");
+                if !dies {
+                    assert_eq!(healed.hit_points, 1, "face {face}");
+                }
+                assert_eq!(recovery_hours > 0, !dies && !revives, "face {face}");
+                // Not a dead end: the table is offered what the story allows next, and it works.
+                let next = offered(&current, first).unwrap();
+                assert!(
+                    next.iter()
+                        .any(|(kind, _)| matches!(kind, K::ShortRest | K::ChooseHarborScene)),
+                    "face {face}: {next:?}"
+                );
+                if !dies {
+                    let rested = submit(
+                        &current,
+                        first,
+                        &request(&current, 190, K::ShortRest, None),
+                        &mut |_| panic!("rest has no draw"),
+                    );
+                    assert_eq!(phase(&rested).unwrap(), rpc::JourneyPhase::Complete);
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -3478,6 +3956,33 @@ mod shared_scene_tests {
             }
         }
         assert_eq!(scans, 4, "the four scan scenes are authored for the server");
+    }
+
+    #[test]
+    fn every_scene_the_server_holds_has_a_typed_lighting_fact_and_only_the_scans_are_sunlit() {
+        for id in scene_ids() {
+            let (_, lighting) = LIGHTING
+                .iter()
+                .find(|(known, _)| *known == id)
+                .unwrap_or_else(|| panic!("scene {id} has no lighting fact"));
+            assert_eq!(
+                *lighting == tactical_rules::Lighting::Sunlight,
+                id.starts_with("scan-"),
+                "{id}"
+            );
+        }
+        assert_eq!(LIGHTING.len(), scene_ids().count());
+        // A real battle map carries the fact the rules read.
+        let village = scene_bytes("scan-village").unwrap();
+        assert_eq!(
+            scene_map(village, "north-south").unwrap().lighting(),
+            tactical_rules::Lighting::Sunlight
+        );
+        let quay = scene_bytes("salt-quay").unwrap();
+        assert_eq!(
+            scene_map(quay, "open-quay").unwrap().lighting(),
+            tactical_rules::Lighting::NightOrInterior
+        );
     }
 
     #[test]

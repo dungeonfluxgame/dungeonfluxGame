@@ -1318,3 +1318,186 @@ fn tactical_snapshot_preserves_dropped_weapon_dying_death_save_and_natural_twent
         Battle::from_snapshot(dead.map().clone(), &dead.snapshot().unwrap()).unwrap()
     );
 }
+
+// ---- PLAY-R01 -------------------------------------------------------------------------------
+fn dying_hero_state() -> Battle {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        melee(2, Cell(1, 7)),
+        CombatantSpec::creature(3, "skeleton", Cell(10, 1), 20).unwrap(),
+    ]);
+    let health = &mut state.actor_mut(1).unwrap().health;
+    health.hit_points = 0;
+    health.unconscious = true;
+    health.prone = true;
+    state.active = state.order.iter().position(|id| *id == 1).unwrap();
+    state.needs_death_save = true;
+    state
+}
+#[test]
+fn a_death_saving_throw_reports_the_roll_the_running_counts_and_the_result() {
+    use DeathSaveResult as R;
+    let state = dying_hero_state();
+    let cases = [
+        (14, R::Success, 1, 0),
+        (9, R::Failure, 0, 1),
+        (1, R::CriticalFailure, 0, 2),
+        (20, R::Revived, 0, 0),
+    ];
+    for (die, result, successes, failures) in cases {
+        let resolved = step(&state, 1, Action::DeathSave, &[(20, die)]);
+        assert_eq!(
+            resolved.death_saves,
+            vec![DeathSaveSummary {
+                actor: 1,
+                die,
+                successes,
+                failures,
+                result
+            }]
+        );
+        assert!(!resolved.battle.needs_death_save());
+    }
+    let mut third_success = state.clone();
+    third_success.actor_mut(1).unwrap().health.death_successes = 2;
+    let resolved = step(&third_success, 1, Action::DeathSave, &[(20, 10)]);
+    assert_eq!(resolved.death_saves[0].result, R::Stabilised);
+    assert!(resolved.battle.actor(1).unwrap().health().stable);
+    let mut third_failure = state;
+    third_failure.actor_mut(1).unwrap().health.death_failures = 2;
+    let resolved = step(&third_failure, 1, Action::DeathSave, &[(20, 4)]);
+    assert_eq!(resolved.death_saves[0].result, R::Died);
+    assert!(resolved.battle.actor(1).unwrap().health().dead);
+}
+
+#[test]
+fn a_move_reports_the_squares_entered_and_their_cost_and_a_paused_move_reports_only_what_it_entered()
+ {
+    let state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "wolf", Cell(10, 1), 0).unwrap(),
+    ]);
+    let path = vec![Cell(2, 1), Cell(3, 1)];
+    let moved = step(&state, 1, Action::Move(path.clone()), &[]);
+    assert_eq!(moved.moves.len(), 1);
+    let summary = &moved.moves[0];
+    assert_eq!((summary.actor, summary.from), (1, Cell(1, 1)));
+    assert_eq!(summary.path, path);
+    assert_eq!(summary.cost_ft, 10);
+    assert_eq!(summary.remaining_ft, 20);
+    // Leaving a hostile creature's reach pauses before the first square: nothing entered yet.
+    let adjacent = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "wolf", Cell(2, 1), 0).unwrap(),
+    ]);
+    let paused = step(
+        &adjacent,
+        1,
+        Action::Move(vec![Cell(0, 1), Cell(0, 2)]),
+        &[],
+    );
+    assert!(paused.moves.is_empty());
+    assert_eq!(paused.battle.reaction_offers(), &[3]);
+}
+
+#[test]
+fn kobold_sunlight_sensitivity_cancels_pack_tactics_and_its_initiative_has_disadvantage() {
+    let src = source();
+    let sunlit = map("open-court").with_lighting(Lighting::Sunlight);
+    let specs = vec![
+        melee(1, Cell(3, 3)),
+        CombatantSpec::creature(10, "kobold-warrior", Cell(4, 3), 0).unwrap(),
+        CombatantSpec::creature(11, "kobold-warrior", Cell(3, 4), 0).unwrap(),
+    ];
+    // The Kobold group rolls twice and keeps the lower face (5): 5 + 2 beats the hero's 1 + 1.
+    let started = begin(
+        sunlit.clone(),
+        specs.clone(),
+        binding(&src),
+        &records(&src, &[(20, 1), (20, 18), (20, 5)]),
+    )
+    .unwrap();
+    assert_eq!(started.battle.initiative_order(), &[10, 11, 1]);
+    assert_eq!(
+        begin(
+            sunlit,
+            specs.clone(),
+            binding(&src),
+            &records(&src, &[(20, 1), (20, 18)])
+        )
+        .map(|_| ()),
+        Err(RuleError::MissingDraw { sides: 20 })
+    );
+    let state = started.battle;
+    let mut dagger = usage(Weapon::Dagger, false);
+    dagger.use_mastery = false;
+    let (advantage, disadvantage) = state.attack_reasons(10, 1, dagger).unwrap();
+    assert!(advantage.contains(&AttackReason::PackTactics));
+    assert!(disadvantage.contains(&AttackReason::SunlightSensitivity));
+    let plain = step(
+        &state,
+        10,
+        strike(1, Weapon::Dagger, false),
+        &[(20, 15), (4, 2)],
+    );
+    assert_eq!(plain.attacks[0].roll_mode, 0);
+    assert_eq!(plain.attacks[0].faces, vec![15]);
+    // The same fight at night: Pack Tactics alone gives Advantage and two d20 faces.
+    let night = begin(
+        map("open-court"),
+        specs,
+        binding(&src),
+        &records(&src, &[(20, 1), (20, 5)]),
+    )
+    .unwrap()
+    .battle;
+    let rolled = step(
+        &night,
+        10,
+        strike(1, Weapon::Dagger, false),
+        &[(20, 3), (20, 15), (4, 2)],
+    );
+    assert_eq!(rolled.attacks[0].roll_mode, 1);
+    assert_eq!(rolled.attacks[0].selected, 15);
+}
+
+#[test]
+fn a_kobold_throws_its_dagger_at_normal_range_and_carries_three() {
+    let state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "kobold-warrior", Cell(5, 1), 0).unwrap(),
+    ]);
+    let state = next_turn(state, 3);
+    let thrown = step(
+        &state,
+        3,
+        strike(1, Weapon::Dagger, true),
+        &[(20, 14), (4, 2)],
+    );
+    let attack = &thrown.attacks[0];
+    assert!(attack.ranged);
+    assert_eq!(attack.distance_ft, 20);
+    assert!(attack.disadvantage.is_empty());
+    assert_eq!(
+        thrown.battle.actor(3).unwrap().weapon_count(Weapon::Dagger),
+        2
+    );
+    // Beyond long range (60 ft) a thrown dagger cannot be used at all.
+    let far = battle(vec![
+        melee(1, Cell(0, 0)),
+        CombatantSpec::creature(3, "kobold-warrior", Cell(15, 0), 0).unwrap(),
+    ]);
+    let far = next_turn(far, 3);
+    let mut throw = usage(Weapon::Dagger, true);
+    throw.use_mastery = false;
+    rejects(
+        &far,
+        3,
+        Action::Attack {
+            target: 1,
+            weapon: throw,
+            spend: AttackSpend::Action,
+        },
+        RuleError::OutOfRange,
+    );
+}

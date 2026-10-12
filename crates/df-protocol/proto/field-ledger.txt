@@ -617,3 +617,42 @@ enum-value dungeonflux.public.v1.HomeVideoState 3 HOME_VIDEO_STATE_READY
 enum-value dungeonflux.public.v1.HomeVideoState 4 HOME_VIDEO_STATE_FAILED
 field dungeonflux.public.v1.JourneyView 31 home_video_state type=14 label=1 presence=false target=.dungeonflux.public.v1.HomeVideoState oneof=-
 field dungeonflux.public.v1.JourneyView 32 home_video_path type=9 label=1 presence=false target=- oneof=-
+# PLAY-R01: outcome audit and public death-save state (appended; order is irrelevant to the check)
+field dungeonflux.public.v1.CombatOutcome 20 distance_ft type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 21 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.OutcomeKind oneof=-
+field dungeonflux.public.v1.CombatOutcome 22 path type=11 label=3 presence=false target=.dungeonflux.public.v1.GridCell oneof=-
+field dungeonflux.public.v1.CombatOutcome 23 cost_ft type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 24 remaining_ft type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 25 roll_mode type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 26 faces type=13 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 27 reasons type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 28 cover type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 29 death_save_result type=14 label=1 presence=false target=.dungeonflux.public.v1.DeathSaveResult oneof=-
+field dungeonflux.public.v1.CombatOutcome 30 death_successes type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 31 death_failures type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatView 16 death_saves type=11 label=3 presence=false target=.dungeonflux.public.v1.DeathSaveState oneof=-
+field dungeonflux.public.v1.DeathSaveState 1 participant_id type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 2 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 3 successes type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 4 failures type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 5 stable type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 6 dead type=8 label=1 presence=false target=- oneof=-
+enum dungeonflux.public.v1.OutcomeKind
+enum dungeonflux.public.v1.DeathSaveResult
+enum-value dungeonflux.public.v1.OutcomeKind 0 OUTCOME_KIND_UNSPECIFIED
+enum-value dungeonflux.public.v1.OutcomeKind 1 OUTCOME_KIND_ATTACK
+enum-value dungeonflux.public.v1.OutcomeKind 2 OUTCOME_KIND_OPPORTUNITY_ATTACK
+enum-value dungeonflux.public.v1.OutcomeKind 3 OUTCOME_KIND_MOVE
+enum-value dungeonflux.public.v1.OutcomeKind 4 OUTCOME_KIND_DEATH_SAVE
+enum-value dungeonflux.public.v1.DeathSaveResult 0 DEATH_SAVE_RESULT_UNSPECIFIED
+enum-value dungeonflux.public.v1.DeathSaveResult 1 DEATH_SAVE_RESULT_SUCCESS
+enum-value dungeonflux.public.v1.DeathSaveResult 2 DEATH_SAVE_RESULT_FAILURE
+enum-value dungeonflux.public.v1.DeathSaveResult 3 DEATH_SAVE_RESULT_CRITICAL_FAILURE
+enum-value dungeonflux.public.v1.DeathSaveResult 4 DEATH_SAVE_RESULT_STABILISED
+enum-value dungeonflux.public.v1.DeathSaveResult 5 DEATH_SAVE_RESULT_DIED
+enum-value dungeonflux.public.v1.DeathSaveResult 6 DEATH_SAVE_RESULT_REVIVED
+message dungeonflux.public.v1.DeathSaveState
+field dungeonflux.public.v1.CombatView 17 move_outcomes type=11 label=3 presence=false target=.dungeonflux.public.v1.CombatOutcome oneof=-
+field dungeonflux.public.v1.CombatView 18 death_save_outcomes type=11 label=3 presence=false target=.dungeonflux.public.v1.CombatOutcome oneof=-
+field dungeonflux.public.v1.CombatOutcome 32 recovery_hours type=13 label=1 presence=false target=- oneof=-
+enum-value dungeonflux.public.v1.OutcomeKind 5 OUTCOME_KIND_RECOVERY

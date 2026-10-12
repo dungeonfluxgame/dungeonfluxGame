@@ -212,6 +212,9 @@ fn validate_thread_progress(
         let Some(thread) = thread else {
             continue;
         };
+        if super::after_victory_time(state, fact) {
+            continue;
+        }
         let decision = state
             .decisions
             .iter()

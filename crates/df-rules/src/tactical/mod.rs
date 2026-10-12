@@ -9,10 +9,12 @@ mod weapons;
 
 pub use build::{ARCHER_CREATION_JSON, ArcherBuild, validate_archer};
 pub use map::{
-    BattleMap, BattleSceneData, Cell, Cover, GridData, LayoutData, ObstacleData, SpawnData,
+    BattleMap, BattleSceneData, Cell, Cover, GridData, LayoutData, Lighting, ObstacleData,
+    SpawnData,
 };
 pub use resolve::{
-    Action, AttackReason, AttackSpend, AttackSummary, AttackUse, DrawBinding, Resolution, resolve,
+    Action, AttackReason, AttackSpend, AttackSummary, AttackUse, DeathSaveResult, DeathSaveSummary,
+    DrawBinding, MoveSummary, RecoverySummary, Resolution, resolve,
 };
 pub use state::{
     Battle, Budget, Combatant, CombatantSpec, CreatureKind, Health, Side, Size, begin,
