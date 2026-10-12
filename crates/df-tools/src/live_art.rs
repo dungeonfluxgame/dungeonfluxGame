@@ -7,7 +7,8 @@
 //! tempo cues) that the display must keep taking at the pace of its director. So the display
 //! copies only the art fields from such a view into the one it shows, and only when the scene and
 //! cast it describes are the same ones and every art path is empty or a well-formed
-//! `/gameplay/imagery/<key>`.
+//! `/gameplay/imagery/<key>`. The heroes' health faces (`JourneyView.live_faces`) travel the same
+//! way, to the display and to every phone.
 
 use df_protocol::common as rpc;
 
@@ -17,48 +18,97 @@ fn well_formed(path: &str) -> bool {
     path.is_empty() || imagery_url(path).is_some()
 }
 
-/// Copies the generated-art fields of `new` into `shown` and returns whether any changed. Nothing
-/// is copied unless both are display views of the same scene (title and authored painting) with
-/// the same cast, in the same order, and every art path in `new` is well formed.
-pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) -> bool {
-    let (
-        Some(rpc::view_message::Audience::Display(shown)),
-        Some(rpc::view_message::Audience::Display(new)),
-    ) = (shown.audience.as_mut(), new.audience.as_ref())
-    else {
-        return false;
-    };
-    let (Some(shown), Some(new)) = (shown.scene.as_mut(), new.scene.as_ref()) else {
-        return false;
-    };
-    let same_scene = shown.title == new.title
-        && shown.scene_asset == new.scene_asset
-        && shown.cast.len() == new.cast.len()
-        && shown
-            .cast
+fn faces_well_formed(journey: Option<&rpc::JourneyView>) -> bool {
+    journey.is_none_or(|journey| {
+        journey
+            .live_faces
             .iter()
-            .zip(&new.cast)
-            .all(|(old, new)| old.id == new.id && old.sprite == new.sprite);
-    let well_formed_art = well_formed(&new.live_backdrop)
-        && well_formed(&new.live_plate)
-        && new.cast.iter().all(|actor| well_formed(&actor.live_sprite));
-    if !same_scene || !well_formed_art {
+            .all(|face| well_formed(&face.sprite))
+    })
+}
+
+/// Copies the heroes' health faces (`JourneyView.live_faces`) of `new` into `shown` and returns
+/// whether any changed. Both views must list the same party (by name, in order).
+fn merge_faces(shown: &mut Option<rpc::JourneyView>, new: Option<&rpc::JourneyView>) -> bool {
+    let (Some(shown), Some(new)) = (shown.as_mut(), new) else {
+        return false;
+    };
+    let same_party = shown.party.len() == new.party.len()
+        && shown
+            .party
+            .iter()
+            .zip(&new.party)
+            .all(|(old, new)| old.name == new.name);
+    if !same_party || shown.live_faces == new.live_faces {
         return false;
     }
-    let mut changed = shown.live_backdrop != new.live_backdrop;
-    shown.live_backdrop.clone_from(&new.live_backdrop);
-    // PLAY-V09: the scene plate, its layout and its state are generated art too.
-    changed |= shown.live_plate != new.live_plate
-        || shown.plate_layout != new.plate_layout
-        || shown.plate_state != new.plate_state;
-    shown.live_plate.clone_from(&new.live_plate);
-    shown.plate_layout.clone_from(&new.plate_layout);
-    shown.plate_state = new.plate_state;
-    for (old, new) in shown.cast.iter_mut().zip(&new.cast) {
-        changed |= old.live_sprite != new.live_sprite;
-        old.live_sprite.clone_from(&new.live_sprite);
+    shown.live_faces.clone_from(&new.live_faces);
+    true
+}
+
+/// Copies the generated-art fields of `new` into `shown` and returns whether any changed. Nothing
+/// is copied unless both are views for the same audience of the same scene (title and authored
+/// painting) with the same cast, in the same order, and every art path in `new` is well formed.
+/// A display view carries the backdrop, the cast's cut-outs and the heroes' health faces; a
+/// player view only the heroes' health faces.
+pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) -> bool {
+    match (shown.audience.as_mut(), new.audience.as_ref()) {
+        (
+            Some(rpc::view_message::Audience::Display(shown)),
+            Some(rpc::view_message::Audience::Display(new)),
+        ) => {
+            let (Some(shown_scene), Some(new_scene)) = (shown.scene.as_mut(), new.scene.as_ref())
+            else {
+                return false;
+            };
+            let same_scene = shown_scene.title == new_scene.title
+                && shown_scene.scene_asset == new_scene.scene_asset
+                && shown_scene.cast.len() == new_scene.cast.len()
+                && shown_scene
+                    .cast
+                    .iter()
+                    .zip(&new_scene.cast)
+                    .all(|(old, new)| old.id == new.id && old.sprite == new.sprite);
+            let well_formed_art = well_formed(&new_scene.live_backdrop)
+                && well_formed(&new_scene.live_plate)
+                && new_scene
+                    .cast
+                    .iter()
+                    .all(|actor| well_formed(&actor.live_sprite))
+                && faces_well_formed(new.journey.as_ref());
+            if !same_scene || !well_formed_art {
+                return false;
+            }
+            let mut changed = shown_scene.live_backdrop != new_scene.live_backdrop;
+            shown_scene
+                .live_backdrop
+                .clone_from(&new_scene.live_backdrop);
+            // PLAY-V09: the scene plate, its layout and its state are generated art too.
+            changed |= shown_scene.live_plate != new_scene.live_plate
+                || shown_scene.plate_layout != new_scene.plate_layout
+                || shown_scene.plate_state != new_scene.plate_state;
+            shown_scene.live_plate.clone_from(&new_scene.live_plate);
+            shown_scene.plate_layout.clone_from(&new_scene.plate_layout);
+            shown_scene.plate_state = new_scene.plate_state;
+            for (old, new) in shown_scene.cast.iter_mut().zip(&new_scene.cast) {
+                changed |= old.live_sprite != new.live_sprite;
+                old.live_sprite.clone_from(&new.live_sprite);
+            }
+            changed | merge_faces(&mut shown.journey, new.journey.as_ref())
+        }
+        (
+            Some(rpc::view_message::Audience::Player(shown)),
+            Some(rpc::view_message::Audience::Player(new)),
+        ) => {
+            let same_scene = shown.scene.as_ref().map(|scene| &scene.title)
+                == new.scene.as_ref().map(|scene| &scene.title);
+            if !same_scene || !faces_well_formed(new.journey.as_ref()) {
+                return false;
+            }
+            merge_faces(&mut shown.journey, new.journey.as_ref())
+        }
+        _ => false,
     }
-    changed
 }
 
 #[cfg(test)]
@@ -93,6 +143,98 @@ mod tests {
                 },
             )),
         }
+    }
+
+    fn player_view(faces: &[(&str, &str)], party: &[&str]) -> rpc::ViewMessage {
+        rpc::ViewMessage {
+            revision: Some(rpc::SessionRevision {
+                epoch: Some(rpc::RecoveryEpoch { value: Some(1) }),
+                sequence: Some(4),
+            }),
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    scene: Some(rpc::GameplayScene {
+                        title: "The Heron Shrine".to_owned(),
+                        ..Default::default()
+                    }),
+                    journey: Some(rpc::JourneyView {
+                        party: party
+                            .iter()
+                            .map(|name| rpc::PartyMemberView {
+                                name: (*name).to_owned(),
+                                ..Default::default()
+                            })
+                            .collect(),
+                        live_faces: faces
+                            .iter()
+                            .map(|(name, sprite)| rpc::LiveFace {
+                                name: (*name).to_owned(),
+                                sprite: (*sprite).to_owned(),
+                            })
+                            .collect(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+        }
+    }
+
+    #[test]
+    fn a_phones_hero_faces_are_copied_for_the_same_party_and_nothing_else_changes() {
+        let mut shown = player_view(&[], &["Rowan", "Mira"]);
+        let newer = player_view(&[("Rowan", &key('a'))], &["Rowan", "Mira"]);
+        assert!(merge_art(&mut shown, &newer));
+        assert_eq!(shown, newer);
+        assert!(!merge_art(&mut shown, &newer), "nothing more to copy");
+        // Healing clears the face again.
+        assert!(merge_art(&mut shown, &player_view(&[], &["Rowan", "Mira"])));
+        // A different party, a bad path or a display view is never taken.
+        let original = shown.clone();
+        assert!(!merge_art(
+            &mut shown,
+            &player_view(&[("Rowan", &key('a'))], &["Rowan", "Someone"])
+        ));
+        assert!(!merge_art(
+            &mut shown,
+            &player_view(&[("Rowan", "/gameplay/imagery/short")], &["Rowan", "Mira"])
+        ));
+        assert!(!merge_art(
+            &mut shown,
+            &view(&key('a'), "", "x", "The Heron Shrine")
+        ));
+        assert_eq!(shown, original);
+    }
+
+    #[test]
+    fn a_displays_hero_faces_travel_with_its_art() {
+        let mut shown = view("", "", "The shrine is quiet.", "The Heron Shrine");
+        let mut newer = view("", "", "Newer narration.", "The Heron Shrine");
+        for message in [&mut shown, &mut newer] {
+            if let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() {
+                display.journey = Some(rpc::JourneyView {
+                    party: vec![rpc::PartyMemberView {
+                        name: "Rowan".to_owned(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+            }
+        }
+        if let Some(rpc::view_message::Audience::Display(display)) = newer.audience.as_mut()
+            && let Some(journey) = display.journey.as_mut()
+        {
+            journey.live_faces = vec![rpc::LiveFace {
+                name: "Rowan".to_owned(),
+                sprite: key('c'),
+            }];
+        }
+        assert!(merge_art(&mut shown, &newer));
+        let Some(rpc::view_message::Audience::Display(display)) = &shown.audience else {
+            panic!("display view");
+        };
+        assert_eq!(display.journey.as_ref().unwrap().live_faces.len(), 1);
+        assert_eq!(display.narration, "The shrine is quiet.");
     }
 
     #[test]
@@ -131,7 +273,7 @@ mod tests {
             scene.plate_layout = Some(rpc::PlateLayout {
                 bubble_side: rpc::PlateSide::Left as i32,
                 head_x_permille: 640,
-                head_y_permille: 370,
+                head_y_permille: 320,
                 head_width_permille: 120,
                 head_height_permille: 180,
             });

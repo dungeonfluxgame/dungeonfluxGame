@@ -217,6 +217,7 @@ impl Fixture {
                 active_turn: Some(entity(1)),
                 objectives: vec![content("escape"), content("hold")],
                 combat_policy: content("tactics"),
+                tactical: None,
             },
             preferences: vec![content("escape"), content("hold")],
         }

@@ -13,14 +13,17 @@
 use super::{
     super::{
         pack::Gender,
-        scene_mood::{Appearance, Expression as FaceExpression},
+        scene_mood::{Expression as FaceExpression, HealthTier},
         shot::{
             DressingZone, Expression, ExtraZone, HeroShot, HeroSlot, Mood, ShotSpec, SpeakerShot,
             TimeOfDay, asked_head,
         },
         startup_configuration::ContentRating,
     },
-    prompt::{AssembledPrompt, LifeStage, Part, PlaceFacts, appearance_phrase, expression_phrase},
+    prompt::{
+        AssembledPrompt, LifeStage, Part, PlaceFacts, expression_phrase, health_face_phrase,
+        health_look_phrase,
+    },
 };
 
 /// The adapter's prompt limit, in characters.
@@ -421,11 +424,11 @@ fn finish(parts: Vec<Part>) -> Result<AssembledPrompt, PlatePromptRefusal> {
 }
 
 /// The prompt that edits an existing plate: the previous plate is image 1, the speaker's art (when
-/// there is one) image 2, and only the speaker's face and appearance change.
+/// there is one) image 2, and only the speaker's face and look change.
 pub(in crate::gameplay) fn plate_moment(
     rating: ContentRating,
     expression: FaceExpression,
-    appearance: Appearance,
+    tier: HealthTier,
     speaker_reference: bool,
 ) -> Result<AssembledPrompt, PlatePromptRefusal> {
     let mut parts = vec![
@@ -435,11 +438,18 @@ pub(in crate::gameplay) fn plate_moment(
         } else {
             MOMENT_SPEAKER
         }),
-        Part::Fixed(expression_phrase(expression, rating)),
     ];
-    if let Some(phrase) = appearance_phrase(appearance, rating) {
-        parts.push(Part::Fixed(MOMENT_APPEARANCE));
-        parts.push(Part::Fixed(phrase));
+    // Priority, not multiplication (as for the cut-out): a hurt speaker shows the health face and
+    // look, a healthy one the conversation's mood face.
+    match health_face_phrase(tier) {
+        Some(face) => {
+            parts.push(Part::Fixed(face));
+            if let Some(look) = health_look_phrase(tier, rating) {
+                parts.push(Part::Fixed(MOMENT_APPEARANCE));
+                parts.push(Part::Fixed(look));
+            }
+        }
+        None => parts.push(Part::Fixed(expression_phrase(expression, rating))),
     }
     parts.extend([
         Part::Fixed(MOMENT_LAST),

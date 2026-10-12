@@ -73,8 +73,10 @@ pub(super) struct Live {
     scene_image: Option<live_screens::ServerImage>,
 }
 impl Live {
+    /// An attack switch starts on: Savage Attacker and Graze cost nothing to use, so a player
+    /// turns one off on purpose rather than losing it by not noticing the switch.
     fn choice(&self, group: &str) -> bool {
-        self.choices.get(group).copied().unwrap_or(false)
+        self.choices.get(group).copied().unwrap_or(true)
     }
     fn toggle_choice(&mut self, group: &str) {
         let selected = self.choice(group);
@@ -255,7 +257,7 @@ fn ensure_host(
     Ok(host)
 }
 
-fn party_portrait(view: &LiveView<'_>, own: &rpc::CharacterSheet) -> &'static str {
+fn party_portrait<'a>(view: &'a LiveView<'_>, own: &rpc::CharacterSheet) -> &'a str {
     sheet::portrait_token(&view.journey.party, own)
 }
 

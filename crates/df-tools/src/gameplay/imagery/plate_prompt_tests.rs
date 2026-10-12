@@ -2,7 +2,7 @@ use super::{
     super::{
         super::{
             pack::{Age, Gender, SceneKey},
-            scene_mood::Expression as FaceExpression,
+            scene_mood::{Expression as FaceExpression, HealthTier},
             shot::{self, ShotInput, SpeakerInput, vocabulary_phrases},
         },
         prompt::{Part, denied},
@@ -267,8 +267,8 @@ fn the_heroes_are_named_by_their_place_on_the_sheet_and_the_speaker_by_the_speak
 fn a_mood_edit_names_the_previous_plate_the_change_and_what_stays_in_both_ratings() {
     for rating in [ContentRating::Mature, ContentRating::Restrained] {
         for expression in FaceExpression::ALL {
-            for appearance in Appearance::ALL {
-                let prompt = plate_moment(rating, expression, appearance, true).unwrap();
+            for tier in HealthTier::ALL {
+                let prompt = plate_moment(rating, expression, tier, true).unwrap();
                 let text = prompt.as_str();
                 assert!(text.starts_with("Image 1 is the previous film still"));
                 assert!(text.contains("change only the following"));

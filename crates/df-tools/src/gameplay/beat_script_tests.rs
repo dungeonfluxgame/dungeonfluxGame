@@ -5,7 +5,7 @@ use df_protocol::common as rpc;
 use df_types::{MemberId, OperationId};
 const MEMBERS: [[u8; 16]; 2] = [[0x61; 16], [0x62; 16]];
 const PACK: &[u8] = include_bytes!("../../../../content/harbor-journey/pack.json");
-const TUNING: &[u8] = include_bytes!("../../../../content/harbor-journey/tuning.json");
+const TUNING: &[u8] = include_bytes!("fixtures/harbor-journey-tuning-baseline.json");
 pub(super) fn input(
     current: &Checkpoint,
     member: MemberId,
@@ -262,13 +262,15 @@ fn canonical_script_reproduces_states_receipts_offers_and_scenes_for_harbor_and_
     .unwrap();
     let mut packs = vec![pack::load_from_bytes(PACK, TUNING).unwrap()];
     for seed in [0x3c6ef378dd81de97, 0xdaa66d325ccc5aac, 17] {
-        let generated = super::adventure::generate(
+        let mut generated = super::adventure::generate(
             &tables,
             seed,
             super::adventure::GenerateOptions::default(),
             &Default::default(),
         )
         .unwrap();
+        // Compare the E01 sequencing change against its archived mechanics.
+        generated.tuning.tactical = None;
         packs.push(
             pack::load_from_bytes(
                 &serde_json::to_vec(&generated.pack).unwrap(),
@@ -334,7 +336,11 @@ fn codec() -> df_persistence::NativeCodecLimits {
 }
 #[test]
 fn real_pre_change_checkpoint_bytes_resume_with_exact_pins_and_reencode_unchanged() {
-    let loaded = pack::load_from_bytes(PACK, TUNING).unwrap();
+    let loaded = pack::load_from_bytes(
+        include_bytes!("fixtures/harbor-journey-pack-integration-baseline.json"),
+        TUNING,
+    )
+    .unwrap();
     pack::with_test_pack(loaded, || {
         for (bytes, sequence, expected) in [
             (

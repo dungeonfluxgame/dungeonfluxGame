@@ -53,6 +53,10 @@ pub enum Action {
     SecondWind,
     EndTurn,
     DeathSave,
+    /// SRD Short Rest: this slice spends no Hit Dice; Fighters starting with at least 1 HP recharge one use.
+    ShortRest {
+        elapsed_seconds: u32,
+    },
     RecoverAmmunition {
         elapsed_seconds: u32,
     },
@@ -79,6 +83,7 @@ pub struct AttackSummary {
     pub actor: u32,
     pub target: u32,
     pub weapon: Weapon,
+    pub ranged: bool,
     pub distance_ft: u32,
     pub cover: Cover,
     pub armor_class: u16,
@@ -186,6 +191,19 @@ pub fn resolve(
             return Err(RuleError::PendingReaction);
         }
         match action {
+            Action::ShortRest { elapsed_seconds } => {
+                if *elapsed_seconds < 3600 {
+                    return Err(RuleError::RecoveryUnavailable);
+                }
+                let combatant = next.actor_mut(actor)?;
+                if combatant.health.dead || combatant.health.hit_points == 0 {
+                    return Err(RuleError::RecoveryUnavailable);
+                }
+                if combatant.spec.kind == CreatureKind::Hero {
+                    combatant.spec.second_wind_uses =
+                        combatant.spec.second_wind_uses.saturating_add(1).min(2);
+                }
+            }
             Action::RecoverAmmunition { elapsed_seconds } => {
                 if !next.finished() || *elapsed_seconds < 60 {
                     return Err(RuleError::RecoveryUnavailable);
@@ -334,10 +352,20 @@ pub fn resolve(
                             combatant.budget.action_used = true;
                         }
                         combatant.budget.object_interaction_used = true;
+                        if combatant.held.len() == 2
+                            || (weapon.two_handed() && combatant.shield_equipped)
+                        {
+                            return Err(RuleError::InvalidHands);
+                        }
                         combatant.dropped.remove(index);
+                        if weapon.two_handed() {
+                            combatant.held.clear();
+                        }
+                        combatant.held.push(*weapon);
                     }
                     Action::Opportunity { .. }
                     | Action::DeathSave
+                    | Action::ShortRest { .. }
                     | Action::RecoverAmmunition { .. } => return Err(RuleError::InvalidReaction),
                 }
             }
@@ -388,6 +416,17 @@ impl Battle {
         let mut projected = self.clone();
         projected.actor_mut(actor)?.spec.cell = origin;
         admit_attack(&projected, actor, target, weapon)
+    }
+    /// Range, cover and advantage reasons for an admitted attack, without spending or drawing.
+    pub fn attack_reasons(
+        &self,
+        actor: u32,
+        target: u32,
+        usage: AttackUse,
+    ) -> Result<(Vec<AttackReason>, Vec<AttackReason>), RuleError> {
+        admit_attack(self, actor, target, usage)?;
+        let (advantage, disadvantage, _, _) = modifiers(self, actor, target, usage)?;
+        Ok((advantage, disadvantage))
     }
     pub fn attack_cover(&self, actor: u32, target: u32) -> Result<Cover, RuleError> {
         self.map.cover_between(
@@ -445,6 +484,9 @@ fn admit_attack(battle: &Battle, id: u32, target: u32, usage: AttackUse) -> Resu
         || (usage.hands == 2 && !usage.weapon.two_handed() && usage.weapon != Weapon::Spear)
     {
         return Err(RuleError::InvalidHands);
+    }
+    if usage.use_mastery && !actor.spec.masteries.contains(&usage.weapon) {
+        return Err(RuleError::InvalidWeapon);
     }
     if usage.finesse_dexterity && !usage.weapon.finesse() {
         return Err(RuleError::InvalidWeapon);
@@ -558,25 +600,29 @@ fn modifiers(
     };
     let damage_modifier =
         crate::local_journey::ability_modifier(actor.spec.abilities[ability]) as i16;
-    let attack_modifier =
-        if actor.spec.kind == CreatureKind::Hero || usage.weapon == Weapon::UnarmedStrike {
-            damage_modifier
-                + 2
-                + if usage.weapon.ranged_weapon() && actor.spec.archery {
-                    2
-                } else {
-                    0
-                }
-        } else {
-            match actor.spec.kind {
-                CreatureKind::Goblin
-                | CreatureKind::Kobold
-                | CreatureKind::Wolf
-                | CreatureKind::Scout => 4,
-                CreatureKind::Skeleton | CreatureKind::GiantRat | CreatureKind::GiantWeasel => 5,
-                _ => 3,
+    let attack_modifier = if actor.spec.kind == CreatureKind::Hero {
+        actor
+            .spec
+            .hero_attack_modifiers(usage.weapon, usage.ranged, usage.finesse_dexterity)?
+            .0
+    } else if usage.weapon == Weapon::UnarmedStrike {
+        damage_modifier
+            + 2
+            + if usage.weapon.ranged_weapon() && actor.spec.archery {
+                2
+            } else {
+                0
             }
-        };
+    } else {
+        match actor.spec.kind {
+            CreatureKind::Goblin
+            | CreatureKind::Kobold
+            | CreatureKind::Wolf
+            | CreatureKind::Scout => 4,
+            CreatureKind::Skeleton | CreatureKind::GiantRat | CreatureKind::GiantWeasel => 5,
+            _ => 3,
+        }
+    };
     if actor.health.prone {
         disadvantage.push(AttackReason::ProneAttacker);
     }
@@ -792,6 +838,9 @@ fn attack(
                 .get_mut(&usage.weapon)
                 .ok_or(RuleError::WeaponMissing)?;
             *quantity -= 1;
+            if *quantity == 0 {
+                actor.held.retain(|held| *held != usage.weapon);
+            }
         }
     }
     let effect = Effect {
@@ -843,6 +892,7 @@ fn attack(
         actor: id,
         target,
         weapon: usage.weapon,
+        ranged: usage.ranged,
         distance_ft: battle.actor(id)?.cell().distance(target_actor.cell()),
         cover,
         armor_class,
@@ -906,7 +956,11 @@ fn apply_damage(
         actor.health.dead = true;
     } else if hp == 0 {
         actor.health.stable = false;
-        actor.health.death_failures += if critical { 2 } else { 1 };
+        actor.health.death_failures = actor
+            .health
+            .death_failures
+            .saturating_add(if critical { 2 } else { 1 })
+            .min(3);
         if actor.health.death_failures >= 3 {
             actor.health.dead = true;
         }
@@ -929,7 +983,11 @@ fn death_save(battle: &mut Battle, id: u32, draws: &mut Draws<'_>) -> Result<(),
         actor.health.death_failures = 0;
         actor.health.death_successes = 0;
     } else if die < 10 {
-        actor.health.death_failures += if die == 1 { 2 } else { 1 };
+        actor.health.death_failures = actor
+            .health
+            .death_failures
+            .saturating_add(if die == 1 { 2 } else { 1 })
+            .min(3);
         actor.health.dead = actor.health.death_failures >= 3;
     } else {
         actor.health.death_successes += 1;

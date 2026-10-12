@@ -114,9 +114,17 @@ impl PlateScene {
     }
 
     /// The plate of this scene for this party: the same scene and party always have one name.
-    fn plate_id(&self, heroes: &[u8]) -> String {
+    fn plate_id(&self, heroes: &[u8], faces: &[(u8, ImageKey)]) -> String {
         let party: String = heroes.iter().map(|art| art.to_string()).collect();
-        format!("{}|{}|{:?}|{party}", self.title, self.place_id, self.key)
+        // A hurt hero's health variant makes another picture, so it is part of the name.
+        let hurt: String = faces
+            .iter()
+            .map(|(art, key)| format!("{art}{}", &key.as_str()[..8]))
+            .collect();
+        format!(
+            "{}|{}|{:?}|{party}|{hurt}",
+            self.title, self.place_id, self.key
+        )
     }
 
     fn stage(&self, heroes: &[u8]) -> Result<ShotSpec, ShotError> {
@@ -234,6 +242,8 @@ struct View {
     in_combat: bool,
     /// The art numbers of the heroes present, in party order.
     heroes: Vec<u8>,
+    /// Their names, to find a hero's health variant.
+    hero_names: Vec<(u8, String)>,
 }
 
 fn scene_identity(display_asset: &str, scene: &rpc::GameplayScene) -> (String, String) {
@@ -253,7 +263,7 @@ fn view_of(message: &rpc::ViewMessage) -> Option<View> {
     let journey = display.journey.as_ref();
     let in_combat = journey.and_then(|journey| rpc::JourneyPhase::try_from(journey.phase).ok())
         == Some(rpc::JourneyPhase::Combat);
-    let heroes = journey
+    let hero_names: Vec<(u8, String)> = journey
         .map(|journey| {
             journey
                 .party
@@ -261,10 +271,13 @@ fn view_of(message: &rpc::ViewMessage) -> Option<View> {
                 .enumerate()
                 .take(shot::MAXIMUM_HEROES)
                 .filter(|(_, member)| member.character_ready)
-                .filter_map(|(index, _)| u8::try_from(index + 1).ok())
+                .filter_map(|(index, member)| {
+                    Some((u8::try_from(index + 1).ok()?, member.name.clone()))
+                })
                 .collect()
         })
         .unwrap_or_default();
+    let heroes = hero_names.iter().map(|(art, _)| *art).collect();
     let (scene_key, asset) = scene_identity(&display.scene_asset, scene);
     Some(View {
         scene_key,
@@ -272,6 +285,7 @@ fn view_of(message: &rpc::ViewMessage) -> Option<View> {
         asset,
         in_combat,
         heroes,
+        hero_names,
     })
 }
 
@@ -373,6 +387,8 @@ enum Job {
         scene: PlateScene,
         spec: Box<ShotSpec>,
         heroes: Vec<u8>,
+        /// The health variants (already made and cached) of hurt heroes, by art number.
+        faces: Vec<(u8, ImageKey)>,
         /// A plate for a scene that may come next, not the one on screen.
         ahead: bool,
     },
@@ -505,7 +521,10 @@ impl Shared {
         let mut woke = false;
         if scene_changed || party_changed {
             let scene = located.as_ref().and_then(PlateScene::of);
-            let id = scene.as_ref().map(|scene| scene.plate_id(&view.heroes));
+            let faces = self.inner.hero_face_keys(&view.hero_names);
+            let id = scene
+                .as_ref()
+                .map(|scene| scene.plate_id(&view.heroes, &faces));
             if scene_changed {
                 book.edit = Edit::Idle;
                 // A plate that failed is asked for again once when its scene comes back.
@@ -526,13 +545,13 @@ impl Shared {
             if let Some(scene) = scene
                 && !view.in_combat
             {
-                self.ensure(&mut book, &scene, &view.heroes, false);
+                self.ensure(&mut book, &scene, &view.heroes, &faces, false);
                 for next in next
                     .iter()
                     .take(MAXIMUM_SUCCESSORS)
                     .filter_map(PlateScene::of)
                 {
-                    self.ensure(&mut book, &next, &view.heroes, true);
+                    self.ensure(&mut book, &next, &view.heroes, &faces, true);
                 }
             }
             woke = true;
@@ -549,8 +568,15 @@ impl Shared {
     }
 
     /// Asks for the plate of `scene` for this party unless the book already knows it.
-    fn ensure(&self, book: &mut Book, scene: &PlateScene, heroes: &[u8], ahead: bool) {
-        let id = scene.plate_id(heroes);
+    fn ensure(
+        &self,
+        book: &mut Book,
+        scene: &PlateScene,
+        heroes: &[u8],
+        faces: &[(u8, ImageKey)],
+        ahead: bool,
+    ) {
+        let id = scene.plate_id(heroes, faces);
         if book.entries.contains_key(&id) {
             return;
         }
@@ -566,6 +592,7 @@ impl Shared {
             scene: scene.clone(),
             spec: Box::new(spec),
             heroes: heroes.to_vec(),
+            faces: faces.to_vec(),
             ahead,
         };
         // A full queue (the worker is busy or gone) drops the request: the next view asks again,
@@ -633,6 +660,7 @@ impl Shared {
                 scene,
                 spec,
                 heroes,
+                faces,
                 ahead,
             } => {
                 tasks.spawn(async move {
@@ -640,7 +668,7 @@ impl Shared {
                         tokio::time::sleep(AHEAD_DELAY).await;
                     }
                     let started = tokio::time::Instant::now();
-                    let result = shared.render_fresh(&scene, &spec, &heroes).await;
+                    let result = shared.render_fresh(&scene, &spec, &heroes, &faces).await;
                     Done::Fresh {
                         id,
                         elapsed: started.elapsed(),
@@ -691,6 +719,7 @@ impl Shared {
         scene: &PlateScene,
         spec: &ShotSpec,
         heroes: &[u8],
+        faces: &[(u8, ImageKey)],
     ) -> Result<(ImageKey, Option<PlateLayout>), ImageFailure> {
         let mut references = Vec::new();
         let mut sorted = heroes.to_vec();
@@ -698,7 +727,19 @@ impl Shared {
         if !sorted.is_empty() {
             let mut figures = Vec::with_capacity(sorted.len());
             for art in &sorted {
-                figures.push(self.inner.load(format!("figure-hero-{art}")).await?);
+                // A hurt hero stands in the plate as the cut-out stage shows them: their health
+                // variant, taken only from what is already made and cached.
+                let variant = match faces.iter().find(|(known, _)| known == art) {
+                    Some((_, key)) => match self.inner.imagery.image(key.as_str()).await {
+                        Lookup::Image { bytes, format } => Some(ReferenceImage::new(format, bytes)),
+                        Lookup::Unregistered | Lookup::NotReady => None,
+                    },
+                    None => None,
+                };
+                figures.push(match variant {
+                    Some(variant) => variant,
+                    None => self.inner.load(format!("figure-hero-{art}")).await?,
+                });
             }
             let sheet = tokio::task::spawn_blocking(move || party_sheet(&figures))
                 .await
@@ -758,7 +799,7 @@ impl Shared {
         let prompt = plate_moment(
             self.inner.rating,
             face.expression,
-            face.appearance,
+            face.tier,
             has_speaker_art,
         )
         .map_err(|_| ImageFailure::InvalidRequest)?;
@@ -860,7 +901,6 @@ impl Shared {
             .inner
             .plate_wanted_face(&speaker.id)
             .filter(|face| *face != Face::AUTHORED);
-        if wanted.is_some() || !matches!(book.edit, Edit::Idle) {}
         match (wanted, book.edit.clone()) {
             (None, Edit::Idle) => {}
             (None, _) => {
@@ -889,7 +929,7 @@ impl Shared {
                         "gameplay.living_scene.plate_edit_requested",
                         &[
                             ("scene.expression", face.expression.label().to_owned()),
-                            ("scene.appearance", face.appearance.label().to_owned()),
+                            ("scene.tier", face.tier.label().to_owned()),
                         ],
                     );
                 }
@@ -899,6 +939,15 @@ impl Shared {
 }
 
 impl Inner {
+    /// The health variants the health pipeline has made for these heroes, by art number.
+    fn hero_face_keys(&self, heroes: &[(u8, String)]) -> Vec<(u8, ImageKey)> {
+        let state = locked(&self.state);
+        heroes
+            .iter()
+            .filter_map(|(art, name)| Some((*art, state.hero_faces.get(name)?.clone())))
+            .collect()
+    }
+
     /// Whether the plate on screen covers the cut-outs: their expression and the re-lit
     /// backdrop are then never drawn (nobody would see them).
     fn set_plate_covers(&self, covers: bool) {

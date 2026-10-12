@@ -141,7 +141,7 @@ impl GameplayViews {
             _ => return Err(ViewDeliveryError::WrongAudience),
         };
         let journey = journey.ok_or(ViewDeliveryError::InvalidProjection)?;
-        if journey.party.len() > 2 || offer_count > 4 {
+        if journey.party.len() > 2 || offer_count > 12 {
             return Err(ViewDeliveryError::InvalidProjection);
         }
         let refresh = self
@@ -162,7 +162,7 @@ impl GameplayViews {
         }
     }
 
-    // PLAY-L01: the generated art of a display view of the revision already shown is copied into
+    // PLAY-L01: the generated art of a view of the revision already shown is copied into
     // the view on screen by `merge_art` (`live_art::merge_art`); nothing else may change at an
     // equal revision. Returns whether the art changed.
     pub(super) fn accept_art_update(
@@ -170,7 +170,7 @@ impl GameplayViews {
         generation: &ConnectionGeneration,
         scope: ViewScope,
         view: &rpc::ViewMessage,
-        merge_art: impl Fn(&mut rpc::ViewMessage, &rpc::ViewMessage) -> bool,
+        merge_art: impl FnMut(&mut rpc::ViewMessage, &rpc::ViewMessage) -> bool,
     ) -> bool {
         let Some(revision) = view
             .revision
@@ -185,21 +185,26 @@ impl GameplayViews {
         else {
             return false;
         };
-        if scope != self.scope || self.scope.role != ViewRole::Display {
+        if scope != self.scope {
             return false;
         }
-        let amended = self
+        // The view on screen is the table-talk view when there is one, so the art goes into it
+        // as well as into the stored view that replaces it later; merging into the stored view
+        // alone left finished art invisible after any line was spoken.
+        let mut merge_art = merge_art;
+        let stored = self
             .views
             .amend_presentation(generation, scope.binding, revision, |shown| {
                 merge_art(shown, view)
             });
-        // PLAY-V09: while a newer table line is shown from the held copy of the view (a typed line
-        // and its reply), that copy is what the display draws, so the art goes into it as well.
-        let held = self
-            .table_talk
-            .as_mut()
-            .is_some_and(|held| merge_art(held, view));
-        amended || held
+        let on_screen = self.table_talk.as_mut().is_some_and(|talk| {
+            let same_revision = talk.revision.as_ref().is_some_and(|wire| {
+                wire.epoch == view.revision.as_ref().and_then(|v| v.epoch)
+                    && wire.sequence == view.revision.as_ref().and_then(|v| v.sequence)
+            });
+            same_revision && merge_art(talk, view)
+        });
+        stored || on_screen
     }
 
     pub(super) fn current_revision(&self) -> Option<SessionRevision> {

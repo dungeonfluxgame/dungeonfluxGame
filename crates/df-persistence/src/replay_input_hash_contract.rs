@@ -18,7 +18,7 @@ fn canonical_hash(
 ) -> Result<CanonicalHash, crate::checkpoint_codec::CodecError> {
     let bytes = crate::checkpoint_codec::encode_checkpoint(checkpoint, codec_limits())?;
     Ok(CanonicalHash {
-        codec_version: u16::try_from(crate::checkpoint_codec::STORAGE_CODEC_VERSION)
+        codec_version: u16::try_from(crate::checkpoint_codec::checkpoint_storage_version(&bytes)?)
             .map_err(|_| crate::checkpoint_codec::CodecError::UnsupportedCodec)?,
         model_schema: checkpoint.schema(),
         sha256: Sha256::digest(bytes).into(),

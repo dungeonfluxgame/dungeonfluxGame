@@ -73,13 +73,16 @@ const LINES: [&str; 14] = [
     "You pathetic coward.",
 ];
 
-/// The pack's secret terms the table has not already heard: the NPC's own name is on screen.
+/// The pack's secret terms the table has not already heard: the NPC's own name is on screen, and
+/// the names the scenes speak aloud are never secret.
 fn unheard(adventure: &GeneratedAdventure, dossier: &Dossier) -> Vec<String> {
+    let spoken = super::npc_reply::spoken_names(&adventure.pack);
     adventure
         .pack
         .secret_terms
         .iter()
         .filter(|term| !mentions_term(&dossier.name, term))
+        .filter(|term| !spoken.iter().any(|name| name.eq_ignore_ascii_case(term)))
         .cloned()
         .collect()
 }

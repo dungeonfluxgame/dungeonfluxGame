@@ -99,8 +99,8 @@
     },
     "grade": {
       "preset": "dusk",
-      "exposure_ev": 0.1,
-      "saturation": 1.05,
+      "exposure_ev": 0.05,
+      "saturation": 0.9,
       "ambient": 0.55,
       "pool_m": 9.0
     },

@@ -1,0 +1,63 @@
+/* PLAY-H01: character health on the live screens. Everything keys on `data-health-tier`
+   (healthy, hurt, bloodied, critical, down), set from the server view's numbers by
+   `health_tier::tier_of`. No rule here depends on a device setting: the cues play for everyone.
+   Colour is never the only cue: every bar has notches at a quarter, a half and three quarters,
+   a word on the card from Hurt down, and a pattern (diagonal stripes at Critical, dashes when
+   Down). The numbers stay on every bar. */
+
+:root{--hp-healthy-a:#3f8553;--hp-healthy-b:#8fd18d;--hp-hurt-a:#82a32c;--hp-hurt-b:#cde05a;--hp-bloodied-a:#c4780f;--hp-bloodied-b:#f5b73c;--hp-critical-a:#7a1010;--hp-critical-b:#e53a32;--hp-down-a:#41474d;--hp-down-b:#7a838b;--hp-chip:#ffe27a;--bar-lag:1.15s;--hp-ticks:linear-gradient(90deg,transparent calc(25% - 1px),#ffffffcc calc(25% - 1px) calc(25% + 1px),transparent calc(25% + 1px),transparent calc(50% - 1px),#ffffffcc calc(50% - 1px) calc(50% + 1px),transparent calc(50% + 1px),transparent calc(75% - 1px),#ffffffcc calc(75% - 1px) calc(75% + 1px),transparent calc(75% + 1px))}
+
+/* ---------- the television's cards ---------- */
+.tv-fig-hp-fill{transition:width .8s ease-out var(--bar-lag)}
+.tv-fig-hp-chip{position:absolute;inset:0 auto 0 0;width:var(--hp,0%);background:var(--hp-chip);box-shadow:0 0 calc(var(--u)*.7) var(--hp-chip)}
+.tv-fig-hp::after{content:'';position:absolute;inset:0;z-index:0;pointer-events:none;background:var(--hp-ticks) top/100% 24% no-repeat,var(--hp-ticks) bottom/100% 24% no-repeat}
+.tv-fig-hp-text{z-index:1;white-space:nowrap;font-size:min(var(--fs-label),calc(var(--u)*1.45));letter-spacing:0;font-variant-numeric:tabular-nums;text-shadow:0 0 3px #000,0 0 5px #000,0 1px 2px #000}
+
+.tv-hud-card[data-health-tier=healthy] .tv-fig-hp-fill{background:linear-gradient(90deg,var(--hp-healthy-a),var(--hp-healthy-b))}
+.tv-hud-card[data-health-tier=hurt] .tv-fig-hp-fill{background:linear-gradient(90deg,var(--hp-hurt-a),var(--hp-hurt-b))}
+.tv-hud-card[data-health-tier=bloodied] .tv-fig-hp-fill{background:linear-gradient(90deg,var(--hp-bloodied-a),var(--hp-bloodied-b))}
+.tv-hud-card[data-health-tier=critical] .tv-fig-hp-fill{background:repeating-linear-gradient(135deg,#0000 0 .5vw,#0000004d .5vw 1vw),linear-gradient(90deg,var(--hp-critical-a),var(--hp-critical-b));animation:df-health-pulse 1.3s ease-in-out infinite}
+.tv-hud-card[data-health-tier=down] .tv-fig-hp-fill{background:repeating-linear-gradient(90deg,#0000 0 .4vw,#00000059 .4vw .7vw),linear-gradient(90deg,var(--hp-down-a),var(--hp-down-b))}
+@keyframes df-health-pulse{0%,100%{filter:brightness(.88)}18%{filter:brightness(1.35)}32%{filter:brightness(.95)}46%{filter:brightness(1.25)}}
+
+.tv-hud-card[data-health-tier=hurt] .tv-hud-crest{border-color:var(--hp-hurt-b)}
+.tv-hud-card[data-health-tier=bloodied] .tv-hud-crest{border-color:var(--hp-bloodied-b)}
+.tv-hud-card[data-health-tier=critical] .tv-hud-crest{border-color:var(--hp-critical-b)}
+.tv-hud-card[data-health-tier=down] .tv-hud-crest{border-color:var(--hp-down-b)}
+.tv-hud-crest[data-crop=face]{background-size:240% auto;background-position:50% 0}
+
+/* the word on the card, from Hurt down: a small ribbon under the crest, so the name keeps its room */
+.tv-hud-crest{position:relative}
+.tv-hud-card:is([data-health-tier=hurt],[data-health-tier=bloodied],[data-health-tier=critical],[data-health-tier=down]) .tv-hud-crest::after{position:absolute;left:50%;bottom:calc(var(--u)*-.55);transform:translateX(-50%);padding:calc(var(--u)*.1) calc(var(--u)*.55);border:1px solid currentColor;border-radius:calc(var(--u)*.6);background:#05080cf2;font:700 calc(var(--u)*.8)/1.2 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap;z-index:2}
+.tv-hud-card[data-health-tier=hurt] .tv-hud-crest::after{content:"Hurt";color:var(--hp-hurt-b)}
+.tv-hud-card[data-health-tier=bloodied] .tv-hud-crest::after{content:"Bloodied";color:var(--hp-bloodied-b)}
+.tv-hud-card[data-health-tier=critical] .tv-hud-crest::after{content:"Critical";color:#ff6b62}
+.tv-hud-card[data-health-tier=down] .tv-hud-crest::after{content:"Down";color:#aeb6bd}
+
+/* A hero's health variant at the near depth: the full-body art cropped to knees-up, as the
+   authored cut-out is framed. The replaced picture fades out unscaled above it. */
+.tv-fig[data-depth=near][data-slot^=hero][data-live] .tv-fig-sprite:not(.tv-fig-ghost){inset:0 auto auto -27.5%;width:155%;height:auto;object-fit:initial}
+
+/* ---------- the phone: own hero card, other bars in the initiative strip ---------- */
+.combat-hp::after{content:'';position:absolute;inset:0;z-index:0;pointer-events:none;background:var(--hp-ticks) top/100% 24% no-repeat,var(--hp-ticks) bottom/100% 24% no-repeat}
+.combat-hp-text{z-index:1;white-space:nowrap;font-variant-numeric:tabular-nums;text-shadow:0 0 3px #000,0 0 5px #000,0 1px 2px #000}
+.combat-hp[data-health-tier=healthy] .combat-hp-fill{background:linear-gradient(90deg,var(--hp-healthy-a),var(--hp-healthy-b))!important}
+.combat-hp[data-health-tier=hurt] .combat-hp-fill{background:linear-gradient(90deg,var(--hp-hurt-a),var(--hp-hurt-b))!important}
+.combat-hp[data-health-tier=bloodied] .combat-hp-fill{background:linear-gradient(90deg,var(--hp-bloodied-a),var(--hp-bloodied-b))!important}
+.combat-hp[data-health-tier=critical] .combat-hp-fill{background:repeating-linear-gradient(135deg,#0000 0 5px,#0000004d 5px 10px),linear-gradient(90deg,var(--hp-critical-a),var(--hp-critical-b))!important;animation:df-health-pulse 1.3s ease-in-out infinite}
+.combat-hp[data-health-tier=down] .combat-hp-fill{background:repeating-linear-gradient(90deg,#0000 0 4px,#00000059 4px 7px),linear-gradient(90deg,var(--hp-down-a),var(--hp-down-b))!important}
+.live-hero-head[data-health-tier=hurt] .live-portrait,#hero-sheet [data-health-tier=hurt] .live-portrait{border-color:var(--hp-hurt-b)}
+.live-hero-head[data-health-tier=bloodied] .live-portrait,#hero-sheet [data-health-tier=bloodied] .live-portrait{border-color:var(--hp-bloodied-b)}
+.live-hero-head[data-health-tier=critical] .live-portrait,#hero-sheet [data-health-tier=critical] .live-portrait{border-color:var(--hp-critical-b)}
+.live-hero-head[data-health-tier=down] .live-portrait,#hero-sheet [data-health-tier=down] .live-portrait{border-color:var(--hp-down-b);filter:saturate(.3)}
+.live-hero-head:is([data-health-tier=hurt],[data-health-tier=bloodied],[data-health-tier=critical],[data-health-tier=down]) .live-hero-name::after,#hero-sheet :is([data-health-tier=hurt],[data-health-tier=bloodied],[data-health-tier=critical],[data-health-tier=down]) .live-hero-name::after{margin-left:.6em;font:700 12px/1 system-ui,sans-serif;letter-spacing:.1em;text-transform:uppercase;vertical-align:middle}
+[data-health-tier=hurt] .live-hero-name::after{content:"Hurt";color:var(--hp-hurt-b)}
+[data-health-tier=bloodied] .live-hero-name::after{content:"Bloodied";color:var(--hp-bloodied-b)}
+[data-health-tier=critical] .live-hero-name::after{content:"Critical";color:#ff6b62}
+[data-health-tier=down] .live-hero-name::after{content:"Down";color:#aeb6bd}
+.live-portrait[data-crop=face]::before,.combat-actor[data-crop=face] .combat-initiative-value::before{background-size:240% auto;background-position:50% 0}
+
+/* red at the edges of a phone whose hero is Bloodied or worse; a slow beat at Critical */
+.live-health-vignette{position:fixed;inset:0;z-index:28;pointer-events:none;background:radial-gradient(ellipse at center,#0000 55%,#b3101a66 100%)}
+.live-health-vignette[data-health-tier=critical]{background:radial-gradient(ellipse at center,#0000 42%,#c40f1cb3 100%);animation:df-vignette-beat 1.3s ease-in-out infinite}
+@keyframes df-vignette-beat{0%,100%{opacity:.55}18%{opacity:1}32%{opacity:.7}46%{opacity:.95}}

@@ -144,9 +144,11 @@ impl OutputSpec {
         transparent: false,
     };
 
+    /// A cut-out is a WebP with alpha (a PNG of the same picture is several times larger); a
+    /// backdrop or close-up is a JPEG.
     fn format(self) -> ImageFormat {
         if self.transparent {
-            ImageFormat::Png
+            ImageFormat::Webp
         } else {
             ImageFormat::Jpeg
         }
@@ -502,11 +504,29 @@ impl Imagery {
             return Lookup::NotReady;
         };
         match engine.read_cached(key, registered.format).await {
-            Some(bytes) => Lookup::Image {
-                bytes,
-                format: registered.format,
-            },
+            Some((bytes, format)) => Lookup::Image { bytes, format },
             None => Lookup::NotReady,
+        }
+    }
+
+    /// The key of `request` if its image is already cached; never calls the provider and never
+    /// charges. The only way a fight learns what it may show.
+    pub(super) async fn peek(&self, request: &ImageRequest) -> Option<ImageKey> {
+        let Mode::On { engine, .. } = &self.inner.mode else {
+            return None;
+        };
+        let key = self.key_for(request);
+        let format = request.output.format();
+        engine.cache_has(&key, format).await?;
+        locked(&self.inner.registry).register(&key, Registered { format });
+        Some(key)
+    }
+
+    /// Provider calls the budget can still pay for.
+    pub(super) fn budget_remaining(&self) -> u32 {
+        match &self.inner.mode {
+            Mode::Off(_) => 0,
+            Mode::On { engine, .. } => locked(&engine.budget).remaining,
         }
     }
 }
@@ -521,17 +541,27 @@ impl Engine {
     }
 
     fn file_name(key: &ImageKey, format: ImageFormat) -> String {
-        let extension = if format == ImageFormat::Png {
-            "png"
-        } else {
-            "jpg"
+        let extension = match format {
+            ImageFormat::Png => "png",
+            ImageFormat::Webp => "webp",
+            ImageFormat::Jpeg => "jpg",
         };
         format!("{}.{extension}", key.as_str())
     }
 
+    /// The formats an image of `format` may be found in: a cut-out cached before WebP output
+    /// is a PNG of the same request.
+    fn stored_formats(format: ImageFormat) -> &'static [ImageFormat] {
+        match format {
+            ImageFormat::Webp => &[ImageFormat::Webp, ImageFormat::Png],
+            ImageFormat::Png => &[ImageFormat::Png],
+            ImageFormat::Jpeg => &[ImageFormat::Jpeg],
+        }
+    }
+
     async fn image(self: &Arc<Self>, key: &ImageKey, request: ImageRequest) -> Outcome {
         let format = request.output.format();
-        if self.cache_has(key, format).await {
+        if self.cache_has(key, format).await.is_some() {
             self.cache_hits.fetch_add(1, Ordering::SeqCst);
             return Ok(());
         }
@@ -588,7 +618,7 @@ impl Engine {
     async fn produce(&self, key: &ImageKey, request: ImageRequest) -> Outcome {
         let format = request.output.format();
         // A flight that finished between the caller's cache check and this one wrote it.
-        if self.cache_has(key, format).await {
+        if self.cache_has(key, format).await.is_some() {
             self.cache_hits.fetch_add(1, Ordering::SeqCst);
             return Ok(());
         }
@@ -671,24 +701,39 @@ impl Engine {
         Ok(())
     }
 
-    async fn cache_has(&self, key: &ImageKey, format: ImageFormat) -> bool {
-        let path = self.cache_dir.join(Self::file_name(key, format));
+    /// The format an image of `format` is cached in, if it is cached.
+    async fn cache_has(&self, key: &ImageKey, format: ImageFormat) -> Option<ImageFormat> {
+        let paths: Vec<(ImageFormat, PathBuf)> = Self::stored_formats(format)
+            .iter()
+            .map(|found| (*found, self.cache_dir.join(Self::file_name(key, *found))))
+            .collect();
         tokio::task::spawn_blocking(move || {
-            std::fs::symlink_metadata(&path)
-                .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+            paths.into_iter().find_map(|(found, path)| {
+                std::fs::symlink_metadata(&path)
+                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+                    .then_some(found)
+            })
         })
         .await
-        .unwrap_or(false)
+        .ok()
+        .flatten()
     }
 
-    async fn read_cached(&self, key: &str, format: ImageFormat) -> Option<Bytes> {
+    async fn read_cached(&self, key: &str, format: ImageFormat) -> Option<(Bytes, ImageFormat)> {
         let key = ImageKey::parse(key)?;
-        let path = self.cache_dir.join(Self::file_name(&key, format));
+        let paths: Vec<(ImageFormat, PathBuf)> = Self::stored_formats(format)
+            .iter()
+            .map(|found| (*found, self.cache_dir.join(Self::file_name(&key, *found))))
+            .collect();
         // A failed blocking task is treated as a cache miss.
-        tokio::task::spawn_blocking(move || read_cache_file(&path))
-            .await
-            .ok()
-            .flatten()
+        tokio::task::spawn_blocking(move || {
+            paths
+                .into_iter()
+                .find_map(|(found, path)| read_cache_file(&path).map(|bytes| (bytes, found)))
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     /// Writes a temporary file beside the target and renames it into place so a reader never
@@ -765,13 +810,14 @@ impl Engine {
                 continue;
             };
             let format = if entry.transparent {
-                ImageFormat::Png
+                ImageFormat::Webp
             } else {
                 ImageFormat::Jpeg
             };
-            let present =
-                std::fs::symlink_metadata(self.cache_dir.join(Self::file_name(&key, format)))
-                    .is_ok_and(|metadata| metadata.is_file());
+            let present = Self::stored_formats(format).iter().any(|found| {
+                std::fs::symlink_metadata(self.cache_dir.join(Self::file_name(&key, *found)))
+                    .is_ok_and(|metadata| metadata.is_file())
+            });
             if present {
                 registry.register(&key, Registered { format });
             }
@@ -889,10 +935,10 @@ async fn serve_image(
     match imagery.image(&key).await {
         Lookup::Image { bytes, format } => {
             let etag = format!("\"{key}\"");
-            let content_type = if format == ImageFormat::Png {
-                "image/png"
-            } else {
-                "image/jpeg"
+            let content_type = match format {
+                ImageFormat::Png => "image/png",
+                ImageFormat::Webp => "image/webp",
+                ImageFormat::Jpeg => "image/jpeg",
             };
             if headers
                 .get(header::IF_NONE_MATCH)

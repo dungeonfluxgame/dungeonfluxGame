@@ -1120,6 +1120,7 @@ fn tactical_action_checkpoint() -> Checkpoint {
         active_turn: Some(entity(5)),
         objectives: vec![content()],
         combat_policy: content(),
+        tactical: None,
     });
     checkpoint(state).unwrap()
 }

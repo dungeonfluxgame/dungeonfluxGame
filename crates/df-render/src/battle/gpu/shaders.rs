@@ -30,6 +30,23 @@ struct FOut {
     @location(0) colour: vec4<f32>,
     @builtin(frag_depth) depth: f32,
 }
+
+// The depth a figure standing on the play plane is tested with. The scan's own ground (turf,
+// stones, tufts) may rise up to `plane.y` metres above the plane, so the figure counts as being as
+// near as the point where its line of sight crosses that height: ground at or below it never hides
+// the feet, while anything standing higher in front of the figure (a trunk, a wall, a palisade)
+// is still nearer than that point and still hides it. Above that height the figure's own depth
+// stands, since the ground cannot reach it. With no margin (painted grounds) nothing changes.
+fn standing_depth(world: vec3<f32>) -> f32 {
+    let to_world = world - frame.eye.xyz;
+    let direction = normalize(to_world);
+    var along = length(to_world);
+    if (direction.y < -0.0001) {
+        along = min(along, (frame.eye.y - (frame.plane.x + frame.plane.y)) / -direction.y);
+    }
+    let clip = frame.view_proj * vec4<f32>(frame.eye.xyz + direction * along, 1.0);
+    return clamp(clip.z / clip.w, 0.0, 1.0);
+}
 "#;
 
 const BACKDROP: &str = r#"
@@ -397,6 +414,47 @@ fn fs(in: VOut) -> FOut {
 }
 "#;
 
+const PARTICLE: &str = r#"
+struct VOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) p: vec2<f32>,
+    @location(1) colour: vec4<f32>,
+}
+
+@vertex
+fn vs(
+    @builtin(vertex_index) i: u32,
+    @location(0) place: vec4<f32>,   // x, y, z, size in metres
+    @location(1) tint: vec4<f32>,    // premultiplied rgb, additive share (1 adds light, 0 blends over)
+) -> VOut {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0));
+    let c = corners[i];
+    // A small camera-facing quad: right is the camera's right, up is the world's up.
+    let world = place.xyz + frame.right.xyz * (c.x * place.w) + vec3<f32>(0.0, c.y * place.w, 0.0);
+    var out: VOut;
+    out.pos = frame.view_proj * vec4<f32>(world, 1.0);
+    out.p = c;
+    out.colour = tint;
+    return out;
+}
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    let d2 = dot(in.p, in.p);
+    if (d2 > 1.0) {
+        discard;
+    }
+    let soft = exp(-d2 * 3.2);
+    // Premultiplied: additive particles carry no alpha (they only add light); dust blends over.
+    let add = in.colour.a;
+    let rgb = in.colour.rgb * soft;
+    let alpha = (1.0 - add) * soft * max(max(in.colour.r, in.colour.g), in.colour.b) * 1.6;
+    return vec4<f32>(rgb, alpha);
+}
+"#;
+
 const POST: &str = r#"
 struct Post {
     grade: vec4<f32>,      // exposure, contrast, saturation, enabled
@@ -406,6 +464,8 @@ struct Post {
     misc: vec4<f32>,       // vignette, flash strength, fade, tilt-shift on
     flash: vec4<f32>,      // flash colour rgb
     shake: vec4<f32>,      // dx px, dy px, texel w, texel h
+    motion: vec4<f32>,     // motion blur direction x, y (unit), blur px, radial punch
+    split: vec4<f32>,      // chromatic split px, picture roll (radians), vignette pulse, unused
 }
 @group(0) @binding(0) var<uniform> post: Post;
 @group(0) @binding(1) var scene: texture_2d<f32>;
@@ -449,10 +509,43 @@ fn blurred(uv: vec2<f32>) -> vec3<f32> {
     return sum / weight;
 }
 
+// The picture rolled about its centre (aspect-correct) by `post.split.y` radians.
+fn rolled(uv: vec2<f32>) -> vec2<f32> {
+    let aspect = post.shake.w / post.shake.z;
+    let c = (uv - vec2<f32>(0.5)) * vec2<f32>(aspect, 1.0);
+    let s = sin(post.split.y);
+    let k = cos(post.split.y);
+    let r = vec2<f32>(c.x * k - c.y * s, c.x * s + c.y * k);
+    return r / vec2<f32>(aspect, 1.0) + vec2<f32>(0.5);
+}
+
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
-    let uv = in.uv + post.shake.xy * post.shake.zw;
+    let uv = rolled(in.uv) + post.shake.xy * post.shake.zw;
     var colour = blurred(uv);
+    // Directional blur along a fast camera move, and a radial punch-in blur on a critical: a few
+    // taps of the already tilt-shifted picture along the direction, averaged with it.
+    let blur_px = post.motion.z;
+    let radial = post.motion.w;
+    if (blur_px > 0.5 || radial > 0.002) {
+        var sum = colour;
+        var weight = 1.0;
+        let toward_centre = (vec2<f32>(0.5) - uv);
+        for (var k = 1; k <= 6; k = k + 1) {
+            let t = f32(k) / 6.0;
+            let along = post.motion.xy * post.shake.zw * blur_px * (t - 0.5) * 2.0;
+            let punch = toward_centre * radial * t;
+            sum = sum + fetch(uv + along + punch);
+            weight = weight + 1.0;
+        }
+        colour = sum / weight;
+    }
+    // Chromatic split on heavy impacts: red and blue slide apart toward the screen edge.
+    if (post.split.x > 0.05) {
+        let edge = (uv - vec2<f32>(0.5));
+        let offset = edge * post.split.x * 2.0 * post.shake.zw;
+        colour = vec3<f32>(fetch(uv + offset).r, colour.g, fetch(uv - offset).b);
+    }
     if (post.grade.w > 0.5) {
         var rgb = max(colour, vec3<f32>(0.0)) * exp2(post.grade.x);
         let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -463,7 +556,9 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     }
     let centred = (in.uv - vec2<f32>(0.5)) * vec2<f32>(1.15, 1.0);
     let vignette = smoothstep(0.32, 0.95, length(centred) * 1.25);
-    colour = colour * (1.0 - vignette * post.misc.x);
+    colour = colour * (1.0 - vignette * (post.misc.x + post.split.z));
+    // The pulse when a hero is hit: the vignette flushes red for a moment.
+    colour = colour + vec3<f32>(0.55, 0.03, 0.03) * vignette * post.split.z;
     colour = colour + post.flash.rgb * post.misc.y * 0.55;
     colour = colour * (1.0 - post.misc.z);
     return vec4<f32>(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
@@ -484,6 +579,10 @@ pub fn grid() -> String {
 
 pub fn decal() -> String {
     format!("{FRAME}{DECAL}")
+}
+
+pub fn particle() -> String {
+    format!("{FRAME}{PARTICLE}")
 }
 
 pub fn post() -> String {

@@ -631,6 +631,7 @@ pub(super) fn observe(client: &Rc<RefCell<Client>>) {
     };
     let scene = display.scene.clone().unwrap_or_default();
     let tempo = tempo_of(&scene, journey, sequence);
+    super::live_battlefield::set_tempo(tempo.intensity);
     let facts = facts_of(&scene, journey, &display.scene_asset);
     match director(&document, &root) {
         Ok(shared) => {

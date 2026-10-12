@@ -23,13 +23,13 @@ fn signal(
     }
 }
 
-fn member(speaking: bool, opposes: bool, appearance: Appearance) -> CastState {
+fn member(speaking: bool, opposes: bool, tier: HealthTier) -> CastState {
     CastState {
         id: "merchant".to_owned(),
         attitude: Some(Attitude::Indifferent),
         opposes,
         speaking,
-        appearance,
+        tier,
     }
 }
 
@@ -261,7 +261,7 @@ fn every_mood_has_a_look_and_every_expression_a_label() {
 
 #[test]
 fn the_same_inputs_and_clock_give_the_same_verdict() {
-    let cast = [member(true, false, Appearance::Unhurt)];
+    let cast = [member(true, false, HealthTier::Healthy)];
     let exchange = signal(
         1,
         Approach::Insult,
@@ -285,7 +285,7 @@ fn the_same_inputs_and_clock_give_the_same_verdict() {
 
 #[test]
 fn an_exchange_changes_the_look_at_once_and_is_handled_only_once() {
-    let cast = [member(true, false, Appearance::Unhurt)];
+    let cast = [member(true, false, HealthTier::Healthy)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
     let calm = tracker.update(seconds(0), &inputs(&cast, None, None, &[]));
     assert!(!calm.scene_worth_rendering);
@@ -306,7 +306,7 @@ fn an_exchange_changes_the_look_at_once_and_is_handled_only_once() {
             "merchant".to_owned(),
             Face {
                 expression: Expression::Angry,
-                appearance: Appearance::Unhurt
+                tier: HealthTier::Healthy
             }
         )]
     );
@@ -320,7 +320,7 @@ fn an_exchange_changes_the_look_at_once_and_is_handled_only_once() {
 
 #[test]
 fn an_ambient_change_must_persist_before_it_becomes_the_target() {
-    let cast = [member(false, false, Appearance::Unhurt)];
+    let cast = [member(false, false, HealthTier::Healthy)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
     let tense = tempo(TempoLevel::Anticipation);
     let first = tracker.update(seconds(0), &inputs(&cast, None, tense, &[]));
@@ -334,7 +334,7 @@ fn an_ambient_change_must_persist_before_it_becomes_the_target() {
 
 #[test]
 fn a_flickering_input_never_flaps_the_look() {
-    let cast = [member(false, false, Appearance::Unhurt)];
+    let cast = [member(false, false, HealthTier::Healthy)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
     for step in 0..60 {
         let phase = if step % 2 == 0 {
@@ -349,7 +349,7 @@ fn a_flickering_input_never_flaps_the_look() {
 
 #[test]
 fn an_exchange_look_is_held_against_tempo_drift_then_released() {
-    let cast = [member(true, false, Appearance::Unhurt)];
+    let cast = [member(true, false, HealthTier::Healthy)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
     let flirt = signal(
         1,
@@ -382,7 +382,7 @@ fn an_exchange_look_is_held_against_tempo_drift_then_released() {
 
 #[test]
 fn an_expression_relaxes_to_the_authored_face_after_the_hold() {
-    let cast = [member(true, false, Appearance::Unhurt)];
+    let cast = [member(true, false, HealthTier::Healthy)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
     let insult = signal(
         1,
@@ -404,7 +404,7 @@ fn an_expression_relaxes_to_the_authored_face_after_the_hold() {
 
 #[test]
 fn only_a_difference_from_what_is_on_screen_is_worth_a_rerender() {
-    let cast = [member(false, false, Appearance::Unhurt)];
+    let cast = [member(false, false, HealthTier::Healthy)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
     let flirt = signal(
         1,
@@ -428,7 +428,7 @@ fn only_a_difference_from_what_is_on_screen_is_worth_a_rerender() {
 
 #[test]
 fn a_new_scene_starts_from_the_authored_look_and_replays_no_exchange() {
-    let cast = [member(true, false, Appearance::Unhurt)];
+    let cast = [member(true, false, HealthTier::Healthy)];
     let mut tracker = MoodTracker::new(Hysteresis::default());
     let insult = signal(
         1,
@@ -447,7 +447,7 @@ fn a_new_scene_starts_from_the_authored_look_and_replays_no_exchange() {
 
 #[test]
 fn recent_actions_and_the_setting_colour_the_ambient_mood() {
-    let cast = [member(false, false, Appearance::Unhurt)];
+    let cast = [member(false, false, HealthTier::Healthy)];
     let actions = [
         TableKind::Action,
         TableKind::Speech,
@@ -472,7 +472,7 @@ fn recent_actions_and_the_setting_colour_the_ambient_mood() {
 
 #[test]
 fn a_peak_with_an_enemy_speaking_is_menacing_and_the_story_beats_set_the_end_mood() {
-    let enemy = [member(true, true, Appearance::Unhurt)];
+    let enemy = [member(true, true, HealthTier::Healthy)];
     assert_eq!(
         ambient_mood(&inputs(&enemy, None, tempo(TempoLevel::Peak), &[])),
         Mood::Menacing
@@ -494,33 +494,58 @@ fn a_peak_with_an_enemy_speaking_is_menacing_and_the_story_beats_set_the_end_moo
 }
 
 #[test]
-fn hit_points_decide_how_hurt_a_character_looks() {
-    assert_eq!(Appearance::from_hit_points(10, 10), Appearance::Unhurt);
-    assert_eq!(Appearance::from_hit_points(6, 10), Appearance::Unhurt);
-    assert_eq!(Appearance::from_hit_points(5, 10), Appearance::Wounded);
-    assert_eq!(Appearance::from_hit_points(3, 10), Appearance::Wounded);
-    assert_eq!(Appearance::from_hit_points(2, 10), Appearance::Bloodied);
-    assert_eq!(Appearance::from_hit_points(0, 10), Appearance::Bloodied);
-    assert_eq!(Appearance::from_hit_points(0, 0), Appearance::Unhurt);
+fn bloodied_or_worse_shows_the_health_face_and_above_it_the_mood_face_wins() {
+    for tier in [HealthTier::Bloodied, HealthTier::Critical, HealthTier::Down] {
+        // Priority, not multiplication: the mood does not combine with the health face.
+        for mood in Expression::ALL {
+            assert_eq!(
+                Face::resolve(mood, tier),
+                Face {
+                    expression: Expression::Neutral,
+                    tier
+                },
+                "{tier:?} {mood:?}"
+            );
+        }
+    }
+    assert_eq!(
+        Face::resolve(Expression::Angry, HealthTier::Hurt),
+        Face {
+            expression: Expression::Angry,
+            tier: HealthTier::Healthy
+        }
+    );
+    assert_eq!(
+        Face::resolve(Expression::Neutral, HealthTier::Hurt).tier,
+        HealthTier::Hurt
+    );
+    assert_eq!(
+        Face::resolve(Expression::Angry, HealthTier::Healthy).expression,
+        Expression::Angry
+    );
+    assert_eq!(
+        Face::resolve(Expression::Neutral, HealthTier::Healthy),
+        Face::AUTHORED
+    );
 }
 
 #[test]
-fn a_hurt_character_shows_pain_or_resolve_and_the_end_beats_show_relief_or_grief() {
+fn a_hurt_character_shows_the_health_face_and_the_end_beats_show_relief_or_grief() {
     let mut tracker = MoodTracker::new(Hysteresis::default());
-    let bloodied = [member(true, true, Appearance::Bloodied)];
+    let bloodied = [member(true, true, HealthTier::Bloodied)];
     let verdict = tracker.update(seconds(0), &inputs(&bloodied, None, None, &[]));
     assert_eq!(
         verdict.face_changes[0].1,
         Face {
-            expression: Expression::Pained,
-            appearance: Appearance::Bloodied
+            expression: Expression::Neutral,
+            tier: HealthTier::Bloodied
         }
     );
-    let wounded = [member(true, true, Appearance::Wounded)];
+    let wounded = [member(true, true, HealthTier::Hurt)];
     let verdict = tracker.update(seconds(1), &inputs(&wounded, None, None, &[]));
-    assert_eq!(verdict.face_changes[0].1.expression, Expression::Determined);
+    assert_eq!(verdict.face_changes[0].1.tier, HealthTier::Hurt);
 
-    let patron = [member(true, false, Appearance::Unhurt)];
+    let patron = [member(true, false, HealthTier::Healthy)];
     let mut sorrow = MoodTracker::new(Hysteresis::default());
     let defeat = MoodInputs {
         beat: Beat::Defeat,
@@ -544,7 +569,7 @@ fn a_hurt_character_shows_pain_or_resolve_and_the_end_beats_show_relief_or_grief
         Expression::Smiling
     );
     // A character who is not speaking shows nothing at the end beats.
-    let silent = [member(false, false, Appearance::Unhurt)];
+    let silent = [member(false, false, HealthTier::Healthy)];
     let mut quiet = MoodTracker::new(Hysteresis::default());
     let victory = MoodInputs {
         beat: Beat::Victory,

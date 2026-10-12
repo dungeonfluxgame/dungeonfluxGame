@@ -206,7 +206,8 @@ pub(crate) async fn insert_checkpoint<A: df_auth::membership::MembershipAuthorit
     let basis = checkpoint.basis();
     let (epoch, sequence) = crate::revision_codec::encode_revision(basis.revision);
     let schema = i32::from(checkpoint.schema());
-    let codec = STORAGE_CODEC_VERSION;
+    let codec = crate::checkpoint_codec::checkpoint_storage_version(document)
+        .map_err(|_| RepositoryError::InvalidCandidate)?;
     validate_storage_format(codec, b"DFCP", document)
         .map_err(|_| RepositoryError::InvalidCandidate)?;
     let changed = transaction

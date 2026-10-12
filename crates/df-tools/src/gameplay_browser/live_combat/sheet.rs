@@ -402,15 +402,19 @@ fn class_line(sheet: &rpc::CharacterSheet) -> String {
 }
 
 /// Portrait token by party order: the first joined hero uses `hero-1`, the second `hero-2`.
-pub(in crate::gameplay_browser) fn portrait_token(
-    party: &[rpc::PartyMemberView],
+pub(in crate::gameplay_browser) fn portrait_token<'a>(
+    party: &'a [rpc::PartyMemberView],
     own: &rpc::CharacterSheet,
-) -> &'static str {
+) -> &'a str {
     let mut matches = party
         .iter()
         .enumerate()
         .filter(|(_, member)| member.name == own.name);
     match (matches.next(), matches.next()) {
+        (Some((_, member)), None) if !member.portrait.is_empty() => member
+            .portrait
+            .strip_prefix("portrait-")
+            .unwrap_or(&member.portrait),
         (Some((1, _)), None) => "hero-2",
         _ => "hero-1",
     }

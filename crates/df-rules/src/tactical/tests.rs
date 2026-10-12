@@ -35,7 +35,22 @@ fn records(source: &RuleReference, faces: &[(u32, u32)]) -> Vec<ActualDraw> {
         })
         .collect()
 }
-fn step(battle: &Battle, actor: u32, action: Action, faces: &[(u32, u32)]) -> Resolution {
+fn step(battle: &Battle, actor: u32, mut action: Action, faces: &[(u32, u32)]) -> Resolution {
+    // Successful source fixtures use only the actor's selected masteries. Refusal
+    // fixtures call resolve directly, preserving their deliberately invalid inputs.
+    let usage = match &mut action {
+        Action::Attack { weapon, .. } => Some(weapon),
+        Action::Opportunity { attack } => attack.as_mut(),
+        _ => None,
+    };
+    if let Some(usage) = usage {
+        usage.use_mastery &= battle
+            .actor(actor)
+            .unwrap()
+            .spec()
+            .masteries
+            .contains(&usage.weapon);
+    }
     let src = source();
     let dice = records(&src, faces);
     resolve(battle, actor, &action, binding(&src), &dice).unwrap()
@@ -142,6 +157,27 @@ fn usage(weapon: Weapon, ranged: bool) -> AttackUse {
         savage_attacker: false,
         use_mastery: true,
     }
+}
+#[test]
+fn unselected_hero_and_monster_masteries_are_refused_without_draws() {
+    let state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "wolf", Cell(2, 1), 0).unwrap(),
+    ]);
+    rejects(
+        &state,
+        1,
+        strike(3, Weapon::Spear, false),
+        RuleError::InvalidWeapon,
+    );
+    let mut state = state;
+    state.active = 1;
+    rejects(
+        &state,
+        3,
+        strike(1, Weapon::Bite, false),
+        RuleError::InvalidWeapon,
+    );
 }
 fn strike(target: u32, weapon: Weapon, ranged: bool) -> Action {
     Action::Attack {
@@ -899,7 +935,10 @@ fn full_creature_catalog_preserves_actions_and_required_riders() {
         3,
         Action::Attack {
             target: 1,
-            weapon: usage(Weapon::Shortsword, false),
+            weapon: AttackUse {
+                use_mastery: false,
+                ..usage(Weapon::Shortsword, false)
+            },
             spend: AttackSpend::Multiattack,
         },
         RuleError::InvalidExtraAttack,
@@ -1166,4 +1205,116 @@ fn vex_marks_multiple_targets_and_expires_after_next_turn_not_at_start() {
     assert_eq!(state.actor(1).unwrap().vex.len(), 2);
     let state = step(&state, 1, Action::EndTurn, &[]).battle;
     assert!(state.actor(1).unwrap().vex.is_empty());
+}
+
+#[test]
+fn tactical_snapshot_preserves_optional_opportunity_pending_path_and_continuation() {
+    let before = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+    let pending = step(&before, 1, Action::Move(vec![Cell(0, 1), Cell(0, 2)]), &[]).battle;
+    assert_eq!(pending.reaction_offers(), &[3]);
+    let saved = pending.snapshot().unwrap();
+    let recovered = Battle::from_snapshot(map("open-court"), &saved).unwrap();
+    assert_eq!(pending, recovered);
+    assert_eq!(saved, recovered.snapshot().unwrap());
+    let decline = Action::Opportunity { attack: None };
+    assert_eq!(
+        step(&pending, 3, decline.clone(), &[]),
+        step(&recovered, 3, decline, &[])
+    );
+}
+
+#[test]
+fn tactical_snapshot_preserves_ammunition_spend_second_wind_and_doffed_shield() {
+    let before = battle(vec![
+        archer(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "goblin-warrior", Cell(9, 1), 20).unwrap(),
+    ]);
+    let fired = step(&before, 1, strike(3, Weapon::Longbow, true), &[(20, 1)]).battle;
+    let healed = step(&fired, 1, Action::SecondWind, &[(10, 3)]).battle;
+    let enemy_turn = step(&healed, 1, Action::EndTurn, &[]).battle;
+    let doffed = step(&enemy_turn, 3, Action::DoffShield, &[]).battle;
+    assert_eq!(doffed.actor(1).unwrap().arrows(), 19);
+    assert_eq!(doffed.actor(1).unwrap().spec().second_wind_uses, 1);
+    assert!(!doffed.actor(3).unwrap().shield_equipped());
+    let saved = doffed.snapshot().unwrap();
+    assert_eq!(
+        Battle::from_snapshot(map("open-court"), &saved).unwrap(),
+        doffed
+    );
+}
+
+#[test]
+fn tactical_snapshot_refuses_incompatible_source_map_order_health_and_overlapping_living_cells() {
+    let before = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+    let bytes = before.snapshot().unwrap();
+    assert_eq!(
+        Battle::from_snapshot(map("broken-yard"), &bytes),
+        Err(RuleError::SnapshotData)
+    );
+    for field in ["version", "source", "order", "health", "cell"] {
+        let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        match field {
+            "version" => json["version"] = 2.into(),
+            "source" => json["source"] = "unadmitted".into(),
+            "order" => json["order"] = serde_json::json!([1, 1]),
+            "health" => json["actors"][0]["health"]["hit_points"] = 99.into(),
+            "cell" => json["actors"][1]["spec"]["cell"] = serde_json::json!([1, 1]),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            Battle::from_snapshot(map("open-court"), &serde_json::to_vec(&json).unwrap()),
+            Err(RuleError::SnapshotData),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn tactical_snapshot_preserves_dropped_weapon_dying_death_save_and_natural_twenty_recovery() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        melee(2, Cell(1, 7)),
+        CombatantSpec::creature(3, "skeleton", Cell(5, 1), 20).unwrap(),
+    ]);
+    state.active = 2;
+    state.actor_mut(1).unwrap().health.hit_points = 1;
+    let state = step(
+        &state,
+        3,
+        strike(1, Weapon::Shortbow, true),
+        &[(20, 15), (6, 1)],
+    )
+    .battle;
+    assert_eq!(state.actor(1).unwrap().health().hit_points, 0);
+    assert!(!state.actor(1).unwrap().dropped_weapons().is_empty());
+    let state = next_turn(state, 1);
+    let restored = Battle::from_snapshot(state.map().clone(), &state.snapshot().unwrap()).unwrap();
+    assert_eq!(state, restored);
+    let recovered = step(&restored, 1, Action::DeathSave, &[(20, 20)]).battle;
+    let held = step(&recovered, 1, Action::PickUpWeapon(Weapon::Greatsword), &[]).battle;
+    assert!(
+        held.actor(1)
+            .unwrap()
+            .held_weapons()
+            .contains(&Weapon::Greatsword)
+    );
+    assert_eq!(
+        held,
+        Battle::from_snapshot(held.map().clone(), &held.snapshot().unwrap()).unwrap()
+    );
+    let mut dying = restored;
+    dying.actor_mut(1).unwrap().health.death_failures = 2;
+    let dead = step(&dying, 1, Action::DeathSave, &[(20, 1)]).battle;
+    assert!(dead.actor(1).unwrap().health().dead);
+    assert_eq!(dead.actor(1).unwrap().health().death_failures, 3);
+    assert_eq!(
+        dead,
+        Battle::from_snapshot(dead.map().clone(), &dead.snapshot().unwrap()).unwrap()
+    );
 }

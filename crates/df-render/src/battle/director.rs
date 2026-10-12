@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use super::{
     camera::ShotName,
+    feel::{self, ImpactClass},
     grid::{Cell, Grid},
     model::{
         AttackResult, AttackStyle, Beat, CameraCommand, CameraFocus, FloatTone, Highlight,
@@ -18,12 +19,15 @@ use super::{
     sound::SoundKind,
 };
 
-const FOCUS_PAN: Duration = Duration::from_millis(650);
-const FOCUS_HOLD: Duration = Duration::from_millis(200);
+/// The camera settles on a turn's shot over this long, then holds a beat before anything moves.
+const FOCUS_PAN: Duration = Duration::from_millis(800);
+const FOCUS_HOLD: Duration = Duration::from_millis(150);
+/// The slow push-in on the wind-up, which ends before the attack starts: the camera is at rest at
+/// contact.
+const WINDUP_PUSH: Duration = Duration::from_millis(380);
 const STEP: Duration = Duration::from_millis(260);
 const WALK_START: Duration = Duration::from_millis(150);
-const IMPACT_PAN: Duration = Duration::from_millis(380);
-const SETTLE_PAN: Duration = Duration::from_millis(900);
+const SETTLE_PAN: Duration = Duration::from_millis(1300);
 const FINISHING_PUSH: Duration = Duration::from_millis(3200);
 const FINISHING_HOLD: Duration = Duration::from_millis(3600);
 pub const LUNGE: Duration = Duration::from_millis(460);
@@ -123,6 +127,20 @@ pub enum Step {
         amplitude_px: f32,
         duration: Duration,
     },
+    /// A blow lands on `target`: the stage expands it into shake, hit-stop, flash, particles and
+    /// the impact event the HUD subscribes to, all scaled by `class` and `share` (the share of the
+    /// target's maximum hit points the blow took). Presentation only; the outcome is the server's.
+    Impact {
+        attacker: TokenId,
+        target: TokenId,
+        class: ImpactClass,
+        share: f32,
+        ranged: bool,
+    },
+    /// A blow was dodged: the camera sways past it instead of shaking.
+    Whoosh,
+    /// The finishing blow's slow-motion ramp starts.
+    SlowMotion,
     Flash {
         tone: FlashTone,
         strength: f32,
@@ -237,6 +255,18 @@ fn find<'a>(tokens: &'a [Token], id: &TokenId) -> Result<&'a Token, PlanError> {
         .find(|token| &token.id == id)
         .ok_or_else(|| PlanError::UnknownToken(id.clone()))
 }
+
+/// The action framing for `actor` (acting on `target`, standing at `stand` to do it).
+fn action_focus(actor: &TokenId, target: Option<&TokenId>, stand: Option<Cell>) -> CameraFocus {
+    CameraFocus::Action {
+        actor: actor.clone(),
+        target: target.cloned(),
+        stand,
+    }
+}
+
+/// The push-in the camera ends the wind-up with: a little closer than the settled shot.
+const PUSH_DOLLY: f32 = 1.0 - feel::PUSH_IN_SHARE;
 
 fn camera(shot: ShotName, focus: CameraFocus, dolly: f32) -> CameraCommand {
     CameraCommand { shot, focus, dolly }
@@ -570,7 +600,7 @@ fn plan_turn(tokens: &[Token], actor: &TokenId) -> Result<Timeline, PlanError> {
     builder.at(
         Duration::ZERO,
         Step::Camera {
-            command: camera(ShotName::TurnFocus, CameraFocus::Token(actor.clone()), 1.0),
+            command: camera(ShotName::TurnFocus, action_focus(actor, None, None), 1.0),
             pan: FOCUS_PAN,
         },
     );
@@ -618,24 +648,23 @@ fn approach(
     base: Duration,
 ) -> Duration {
     builder.at(base, Step::SetActive(Some(attacker.id.clone())));
+    let beside = fighting_cell(grid, tokens, attacker, target);
+    let stand = (attacker.attack != AttackStyle::Ranged).then_some(beside);
+    let framing = action_focus(&attacker.id, Some(&target.id), stand);
     builder.at(
         base,
         Step::Camera {
-            command: camera(
-                ShotName::TurnFocus,
-                CameraFocus::Token(attacker.id.clone()),
-                1.0,
-            ),
+            command: camera(ShotName::TurnFocus, framing.clone(), 1.0),
             pan: FOCUS_PAN,
         },
     );
     builder.at(base, Step::Target(Some(target.id.clone())));
     let mut end = base + FOCUS_PAN;
-    if attacker.attack == AttackStyle::Ranged {
-        return end;
-    }
-    let beside = fighting_cell(grid, tokens, attacker, target);
-    if beside != attacker.cell {
+    // The approach: the attacker walks beside the target while the camera is already settled on
+    // the frame that holds both. This step, and the walk back in `strike`, are the only cosmetic
+    // movement of figures between squares; they are removed together when positions come from the
+    // server (see `approach` and the `MoveTo` steps in `strike`).
+    if attacker.attack != AttackStyle::Ranged && beside != attacker.cell {
         let steps = grid
             .path(attacker.cell, beside)
             .map_or(0, |path| path.len().saturating_sub(1)) as u32;
@@ -650,7 +679,15 @@ fn approach(
         );
         end = end.max(base + WALK_START + per_step * steps);
     }
-    end
+    // A slow push-in on the wind-up that is finished before the blow starts.
+    builder.at(
+        end,
+        Step::Camera {
+            command: camera(ShotName::TurnFocus, framing, PUSH_DOLLY),
+            pan: WINDUP_PUSH,
+        },
+    );
+    end + WINDUP_PUSH
 }
 
 /// Time per cell for a walk of `steps` cells: the usual pace, quickened (to a floor) so that a
@@ -745,20 +782,18 @@ fn strike(
         (base + LUNGE_CONTACT, base + LUNGE)
     };
     builder.at(contact, Step::Target(None));
-    // A blow at close quarters frames both fighters; an arrow's far target is framed on its own
-    // so the number and the recoil can be read.
-    let impact_focus = if ranged {
-        CameraFocus::Token(target.id.clone())
-    } else {
-        CameraFocus::Between(attacker.id.clone(), target.id.clone())
-    };
-    let impact_camera = Step::Camera {
-        command: camera(ShotName::Impact, impact_focus, 1.0),
-        pan: IMPACT_PAN,
-    };
+    // The camera does not move at contact: the action shot already holds both fighters, so the
+    // hit-stop and the shake land on a stable frame.
+    let finishing = matches!(result, AttackResult::Hit { downed: true, .. })
+        && target.side == Side::Enemy
+        && attacker.side == Side::Hero;
+    if finishing {
+        // Time slows into the blow.
+        builder.at(base, Step::SlowMotion);
+    }
     match result {
         AttackResult::Miss => {
-            builder.at(contact, impact_camera);
+            builder.at(contact, Step::Whoosh);
             builder.at(
                 contact,
                 Step::Animate {
@@ -788,23 +823,16 @@ fn strike(
             critical,
             downed,
         } => {
-            builder.at(contact, impact_camera);
+            let maximum = target.hit_points.map_or(0, |hp| hp.maximum);
+            let class = feel::classify(damage, maximum, critical, downed);
             builder.at(
                 contact,
-                Step::Shake {
-                    amplitude_px: if critical { 14.0 } else { 8.0 },
-                    duration: Duration::from_millis(200),
-                },
-            );
-            builder.at(
-                contact,
-                Step::Flash {
-                    tone: if critical {
-                        FlashTone::Critical
-                    } else {
-                        FlashTone::Impact
-                    },
-                    strength: if critical { 0.9 } else { 0.55 },
+                Step::Impact {
+                    attacker: attacker.id.clone(),
+                    target: target.id.clone(),
+                    class,
+                    share: feel::damage_share(damage, maximum),
+                    ranged,
                 },
             );
             builder.at(
@@ -869,13 +897,15 @@ fn strike(
                             enemy: target.id.clone(),
                         },
                     );
+                    // The foe's fall is the subject: both are framed, off the line between them, so
+                    // the falling foe is on screen for its whole duration.
                     builder.at(
                         cue,
                         Step::Camera {
                             command: camera(
                                 ShotName::Victory,
-                                CameraFocus::Token(attacker.id.clone()),
-                                0.7,
+                                action_focus(&attacker.id, Some(&target.id), None),
+                                0.92,
                             ),
                             pan: FINISHING_PUSH,
                         },
@@ -887,7 +917,11 @@ fn strike(
                 builder.at(
                     fall,
                     Step::Camera {
-                        command: camera(ShotName::Ko, CameraFocus::Token(target.id.clone()), 1.0),
+                        command: camera(
+                            ShotName::Ko,
+                            action_focus(&attacker.id, Some(&target.id), None),
+                            1.0,
+                        ),
                         pan: SETTLE_PAN,
                     },
                 );
@@ -945,7 +979,11 @@ fn plan_heal(
         Step::Camera {
             command: camera(
                 ShotName::TurnFocus,
-                CameraFocus::Token(source_id.clone()),
+                action_focus(
+                    source_id,
+                    (source_id != target_id).then_some(target_id),
+                    None,
+                ),
                 1.0,
             ),
             pan: FOCUS_PAN,
@@ -1017,6 +1055,7 @@ mod tests {
             hit_points: None,
             statuses: Vec::new(),
             attack: AttackStyle::Melee,
+            voice: None,
         }
     }
 
@@ -1066,6 +1105,9 @@ mod tests {
                     Anim::Ready { .. } => "ready",
                 },
                 Step::Shake { .. } => "shake",
+                Step::Impact { .. } => "impact",
+                Step::Whoosh => "whoosh",
+                Step::SlowMotion => "slow-motion",
                 Step::Flash { .. } => "flash",
                 Step::Float { .. } => "float",
                 Step::ShowHitPoints { .. } => "hp",
@@ -1135,9 +1177,7 @@ mod tests {
             "focus",
             "walk",
             "lunge",
-            "impact-shot",
-            "shake",
-            "flash",
+            "impact",
             "float",
             "recoil",
             "fall",
@@ -1229,10 +1269,10 @@ mod tests {
         )
         .unwrap();
         let first = names(&approach_only);
-        assert_eq!(first, vec!["active", "focus", "target", "walk"]);
+        assert_eq!(first, vec!["active", "focus", "target", "walk", "focus"]);
         assert!(!first.contains(&"lunge"));
         let second = names(&strike_only);
-        assert!(position(&second, "lunge") < position(&second, "impact-shot"));
+        assert!(position(&second, "lunge") < position(&second, "impact"));
         assert!(!second.contains(&"focus"));
         // The strike snaps the attacker beside the target first, in case the approach was skipped.
         assert_eq!(moves(&strike_only)[0].1, Duration::ZERO);
@@ -1245,13 +1285,17 @@ mod tests {
         let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
         let names = names(&timeline);
         assert!(names.contains(&"dodge") && names.contains(&"float"));
-        for absent in ["shake", "flash", "recoil", "fall", "finishing"] {
+        assert!(
+            names.contains(&"whoosh"),
+            "a miss sways the camera past: {names:?}"
+        );
+        for absent in ["shake", "flash", "impact", "recoil", "fall", "finishing"] {
             assert!(!names.contains(&absent), "{absent} in {names:?}");
         }
     }
 
     #[test]
-    fn a_critical_hit_shakes_and_flashes_harder_than_an_ordinary_one() {
+    fn a_critical_hit_lands_as_a_heavier_impact_than_an_ordinary_one() {
         let (grid, tokens) = field();
         let strength = |critical| {
             let timeline = plan(
@@ -1268,12 +1312,13 @@ mod tests {
                 .steps
                 .iter()
                 .find_map(|timed| match timed.step {
-                    Step::Flash { strength, .. } => Some(strength),
+                    Step::Impact { class, .. } => Some(class),
                     _ => None,
                 })
                 .unwrap()
         };
         assert!(strength(true) > strength(false));
+        assert_eq!(strength(true), ImpactClass::Critical);
     }
 
     #[test]

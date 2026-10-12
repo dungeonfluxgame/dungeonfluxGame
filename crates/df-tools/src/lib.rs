@@ -38,6 +38,11 @@ mod plate_layout;
 mod presentation;
 #[cfg(any(target_arch = "wasm32", test))]
 mod speech_capture;
+// PLAY-H01: the one definition of the health tiers, shared by the server and both clients.
+pub(crate) mod health_tier;
+// PLAY-H01: shake sizes and timings (pure), used by the browser's health cues.
+#[cfg(any(target_arch = "wasm32", test))]
+mod health_cues;
 mod stage_art;
 #[cfg(any(target_arch = "wasm32", test))]
 mod stage_conductor;

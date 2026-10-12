@@ -2,6 +2,17 @@
 
 #[path = "../src/gameplay_browser/view_delivery.rs"]
 mod view_delivery;
+// `view_delivery`'s own tests merge generated art with the display's real merge.
+#[allow(dead_code)]
+#[path = "../src/live_art.rs"]
+mod live_art;
+// PLAY-V09: the presentation module's scene plate layout uses the bubble placement types.
+#[allow(dead_code)]
+#[path = "../src/plate_layout.rs"]
+mod plate_layout;
+#[allow(dead_code)]
+#[path = "../src/presentation.rs"]
+mod presentation;
 
 use df_client::{
     cache::CacheScope, connection::RpcConnection, connection_views::ConnectionViewAcceptance,
@@ -439,45 +450,103 @@ fn an_equal_revision_changes_the_shown_view_only_through_the_art_merge() {
     ));
 }
 
-/// A display frame at `sequence` that carries `talk` as its presentation sequence.
-fn talking_display(sequence: u64, talk: u64, backdrop: &str) -> rpc::ViewMessage {
-    let mut view = display_frame(sequence, "shown", backdrop);
-    if let Some(rpc::view_message::Audience::Display(display)) = view.audience.as_mut()
-        && let Some(journey) = display.journey.as_mut()
-    {
-        journey.presentation_sequence = talk;
+fn talking_display(sequence: u64, presentation_sequence: u64, sprite: &str) -> rpc::ViewMessage {
+    let mut view = display_frame(sequence, "The courier waits.", "");
+    if let Some(rpc::view_message::Audience::Display(display)) = view.audience.as_mut() {
+        if let Some(scene) = display.scene.as_mut() {
+            scene.cast = vec![rpc::SceneActor {
+                id: "merchant".to_owned(),
+                live_sprite: sprite.to_owned(),
+                ..Default::default()
+            }];
+        }
+        if let Some(journey) = display.journey.as_mut() {
+            journey.presentation_sequence = presentation_sequence;
+        }
     }
     view
 }
 
+/// Copies the cast's generated sprites only, as the display's real merge does for the art fields.
+fn merge_sprite(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) -> bool {
+    let (
+        Some(rpc::view_message::Audience::Display(shown)),
+        Some(rpc::view_message::Audience::Display(new)),
+    ) = (shown.audience.as_mut(), new.audience.as_ref())
+    else {
+        return false;
+    };
+    let (Some(shown), Some(new)) = (shown.scene.as_mut(), new.scene.as_ref()) else {
+        return false;
+    };
+    let mut changed = false;
+    for (old, new) in shown.cast.iter_mut().zip(&new.cast) {
+        changed |= old.live_sprite != new.live_sprite;
+        old.live_sprite.clone_from(&new.live_sprite);
+    }
+    changed
+}
+
+fn shown_sprite(views: &GameplayViews) -> String {
+    match views.current().and_then(|view| view.audience.as_ref()) {
+        Some(rpc::view_message::Audience::Display(display)) => display
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.cast.first())
+            .map(|actor| actor.live_sprite.clone())
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// Live defect: a hero's typed line or an NPC's reply moves the table-talk counter without moving
+/// the game revision, and the view of that moment is kept as the one on screen. Art that
+/// finished afterwards was merged into the stored view beneath it and never showed.
 #[test]
-fn art_reaches_the_held_table_talk_view_the_display_draws() {
-    // PLAY-V09: a typed line and its reply are shown from a held copy of the view; art that
-    // arrives while it is shown (a scene plate edited for the speaker's mood) goes into it too.
+fn art_that_arrives_after_table_talk_reaches_the_view_on_screen() {
     let display = scope(1, 2, 3, ViewRole::Display);
     let owner = RpcConnection::new(());
     let generation = owner.generation();
     let mut views = GameplayViews::new(display, generation.clone());
     assert_eq!(
-        views.accept(&generation, display, talking_display(5, 0, "")),
+        views.accept(&generation, display, talking_display(4, 0, "")),
         Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
     );
+    // The line is spoken: same revision, the counter moves, the view on screen is replaced.
     assert_eq!(
-        views.accept(&generation, display, talking_display(5, 1, "")),
-        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied)),
-        "a newer table line at the same revision is shown from the held copy"
+        views.accept(&generation, display, talking_display(4, 3, "")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
     );
-    let art = talking_display(5, 1, "/gameplay/imagery/x");
-    assert_eq!(
-        views.accept(&generation, display, art.clone()),
-        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Duplicate {
-            current: revision(1, 5)
-        }))
-    );
-    assert!(views.accept_art_update(&generation, display, &art, merge_backdrop));
-    assert_eq!(
-        views.current(),
-        Some(&art),
-        "the held view the display draws has the art"
-    );
+    // The face finishes: the same revision and counter, now with art.
+    let with_art = talking_display(4, 3, "/gameplay/imagery/a");
+    assert!(matches!(
+        views.accept(&generation, display, with_art.clone()),
+        Ok(ConnectionViewAcceptance::View(
+            ViewAcceptance::Duplicate { .. }
+        ))
+    ));
+    assert!(views.accept_art_update(&generation, display, &with_art, merge_sprite));
+    assert_eq!(shown_sprite(&views), "/gameplay/imagery/a");
+    // A further reply (the counter moves again) carries the art itself: still shown.
+    views
+        .accept(
+            &generation,
+            display,
+            talking_display(4, 4, "/gameplay/imagery/a"),
+        )
+        .unwrap();
+    assert_eq!(shown_sprite(&views), "/gameplay/imagery/a");
+    // A newer revision replaces everything, including the art it carries.
+    views
+        .accept(
+            &generation,
+            display,
+            talking_display(5, 4, "/gameplay/imagery/b"),
+        )
+        .unwrap();
+    assert_eq!(shown_sprite(&views), "/gameplay/imagery/b");
+    // And art after that, with no table talk at all, still lands.
+    let later = talking_display(5, 4, "/gameplay/imagery/c");
+    assert!(views.accept_art_update(&generation, display, &later, merge_sprite));
+    assert_eq!(shown_sprite(&views), "/gameplay/imagery/c");
 }

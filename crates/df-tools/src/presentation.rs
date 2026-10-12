@@ -466,7 +466,12 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
             hit_points: hit_points(member),
             speaking: fighting && member.active_turn,
             down: is_down(member),
-            live_sprite: None,
+            // PLAY-H01: the server's health variant of this hero, by name.
+            live_sprite: journey
+                .live_faces
+                .iter()
+                .find(|face| face.name == member.name)
+                .and_then(|face| imagery_url(&face.sprite)),
         })
         .collect();
     let participants = journey

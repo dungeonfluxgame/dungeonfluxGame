@@ -40,8 +40,10 @@ CAMPAIGN_STATUS=0
 HARBOR_REQUESTED=0
 ADVENTURE_SEED_REQUESTED=0
 
+LAN=0
+
 usage() {
-  echo 'usage: run-gameplay.sh [--no-build] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor] [--campaign <id>] [--campaign-seed <n>] [--status]'
+  echo 'usage: run-gameplay.sh [--no-build] [--lan] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor] [--campaign <id>] [--campaign-seed <n>] [--status]'
 }
 
 while test "$#" -gt 0; do
@@ -54,6 +56,7 @@ while test "$#" -gt 0; do
       CAMPAIGN_SEED=$2; export DF_GAMEPLAY_CAMPAIGN_SEED=$2; shift 2 ;;
     --status) CAMPAIGN_STATUS=1; shift ;;
     --no-build) NO_BUILD=1; shift ;;
+    --lan) LAN=1; shift ;;
     --harbor) HARBOR_REQUESTED=1; export DF_GAMEPLAY_ADVENTURE=harbor; shift ;;
     --seed)
       if test "$#" -lt 2; then usage >&2; exit 2; fi
@@ -119,6 +122,24 @@ fi
 for PG_TOOL in initdb pg_ctl createdb psql pg_isready; do
   if test ! -x "$PG/$PG_TOOL"; then echo "missing PostgreSQL tool: $PG/$PG_TOOL" >&2; exit 1; fi
 done
+
+# --lan: the game server listens on every interface, and phones on this network join through this
+# machine's address (DF_GAMEPLAY_PUBLIC_URL). Without a LAN address it stays on loopback.
+if test "$LAN" -eq 1; then
+  LAN_ADDRESS=
+  if test "${DF_GAMEPLAY_PUBLIC_URL+x}" != x; then
+    LAN_ADDRESS=$(ipconfig getifaddr en0 2>/dev/null || true)
+    if test -z "$LAN_ADDRESS"; then LAN_ADDRESS=$(ipconfig getifaddr en1 2>/dev/null || true); fi
+    if test -z "$LAN_ADDRESS"; then echo 'no LAN address on en0 or en1: the server stays on loopback and phones cannot join' >&2; fi
+  fi
+  if test -n "$LAN_ADDRESS" || test "${DF_GAMEPLAY_PUBLIC_URL+x}" = x; then
+    if test "${DF_GAMEPLAY_LISTEN+x}" != x; then export DF_GAMEPLAY_LISTEN=0.0.0.0:63309; fi
+  fi
+  if test -n "$LAN_ADDRESS"; then
+    export DF_GAMEPLAY_PUBLIC_URL="http://$LAN_ADDRESS:${DF_GAMEPLAY_LISTEN##*:}"
+    echo "LAN: phones on this network join through $DF_GAMEPLAY_PUBLIC_URL"
+  fi
+fi
 
 LISTEN=${DF_GAMEPLAY_LISTEN:-127.0.0.1:63309}
 GAME_PORT=${LISTEN##*:}

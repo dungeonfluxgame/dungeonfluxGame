@@ -41,3 +41,5 @@
 .tv-plate-bubbles{position:absolute;inset:0;z-index:9;pointer-events:none}
 .tv-plate-bubbles>.tv-fig-bubbles{position:absolute;top:0;left:0;right:auto}
 .tv-plate-bubbles>.tv-fig-bubbles[data-narrow]{width:calc(var(--u)*17.5)}
+/* a fight is staged on the battlefield and its flat view: no plate under it */
+.tv-stage[data-battle-state]:not([data-battle-state=absent]) .tv-plate,.tv-stage[data-arrange=combat] .tv-plate{display:none}

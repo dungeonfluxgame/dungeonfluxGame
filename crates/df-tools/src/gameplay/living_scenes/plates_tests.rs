@@ -7,7 +7,7 @@ use super::{
         super::{
             adventure::setting::{SceneSetting, SettingKind},
             imagery::{ImageKey, Imagery},
-            scene_mood::{Appearance, Expression},
+            scene_mood::{Expression, HealthTier},
             social::SocialLedger,
             startup_configuration::{ContentRating, ImageryOff},
         },
@@ -73,6 +73,10 @@ fn view(scene: &pack::Scene, heroes: &[u8], in_combat: bool) -> View {
         asset: scene.asset.clone(),
         in_combat,
         heroes: heroes.to_vec(),
+        hero_names: heroes
+            .iter()
+            .map(|art| (*art, format!("Hero {art}")))
+            .collect(),
     }
 }
 
@@ -347,7 +351,7 @@ async fn a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_
     ready(&shared, &id, 'a');
     let angry = Face {
         expression: Expression::Angry,
-        appearance: Appearance::Unhurt,
+        tier: HealthTier::Healthy,
     };
     locked(&shared.inner.state)
         .plate_wants
@@ -405,7 +409,7 @@ async fn an_edit_that_lands_in_another_scene_is_ignored() {
     ready(&shared, &id, 'a');
     let angry = Face {
         expression: Expression::Angry,
-        appearance: Appearance::Unhurt,
+        tier: HealthTier::Healthy,
     };
     locked(&shared.inner.state)
         .plate_wants
@@ -484,4 +488,25 @@ fn the_party_comes_from_the_ready_members_by_their_art() {
     };
     assert_eq!(view_of(&message).unwrap().heroes, [1, 3]);
     assert!(view_of(&player_message(&scene(SceneKey::Opening, "T", None))).is_none());
+}
+
+#[tokio::test]
+async fn a_hurt_hero_stands_in_the_plate_as_their_health_variant_and_makes_another_plate() {
+    let (shared, mut queue) = shared(16);
+    let current = scene(SceneKey::Victory, "What the Fight Cost", Some("Kestrel"));
+    observe(&shared, &current, &[], &[1, 2]);
+    let healthy = drain(&mut queue);
+    assert!(matches!(&healthy[0], Job::Fresh { faces, .. } if faces.is_empty()));
+    locked(&shared.inner.state)
+        .hero_faces
+        .insert("Hero 1".to_owned(), key('d'));
+    // The same party with a hurt first hero in another scene: its plate is another picture.
+    let other = scene(SceneKey::Victory, "What the Fight Cost 2", Some("Kestrel"));
+    observe(&shared, &other, &[], &[1, 2]);
+    let hurt = drain(&mut queue);
+    let Job::Fresh { id, faces, .. } = &hurt[0] else {
+        panic!("a fresh plate");
+    };
+    assert_eq!(faces, &[(1, key('d'))], "only the hurt hero has a variant");
+    assert!(id.contains("dddddddd"), "the variant names the plate: {id}");
 }
