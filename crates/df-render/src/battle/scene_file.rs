@@ -310,7 +310,9 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
     let splat = file.splat.map(validate_splat).transpose()?;
     let surface = match file.surface.as_deref() {
         None => Surface::default(),
-        Some(key) => Surface::from_key(key).ok_or_else(|| SceneFileError::Surface(key.to_owned()))?,
+        Some(key) => {
+            Surface::from_key(key).ok_or_else(|| SceneFileError::Surface(key.to_owned()))?
+        }
     };
     let layouts = convert_layouts(file.layouts, &grid)?;
     frame_for_grid(&mut cameras, &grid);
@@ -345,7 +347,9 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
 fn frame_for_grid(cameras: &mut BTreeMap<ShotName, CameraPose>, grid: &Grid) {
     let width = grid.cols() as f32 * grid.cell_m();
     let depth = grid.rows() as f32 * grid.cell_m();
-    let scale = (width / FRAMED_WIDTH_M).max(depth / FRAMED_DEPTH_M).max(1.0);
+    let scale = (width / FRAMED_WIDTH_M)
+        .max(depth / FRAMED_DEPTH_M)
+        .max(1.0);
     for shot in [ShotName::Tactical, ShotName::CombatEst] {
         if let Some(pose) = cameras.get_mut(&shot) {
             pose.distance *= scale;
@@ -364,7 +368,9 @@ fn convert_layouts(files: Vec<FileLayout>, grid: &Grid) -> Result<Vec<Layout>, S
             return Err(SceneFileError::Layout(LayoutError::Identifier(file.label)));
         }
         if layouts.iter().any(|known| known.id == file.id) {
-            return Err(SceneFileError::Layout(LayoutError::DuplicateLayout(file.id)));
+            return Err(SceneFileError::Layout(LayoutError::DuplicateLayout(
+                file.id,
+            )));
         }
         let mut obstacles = Vec::with_capacity(file.obstacles.len());
         for obstacle in file.obstacles {
@@ -480,7 +486,11 @@ pub fn resolve_scene(location_id: &str) -> SceneChoice {
             scene_id: DEFAULT_SCENE_ID,
             fallback_reason: Some(format!(
                 "fallback:{}",
-                if location_id.is_empty() { "none" } else { location_id }
+                if location_id.is_empty() {
+                    "none"
+                } else {
+                    location_id
+                }
             )),
         },
     }
@@ -536,7 +546,10 @@ mod tests {
             let choice = resolve_scene(id);
             assert_eq!(choice.scene_id, id);
             assert_eq!(choice.fallback_reason, None, "{id} must not fall back");
-            assert_eq!(load_embedded(choice.scene_id).unwrap().unwrap().location_id, id);
+            assert_eq!(
+                load_embedded(choice.scene_id).unwrap().unwrap().location_id,
+                id
+            );
         }
     }
 
@@ -544,7 +557,10 @@ mod tests {
     fn an_unknown_or_missing_location_falls_back_and_records_why() {
         let unknown = resolve_scene("moonbase-alpha");
         assert_eq!(unknown.scene_id, DEFAULT_SCENE_ID);
-        assert_eq!(unknown.fallback_reason.as_deref(), Some("fallback:moonbase-alpha"));
+        assert_eq!(
+            unknown.fallback_reason.as_deref(),
+            Some("fallback:moonbase-alpha")
+        );
         let missing = resolve_scene("");
         assert_eq!(missing.scene_id, DEFAULT_SCENE_ID);
         assert_eq!(missing.fallback_reason.as_deref(), Some("fallback:none"));
@@ -652,7 +668,11 @@ mod tests {
         let mut total = 0;
         for id in LOCATIONS.into_iter().chain([DEFAULT_SCENE_ID]) {
             let scene = load_embedded(id).unwrap().unwrap();
-            assert!(scene.layouts.len() >= 3, "{id}: {} layouts", scene.layouts.len());
+            assert!(
+                scene.layouts.len() >= 3,
+                "{id}: {} layouts",
+                scene.layouts.len()
+            );
             total += scene.layouts.len();
             let signature = |layout: &Layout| {
                 let mut cells: Vec<_> = layout
@@ -668,7 +688,11 @@ mod tests {
                 assert!(layout.heroes.len() >= 4 && layout.enemies.len() >= 4);
                 assert_eq!(layout.validate(&scene.grid), Ok(()), "{id}/{}", layout.id);
                 let shape = signature(layout);
-                assert!(!seen.contains(&shape), "{id}/{} repeats another layout", layout.id);
+                assert!(
+                    !seen.contains(&shape),
+                    "{id}/{} repeats another layout",
+                    layout.id
+                );
                 seen.push(shape);
             }
             let ids: std::collections::BTreeSet<_> = scene.layouts.iter().map(|l| &l.id).collect();
@@ -689,7 +713,11 @@ mod tests {
             .collect();
         assert!(sizes.len() >= 6, "{sizes:?}");
         assert!(sizes.contains(&(8, 6)) && sizes.contains(&(14, 10)));
-        assert!(sizes.iter().all(|(c, r)| (8..=14).contains(c) && (6..=10).contains(r)));
+        assert!(
+            sizes
+                .iter()
+                .all(|(c, r)| (8..=14).contains(c) && (6..=10).contains(r))
+        );
     }
 
     #[test]
@@ -718,7 +746,11 @@ mod tests {
         assert_eq!(tactical(&quay), 15.0);
         assert!(tactical(&library) > 15.0 * 1.3);
         let focus = |scene: &BattleScene| scene.cameras[&ShotName::TurnFocus].distance;
-        assert_eq!(focus(&library), focus(&quay), "close shots follow the figure instead");
+        assert_eq!(
+            focus(&library),
+            focus(&quay),
+            "close shots follow the figure instead"
+        );
     }
 
     fn v1() -> serde_json::Value {

@@ -742,7 +742,11 @@ impl Renderer {
                 for cell in &obstacle.cells {
                     let at = grid.cell_centre(*cell);
                     if obstacle.sprite == "none" {
-                        push([at.x, at.z, half, half], [0.0, 0.02, 0.05, 1.0], [6.0, 0.0, 0.0]);
+                        push(
+                            [at.x, at.z, half, half],
+                            [0.0, 0.02, 0.05, 1.0],
+                            [6.0, 0.0, 0.0],
+                        );
                     } else {
                         let width = half * 0.95;
                         push(
@@ -807,7 +811,7 @@ impl Renderer {
             }
             if figure.statuses.contains(Status::Marked) {
                 push(
-                    [figure.position.x, figure.position.z, half * 1.05, half * 1.05],
+                    [figure.position.x, figure.position.z, half * 1.2, half * 1.2],
                     [1.0, 0.55, 0.25, 1.0],
                     [9.0, reduced, 0.0],
                 );
@@ -831,10 +835,10 @@ impl Renderer {
                 };
                 push(
                     [
-                        at.x + pip.toward[0] * half * 0.72,
-                        at.z + pip.toward[1] * half * 0.72,
-                        0.13,
-                        0.13,
+                        at.x + pip.toward[0] * half * 0.7,
+                        at.z + pip.toward[1] * half * 0.7,
+                        0.21,
+                        0.21,
                     ],
                     [1.0, 1.0, 1.0, 1.0],
                     [7.0, level, 0.0],
@@ -873,19 +877,23 @@ impl Renderer {
                 }
                 for cell in &obstacle.cells {
                     let at = frame.grid.cell_centre(*cell);
-                    let seed = (cell.col.wrapping_mul(73_856_093) ^ cell.row.wrapping_mul(19_349_663))
-                        as u32;
+                    let seed = (cell.col.wrapping_mul(73_856_093)
+                        ^ cell.row.wrapping_mul(19_349_663)) as u32;
                     let jitter = ((seed >> 4) % 100) as f32 / 100.0;
                     let flip = (seed >> 11) % 2 == 1;
                     let height = obstacle.height_m * (0.96 + 0.08 * jitter);
                     self.request(&obstacle.sprite, true, false);
                     let side = if flip { 2.0 } else { 0.0 };
                     let depth = (at - eye).dot(forward);
-                    let slot = self.cache.borrow().get(&obstacle.sprite).map(|slot| match slot {
-                        Slot::Ready(texture) => Some(Some(texture.clone())),
-                        Slot::Failed => Some(None),
-                        Slot::Loading => None,
-                    });
+                    let slot = self
+                        .cache
+                        .borrow()
+                        .get(&obstacle.sprite)
+                        .map(|slot| match slot {
+                            Slot::Ready(texture) => Some(Some(texture.clone())),
+                            Slot::Failed => Some(None),
+                            Slot::Loading => None,
+                        });
                     match slot.flatten() {
                         Some(Some(texture)) => {
                             let aspect = texture.width as f32 / texture.height as f32;
@@ -994,7 +1002,12 @@ impl Renderer {
                         figure.position.z,
                         figure.height_m,
                     ],
-                    [figure.lean, figure.alpha, figure.red_flash, figure.heal_glow],
+                    [
+                        figure.lean,
+                        figure.alpha,
+                        figure.red_flash,
+                        figure.heal_glow,
+                    ],
                     [1.0, 1.0, 1.0, figure.breath],
                     [aspect, kind, has_texture, side],
                     bounds,

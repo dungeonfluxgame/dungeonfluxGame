@@ -719,8 +719,9 @@ pub(super) fn initiative_rolls(
             .iter()
             .find(|draw| draw.operation == start.operation && draw.ordinal == ordinal as u32)
             .ok_or(Error::Start)?;
-        let dexterity = u8::try_from(value(state, *who, "dexterity").map_err(|_| Error::Encounter)?)
-            .map_err(|_| Error::Encounter)?;
+        let dexterity =
+            u8::try_from(value(state, *who, "dexterity").map_err(|_| Error::Encounter)?)
+                .map_err(|_| Error::Encounter)?;
         let modifier = rules::ability_modifier(dexterity);
         let order = encounter
             .turn_order
@@ -3427,8 +3428,12 @@ mod tests {
             .expect("character");
         }
         for (op, kind) in [(5, "begin-story"), (6, "ask-courier")] {
-            current = stage_using(&current, &input(&current, first, op, kind, vec![]), &mut none)
-                .expect("story step");
+            current = stage_using(
+                &current,
+                &input(&current, first, op, kind, vec![]),
+                &mut none,
+            )
+            .expect("story step");
         }
         // Three recorded d20 faces: the first hero 4, the second 15, the bandit 15.
         let mut faces = [4, 15, 15].into_iter();
@@ -3442,7 +3447,10 @@ mod tests {
         let rolls = initiative_rolls(&current).expect("rolls from the record");
         let encounter = current.state().encounters.first().expect("encounter");
         assert_eq!(rolls.len(), 3);
-        let ids: Vec<Vec<u8>> = rolls.iter().map(|roll| roll.participant_id.clone()).collect();
+        let ids: Vec<Vec<u8>> = rolls
+            .iter()
+            .map(|roll| roll.participant_id.clone())
+            .collect();
         let turn: Vec<Vec<u8>> = encounter
             .turn_order
             .iter()
@@ -3459,7 +3467,10 @@ mod tests {
             assert!(!roll.name.is_empty());
         }
         let totals: Vec<i32> = rolls.iter().map(|roll| roll.total).collect();
-        assert!(totals.windows(2).all(|pair| pair[0] >= pair[1]), "highest first: {totals:?}");
+        assert!(
+            totals.windows(2).all(|pair| pair[0] >= pair[1]),
+            "highest first: {totals:?}"
+        );
         // The tie between the second hero and the bandit (both rolled 15) resolves by the
         // recorded order, not a re-roll: no new draw was made to produce the view.
         assert_eq!(current.state().draws.len(), 3);

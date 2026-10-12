@@ -217,7 +217,9 @@ impl StatusSet {
     pub const EMPTY: Self = Self(0);
 
     pub fn of(statuses: &[Status]) -> Self {
-        statuses.iter().fold(Self::EMPTY, |set, status| set.with(*status))
+        statuses
+            .iter()
+            .fold(Self::EMPTY, |set, status| set.with(*status))
     }
 
     pub fn with(self, status: Status) -> Self {
@@ -241,7 +243,9 @@ impl StatusSet {
     }
 
     pub fn iter(self) -> impl Iterator<Item = Status> {
-        Status::ALL.into_iter().filter(move |status| self.contains(*status))
+        Status::ALL
+            .into_iter()
+            .filter(move |status| self.contains(*status))
     }
 
     fn only(self, allowed: &[Status]) -> Self {
@@ -388,8 +392,16 @@ pub fn pose_for(set: StatusSet, reduced_motion: bool) -> StatusPose {
         slump,
         idle,
         breath: if has(Status::Raging) { 2.4 } else { 1.0 },
-        wobble: if has(Status::Stunned) && motion { 1.0 } else { 0.0 },
-        shiver: if has(Status::Frightened) && motion { 1.0 } else { 0.0 },
+        wobble: if has(Status::Stunned) && motion {
+            1.0
+        } else {
+            0.0
+        },
+        shiver: if has(Status::Frightened) && motion {
+            1.0
+        } else {
+            0.0
+        },
         flinch: if has(Status::Frightened) { 0.16 } else { 0.0 },
         dim: if unconscious || has(Status::Incapacitated) {
             0.45
@@ -398,7 +410,7 @@ pub fn pose_for(set: StatusSet, reduced_motion: bool) -> StatusPose {
         } else {
             0.0
         },
-        alpha: if has(Status::Invisible) { 0.25 } else { 1.0 },
+        alpha: if has(Status::Invisible) { 0.3 } else { 1.0 },
         heartbeat: has(Status::Dying) && motion,
         afterimage: has(Status::Dodging) && motion,
     }
@@ -421,7 +433,9 @@ pub fn derived_from_view(hit_points: u32, maximum: u32, knocked_out: bool) -> Ve
 
 /// Statuses worth an icon: everything except the ones that read better as a tile marker.
 pub fn icon_statuses(set: StatusSet) -> Vec<Status> {
-    set.iter().filter(|status| *status != Status::Cover).collect()
+    set.iter()
+        .filter(|status| *status != Status::Cover)
+        .collect()
 }
 
 #[cfg(test)]
@@ -436,10 +450,7 @@ mod tests {
             assert_eq!(Status::from_id(status.id()), Some(status));
             assert!(seen.insert(status.id()), "duplicate id {}", status.id());
             assert!(
-                status
-                    .id()
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase()),
+                status.id().bytes().all(|byte| byte.is_ascii_lowercase()),
                 "{}",
                 status.id()
             );
@@ -455,10 +466,33 @@ mod tests {
     #[test]
     fn the_ids_are_exactly_the_agreed_twenty_seven() {
         let wanted = [
-            "blinded", "charmed", "deafened", "exhaustion", "frightened", "grappled",
-            "incapacitated", "invisible", "paralyzed", "petrified", "poisoned", "prone",
-            "restrained", "stunned", "unconscious", "bloodied", "burning", "blessed", "cursed",
-            "concentrating", "dodging", "hidden", "inspired", "raging", "marked", "dying", "cover",
+            "blinded",
+            "charmed",
+            "deafened",
+            "exhaustion",
+            "frightened",
+            "grappled",
+            "incapacitated",
+            "invisible",
+            "paralyzed",
+            "petrified",
+            "poisoned",
+            "prone",
+            "restrained",
+            "stunned",
+            "unconscious",
+            "bloodied",
+            "burning",
+            "blessed",
+            "cursed",
+            "concentrating",
+            "dodging",
+            "hidden",
+            "inspired",
+            "raging",
+            "marked",
+            "dying",
+            "cover",
         ];
         let ids: Vec<&str> = Status::ALL.iter().map(|status| status.id()).collect();
         assert_eq!(ids, wanted);
@@ -485,7 +519,12 @@ mod tests {
 
     #[test]
     fn petrified_overrides_every_other_colour_treatment() {
-        let set = StatusSet::of(&[Status::Petrified, Status::Poisoned, Status::Cursed, Status::Charmed]);
+        let set = StatusSet::of(&[
+            Status::Petrified,
+            Status::Poisoned,
+            Status::Cursed,
+            Status::Charmed,
+        ]);
         let resolved = resolve(set);
         assert_eq!(resolved.body, StatusSet::of(&[Status::Petrified]));
         assert!(resolved.edge.is_empty());
@@ -497,7 +536,10 @@ mod tests {
         let resolved = resolve(set);
         assert!(resolved.invisible);
         assert!(resolved.body.is_empty());
-        assert!(resolved.edge.contains(Status::Invisible), "the faint outline itself");
+        assert!(
+            resolved.edge.contains(Status::Invisible),
+            "the faint outline itself"
+        );
         assert!(resolved.edge.contains(Status::Burning));
         assert!(resolved.overlay.contains(Status::Burning));
     }
@@ -523,8 +565,14 @@ mod tests {
 
     #[test]
     fn stone_and_paralysis_are_rigid_and_restraints_constrain_motion() {
-        assert_eq!(pose_for(StatusSet::of(&[Status::Petrified]), false).idle, 0.0);
-        assert_eq!(pose_for(StatusSet::of(&[Status::Paralyzed]), false).idle, 0.0);
+        assert_eq!(
+            pose_for(StatusSet::of(&[Status::Petrified]), false).idle,
+            0.0
+        );
+        assert_eq!(
+            pose_for(StatusSet::of(&[Status::Paralyzed]), false).idle,
+            0.0
+        );
         let restrained = pose_for(StatusSet::of(&[Status::Restrained]), false);
         assert!(restrained.idle > 0.0 && restrained.idle < 0.5);
         assert!(pose_for(StatusSet::of(&[Status::Raging]), false).breath > 2.0);
@@ -532,7 +580,12 @@ mod tests {
 
     #[test]
     fn reduced_motion_removes_wobble_shiver_and_pulses_but_not_the_pose() {
-        let set = StatusSet::of(&[Status::Stunned, Status::Frightened, Status::Dodging, Status::Prone]);
+        let set = StatusSet::of(&[
+            Status::Stunned,
+            Status::Frightened,
+            Status::Dodging,
+            Status::Prone,
+        ]);
         let moving = pose_for(set, false);
         let calm = pose_for(set, true);
         assert!(moving.wobble > 0.0 && moving.shiver > 0.0 && moving.afterimage);
@@ -544,7 +597,7 @@ mod tests {
 
     #[test]
     fn invisible_is_faint() {
-        assert!(pose_for(StatusSet::of(&[Status::Invisible]), false).alpha < 0.3);
+        assert!(pose_for(StatusSet::of(&[Status::Invisible]), false).alpha <= 0.3);
         assert_eq!(pose_for(StatusSet::EMPTY, false).alpha, 1.0);
     }
 
@@ -552,11 +605,22 @@ mod tests {
     fn only_bloodied_and_unconscious_are_derived_from_the_view() {
         assert_eq!(derived_from_view(12, 12, false), vec![]);
         assert_eq!(derived_from_view(7, 12, false), vec![]);
-        assert_eq!(derived_from_view(6, 12, false), vec![Status::Bloodied], "half counts");
+        assert_eq!(
+            derived_from_view(6, 12, false),
+            vec![Status::Bloodied],
+            "half counts"
+        );
         assert_eq!(derived_from_view(1, 12, false), vec![Status::Bloodied]);
         assert_eq!(derived_from_view(0, 12, true), vec![Status::Unconscious]);
-        assert_eq!(derived_from_view(0, 12, false), vec![], "zero alone is the stage's fall");
-        assert_eq!(derived_from_view(3, 12, true), vec![Status::Bloodied, Status::Unconscious]);
+        assert_eq!(
+            derived_from_view(0, 12, false),
+            vec![],
+            "zero alone is the stage's fall"
+        );
+        assert_eq!(
+            derived_from_view(3, 12, true),
+            vec![Status::Bloodied, Status::Unconscious]
+        );
         assert_eq!(derived_from_view(0, 0, false), vec![]);
         for status in derived_from_view(2, 12, true) {
             assert!(matches!(status, Status::Bloodied | Status::Unconscious));

@@ -363,7 +363,10 @@ impl Stage {
         self.playing = None;
         self.hud.roll_for_initiative = InitiativeShow::default();
         for runtime in &mut self.tokens {
-            if matches!(runtime.anim.as_ref().map(|a| &a.anim), Some(Anim::Ready { .. })) {
+            if matches!(
+                runtime.anim.as_ref().map(|a| &a.anim),
+                Some(Anim::Ready { .. })
+            ) {
                 runtime.anim = None;
             }
         }
@@ -409,10 +412,26 @@ impl Stage {
         self.rig.pose()
     }
 
-    /// Holds the wide tactical shot (the contact sheets frame the whole field with it).
+    /// Holds the wide tactical shot (the layout stills frame the whole field with it).
     pub fn show_tactical(&mut self) {
         if let Some(wide) = self.scene.cameras.get(&ShotName::Tactical) {
             self.rig.cut_to(*wide);
+        }
+    }
+
+    /// Holds a closer view of the field (the status contact sheets read figures with it).
+    pub fn show_close(&mut self) {
+        if let Some(pose) = self.scene.cameras.get(&ShotName::CombatEst) {
+            self.rig.cut_to(pose.dollied(0.82));
+        }
+    }
+
+    /// Moves a token to another cell at once (a review aid: server cells do the same in play).
+    pub fn place_token(&mut self, id: &TokenId, cell: Cell) {
+        if let Some(index) = self.token_index(id) {
+            self.tokens[index].token.cell = cell;
+            self.tokens[index].position = self.grid.cell_centre(cell);
+            self.tokens[index].walk = None;
         }
     }
 
@@ -843,7 +862,10 @@ impl Stage {
             } => {
                 // Only the current stop's badge stands; the tracker keeps the record. The badges
                 // of one sweep arrive together and stay together.
-                self.hud.roll_for_initiative.badges.retain(|badge| badge.age_s < 0.2);
+                self.hud
+                    .roll_for_initiative
+                    .badges
+                    .retain(|badge| badge.age_s < 0.2);
                 let name = self
                     .token_index(&token)
                     .map(|index| self.tokens[index].token.name.clone())
@@ -1321,11 +1343,11 @@ fn advance_runtime(runtime: &mut Runtime, dt: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::{Cover, SoundKind, Status};
     use crate::battle::{
         model::{AttackResult, FloatTone, HitPoints},
         scene_file::load_embedded,
     };
-    use super::{Cover, SoundKind, Status};
 
     fn token(id: &str, side: Side, cell: Cell, hp: u32) -> Token {
         Token {
@@ -1640,7 +1662,10 @@ mod tests {
             .map_or(0, |path| path.len() - 1);
         assert_eq!(steps, out * 2, "out and back, one per cell");
         let order: Vec<SoundKind> = heard.iter().map(|(_, kind, _)| *kind).collect();
-        let first_swing = order.iter().position(|kind| *kind == SoundKind::SwordSwing).unwrap();
+        let first_swing = order
+            .iter()
+            .position(|kind| *kind == SoundKind::SwordSwing)
+            .unwrap();
         let last_out_step = heard
             .iter()
             .take(first_swing)
@@ -1654,8 +1679,16 @@ mod tests {
         let mut stage = stage(true);
         stage.stage(killing_blow()).unwrap();
         let heard = sounds_after(&mut stage, 20.0);
-        assert!(heard.iter().all(|(_, kind, _)| *kind != SoundKind::Footstep));
-        assert!(heard.iter().any(|(_, kind, _)| *kind == SoundKind::BladeHit));
+        assert!(
+            heard
+                .iter()
+                .all(|(_, kind, _)| *kind != SoundKind::Footstep)
+        );
+        assert!(
+            heard
+                .iter()
+                .any(|(_, kind, _)| *kind == SoundKind::BladeHit)
+        );
     }
 
     #[test]
@@ -1667,9 +1700,15 @@ mod tests {
             stage.update(Duration::from_millis(50));
             seen.extend(stage.take_sounds());
         }
-        let effort = seen.iter().find(|event| event.kind == SoundKind::Effort).unwrap();
+        let effort = seen
+            .iter()
+            .find(|event| event.kind == SoundKind::Effort)
+            .unwrap();
         assert_eq!(effort.voice, crate::battle::VoiceSet::HeroMale);
-        let step = seen.iter().find(|event| event.kind == SoundKind::Footstep).unwrap();
+        let step = seen
+            .iter()
+            .find(|event| event.kind == SoundKind::Footstep)
+            .unwrap();
         assert_eq!(step.surface, stage.scene().surface);
     }
 
@@ -1722,9 +1761,15 @@ mod tests {
             }
         }
         let flight_ms = in_flight * 20;
-        assert!((340..=500).contains(&flight_ms), "{flight_ms} ms in the air");
+        assert!(
+            (340..=500).contains(&flight_ms),
+            "{flight_ms} ms in the air"
+        );
         let peak = heights.iter().copied().fold(f32::MIN, f32::max);
-        assert!(peak > heights[0] && peak > *heights.last().unwrap(), "an arc, not a line");
+        assert!(
+            peak > heights[0] && peak > *heights.last().unwrap(),
+            "an arc, not a line"
+        );
         assert!(stage.frame().projectiles.is_empty());
         let hero = figure(&stage, "hero");
         assert!((hero.position - stage.grid().cell_centre(Cell::new(3, 4))).length() < 0.01);
@@ -1753,7 +1798,10 @@ mod tests {
         }
         let arrow = stuck.expect("the arrow stuck");
         assert!(arrow.head.y < 0.3, "in the ground");
-        assert!(arrow.head.z < target.z, "past the target, away from the archer");
+        assert!(
+            arrow.head.z < target.z,
+            "past the target, away from the archer"
+        );
         assert!(stage.frame().projectiles.is_empty(), "then gone");
     }
 
@@ -1768,10 +1816,19 @@ mod tests {
             let enemy = figure(&stage, "enemy");
             slumps.push(enemy.slump);
             thud_peak = thud_peak.max(enemy.thud);
-            assert_eq!(enemy.alpha, 1.0, "solid on the ground, never fading in the air");
+            assert_eq!(
+                enemy.alpha, 1.0,
+                "solid on the ground, never fading in the air"
+            );
         }
-        assert!(slumps.windows(2).all(|pair| pair[1] >= pair[0] - 1e-4), "monotonic");
-        assert!(slumps.iter().any(|slump| (0.3..0.6).contains(slump)), "passes the knee");
+        assert!(
+            slumps.windows(2).all(|pair| pair[1] >= pair[0] - 1e-4),
+            "monotonic"
+        );
+        assert!(
+            slumps.iter().any(|slump| (0.3..0.6).contains(slump)),
+            "passes the knee"
+        );
         assert!(thud_peak > 0.9, "squashes on landing");
         let enemy = figure(&stage, "enemy");
         assert!((enemy.slump, enemy.thud) == (1.0, 0.0) && enemy.downed);
@@ -1837,11 +1894,18 @@ mod tests {
         assert!(!figure(&stage, "hero").statuses.contains(Status::Bloodied));
         stage.stage(killing_blow()).unwrap();
         run(&mut stage, 0.6);
-        assert!(!figure(&stage, "enemy").statuses.contains(Status::Unconscious));
+        assert!(
+            !figure(&stage, "enemy")
+                .statuses
+                .contains(Status::Unconscious)
+        );
         run(&mut stage, 5.0);
         let enemy = figure(&stage, "enemy");
         assert!(enemy.statuses.contains(Status::Unconscious));
-        assert!(!enemy.statuses.contains(Status::Bloodied), "zero is not bloodied");
+        assert!(
+            !enemy.statuses.contains(Status::Bloodied),
+            "zero is not bloodied"
+        );
     }
 
     #[test]
@@ -1868,7 +1932,11 @@ mod tests {
         ally.statuses = vec![Status::Prone, Status::Poisoned];
         let mut hero = token("hero", Side::Hero, Cell::new(3, 4), 12);
         hero.statuses = vec![Status::Petrified];
-        stage.set_tokens(vec![hero, ally, token("enemy", Side::Enemy, Cell::new(4, 1), 5)]);
+        stage.set_tokens(vec![
+            hero,
+            ally,
+            token("enemy", Side::Enemy, Cell::new(4, 1), 5),
+        ]);
         run(&mut stage, 1.0);
         let ally = figure(&stage, "ally");
         assert_eq!(ally.slump, 1.0);
@@ -1945,11 +2013,17 @@ mod tests {
             stage.update(Duration::from_millis(25));
             let hero = figure(&stage, "hero");
             if let Some(cell) = stage.grid().cell_at(hero.position) {
-                assert!(stage.grid().is_walkable(cell), "stood in a crate at {cell:?}");
+                assert!(
+                    stage.grid().is_walkable(cell),
+                    "stood in a crate at {cell:?}"
+                );
                 cells.insert(cell);
             }
         }
-        assert!(cells.iter().any(|cell| cell.col == 0 || cell.col == 6), "went round the end");
+        assert!(
+            cells.iter().any(|cell| cell.col == 0 || cell.col == 6),
+            "went round the end"
+        );
         assert!(cells.len() > 6);
         assert!(!stage.is_busy());
     }
@@ -1967,7 +2041,10 @@ mod tests {
         let hero = figure(&stage, "hero");
         let pip = hero.cover.expect("beside the crates");
         assert_eq!(pip.level, Cover::Half);
-        assert!(pip.toward[1] < -0.9, "toward the row of crates, away from the camera");
+        assert!(
+            pip.toward[1] < -0.9,
+            "toward the row of crates, away from the camera"
+        );
         assert!(figure(&stage, "enemy").cover.expect("other side").toward[1] > 0.9);
     }
 
@@ -1992,7 +2069,11 @@ mod tests {
         feed.apply(
             &mut stage,
             &CombatSnapshot {
-                members: vec![member("a", Side::Hero), member("b", Side::Hero), member("e", Side::Enemy)],
+                members: vec![
+                    member("a", Side::Hero),
+                    member("b", Side::Hero),
+                    member("e", Side::Enemy),
+                ],
                 active: None,
                 round: 1,
                 outcomes: vec![],
@@ -2004,7 +2085,11 @@ mod tests {
         let cells: Vec<(String, Cell)> = stage.tokens().map(|t| (t.id.0.clone(), t.cell)).collect();
         for (id, cell) in &cells {
             let layout = stage.layout().unwrap();
-            let spawns = if id == "e" { &layout.enemies } else { &layout.heroes };
+            let spawns = if id == "e" {
+                &layout.enemies
+            } else {
+                &layout.heroes
+            };
             assert!(spawns.contains(cell), "{id} at {cell:?}");
         }
     }
@@ -2030,7 +2115,10 @@ mod tests {
         feed.apply(
             &mut stage,
             &CombatSnapshot {
-                members: vec![member("a", Side::Hero, Some(Cell::new(6, 4))), member("e", Side::Enemy, None)],
+                members: vec![
+                    member("a", Side::Hero, Some(Cell::new(6, 4))),
+                    member("e", Side::Enemy, None),
+                ],
                 active: None,
                 round: 1,
                 outcomes: vec![],
@@ -2039,7 +2127,11 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(stage.tokens().any(|t| t.id.0 == "a" && t.cell == Cell::new(6, 4)));
+        assert!(
+            stage
+                .tokens()
+                .any(|t| t.id.0 == "a" && t.cell == Cell::new(6, 4))
+        );
     }
 
     fn rolls_for(order: &[&str]) -> Vec<crate::battle::InitiativeRoll> {
@@ -2074,7 +2166,12 @@ mod tests {
                 if tracker_sizes.last() != Some(&tracker.len()) {
                     tracker_sizes.push(tracker.len());
                     let expected = ["enemy", "hero", "ally"];
-                    assert!(tracker.iter().zip(expected).all(|(have, want)| have.0 == want));
+                    assert!(
+                        tracker
+                            .iter()
+                            .zip(expected)
+                            .all(|(have, want)| have.0 == want)
+                    );
                 }
             }
             for badge in &show.badges {
@@ -2091,13 +2188,24 @@ mod tests {
         assert_eq!(tracker_sizes, vec![0, 1, 2, 3]);
         assert_eq!(
             seen_badges,
-            vec![(1, "ENEMY".to_owned()), (2, "HERO".to_owned()), (3, "ALLY".to_owned())]
+            vec![
+                (1, "ENEMY".to_owned()),
+                (2, "HERO".to_owned()),
+                (3, "ALLY".to_owned())
+            ]
         );
-        assert_eq!(banners, vec!["Roll for initiative".to_owned(), "Round 1".to_owned()]);
+        assert_eq!(
+            banners,
+            vec!["Roll for initiative".to_owned(), "Round 1".to_owned()]
+        );
         assert!(!stage.is_busy());
         let show = &stage.hud().roll_for_initiative;
         assert!(show.tracker.is_none() && show.badges.is_empty() && show.dice.is_empty());
-        assert_eq!(stage.hud().active, Some(TokenId::new("enemy")), "the first turn follows");
+        assert_eq!(
+            stage.hud().active,
+            Some(TokenId::new("enemy")),
+            "the first turn follows"
+        );
     }
 
     #[test]
@@ -2149,7 +2257,10 @@ mod tests {
         assert!(!calm_panned, "reduced motion never pans: it cuts");
         assert!(lively_overshoot);
         let victory = lively.scene().cameras[&ShotName::Victory].fov_deg;
-        assert!(closest < victory * 0.97, "zoom punch on arrival: {closest} vs {victory}");
+        assert!(
+            closest < victory * 0.97,
+            "zoom punch on arrival: {closest} vs {victory}"
+        );
         assert!(!calm.is_busy() && !lively.is_busy());
     }
 
@@ -2171,7 +2282,11 @@ mod tests {
         assert!(!stage.rig.is_panning());
     }
 
-    fn feed_snapshot(begun_live: bool, outcomes: usize, round: u32) -> crate::battle::CombatSnapshot {
+    fn feed_snapshot(
+        begun_live: bool,
+        outcomes: usize,
+        round: u32,
+    ) -> crate::battle::CombatSnapshot {
         use crate::battle::{InitiativeEntry, Member, Outcome};
         let member = |id: &str, side| Member {
             id: id.to_owned(),
@@ -2187,7 +2302,11 @@ mod tests {
             statuses: Vec::new(),
         };
         crate::battle::CombatSnapshot {
-            members: vec![member("a", Side::Hero), member("b", Side::Hero), member("e", Side::Enemy)],
+            members: vec![
+                member("a", Side::Hero),
+                member("b", Side::Hero),
+                member("e", Side::Enemy),
+            ],
             active: Some("e".to_owned()),
             round,
             outcomes: (0..outcomes)
@@ -2225,7 +2344,12 @@ mod tests {
         run(&mut stage, 0.2);
         assert!(stage.is_rolling_initiative());
         assert_eq!(
-            stage.hud().initiative.iter().map(|id| id.0.as_str()).collect::<Vec<_>>(),
+            stage
+                .hud()
+                .initiative
+                .iter()
+                .map(|id| id.0.as_str())
+                .collect::<Vec<_>>(),
             vec!["e", "a", "b"],
             "the tracker order is the server's, not the seat order"
         );
@@ -2237,8 +2361,12 @@ mod tests {
         for (live, outcomes, round) in [(false, 0, 1), (true, 2, 1), (true, 0, 2)] {
             let mut stage = stage(false);
             let mut feed = CombatFeed::new(FeedMode::HoldForCues);
-            feed.apply(&mut stage, &feed_snapshot(live, outcomes, round)).unwrap();
-            assert!(!stage.is_busy(), "live={live} outcomes={outcomes} round={round}");
+            feed.apply(&mut stage, &feed_snapshot(live, outcomes, round))
+                .unwrap();
+            assert!(
+                !stage.is_busy(),
+                "live={live} outcomes={outcomes} round={round}"
+            );
             assert!(!stage.is_rolling_initiative());
         }
     }
@@ -2267,14 +2395,20 @@ mod tests {
             token("enemy", Side::Enemy, Cell::new(6, 1), 5),
         ]);
         run(&mut stage, 0.2);
-        assert!(!figure(&stage, "hero").mirror, "target to the right: her art as drawn");
+        assert!(
+            !figure(&stage, "hero").mirror,
+            "target to the right: her art as drawn"
+        );
         stage.set_tokens(vec![
             archer,
             token("ally", Side::Hero, Cell::new(5, 4), 12),
             token("enemy", Side::Enemy, Cell::new(0, 1), 5),
         ]);
         run(&mut stage, 0.2);
-        assert!(figure(&stage, "hero").mirror, "target to the left: mirrored");
+        assert!(
+            figure(&stage, "hero").mirror,
+            "target to the left: mirrored"
+        );
         assert!(!figure(&stage, "ally").mirror, "only archers mirror");
     }
 }

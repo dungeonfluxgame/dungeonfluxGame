@@ -294,9 +294,9 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
             glow_a = glow_a + 0.35;
         }
         if (invisible) {
-            glow = glow + vec3<f32>(0.75, 0.95, 1.0) * 0.9;
-            glow_a = glow_a + 0.9;
-            rgb = rgb * vec3<f32>(0.5, 0.62, 0.7);
+            glow = glow + vec3<f32>(0.75, 0.95, 1.0) * 0.6;
+            glow_a = glow_a + 0.7;
+            rgb = rgb * vec3<f32>(0.95, 1.1, 1.25);
         }
         glow_a = clamp(glow_a, 0.0, 1.0);
     }
@@ -421,7 +421,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     if (has_bit(lo, hi, ST_BLESSED) || has_bit(lo, hi, ST_INSPIRED)) {
         // A warm gold aura from below, with rising specks.
         let column = exp(-pow(p.x / 0.4, 2.0)) * pow(1.0 - clamp(p.y / 1.15, 0.0, 1.0), 1.6);
-        add = add + vec3<f32>(1.0, 0.82, 0.4) * column * (0.42 + 0.08 * sin(tt * 2.0));
+        add = add + vec3<f32>(1.0, 0.82, 0.4) * column * (0.7 + 0.12 * sin(tt * 2.0));
         let specks = select(4u, 8u, has_bit(lo, hi, ST_INSPIRED));
         for (var n = 0u; n < specks; n = n + 1u) {
             let fn_ = f32(n);

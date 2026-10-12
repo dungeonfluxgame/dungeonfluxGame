@@ -202,41 +202,68 @@ mod tests {
         );
         let mut bad = layout();
         bad.heroes[0] = Cell::new(-1, 5);
-        assert!(matches!(bad.validate(&base()), Err(LayoutError::OutsideGrid(..))));
+        assert!(matches!(
+            bad.validate(&base()),
+            Err(LayoutError::OutsideGrid(..))
+        ));
     }
 
     #[test]
     fn a_spawn_on_an_obstacle_or_a_hole_is_rejected() {
         let mut bad = layout();
         bad.enemies[0] = Cell::new(3, 2);
-        assert!(matches!(bad.validate(&base()), Err(LayoutError::SpawnBlocked(..))));
+        assert!(matches!(
+            bad.validate(&base()),
+            Err(LayoutError::SpawnBlocked(..))
+        ));
         let mut bad = layout();
         bad.heroes[0] = Cell::new(0, 0);
-        assert!(matches!(bad.validate(&base()), Err(LayoutError::SpawnBlocked(..))));
+        assert!(matches!(
+            bad.validate(&base()),
+            Err(LayoutError::SpawnBlocked(..))
+        ));
     }
 
     #[test]
     fn duplicate_ids_overlaps_and_short_spawn_lists_are_rejected() {
         let mut bad = layout();
         bad.obstacles[1].id = "a".into();
-        assert!(matches!(bad.validate(&base()), Err(LayoutError::DuplicateObstacle(_))));
+        assert!(matches!(
+            bad.validate(&base()),
+            Err(LayoutError::DuplicateObstacle(_))
+        ));
         let mut bad = layout();
         bad.obstacles[1].cells.push(Cell::new(3, 2));
-        assert!(matches!(bad.validate(&base()), Err(LayoutError::ObstacleOverlap(..))));
+        assert!(matches!(
+            bad.validate(&base()),
+            Err(LayoutError::ObstacleOverlap(..))
+        ));
         let mut bad = layout();
         bad.heroes.pop();
-        assert!(matches!(bad.validate(&base()), Err(LayoutError::TooFewSpawns(_))));
+        assert!(matches!(
+            bad.validate(&base()),
+            Err(LayoutError::TooFewSpawns(_))
+        ));
         let mut bad = layout();
         bad.enemies[1] = bad.enemies[0];
-        assert!(matches!(bad.validate(&base()), Err(LayoutError::DuplicateSpawn(..))));
+        assert!(matches!(
+            bad.validate(&base()),
+            Err(LayoutError::DuplicateSpawn(..))
+        ));
     }
 
     #[test]
     fn a_wall_that_cuts_the_field_makes_the_spawns_unreachable() {
         let mut bad = layout();
-        bad.obstacles = vec![crate_at("wall", &(0..8).map(|c| (c, 3)).collect::<Vec<_>>())];
+        bad.obstacles = vec![crate_at(
+            "wall",
+            &(0..8).map(|c| (c, 3)).collect::<Vec<_>>(),
+        )];
         bad.difficult.clear();
-        assert!(matches!(bad.validate(&base()), Err(LayoutError::Unreachable(..))));
+        assert!(matches!(
+            bad.validate(&base()),
+            Err(LayoutError::Unreachable(..))
+        ));
         // A one-cell gap restores the route.
         let mut gap = bad.clone();
         gap.obstacles[0].cells.retain(|cell| cell.col != 5);
@@ -257,14 +284,20 @@ mod tests {
     fn difficult_ground_cannot_sit_under_a_blocking_obstacle() {
         let mut bad = layout();
         bad.difficult.push(Cell::new(3, 2));
-        assert!(matches!(bad.validate(&base()), Err(LayoutError::DifficultBlocked(..))));
+        assert!(matches!(
+            bad.validate(&base()),
+            Err(LayoutError::DifficultBlocked(..))
+        ));
     }
 
     #[test]
     fn obstacle_height_must_be_sensible() {
         let mut bad = layout();
         bad.obstacles[0].height_m = 9.0;
-        assert!(matches!(bad.validate(&base()), Err(LayoutError::ObstacleHeight(_))));
+        assert!(matches!(
+            bad.validate(&base()),
+            Err(LayoutError::ObstacleHeight(_))
+        ));
     }
 
     #[test]
@@ -287,7 +320,10 @@ mod tests {
         let (cell, cover) = grid.cover_beside(Cell::new(3, 3)).unwrap();
         assert_eq!((cell, cover), (Cell::new(3, 2), Cover::Total));
         assert!(grid.is_walkable(Cell::new(4, 3)), "crossable");
-        assert!(!grid.is_standable(Cell::new(4, 3)), "but not a place to stop");
+        assert!(
+            !grid.is_standable(Cell::new(4, 3)),
+            "but not a place to stop"
+        );
         let beside = grid
             .free_cell_beside(Cell::new(5, 3), Cell::new(1, 5), &[])
             .unwrap();
@@ -321,12 +357,23 @@ mod tests {
                 ..layout()
             })
             .collect();
-        let first = choose(&layouts, "scene-salt-quay-arrival|a|b").unwrap().id.clone();
+        let first = choose(&layouts, "scene-salt-quay-arrival|a|b")
+            .unwrap()
+            .id
+            .clone();
         for _ in 0..5 {
-            assert_eq!(choose(&layouts, "scene-salt-quay-arrival|a|b").unwrap().id, first);
+            assert_eq!(
+                choose(&layouts, "scene-salt-quay-arrival|a|b").unwrap().id,
+                first
+            );
         }
         let picked: BTreeSet<String> = (0..60)
-            .map(|index| choose(&layouts, &format!("fight-{index}")).unwrap().id.clone())
+            .map(|index| {
+                choose(&layouts, &format!("fight-{index}"))
+                    .unwrap()
+                    .id
+                    .clone()
+            })
             .collect();
         assert_eq!(picked.len(), 3);
         assert!(choose(&[], "x").is_none());

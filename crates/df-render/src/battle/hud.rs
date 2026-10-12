@@ -340,10 +340,9 @@ impl Hud {
             plate
                 .root
                 .set_attribute("data-active", if figure.active { "true" } else { "false" })?;
-            plate.root.set_attribute(
-                "data-down",
-                if figure.downed { "true" } else { "false" },
-            )?;
+            plate
+                .root
+                .set_attribute("data-down", if figure.downed { "true" } else { "false" })?;
             plate.root.set_attribute(
                 "data-bloodied",
                 if figure.statuses.contains(Status::Bloodied) {
@@ -353,7 +352,11 @@ impl Hud {
                 },
             )?;
             let icons = icon_statuses(figure.statuses);
-            let signature: String = icons.iter().map(|status| status.id()).collect::<Vec<_>>().join(",");
+            let signature: String = icons
+                .iter()
+                .map(|status| status.id())
+                .collect::<Vec<_>>()
+                .join(",");
             if signature != plate.status_signature {
                 plate.status.set_text_content(None);
                 for status in &icons {
@@ -472,7 +475,11 @@ impl Hud {
             if icons.is_empty() {
                 continue;
             }
-            let signature: String = icons.iter().map(|status| status.id()).collect::<Vec<_>>().join(",");
+            let signature: String = icons
+                .iter()
+                .map(|status| status.id())
+                .collect::<Vec<_>>()
+                .join(",");
             if !self.pip_rows.contains_key(&figure.id) {
                 let root = element(&self.document, &self.overlays, "div", "bf-pips", "")?;
                 self.pip_rows.insert(
@@ -517,7 +524,11 @@ impl Hud {
                 if self.target_tag.text_content().as_deref() != Some(text.as_str()) {
                     self.target_tag.set_text_content(Some(&text));
                 }
-                let lift = if icon_statuses(figure.statuses).is_empty() { 0.3 } else { 0.7 };
+                let lift = if icon_statuses(figure.statuses).is_empty() {
+                    0.3
+                } else {
+                    0.7
+                };
                 match anchor(figure, lift) {
                     Some((x, y)) => self.target_tag.set_attribute(
                         "style",
@@ -584,7 +595,11 @@ impl Hud {
             node.set_attribute("data-landed", if die.landed { "true" } else { "false" })?;
             node.set_attribute(
                 "data-side",
-                if figure.side == Side::Hero { "hero" } else { "enemy" },
+                if figure.side == Side::Hero {
+                    "hero"
+                } else {
+                    "enemy"
+                },
             )?;
             let tumble = if die.landed {
                 0.0
@@ -604,7 +619,8 @@ impl Hud {
                 None => node.set_attribute("style", "display:none")?,
             }
         }
-        let live_badges: BTreeSet<&TokenId> = show.badges.iter().map(|badge| &badge.token).collect();
+        let live_badges: BTreeSet<&TokenId> =
+            show.badges.iter().map(|badge| &badge.token).collect();
         self.badges.retain(|id, node| {
             let keep = live_badges.contains(id);
             if !keep {
@@ -618,7 +634,13 @@ impl Hud {
             };
             if !self.badges.contains_key(&badge.token) {
                 let node = element(&self.document, &self.overlays, "div", "bf-badge", "")?;
-                element(&self.document, &node, "span", "bf-badge-order", &ordinal(badge.order))?;
+                element(
+                    &self.document,
+                    &node,
+                    "span",
+                    "bf-badge-order",
+                    &ordinal(badge.order),
+                )?;
                 element(
                     &self.document,
                     &node,
@@ -628,7 +650,11 @@ impl Hud {
                 )?;
                 node.set_attribute(
                     "data-side",
-                    if figure.side == Side::Hero { "hero" } else { "enemy" },
+                    if figure.side == Side::Hero {
+                        "hero"
+                    } else {
+                        "enemy"
+                    },
                 )?;
                 self.badges.insert(badge.token.clone(), node);
             }

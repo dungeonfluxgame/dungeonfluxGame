@@ -475,7 +475,10 @@ mod tests {
             peak = peak.max(rig.pose().distance);
             distances.push(rig.pose().distance);
         }
-        assert!(peak > 20.2 && peak < 21.5, "overshoot of a few percent, got {peak}");
+        assert!(
+            peak > 20.2 && peak < 21.5,
+            "overshoot of a few percent, got {peak}"
+        );
         assert!(!rig.is_panning());
         // Arrived: the base pose is exact once the punch is over.
         let mut narrowest = f32::MAX;
@@ -483,7 +486,10 @@ mod tests {
             rig.update(Duration::from_millis(10));
             narrowest = narrowest.min(rig.pose().fov_deg);
         }
-        assert!(narrowest < 40.0 * 0.95, "the lens tightens on arrival: {narrowest}");
+        assert!(
+            narrowest < 40.0 * 0.95,
+            "the lens tightens on arrival: {narrowest}"
+        );
         assert_eq!(rig.pose(), pose(20.0, 0.0));
         // It travels fast: more than half the way in the first third of the time.
         assert!(distances[9] > 15.0, "snappy start: {}", distances[9]);

@@ -3,10 +3,13 @@
 //! columns grow along +X and rows along +Z. The grid is staging only: the rules engine has no
 //! positions, so nothing here decides range, reach or movement outcomes.
 
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
-use super::{layout::{Cover, Layout}, math::Vec3};
+use super::{
+    layout::{Cover, Layout},
+    math::Vec3,
+};
 
 pub const MAX_GRID_SIDE: u32 = 64;
 
@@ -147,7 +150,8 @@ impl Grid {
     }
 
     pub fn cover_at(&self, cell: Cell) -> Cover {
-        self.index(cell).map_or(Cover::None, |index| self.cover[index])
+        self.index(cell)
+            .map_or(Cover::None, |index| self.cover[index])
     }
 
     /// The best cover next to `cell` (eight-way) and the neighbouring cell that gives it; ties
@@ -161,7 +165,12 @@ impl Grid {
             .max_by_key(|(cover, neighbour)| {
                 // Strongest cover first, then a straight-on neighbour over a diagonal one.
                 let diagonal = neighbour.col != cell.col && neighbour.row != cell.row;
-                (*cover, Reverse(diagonal), Reverse(neighbour.row), Reverse(neighbour.col))
+                (
+                    *cover,
+                    Reverse(diagonal),
+                    Reverse(neighbour.row),
+                    Reverse(neighbour.col),
+                )
             })
             .map(|(cover, neighbour)| (neighbour, cover))
     }

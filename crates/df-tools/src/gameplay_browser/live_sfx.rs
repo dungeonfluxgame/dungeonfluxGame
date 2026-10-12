@@ -307,7 +307,12 @@ pub(super) fn play_event(event: &SoundEvent, rating: ContentRating) {
     let Some(clip) = PICKER.with(|picker| picker.borrow_mut().pick(event.clips(rating))) else {
         return;
     };
-    play_shaped(Cue::Clip(clip), Duration::ZERO, event.kind.gain(), event.rate);
+    play_shaped(
+        Cue::Clip(clip),
+        Duration::ZERO,
+        event.kind.gain(),
+        event.rate,
+    );
 }
 
 /// While the 3D battlefield stages blows, the flat view's own hit and miss sounds are left out

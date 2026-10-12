@@ -72,6 +72,8 @@ struct PreviewRequest {
     procedural_splats: bool,
     reduced_motion: bool,
     restrained: bool,
+    /// `&place=<token>:<col>:<row>`: stands a token on a cell, to review one situation.
+    places: Vec<(String, Cell)>,
     mode: PreviewMode,
     /// A splat scene served from `/assets/splat/` to use instead of the painted ground.
     splat_file: Option<(String, battle::SplatFormat)>,
@@ -94,6 +96,7 @@ fn preview_request() -> Option<PreviewRequest> {
         procedural_splats: false,
         reduced_motion: battle::prefers_reduced_motion(),
         restrained: false,
+        places: Vec::new(),
         mode: PreviewMode::Fight,
         splat_file: None,
     };
@@ -105,6 +108,15 @@ fn preview_request() -> Option<PreviewRequest> {
             "restrained" => request.restrained = true,
             "statuses" => request.mode = PreviewMode::Statuses,
             "still" => request.mode = PreviewMode::Still,
+            other if other.starts_with("place=") => {
+                let fields: Vec<&str> = other[6..].split(':').collect();
+                if let [id, col, row] = fields[..]
+                    && let (Ok(col), Ok(row)) = (col.parse::<i32>(), row.parse::<i32>())
+                    && plain_name(id)
+                {
+                    request.places.push((id.to_owned(), Cell::new(col, row)));
+                }
+            }
             "sheet" => request.mode = PreviewMode::Sheet(0),
             other if other.starts_with("sheet=") => {
                 if let Ok(page) = other[6..].parse::<usize>() {
@@ -180,21 +192,60 @@ fn attack_style_for(figure: &str) -> AttackStyle {
     }
 }
 
-const GOBLIN: (&str, &str, &str) = ("goblin", "figure-ant-goblin-warrior", "portrait-ant-goblin-warrior");
+const GOBLIN: (&str, &str, &str) = (
+    "goblin",
+    "figure-ant-goblin-warrior",
+    "portrait-ant-goblin-warrior",
+);
 
 /// The preview's heroes and the lone goblin on a layout's spawn cells (or the derived formation
 /// when the scene has no layouts).
-fn preview_tokens(grid: &battle::Grid, layout: Option<&battle::Layout>) -> Result<Vec<Token>, JsValue> {
+fn preview_tokens(
+    grid: &battle::Grid,
+    layout: Option<&battle::Layout>,
+) -> Result<Vec<Token>, JsValue> {
     let seats = match layout {
         Some(layout) => battle::from_layout(layout, grid, 3, 1),
         None => battle::derive_formation(grid, 3, 1),
     }
     .map_err(|_| JsValue::from_str("battlefield formation has no room"))?;
     Ok(vec![
-        combatant("tobin", "Tobin", Side::Hero, seats.heroes[0], "figure-hero-1", "portrait-hero-1", 1.35),
-        combatant("sylvie", "Sylvie", Side::Hero, seats.heroes[1], "figure-hero-3", "portrait-hero-3", 1.35),
-        combatant("nimrael", "Nimrael", Side::Hero, seats.heroes[2], "figure-hero-2", "portrait-hero-2", 1.35),
-        combatant(GOBLIN.0, "Goblin Warrior", Side::Enemy, seats.enemies[0], GOBLIN.1, GOBLIN.2, 1.0),
+        combatant(
+            "tobin",
+            "Tobin",
+            Side::Hero,
+            seats.heroes[0],
+            "figure-hero-1",
+            "portrait-hero-1",
+            1.35,
+        ),
+        combatant(
+            "sylvie",
+            "Sylvie",
+            Side::Hero,
+            seats.heroes[1],
+            "figure-hero-3",
+            "portrait-hero-3",
+            1.35,
+        ),
+        combatant(
+            "nimrael",
+            "Nimrael",
+            Side::Hero,
+            seats.heroes[2],
+            "figure-hero-2",
+            "portrait-hero-2",
+            1.35,
+        ),
+        combatant(
+            GOBLIN.0,
+            "Goblin Warrior",
+            Side::Enemy,
+            seats.enemies[0],
+            GOBLIN.1,
+            GOBLIN.2,
+            1.0,
+        ),
     ])
 }
 
@@ -263,7 +314,10 @@ fn status_cycle() -> Vec<Vec<Status>> {
 }
 
 fn status_name(set: &[Status]) -> String {
-    set.iter().map(|status| status.id()).collect::<Vec<_>>().join("+")
+    set.iter()
+        .map(|status| status.id())
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 fn pick_layout(scene: &BattleScene, requested: Option<&str>, cycle: usize) -> Option<String> {
@@ -277,7 +331,11 @@ fn pick_layout(scene: &BattleScene, requested: Option<&str>, cycle: usize) -> Op
 }
 
 fn with_preview<R>(operation: impl FnOnce(&mut battle::Stage) -> R) -> Option<R> {
-    PREVIEW.with(|slot| slot.borrow().as_ref().and_then(|stage| stage.with_stage(operation)))
+    PREVIEW.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|stage| stage.with_stage(operation))
+    })
 }
 
 fn mark(host: &Element, name: &str, value: &str) {
@@ -332,7 +390,11 @@ async fn run_preview(host: Element, request: PreviewRequest) {
         live_sfx::play_event(&event, content_rating());
     }));
     PREVIEW.with(|slot| *slot.borrow_mut() = Some(stage));
-    with_preview(|stage| stage.set_restrained(request.restrained || content_rating() == battle::ContentRating::Restrained));
+    with_preview(|stage| {
+        stage.set_restrained(
+            request.restrained || content_rating() == battle::ContentRating::Restrained,
+        )
+    });
     live_sfx::set_battlefield_owns_combat(true);
     // The shared sound control lets a harness (or a viewer) unlock audio with one click.
     if let Some(document) = host.owner_document() {
@@ -344,7 +406,11 @@ async fn run_preview(host: Element, request: PreviewRequest) {
     loop {
         let layout_id = pick_layout(&scene_for_choice, request.layout_id.as_deref(), cycle);
         cycle += 1;
-        mark(&host, "data-battlefield-layout", layout_id.as_deref().unwrap_or("none"));
+        mark(
+            &host,
+            "data-battlefield-layout",
+            layout_id.as_deref().unwrap_or("none"),
+        );
         let prepared = with_preview(|stage| {
             if let Some(id) = &layout_id {
                 stage.set_layout(id);
@@ -359,11 +425,17 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             tokens.map(|tokens| {
                 stage.set_tokens(tokens);
                 let order: Vec<TokenId> = match request.mode {
-                    PreviewMode::Fight => preview_initiative().into_iter().map(|roll| roll.token).collect(),
+                    PreviewMode::Fight => preview_initiative()
+                        .into_iter()
+                        .map(|roll| roll.token)
+                        .collect(),
                     _ => stage.tokens().map(|token| token.id.clone()).collect(),
                 };
                 stage.set_initiative(order);
                 stage.set_round(1);
+                for (id, cell) in &request.places {
+                    stage.place_token(&TokenId::new(id.clone()), *cell);
+                }
             })
         });
         match prepared {
@@ -405,7 +477,11 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                         return;
                     }
                     beat_counter.set(beat_counter.get() + 1);
-                    mark(&host, "data-battlefield-beat", &beat_counter.get().to_string());
+                    mark(
+                        &host,
+                        "data-battlefield-beat",
+                        &beat_counter.get().to_string(),
+                    );
                     if !wait_idle().await {
                         return;
                     }
@@ -429,7 +505,9 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                     mark(&host, "data-battlefield-status", &status_name(&set));
                     mark(&host, "data-battlefield-status-index", &index.to_string());
                     let applied = with_preview(|stage| {
-                        if let Ok(mut tokens) = preview_tokens(stage.grid(), stage.layout().cloned().as_ref()) {
+                        if let Ok(mut tokens) =
+                            preview_tokens(stage.grid(), stage.layout().cloned().as_ref())
+                        {
                             tokens[0].statuses = set.clone();
                             // The goblin keeps the frightened figure's attention honest.
                             stage.set_tokens(tokens);
@@ -447,7 +525,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                 TimeoutFuture::new(60_000).await;
             }
             PreviewMode::Sheet(_) => {
-                with_preview(|stage| stage.show_tactical());
+                with_preview(|stage| stage.show_close());
                 mark(&host, "data-battlefield-phase", "sheet");
                 TimeoutFuture::new(60_000).await;
             }
@@ -467,14 +545,67 @@ fn sheet_tokens(
     }
     .map_err(|_| JsValue::from_str("battlefield formation has no room"))?;
     let cycle = status_cycle();
-    let set_for = |slot: usize| cycle.get((page * 6 + slot) % cycle.len()).cloned().unwrap_or_default();
+    let set_for = |slot: usize| {
+        cycle
+            .get((page * 6 + slot) % cycle.len())
+            .cloned()
+            .unwrap_or_default()
+    };
     let mut tokens = vec![
-        combatant("s0", "", Side::Hero, seats.heroes[0], "figure-hero-1", "portrait-hero-1", 1.35),
-        combatant("s1", "", Side::Hero, seats.heroes[1], "figure-hero-3", "portrait-hero-3", 1.35),
-        combatant("s2", "", Side::Hero, seats.heroes[2], "figure-hero-2", "portrait-hero-2", 1.35),
-        combatant("s3", "", Side::Enemy, seats.enemies[0], "figure-ant-goblin-warrior", "portrait-ant-goblin-warrior", 1.0),
-        combatant("s4", "", Side::Enemy, seats.enemies[1], "figure-ant-skeleton", "portrait-ant-skeleton", 1.75),
-        combatant("s5", "", Side::Enemy, seats.enemies[2], "figure-ant-wolf", "portrait-ant-wolf", 0.9),
+        combatant(
+            "s0",
+            "",
+            Side::Hero,
+            seats.heroes[0],
+            "figure-hero-1",
+            "portrait-hero-1",
+            1.35,
+        ),
+        combatant(
+            "s1",
+            "",
+            Side::Hero,
+            seats.heroes[1],
+            "figure-hero-3",
+            "portrait-hero-3",
+            1.35,
+        ),
+        combatant(
+            "s2",
+            "",
+            Side::Hero,
+            seats.heroes[2],
+            "figure-hero-2",
+            "portrait-hero-2",
+            1.35,
+        ),
+        combatant(
+            "s3",
+            "",
+            Side::Enemy,
+            seats.enemies[0],
+            "figure-ant-goblin-warrior",
+            "portrait-ant-goblin-warrior",
+            1.0,
+        ),
+        combatant(
+            "s4",
+            "",
+            Side::Enemy,
+            seats.enemies[1],
+            "figure-ant-skeleton",
+            "portrait-ant-skeleton",
+            1.75,
+        ),
+        combatant(
+            "s5",
+            "",
+            Side::Enemy,
+            seats.enemies[2],
+            "figure-ant-wolf",
+            "portrait-ant-wolf",
+            0.9,
+        ),
     ];
     for (slot, token) in tokens.iter_mut().enumerate() {
         token.statuses = set_for(slot);
@@ -656,7 +787,11 @@ fn chosen_layout_id(scene: &BattleScene, key: &str) -> Option<String> {
 }
 
 fn layout_key(view: &LiveView<'_>, snapshot: &CombatSnapshot) -> String {
-    let mut ids: Vec<&str> = snapshot.members.iter().map(|member| member.id.as_str()).collect();
+    let mut ids: Vec<&str> = snapshot
+        .members
+        .iter()
+        .map(|member| member.id.as_str())
+        .collect();
     ids.sort_unstable();
     format!("{}|{}", view.scene.location_id, ids.join(","))
 }
@@ -853,7 +988,10 @@ fn start_mount(
         scene.backdrop.stem = stem;
     }
     let layout = chosen_layout_id(&scene, key);
-    let _ = host.set_attribute("data-battlefield-layout", layout.as_deref().unwrap_or("none"));
+    let _ = host.set_attribute(
+        "data-battlefield-layout",
+        layout.as_deref().unwrap_or("none"),
+    );
     if install_style(&document).is_err() {
         LIVE.with(|live| live.borrow_mut().phase = Phase::Unavailable);
         return;

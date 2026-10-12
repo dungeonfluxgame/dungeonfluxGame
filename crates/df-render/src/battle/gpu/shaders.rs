@@ -98,11 +98,13 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // Sharper close up: an unsharp mask against a blurrier mip, plus a fine mottling that fades
     // with distance, so the planks and stones keep detail when the camera is low and near.
     let base = textureSample(tex, samp, uv).rgb;
-    let soft = textureSampleLevel(tex, samp, uv, 1.6).rgb;
-    var colour = max(base + (base - soft) * 0.42, vec3<f32>(0.0));
+    let soft = textureSampleLevel(tex, samp, uv, 1.3).rgb;
+    // The detail is clamped so a bright highlight never turns into speckle.
+    let detail = clamp(base - soft, vec3<f32>(-0.07), vec3<f32>(0.07)) * 1.3;
+    var colour = max(base + detail, vec3<f32>(0.0));
     let near = 1.0 - smoothstep(4.0, 15.0, distance(in.world_xz, frame.eye.xz));
-    let fine = vnoise(in.world_xz * 7.0) * 0.55 + vnoise(in.world_xz * 19.0) * 0.45;
-    colour = colour * (1.0 + (fine - 0.5) * 0.14 * near);
+    let broad = vnoise(in.world_xz * 2.3);
+    colour = colour * (1.0 + (broad - 0.5) * 0.12 * near);
     let offset = abs(in.world_xz - frame.ground.xy);
     let edge = frame.ground.z - max(offset.x, offset.y);
     let sides = smoothstep(0.0, max(frame.ground.w, 0.01), edge);
@@ -224,7 +226,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let ang = frame.eye.w * 0.9 * (1.0 - in.params.y);
         let r = vec2<f32>(c.x * cos(ang) - c.y * sin(ang), c.x * sin(ang) + c.y * cos(ang));
         let d = length(c);
-        let ring = 1.0 - smoothstep(0.0, 0.07, abs(d - 0.62));
+        let ring = 1.0 - smoothstep(0.0, 0.1, abs(d - 0.62));
         let tick_x = (1.0 - smoothstep(0.04, 0.08, abs(r.x))) * step(0.5, abs(r.y)) * step(abs(r.y), 0.95);
         let tick_y = (1.0 - smoothstep(0.04, 0.08, abs(r.y))) * step(0.5, abs(r.x)) * step(abs(r.x), 0.95);
         let a = max(ring, max(tick_x, tick_y)) * in.col.a;
@@ -235,8 +237,8 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let d = length(in.c);
         let ang = atan2(in.c.y, in.c.x) + frame.eye.w * 0.8 * (1.0 - in.params.y);
         let dash = step(0.5, fract(ang * 1.9099));
-        let ring = 1.0 - smoothstep(0.0, 0.06, abs(d - 0.74));
-        let a = ring * (0.35 + 0.65 * dash) * in.col.a;
+        let ring = 1.0 - smoothstep(0.0, 0.1, abs(d - 0.74));
+        let a = ring * (0.5 + 0.5 * dash) * in.col.a;
         return vec4<f32>(in.col.rgb * a, a);
     }
     if (kind == 11) {

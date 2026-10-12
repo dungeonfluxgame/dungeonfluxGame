@@ -280,16 +280,27 @@ mod tests {
 
     #[test]
     fn ordinals_follow_english_including_the_teens() {
-        let words: Vec<String> = [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map(ordinal).into();
+        let words: Vec<String> = [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111]
+            .map(ordinal)
+            .into();
         assert_eq!(
             words,
-            ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "101st", "111th"]
+            [
+                "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd",
+                "101st", "111th"
+            ]
         );
     }
 
     #[test]
     fn the_phone_line_reads_like_the_example() {
-        assert_eq!(initiative_line(14, 1, 15, 2), "Initiative 14 + 1 = 15 \u{2014} you act 2nd");
-        assert_eq!(initiative_line(9, -1, 8, 3), "Initiative 9 \u{2212} 1 = 8 \u{2014} you act 3rd");
+        assert_eq!(
+            initiative_line(14, 1, 15, 2),
+            "Initiative 14 + 1 = 15 \u{2014} you act 2nd"
+        );
+        assert_eq!(
+            initiative_line(9, -1, 8, 3),
+            "Initiative 9 \u{2212} 1 = 8 \u{2014} you act 3rd"
+        );
     }
 }

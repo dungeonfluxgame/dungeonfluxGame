@@ -324,9 +324,18 @@ mod tests {
 
     #[test]
     fn heroes_follow_their_figure_and_enemies_their_creature_family() {
-        assert_eq!(voice_for(Side::Hero, Some("figure-hero-1")), VoiceSet::HeroMale);
-        assert_eq!(voice_for(Side::Hero, Some("figure-hero-2")), VoiceSet::HeroFemale);
-        assert_eq!(voice_for(Side::Hero, Some("figure-hero-3")), VoiceSet::HeroFemale);
+        assert_eq!(
+            voice_for(Side::Hero, Some("figure-hero-1")),
+            VoiceSet::HeroMale
+        );
+        assert_eq!(
+            voice_for(Side::Hero, Some("figure-hero-2")),
+            VoiceSet::HeroFemale
+        );
+        assert_eq!(
+            voice_for(Side::Hero, Some("figure-hero-3")),
+            VoiceSet::HeroFemale
+        );
         assert_eq!(voice_for(Side::Hero, None), VoiceSet::HeroMale);
         let enemy = |stem| voice_for(Side::Enemy, Some(stem));
         assert_eq!(enemy("figure-ant-goblin-warrior"), VoiceSet::SmallCreature);
@@ -386,7 +395,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(used.len(), ALL_CLIPS.len(), "a listed clip is never asked for");
+        assert_eq!(
+            used.len(),
+            ALL_CLIPS.len(),
+            "a listed clip is never asked for"
+        );
         let unique: std::collections::BTreeSet<_> = ALL_CLIPS.iter().collect();
         assert_eq!(unique.len(), ALL_CLIPS.len());
     }
@@ -394,19 +407,32 @@ mod tests {
     #[test]
     fn the_restrained_set_swaps_graphic_impacts_and_death_cries_for_plain_ones() {
         let mature = |kind, voice| event(kind, voice, Surface::Stone).clips(ContentRating::Mature);
-        let plain = |kind, voice| event(kind, voice, Surface::Stone).clips(ContentRating::Restrained);
-        assert_eq!(mature(SoundKind::BladeHit, VoiceSet::HeroMale), &["blade-hit-1", "blade-hit-2"]);
+        let plain =
+            |kind, voice| event(kind, voice, Surface::Stone).clips(ContentRating::Restrained);
+        assert_eq!(
+            mature(SoundKind::BladeHit, VoiceSet::HeroMale),
+            &["blade-hit-1", "blade-hit-2"]
+        );
         assert_eq!(plain(SoundKind::BladeHit, VoiceSet::HeroMale), &["hit"]);
         assert_eq!(plain(SoundKind::ArrowImpact, VoiceSet::Beast), &["hit"]);
-        assert_eq!(mature(SoundKind::Down, VoiceSet::Undead), &["voice-undead-down"]);
-        assert_eq!(plain(SoundKind::Down, VoiceSet::Undead), plain(SoundKind::Pain, VoiceSet::Undead));
+        assert_eq!(
+            mature(SoundKind::Down, VoiceSet::Undead),
+            &["voice-undead-down"]
+        );
+        assert_eq!(
+            plain(SoundKind::Down, VoiceSet::Undead),
+            plain(SoundKind::Pain, VoiceSet::Undead)
+        );
         // Everything else is the same in both sets.
         assert_eq!(
             mature(SoundKind::SwordSwing, VoiceSet::HeroMale),
             plain(SoundKind::SwordSwing, VoiceSet::HeroMale)
         );
         assert_eq!(ContentRating::default(), ContentRating::Mature);
-        assert_eq!(ContentRating::from_key("restrained"), Some(ContentRating::Restrained));
+        assert_eq!(
+            ContentRating::from_key("restrained"),
+            Some(ContentRating::Restrained)
+        );
         assert_eq!(ContentRating::from_key("PG"), None);
     }
 
@@ -415,7 +441,11 @@ mod tests {
         let steps = |surface| {
             event(SoundKind::Footstep, VoiceSet::HeroMale, surface).clips(ContentRating::Mature)
         };
-        let (wood, dirt, stone) = (steps(Surface::Wood), steps(Surface::Dirt), steps(Surface::Stone));
+        let (wood, dirt, stone) = (
+            steps(Surface::Wood),
+            steps(Surface::Dirt),
+            steps(Surface::Stone),
+        );
         for group in [wood, dirt, stone] {
             assert!(group.len() >= 2);
         }
@@ -451,11 +481,17 @@ mod tests {
         let allowlist = include_str!("../../../df-tools/src/gameplay/startup_configuration.rs");
         let folder = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/ui/generated/sfx");
         for clip in ALL_CLIPS {
-            assert!(allowlist.contains(&format!("\"{clip}\",")), "{clip} not in SFX_NAMES");
+            assert!(
+                allowlist.contains(&format!("\"{clip}\",")),
+                "{clip} not in SFX_NAMES"
+            );
             let bytes = std::fs::metadata(format!("{folder}/{clip}.mp3"))
                 .unwrap_or_else(|error| panic!("{clip}.mp3: {error}"))
                 .len();
-            assert!((2_000..200_000).contains(&bytes), "{clip}.mp3 is {bytes} bytes");
+            assert!(
+                (2_000..200_000).contains(&bytes),
+                "{clip}.mp3 is {bytes} bytes"
+            );
         }
     }
 }

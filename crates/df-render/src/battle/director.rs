@@ -49,15 +49,25 @@ const FINISHING_DELAY: Duration = Duration::from_millis(560);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Anim {
-    Lunge { toward: TokenId },
-    Recoil { from: TokenId },
-    Dodge { from: TokenId },
+    Lunge {
+        toward: TokenId,
+    },
+    Recoil {
+        from: TokenId,
+    },
+    Dodge {
+        from: TokenId,
+    },
     Fall,
     Heal,
     /// Lean back drawing a bow toward the target, then snap forward on release.
-    Draw { toward: TokenId },
+    Draw {
+        toward: TokenId,
+    },
     /// The "ready" flourish at a roll-call stop.
-    Ready { style: ReadyStyle },
+    Ready {
+        style: ReadyStyle,
+    },
 }
 
 /// How a combatant shows it is ready at its roll-call stop.
@@ -435,7 +445,11 @@ fn plan_initiative(
         builder.at(
             at,
             Step::Whip {
-                command: camera(ShotName::Victory, CameraFocus::Token(roll.token.clone()), 1.15),
+                command: camera(
+                    ShotName::Victory,
+                    CameraFocus::Token(roll.token.clone()),
+                    1.15,
+                ),
                 travel,
             },
         );
@@ -531,7 +545,11 @@ fn plan_initiative(
     builder.at(
         turn,
         Step::Camera {
-            command: camera(ShotName::TurnFocus, CameraFocus::Token(first.token.clone()), 1.0),
+            command: camera(
+                ShotName::TurnFocus,
+                CameraFocus::Token(first.token.clone()),
+                1.0,
+            ),
             pan: FOCUS_PAN,
         },
     );
@@ -1342,14 +1360,23 @@ mod tests {
         )
         .unwrap();
         let labels = names(&timeline);
-        assert!(!labels.contains(&"walk") || moves(&timeline).iter().all(|(cell, _)| *cell == Cell::new(3, 4)));
+        assert!(
+            !labels.contains(&"walk")
+                || moves(&timeline)
+                    .iter()
+                    .all(|(cell, _)| *cell == Cell::new(3, 4))
+        );
         let draw = times_of(&timeline, "draw")[0];
         let release = times_of(&timeline, "snd-bow-release")[0];
         let flight = times_of(&timeline, "arrow")[0];
         let impact = times_of(&timeline, "snd-arrow-impact")[0];
         let number = times_of(&timeline, "float")[0];
         assert!(draw < release && release == flight && flight < impact);
-        assert_eq!(impact - release, FLIGHT, "the blow lands when the arrow arrives");
+        assert_eq!(
+            impact - release,
+            FLIGHT,
+            "the blow lands when the arrow arrives"
+        );
         assert_eq!(number, impact);
         assert_eq!(times_of(&timeline, "snd-bow-draw")[0], draw);
         assert!(times_of(&timeline, "snd-arrow-flight")[0] >= release);
@@ -1384,7 +1411,11 @@ mod tests {
         let (grid, mut tokens) = ranged_field();
         tokens[0].cell = Cell::new(0, 5);
         let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
-        assert!(moves(&timeline).iter().all(|(cell, _)| *cell == Cell::new(0, 5)));
+        assert!(
+            moves(&timeline)
+                .iter()
+                .all(|(cell, _)| *cell == Cell::new(0, 5))
+        );
     }
 
     #[test]
@@ -1410,7 +1441,10 @@ mod tests {
             "snd-body-fall",
         ];
         let positions: Vec<usize> = order.iter().map(|name| position(&labels, name)).collect();
-        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{labels:?}");
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{labels:?}"
+        );
         let swing = times_of(&timeline, "snd-swing")[0];
         let hit = times_of(&timeline, "snd-hit")[0];
         assert_eq!(hit - swing, LUNGE_CONTACT, "the impact sounds at contact");
@@ -1463,7 +1497,10 @@ mod tests {
         });
         let miss = widen(AttackResult::Miss);
         assert!(hit >= miss + IMPACT_HOLD, "hit {hit:?} vs miss {miss:?}");
-        assert!(hit >= Duration::from_millis(2400), "the number lives 1.4 s and is read: {hit:?}");
+        assert!(
+            hit >= Duration::from_millis(2400),
+            "the number lives 1.4 s and is read: {hit:?}"
+        );
     }
 
     #[test]
@@ -1503,7 +1540,11 @@ mod tests {
         let tokens: Vec<Token> = (0..count)
             .map(|index| {
                 let side = if index < 2 { Side::Hero } else { Side::Enemy };
-                token(&format!("c{index}"), side, Cell::new(index as i32 % 8, 1 + index as i32 / 8))
+                token(
+                    &format!("c{index}"),
+                    side,
+                    Cell::new(index as i32 % 8, 1 + index as i32 / 8),
+                )
             })
             .collect();
         // The server's order, deliberately not the seat order.
@@ -1567,9 +1608,15 @@ mod tests {
             "banner-round",
         ];
         let positions: Vec<usize> = order.iter().map(|name| position(&labels, name)).collect();
-        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{labels:?}");
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{labels:?}"
+        );
         assert_eq!(labels.last(), Some(&"highlight"));
-        assert!(labels[labels.len() - 3..].contains(&"focus"), "ends on the first turn-focus shot");
+        assert!(
+            labels[labels.len() - 3..].contains(&"focus"),
+            "ends on the first turn-focus shot"
+        );
         // Every die lands before the first stop; the last one is the pull-back whip.
         let last_land = *times_of(&timeline, "die-land").last().unwrap();
         let first_whip = times_of(&timeline, "whip")[0];
@@ -1577,7 +1624,10 @@ mod tests {
         let whips = times_of(&timeline, "whip");
         let tracker = times_of(&timeline, "tracker");
         assert_eq!(tracker.len(), 3);
-        assert!(tracker.windows(2).all(|pair| pair[0] < pair[1]), "fills in order, one stop at a time");
+        assert!(
+            tracker.windows(2).all(|pair| pair[0] < pair[1]),
+            "fills in order, one stop at a time"
+        );
         assert_eq!(whips.len(), 4, "three stops and the pull-back");
     }
 
@@ -1593,7 +1643,10 @@ mod tests {
             badges.iter().map(|(_, order)| *order).collect::<Vec<_>>(),
             vec![1, 2, 3, 4]
         );
-        assert_eq!(badges.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(), server_order);
+        assert_eq!(
+            badges.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+            server_order
+        );
         // The dice are rolled in seat order, which is not the turn order.
         let dice: Vec<String> = timeline
             .steps
@@ -1613,7 +1666,11 @@ mod tests {
         let (tokens, _) = crowd(3);
         for tie_winner in ["c1", "c2"] {
             let loser = if tie_winner == "c1" { "c2" } else { "c1" };
-            let rolls = vec![roll("c0", 19, 1), roll(tie_winner, 12, 2), roll(loser, 12, 2)];
+            let rolls = vec![
+                roll("c0", 19, 1),
+                roll(tie_winner, 12, 2),
+                roll(loser, 12, 2),
+            ];
             assert_eq!(rolls[1].total, rolls[2].total, "a genuine tie");
             let timeline = plan(&grid, &tokens, &Beat::Initiative { rolls }).unwrap();
             assert_eq!(whip_targets(&timeline)[..3], ["c0", tie_winner, loser]);
@@ -1640,7 +1697,11 @@ mod tests {
             if count <= 6 {
                 assert!(pull_back - first >= STOP * count as u32 - Duration::from_millis(1));
             }
-            assert_eq!(badge_order(&timeline).len(), count, "everyone gets an order badge");
+            assert_eq!(
+                badge_order(&timeline).len(),
+                count,
+                "everyone gets an order badge"
+            );
             assert_eq!(times_of(&timeline, "tracker").len(), count);
         }
     }
@@ -1651,7 +1712,11 @@ mod tests {
         let (tokens, rolls) = crowd(9);
         let timeline = plan(&grid, &tokens, &Beat::Initiative { rolls }).unwrap();
         let whips = times_of(&timeline, "whip");
-        assert_eq!(whips.len(), MAX_INDIVIDUAL_STOPS + 2, "six stops, one sweep, the pull-back");
+        assert_eq!(
+            whips.len(),
+            MAX_INDIVIDUAL_STOPS + 2,
+            "six stops, one sweep, the pull-back"
+        );
         let sweep_badges: Vec<Duration> = timeline
             .steps
             .iter()
@@ -1663,7 +1728,10 @@ mod tests {
             })
             .collect();
         assert_eq!(sweep_badges.len(), 3);
-        assert!(sweep_badges.windows(2).all(|pair| pair[0] == pair[1]), "all at once");
+        assert!(
+            sweep_badges.windows(2).all(|pair| pair[0] == pair[1]),
+            "all at once"
+        );
         assert_eq!(times_of(&timeline, "sting").len(), MAX_INDIVIDUAL_STOPS + 1);
     }
 
@@ -1714,7 +1782,11 @@ mod tests {
         let labels = names(&calm);
         assert!(!labels.contains(&"snd-dice-rattle") && !labels.contains(&"die-land"));
         assert!(calm.duration < lively.duration);
-        assert_eq!(whip_targets(&calm), whip_targets(&lively), "same order, same information");
+        assert_eq!(
+            whip_targets(&calm),
+            whip_targets(&lively),
+            "same order, same information"
+        );
         assert_eq!(badge_order(&calm), badge_order(&lively));
     }
 
