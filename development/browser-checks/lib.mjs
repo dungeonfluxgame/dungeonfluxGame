@@ -25,7 +25,8 @@ export async function click(s, page, text, { optional = false, wait = 1500 } = {
 
 export async function create(s, page, name, detail) {
   await click(s, page, 'Join this room');
-  await page.waitForSelector('button[aria-pressed]', { timeout: 10000 });
+  // The table-settings toggles (a hidden menu) are aria-pressed buttons too: wait for a visible one.
+  await page.locator('button[aria-pressed]:visible').first().waitFor({ timeout: 25000 });
   await page.evaluate(([n, d]) => {
     const set = (el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
     const inputs = [...document.querySelectorAll('input[type=text],input:not([type])')].filter((i) => !i.readOnly);
