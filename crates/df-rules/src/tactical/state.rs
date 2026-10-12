@@ -54,6 +54,26 @@ pub struct CombatantSpec {
     /// An occupied shield hand makes a two-handed attack illegal; caller tracks equipment.
     pub shield: bool,
 }
+impl CreatureKind {
+    /// The compiled SRD 5.2.1 creature id, none for a hero.
+    pub fn srd_id(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Hero => return None,
+            Self::Bandit => "bandit",
+            Self::Cultist => "cultist",
+            Self::Guard => "guard",
+            Self::Goblin => "goblin-warrior",
+            Self::Kobold => "kobold-warrior",
+            Self::Skeleton => "skeleton",
+            Self::Zombie => "zombie",
+            Self::Wolf => "wolf",
+            Self::GiantRat => "giant-rat",
+            Self::GiantWeasel => "giant-weasel",
+            Self::Mastiff => "mastiff",
+            Self::Scout => "scout",
+        })
+    }
+}
 impl CombatantSpec {
     /// Source-derived hero attack and damage modifiers for a supported carried weapon.
     pub fn hero_attack_modifiers(
@@ -864,13 +884,22 @@ pub fn begin(
             initiatives.push(initiatives[earlier]);
             continue;
         }
-        initiatives.push(draws.take(20)?);
+        let mut face = draws.take(20)?;
+        // SRD 5.2.1 p302: a Kobold in sunlight has Disadvantage on ability checks, and
+        // Initiative is a Dexterity check. The group makes one roll, with Disadvantage.
+        if actor.kind == CreatureKind::Kobold && map.lighting() == super::Lighting::Sunlight {
+            face = face.min(draws.take(20)?);
+        }
+        initiatives.push(face);
     }
     let battle = begin_faces(map, specs, &initiatives)?;
     Ok(super::Resolution {
         battle,
         draws: draws.finish()?,
         attacks: vec![],
+        moves: vec![],
+        death_saves: vec![],
+        recoveries: vec![],
     })
 }
 

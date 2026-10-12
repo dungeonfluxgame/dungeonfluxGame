@@ -60,6 +60,9 @@ pub enum Action {
     RecoverAmmunition {
         elapsed_seconds: u32,
     },
+    /// SRD 5.2.1 p18: a Stable creature that is not healed regains 1 Hit Point after 1d4 hours.
+    /// The one recorded d4 is the number of hours that pass; the caller advances its clock.
+    StableRecovery,
     /// Shield don/doff takes the Utilize action (SRD armor); changing gear is explicit.
     DoffShield,
     PickUpWeapon(Weapon),
@@ -74,6 +77,8 @@ pub enum AttackReason {
     UnconsciousTarget,
     Dodge,
     PackTactics,
+    /// Kobold Warrior in sunlight (SRD 5.2.1 p302): Disadvantage on attack rolls.
+    SunlightSensitivity,
     Vex,
     Sap,
 }
@@ -104,6 +109,47 @@ pub struct AttackSummary {
     pub killed: bool,
     pub mastery: Option<Mastery>,
 }
+/// Squares a mover actually entered in one resolution, in order, and what they cost in feet
+/// (SRD p13-14: every square 5 ft, Difficult Terrain and crawling add 5 ft each). A move that
+/// pauses for an Opportunity Attack offer reports only the squares entered before the pause.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MoveSummary {
+    pub actor: u32,
+    pub from: Cell,
+    pub path: Vec<Cell>,
+    pub cost_ft: u16,
+    /// Movement left this turn after the squares above (Speed, Dash and Slow already applied).
+    pub remaining_ft: u16,
+}
+/// How a Death Saving Throw changed the dying hero (SRD p17-18).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeathSaveResult {
+    Success,
+    Failure,
+    /// Natural 1: two failures.
+    CriticalFailure,
+    /// Third success: stable at 0 Hit Points.
+    Stabilised,
+    /// Third failure: dead.
+    Died,
+    /// Natural 20: back to 1 Hit Point.
+    Revived,
+}
+/// One Death Saving Throw: the d20 face and the running counts after it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeathSaveSummary {
+    pub actor: u32,
+    pub die: u32,
+    pub successes: u8,
+    pub failures: u8,
+    pub result: DeathSaveResult,
+}
+/// A Stable hero back on 1 Hit Point after the hours the d4 gave.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecoverySummary {
+    pub actor: u32,
+    pub hours: u32,
+}
 /// A staged successor and exact consumed records. Caller commits state and draws together.
 /// Any rejection leaves caller state and supplied immutable draws unchanged.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,6 +157,9 @@ pub struct Resolution {
     pub battle: Battle,
     pub draws: Vec<ActualDraw>,
     pub attacks: Vec<AttackSummary>,
+    pub moves: Vec<MoveSummary>,
+    pub death_saves: Vec<DeathSaveSummary>,
+    pub recoveries: Vec<RecoverySummary>,
 }
 
 pub(crate) struct Draws<'a> {
@@ -184,8 +233,18 @@ pub fn resolve(
     let mut draws = Draws::new(binding, records)?;
     let mut next = battle.clone();
     let mut attacks = Vec::new();
+    let mut moves = Vec::new();
+    let mut death_saves = Vec::new();
+    let mut recoveries = Vec::new();
     if let Action::Opportunity { attack } = action {
-        react(&mut next, actor, *attack, &mut draws, &mut attacks)?;
+        react(
+            &mut next,
+            actor,
+            *attack,
+            &mut draws,
+            &mut attacks,
+            &mut moves,
+        )?;
     } else {
         if next.pending.is_some() {
             return Err(RuleError::PendingReaction);
@@ -219,11 +278,28 @@ pub fn resolve(
                 combatant.spec.bolts += combatant.bolts_used / 2;
                 combatant.recovered = true;
             }
+            Action::StableRecovery => {
+                let combatant = next.actor_mut(actor)?;
+                if combatant.spec.kind != CreatureKind::Hero
+                    || combatant.health.hit_points != 0
+                    || combatant.health.dead
+                    || !combatant.health.stable
+                {
+                    return Err(RuleError::RecoveryUnavailable);
+                }
+                let hours = draws.take(4)?;
+                combatant.health.hit_points = 1;
+                combatant.health.stable = false;
+                combatant.health.unconscious = false;
+                combatant.health.death_successes = 0;
+                combatant.health.death_failures = 0;
+                recoveries.push(RecoverySummary { actor, hours });
+            }
             Action::DeathSave => {
                 if next.active_actor() != Some(actor) || !next.needs_death_save {
                     return Err(RuleError::NotYourTurn);
                 }
-                death_save(&mut next, actor, &mut draws)?;
+                death_saves.push(death_save(&mut next, actor, &mut draws)?);
                 next.needs_death_save = false;
             }
             _ => {
@@ -248,7 +324,10 @@ pub fn resolve(
                             next: 0,
                             eligible: vec![],
                         });
-                        continue_move(&mut next, false)?;
+                        let from = next.actor(actor)?.cell();
+                        let mut steps = Vec::new();
+                        continue_move(&mut next, false, &mut steps)?;
+                        moves.extend(move_summary(&next, actor, from, steps)?);
                     }
                     Action::Stand => {
                         let combatant = next.actor_mut(actor)?;
@@ -366,6 +445,7 @@ pub fn resolve(
                     Action::Opportunity { .. }
                     | Action::DeathSave
                     | Action::ShortRest { .. }
+                    | Action::StableRecovery
                     | Action::RecoverAmmunition { .. } => return Err(RuleError::InvalidReaction),
                 }
             }
@@ -375,7 +455,27 @@ pub fn resolve(
         battle: next,
         draws: draws.finish()?,
         attacks,
+        moves,
+        death_saves,
+        recoveries,
     })
+}
+fn move_summary(
+    battle: &Battle,
+    actor: u32,
+    from: Cell,
+    steps: Vec<(Cell, u16)>,
+) -> Result<Option<MoveSummary>, RuleError> {
+    if steps.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(MoveSummary {
+        actor,
+        from,
+        cost_ft: steps.iter().map(|(_, cost)| *cost).sum(),
+        path: steps.into_iter().map(|(cell, _)| cell).collect(),
+        remaining_ft: battle.actor(actor)?.movement_remaining_ft(),
+    }))
 }
 
 /// Read-only authoritative range/cover/weapon legality, before any budget or draw spends.
@@ -679,6 +779,10 @@ fn modifiers(
     }) {
         advantage.push(AttackReason::PackTactics);
     }
+    if actor.spec.kind == CreatureKind::Kobold && battle.map.lighting() == super::Lighting::Sunlight
+    {
+        disadvantage.push(AttackReason::SunlightSensitivity);
+    }
     if actor.vex.iter().any(|(marked, _)| *marked == target.id()) {
         advantage.push(AttackReason::Vex);
     }
@@ -967,7 +1071,11 @@ fn apply_damage(
     }
     Ok(())
 }
-fn death_save(battle: &mut Battle, id: u32, draws: &mut Draws<'_>) -> Result<(), RuleError> {
+fn death_save(
+    battle: &mut Battle,
+    id: u32,
+    draws: &mut Draws<'_>,
+) -> Result<DeathSaveSummary, RuleError> {
     let actor = battle.actor_mut(id)?;
     if actor.health.hit_points != 0
         || actor.health.dead
@@ -977,11 +1085,12 @@ fn death_save(battle: &mut Battle, id: u32, draws: &mut Draws<'_>) -> Result<(),
         return Err(RuleError::InvalidTarget);
     }
     let die = draws.take(20)?;
-    if die == 20 {
+    let mut result = if die == 20 {
         actor.health.hit_points = 1;
         actor.health.unconscious = false;
         actor.health.death_failures = 0;
         actor.health.death_successes = 0;
+        DeathSaveResult::Revived
     } else if die < 10 {
         actor.health.death_failures = actor
             .health
@@ -989,15 +1098,31 @@ fn death_save(battle: &mut Battle, id: u32, draws: &mut Draws<'_>) -> Result<(),
             .saturating_add(if die == 1 { 2 } else { 1 })
             .min(3);
         actor.health.dead = actor.health.death_failures >= 3;
+        if actor.health.dead {
+            DeathSaveResult::Died
+        } else if die == 1 {
+            DeathSaveResult::CriticalFailure
+        } else {
+            DeathSaveResult::Failure
+        }
     } else {
         actor.health.death_successes += 1;
-        if actor.health.death_successes == 3 {
-            actor.health.stable = true;
-            actor.health.death_successes = 0;
-            actor.health.death_failures = 0;
-        }
+        DeathSaveResult::Success
+    };
+    let (successes, failures) = (actor.health.death_successes, actor.health.death_failures);
+    if result == DeathSaveResult::Success && actor.health.death_successes == 3 {
+        actor.health.stable = true;
+        actor.health.death_successes = 0;
+        actor.health.death_failures = 0;
+        result = DeathSaveResult::Stabilised;
     }
-    Ok(())
+    Ok(DeathSaveSummary {
+        actor: id,
+        die,
+        successes,
+        failures,
+        result,
+    })
 }
 fn end_turn(battle: &mut Battle, id: u32) -> Result<(), RuleError> {
     let actor = battle.actor_mut(id)?;
@@ -1041,7 +1166,11 @@ fn end_turn(battle: &mut Battle, id: u32) -> Result<(), RuleError> {
         actor.health.hit_points == 0 && !actor.health.dead && !actor.health.stable;
     Ok(())
 }
-fn continue_move(battle: &mut Battle, approved_step: bool) -> Result<(), RuleError> {
+fn continue_move(
+    battle: &mut Battle,
+    approved_step: bool,
+    steps: &mut Vec<(Cell, u16)>,
+) -> Result<(), RuleError> {
     let Some(mut movement) = battle.pending.take() else {
         return Ok(());
     };
@@ -1076,6 +1205,7 @@ fn continue_move(battle: &mut Battle, approved_step: bool) -> Result<(), RuleErr
         let actor = battle.actor_mut(movement.actor)?;
         actor.budget.movement_spent_ft += cost;
         actor.spec.cell = to;
+        steps.push((to, cost));
         movement.next += 1;
         skip_trigger = false;
     }
@@ -1087,6 +1217,7 @@ fn react(
     usage: Option<AttackUse>,
     draws: &mut Draws<'_>,
     attacks: &mut Vec<AttackSummary>,
+    moves: &mut Vec<MoveSummary>,
 ) -> Result<(), RuleError> {
     let pending = battle
         .pending
@@ -1130,7 +1261,10 @@ fn react(
         .ok_or(RuleError::NoPendingReaction)?;
     pending.eligible.remove(0);
     if pending.eligible.is_empty() {
-        continue_move(battle, true)?;
+        let from = battle.actor(mover)?.cell();
+        let mut steps = Vec::new();
+        continue_move(battle, true, &mut steps)?;
+        moves.extend(move_summary(battle, mover, from, steps)?);
     }
     Ok(())
 }

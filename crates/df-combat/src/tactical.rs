@@ -315,6 +315,16 @@ pub fn propose(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
         }
     }
     paths.sort();
+    // SRD 5.2.1 stat blocks (Kobold Warrior Dagger p302, Guard Spear p296) are "Melee or Ranged
+    // Attack Roll": reach 5 ft or range 20/60 ft. A creature that cannot reach a melee square this
+    // turn throws at normal range, from where it stands or after moving within its Speed.
+    let melee_reachable = paths.first().is_some_and(|(too_far, ..)| !too_far);
+    if can_attack
+        && !melee_reachable
+        && let Some(action) = thrown_attack(battle, id, &opponents, spend)?
+    {
+        return Ok(Some(action));
+    }
     if let Some((_, full_cost, _, _, path)) = paths.first() {
         if *full_cost > u32::from(actor.movement_remaining_ft()) && !actor.budget().action_used {
             return Ok(Some(Action::Dash));
@@ -341,6 +351,69 @@ pub fn propose(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
     } else {
         Ok(Some(Action::EndTurn))
     }
+}
+/// The thrown weapon a stat-block creature carries: a melee weapon with a 20/60 style range
+/// and at least one left. Heroes choose their own throws, so only enemies use this policy.
+fn thrown_weapon(battle: &Battle, id: u32) -> Result<Option<Weapon>, RuleError> {
+    let actor = battle.actor(id)?;
+    if actor.spec().kind == CreatureKind::Hero {
+        return Ok(None);
+    }
+    Ok(actor.spec().weapons.iter().copied().find(|weapon| {
+        !weapon.ranged_weapon() && weapon.range().is_some() && actor.weapon_count(*weapon) > 0
+    }))
+}
+/// Throw now if a target is within normal range with a clear line, otherwise move to the
+/// cheapest reachable square from which one is, never beside a hostile creature that could
+/// see the thrower (that would impose Disadvantage, SRD 5.2.1 p16).
+fn thrown_attack(
+    battle: &Battle,
+    id: u32,
+    opponents: &[&df_rules::tactical::Combatant],
+    spend: AttackSpend,
+) -> Result<Option<Action>, RuleError> {
+    let Some(weapon) = thrown_weapon(battle, id)? else {
+        return Ok(None);
+    };
+    let actor = battle.actor(id)?;
+    let (normal, _) = weapon.range().ok_or(RuleError::InvalidWeapon)?;
+    let usage = weapon_use(weapon, true);
+    let safe = |cell: Cell| {
+        opponents
+            .iter()
+            .all(|enemy| cell.distance(enemy.cell()) > 5)
+    };
+    let in_range = |cell: Cell, enemy: &df_rules::tactical::Combatant| {
+        cell.distance(enemy.cell()) <= u32::from(normal)
+            && battle.attack_from(id, cell, enemy.id(), usage).is_ok()
+    };
+    if safe(actor.cell())
+        && let Some(target) = opponents.iter().find(|enemy| in_range(actor.cell(), enemy))
+    {
+        return Ok(Some(Action::Attack {
+            target: target.id(),
+            weapon: usage,
+            spend,
+        }));
+    }
+    if actor.movement_remaining_ft() == 0 {
+        return Ok(None);
+    }
+    let mut destinations = Vec::new();
+    for cell in battle.reachable_cells(id)? {
+        if cell == actor.cell() || !safe(cell) {
+            continue;
+        }
+        if opponents.iter().any(|enemy| in_range(cell, enemy)) {
+            let path = battle.shortest_path(id, cell, Some(actor.movement_remaining_ft()))?;
+            destinations.push((battle.path_cost(id, &path)?, cell, path));
+        }
+    }
+    destinations.sort();
+    Ok(destinations
+        .into_iter()
+        .next()
+        .map(|(_, _, path)| Action::Move(path)))
 }
 fn weapon_use(weapon: Weapon, ranged: bool) -> AttackUse {
     AttackUse {

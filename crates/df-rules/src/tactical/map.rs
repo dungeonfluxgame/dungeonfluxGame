@@ -12,6 +12,16 @@ impl Cell {
     }
 }
 
+/// Whether the fight is in sunlight. SRD 5.2.1 p302 Kobold Warrior: while in sunlight it has
+/// Disadvantage on ability checks and attack rolls. The painted scenes are night or interior;
+/// the photographic scan scenes are daylight. The fact is typed and carried by the map, never
+/// inferred from a scene name inside the rules.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub enum Lighting {
+    Sunlight,
+    NightOrInterior,
+}
+
 /// Authored obstacle coverage, interpreted by the disclosed centre-line convention.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "kebab-case")]
@@ -88,6 +98,7 @@ pub struct BattleMap {
     cover: BTreeMap<Cell, Cover>,
     hero_spawns: Vec<Cell>,
     enemy_spawns: Vec<Cell>,
+    lighting: Lighting,
 }
 impl BattleMap {
     /// Parse supplied bytes without I/O; require schema v2 and validate every layout.
@@ -149,6 +160,7 @@ impl BattleMap {
                 cover: BTreeMap::new(),
                 hero_spawns: layout.spawns.heroes.clone(),
                 enemy_spawns: layout.spawns.enemies.clone(),
+                lighting: Lighting::NightOrInterior,
             };
             for &cell in &data.grid.blocked {
                 map.require_cell(cell)?;
@@ -221,6 +233,15 @@ impl BattleMap {
             }
         }
         result.ok_or(RuleError::UnknownLayout)
+    }
+    /// Parsed scene data carries no lighting fact (the renderer's scene files reject unknown
+    /// fields), so the staging caller states it. Authored fixtures default to night/interior.
+    pub fn with_lighting(mut self, lighting: Lighting) -> Self {
+        self.lighting = lighting;
+        self
+    }
+    pub fn lighting(&self) -> Lighting {
+        self.lighting
     }
     pub fn id(&self) -> &str {
         &self.id

@@ -440,6 +440,22 @@ fn record_refusal(action_kind: i32, reason: &str, status: &str) {
     span.finish_unmeasured(status);
 }
 
+/// One `COMBAT` stdout line and one shared-path event per recorded outcome of an accepted
+/// action, so a turn can be checked against the rules from the server log alone.
+fn record_combat_audit(accepted: &rpc::AcceptedAction) {
+    for outcome in &accepted.combat {
+        let line = super::table_log::audit_line(outcome);
+        println!("{line}");
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        let mut span = df_observe::begin(&context, "gameplay.combat_outcome");
+        span.event("gameplay.combat_outcome", &[("combat.line", line)]);
+        span.finish_unmeasured("recorded");
+    }
+}
+
 fn after_grant_reconnect<T>(
     reconnected: Result<(), RepositoryError>,
     dispatch: impl FnOnce() -> Result<T, tonic::Status>,
@@ -1262,6 +1278,7 @@ impl Actor {
         request: &rpc::SubmitActionRequest,
         accepted: &rpc::AcceptedAction,
     ) {
+        record_combat_audit(accepted);
         let Ok(view) = wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member)
         else {
             return;

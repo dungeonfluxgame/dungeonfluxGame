@@ -808,6 +808,10 @@ pub(super) fn project_journey(
             .into_iter()
             .flat_map(|accepted| accepted.combat)
             .collect::<Vec<_>>();
+        let (outcomes, move_outcomes, death_save_outcomes) = journey::tactical::split_outcomes(
+            outcomes,
+            usize::from(super::pack::combat().combat_log_entries),
+        );
         combat = Some(rpc::CombatView {
             participants,
             active_actor: encounter
@@ -819,14 +823,9 @@ pub(super) fn project_journey(
                 journey::CombatRoundError::Capacity => RepositoryError::Capacity,
                 _ => RepositoryError::InvalidCandidate,
             })?,
-            outcomes: outcomes
-                .into_iter()
-                .rev()
-                .take(usize::from(super::pack::combat().combat_log_entries))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect(),
+            outcomes,
+            move_outcomes,
+            death_save_outcomes,
             finished: encounter.active_turn.is_none(),
             source_revision: model::source_revision(),
             active_participant_id: encounter
@@ -907,6 +906,9 @@ pub(super) fn project_journey(
     };
     if key == SceneKey::Combat && super::journey::tactical::present(current.state()) {
         rules_note.push_str(" Disclosed custom rule tactical.cover-centre-line: cover is adjudicated along the segment between cell centres.");
+        rules_note.push_str(&journey::tactical::unmodelled_features_note(
+            current.state(),
+        )?);
     }
     let table_choices = if role == LocalDemoRole::Display {
         table_choices(current, phase)?
@@ -969,7 +971,6 @@ pub(super) fn project_journey(
     };
     scene.cast = scene_cast(&authored);
     scene.rules_note = rules_note;
-    scene.place = authored
     // A chapter's closing scenes are story scenes, not the aftermath of its fight: the screens
     // draw them as the peaceful chapters' resolution, epilogue and end card.
     if super::beat_script_runtime::closing(state)?
@@ -978,6 +979,7 @@ pub(super) fn project_journey(
         scene.destination = rpc::HarborDestination::HarborInn as i32;
         journey.combat = None;
     }
+    scene.place = authored
         .setting
         .as_ref()
         .map(|setting| setting.name.clone())

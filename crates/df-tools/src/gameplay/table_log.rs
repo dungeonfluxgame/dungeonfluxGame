@@ -369,7 +369,9 @@ pub(super) fn action_lines(
     label: &str,
 ) -> Vec<ActionLine> {
     use rpc::GameplayActionKind as Kind;
-    let own = combat.iter().find(|outcome| outcome.actor_name == hero);
+    let own = combat
+        .iter()
+        .find(|outcome| outcome.actor_name == hero && is_attack(outcome));
     // The resolved attack names the weapon it used (a longbow for an archer); the hero's melee
     // weapon is only the fallback when the outcome carries none.
     let used = own
@@ -399,7 +401,44 @@ pub(super) fn action_lines(
         speaker: hero.to_owned(),
         text: phrase,
     }];
-    for outcome in combat.iter().filter(|outcome| outcome.actor_name != hero) {
+    for outcome in combat {
+        match rpc::OutcomeKind::try_from(outcome.kind) {
+            Ok(rpc::OutcomeKind::DeathSave) => {
+                lines.push(ActionLine {
+                    speaker: outcome.actor_name.clone(),
+                    text: death_save_text(outcome),
+                });
+                continue;
+            }
+            Ok(rpc::OutcomeKind::Recovery) => {
+                lines.push(ActionLine {
+                    speaker: outcome.actor_name.clone(),
+                    text: format!(
+                        "has been stable for {} hours and regains 1 hit point",
+                        outcome.recovery_hours
+                    ),
+                });
+                continue;
+            }
+            Ok(rpc::OutcomeKind::Move) => {
+                // The hero's own move already reads as the offer's phrase.
+                if outcome.actor_name != hero {
+                    lines.push(ActionLine {
+                        speaker: outcome.actor_name.clone(),
+                        text: format!(
+                            "moves {} squares ({} ft)",
+                            outcome.path.len(),
+                            outcome.cost_ft
+                        ),
+                    });
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if outcome.actor_name == hero {
+            continue;
+        }
         let text = if outcome.hit {
             format!(
                 "strikes {} \u{2014} hit, {} damage{}",
@@ -429,6 +468,91 @@ fn damage_words(outcome: &rpc::CombatOutcome) -> String {
     } else {
         format!("{} {}", outcome.damage, outcome.damage_type)
     }
+}
+
+/// One server log line per recorded outcome that proves the turn was legal: the squares and
+/// feet a move spent, the distance and mode of an attack with what changed its dice, and each
+/// Death Saving Throw with the running counts.
+pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
+    let squares = |cells: &[rpc::GridCell]| {
+        cells
+            .iter()
+            .map(|cell| format!("({},{})", cell.col, cell.row))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    match rpc::OutcomeKind::try_from(outcome.kind) {
+        Ok(rpc::OutcomeKind::Move) => format!(
+            "COMBAT move actor={:?} squares={} path={} cost_ft={} movement_left_ft={}",
+            outcome.actor_name,
+            outcome.path.len(),
+            squares(&outcome.path),
+            outcome.cost_ft,
+            outcome.remaining_ft
+        ),
+        Ok(rpc::OutcomeKind::Recovery) => format!(
+            "COMBAT stable_recovery actor={:?} hours={}",
+            outcome.actor_name, outcome.recovery_hours
+        ),
+        Ok(rpc::OutcomeKind::DeathSave) => format!(
+            "COMBAT death_save actor={:?} die={} result={:?} successes={} failures={}",
+            outcome.actor_name,
+            outcome.attack_die,
+            rpc::DeathSaveResult::try_from(outcome.death_save_result)
+                .unwrap_or(rpc::DeathSaveResult::Unspecified),
+            outcome.death_successes,
+            outcome.death_failures
+        ),
+        kind => format!(
+            "COMBAT {} actor={:?} target={:?} weapon={} mode={} distance_ft={} cover={} roll_mode={} faces={:?} modifier={} hit={} critical={} damage={} reasons={:?}",
+            if kind == Ok(rpc::OutcomeKind::OpportunityAttack) {
+                "opportunity_attack"
+            } else {
+                "attack"
+            },
+            outcome.actor_name,
+            outcome.target_name,
+            outcome.weapon,
+            if outcome.attack_style == 2 {
+                "ranged"
+            } else {
+                "melee"
+            },
+            outcome.distance_ft,
+            outcome.cover,
+            outcome.roll_mode,
+            outcome.faces,
+            outcome.attack_modifier,
+            outcome.hit,
+            outcome.critical,
+            outcome.damage,
+            outcome.reasons
+        ),
+    }
+}
+
+fn is_attack(outcome: &rpc::CombatOutcome) -> bool {
+    !matches!(
+        rpc::OutcomeKind::try_from(outcome.kind),
+        Ok(rpc::OutcomeKind::Move | rpc::OutcomeKind::DeathSave | rpc::OutcomeKind::Recovery)
+    )
+}
+
+/// The public sentence for one Death Saving Throw: the roll, the result, the running counts.
+fn death_save_text(outcome: &rpc::CombatOutcome) -> String {
+    let result = match rpc::DeathSaveResult::try_from(outcome.death_save_result) {
+        Ok(rpc::DeathSaveResult::Success) => "success",
+        Ok(rpc::DeathSaveResult::Failure) => "failure",
+        Ok(rpc::DeathSaveResult::CriticalFailure) => "a natural 1, two failures",
+        Ok(rpc::DeathSaveResult::Stabilised) => "stable at last",
+        Ok(rpc::DeathSaveResult::Died) => "dies",
+        Ok(rpc::DeathSaveResult::Revived) => "a natural 20, back on their feet with 1 hit point",
+        _ => "no result",
+    };
+    format!(
+        "makes a Death Saving Throw: {} \u{2014} {result} ({} successes, {} failures)",
+        outcome.attack_die, outcome.death_successes, outcome.death_failures
+    )
 }
 
 /// The third-person phrase for an offer label: its imperative verb takes an `s`

@@ -688,7 +688,12 @@ pub(super) fn offered(
         if tactical::dying(current.state())? {
             return Ok(vec![(
                 rpc::GameplayActionKind::EndTurn,
-                "Advance 6 seconds · death saves".to_owned(),
+                if tactical::needs_saves(current.state())? {
+                    "Advance 6 seconds · death saves"
+                } else {
+                    "Wait · a stable hero regains 1 hit point after 1d4 hours"
+                }
+                .to_owned(),
             )]);
         }
     }
@@ -1715,6 +1720,18 @@ fn finish(
     Ok(candidate)
 }
 
+/// An EndTurn recorded after the fight was won: the hours and rounds that pass while a hero at 0
+/// hit points is dying or Stable. It is the table's time, not a consequence for any thread.
+fn after_victory_time(state: &GameState, fact: &GameFact) -> bool {
+    let named = |fact: &GameFact, entry: &str| matches!(&fact.value, FactValue::ContentEvent { definition, .. } if definition.entry.as_str() == entry);
+    named(fact, "end-turn")
+        && state
+            .facts
+            .iter()
+            .take_while(|earlier| earlier.id != fact.id)
+            .any(|earlier| named(earlier, "combat-victory"))
+}
+
 fn stage_authored_threads(
     candidate: Checkpoint,
     source_id: FactId,
@@ -1734,6 +1751,11 @@ fn stage_authored_threads(
     let FactValue::ContentEvent { definition, .. } = &source.value else {
         return Err(RepositoryError::InvalidCandidate);
     };
+    // Time passing after a won fight (a dying hero's timed Death Saving Throws, a Stable hero's
+    // recovery) adds nothing to the threat thread: the winning blow already resolved it.
+    if after_victory_time(candidate.state(), source) {
+        return Ok(candidate);
+    }
     let mut admitted_thread = None;
     for &(event, thread) in THREAD_EVENTS {
         if *definition == model::content(event)? {
@@ -2769,6 +2791,16 @@ fn stage_using(
     let mut outcomes = Vec::new();
     let mut private = false;
     let pure_target = super::beat_script_runtime::pure_target(current, &selected)?;
+    // Time passing for a hero at 0 hit points after the fight belongs to the story beat that
+    // follows the fight, not to a choice of that beat's own offers: it records no script choice,
+    // so the script replay finds the beat it was already on.
+    let aftermath = tactical::present(current.state())
+        && kind == rpc::GameplayActionKind::EndTurn
+        && super::beat_script::with_script(|script| {
+            script
+                .current(current.state())
+                .is_ok_and(|beat| beat.kind != super::beat_script::BeatKind::Fight)
+        });
     match kind {
         kind if tactical::combat_action(kind) && tactical::present(&state) => {
             tactical::stage(
@@ -2992,6 +3024,7 @@ fn stage_using(
             objective_command: Some(command),
             script_choice: if super::beat_script::with_script(|script| script.is_canonical())
                 || original_kind == rpc::GameplayActionKind::CreateCharacter
+                || aftermath
             {
                 None
             } else {
@@ -3106,6 +3139,22 @@ fn phase_from_state(
             narrative_phase::classify(state)
         } else {
             let beat = script.current(before.state())?;
+            // After a won fight a dying hero's timed Death Saving Throws advance the clock on
+            // the beat that follows the fight. The offer that does it belongs to the fight
+            // beat, so the following beat has no transition for it and the story stays put.
+            if tactical::present(before.state())
+                && beat.kind != super::beat_script::BeatKind::Fight
+                && tactical::dying(before.state())?
+                && script.beats.iter().any(|fight| {
+                    fight.kind == super::beat_script::BeatKind::Fight
+                        && fight.offers.iter().any(|offer| {
+                            offer.id == selected_id
+                                && offer.effect.action() == rpc::GameplayActionKind::EndTurn
+                        })
+                })
+            {
+                return Ok(super::beat_script_runtime::phase_of(beat));
+            }
             let trigger = super::beat_script::BeatTrigger::Offer {
                 offer: selected_id.into(),
             };

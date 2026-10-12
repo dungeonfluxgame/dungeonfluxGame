@@ -702,10 +702,6 @@ pub(super) fn ended(state: &GameState) -> Result<bool, RepositoryError> {
         Ok(beat.kind == BeatKind::Ending && beat.offers.is_empty())
     })
 }
-pub(super) fn action_label(
-    id: &str,
-    kind: rpc::GameplayActionKind,
-) -> Result<String, RepositoryError> {
 /// Whether the story is in its closing steps: the resolution's epilogue or the end card.
 pub(super) fn closing(state: &GameState) -> Result<bool, RepositoryError> {
     beat_script::with_script(|script| {
@@ -727,6 +723,10 @@ pub(super) fn settled_defeat(state: &GameState) -> Result<bool, RepositoryError>
             && !journey::tactical::dying(state)?)
     })
 }
+pub(super) fn action_label(
+    id: &str,
+    kind: rpc::GameplayActionKind,
+) -> Result<String, RepositoryError> {
     if journey::tactical::enabled() && journey::tactical::combat_action(kind) {
         return Ok(match kind {
             rpc::GameplayActionKind::GreatswordAttack => "Attack",
