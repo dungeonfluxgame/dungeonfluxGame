@@ -16,7 +16,7 @@ use tokio::sync::watch;
 /// How many of the latest lines a view carries.
 pub(super) const RING_LINES: usize = 24;
 /// Longest text of one line, in characters.
-pub(super) const LINE_CHARACTERS: usize = 160;
+pub(super) const LINE_CHARACTERS: usize = 360;
 
 struct Ring {
     next_sequence: u64,

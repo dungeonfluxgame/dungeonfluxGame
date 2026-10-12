@@ -118,10 +118,7 @@ impl rpc::dialogue_service_server::DialogueService for Service {
                 // The model call runs here, off the actor thread; on any failure the
                 // response is exactly the classification the actor produced.
                 if let Some(context) = npc
-                    && let Some(reply) = self
-                        .npc_voice
-                        .reply_in_public(context, &self.table_log)
-                        .await
+                    && let Some(reply) = self.npc_voice.converse(context, &self.table_log).await
                 {
                     response.npc_reply = reply;
                 }
@@ -387,10 +384,17 @@ impl actor::Actor {
     /// The facts for the speaker's reply, taken from this member's own view. Failing to build
     /// them only means this line gets today's response without a spoken reply.
     fn npc_reply_context(&self, member: MemberId, typed: &str) -> Option<NpcReplyContext> {
-        let view =
-            wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member).ok()?;
+        let projection =
+            wire::project_journey(self.owner.checkpoint(), LocalDemoRole::Player, member).ok()?;
         let story = super::pack::with_content(StoryFacts::from_pack);
-        NpcReplyContext::from_view(&view, member, typed, &story)
+        NpcReplyContext::for_cast(
+            &projection.view,
+            member,
+            typed,
+            &story,
+            &self.social,
+            &format!("{:?}", projection.scene),
+        )
     }
 
     fn confirm_dialogue(

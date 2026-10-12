@@ -12,6 +12,7 @@ mod inn_qualification;
 mod journey;
 mod model;
 mod music_assets;
+mod npc_dossier;
 mod npc_reply;
 mod pack;
 #[cfg(test)]
@@ -23,6 +24,7 @@ mod recovery_qualification;
 mod rest_qualification;
 mod restart_qualification;
 mod room;
+mod social;
 mod startup_configuration;
 #[cfg(test)]
 mod startup_contract;
@@ -952,6 +954,24 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         table_log::TableLog::disabled()
     };
+    // A generated adventure's NPCs have backstories and feelings about each hero; the harbor
+    // pack and adventures saved before dossiers existed have none and keep today's behaviour.
+    let social = match &generated_adventure {
+        Some(prepared) if !prepared.record.dossiers.is_empty() => {
+            println!(
+                "ADVENTURE npc dossiers={} (attitude saved in {})",
+                prepared.record.dossiers.len(),
+                prepared.directory.display()
+            );
+            social::SocialLedger::open(
+                prepared.record.dossiers.clone(),
+                &prepared.record.seed,
+                Some(prepared.directory.clone()),
+            )
+            .map_err(|error| io::Error::other(error.to_string()))?
+        }
+        _ => social::SocialLedger::none(),
+    };
     let tempo = if std::env::args().nth(4).is_some() {
         None
     } else {
@@ -973,6 +993,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         tempo,
         owner,
         table_log: table_log.clone(),
+        social,
         dialogue: dialogue::DialogueState::default(),
         bootstrap_credential: player_credential,
         issuer,
