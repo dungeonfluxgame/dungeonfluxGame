@@ -534,20 +534,7 @@ impl LivingScenes {
             social,
             rating,
             timing,
-            state: Mutex::new(State {
-                stage: None,
-                facts: None,
-                tracker: MoodTracker::new(timing.hysteresis),
-                pacer: Pacer::new(timing, Duration::ZERO),
-                backdrop: None,
-                sprites: BTreeMap::new(),
-                ready_backdrop: None,
-                refresh_in_flight: false,
-                expression_in_flight: BTreeSet::new(),
-                failed_faces: BTreeSet::new(),
-                last_revision: None,
-                budget_exhausted: false,
-            }),
+            state: Mutex::new(State::new(timing)),
             wake: watch::channel(0).0,
             origin,
         });
@@ -594,7 +581,10 @@ impl Inner {
     }
 
     fn observe(&self, stage: Stage) {
-        let now = self.now();
+        self.observe_at(stage, self.now());
+    }
+
+    fn observe_at(&self, stage: Stage, now: Duration) {
         let mut state = locked(&self.state);
         let changed_scene = state
             .stage
@@ -829,7 +819,11 @@ impl Inner {
     /// One decision pass: lands a ready backdrop when quiet, reverts to the authored art when
     /// the mood has calmed, and returns the renders to start.
     fn evaluate(&self) -> Vec<Job> {
-        let now = self.now();
+        self.evaluate_at(self.now())
+    }
+
+    /// [`Self::evaluate`] at an explicit time, so tests control the clock.
+    fn evaluate_at(&self, now: Duration) -> Vec<Job> {
         let mut state = locked(&self.state);
         let (Some(stage), Some(facts)) = (state.stage.clone(), state.facts.clone()) else {
             return Vec::new();
@@ -990,6 +984,23 @@ impl Inner {
 }
 
 impl State {
+    fn new(timing: Timing) -> Self {
+        Self {
+            stage: None,
+            facts: None,
+            tracker: MoodTracker::new(timing.hysteresis),
+            pacer: Pacer::new(timing, Duration::ZERO),
+            backdrop: None,
+            sprites: BTreeMap::new(),
+            ready_backdrop: None,
+            refresh_in_flight: false,
+            expression_in_flight: BTreeSet::new(),
+            failed_faces: BTreeSet::new(),
+            last_revision: None,
+            budget_exhausted: false,
+        }
+    }
+
     /// The newest exchange sequence the mood has already handled.
     fn tracker_handled(&self) -> u64 {
         self.tracker.handled_sequence()
