@@ -1,6 +1,11 @@
 //! Pure, server-owned chapter generation; governing design: adventure-generator §§1–12.
 mod bounds;
 pub(crate) mod cli;
+pub(crate) mod dossier;
+pub(crate) mod dossier_render;
+pub(crate) mod dossier_tables;
+#[cfg(test)]
+mod dossier_tests;
 mod generate;
 pub(crate) mod record;
 mod render;
