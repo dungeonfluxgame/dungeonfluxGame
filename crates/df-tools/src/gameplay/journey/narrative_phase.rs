@@ -24,7 +24,7 @@ pub(super) fn classify(state: &GameState) -> Result<rpc::JourneyPhase, Repositor
         "opening" => Ok(rpc::JourneyPhase::Opening),
         "courier-answer-seal" | "courier-answer-escort" => Ok(rpc::JourneyPhase::Dialogue),
         "combat" => Ok(rpc::JourneyPhase::Combat),
-        "complete" | "harbor-inn" => Ok(rpc::JourneyPhase::Complete),
+        "complete" | "harbor-inn" | "epilogue" | "the-end" => Ok(rpc::JourneyPhase::Complete),
         _ => invalid(),
     }
 }
@@ -439,7 +439,13 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
         return invalid();
     }
     let end = completion_source(state, start, &actors, victory, true)?;
-    if state.narrative.active_beats == [model::content("harbor-inn")?] {
+    // A fight's ending steps follow the inn (after a victory) or the defeat scene.
+    let active = state.narrative.active_beats[0].entry.as_str();
+    let ending = matches!(active, "epilogue" | "the-end");
+    if ending && !victory {
+        completed.push(model::content("complete")?);
+    }
+    if active == "harbor-inn" || (ending && victory) {
         completed.push(model::content("complete")?);
         let inn = source(state, "harbor-inn", rpc::JourneyPhase::Complete)?;
         if !victory
@@ -459,6 +465,23 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
             return invalid();
         }
     }
+    if ending {
+        if victory {
+            completed.push(model::content("harbor-inn")?);
+        }
+        if active == "the-end" {
+            completed.push(model::content("epilogue")?);
+        }
+    }
+    ending_steps(
+        state,
+        end,
+        if active == "the-end" {
+            2
+        } else {
+            usize::from(ending)
+        },
+    )?;
     let rest = model::content("short-rest-complete")?;
     let markers = state
         .narrative
@@ -480,6 +503,47 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
         return invalid();
     }
     Ok(phase)
+}
+
+/// The ending steps taken since the fight ended: one resolution, then the epilogue's close. Each
+/// is its own accepted decision whose terminal event is the step marker.
+fn ending_steps(
+    state: &GameState,
+    completion: &GameFact,
+    expected: usize,
+) -> Result<(), RepositoryError> {
+    let step = model::content(super::super::beat_script_runtime::STEP)?;
+    let mut found = 0;
+    for decision in &state.decisions {
+        if decision.source_policy.as_str() != THREAD_POLICY
+            || decision.revision <= completion.revision
+        {
+            continue;
+        }
+        let Some(event) = state
+            .facts
+            .iter()
+            .find(|fact| decision.facts.last() == Some(&fact.id))
+        else {
+            continue;
+        };
+        if !matches!(&event.value, FactValue::ContentEvent { definition, subjects }
+            if *definition == step && subjects.is_empty())
+        {
+            continue;
+        }
+        let receipt = accepted(decision)?;
+        if event.audience != AudienceScope::Shared
+            || receipt.phase != rpc::JourneyPhase::Complete as i32
+            || receipt.scene.is_some()
+            || !receipt.combat.is_empty()
+        {
+            return invalid();
+        }
+        validate_terminal_cause(state, event, decision)?;
+        found += 1;
+    }
+    if found == expected { Ok(()) } else { invalid() }
 }
 
 fn accepted_rest(

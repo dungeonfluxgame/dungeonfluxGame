@@ -17,7 +17,11 @@ use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, watch};
 
-use super::{model, wire};
+use super::{
+    model,
+    table_settings::{self, TableSettings},
+    wire,
+};
 
 #[derive(Clone)]
 pub(super) struct QualificationSnapshot {
@@ -351,6 +355,8 @@ pub(super) struct Actor {
     pub table_log: std::sync::Arc<super::table_log::TableLog>,
     /// Each NPC's backstory and attitude toward each hero.
     pub social: std::sync::Arc<super::social::SocialLedger>,
+    /// The room's table settings, as stored and carried in every view.
+    pub table_settings: TableSettings,
     pub dialogue: super::dialogue::DialogueState,
     pub tempo: Option<tempo::TempoOwner>,
     pub bootstrap_credential: [u8; 32],
@@ -846,6 +852,49 @@ impl Actor {
             self.owner.checkpoint(),
         );
     }
+    /// A seated player's change to the room's table settings: validated, stored, then carried in
+    /// every view. It moves no game revision and touches no rule.
+    fn set_table_setting(
+        &mut self,
+        member: df_types::MemberId,
+        request: &rpc::SubmitActionRequest,
+    ) -> Result<rpc::SubmitActionResponse, tonic::Status> {
+        require_readable(self.fenced)?;
+        let current = self.owner.checkpoint().basis();
+        let scope_invalid = || tonic::Status::invalid_argument("required action scope invalid");
+        let session =
+            df_api::session_id(request.session_id.as_ref()).map_err(|_| scope_invalid())?;
+        let run = df_api::run_id(request.run_id.as_ref()).map_err(|_| scope_invalid())?;
+        let operation =
+            df_api::operation_id(request.operation_id.as_ref()).map_err(|_| scope_invalid())?;
+        if session != current.session || run != current.run {
+            return Err(tonic::Status::permission_denied(
+                "local gameplay scope denied",
+            ));
+        }
+        if !table_settings::may_change(self.owner.checkpoint(), member) {
+            return Err(tonic::Status::permission_denied(
+                "only a seated player can change the table settings",
+            ));
+        }
+        let change = request
+            .table_setting
+            .as_ref()
+            .ok_or_else(|| tonic::Status::invalid_argument("table setting required"))?;
+        let settings = self.table_settings.changed(change)?;
+        self.issuer
+            .store_table_settings(settings.stored())
+            .map_err(unavailable)?;
+        self.table_settings = settings;
+        self.table_log.settings_changed();
+        Ok(wire::committed(wire::receipt(
+            current,
+            operation,
+            rpc::decision_receipt::Outcome::Accepted(Box::default()),
+            false,
+        )))
+    }
+
     pub(super) fn submit(
         &mut self,
         credential: [u8; 32],
@@ -867,6 +916,11 @@ impl Actor {
         }
         let member = df_types::MemberId::from_bytes(&principal)
             .map_err(|_| tonic::Status::permission_denied("member binding invalid"))?;
+        if rpc::GameplayActionKind::try_from(request.action_kind)
+            == Ok(rpc::GameplayActionKind::SetTableSetting)
+        {
+            return self.set_table_setting(member, &request);
+        }
         let input = wire::journey_input(&request, member, self.owner.checkpoint())?;
         let GameInput::Game(command) = &input else {
             return Err(tonic::Status::internal("canonical command unavailable"));
@@ -1214,6 +1268,7 @@ impl Actor {
         let member = df_types::MemberId::from_bytes(&principal)
             .map_err(|_| tonic::Status::permission_denied("binding invalid"))?;
         let mut view = wire::journey_view(current, role, member).map_err(unavailable)?;
+        self.table_settings.attach(&mut view);
         self.table_log.attach(&mut view);
         self.social.attach(&mut view, member);
         if let Some(tempo) = self.tempo.as_mut() {

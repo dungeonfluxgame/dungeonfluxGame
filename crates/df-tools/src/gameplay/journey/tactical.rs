@@ -1292,6 +1292,52 @@ pub(in crate::gameplay) fn dying(state: &GameState) -> Result<bool, RepositoryEr
             && !actor.health().stable
     }))
 }
+/// How a fight ended, as the closing scenes tell it. Victory is the heroes standing at the end;
+/// it is costly when any hero is down or dead. Defeat leaves survivors unless every hero is dead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) enum FightOutcome {
+    Won,
+    WonCostly,
+    Lost,
+    LostAll,
+}
+impl FightOutcome {
+    pub(in crate::gameplay) const ALL: [Self; 4] =
+        [Self::Won, Self::WonCostly, Self::Lost, Self::LostAll];
+    pub(in crate::gameplay) fn classify(won: bool, any_down: bool, any_alive: bool) -> Self {
+        match (won, any_down, any_alive) {
+            (true, false, _) => Self::Won,
+            (true, true, _) => Self::WonCostly,
+            (false, _, true) => Self::Lost,
+            (false, _, false) => Self::LostAll,
+        }
+    }
+    /// The suffix of this outcome's closing scene variants.
+    pub(in crate::gameplay) fn slug(self) -> &'static str {
+        match self {
+            Self::Won => "won",
+            Self::WonCostly => "won-costly",
+            Self::Lost => "lost",
+            Self::LostAll => "lost-all",
+        }
+    }
+}
+/// The per-hero dead and down flags of the tactical snapshot decide the class.
+pub(in crate::gameplay) fn outcome(state: &GameState) -> Result<FightOutcome, RepositoryError> {
+    let won = victory(state)?;
+    let battle = read(state)?;
+    let mut down = false;
+    let mut survivors = false;
+    for actor in battle
+        .combatants()
+        .iter()
+        .filter(|actor| actor.side() == Side::Heroes)
+    {
+        down |= actor.health().dead || actor.health().hit_points == 0;
+        survivors |= !actor.health().dead;
+    }
+    Ok(FightOutcome::classify(won, down, survivors))
+}
 pub(super) fn aftermath(
     state: &mut GameState,
     operation: OperationId,

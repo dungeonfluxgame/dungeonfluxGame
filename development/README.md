@@ -162,6 +162,19 @@ and treat the room code as the only password.
 Speech input needs HTTPS or `localhost`: browsers grant the microphone only there. On a plain
 `http://` LAN address a phone can type its lines but cannot speak them (see Speech input below).
 
+### Table settings (choice chips on the TV)
+
+Any seated player can change the room's table settings from the Menu sheet on their phone, in the
+lobby or during play. The server owns them: the choice is stored with the game's database, so it
+survives a reconnect and a server restart, and every screen receives it in its view.
+
+- `DF_GAMEPLAY_CHOICE_HINTS=on|off`: the startup value of "Show choices on the TV". Default `on`.
+  Any other value refuses startup. A choice a player has already stored wins over this default;
+  the startup line reads `TABLE choice_hints=on` or `TABLE choice_hints=off`.
+
+With the chips off the shared display hides the numbered chip row and gives its space to the
+narrator box. The setting changes presentation only; no rule, roll or outcome depends on it.
+
 ### Content rating (mature by default)
 
 This is an adult game, so the written and spoken content is `mature` unless you switch it:

@@ -69,6 +69,8 @@ pub(super) struct TvModel {
     pub(super) rules_note: String,
     /// What the table can do now: labels only, for the read-only row of chips.
     pub(super) choices: Vec<String>,
+    /// The table's setting: the chip row is hidden and the narrator box takes its room.
+    pub(super) choice_hints_hidden: bool,
     pub(super) family: SceneFamily,
     /// Names the scene for the figures: a non-player character stays until it changes.
     pub(super) scene_key: String,
@@ -626,7 +628,10 @@ impl TvStage {
         self.lede.set_text_content(Some(&model.lede));
         self.rules_text.set_text_content(Some(&model.rules_note));
         set_hidden(&self.rules, model.rules_note.is_empty() || lobby)?;
-        self.set_choices(if lobby { &[] } else { &model.choices })?;
+        self.set_choices(
+            if lobby { &[] } else { &model.choices },
+            model.choice_hints_hidden,
+        )?;
         match &model.end {
             Some(card) => {
                 self.root.set_attribute("data-ended", "")?;
@@ -788,14 +793,17 @@ impl TvStage {
 
     /// The read-only row of numbered chips: what the table can do now. It is replaced only
     /// when the labels change, so a redraw never restarts its animation.
-    pub(super) fn set_choices(&self, labels: &[String]) -> Result<(), JsValue> {
+    pub(super) fn set_choices(&self, labels: &[String], hidden: bool) -> Result<(), JsValue> {
         let shown: Vec<&str> = labels.iter().map(String::as_str).collect();
         let signature = shown.join("\u{1f}");
-        // `data-chips="off"` is the table's setting that hides the hints; the count never replaces it.
-        if self.root.get_attribute("data-chips").as_deref() != Some("off") {
-            self.root
-                .set_attribute("data-chips", &shown.len().to_string())?;
-        }
+        // `data-chips="off"` is the table's setting that hides the hints (the stylesheet then
+        // gives their room to the narrator box); otherwise the count of chips is recorded.
+        let chips = if hidden {
+            "off".to_owned()
+        } else {
+            shown.len().to_string()
+        };
+        self.root.set_attribute("data-chips", &chips)?;
         if self.choices.get_attribute("data-labels").as_deref() == Some(signature.as_str()) {
             return Ok(());
         }

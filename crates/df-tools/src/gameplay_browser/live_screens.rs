@@ -246,6 +246,7 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         place: input.scene.place.clone(),
         rules_note: input.scene.rules_note.clone(),
         choices: input.journey.table_choices.clone(),
+        choice_hints_hidden: input.journey.choice_hints_hidden,
         family: crate::presentation::scene_family(&input.scene.scene_asset),
         scene_key: input.scene.title.clone(),
         home: input.journey.home.clone(),
