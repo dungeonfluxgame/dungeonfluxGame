@@ -4783,6 +4783,708 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T05:54:24+00:00",
       "updated_at": "2026-10-12T05:54:24+00:00"
+    },
+    {
+      "id": "PLAY-Q01",
+      "feature_id": "F04",
+      "title": "Join by QR code and room code, with a LAN join link",
+      "objective": "The shared display shows a QR code beside the room code; a public address setting and a --lan launcher option make the link reachable from phones on the same network.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/join_link.rs",
+        "crates/df-tools/src/gameplay_browser/live_tv.rs",
+        "development/run-gameplay.sh"
+      ],
+      "acceptance_json": [
+        "The QR decodes to the join link and the link opens the join page with the room pre-filled.",
+        "A bad public address is refused at startup without echoing it; no origin check is loosened.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for the link, route and validation; browser captures at three sizes with the QR decoded."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M13",
+        "milestone_goal": "A whole game: an adventure can be joined, played, concluded and followed by the next.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner direction and coordinator playthroughs, 2026-10-12. Owner: \"I want QR codes and a room code\".",
+        "objective": "The shared display shows a QR code beside the room code; a public address setting and a --lan launcher option make the link reachable from phones on the same network.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Join by QR code and room code, with a LAN join link",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "c0ddcae8ef6b40a73859dc3ca73bfb2ed21136457940bd82615ad41633e617ee"
+          },
+          {
+            "path": "planning/rpc-transport.md",
+            "sha256": "841ba2500a426e6bacf62017d60e106cae402eb62b0e171eccab26dfb9c31c79"
+          }
+        ],
+        "input_revision": "6bd89b11fc7c902eeb2b7432355669e57910c151",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 90,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T08:40:35+00:00",
+      "updated_at": "2026-10-12T08:40:35+00:00"
+    },
+    {
+      "id": "PLAY-N05",
+      "feature_id": "F04",
+      "title": "NPCs know their errand and remember what they have said",
+      "objective": "Each speaker carries the facts of their side of the errand, a per-conversation memory of what was offered, pacing of new facts and no stock closing lines.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/npc_dossier.rs",
+        "crates/df-tools/src/gameplay/npc_reply.rs",
+        "crates/df-tools/src/gameplay/adventure/dossier.rs"
+      ],
+      "acceptance_json": [
+        "No speaker is ignorant of an authored statement of their own across 200 seeds, for every role.",
+        "A reply never repeats an earlier answer in the same conversation.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests; coordinator reading of live replies."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M7",
+        "milestone_goal": "Coherent staging: where a scene happens, who is in it and who is speaking all agree.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner direction and coordinator playthroughs, 2026-10-12. Owner: the patron's dialogue is very weak; she denied knowing her own errand.",
+        "objective": "Each speaker carries the facts of their side of the errand, a per-conversation memory of what was offered, pacing of new facts and no stock closing lines.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "NPCs know their errand and remember what they have said",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/interaction-engine.md",
+            "sha256": "1bad7c28609ac5e5a51a3ea0b3c1fae17ebeb6380dbdb8fce582085a8ede354f"
+          },
+          {
+            "path": "planning/narrative-engine.md",
+            "sha256": "370ca7352aa195467baeca921c0d016284b16619f6f3e65087d6be8831e93d47"
+          }
+        ],
+        "input_revision": "6bd89b11fc7c902eeb2b7432355669e57910c151",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 94,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T08:40:35+00:00",
+      "updated_at": "2026-10-12T08:40:35+00:00"
+    },
+    {
+      "id": "PLAY-N06",
+      "feature_id": "F04",
+      "title": "NPC replies a player wants to read, proven with the real text model",
+      "objective": "Replies answer first, discuss a private clue with the hero who was given it, carry no sayings or autobiography as filler, stay within three sentences and move the conversation on; proven by kept transcripts from the real text model and rule checks over them.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/npc_dossier.rs",
+        "crates/df-tools/src/gameplay/npc_reply.rs",
+        "crates/df-tools/src/gameplay/dialogue.rs",
+        "crates/df-tools/src/gameplay/social.rs"
+      ],
+      "acceptance_json": [
+        "Six scripted five-exchange conversations over three seeds and both ratings meet the rules.",
+        "A private clue reaches only the hero it was given to, and that hero can ask about it.",
+        "Every existing guard on secret and shame terms still holds.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Live transcript sets before and after, rule checks as native tests, a phone-sized browser check."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M7",
+        "milestone_goal": "Coherent staging: where a scene happens, who is in it and who is speaking all agree.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner direction and coordinator playthroughs, 2026-10-12. After PLAY-N05 the witness still refused to discuss what he had just told the hero in private and padded replies with proverbs. Escalated after two economy attempts.",
+        "objective": "Replies answer first, discuss a private clue with the hero who was given it, carry no sayings or autobiography as filler, stay within three sentences and move the conversation on; proven by kept transcripts from the real text model and rule checks over them.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "NPC replies a player wants to read, proven with the real text model",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/interaction-engine.md",
+            "sha256": "1bad7c28609ac5e5a51a3ea0b3c1fae17ebeb6380dbdb8fce582085a8ede354f"
+          },
+          {
+            "path": "planning/narrative-engine.md",
+            "sha256": "370ca7352aa195467baeca921c0d016284b16619f6f3e65087d6be8831e93d47"
+          }
+        ],
+        "input_revision": "6bd89b11fc7c902eeb2b7432355669e57910c151",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T08:40:35+00:00",
+      "updated_at": "2026-10-12T08:40:35+00:00"
+    },
+    {
+      "id": "PLAY-E02",
+      "feature_id": "F04",
+      "title": "Investigation choices work in the live game",
+      "objective": "Scripted look and question choices reach the journey through the engine entry; a refused action is reported plainly instead of as an unknown outcome; four choice chips show whole.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/model.rs",
+        "crates/df-tools/src/gameplay/actor.rs",
+        "crates/df-tools/src/gameplay_browser/live_stage.css"
+      ],
+      "acceptance_json": [
+        "Mystery and parley chapters play from first choice to their last scene on two phones.",
+        "No uncertain-outcome text appears for a deterministic refusal.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "An engine-entry native test and a browser check per chapter type."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M13",
+        "milestone_goal": "A whole game: an adventure can be joined, played, concluded and followed by the next.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner direction and coordinator playthroughs, 2026-10-12. Every investigation press returned \"Outcome unknown\" in a mystery chapter.",
+        "objective": "Scripted look and question choices reach the journey through the engine entry; a refused action is reported plainly instead of as an unknown outcome; four choice chips show whole.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Investigation choices work in the live game",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "c0ddcae8ef6b40a73859dc3ca73bfb2ed21136457940bd82615ad41633e617ee"
+          },
+          {
+            "path": "planning/narrative-engine.md",
+            "sha256": "370ca7352aa195467baeca921c0d016284b16619f6f3e65087d6be8831e93d47"
+          }
+        ],
+        "input_revision": "6bd89b11fc7c902eeb2b7432355669e57910c151",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 95,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T08:40:35+00:00",
+      "updated_at": "2026-10-12T08:40:35+00:00"
+    },
+    {
+      "id": "PLAY-E03",
+      "feature_id": "F04",
+      "title": "The adventure must end: resolution, epilogue, end card and the next step",
+      "objective": "The resolution scene concludes the errand, an epilogue and closing line play, the session enters a terminal state with an end card, and the party can begin a new adventure or the campaign's next chapter in the same room with the same heroes, without a server restart.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/journey.rs",
+        "crates/df-tools/src/gameplay/beat_script_runtime.rs",
+        "crates/df-tools/src/gameplay/wire.rs",
+        "content/adventure-tables/"
+      ],
+      "acceptance_json": [
+        "For each hook kind, victory and defeat, play reaches the terminal state through submitted actions.",
+        "The next step yields a new adventure or chapter with the same room, phones and heroes.",
+        "A reload in any of these states lands in the same state.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests; browser checks for a whole adventure and a chapter-to-chapter step."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M13",
+        "milestone_goal": "A whole game: an adventure can be joined, played, concluded and followed by the next.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner direction and coordinator playthroughs, 2026-10-12. Every adventure and chapter stops on a repeatable Short Rest or \"the story waits\".",
+        "objective": "The resolution scene concludes the errand, an epilogue and closing line play, the session enters a terminal state with an end card, and the party can begin a new adventure or the campaign's next chapter in the same room with the same heroes, without a server restart.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "The adventure must end: resolution, epilogue, end card and the next step",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "6c04bdd223eb877d8ac8beeaa75e6aa56c6f9cacf5235fa99c1ef99054fba14d"
+          },
+          {
+            "path": "planning/narrative-engine.md",
+            "sha256": "370ca7352aa195467baeca921c0d016284b16619f6f3e65087d6be8831e93d47"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          }
+        ],
+        "input_revision": "6bd89b11fc7c902eeb2b7432355669e57910c151",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 98,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T08:40:35+00:00",
+      "updated_at": "2026-10-12T08:40:35+00:00"
+    },
+    {
+      "id": "PLAY-V09",
+      "feature_id": "F04",
+      "title": "Composed scene plates in the live game",
+      "objective": "On entering a story scene the server generates one composed photographic plate of the place with the heroes in the foreground and the speaker lit at their work; the display shows the cut-out stage until it lands, then the plate with the bubble beside the speaker's head.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/living_scenes.rs",
+        "crates/df-tools/src/gameplay/imagery/",
+        "crates/df-tools/src/gameplay_browser/live_stage.rs"
+      ],
+      "acceptance_json": [
+        "A plate replaces the cut-out stage without disturbing the line being spoken.",
+        "Bubbles sit beside the measured head of their speaker; a plate never shows during combat.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests; a real-browser run with the real image provider."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M12",
+        "milestone_goal": "Composed scenes: story scenes and the home screen read as film stills, not layouts.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner direction and coordinator playthroughs, 2026-10-12. Owner's twelve reference frames: a scene is a composed film still.",
+        "objective": "On entering a story scene the server generates one composed photographic plate of the place with the heroes in the foreground and the speaker lit at their work; the display shows the cut-out stage until it lands, then the plate with the bubble beside the speaker's head.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Composed scene plates in the live game",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "3bffcd6895fa5c18f85f45a276767a4f1ede4cd30a1ae4ff443a05a901bda1d8"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "c0ddcae8ef6b40a73859dc3ca73bfb2ed21136457940bd82615ad41633e617ee"
+          }
+        ],
+        "input_revision": "6bd89b11fc7c902eeb2b7432355669e57910c151",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 95,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T08:40:35+00:00",
+      "updated_at": "2026-10-12T08:40:35+00:00"
+    },
+    {
+      "id": "PLAY-T03",
+      "feature_id": "F04",
+      "title": "Tactical combat works in the live server: archer creation and the acting phone",
+      "objective": "Creating the archer build succeeds for any seat; the acting player's phone receives its combat view; a refused or failed submit and a failed stream each leave a diagnostic and tell the phone the truth.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/journey/tactical.rs",
+        "crates/df-tools/src/gameplay/actor.rs",
+        "crates/df-tools/src/gameplay/wire.rs"
+      ],
+      "acceptance_json": [
+        "Each supported package is created through the engine entry for seats one and two.",
+        "Both phones show a three-enemy fight on every turn and can move and attack to its end.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Engine-entry native tests with a codec round trip; a two-phone browser check with the database."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M8",
+        "milestone_goal": "A battle worth watching: a staged battlefield, readable turns and felt impacts.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner direction and coordinator playthroughs, 2026-10-12. First live session after PLAY-T02: the archer package returned \"Outcome unknown\" and the acting player's phone lost its connection when its turn began.",
+        "objective": "Creating the archer build succeeds for any seat; the acting player's phone receives its combat view; a refused or failed submit and a failed stream each leave a diagnostic and tell the phone the truth.",
+        "owners": [
+          "df-tools",
+          "df-persistence"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Tactical combat works in the live server: archer creation and the acting phone",
+            "owner": "df-tools"
+          },
+          {
+            "hook": "Tactical combat works in the live server: archer creation and the acting phone",
+            "owner": "df-persistence"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/rpc-transport.md",
+            "sha256": "841ba2500a426e6bacf62017d60e106cae402eb62b0e171eccab26dfb9c31c79"
+          }
+        ],
+        "input_revision": "6bd89b11fc7c902eeb2b7432355669e57910c151",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 99,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T08:40:35+00:00",
+      "updated_at": "2026-10-12T08:40:35+00:00"
+    },
+    {
+      "id": "PLAY-S02",
+      "feature_id": "F04",
+      "title": "Tactical fights on scan scenes: the server picks the layout of the scene shown",
+      "objective": "A forced battle scene and the server's grid agree: the server selects a layout from the scene that will be shown, scan grids are shared authored data, figures stand and move only where the server says, and framing holds for many figures, ranged attacks and moves.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-render/src/battle/",
+        "crates/df-rules/src/tactical/",
+        "crates/df-tools/src/gameplay_browser/live_battlefield.rs"
+      ],
+      "acceptance_json": [
+        "Every scan layout the server can choose is valid for the rules and matches the renderer.",
+        "No cosmetic movement: a figure moves only when the server moves it.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests; real-browser three-enemy fights on two scans."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M8",
+        "milestone_goal": "A battle worth watching: a staged battlefield, readable turns and felt impacts.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner direction and coordinator playthroughs, 2026-10-12. After PLAY-T02 a forced scan was ignored; the owner wants fights on the splat scans.",
+        "objective": "A forced battle scene and the server's grid agree: the server selects a layout from the scene that will be shown, scan grids are shared authored data, figures stand and move only where the server says, and framing holds for many figures, ranged attacks and moves.",
+        "owners": [
+          "df-render",
+          "df-tools",
+          "df-rules"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Tactical fights on scan scenes: the server picks the layout of the scene shown",
+            "owner": "df-render"
+          },
+          {
+            "hook": "Tactical fights on scan scenes: the server picks the layout of the scene shown",
+            "owner": "df-tools"
+          },
+          {
+            "hook": "Tactical fights on scan scenes: the server picks the layout of the scene shown",
+            "owner": "df-rules"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "c0ddcae8ef6b40a73859dc3ca73bfb2ed21136457940bd82615ad41633e617ee"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          }
+        ],
+        "input_revision": "6bd89b11fc7c902eeb2b7432355669e57910c151",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T08:40:35+00:00",
+      "updated_at": "2026-10-12T08:40:35+00:00"
+    },
+    {
+      "id": "PLAY-H02",
+      "feature_id": "F04",
+      "title": "Health cues on the 3D battlefield",
+      "objective": "Battlefield plates carry the health tier colour, ribbon and chip; figures show the cached health variant; the struck figure reacts by share of bar lost; the downed look reads as fallen.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-render/src/battle/hud.rs",
+        "crates/df-tools/src/gameplay_browser/live_battlefield.css"
+      ],
+      "acceptance_json": [
+        "Every tier is visible on the plate and the figure in a real fight on a scan.",
+        "One shared tier function; df-render grows no thresholds of its own.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests; a real-browser run through every tier and a heal."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M8",
+        "milestone_goal": "A battle worth watching: a staged battlefield, readable turns and felt impacts.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner direction and coordinator playthroughs, 2026-10-12. A hero at 6 of 13 kept a green bar and healthy figure on the battlefield.",
+        "objective": "Battlefield plates carry the health tier colour, ribbon and chip; figures show the cached health variant; the struck figure reacts by share of bar lost; the downed look reads as fallen.",
+        "owners": [
+          "df-render",
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Health cues on the 3D battlefield",
+            "owner": "df-render"
+          },
+          {
+            "hook": "Health cues on the 3D battlefield",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "c0ddcae8ef6b40a73859dc3ca73bfb2ed21136457940bd82615ad41633e617ee"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "3bffcd6895fa5c18f85f45a276767a4f1ede4cd30a1ae4ff443a05a901bda1d8"
+          }
+        ],
+        "input_revision": "6bd89b11fc7c902eeb2b7432355669e57910c151",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 93,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T08:40:35+00:00",
+      "updated_at": "2026-10-12T08:40:35+00:00"
     }
   ],
   "dependencies": [
@@ -4956,6 +5658,54 @@
     },
     {
       "task_id": "PLAY-F07",
+      "prerequisite_task_id": "PLAY-S01"
+    },
+    {
+      "task_id": "PLAY-N06",
+      "prerequisite_task_id": "PLAY-N05"
+    },
+    {
+      "task_id": "PLAY-E02",
+      "prerequisite_task_id": "PLAY-E01"
+    },
+    {
+      "task_id": "PLAY-E03",
+      "prerequisite_task_id": "PLAY-E02"
+    },
+    {
+      "task_id": "PLAY-E03",
+      "prerequisite_task_id": "PLAY-T02"
+    },
+    {
+      "task_id": "PLAY-V09",
+      "prerequisite_task_id": "PLAY-V03"
+    },
+    {
+      "task_id": "PLAY-V09",
+      "prerequisite_task_id": "PLAY-H01"
+    },
+    {
+      "task_id": "PLAY-T03",
+      "prerequisite_task_id": "PLAY-T02"
+    },
+    {
+      "task_id": "PLAY-S02",
+      "prerequisite_task_id": "PLAY-S01"
+    },
+    {
+      "task_id": "PLAY-S02",
+      "prerequisite_task_id": "PLAY-T02"
+    },
+    {
+      "task_id": "PLAY-S02",
+      "prerequisite_task_id": "PLAY-F07"
+    },
+    {
+      "task_id": "PLAY-H02",
+      "prerequisite_task_id": "PLAY-H01"
+    },
+    {
+      "task_id": "PLAY-H02",
       "prerequisite_task_id": "PLAY-S01"
     }
   ]
