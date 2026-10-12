@@ -3979,7 +3979,7 @@
       "feature_id": "F04",
       "title": "Author the hero life-path tables and original custom backgrounds",
       "objective": "Write the data the backstory picker runs on: the eight life-path stages with their options, each option's story text, tags and the build choices it proposes, and a first set of original DungeonFlux backgrounds and callings as disclosed custom content on the 2024 background template, every entry tagged with its source.",
-      "stage": "content",
+      "stage": "implementation",
       "edit_areas_json": [
         "content/hero-tables/",
         "planning/character-backstory-creation.md"
