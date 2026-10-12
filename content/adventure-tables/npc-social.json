@@ -117,54 +117,54 @@
       {"faces": [20, 20], "id": "mumble-shy", "length": "short", "vocabulary": "mumbles; apologises as they go", "tic": "begins with 'Um.'", "opener": "Um.", "closer": "Sorry.", "tags": ["nervous"]}
     ]},
     "flattery": {"die": 8, "entries": [
-      {"faces": [1, 1], "id": "warms-to-it", "tags": ["warm"], "text": "warms to it and shows it", "speak": "Well, that is kind of you to say. I will try not to let it go to my head."},
-      {"faces": [2, 2], "id": "asks-what-for", "tags": ["gruff"], "text": "suspects it and asks what is really wanted", "speak": "Praise is cheap. What do you want?"},
-      {"faces": [3, 3], "id": "waves-it-off", "text": "waves it away, embarrassed but secretly pleased", "speak": "Oh, stop. Really. Go on, though."},
-      {"faces": [4, 4], "id": "returns-with-interest", "tags": ["playful", "warm"], "text": "laughs and returns the compliment with interest", "speak": "Flattery from you? I will take it, and I will give you double."},
-      {"faces": [5, 5], "id": "no-more-than-due", "tags": ["formal"], "text": "accepts it as no more than their due", "speak": "You are not wrong. But it is pleasant to hear."},
-      {"faces": [6, 6], "id": "touched-then-guarded", "text": "is touched, then becomes a little guarded", "speak": "That is more than I expected. Thank you."},
-      {"faces": [7, 7], "id": "credits-the-work", "tags": ["calm"], "text": "turns it toward the work, never toward themselves", "speak": "It is the work that deserves the praise, not me."},
-      {"faces": [8, 8], "id": "melts-and-chatters", "tags": ["warm", "hurried"], "text": "melts and begins to talk too much", "speak": "Oh, you do go on! I could listen to you all evening."}
+      {"faces": [1, 1], "id": "warms-to-it", "tags": ["warm"], "effect": "warm", "text": "warms to it and shows it", "speak": "Well, that is kind of you to say. I will try not to let it go to my head."},
+      {"faces": [2, 2], "id": "asks-what-for", "tags": ["gruff"], "effect": "steady", "text": "suspects it and asks what is really wanted", "speak": "Praise is cheap. What do you want?"},
+      {"faces": [3, 3], "id": "waves-it-off", "effect": "warm", "text": "waves it away, embarrassed but secretly pleased", "speak": "Oh, stop. Really. Go on, though."},
+      {"faces": [4, 4], "id": "returns-with-interest", "tags": ["playful", "warm"], "effect": "warm", "text": "laughs and returns the compliment with interest", "speak": "Flattery from you? I will take it, and I will give you double."},
+      {"faces": [5, 5], "id": "no-more-than-due", "tags": ["formal"], "effect": "steady", "text": "accepts it as no more than their due", "speak": "You are not wrong. But it is pleasant to hear."},
+      {"faces": [6, 6], "id": "touched-then-guarded", "effect": "warm", "text": "is touched, then becomes a little guarded", "speak": "That is more than I expected. Thank you."},
+      {"faces": [7, 7], "id": "credits-the-work", "tags": ["calm"], "effect": "steady", "text": "turns it toward the work, never toward themselves", "speak": "It is the work that deserves the praise, not me."},
+      {"faces": [8, 8], "id": "melts-and-chatters", "tags": ["warm", "hurried"], "effect": "warm", "text": "melts and begins to talk too much", "speak": "Oh, you do go on! I could listen to you all evening."}
     ]},
     "flirting": {"die": 8, "entries": [
-      {"faces": [1, 1], "id": "flattered-spoken-for", "tags": ["warm"], "text": "flattered but spoken for, and says so with a smile", "speak": "I am flattered, truly. But my heart is already spoken for, so save your charms for someone who can use them."},
-      {"faces": [2, 2], "id": "amused-teasing", "tags": ["playful"], "text": "amused and teasing; gives as good as gets", "speak": "Bold! Keep that up and I might ask you to carry my bags."},
-      {"faces": [3, 3], "id": "flustered", "tags": ["nervous"], "text": "flustered; loses the thread of the sentence", "speak": "Oh, well, what was I saying? You have scattered my thoughts."},
-      {"faces": [4, 4], "id": "cool-unimpressed", "tags": ["cold"], "text": "cool and unimpressed; the compliment slides off", "speak": "Save the charm. It will not buy you anything here."},
-      {"faces": [5, 5], "id": "plays-along-to-learn", "text": "plays along only to learn something", "speak": "Is that so? Do go on. I am always curious how far a smile will get someone."},
-      {"faces": [6, 6], "id": "kind-refusal", "text": "gently and kindly declines", "speak": "That is a kind thing to say, and I will remember it. But no."},
-      {"faces": [7, 7], "id": "back-to-business", "tags": ["formal"], "text": "politely returns to the matter at hand", "speak": "How kind. Now, about the matter at hand."},
-      {"faces": [8, 8], "id": "baffled-blush", "tags": ["nervous"], "text": "is baffled, then blushes and goes quiet", "speak": "Thank you, I think. Is it warm in here?"}
+      {"faces": [1, 1], "id": "flattered-spoken-for", "tags": ["warm"], "effect": "warm", "text": "flattered but spoken for, and says so with a smile", "speak": "I am flattered, truly. But my heart is already spoken for, so save your charms for someone who can use them."},
+      {"faces": [2, 2], "id": "amused-teasing", "tags": ["playful"], "effect": "warm", "text": "amused and teasing; gives as good as gets", "speak": "Bold! Keep that up and I might ask you to carry my bags."},
+      {"faces": [3, 3], "id": "flustered", "tags": ["nervous"], "effect": "warm", "text": "flustered; loses the thread of the sentence", "speak": "Oh, well, what was I saying? You have scattered my thoughts."},
+      {"faces": [4, 4], "id": "cool-unimpressed", "tags": ["cold"], "effect": "cool", "text": "cool and unimpressed; the compliment slides off", "speak": "Save the charm. It will not buy you anything here."},
+      {"faces": [5, 5], "id": "plays-along-to-learn", "effect": "steady", "text": "plays along only to learn something", "speak": "Is that so? Do go on. I am always curious how far a smile will get someone."},
+      {"faces": [6, 6], "id": "kind-refusal", "effect": "steady", "text": "gently and kindly declines", "speak": "That is a kind thing to say, and I will remember it. But no."},
+      {"faces": [7, 7], "id": "back-to-business", "tags": ["formal"], "effect": "steady", "text": "politely returns to the matter at hand", "speak": "How kind. Now, about the matter at hand."},
+      {"faces": [8, 8], "id": "baffled-blush", "tags": ["nervous"], "effect": "warm", "text": "is baffled, then blushes and goes quiet", "speak": "Thank you, I think. Is it warm in here?"}
     ]},
     "threats": {"die": 8, "entries": [
-      {"faces": [1, 1], "id": "stands-firm", "tags": ["calm"], "text": "stands firm, voice steady", "speak": "Threaten me all you like. I have lived through worse than words."},
-      {"faces": [2, 2], "id": "bristles-back", "tags": ["gruff"], "text": "bristles and threatens back, loudly", "speak": "You will want to watch your tone. I know more people in this town than you would guess."},
-      {"faces": [3, 3], "id": "goes-pale", "tags": ["nervous", "hurried"], "text": "goes pale and begins to talk fast", "speak": "Please. There is no need for that. Tell me what you want to know and I will tell you."},
-      {"faces": [4, 4], "id": "cold-courtesy-reply", "tags": ["cold", "formal"], "text": "answers with quiet, cold courtesy", "speak": "I would advise against that. I would advise it very politely."},
-      {"faces": [5, 5], "id": "laughs-it-off", "tags": ["playful"], "text": "laughs it off to hide the fear", "speak": "Ha! Very good. Do it again, with more feeling."},
-      {"faces": [6, 6], "id": "glances-at-the-door", "text": "glances at the door and lowers the voice", "speak": "I would keep your voice down. The walls here have ears, and the ears have friends."},
-      {"faces": [7, 7], "id": "gives-a-little", "text": "folds quickly and gives up something small, but nothing important", "speak": "Fine. Fine! Take this much, and not a word more."},
-      {"faces": [8, 8], "id": "goes-silent", "tags": ["slow"], "text": "refuses flatly and goes silent", "speak": "No. Nothing more to say."}
+      {"faces": [1, 1], "id": "stands-firm", "tags": ["calm"], "effect": "cool", "text": "stands firm, voice steady", "speak": "Threaten me all you like. I have lived through worse than words."},
+      {"faces": [2, 2], "id": "bristles-back", "tags": ["gruff"], "effect": "cool", "text": "bristles and threatens back, loudly", "speak": "You will want to watch your tone. I know more people in this town than you would guess."},
+      {"faces": [3, 3], "id": "goes-pale", "tags": ["nervous", "hurried"], "effect": "cool", "text": "goes pale and begins to talk fast", "speak": "Please. There is no need for that. Tell me what you want to know and I will tell you."},
+      {"faces": [4, 4], "id": "cold-courtesy-reply", "tags": ["cold", "formal"], "effect": "cool", "text": "answers with quiet, cold courtesy", "speak": "I would advise against that. I would advise it very politely."},
+      {"faces": [5, 5], "id": "laughs-it-off", "tags": ["playful"], "effect": "steady", "text": "laughs it off to hide the fear", "speak": "Ha! Very good. Do it again, with more feeling."},
+      {"faces": [6, 6], "id": "glances-at-the-door", "effect": "steady", "text": "glances at the door and lowers the voice", "speak": "I would keep your voice down. The walls here have ears, and the ears have friends."},
+      {"faces": [7, 7], "id": "gives-a-little", "effect": "steady", "text": "folds quickly and gives up something small, but nothing important", "speak": "Fine. Fine! Take this much, and not a word more."},
+      {"faces": [8, 8], "id": "goes-silent", "tags": ["slow"], "effect": "cool", "text": "refuses flatly and goes silent", "speak": "No. Nothing more to say."}
     ]},
     "lies": {"die": 8, "entries": [
-      {"faces": [1, 1], "id": "believes-too-easily", "text": "believes it too easily", "speak": "Is that right? Well, if you say so."},
-      {"faces": [2, 2], "id": "notices-kindly", "tags": ["calm"], "text": "notices at once and says so kindly", "speak": "That does not sit right, friend. But I will let it pass."},
-      {"faces": [3, 3], "id": "pretends-to-believe", "tags": ["calm", "cold"], "text": "pretends to believe it and watches closely", "speak": "Mm. Of course. Please, go on."},
-      {"faces": [4, 4], "id": "calls-it-out", "tags": ["gruff", "brisk"], "text": "catches it and calls it out bluntly", "speak": "That is not true, and we both know it. Try again."},
-      {"faces": [5, 5], "id": "muddled-questions", "tags": ["nervous", "hurried"], "text": "becomes confused and asks too many questions", "speak": "But that does not fit. Wait, who said that, and when?"},
-      {"faces": [6, 6], "id": "hurt-not-angry", "tags": ["warm"], "text": "is hurt by it more than angry", "speak": "I would rather you simply told me. It hurts a little, you know."},
-      {"faces": [7, 7], "id": "turns-it-around", "tags": ["playful"], "text": "plays along, then turns the lie around with a joke", "speak": "Oh, wonderful. Tell me another. I do enjoy a good one."},
-      {"faces": [8, 8], "id": "weighs-it-quietly", "text": "weighs it against what they know and says nothing", "speak": "Hm. I will think on that."}
+      {"faces": [1, 1], "id": "believes-too-easily", "effect": "steady", "text": "believes it too easily", "speak": "Is that right? Well, if you say so."},
+      {"faces": [2, 2], "id": "notices-kindly", "tags": ["calm"], "effect": "steady", "text": "notices at once and says so kindly", "speak": "That does not sit right, friend. But I will let it pass."},
+      {"faces": [3, 3], "id": "pretends-to-believe", "tags": ["calm", "cold"], "effect": "steady", "text": "pretends to believe it and watches closely", "speak": "Mm. Of course. Please, go on."},
+      {"faces": [4, 4], "id": "calls-it-out", "tags": ["gruff", "brisk"], "effect": "cool", "text": "catches it and calls it out bluntly", "speak": "That is not true, and we both know it. Try again."},
+      {"faces": [5, 5], "id": "muddled-questions", "tags": ["nervous", "hurried"], "effect": "steady", "text": "becomes confused and asks too many questions", "speak": "But that does not fit. Wait, who said that, and when?"},
+      {"faces": [6, 6], "id": "hurt-not-angry", "tags": ["warm"], "effect": "cool", "text": "is hurt by it more than angry", "speak": "I would rather you simply told me. It hurts a little, you know."},
+      {"faces": [7, 7], "id": "turns-it-around", "tags": ["playful"], "effect": "warm", "text": "plays along, then turns the lie around with a joke", "speak": "Oh, wonderful. Tell me another. I do enjoy a good one."},
+      {"faces": [8, 8], "id": "weighs-it-quietly", "effect": "steady", "text": "weighs it against what they know and says nothing", "speak": "Hm. I will think on that."}
     ]},
     "bribes": {"die": 8, "entries": [
-      {"faces": [1, 1], "id": "refuses-offended", "tags": ["gruff"], "text": "refuses, offended", "speak": "Put that away. I am not for sale, and I do not care for the notion."},
-      {"faces": [2, 2], "id": "dignified-refusal", "tags": ["formal"], "text": "refuses with dignity, though tempted", "speak": "I thank you, but no. My good name is the only thing I own outright."},
-      {"faces": [3, 3], "id": "takes-it-promises-nothing", "text": "takes it at once and promises nothing", "speak": "Thank you. I will note your generosity. I will note nothing else."},
-      {"faces": [4, 4], "id": "haggles", "tags": ["playful"], "text": "haggles for more", "speak": "Is that all? You can do better than that."},
-      {"faces": [5, 5], "id": "pushes-it-back", "tags": ["nervous"], "text": "is embarrassed and pushes it back", "speak": "Oh, no. No, I could not. Please, take it back."},
-      {"faces": [6, 6], "id": "pays-in-trivia", "text": "accepts, then offers a harmless scrap of gossip in return", "speak": "Well, since you are so generous: the baker's cat has had kittens again."},
-      {"faces": [7, 7], "id": "asks-what-for", "tags": ["calm"], "text": "asks what it is meant to buy before deciding", "speak": "What exactly is this meant to buy?"},
-      {"faces": [8, 8], "id": "give-it-to-others", "tags": ["warm"], "text": "tells them to give it to someone who needs it more", "speak": "Give it to someone who needs it. I am not short."}
+      {"faces": [1, 1], "id": "refuses-offended", "tags": ["gruff"], "effect": "cool", "text": "refuses, offended", "speak": "Put that away. I am not for sale, and I do not care for the notion."},
+      {"faces": [2, 2], "id": "dignified-refusal", "tags": ["formal"], "effect": "steady", "text": "refuses with dignity, though tempted", "speak": "I thank you, but no. My good name is the only thing I own outright."},
+      {"faces": [3, 3], "id": "takes-it-promises-nothing", "effect": "warm", "text": "takes it at once and promises nothing", "speak": "Thank you. I will note your generosity. I will note nothing else."},
+      {"faces": [4, 4], "id": "haggles", "tags": ["playful"], "effect": "steady", "text": "haggles for more", "speak": "Is that all? You can do better than that."},
+      {"faces": [5, 5], "id": "pushes-it-back", "tags": ["nervous"], "effect": "steady", "text": "is embarrassed and pushes it back", "speak": "Oh, no. No, I could not. Please, take it back."},
+      {"faces": [6, 6], "id": "pays-in-trivia", "effect": "warm", "text": "accepts, then offers a harmless scrap of gossip in return", "speak": "Well, since you are so generous: the baker's cat has had kittens again."},
+      {"faces": [7, 7], "id": "asks-what-for", "tags": ["calm"], "effect": "steady", "text": "asks what it is meant to buy before deciding", "speak": "What exactly is this meant to buy?"},
+      {"faces": [8, 8], "id": "give-it-to-others", "tags": ["warm"], "effect": "warm", "text": "tells them to give it to someone who needs it more", "speak": "Give it to someone who needs it. I am not short."}
     ]},
     "deflections": {"die": 12, "entries": [
       {"faces": [1, 1], "id": "bad-singing", "tags": ["playful"], "text": "jokes about a harmless embarrassment", "speak": "Hiding? A very bad singing voice, and you will never hear it."},
@@ -179,6 +179,16 @@
       {"faces": [10, 10], "id": "own-cooking", "tags": ["playful"], "text": "jokes about hiding from their own cooking", "speak": "I am hiding from my own cooking, mostly."},
       {"faces": [11, 11], "id": "probably-wrong", "tags": ["calm"], "text": "stays calm and gives nothing", "speak": "Whatever you imagine, you are probably wrong."},
       {"faces": [12, 12], "id": "next-question", "text": "says nothing at all and asks for the next question", "speak": "Next question, please."}
+    ]},
+    "curt": {"die": 8, "entries": [
+      {"faces": [1, 1], "id": "nothing-to-say", "text": "refuses to engage", "speak": "I have nothing to say to you."},
+      {"faces": [2, 2], "id": "someone-else", "text": "sends the hero away", "speak": "Find someone else to bother."},
+      {"faces": [3, 3], "id": "not-today", "text": "shuts the conversation down", "speak": "Not to you. Not today."},
+      {"faces": [4, 4], "id": "cold-courtesy", "tags": ["cold", "formal"], "text": "icy and exact", "speak": "I do not believe we have anything to discuss."},
+      {"faces": [5, 5], "id": "make-it-quick", "tags": ["brisk"], "text": "clipped and impatient", "speak": "Make it quick, or make it elsewhere."},
+      {"faces": [6, 6], "id": "mocking-charm", "tags": ["playful"], "text": "mocks the effort", "speak": "Oh, how charming. Ask somebody who cares."},
+      {"faces": [7, 7], "id": "shaky-no", "tags": ["nervous"], "text": "refuses with a shaky voice", "speak": "No. I do not want to talk to you. Please go."},
+      {"faces": [8, 8], "id": "one-word", "tags": ["slow", "gruff"], "text": "answers with a single heavy word", "speak": "No."}
     ]},
     "frames": {
       "who_are_you": {"die": 4, "entries": [

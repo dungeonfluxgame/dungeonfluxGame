@@ -12,6 +12,7 @@ pub(crate) mod campaign_tables;
 mod campaign_tests;
 pub(crate) mod cli;
 pub(crate) mod dossier;
+mod dossier_cast;
 pub(crate) mod dossier_render;
 pub(crate) mod dossier_tables;
 #[cfg(test)]
@@ -110,6 +111,8 @@ pub(crate) struct GeneratedAdventure {
     pub(crate) pack: PackFile,
     pub(crate) tuning: TuningFile,
     pub(crate) settings: setting::ChapterSettings,
+    /// The speaking cast's backstories, rolled on their own streams (section 19).
+    pub(crate) dossiers: Vec<dossier::Dossier>,
 }
 #[derive(Clone, Debug)]
 pub(crate) enum GenerateError {
@@ -123,6 +126,7 @@ pub(crate) enum GenerateError {
         maximum: usize,
     },
     Pack(super::pack::PackError),
+    Dossier(dossier::DossierError),
     Serialization,
 }
 impl fmt::Display for GenerateError {
@@ -143,6 +147,7 @@ impl fmt::Display for GenerateError {
                 maximum,
             } => write!(f, "adventure {slot}: {actual} characters exceeds {maximum}"),
             Self::Pack(error) => error.fmt(f),
+            Self::Dossier(error) => error.fmt(f),
             Self::Serialization => f.write_str("adventure serialization failed"),
         }
     }

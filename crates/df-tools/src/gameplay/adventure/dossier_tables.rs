@@ -10,7 +10,7 @@
 )]
 use super::{
     TablesError,
-    dossier::{Attitude, Binding, Group, Length, NpcRole, Topic, sentence_count},
+    dossier::{Attitude, Binding, Effect, Group, Length, NpcRole, Topic, sentence_count},
     schema::Table,
 };
 use serde::{Deserialize, de::DeserializeOwned};
@@ -135,6 +135,9 @@ pub(crate) struct Profile {
     /// Archetype ids this entry must not be given to.
     #[serde(default)]
     pub(crate) except: Vec<String>,
+    /// For the temperament tables: how the reaction moves attitude.
+    #[serde(default)]
+    pub(crate) effect: Option<Effect>,
 }
 impl Faced for Profile {
     fn faces(&self) -> [u8; 2] {
@@ -301,6 +304,8 @@ pub(super) struct Social {
     pub(super) lies: Table<Profile>,
     pub(super) bribes: Table<Profile>,
     pub(super) deflections: Table<Profile>,
+    /// Short refusals a Hostile NPC gives to anything; a few are kept per dossier.
+    pub(super) curt: Table<Profile>,
     pub(super) attitudes: Attitudes,
     pub(super) styles: Table<StyleEntry>,
     pub(super) frames: BTreeMap<Topic, Table<Profile>>,
@@ -775,8 +780,21 @@ impl DossierTables {
             ("lies", &s.lies),
             ("bribes", &s.bribes),
             ("deflections", &s.deflections),
+            ("curt", &s.curt),
         ] {
             check_profiles(file, name, table, reaction, tags)?;
+            let moves = matches!(name, "flattery" | "flirting" | "threats" | "lies" | "bribes");
+            if table
+                .entries
+                .iter()
+                .any(|entry| entry.effect.is_some() != moves)
+            {
+                return Err(invalid(
+                    file,
+                    &format!("tables.{name}"),
+                    "effect is required on every temperament entry and used nowhere else",
+                ));
+            }
             // Spoken as a prepared answer, so it must stay within three sentences.
             for entry in &table.entries {
                 if entry

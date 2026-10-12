@@ -880,7 +880,7 @@ pub(crate) fn generate_with_prose(
     let pack_bytes = serde_json::to_vec(&pack).map_err(|_| GenerateError::Serialization)?;
     let tuning_bytes = serde_json::to_vec(&tuning).map_err(|_| GenerateError::Serialization)?;
     pack::load_from_bytes(&pack_bytes, &tuning_bytes).map_err(GenerateError::Pack)?;
-    Ok(GeneratedAdventure {
+    let mut adventure = GeneratedAdventure {
         seed,
         tables_revision: tables.revision.clone(),
         rules_mode: options.rules_mode,
@@ -890,7 +890,14 @@ pub(crate) fn generate_with_prose(
         pack,
         tuning,
         settings,
-    })
+        dossiers: Vec::new(),
+    };
+    adventure.dossiers = super::dossier_cast::roll_for(
+        tables,
+        &adventure,
+        &super::dossier_cast::PublicStory::default(),
+    )?;
+    Ok(adventure)
 }
 fn check(slot: &str, text: &str, maximum: usize) -> Result<(), GenerateError> {
     let actual = text.chars().count();

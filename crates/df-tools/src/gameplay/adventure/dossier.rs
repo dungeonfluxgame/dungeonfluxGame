@@ -27,6 +27,8 @@ const STREAM_TAG: u64 = 0x4e50_4344_4f53_5331;
 const MAX_ATTEMPTS: usize = 64;
 const MAX_CAST: usize = 20;
 const MAX_SENTENCES: usize = 3;
+/// Curt lines a dossier carries for a Hostile NPC.
+const CURT_ANSWERS: usize = 3;
 const DICE: [u8; 6] = [4, 6, 8, 10, 12, 20];
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -98,6 +100,14 @@ impl Attitude {
             Self::Hostile => "hostile",
         }
     }
+}
+/// How a reaction moves the NPC's attitude toward a hero. Custom story colour, not a rule.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Effect {
+    Warm,
+    Cool,
+    Steady,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -309,6 +319,8 @@ pub(crate) struct Reaction {
     /// First-person line, family-suitable, never a mechanical benefit.
     pub(crate) answer: String,
     pub(crate) tags: Vec<String>,
+    /// Whether this reaction warms, cools or leaves the attitude where it was.
+    pub(crate) effect: Effect,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -359,6 +371,9 @@ pub(crate) struct Dossier {
     pub(crate) starting_attitude: Attitude,
     pub(crate) speech_style: SpeechStyle,
     pub(crate) prepared_answers: BTreeMap<Topic, String>,
+    /// Short in-character lines for a Hostile NPC when no text model answers; they reveal
+    /// nothing.
+    pub(crate) curt_answers: Vec<String>,
     pub(crate) rolls: Vec<Roll>,
 }
 
@@ -728,12 +743,13 @@ fn trait_of(profile: &Profile, text: String) -> Trait {
         text,
     }
 }
-fn reaction_of(entry: &Profile, text: String, answer: String) -> Reaction {
+fn reaction_of(entry: &Profile, text: String, answer: String, effect: Effect) -> Reaction {
     Reaction {
         id: entry.id.clone(),
         text,
         answer,
         tags: entry.tags.clone(),
+        effect,
     }
 }
 fn template_error(npc_id: &str, table: &str) -> DossierError {
@@ -1006,6 +1022,20 @@ fn roll_one(
         };
         prepared_answers.insert(topic, with_tic(topic, body, style, context));
     }
+    // Rolled last so every earlier roll keeps its value.
+    let mut curt_entries: Vec<&Profile> = Vec::with_capacity(CURT_ANSWERS);
+    for _ in 0..CURT_ANSWERS {
+        let entry = roller.pick("curt", &social.curt, |entry| {
+            context.clear_of_tags(&entry.tags, &taken)
+                && !curt_entries.iter().any(|chosen| chosen.id == entry.id)
+                && context.profile_fits(entry, &[(entry.speak.as_deref(), Audience::Public)])
+        })?;
+        curt_entries.push(entry);
+    }
+    let curt_answers = curt_entries
+        .into_iter()
+        .map(|entry| spoken(context, entry, "curt"))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let given = GivenTraits {
         mannerism: member.mannerism.clone(),
@@ -1059,6 +1089,7 @@ fn roll_one(
             tags: style.tags.clone(),
         },
         prepared_answers,
+        curt_answers,
         rolls: roller.rolls,
     })
 }
@@ -1231,6 +1262,9 @@ fn reaction_entry(context: &Context<'_>, entry: &Profile) -> Result<Reaction, Do
             npc,
             "temperament",
         )?,
+        entry
+            .effect
+            .ok_or_else(|| template_error(npc, "temperament effect"))?,
     ))
 }
 
@@ -1388,6 +1422,9 @@ impl Dossier {
             .collect();
         for (topic, text) in &self.prepared_answers {
             public.push((format!("prepared_answers.{}", topic.label()), text));
+        }
+        for (index, text) in self.curt_answers.iter().enumerate() {
+            public.push((format!("curt_answers.{index}"), text));
         }
         let mut spoken: Vec<(String, &str)> = self
             .knowledge
