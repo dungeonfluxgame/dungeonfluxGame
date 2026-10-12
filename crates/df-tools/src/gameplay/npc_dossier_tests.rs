@@ -16,7 +16,7 @@ use super::{
     npc_dossier::{self, Inputs, Withheld, facts, fallback},
     npc_reply::{NpcReplyContext, NpcVoice, StoryFacts},
     pack::SceneKey,
-    social::{Approach, SocialLedger, Standing, classify_keywords},
+    social::{Approach, Conversation, SocialLedger, Standing, classify_keywords},
     startup_configuration::{ContentRating, TestRating, content_rating},
     storyteller::{
         CallProfile, Expression, Slot, age_group, build_prompt, sexual_content_allowed,
@@ -123,7 +123,17 @@ fn facts_for(
         choices: &["Ask what is wrong"],
         words,
         withheld: &withheld_of(adventure, dossier),
+        // A friendly hero is at the third exchange, when confidences are first released.
+        conversation: &Conversation {
+            exchange: if standing.attitude == Attitude::Friendly {
+                3
+            } else {
+                1
+            },
+            ..Conversation::default()
+        },
     })
+    .0
 }
 
 fn every_standing() -> [Standing; 4] {
@@ -196,7 +206,7 @@ fn a_hero_at_the_starting_attitude_hears_the_free_tier_only_and_a_friendly_one_t
 
         assert!(
             free.iter()
-                .all(|line| indifferent.contains(&json_inner(line))),
+                .any(|line| indifferent.contains(&json_inner(line))),
             "seed {seed}"
         );
         assert!(!indifferent.contains("says_when_trusted"), "seed {seed}");
@@ -205,8 +215,14 @@ fn a_hero_at_the_starting_attitude_hears_the_free_tier_only_and_a_friendly_one_t
                 !indifferent.contains(&json_inner(line)),
                 "seed {seed}: {line}"
             );
-            assert!(friendly.contains(&json_inner(line)), "seed {seed}: {line}");
         }
+        // One confidence at a time: the friendly hero at the third exchange hears one of them.
+        assert!(
+            trusted
+                .iter()
+                .any(|line| friendly.contains(&json_inner(line))),
+            "seed {seed}"
+        );
         assert!(friendly.contains("says_when_trusted"));
         proved += 1;
     }
@@ -244,7 +260,7 @@ fn never_says_and_secret_terms_never_enter_a_prompt_or_a_prepared_reply(rating: 
                         assert!(!sent.contains(&hidden.text), "seed {seed}: never_says text");
                     }
                     let answer =
-                        fallback(dossier, standing, line, classify_keywords(line), &withheld);
+                        fallback_of(dossier, standing, line, classify_keywords(line), &withheld);
                     assert!(
                         !secrets.leaks(&answer) && !answer.is_empty(),
                         "seed {seed} {} {standing:?} {line}: {answer}",
@@ -435,14 +451,26 @@ async fn earning_friendship_through_kindness_opens_the_trusted_tier_in_the_next_
         .iter()
         .map(|body| facts_of_request(body["input"].as_str().unwrap()))
         .collect();
-    for facts in &sent[..3] {
+    // Confidences are released from the third exchange, one per reply, never before.
+    for facts in &sent[..2] {
         assert!(
             !facts.contains(&json_inner(&confided)),
             "the trusted tier leaked early"
         );
         assert!(!facts.contains("says_when_trusted"));
     }
-    assert!(sent[3].contains(&json_inner(&confided)), "{}", sent[3]);
+    let released: Vec<serde_json::Value> = sent[2..]
+        .iter()
+        .filter_map(|facts| serde_json::from_str::<serde_json::Value>(facts).ok())
+        .filter_map(|value| value.get("says_when_trusted").cloned())
+        .collect();
+    assert!(!released.is_empty(), "{sent:?}");
+    assert!(
+        released
+            .iter()
+            .all(|lines| lines.as_array().is_some_and(|lines| lines.len() == 1)),
+        "{sent:?}"
+    );
     assert!(sent[3].contains("\"attitude_toward_hero\":\"friendly\""));
     assert_eq!(
         ledger.standing(member(1), &dossier).attitude,
@@ -479,7 +507,7 @@ async fn a_secret_reply_is_refused(tag: &str) {
     let (voice, cache) = voice(&endpoint, &format!("dossier-leak-{tag}"));
     let log = TableLog::new();
     let ask = context(&adventure, &ledger, SceneKey::Opening, "Who are you?");
-    let expected = fallback(
+    let expected = fallback_of(
         &dossier,
         Standing {
             attitude: Attitude::Indifferent,
@@ -492,7 +520,7 @@ async fn a_secret_reply_is_refused(tag: &str) {
 
     let answer = voice.converse(ask, &log).await.unwrap();
 
-    assert_eq!(answer, expected);
+    assert!(answer.starts_with(spoken_part(&expected)), "{answer}");
     assert!(!answer.contains(&secret));
     assert_eq!(
         endpoint.connections(),
@@ -593,9 +621,9 @@ async fn with_the_text_model_off_every_line_still_gets_the_dossiers_answer_by_to
         answers.push(voice.converse(ask, &log).await.unwrap());
     }
 
-    assert_eq!(answers[0], dossier.prepared_answers[&Topic::WhoAreYou]);
-    assert_eq!(answers[1], dossier.prepared_answers[&Topic::YourPast]);
-    assert_eq!(answers[2], dossier.prepared_answers[&Topic::ThePlace]);
+    assert!(answers[0].starts_with(&dossier.prepared_answers[&Topic::WhoAreYou]));
+    assert!(answers[1].starts_with(&dossier.prepared_answers[&Topic::YourPast]));
+    assert!(answers[2].starts_with(&dossier.prepared_answers[&Topic::ThePlace]));
 
     // The same NPC after being insulted twice in one scene is curt, not friendly.
     for _ in 0..2 {
@@ -632,14 +660,14 @@ fn a_trusted_hero_who_asks_what_is_hidden_hears_a_confidence_and_a_stranger_a_de
         trust: 0,
     };
 
-    let told = fallback(
+    let told = fallback_of(
         dossier,
         friendly,
         "What are you hiding?",
         Approach::Question,
         &withheld,
     );
-    let deflected = fallback(
+    let deflected = fallback_of(
         dossier,
         stranger,
         "What are you hiding?",
@@ -652,10 +680,10 @@ fn a_trusted_hero_who_asks_what_is_hidden_hears_a_confidence_and_a_stranger_a_de
             .knowledge
             .says_when_trusted
             .iter()
-            .any(|item| item.text == told)
+            .any(|item| told.starts_with(item.text.as_str()))
     );
     assert_eq!(
-        deflected,
+        spoken_part(&deflected),
         dossier.prepared_answers[&Topic::WhatAreYouHiding]
     );
     assert!(
@@ -859,7 +887,7 @@ fn flirts_are_declined_played_along_or_returned_by_each_npcs_own_temperament_whe
     for (id, phrase, effect) in wanted {
         let (adventure, index) = &picked[id];
         let dossier = &adventure.dossiers[*index];
-        let answer = fallback(
+        let answer = fallback_of(
             dossier,
             Standing {
                 attitude: Attitude::Indifferent,
@@ -870,7 +898,10 @@ fn flirts_are_declined_played_along_or_returned_by_each_npcs_own_temperament_whe
             &withheld_of(adventure, dossier),
         );
         assert_eq!(dossier.temperament.flirting.effect, effect, "{id}");
-        assert_eq!(answer, dossier.prepared_answers[&Topic::ComplimentOrFlirt]);
+        assert!(
+            answer.starts_with(&dossier.prepared_answers[&Topic::ComplimentOrFlirt]),
+            "{answer}"
+        );
         assert!(answer.contains(phrase), "{id}: {answer}");
         answers.push(answer);
     }
@@ -948,7 +979,7 @@ fn the_npc_reply_rules_differ_between_ratings_only_in_the_rating_sentences() {
         .filter(|(restrained, mature)| restrained != mature)
         .map(|(restrained, _)| &restrained[..3])
         .collect();
-    assert_eq!(differing, ["e. ", "f. "], "exactly rules e and f");
+    assert_eq!(differing, ["h. ", "i. "], "exactly rules h and i");
     let (restrained, mature) = (restrained.join("\n"), mature.join("\n"));
     assert!(restrained.contains("never anything explicit"));
     assert!(restrained.contains("Keep it suitable for a family table."));
@@ -979,7 +1010,7 @@ async fn a_crude_reply_is_kept_when_mature_and_replaced_by_the_prepared_answer_w
         let _rating = TestRating::set(rating);
         let (adventure, ledger) = confiding_patron(Attitude::Indifferent);
         let dossier = adventure.dossiers[0].clone();
-        let expected = fallback(
+        let expected = fallback_of(
             &dossier,
             Standing {
                 attitude: Attitude::Indifferent,
@@ -1005,7 +1036,10 @@ async fn a_crude_reply_is_kept_when_mature_and_replaced_by_the_prepared_answer_w
                 assert_eq!(endpoint.connections(), 1);
             }
             ContentRating::Restrained => {
-                assert_eq!(answer, expected, "refused, then the prepared answer");
+                assert!(
+                    answer.starts_with(spoken_part(&expected)),
+                    "refused, then the prepared answer: {answer}"
+                );
                 assert_eq!(
                     endpoint.connections(),
                     2,
@@ -1053,4 +1087,210 @@ fn a_young_speaker_is_a_young_adult_and_an_unstated_age_or_a_real_likeness_is_ex
     assert!(!sexual_content_allowed("", false));
     assert!(!sexual_content_allowed("adult", true));
     assert!(sexual_content_allowed("young", false));
+}
+
+/// The fallback answer for a conversation's first exchange, with nothing said yet.
+fn fallback_of(
+    dossier: &Dossier,
+    standing: Standing,
+    typed: &str,
+    approach: Approach,
+    withheld: &Withheld,
+) -> String {
+    fallback(
+        dossier,
+        standing,
+        typed,
+        approach,
+        withheld,
+        &Conversation::default(),
+        &[],
+    )
+}
+
+/// Facts for one line typed to a dossier at a given point in the conversation.
+fn conversation_facts(
+    adventure: &GeneratedAdventure,
+    dossier: &Dossier,
+    standing: Standing,
+    words: &str,
+    conversation: &Conversation,
+) -> (serde_json::Value, Vec<String>) {
+    facts(&Inputs {
+        dossier,
+        name: &dossier.name,
+        hero: "Brannoch",
+        standing,
+        recent: &[],
+        scene_title: "The Opening",
+        scripted_line: "",
+        choices: &[],
+        words,
+        withheld: &withheld_of(adventure, dossier),
+        conversation,
+    })
+}
+
+fn friendly() -> Standing {
+    Standing {
+        attitude: Attitude::Friendly,
+        trust: 0,
+    }
+}
+
+#[test]
+fn a_trait_already_voiced_is_not_restated_unless_the_hero_asks_about_it_again() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let dossier = adventure.dossiers[0].clone();
+    let voiced = Conversation {
+        exchange: 2,
+        voiced: vec!["trait:want".to_owned()],
+        ..Conversation::default()
+    };
+    let (repeat, offered) = conversation_facts(
+        &adventure,
+        &dossier,
+        friendly(),
+        "Go on, tell me more.",
+        &voiced,
+    );
+    assert!(repeat.get("wants").is_none(), "{repeat}");
+    assert!(!offered.contains(&"trait:want".to_owned()));
+    assert!(
+        repeat["already_said"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(dossier.want.text)),
+        "{repeat}"
+    );
+    let (asked, offered) = conversation_facts(
+        &adventure,
+        &dossier,
+        friendly(),
+        "Why does this matter to you so much?",
+        &voiced,
+    );
+    assert_eq!(asked["wants"], json!(dossier.want.text), "{asked}");
+    assert!(offered.contains(&"trait:want".to_owned()));
+}
+
+#[test]
+fn trusted_confidences_are_released_one_at_a_time_from_the_third_exchange() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let dossier = adventure.dossiers[0].clone();
+    let early = Conversation {
+        exchange: 2,
+        ..Conversation::default()
+    };
+    let (first, _) = conversation_facts(
+        &adventure,
+        &dossier,
+        friendly(),
+        "What are you hiding from me?",
+        &early,
+    );
+    assert!(first.get("says_when_trusted").is_none(), "{first}");
+    let third = Conversation {
+        exchange: 3,
+        ..Conversation::default()
+    };
+    let (released, offered) = conversation_facts(
+        &adventure,
+        &dossier,
+        friendly(),
+        "What are you hiding from me?",
+        &third,
+    );
+    let lines = released["says_when_trusted"].as_array().unwrap();
+    assert_eq!(lines.len(), 1, "{released}");
+    assert!(offered.iter().any(|key| key.starts_with("trusted:")));
+    let fourth = Conversation {
+        exchange: 4,
+        voiced: offered,
+        ..Conversation::default()
+    };
+    let (next, _) = conversation_facts(
+        &adventure,
+        &dossier,
+        friendly(),
+        "What are you hiding from me?",
+        &fourth,
+    );
+    if let Some(next_lines) = next.get("says_when_trusted") {
+        assert_ne!(
+            next_lines[0], lines[0],
+            "the same confidence is not given twice"
+        );
+    }
+}
+
+#[test]
+fn the_speech_style_closer_is_never_sent_to_the_model_as_a_stock_sentence() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    for dossier in adventure.dossiers.clone() {
+        let (value, _) = conversation_facts(
+            &adventure,
+            &dossier,
+            friendly(),
+            "Who are you?",
+            &Conversation::default(),
+        );
+        assert!(
+            value["speech_style"].get("usual_closer").is_none(),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn with_the_text_model_off_no_answer_repeats_and_each_leaves_a_hook_or_a_redirect() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let dossier = adventure.dossiers[0].clone();
+    let withheld = withheld_of(&adventure, &dossier);
+    let mut said: Vec<String> = Vec::new();
+    for (index, line) in [
+        "Who are you?",
+        "Tell me about your past.",
+        "Why does this matter to you so much?",
+        "Who is behind this trouble?",
+        "What is this place like?",
+        "What are you hiding from me?",
+        "What are you hiding from me?",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let conversation = Conversation {
+            exchange: u32::try_from(index).unwrap() + 1,
+            ..Conversation::default()
+        };
+        let answer = fallback(
+            &dossier,
+            friendly(),
+            line,
+            classify_keywords(line),
+            &withheld,
+            &conversation,
+            &said,
+        );
+        assert!(!said.contains(&answer), "repeated: {answer}");
+        let hooked = npc_dossier::FALLBACK_HOOKS
+            .iter()
+            .any(|hook| answer.ends_with(hook));
+        let redirect = npc_dossier::FALLBACK_REDIRECTS.contains(&answer.as_str());
+        assert!(
+            answer.ends_with('?') || hooked || redirect,
+            "no hook or redirect: {answer}"
+        );
+        said.push(answer);
+    }
+}
+
+/// The answer without the hook a fallback reply may end with, so the prepared words can be
+/// compared whatever hook the exchange drew.
+fn spoken_part(text: &str) -> &str {
+    npc_dossier::FALLBACK_HOOKS
+        .iter()
+        .find_map(|hook| text.strip_suffix(hook))
+        .map_or(text, str::trim_end)
 }

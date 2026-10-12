@@ -1144,13 +1144,15 @@ fn sha256(bytes: &[u8]) -> String {
 /// before the content rating existed (with `GenerateOptions::default()`).
 /// Pack and record were re-pinned when every pack gained its `beat_script`: with that one key
 /// removed, each pack was byte-identical to the earlier pin.
+// The third hash of each seed is the adventure record, which embeds the NPC dossiers. Dossier text
+// changes re-pin only that hash, after review; the pack and tuning hashes never move with it.
 const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
             "072519d1e82c29c030e6788b77af55483ff477e1290f8ffbe9e5952692cf70cb",
             "fd318025d2d7b016708169b59777687fe1f7b630a3b70eb2715dad37af962933",
-            "59d52d16a87d02c42a9f564fd536ba6bab2a652ad1fed3d6fa4813e9e1e51567",
+            "2541b5d7ea0bfab9d19dea23262cf40a583faf9a32f30698ff4ea5a752ca6233",
         ],
     ),
     (
@@ -1158,7 +1160,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "80a4f6aa32d5b1ecbe68ab33a5e2e43ecb6697e5c62a499df1b91001e6c01e44",
             "6e122920b8921cd08441ec5c13360ac3898742e2d143a16e0c8a8d678d367ace",
-            "3e8ee5cea2515032c701e3d0d510d29328fe96c4599355fb1df04333a8a85157",
+            "796fff4becbced8f36a7bcc1fb11d5eee0d4516ca4aae6d17654a02dbce5f7bb",
         ],
     ),
     (
@@ -1166,7 +1168,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "2c75bec4abecef0694322db9b71f6bf826b7161641ed6c520f9377008eebb705",
             "d29e661273c6de6896f5723c824099989ad0b023d8f9085a5f9bc73cbb5450d7",
-            "14394ebc68dffb3a3cba2ee7212e6c993d9298d69266726e8b5b70b67ee86032",
+            "18c0c3c7c72d991e58d0bc28e65d4bc689c51deb84383da70df70b5e8e38a4ea",
         ],
     ),
 ];

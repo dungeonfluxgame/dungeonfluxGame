@@ -368,6 +368,19 @@ struct Relationship {
     scene: String,
     scene_start: Attitude,
     recent: Vec<Line>,
+    /// Keys of the facts and traits this NPC has already offered or said to this hero, such as
+    /// `trait:want` or `line:origin_line`. Kept across scenes so nothing is volunteered twice.
+    #[serde(default)]
+    voiced: Vec<String>,
+    /// Exchanges in the current conversation: reset when the scene changes.
+    #[serde(default)]
+    exchanges: u32,
+    /// Whether the NPC has said she does not know in the current conversation.
+    #[serde(default)]
+    admitted_ignorance: bool,
+    /// Whether her last reply ended with a question, so the next should end another way.
+    #[serde(default)]
+    last_asked: bool,
 }
 
 impl Relationship {
@@ -378,6 +391,10 @@ impl Relationship {
             scene: String::new(),
             scene_start: dossier.starting_attitude,
             recent: Vec::new(),
+            voiced: Vec::new(),
+            exchanges: 0,
+            admitted_ignorance: false,
+            last_asked: false,
         }
     }
 
@@ -386,6 +403,9 @@ impl Relationship {
         if self.scene != scene {
             self.scene = scene.to_owned();
             self.scene_start = self.attitude;
+            self.exchanges = 0;
+            self.admitted_ignorance = false;
+            self.last_asked = false;
         }
         let direction: i8 = match effect {
             Effect::Warm => 1,
@@ -434,6 +454,34 @@ impl Standing {
             Attitude::Hostile => false,
         }
     }
+}
+
+/// What a reply may draw on from one conversation: its place in the exchanges, what this NPC has
+/// already offered or said to this hero, and whether she has admitted she does not know.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct Conversation {
+    /// This reply's number in the conversation, from 1.
+    pub(super) exchange: u32,
+    pub(super) voiced: Vec<String>,
+    pub(super) admitted_ignorance: bool,
+    pub(super) last_asked: bool,
+}
+
+/// Whether an NPC's line says she does not know or will not say. It reads the reply text, so
+/// it counts the honest "I don't know" that the rules allow once per conversation.
+pub(super) fn admits_not_knowing(line: &str) -> bool {
+    let lowered = line.to_lowercase().replace('\u{2019}', "'");
+    const PHRASES: [&str; 8] = [
+        "i don't know",
+        "i do not know",
+        "i can't say",
+        "i cannot say",
+        "i can't tell",
+        "i cannot tell",
+        "i couldn't say",
+        "no idea",
+    ];
+    PHRASES.iter().any(|phrase| lowered.contains(phrase))
 }
 
 /// The outcome of recording one exchange.
@@ -634,6 +682,47 @@ impl SocialLedger {
             .unwrap_or_default()
     }
 
+    /// What this hero and NPC have already said in the conversation of `scene`.
+    pub(super) fn conversation(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+    ) -> Conversation {
+        let relationships = self.lock();
+        let Some(relationship) = relationships.get(&(member, dossier.npc_id.clone())) else {
+            return Conversation {
+                exchange: 1,
+                ..Conversation::default()
+            };
+        };
+        let continuing = relationship.scene == scene;
+        Conversation {
+            exchange: if continuing {
+                relationship.exchanges.saturating_add(1)
+            } else {
+                1
+            },
+            voiced: relationship.voiced.clone(),
+            admitted_ignorance: continuing && relationship.admitted_ignorance,
+            last_asked: continuing && relationship.last_asked,
+        }
+    }
+
+    /// Remembers the memory keys a reply offered as said to this hero. Called after the reply is
+    /// recorded; the caller saves afterwards.
+    pub(super) fn remember_offered(&self, member: MemberId, dossier: &Dossier, offered: &[String]) {
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        for key in offered {
+            if !relationship.voiced.contains(key) {
+                relationship.voiced.push(key.clone());
+            }
+        }
+    }
+
     /// Records one exchange: moves the standing by the approach's effect on this NPC, inside the
     /// bounds, and keeps the last lines of the conversation. The caller saves afterwards.
     pub(super) fn record_exchange(
@@ -654,6 +743,9 @@ impl SocialLedger {
             effect_of(dossier, approach),
             dossier.role.opposes_party(),
         );
+        relationship.exchanges = relationship.exchanges.saturating_add(1);
+        relationship.admitted_ignorance |= admits_not_knowing(npc_line);
+        relationship.last_asked = npc_line.trim_end().ends_with('?');
         for (hero, text) in [(true, hero_line), (false, npc_line)] {
             relationship.recent.push(Line {
                 hero,
