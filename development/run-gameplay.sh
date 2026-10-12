@@ -27,17 +27,30 @@ fi
 export DF_GAMEPLAY_TEXT_CACHE=${DF_GAMEPLAY_TEXT_CACHE:-$PLAY/text-cache}
 DATABASE=
 NO_BUILD=0
+CAMPAIGN=
+CAMPAIGN_SEED=
+CAMPAIGN_STATUS=0
+HARBOR_REQUESTED=0
+ADVENTURE_SEED_REQUESTED=0
 
 usage() {
-  echo 'usage: run-gameplay.sh [--no-build] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor]'
+  echo 'usage: run-gameplay.sh [--no-build] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor] [--campaign <id>] [--campaign-seed <n>] [--status]'
 }
 
 while test "$#" -gt 0; do
   case "$1" in
+    --campaign)
+      if test "$#" -lt 2; then usage >&2; exit 2; fi
+      CAMPAIGN=$2; export DF_GAMEPLAY_ADVENTURE=campaign; export DF_GAMEPLAY_CAMPAIGN=$2; shift 2 ;;
+    --campaign-seed)
+      if test "$#" -lt 2; then usage >&2; exit 2; fi
+      CAMPAIGN_SEED=$2; export DF_GAMEPLAY_CAMPAIGN_SEED=$2; shift 2 ;;
+    --status) CAMPAIGN_STATUS=1; shift ;;
     --no-build) NO_BUILD=1; shift ;;
-    --harbor) export DF_GAMEPLAY_ADVENTURE=harbor; shift ;;
+    --harbor) HARBOR_REQUESTED=1; export DF_GAMEPLAY_ADVENTURE=harbor; shift ;;
     --seed)
       if test "$#" -lt 2; then usage >&2; exit 2; fi
+      ADVENTURE_SEED_REQUESTED=1
       export DF_GAMEPLAY_ADVENTURE_SEED=$2
       shift 2
       ;;
@@ -51,6 +64,29 @@ while test "$#" -gt 0; do
   esac
 done
 
+
+if test -z "$CAMPAIGN" && { test "$CAMPAIGN_STATUS" -eq 1 || test -n "$CAMPAIGN_SEED"; }; then
+  echo '--status and --campaign-seed require --campaign' >&2; exit 2
+fi
+if test -n "$CAMPAIGN"; then
+  if test "$HARBOR_REQUESTED" -eq 1 || test "$ADVENTURE_SEED_REQUESTED" -eq 1; then echo '--campaign cannot combine with --harbor or --seed; use --campaign-seed' >&2; exit 2; fi
+  if test -n "$DATABASE"; then echo '--campaign chooses its database; omit --database' >&2; exit 2; fi
+  mkdir -p "$TMPDIR"
+  cd "$ROOT"
+  if test "$NO_BUILD" -eq 0; then cargo build --offline --locked -j 3 -p df-tools --bin df-transport-fixture; fi
+  if test "$CAMPAIGN_STATUS" -eq 1; then
+    "$CARGO_TARGET_DIR/debug/df-transport-fixture" --campaign-status "$CAMPAIGN"
+    exit 0
+  fi
+  if test -n "$CAMPAIGN_SEED"; then
+    CAMPAIGN_SELECTION=$("$CARGO_TARGET_DIR/debug/df-transport-fixture" --campaign-run "$CAMPAIGN" "$DF_GAMEPLAY_ADVENTURE_TABLES" "$CAMPAIGN_SEED")
+  else
+    CAMPAIGN_SELECTION=$("$CARGO_TARGET_DIR/debug/df-transport-fixture" --campaign-run "$CAMPAIGN" "$DF_GAMEPLAY_ADVENTURE_TABLES")
+  fi
+  DATABASE=$(printf '%s\n' "$CAMPAIGN_SELECTION" | sed -n '1s/^DATABASE=//p')
+  printf '%s\n' "$CAMPAIGN_SELECTION" | sed '1d'
+fi
+
 if test -z "$DATABASE"; then
   DATABASE="df_gameplay_demo_play_$(date -u +%Y%m%d%H%M%S)"
 fi
@@ -59,7 +95,7 @@ case "$DATABASE" in
   *) echo 'invalid database name: expected df_gameplay_demo_<name> with only letters, digits, or underscores' >&2; exit 1 ;;
 esac
 case "$DATABASE" in
-  *[!A-Za-z0-9_]*) echo 'invalid database name: expected df_gameplay_demo_<name> with only letters, digits, or underscores' >&2; exit 1 ;;
+  *[!A-Za-z0-9_-]*) echo 'invalid database name: expected df_gameplay_demo_<name> with only letters, digits, or underscores' >&2; exit 1 ;;
 esac
 if test "${#DATABASE}" -gt 63 || test "$DATABASE" = df_gameplay_demo_; then
   echo 'invalid database name: must be 1-63 characters and match df_gameplay_demo_<name>' >&2
@@ -168,7 +204,9 @@ if test "$DF_GAMEPLAY_ADVENTURE" = harbor; then
 else
   echo "A fresh database rolls a new adventure; --seed reproduces the chapter. Existing databases resume their stored chapter."
 fi
-if test "$DF_GAMEPLAY_ADVENTURE" = harbor; then
+if test -n "$CAMPAIGN"; then
+  echo "To resume this campaign later: development/run-gameplay.sh --no-build --campaign $CAMPAIGN"
+elif test "$DF_GAMEPLAY_ADVENTURE" = harbor; then
   echo "To resume this game later: development/run-gameplay.sh --no-build --harbor --database $DATABASE"
 else
   echo "To resume this game later: development/run-gameplay.sh --no-build --database $DATABASE"

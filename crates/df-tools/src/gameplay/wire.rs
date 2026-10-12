@@ -667,6 +667,19 @@ pub(super) fn journey_view(
     } else {
         narration
     };
+    let narration = pack::with_content(|content| {
+        if key == SceneKey::Inn
+            && let Some(epilogue) = &content.campaign_epilogue
+        {
+            return if state.facts.iter().any(|fact| matches!(&fact.value,
+                FactValue::ContentEvent { definition, .. } if definition.entry.as_str() == "private-courier-note")) {
+                epilogue.asked.clone()
+            } else {
+                epilogue.escorted.clone()
+            };
+        }
+        narration
+    });
     let journey = rpc::JourneyView {
         phase: if creation.is_some() {
             rpc::JourneyPhase::CharacterCreation as i32

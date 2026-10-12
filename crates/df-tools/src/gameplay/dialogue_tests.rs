@@ -151,6 +151,7 @@ impl RunningActor {
             codec,
             fenced: false,
             recovery_wakeup: updates,
+            campaign_observer: None,
             intent_notifications,
             calls_remaining,
             calls_unbounded: false,

@@ -174,7 +174,7 @@ pub(super) fn pins() -> Result<CheckpointPins, RepositoryError> {
     let custom = loaded
         .as_ref()
         .is_some_and(|loaded| !loaded.departures.is_empty());
-    let configuration = loaded.as_ref().map_or_else(
+    let mut configuration = loaded.as_ref().map_or_else(
         || "local-gameplay-demo-config-1".to_owned(),
         |loaded| {
             format!(
@@ -184,6 +184,18 @@ pub(super) fn pins() -> Result<CheckpointPins, RepositoryError> {
             )
         },
     );
+    if let Some(campaign) = loaded
+        .as_ref()
+        .and_then(|loaded| loaded.pack.campaign.as_ref())
+    {
+        configuration.push_str(&format!(
+            ":c-{}",
+            campaign
+                .frame_sha256
+                .get(..16)
+                .ok_or(RepositoryError::InvalidCandidate)?
+        ));
+    }
     let ruleset = if custom {
         format!(
             "custom-{}",

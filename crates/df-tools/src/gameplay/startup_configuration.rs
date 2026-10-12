@@ -500,7 +500,7 @@ pub(super) fn database_config(
         || !name.starts_with("df_gameplay_demo_")
         || !name
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
     {
         return Err(io::Error::other("local demonstration database invalid"));
     }
@@ -917,6 +917,7 @@ mod tests {
 pub(super) enum AdventureMode {
     Harbor,
     Random,
+    Campaign,
 }
 pub(super) struct AdventureInputs {
     pub(super) mode: Result<String, VarError>,
@@ -1010,10 +1011,11 @@ pub(super) fn adventure_settings(
     let mode = match adventure_input(inputs.mode, "DF_GAMEPLAY_ADVENTURE")?.as_deref() {
         None | Some("harbor") => AdventureMode::Harbor,
         Some("random") => AdventureMode::Random,
+        Some("campaign") => AdventureMode::Campaign,
         _ => {
             return Err(AdventureSettingsError {
                 variable: "DF_GAMEPLAY_ADVENTURE",
-                expected: "harbor or random",
+                expected: "harbor, random or campaign",
             });
         }
     };

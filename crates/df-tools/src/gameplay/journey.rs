@@ -3553,6 +3553,28 @@ mod tests {
         );
 
         assert!(!combat_victory(defeated.state()).unwrap());
+        let completion = super::super::adventure::campaign_completion::terminal_outcome;
+        assert!(completion(&defeated).unwrap().is_none());
+        let rested = stage_with_supplier(
+            &defeated,
+            &input(&defeated, first, 9, "short-rest", vec![]),
+            &mut |_| panic!("rest dice"),
+        )
+        .unwrap();
+        let outcome = completion(&rested).unwrap().unwrap();
+        assert_eq!(
+            outcome.result,
+            super::super::adventure::campaign::ChapterResult::Defeat
+        );
+        assert_eq!(
+            outcome.approach,
+            super::super::adventure::campaign::Approach::Escorted
+        );
+        assert_eq!(outcome.member, hex(first.as_bytes()));
+        assert!(outcome.rested);
+        assert!(!outcome.destination_reached);
+        assert!(!outcome.antagonist_spared);
+
         let original = defeated.clone();
         let command = input(&defeated, first, 9, "short-rest", vec![]);
         let rested =
@@ -4751,6 +4773,325 @@ mod tests {
                 .is_err()
             );
             assert_eq!(forged, before);
+        }
+    }
+    #[test]
+    fn campaign_terminal_policy_waits_for_destination_and_retains_actual_secret_holder_and_rest() {
+        let completion = super::super::adventure::campaign_completion::terminal_outcome;
+        let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let victory = inn_victory();
+        assert!(completion(&victory).unwrap().is_none());
+        let arrived = stage_with_supplier(&victory, &inn_command(&victory, first, 90), &mut |_| {
+            panic!("inn dice")
+        })
+        .unwrap();
+        let outcome = completion(&arrived).unwrap().unwrap();
+        assert_eq!(outcome.member, hex(first.as_bytes()));
+        assert_eq!(
+            outcome.approach,
+            super::super::adventure::campaign::Approach::Asked
+        );
+        assert!(!outcome.rested);
+        assert!(outcome.destination_reached && outcome.antagonist_spared);
+        let rested = stage_with_supplier(
+            &victory,
+            &input(&victory, first, 91, "short-rest", vec![]),
+            &mut |_| panic!("rest dice"),
+        )
+        .unwrap();
+        assert!(completion(&rested).unwrap().is_none());
+        let arrived = stage_with_supplier(&rested, &inn_command(&rested, first, 92), &mut |_| {
+            panic!("inn dice")
+        })
+        .unwrap();
+        assert!(completion(&arrived).unwrap().unwrap().rested);
+        let escorted = tuning_journey();
+        let outcome = completion(escorted.last().unwrap()).unwrap().unwrap();
+        assert_eq!(
+            outcome.approach,
+            super::super::adventure::campaign::Approach::Escorted
+        );
+        assert_eq!(outcome.member, hex(first.as_bytes()));
+        assert!(outcome.rested && outcome.antagonist_spared);
+    }
+    #[test]
+    fn campaign_completion_worker_reconciles_restart_replays_without_rewrite_and_storage_error_is_nonfatal()
+     {
+        use super::super::adventure::{
+            GenerateOptions,
+            campaign::{CampaignRecord, digest, generate_frame, next_chapter},
+            campaign_completion::worker,
+            campaign_render::generate_chapter,
+            campaign_startup::CampaignRun,
+            campaign_store::CampaignStore,
+            campaign_tables::CampaignTables,
+        };
+        let project = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = project.join("artifacts/tmp/play-g4").join(format!(
+            "worker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let tables = CampaignTables::load(&project.join("content/adventure-tables")).unwrap();
+        let mut record =
+            CampaignRecord::new(generate_frame(&tables, 42, GenerateOptions::default()).unwrap())
+                .unwrap();
+        let mut plan = next_chapter(&tables, &record.frame, &record).unwrap();
+        let mut generated = generate_chapter(&tables, &record.frame, &mut plan).unwrap();
+        generated.pack.campaign = Some(pack::CampaignIdentity {
+            id: "test".into(),
+            chapter: 1,
+            frame_sha256: record.frame_digest.clone(),
+        });
+        let documents = generated.documents(true).unwrap();
+        let (loaded, _) = super::super::adventure::record::reload(&documents).unwrap();
+        record
+            .begin(
+                plan,
+                "df_gameplay_demo_test_ch01".into(),
+                digest(&documents.record),
+            )
+            .unwrap();
+        let store = CampaignStore::new(&root, "test").unwrap();
+        store.save(&record, None).unwrap();
+        let arrived = pack::with_test_pack(loaded.clone(), || {
+            let victory = inn_victory();
+            let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            stage_with_supplier(&victory, &inn_command(&victory, first, 93), &mut |_| {
+                panic!("inn dice")
+            })
+            .unwrap()
+        });
+        pack::with_test_pack(loaded, || {
+            let run = CampaignRun {
+                root: root.clone(),
+                id: "test".into(),
+                number: 1,
+                frame_digest: record.frame_digest.clone(),
+            };
+            // Simulate failure after the authoritative game commit, then reconciliation
+            // of that same checkpoint on restart. Holding the OS lock cannot block observe.
+            let lock = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(root.join("development/campaigns/test/write.lock"))
+                .unwrap();
+            lock.try_lock().unwrap();
+            let (observer, background) = worker(run.clone()).unwrap();
+            observer.observe(&arrived);
+            drop(background);
+            assert_eq!(
+                arrived.state().narrative.active_beats,
+                [model::content("harbor-inn").unwrap()]
+            );
+            drop(lock);
+            assert!(
+                store.load().unwrap().unwrap().record.chapters[0]
+                    .outcome
+                    .is_none()
+            );
+            let (observer, background) = worker(run.clone()).unwrap();
+            observer.observe(&arrived);
+            drop(background);
+            let stored = store.load().unwrap().unwrap();
+            assert!(stored.record.chapters[0].outcome.is_some());
+            let before =
+                std::fs::read(root.join("development/campaigns/test/campaign.json")).unwrap();
+            let (observer, background) = worker(run).unwrap();
+            observer.observe(&arrived);
+            drop(background);
+            assert_eq!(
+                std::fs::read(root.join("development/campaigns/test/campaign.json")).unwrap(),
+                before
+            );
+            let mut record = stored.record;
+            let mut conflicting = record.chapters[0].outcome.clone().unwrap();
+            conflicting.rested = !conflicting.rested;
+            assert!(record.complete(1, conflicting).is_err());
+            std::fs::remove_dir_all(root).unwrap();
+        });
+    }
+    #[test]
+    fn campaign_finale_projects_bounded_branch_endings_and_preserves_defeat_mechanics() {
+        use super::super::adventure::{
+            GenerateOptions,
+            campaign::{
+                Approach, CampaignRecord, ChapterOutcome, ChapterResult, generate_frame,
+                next_chapter,
+            },
+            campaign_render::generate_chapter,
+            campaign_tables::CampaignTables,
+        };
+        let tables = CampaignTables::load(
+            &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../content/adventure-tables"),
+        )
+        .unwrap();
+        for desperate in [false, true] {
+            let frame = generate_frame(&tables, 42, GenerateOptions::default()).unwrap();
+            let mut record = CampaignRecord::new(frame.clone()).unwrap();
+            let mut final_plan = loop {
+                let mut plan = next_chapter(&tables, &frame, &record).unwrap();
+                if plan.chapter_type == "finale" {
+                    break plan;
+                }
+                generate_chapter(&tables, &frame, &mut plan).unwrap();
+                let n = plan.number;
+                record
+                    .begin(plan, "synthetic".into(), "digest".into())
+                    .unwrap();
+                record
+                    .complete(
+                        n,
+                        ChapterOutcome {
+                            result: if desperate {
+                                ChapterResult::Defeat
+                            } else {
+                                ChapterResult::Victory
+                            },
+                            approach: Approach::Escorted,
+                            member: "hero".into(),
+                            rested: true,
+                            destination_reached: !desperate,
+                            antagonist_spared: false,
+                            campaign_time: u64::from(n) * 3600,
+                        },
+                    )
+                    .unwrap();
+            };
+            assert_eq!(final_plan.desperate, desperate);
+            let generated = generate_chapter(&tables, &frame, &mut final_plan).unwrap();
+            let ending = generated.pack.campaign_epilogue.clone().unwrap();
+            let documents = generated.documents(true).unwrap();
+            let (loaded, _) = super::super::adventure::record::reload(&documents).unwrap();
+            pack::with_test_pack(loaded, || {
+                let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+                for (victory, expected) in [
+                    (inn_victory(), ending.asked.as_str()),
+                    (
+                        tuning_journey().into_iter().rev().nth(1).unwrap(),
+                        ending.escorted.as_str(),
+                    ),
+                ] {
+                    let arrived = stage_with_supplier(
+                        &victory,
+                        &inn_command(&victory, first, 94),
+                        &mut |_| panic!("destination dice"),
+                    )
+                    .unwrap();
+                    let projected = wire::journey_view(
+                        &arrived,
+                        df_persistence::local_demo_scope::LocalDemoRole::Player,
+                        first,
+                    )
+                    .unwrap();
+                    let rpc::view_message::Audience::Player(view) = projected.audience.unwrap()
+                    else {
+                        panic!("player projection");
+                    };
+                    assert_eq!(view.narration, expected);
+                    assert!(view.narration.chars().count() <= 220);
+                    assert!(
+                        view.narration.contains(
+                            serde_json::to_value(&frame).unwrap()["artifact"]["name"]
+                                .as_str()
+                                .unwrap()
+                        )
+                    );
+                    assert!(
+                        !view.narration.contains(
+                            serde_json::to_value(&frame).unwrap()["villain"]["name"]
+                                .as_str()
+                                .unwrap()
+                        )
+                    );
+                }
+                for approach in ["ask-courier", "escort-courier"] {
+                    let opening = opening_story();
+                    let dialogue = stage_with_supplier(
+                        &opening,
+                        &input(&opening, first, 6, approach, vec![]),
+                        &mut |_| panic!("dialogue dice"),
+                    )
+                    .unwrap();
+                    let mut initiative = 0;
+                    let combat = stage_with_supplier(
+                        &dialogue,
+                        &input(&dialogue, first, 7, "defend-courier", vec![]),
+                        &mut |sides| {
+                            if sides == 20 {
+                                initiative += 1;
+                                Ok(if initiative <= 2 { 1 } else { 20 })
+                            } else {
+                                Ok(sides)
+                            }
+                        },
+                    )
+                    .unwrap();
+                    let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+                    let defeated = stage_with_supplier(
+                        &combat,
+                        &input(&combat, second, 8, "end-turn", vec![]),
+                        &mut |sides| Ok(if sides == 20 { 20 } else { sides }),
+                    )
+                    .unwrap();
+                    assert!(!combat_victory(defeated.state()).unwrap());
+                    let rested = stage_with_supplier(
+                        &defeated,
+                        &input(&defeated, first, 9, "short-rest", vec![]),
+                        &mut |_| panic!("rest dice"),
+                    )
+                    .unwrap();
+                    for (checkpoint, key) in
+                        [(&defeated, "defeat_mech"), (&rested, "defeat_rested")]
+                    {
+                        let projected = wire::journey_view(
+                            checkpoint,
+                            df_persistence::local_demo_scope::LocalDemoRole::Player,
+                            first,
+                        )
+                        .unwrap();
+                        let rpc::view_message::Audience::Player(view) = projected.audience.unwrap()
+                        else {
+                            panic!("player projection");
+                        };
+                        let prose: serde_json::Value = serde_json::from_slice(
+                            &std::fs::read(
+                                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                                    .join("../../content/adventure-tables/prose-patterns.json"),
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap();
+                        let mandatory = prose["tables"][key]["variants"][0]["text"]
+                            .as_str()
+                            .unwrap();
+                        let mut expected = if key == "defeat_mech" {
+                            mandatory.replace("{story}", &ending.defeat)
+                        } else {
+                            format!("{} {mandatory}", ending.defeat)
+                        };
+                        if approach == "escort-courier" {
+                            expected.push(' ');
+                            expected.push_str(&pack::with_content(|content| {
+                                content.escort_support_suffix.replace("{name}", "Brynn")
+                            }));
+                        }
+                        assert_eq!(view.narration, expected);
+                        assert!(ending.defeat.chars().count() <= 220);
+                        assert!(
+                            !view.narration.contains(
+                                serde_json::to_value(&frame).unwrap()["villain"]["name"]
+                                    .as_str()
+                                    .unwrap()
+                            )
+                        );
+                    }
+                }
+            });
         }
     }
 }

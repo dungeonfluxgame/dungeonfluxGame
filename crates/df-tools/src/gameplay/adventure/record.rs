@@ -26,6 +26,8 @@ pub(crate) struct AdventureRecord {
     pack_sha256: String,
     tuning_sha256: String,
     pub(crate) seeded_dice: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    campaign: Option<pack::CampaignIdentity>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -83,6 +85,7 @@ impl GeneratedAdventure {
             pack_sha256: hash(&pack),
             tuning_sha256: hash(&tuning),
             seeded_dice,
+            campaign: self.pack.campaign.clone(),
         };
         let record =
             serde_json::to_vec_pretty(&record).map_err(|_| GenerateError::Serialization)?;
@@ -119,6 +122,7 @@ pub(crate) fn reload(
         || record.pack_sha256 != hash(&documents.pack)
         || record.tuning_sha256 != hash(&documents.tuning)
         || loaded.pack.id != format!("adv-{seed:016x}")
+        || record.campaign != loaded.pack.campaign
     {
         return Err(RecordError::Invalid(
             "schema, version, seed or byte revisions",

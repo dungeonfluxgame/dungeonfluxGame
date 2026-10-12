@@ -17,6 +17,7 @@ pub(crate) struct PreparedAdventure {
     pub(crate) documents: DemoAdventure,
     pub(crate) record: AdventureRecord,
     pub(crate) fresh: bool,
+    pub(crate) campaign: Option<super::campaign_startup::CampaignRun>,
 }
 #[derive(Debug)]
 pub(crate) enum StartupError {
@@ -28,6 +29,7 @@ pub(crate) enum StartupError {
     Generate(GenerateError),
     Record(RecordError),
     DatabaseName,
+    Campaign(super::campaign_startup::CampaignStartupError),
 }
 impl fmt::Display for StartupError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -45,6 +47,7 @@ impl fmt::Display for StartupError {
             Self::Tables(e) => e.fmt(f),
             Self::Generate(e) => e.fmt(f),
             Self::Record(e) => e.fmt(f),
+            Self::Campaign(error) => error.fmt(f),
             Self::DatabaseName => f.write_str("adventure run database identity unavailable"),
         }
     }
@@ -87,6 +90,9 @@ pub(crate) fn select(
     database: &str,
     state: AdventureStartup,
 ) -> Result<PreparedAdventure, StartupError> {
+    if settings.mode == super::super::startup_configuration::AdventureMode::Campaign {
+        return super::campaign_startup::select(settings, current, database, state);
+    }
     if !database.starts_with("df_gameplay_demo_")
         || database.len() > 63
         || !database
@@ -130,5 +136,6 @@ pub(crate) fn select(
         documents,
         record,
         fresh,
+        campaign: None,
     })
 }
