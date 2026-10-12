@@ -98,6 +98,8 @@ struct Inner {
     /// The loading splash over the battlefield, until the scene is resolved and revealed.
     splash: Option<SplashDom>,
     gate: Gate,
+    /// Whether the stage was busy at the last frame, for the `data-battlefield-busy` marker.
+    last_busy: bool,
     /// Chunks resident, chunks wanted and whether the scan is complete, for the splash.
     scan_progress: (u32, u32, bool),
     frames: u64,
@@ -201,6 +203,7 @@ impl BattleStage {
                 revealed: false,
                 splash: None,
                 gate: Gate::new(0.0),
+                last_busy: false,
                 scan_progress: (0, 0, false),
                 frames: 0,
                 stats_every: 60,
@@ -331,6 +334,7 @@ impl BattleStage {
             revealed: false,
             splash,
             gate: Gate::new(now_ms()),
+            last_busy: false,
             scan_progress: (0, 0, false),
             frames: 0,
             stats_every: 30,
@@ -584,6 +588,15 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
         if let Some(container) = &state.container {
             let _ = container.set_attribute("data-ready", "");
         }
+    }
+    // A harness (and the display's battle machine, through `is_busy`) reads when the stage is
+    // playing something, including the held beat after the deciding blow.
+    let busy = state.stage.is_busy();
+    if busy != state.last_busy {
+        state.last_busy = busy;
+        let _ = state
+            .host
+            .set_attribute("data-battlefield-busy", if busy { "1" } else { "0" });
     }
     if state.frames.is_multiple_of(state.stats_every) {
         let label = match phase {
