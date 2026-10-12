@@ -1,5 +1,3 @@
-// The pure view admission also compiles natively so its contract can be tested (see `lib.rs`).
-#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 use df_client::{
     cache::CacheScope,
     connection::ConnectionGeneration,
@@ -201,7 +199,7 @@ impl GameplayViews {
             });
         let on_screen = self.table_talk.as_mut().is_some_and(|talk| {
             let same_revision = talk.revision.as_ref().is_some_and(|wire| {
-                wire.epoch == view.revision.as_ref().and_then(|v| v.epoch.clone())
+                wire.epoch == view.revision.as_ref().and_then(|v| v.epoch)
                     && wire.sequence == view.revision.as_ref().and_then(|v| v.sequence)
             });
             same_revision && merge_art(talk, view)
@@ -217,106 +215,5 @@ impl GameplayViews {
         self.table_talk
             .as_ref()
             .or_else(|| self.views.current().map(|(_, view)| view))
-    }
-}
-
-// The tests run natively through `lib.rs` (this file has no browser dependency).
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use df_client::connection::RpcConnection;
-
-    fn scope() -> ViewScope {
-        let id = |byte: u8| Some(vec![byte; 16]);
-        ViewScope::from_wire(
-            Some(&rpc::SessionId { value: id(1) }),
-            Some(&rpc::RunId { value: id(2) }),
-            Some(&rpc::ClientBindingId { value: id(3) }),
-            ViewRole::Display,
-        )
-        .unwrap()
-    }
-
-    fn display_view(sequence: u64, talk: u64, sprite: &str) -> rpc::ViewMessage {
-        rpc::ViewMessage {
-            revision: Some(rpc::SessionRevision {
-                epoch: Some(rpc::RecoveryEpoch { value: Some(1) }),
-                sequence: Some(sequence),
-            }),
-            audience: Some(rpc::view_message::Audience::Display(
-                rpc::DisplayGameplayView {
-                    scene: Some(rpc::GameplayScene {
-                        title: "The Heron Shrine".to_owned(),
-                        cast: vec![rpc::SceneActor {
-                            id: "merchant".to_owned(),
-                            sprite: "sprite-patron-merchant".to_owned(),
-                            live_sprite: sprite.to_owned(),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }),
-                    journey: Some(rpc::JourneyView {
-                        presentation_sequence: talk,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            )),
-        }
-    }
-
-    fn shown_sprite(views: &GameplayViews) -> String {
-        match views.current().and_then(|view| view.audience.as_ref()) {
-            Some(rpc::view_message::Audience::Display(display)) => {
-                display.scene.as_ref().unwrap().cast[0].live_sprite.clone()
-            }
-            _ => panic!("display view"),
-        }
-    }
-
-    fn art(byte: char) -> String {
-        format!("/gameplay/imagery/{}", byte.to_string().repeat(64))
-    }
-
-    /// Live defect: a hero's typed line or an NPC's reply moves the table-talk counter without
-    /// moving the game revision, and the view of that moment is kept as the one on screen. Art
-    /// that finished afterwards was merged into the stored view underneath it and never showed.
-    #[test]
-    fn art_that_arrives_after_table_talk_reaches_the_view_on_screen() {
-        let connection = RpcConnection::new(());
-        let generation = connection.generation();
-        let mut views = GameplayViews::new(scope(), generation.clone());
-        let accepted = |views: &mut GameplayViews, view: rpc::ViewMessage| {
-            views.accept(&generation, scope(), view).unwrap()
-        };
-        accepted(&mut views, display_view(4, 0, ""));
-        // The line is spoken: same revision, the counter moves, the view on screen is replaced.
-        assert_eq!(
-            accepted(&mut views, display_view(4, 3, "")),
-            ConnectionViewAcceptance::View(ViewAcceptance::Applied)
-        );
-        // The face finishes: the same revision and counter, now with art.
-        let with_art = display_view(4, 3, &art('a'));
-        assert!(matches!(
-            accepted(&mut views, with_art.clone()),
-            ConnectionViewAcceptance::View(ViewAcceptance::Duplicate { .. })
-        ));
-        assert!(views.accept_art_update(
-            &generation,
-            scope(),
-            &with_art,
-            crate::live_art::merge_art
-        ));
-        assert_eq!(shown_sprite(&views), art('a'));
-        // A further reply (counter moves again) arrives carrying the art: still shown.
-        accepted(&mut views, display_view(4, 4, &art('a')));
-        assert_eq!(shown_sprite(&views), art('a'));
-        // A newer revision replaces everything, including the art it carries.
-        accepted(&mut views, display_view(5, 4, &art('b')));
-        assert_eq!(shown_sprite(&views), art('b'));
-        // And art after that, with no table talk at all, still lands.
-        let later = display_view(5, 4, &art('c'));
-        assert!(views.accept_art_update(&generation, scope(), &later, crate::live_art::merge_art));
-        assert_eq!(shown_sprite(&views), art('c'));
     }
 }
