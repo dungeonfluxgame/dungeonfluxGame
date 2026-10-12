@@ -326,6 +326,9 @@ pub fn resolve(set: StatusSet) -> Resolved {
         // Stone does not crackle, glow or flush: only a visible rim from fire survives.
         edge = edge.only(&[Status::Burning]);
     }
+    if invisible {
+        edge = edge.with(Status::Invisible);
+    }
     Resolved {
         body,
         edge,
@@ -479,6 +482,7 @@ mod tests {
         let resolved = resolve(set);
         assert!(resolved.invisible);
         assert!(resolved.body.is_empty());
+        assert!(resolved.edge.contains(Status::Invisible), "the faint outline itself");
         assert!(resolved.edge.contains(Status::Burning));
         assert!(resolved.overlay.contains(Status::Burning));
     }
