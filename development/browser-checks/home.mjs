@@ -71,7 +71,10 @@ const text = await page.evaluate(() => {
   for (const selector of selectors) {
     const element = document.querySelector(selector);
     if (!element || !element.offsetParent) continue;
-    const r = element.getBoundingClientRect();
+    // The glyph extent, not the block: a block-level label spans its container's full width.
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const r = range.getBoundingClientRect();
     out.push({ selector, color: getComputedStyle(element).color, box: [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)] });
   }
   for (const element of document.querySelectorAll('.tv-stage .tv-safe *')) element.style.setProperty('color', 'transparent', 'important');

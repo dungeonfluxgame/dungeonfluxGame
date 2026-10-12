@@ -342,7 +342,10 @@ fn arrival_paintings() -> Vec<String> {
         .iter()
         .filter_map(|entry| {
             let key = entry["art_key"].as_str()?;
-            (key.starts_with("loc-") && key.ends_with("-arrival")).then(|| {
+            // A location's home painting is its arrival, or its forecourt where the adventure
+            // meets in the open (the library's lobby shows the forecourt).
+            let home = key.ends_with("-arrival") || key.ends_with("-forecourt");
+            (key.starts_with("loc-") && home).then(|| {
                 format!(
                     "assets/ui/generated/{}.webp",
                     entry["file_stem"].as_str().unwrap_or_default()
