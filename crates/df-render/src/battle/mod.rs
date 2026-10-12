@@ -44,13 +44,15 @@ pub use model::{
     Highlight, HighlightKind, HitPoints, HudState, RollCard, Side, Token, TokenId,
 };
 pub use scene_file::{
-    BackdropLayer, BattleScene, DEFAULT_SCENE_ID, GroundLayer, SceneFileError, SplatFormat,
-    SplatLayer, embedded_ids, load_embedded, parse as parse_scene,
+    BackdropLayer, BattleScene, DEFAULT_SCENE_ID, GroundLayer, SceneChoice, SceneFileError,
+    SplatFormat, SplatLayer, embedded_ids, load_embedded, parse as parse_scene, resolve_scene,
 };
 pub use sound::{
     ALL_CLIPS, ContentRating, SoundEvent, SoundKind, Surface, VariationPicker, VoiceSet, voice_for,
 };
-pub use status::{Resolved, Status, StatusPose, StatusSet, icon_statuses, pose_for, resolve};
+pub use status::{
+    Resolved, Status, StatusPose, StatusSet, derived_from_view, icon_statuses, pose_for, resolve,
+};
 pub use splat::{
     ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, Splat, SplatCloud, SplatError,
     SplatFileLoader, SplatLoader, SplatSorter, SplatTransform, encode_splat_file,

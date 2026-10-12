@@ -64,6 +64,36 @@
 
 .bf-unavailable{--u:min(1vw,1.7778vh);position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;padding:calc(var(--u)*1.4) calc(var(--u)*2);background:#080f19f2;border:1px solid #c9a35f99;border-radius:10px;text-align:center;font:calc(var(--u)*1.6)/1.35 var(--serif,Georgia,serif);color:#f0d9aa;z-index:60}
 
+/* Status icons, the target tag and the initiative moment. Everything here is anchored to a figure
+   by the HUD's own projection; sizes are in --u so they stay readable from across the room. */
+.bf-overlays{position:absolute;inset:0;overflow:hidden}
+.bf-target-tag{position:absolute;transform:translate(-50%,-100%);padding:calc(var(--u)*.35) calc(var(--u)*1.1);font-size:calc(var(--u)*1.5);letter-spacing:.08em;color:#ffd9d2;background:#2a0d0cdd;border:1px solid #ff6a5ccc;border-radius:calc(var(--u)*.5);white-space:nowrap;opacity:0;transition:opacity .25s ease}
+.bf-pips{position:absolute;transform:translate(-50%,-100%);display:flex;gap:calc(var(--u)*.3);align-items:center}
+.bf-pip{display:grid;place-items:center;width:calc(var(--u)*2.6);height:calc(var(--u)*2.6);border-radius:50%;border:max(2px,calc(var(--u)*.14)) solid var(--chip,#5d6470);background:#0b1018d9;overflow:hidden;font-size:calc(var(--u)*1.1);line-height:1;color:#fff;text-shadow:none;box-shadow:0 2px 8px #000a}
+.bf-pip img{width:100%;height:100%;object-fit:contain;display:block}
+.bf-pip-more{font-size:calc(var(--u)*1.4);color:var(--gold)}
+.bf-plate-status{display:flex;flex-wrap:wrap;gap:calc(var(--u)*.25);margin-top:calc(var(--u)*.3)}
+.bf-plate-status:empty{display:none}
+.bf-plate-status .bf-pip{width:calc(var(--u)*2.1);height:calc(var(--u)*2.1);font-size:calc(var(--u)*.9);border-width:max(1.5px,calc(var(--u)*.1))}
+.bf-hp{position:relative}
+.bf-hp-tick{position:absolute;left:50%;top:-12%;bottom:-12%;width:max(2px,calc(var(--u)*.12));background:#ff5a4a99}
+.bf-plate[data-bloodied=true] .bf-hp-tick{background:#ff5a4a;box-shadow:0 0 calc(var(--u)*.5) #ff5a4a}
+.bf-chip[data-pop]{animation:bf-pop .45s cubic-bezier(.2,1.6,.4,1) both}
+@keyframes bf-pop{from{transform:scale(.2);opacity:0}to{transform:scale(1);opacity:.78}}
+.bf-banner{position:absolute;left:50%;top:30%;transform:translate(-50%,-50%) scale(.9);font-size:calc(var(--u)*7);letter-spacing:.14em;text-transform:uppercase;color:var(--gold);text-shadow:0 4px 40px #000,0 0 calc(var(--u)*2) #000;white-space:nowrap;opacity:0;transition:opacity .25s ease,transform .3s cubic-bezier(.2,1.4,.4,1)}
+.bf-banner[data-open]{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.bf-die{position:absolute;transform:translate(-50%,-50%) rotate(var(--spin,0deg));min-width:calc(var(--u)*5.2);padding:calc(var(--u)*.7) calc(var(--u)*1.2);text-align:center;font-size:calc(var(--u)*3.2);font-weight:700;color:var(--gold);background:linear-gradient(135deg,#0f1a29,#070d16);border:max(2px,calc(var(--u)*.16)) solid #cba466;border-radius:calc(var(--u)*1);white-space:nowrap;text-shadow:none;box-shadow:0 6px 24px #000a}
+.bf-die[data-side=enemy]{border-color:#b6544c;color:#ffb4a8}
+.bf-die[data-landed=true]{transform:translate(-50%,-50%);font-size:calc(var(--u)*2.4);animation:bf-land .3s ease-out}
+@keyframes bf-land{from{transform:translate(-50%,-50%) scale(1.35)}to{transform:translate(-50%,-50%) scale(1)}}
+.bf-badge{position:absolute;transform:translate(calc(var(--u)*2.6),-50%);display:flex;flex-direction:column;align-items:flex-start;padding:calc(var(--u)*.6) calc(var(--u)*1.6);background:linear-gradient(135deg,#0b1623f2,#050b13f5);border:max(2px,calc(var(--u)*.14)) solid #f2c773;border-radius:calc(var(--u)*.7);animation:bf-slam .38s cubic-bezier(.2,1.5,.4,1) both;box-shadow:0 8px 30px #000b}
+.bf-badge[data-side=enemy]{border-color:#d0675c}
+.bf-badge-order{font-size:calc(var(--u)*5.4);line-height:1;font-weight:700;color:var(--gold)}
+.bf-badge[data-side=enemy] .bf-badge-order{color:#ff9d8f}
+.bf-badge-name{font-size:calc(var(--u)*1.9);color:var(--ivory)}
+@keyframes bf-slam{from{transform:translate(calc(var(--u)*2.6),-50%) scale(2.2);opacity:0}to{transform:translate(calc(var(--u)*2.6),-50%) scale(1);opacity:1}}
+
 @media (prefers-reduced-motion:reduce){
-  .bf-chip,.bf-top,.bf-party,.bf-enemies,.bf-hp-fill,.bf-bar,.bf-finish,.bf-plate{transition:none}
+  .bf-chip,.bf-top,.bf-party,.bf-enemies,.bf-hp-fill,.bf-bar,.bf-finish,.bf-plate,.bf-banner,.bf-target-tag{transition:none}
+  .bf-chip[data-pop],.bf-badge,.bf-die[data-landed=true]{animation:none}
 }

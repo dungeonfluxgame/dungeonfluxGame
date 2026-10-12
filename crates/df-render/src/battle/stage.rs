@@ -409,6 +409,13 @@ impl Stage {
         self.rig.pose()
     }
 
+    /// Holds the wide tactical shot (the contact sheets frame the whole field with it).
+    pub fn show_tactical(&mut self) {
+        if let Some(wide) = self.scene.cameras.get(&ShotName::Tactical) {
+            self.rig.cut_to(*wide);
+        }
+    }
+
     /// Opens on the wide tactical shot and eases to the combat establishing shot.
     pub fn establish(&mut self) {
         if let Some(wide) = self.scene.cameras.get(&ShotName::Tactical) {

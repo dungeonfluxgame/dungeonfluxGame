@@ -458,6 +458,34 @@ pub fn embedded_ids() -> impl Iterator<Item = &'static str> {
     EMBEDDED.iter().map(|(id, _)| *id)
 }
 
+/// Which battle scene a fight is staged in, and why if it is not the fight's own location.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SceneChoice {
+    pub scene_id: &'static str,
+    /// `None` when the location has its own scene; otherwise `fallback:<location id>` (or
+    /// `fallback:none` when the view carried no location), recorded on the page for diagnosis.
+    pub fallback_reason: Option<String>,
+}
+
+/// The battle scene for an adventure location id (`GameplayScene.location_id`). Everything
+/// is keyed by the location, never by the painting: the story art for a fight can be any
+/// `scene-place-*` or `scene-dest-*` picture and no longer names the place.
+pub fn resolve_scene(location_id: &str) -> SceneChoice {
+    match embedded_ids().find(|id| *id == location_id) {
+        Some(scene_id) => SceneChoice {
+            scene_id,
+            fallback_reason: None,
+        },
+        None => SceneChoice {
+            scene_id: DEFAULT_SCENE_ID,
+            fallback_reason: Some(format!(
+                "fallback:{}",
+                if location_id.is_empty() { "none" } else { location_id }
+            )),
+        },
+    }
+}
+
 /// Loads an embedded scene by location id.
 pub fn load_embedded(location_id: &str) -> Option<Result<BattleScene, SceneFileError>> {
     EMBEDDED
@@ -493,6 +521,36 @@ mod tests {
             assert!(scene.ground.stem.starts_with("ground-"));
         }
         assert_eq!(embedded_ids().count(), 9);
+    }
+
+    #[test]
+    fn every_adventure_location_resolves_to_its_own_battle_scene() {
+        let table: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../content/adventure-tables/locations.json"
+        ))
+        .unwrap();
+        let entries = table["tables"]["locations"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 8);
+        for entry in entries {
+            let id = entry["id"].as_str().unwrap();
+            let choice = resolve_scene(id);
+            assert_eq!(choice.scene_id, id);
+            assert_eq!(choice.fallback_reason, None, "{id} must not fall back");
+            assert_eq!(load_embedded(choice.scene_id).unwrap().unwrap().location_id, id);
+        }
+    }
+
+    #[test]
+    fn an_unknown_or_missing_location_falls_back_and_records_why() {
+        let unknown = resolve_scene("moonbase-alpha");
+        assert_eq!(unknown.scene_id, DEFAULT_SCENE_ID);
+        assert_eq!(unknown.fallback_reason.as_deref(), Some("fallback:moonbase-alpha"));
+        let missing = resolve_scene("");
+        assert_eq!(missing.scene_id, DEFAULT_SCENE_ID);
+        assert_eq!(missing.fallback_reason.as_deref(), Some("fallback:none"));
+        // The fight's painting is not a location: a story art stem does not select a scene.
+        let painting = resolve_scene("scene-dest-orrery-library-forecourt");
+        assert!(painting.fallback_reason.is_some());
     }
 
     #[test]

@@ -8,13 +8,20 @@
 //! copied from the server's `CombatOutcome`. When the server later supplies cells, build the
 //! tokens with those cells instead of `derive_formation`; the renderer does not change.
 //!
-//! `#battle-preview[=<location-id>][&splat][&reduced]` mounts the battlefield alone and loops a
-//! scripted fight with no server calls, for looking at the renderer without playing a game.
+//! `#battle-preview[=<location-id>[:<layout-id>]][&splat][&reduced][&restrained][&statuses][&sheet[=n]]`
+//! mounts the battlefield alone and loops a scripted fight (it opens with the initiative roll and
+//! roll-call) with no server calls, for looking at the renderer without playing a game.
+//! `&statuses` puts every status on a figure in turn; `&sheet=n` shows six figures at once.
+//!
+//! The four SWITCH POINTS the server's data later replaces, each one function: the layout choice
+//! ([`chosen_layout_id`]), the attack style ([`attack_style_for`]), the voice set
+//! (`df_render::battle::voice_for`, called by the stage) and the content rating
+//! ([`content_rating`]).
 
 use super::*;
 use df_render::battle::{
-    self, AttackResult, Availability, BattleScene, BattleStage, Beat, Cell, HitPoints, Side,
-    StageOptions, Token, TokenId,
+    self, AttackResult, AttackStyle, Availability, BattleScene, BattleStage, Beat, Cell, HitPoints,
+    Side, StageOptions, Status, Token, TokenId,
 };
 use gloo_timers::future::TimeoutFuture;
 use std::cell::Cell as StdCell;
@@ -48,10 +55,22 @@ pub(super) fn install_style(document: &Document) -> Result<(), JsValue> {
     Ok(())
 }
 
+/// What the preview shows: the scripted fight, one status after another on a figure, or a
+/// contact sheet of six figures each with different statuses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreviewMode {
+    Fight,
+    Statuses,
+    Sheet(usize),
+}
+
 struct PreviewRequest {
     scene_id: String,
+    layout_id: Option<String>,
     procedural_splats: bool,
     reduced_motion: bool,
+    restrained: bool,
+    mode: PreviewMode,
     /// A splat scene served from `/assets/splat/` to use instead of the painted ground.
     splat_file: Option<(String, battle::SplatFormat)>,
 }
@@ -67,11 +86,13 @@ fn plain_name(name: &str) -> bool {
 fn preview_request() -> Option<PreviewRequest> {
     let hash = web_sys::window()?.location().hash().ok()?;
     let rest = hash.strip_prefix(PREVIEW_HASH)?;
-    let mut scene_id = battle::DEFAULT_SCENE_ID.to_owned();
     let mut request = PreviewRequest {
-        scene_id: String::new(),
+        scene_id: battle::DEFAULT_SCENE_ID.to_owned(),
+        layout_id: None,
         procedural_splats: false,
         reduced_motion: battle::prefers_reduced_motion(),
+        restrained: false,
+        mode: PreviewMode::Fight,
         splat_file: None,
     };
     for part in rest.split('&') {
@@ -79,6 +100,14 @@ fn preview_request() -> Option<PreviewRequest> {
             "" => {}
             "splat" => request.procedural_splats = true,
             "reduced" => request.reduced_motion = true,
+            "restrained" => request.restrained = true,
+            "statuses" => request.mode = PreviewMode::Statuses,
+            "sheet" => request.mode = PreviewMode::Sheet(0),
+            other if other.starts_with("sheet=") => {
+                if let Ok(page) = other[6..].parse::<usize>() {
+                    request.mode = PreviewMode::Sheet(page);
+                }
+            }
             other if other.starts_with("sog=") && plain_name(&other[4..]) => {
                 request.splat_file = Some((
                     format!("/assets/splat/{}/meta.json", &other[4..]),
@@ -91,11 +120,19 @@ fn preview_request() -> Option<PreviewRequest> {
                     battle::SplatFormat::Splat,
                 ));
             }
-            id if battle::embedded_ids().any(|known| known == id) => scene_id = id.to_owned(),
-            _ => {}
+            // `<location-id>` or `<location-id>:<layout-id>`.
+            other => {
+                let (scene, layout) = match other.split_once(':') {
+                    Some((scene, layout)) => (scene, Some(layout)),
+                    None => (other, None),
+                };
+                if battle::embedded_ids().any(|known| known == scene) {
+                    request.scene_id = scene.to_owned();
+                    request.layout_id = layout.filter(|id| plain_name(id)).map(str::to_owned);
+                }
+            }
         }
     }
-    request.scene_id = scene_id;
     Some(request)
 }
 
@@ -104,13 +141,21 @@ pub(super) fn preview_requested() -> bool {
     preview_request().is_some()
 }
 
-fn hero(id: &str, name: &str, cell: Cell, figure: &str, portrait: &str) -> Token {
+fn combatant(
+    id: &str,
+    name: &str,
+    side: Side,
+    cell: Cell,
+    figure: &str,
+    portrait: &str,
+    height_m: f32,
+) -> Token {
     Token {
         id: TokenId::new(id),
-        side: Side::Hero,
+        side,
         name: name.to_owned(),
         cell,
-        height_m: 1.35,
+        height_m,
         figure: Some(figure.to_owned()),
         portrait: Some(portrait.to_owned()),
         hit_points: Some(HitPoints {
@@ -118,45 +163,57 @@ fn hero(id: &str, name: &str, cell: Cell, figure: &str, portrait: &str) -> Token
             maximum: 12,
         }),
         statuses: Vec::new(),
+        attack: attack_style_for(figure),
     }
 }
 
-fn preview_tokens(scene: &BattleScene) -> Result<Vec<Token>, JsValue> {
-    let formation = battle::derive_formation(&scene.grid, 2, 1)
-        .map_err(|_| JsValue::from_str("battlefield formation has no room"))?;
+/// How a figure attacks on screen. SWITCH POINT: until the server reports each combatant's
+/// weapon, the archer is the figure whose art is the bow (`figure-hero-3`); the server's
+/// equipped weapon replaces this match.
+fn attack_style_for(figure: &str) -> AttackStyle {
+    match figure {
+        "figure-hero-3" => AttackStyle::Ranged,
+        _ => AttackStyle::Melee,
+    }
+}
+
+const GOBLIN: (&str, &str, &str) = ("goblin", "figure-ant-goblin-warrior", "portrait-ant-goblin-warrior");
+
+/// The preview's heroes and the lone goblin on a layout's spawn cells (or the derived formation
+/// when the scene has no layouts).
+fn preview_tokens(grid: &battle::Grid, layout: Option<&battle::Layout>) -> Result<Vec<Token>, JsValue> {
+    let seats = match layout {
+        Some(layout) => battle::from_layout(layout, grid, 3, 1),
+        None => battle::derive_formation(grid, 3, 1),
+    }
+    .map_err(|_| JsValue::from_str("battlefield formation has no room"))?;
     Ok(vec![
-        hero(
-            "tobin",
-            "Tobin",
-            formation.heroes[0],
-            "figure-hero-1",
-            "portrait-hero-1",
-        ),
-        hero(
-            "nimrael",
-            "Nimrael",
-            formation.heroes[1],
-            "figure-hero-2",
-            "portrait-hero-2",
-        ),
-        Token {
-            id: TokenId::new("goblin"),
-            side: Side::Enemy,
-            name: "Goblin Warrior".to_owned(),
-            cell: formation.enemies[0],
-            height_m: 1.0,
-            figure: Some("figure-ant-goblin-warrior".to_owned()),
-            portrait: Some("portrait-ant-goblin-warrior".to_owned()),
-            hit_points: Some(HitPoints {
-                current: 12,
-                maximum: 12,
-            }),
-            statuses: Vec::new(),
-        },
+        combatant("tobin", "Tobin", Side::Hero, seats.heroes[0], "figure-hero-1", "portrait-hero-1", 1.35),
+        combatant("sylvie", "Sylvie", Side::Hero, seats.heroes[1], "figure-hero-3", "portrait-hero-3", 1.35),
+        combatant("nimrael", "Nimrael", Side::Hero, seats.heroes[2], "figure-hero-2", "portrait-hero-2", 1.35),
+        combatant(GOBLIN.0, "Goblin Warrior", Side::Enemy, seats.enemies[0], GOBLIN.1, GOBLIN.2, 1.0),
     ])
 }
 
-/// The looping preview fight: a miss, hits both ways, a heal, then a finishing blow.
+/// The recorded rolls the preview shows, first to act first: Sylvie 20, Tobin 15, then the goblin
+/// and Nimrael tied at 13 with the goblin ahead (a tie the "server" resolved).
+fn preview_initiative() -> Vec<battle::InitiativeRoll> {
+    let roll = |id: &str, die, modifier| battle::InitiativeRoll {
+        token: TokenId::new(id),
+        die,
+        modifier,
+        total: die as i32 + modifier,
+    };
+    vec![
+        roll("sylvie", 17, 3),
+        roll("tobin", 14, 1),
+        roll("goblin", 11, 2),
+        roll("nimrael", 10, 3),
+    ]
+}
+
+/// The looping preview fight: a miss, hits both ways, a ranged hit and miss, a heal, then a
+/// finishing blow.
 fn preview_script() -> Vec<(u32, Beat)> {
     let attack = |attacker: &str, target: &str, result, after| Beat::Attack {
         attacker: TokenId::new(attacker),
@@ -172,7 +229,8 @@ fn preview_script() -> Vec<(u32, Beat)> {
     vec![
         (1, attack("tobin", "goblin", AttackResult::Miss, None)),
         (1, attack("goblin", "nimrael", hit(3, false), Some(9))),
-        (2, attack("nimrael", "goblin", hit(5, false), Some(7))),
+        (2, attack("sylvie", "goblin", hit(4, false), Some(8))),
+        (2, attack("nimrael", "goblin", hit(5, false), Some(3))),
         (
             2,
             Beat::Heal {
@@ -183,8 +241,57 @@ fn preview_script() -> Vec<(u32, Beat)> {
             },
         ),
         (3, attack("goblin", "tobin", hit(2, false), Some(10))),
-        (3, attack("tobin", "goblin", hit(7, true), Some(0))),
+        (3, attack("sylvie", "goblin", AttackResult::Miss, None)),
+        (3, attack("tobin", "goblin", hit(3, true), Some(0))),
     ]
+}
+
+/// Single statuses first, then a few combinations that exercise the combination rules.
+fn status_cycle() -> Vec<Vec<Status>> {
+    let mut cycle: Vec<Vec<Status>> = Status::ALL.iter().map(|status| vec![*status]).collect();
+    cycle.extend([
+        vec![Status::Petrified, Status::Poisoned],
+        vec![Status::Invisible, Status::Burning],
+        vec![Status::Prone, Status::Poisoned],
+        vec![Status::Frightened, Status::Blessed],
+        vec![Status::Restrained, Status::Bloodied],
+    ]);
+    cycle
+}
+
+fn status_name(set: &[Status]) -> String {
+    set.iter().map(|status| status.id()).collect::<Vec<_>>().join("+")
+}
+
+fn pick_layout(scene: &BattleScene, requested: Option<&str>, cycle: usize) -> Option<String> {
+    if let Some(id) = requested
+        && scene.layouts.iter().any(|layout| layout.id == id)
+    {
+        return Some(id.to_owned());
+    }
+    // No layout asked for: cycle through them, one per loop of the fight.
+    (!scene.layouts.is_empty()).then(|| scene.layouts[cycle % scene.layouts.len()].id.clone())
+}
+
+fn with_preview<R>(operation: impl FnOnce(&mut battle::Stage) -> R) -> Option<R> {
+    PREVIEW.with(|slot| slot.borrow().as_ref().and_then(|stage| stage.with_stage(operation)))
+}
+
+fn mark(host: &Element, name: &str, value: &str) {
+    // Best-effort test hook: a harness reads these to time its captures.
+    let _ = host.set_attribute(name, value);
+}
+
+/// Waits until the stage has finished everything queued; `false` when it went away.
+async fn wait_idle() -> bool {
+    loop {
+        TimeoutFuture::new(100).await;
+        match with_preview(|stage| stage.is_busy()) {
+            Some(true) => {}
+            Some(false) => return true,
+            None => return false,
+        }
+    }
 }
 
 async fn run_preview(host: Element, request: PreviewRequest) {
@@ -203,10 +310,8 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             max_splats: None,
         });
     }
-    let tokens = match preview_tokens(&scene) {
-        Ok(tokens) => tokens,
-        Err(_) => return,
-    };
+    let scene_for_choice = scene.clone();
+    mark(&host, "data-battlefield-scene", &request.scene_id);
     let stage = BattleStage::mount(
         &host,
         scene,
@@ -220,66 +325,155 @@ async fn run_preview(host: Element, request: PreviewRequest) {
         show_unavailable(&host, reason.key());
         return;
     }
+    stage.set_sound_sink(Rc::new(|event| {
+        live_sfx::play_event(&event, content_rating());
+    }));
     PREVIEW.with(|slot| *slot.borrow_mut() = Some(stage));
+    with_preview(|stage| stage.set_restrained(request.restrained || content_rating() == battle::ContentRating::Restrained));
+    live_sfx::set_battlefield_owns_combat(true);
+    // The shared sound control lets a harness (or a viewer) unlock audio with one click.
+    if let Some(document) = host.owner_document() {
+        let _ = live_voice::attach(&document, &host);
+    }
     wasm_bindgen_futures::spawn_local(watch_availability(host.clone()));
     let beat_counter = StdCell::new(0u32);
+    let mut cycle = 0usize;
     loop {
-        let reset = PREVIEW.with(|slot| {
-            slot.borrow().as_ref().and_then(|stage| {
-                stage.with_stage(|stage| {
-                    stage.set_tokens(tokens.clone());
-                    stage.set_initiative(vec![
-                        TokenId::new("tobin"),
-                        TokenId::new("goblin"),
-                        TokenId::new("nimrael"),
-                    ]);
-                    stage.set_round(1);
-                    stage.establish();
-                })
+        let layout_id = pick_layout(&scene_for_choice, request.layout_id.as_deref(), cycle);
+        cycle += 1;
+        mark(&host, "data-battlefield-layout", layout_id.as_deref().unwrap_or("none"));
+        let prepared = with_preview(|stage| {
+            if let Some(id) = &layout_id {
+                stage.set_layout(id);
+            }
+            let layout = stage.layout().cloned();
+            let tokens = match request.mode {
+                PreviewMode::Fight | PreviewMode::Statuses => preview_tokens(stage.grid(), layout.as_ref()),
+                PreviewMode::Sheet(page) => sheet_tokens(stage.grid(), layout.as_ref(), page),
+            };
+            tokens.map(|tokens| {
+                stage.set_tokens(tokens);
+                let order: Vec<TokenId> = match request.mode {
+                    PreviewMode::Fight => preview_initiative().into_iter().map(|roll| roll.token).collect(),
+                    _ => stage.tokens().map(|token| token.id.clone()).collect(),
+                };
+                stage.set_initiative(order);
+                stage.set_round(1);
             })
         });
-        if reset.is_none() {
-            // The stage became unavailable (device lost) or was disposed: nothing left to drive.
-            if let Some(Availability::Unavailable(reason)) =
-                PREVIEW.with(|slot| slot.borrow().as_ref().map(BattleStage::availability))
-            {
-                show_unavailable(&host, reason.key());
-            }
-            return;
-        }
-        TimeoutFuture::new(3000).await;
-        for (round, beat) in preview_script() {
-            let queued = PREVIEW.with(|slot| {
-                slot.borrow().as_ref().and_then(|stage| {
-                    stage.with_stage(|stage| {
-                        stage.set_round(round);
-                        stage.stage(beat.clone()).is_ok()
-                    })
-                })
-            });
-            if queued != Some(true) {
+        match prepared {
+            Some(Ok(())) => {}
+            Some(Err(_)) => return,
+            None => {
+                // The stage became unavailable (device lost) or was disposed: nothing left to drive.
+                if let Some(Availability::Unavailable(reason)) =
+                    PREVIEW.with(|slot| slot.borrow().as_ref().map(BattleStage::availability))
+                {
+                    show_unavailable(&host, reason.key());
+                }
                 return;
             }
-            beat_counter.set(beat_counter.get() + 1);
-            // Best-effort test hook: lets a headless harness time its captures.
-            let _ = host.set_attribute("data-battlefield-beat", &beat_counter.get().to_string());
-            loop {
-                TimeoutFuture::new(100).await;
-                let busy = PREVIEW.with(|slot| {
-                    slot.borrow()
-                        .as_ref()
-                        .and_then(|stage| stage.with_stage(|stage| stage.is_busy()))
+        }
+        match request.mode {
+            PreviewMode::Fight => {
+                with_preview(|stage| stage.establish());
+                TimeoutFuture::new(1500).await;
+                mark(&host, "data-battlefield-phase", "initiative");
+                let queued = with_preview(|stage| {
+                    stage
+                        .stage(Beat::Initiative {
+                            rolls: preview_initiative(),
+                        })
+                        .is_ok()
                 });
-                match busy {
-                    Some(true) => {}
-                    Some(false) => break,
-                    None => return,
+                if queued != Some(true) || !wait_idle().await {
+                    return;
+                }
+                mark(&host, "data-battlefield-phase", "fight");
+                TimeoutFuture::new(700).await;
+                for (round, beat) in preview_script() {
+                    let queued = with_preview(|stage| {
+                        stage.set_round(round);
+                        stage.stage(beat.clone()).is_ok()
+                    });
+                    if queued != Some(true) {
+                        return;
+                    }
+                    beat_counter.set(beat_counter.get() + 1);
+                    mark(&host, "data-battlefield-beat", &beat_counter.get().to_string());
+                    if !wait_idle().await {
+                        return;
+                    }
+                    TimeoutFuture::new(900).await;
+                }
+                TimeoutFuture::new(2500).await;
+            }
+            PreviewMode::Statuses => {
+                let queued = with_preview(|stage| {
+                    stage.set_active(Some(TokenId::new("tobin")));
+                    stage
+                        .stage(Beat::TurnStart {
+                            actor: TokenId::new("tobin"),
+                        })
+                        .is_ok()
+                });
+                if queued != Some(true) || !wait_idle().await {
+                    return;
+                }
+                for (index, set) in status_cycle().into_iter().enumerate() {
+                    mark(&host, "data-battlefield-status", &status_name(&set));
+                    mark(&host, "data-battlefield-status-index", &index.to_string());
+                    let applied = with_preview(|stage| {
+                        if let Ok(mut tokens) = preview_tokens(stage.grid(), stage.layout().cloned().as_ref()) {
+                            tokens[0].statuses = set.clone();
+                            // The goblin keeps the frightened figure's attention honest.
+                            stage.set_tokens(tokens);
+                        }
+                    });
+                    if applied.is_none() {
+                        return;
+                    }
+                    TimeoutFuture::new(3500).await;
                 }
             }
-            TimeoutFuture::new(900).await;
+            PreviewMode::Sheet(_) => {
+                with_preview(|stage| stage.show_tactical());
+                mark(&host, "data-battlefield-phase", "sheet");
+                TimeoutFuture::new(60_000).await;
+            }
         }
-        TimeoutFuture::new(2500).await;
     }
+}
+
+/// Six figures, three heroes and three enemies, each carrying different statuses, for review.
+fn sheet_tokens(
+    grid: &battle::Grid,
+    layout: Option<&battle::Layout>,
+    page: usize,
+) -> Result<Vec<Token>, JsValue> {
+    let seats = match layout {
+        Some(layout) => battle::from_layout(layout, grid, 3, 3),
+        None => battle::derive_formation(grid, 3, 3),
+    }
+    .map_err(|_| JsValue::from_str("battlefield formation has no room"))?;
+    let cycle = status_cycle();
+    let set_for = |slot: usize| cycle.get((page * 6 + slot) % cycle.len()).cloned().unwrap_or_default();
+    let mut tokens = vec![
+        combatant("s0", "", Side::Hero, seats.heroes[0], "figure-hero-1", "portrait-hero-1", 1.35),
+        combatant("s1", "", Side::Hero, seats.heroes[1], "figure-hero-3", "portrait-hero-3", 1.35),
+        combatant("s2", "", Side::Hero, seats.heroes[2], "figure-hero-2", "portrait-hero-2", 1.35),
+        combatant("s3", "", Side::Enemy, seats.enemies[0], "figure-ant-goblin-warrior", "portrait-ant-goblin-warrior", 1.0),
+        combatant("s4", "", Side::Enemy, seats.enemies[1], "figure-ant-skeleton", "portrait-ant-skeleton", 1.75),
+        combatant("s5", "", Side::Enemy, seats.enemies[2], "figure-ant-wolf", "portrait-ant-wolf", 0.9),
+    ];
+    for (slot, token) in tokens.iter_mut().enumerate() {
+        token.statuses = set_for(slot);
+        token.name = token
+            .statuses
+            .first()
+            .map_or_else(String::new, |status| status.label().to_owned());
+    }
+    Ok(tokens)
 }
 
 /// Shows the notice once if the stage later becomes unavailable (a lost device).
@@ -377,6 +571,8 @@ struct Live {
     stage: Option<BattleStage>,
     feed: CombatFeed,
     latest: Option<CombatSnapshot>,
+    /// The fight began in front of the display and its first feed has not run yet.
+    begun_live: bool,
 }
 
 thread_local! {
@@ -386,6 +582,7 @@ thread_local! {
         stage: None,
         feed: CombatFeed::new(FeedMode::HoldForCues),
         latest: None,
+        begun_live: false,
     });
 }
 
@@ -424,21 +621,52 @@ fn enemy_height_m(creature: &str) -> f32 {
     }
 }
 
-/// The battle scene for the display's scene art: `scene-<location>-arrival` -> `<location>`.
-fn scene_id_for(scene_asset: &str) -> String {
-    let location = stem_of(scene_asset)
-        .and_then(|stem| stem.strip_prefix("scene-"))
-        .map(|rest| {
-            rest.strip_suffix("-arrival")
-                .or_else(|| rest.strip_suffix("-interior"))
-                .unwrap_or(rest)
-        })
-        .unwrap_or("");
-    if battle::embedded_ids().any(|id| id == location) {
-        location.to_owned()
-    } else {
-        battle::DEFAULT_SCENE_ID.to_owned()
-    }
+/// The battle scene for the fight, chosen from the LOCATION the server names
+/// (`GameplayScene.location_id`), never from the painting: story art for a fight can be any
+/// `scene-place-*` or `scene-dest-*` picture and no longer names the place. The reason for any
+/// fallback is returned so it can be recorded on the page.
+fn scene_choice(view: &LiveView<'_>) -> battle::SceneChoice {
+    battle::resolve_scene(&view.scene.location_id)
+}
+
+/// The fight's own painting, used as the backdrop behind the battlefield (the confrontation
+/// setting's art), when it names a story scene picture the display already serves.
+fn backdrop_stem(view: &LiveView<'_>) -> Option<String> {
+    stem_of(&view.scene.scene_asset)
+        .filter(|stem| stem.starts_with("scene-"))
+        .map(str::to_owned)
+}
+
+/// SWITCH POINT (layout). The layout for this fight, deterministic from data the view already
+/// carries (the location, the fight's participants; never the round), so a reload and the
+/// preview show the same layout for the same fight. The server's own layout id replaces this
+/// function's body.
+fn chosen_layout_id(scene: &BattleScene, key: &str) -> Option<String> {
+    battle::choose_layout(&scene.layouts, key).map(|layout| layout.id.clone())
+}
+
+fn layout_key(view: &LiveView<'_>, snapshot: &CombatSnapshot) -> String {
+    let mut ids: Vec<&str> = snapshot.members.iter().map(|member| member.id.as_str()).collect();
+    ids.sort_unstable();
+    format!("{}|{}", view.scene.location_id, ids.join(","))
+}
+
+/// SWITCH POINT (content rating). `mature` unless the page says `restrained` (the server's
+/// `DF_GAMEPLAY_CONTENT_RATING` setting will write `data-content-rating` on the document element).
+fn content_rating() -> battle::ContentRating {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.document_element())
+        .and_then(|element| element.get_attribute("data-content-rating"))
+        .and_then(|key| battle::ContentRating::from_key(&key))
+        .unwrap_or_default()
+}
+
+thread_local! {
+    /// A non-combat view was seen since the last fight: the next fight began in front of the
+    /// display, so its initiative roll is staged. A display that loads straight into a fight does
+    /// not stage it.
+    static SEEN_NON_COMBAT: StdCell<bool> = const { StdCell::new(false) };
 }
 
 /// Copies the server's combat projection into plain data. No outcome is decided here.
@@ -461,6 +689,13 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
         .enumerate()
         .map(|(index, member)| {
             let hero = index < party;
+            // The hero art cycles through the three heroes by seat (the third is the archer).
+            let hero_art = (index % 3) + 1;
+            let figure = if hero {
+                format!("figure-hero-{hero_art}")
+            } else {
+                format!("figure-{creature}")
+            };
             Member {
                 id: id_of(index, member),
                 name: member.name.clone(),
@@ -468,13 +703,19 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
                 hit_points: member.hit_points,
                 maximum_hit_points: member.maximum_hit_points,
                 height_m: if hero { 1.35 } else { enemy_height_m(creature) },
-                figure: Some(if hero {
-                    format!("figure-hero-{}", (index % 2) + 1)
-                } else {
-                    format!("figure-{creature}")
-                }),
+                attack: attack_style_for(&figure),
+                // Server-supplied cells replace the spawn cells here (none carried today).
+                cell: None,
+                // Only what the view already says: bloodied from the hit points, unconscious
+                // from the server's own knockout flag. The conditions wait for the server.
+                statuses: battle::derived_from_view(
+                    member.hit_points,
+                    member.maximum_hit_points,
+                    member.unconscious,
+                ),
+                figure: Some(figure),
                 portrait: Some(if hero {
-                    format!("portrait-hero-{}", (index % 2) + 1)
+                    format!("portrait-hero-{hero_art}")
                 } else {
                     format!("portrait-{creature}")
                 }),
@@ -521,11 +762,29 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
             }
         })
         .flatten();
+    let mut initiative: Vec<(u32, battle::InitiativeEntry)> = combat
+        .initiative
+        .iter()
+        .map(|roll| {
+            (
+                roll.order,
+                battle::InitiativeEntry {
+                    id: hex(&roll.participant_id),
+                    die: roll.die,
+                    modifier: roll.modifier,
+                    total: roll.total,
+                },
+            )
+        })
+        .collect();
+    initiative.sort_by_key(|(order, _)| *order);
     Some(CombatSnapshot {
         members,
         active,
         round: combat.round,
         outcomes,
+        initiative: initiative.into_iter().map(|(_, entry)| entry).collect(),
+        begun_live: false,
     })
 }
 
@@ -538,28 +797,52 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
     let Some(snapshot) = snapshot_of(view) else {
         return;
     };
-    let scene_id = scene_id_for(&view.scene.scene_asset);
+    let choice = scene_choice(view);
+    let backdrop = backdrop_stem(view);
+    let key = layout_key(view, &snapshot);
     let phase_idle = LIVE.with(|live| {
         let mut live = live.borrow_mut();
         live.latest = Some(snapshot);
-        matches!(live.phase, Phase::Idle)
+        let idle = matches!(live.phase, Phase::Idle);
+        if idle {
+            // A fight beginning in front of the display stages its initiative roll once.
+            live.begun_live = SEEN_NON_COMBAT.with(|seen| seen.replace(false));
+        }
+        idle
     });
     if phase_idle {
-        start_mount(client, &scene_id);
+        start_mount(client, &choice, backdrop, &key);
     } else {
         sync();
     }
 }
 
-fn start_mount(client: &Rc<RefCell<Client>>, scene_id: &str) {
+fn start_mount(
+    client: &Rc<RefCell<Client>>,
+    choice: &battle::SceneChoice,
+    backdrop: Option<String>,
+    key: &str,
+) {
     let (document, host) = {
         let state = client.borrow();
         (state.document.clone(), state.root.clone())
     };
-    let Some(Ok(scene)) = battle::load_embedded(scene_id) else {
+    let Some(Ok(mut scene)) = battle::load_embedded(choice.scene_id) else {
         LIVE.with(|live| live.borrow_mut().phase = Phase::Unavailable);
         return;
     };
+    // The record of which scene was chosen, and why if it is not the fight's own location.
+    let marker = choice
+        .fallback_reason
+        .clone()
+        .unwrap_or_else(|| choice.scene_id.to_owned());
+    // Best-effort diagnostic attribute; a failure here changes nothing about the fight.
+    let _ = host.set_attribute("data-battlefield-scene", &marker);
+    if let Some(stem) = backdrop {
+        scene.backdrop.stem = stem;
+    }
+    let layout = chosen_layout_id(&scene, key);
+    let _ = host.set_attribute("data-battlefield-layout", layout.as_deref().unwrap_or("none"));
     if install_style(&document).is_err() {
         LIVE.with(|live| live.borrow_mut().phase = Phase::Unavailable);
         return;
@@ -580,6 +863,18 @@ fn start_mount(client: &Rc<RefCell<Client>>, scene_id: &str) {
         )
         .await;
         let available = matches!(stage.availability(), Availability::Available);
+        if available {
+            stage.set_sound_sink(Rc::new(|event| {
+                live_sfx::play_event(&event, content_rating());
+            }));
+            if let Some(id) = &layout {
+                stage.with_stage(|stage| {
+                    stage.set_layout(id);
+                    stage.set_restrained(content_rating() == battle::ContentRating::Restrained);
+                });
+            }
+            live_sfx::set_battlefield_owns_combat(true);
+        }
         let keep = LIVE.with(|live| {
             let mut live = live.borrow_mut();
             // Released while mounting (the fight ended): throw the new stage away.
@@ -619,9 +914,12 @@ fn sync() {
             return;
         }
         let feed = &mut live.feed;
+        let mut shown = snapshot.clone();
+        shown.begun_live = live.begun_live;
         let fits = stage
-            .with_stage(|stage| feed.apply(stage, snapshot))
+            .with_stage(|stage| feed.apply(stage, &shown))
             .flatten();
+        live.begun_live = false;
         if fits.is_none() {
             // No room on the grid for this roster: leave the flat view.
             live.phase = Phase::Unavailable;
@@ -703,6 +1001,8 @@ fn reset_fight(live: &mut Live) {
 /// The fight ended or the view scope changed. A stage that is still playing (the finishing blow)
 /// is allowed to finish, then fades out; one that never mounted or is unavailable is just reset.
 pub(super) fn release() {
+    // A view that is not combat means the next fight begins in front of the display.
+    SEEN_NON_COMBAT.with(|seen| seen.set(true));
     let closing = LIVE.with(|live| {
         let mut live = live.borrow_mut();
         match live.phase {
@@ -757,4 +1057,5 @@ async fn close_when_idle() {
         stage
     });
     drop(dropped);
+    live_sfx::set_battlefield_owns_combat(false);
 }

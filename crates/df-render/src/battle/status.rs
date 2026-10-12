@@ -404,6 +404,21 @@ pub fn pose_for(set: StatusSet, reduced_motion: bool) -> StatusPose {
     }
 }
 
+/// The statuses the adapter derives from what the server's combat view already says, and
+/// nothing else: bloodied at or below half hit points (above zero), unconscious when the server
+/// reports the combatant knocked out. Conditions such as prone, poisoned or stunned are never
+/// guessed here; they wait for the server to carry them.
+pub fn derived_from_view(hit_points: u32, maximum: u32, knocked_out: bool) -> Vec<Status> {
+    let mut derived = Vec::new();
+    if maximum > 0 && hit_points > 0 && hit_points * 2 <= maximum {
+        derived.push(Status::Bloodied);
+    }
+    if knocked_out {
+        derived.push(Status::Unconscious);
+    }
+    derived
+}
+
 /// Statuses worth an icon: everything except the ones that read better as a tile marker.
 pub fn icon_statuses(set: StatusSet) -> Vec<Status> {
     set.iter().filter(|status| *status != Status::Cover).collect()
@@ -531,6 +546,21 @@ mod tests {
     fn invisible_is_faint() {
         assert!(pose_for(StatusSet::of(&[Status::Invisible]), false).alpha < 0.3);
         assert_eq!(pose_for(StatusSet::EMPTY, false).alpha, 1.0);
+    }
+
+    #[test]
+    fn only_bloodied_and_unconscious_are_derived_from_the_view() {
+        assert_eq!(derived_from_view(12, 12, false), vec![]);
+        assert_eq!(derived_from_view(7, 12, false), vec![]);
+        assert_eq!(derived_from_view(6, 12, false), vec![Status::Bloodied], "half counts");
+        assert_eq!(derived_from_view(1, 12, false), vec![Status::Bloodied]);
+        assert_eq!(derived_from_view(0, 12, true), vec![Status::Unconscious]);
+        assert_eq!(derived_from_view(0, 12, false), vec![], "zero alone is the stage's fall");
+        assert_eq!(derived_from_view(3, 12, true), vec![Status::Bloodied, Status::Unconscious]);
+        assert_eq!(derived_from_view(0, 0, false), vec![]);
+        for status in derived_from_view(2, 12, true) {
+            assert!(matches!(status, Status::Bloodied | Status::Unconscious));
+        }
     }
 
     #[test]
