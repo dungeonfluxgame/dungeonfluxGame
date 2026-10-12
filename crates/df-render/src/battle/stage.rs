@@ -820,6 +820,34 @@ mod tests {
     }
 
     #[test]
+    fn figures_stand_on_the_scanned_ground_under_their_cell() {
+        let mut scene = load_embedded("salt-quay").unwrap().unwrap();
+        // A gently sloping field, 10 cm per metre along x, covering the grid.
+        let origin = [scene.grid.origin()[0] - 1.0, scene.grid.origin()[1] - 1.0];
+        let heights: Vec<f32> = (0..40)
+            .flat_map(|_| (0..40).map(|col| col as f32 * 0.1))
+            .collect();
+        let field = super::super::terrain::HeightField::new(origin, 1.0, 40, 40, heights).unwrap();
+        scene.grid = scene.grid.clone().with_terrain(field);
+        let mut stage = Stage::new(scene, false);
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(1, 4), 10),
+            token("goblin", Side::Enemy, Cell::new(6, 4), 8),
+        ]);
+        let frame = stage.frame();
+        let heights: Vec<(f32, f32)> = frame
+            .figures
+            .iter()
+            .map(|figure| (figure.position.x, figure.position.y))
+            .collect();
+        assert_eq!(heights.len(), 2);
+        for (x, y) in heights {
+            let expected = (x - origin[0]) * 0.1;
+            assert!((y - expected).abs() < 0.02, "feet at {y} on ground {expected}");
+        }
+    }
+
+    #[test]
     fn frame_lists_figures_far_to_near() {
         let stage = stage(false);
         let order: Vec<String> = stage

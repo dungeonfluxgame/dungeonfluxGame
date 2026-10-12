@@ -740,4 +740,118 @@ mod tests {
             Err(SceneFileError::Splat(_))
         ));
     }
+
+    fn scan_scene(edit: impl FnOnce(&mut serde_json::Value)) -> Result<BattleScene, SceneFileError> {
+        let mut value = base();
+        value["schema"] = 2.into();
+        value["splat"] = serde_json::json!({
+            "url": "/assets/splat/abc/v1/lod-meta.json", "format": "lod",
+            "orient_deg": [180, 0, 0], "levels": [1, 3], "max_splats": 2500000,
+            "clip": {"above_m": 6.0, "radius_m": 40.0},
+            "grade": {"preset": "dusk", "exposure_ev": -0.2}
+        });
+        edit(&mut value);
+        parse(&value.to_string())
+    }
+
+    #[test]
+    fn a_scan_scene_carries_its_transform_levels_grade_clip_terrain_and_attribution() {
+        let scene = scan_scene(|v| {
+            v["terrain"] = serde_json::json!({
+                "origin": [-1.0, -1.0], "step_m": 1.0, "cols": 2, "rows": 2,
+                "heights_cm": [0, 100, 200, 300]
+            });
+            v["distribution"] = "private-test-only".into();
+            v["attribution"] = serde_json::json!({
+                "title": "T", "author": "A", "source_url": "https://example.com", "licence": "none"
+            });
+            v["layouts"] = serde_json::json!([]);
+        })
+        .unwrap();
+        let layer = scene.splat.as_ref().unwrap();
+        assert_eq!(layer.format, SplatFormat::Lod);
+        assert_eq!(layer.levels, Some((1, 3)));
+        assert_eq!(layer.clip, Some((6.0, 40.0)));
+        assert_eq!(layer.grade.exposure_ev, -0.2, "an explicit value overrides the preset");
+        assert_eq!(layer.grade.saturation, SplatGrade::DUSK.saturation);
+        // A half turn about X puts the scan's -Y up.
+        let up = layer.orient.rotate(Vec3::new(0.0, -1.0, 0.0));
+        assert!(up.y > 0.999, "{up:?}");
+        assert_eq!(scene.distribution, Distribution::PrivateTestOnly);
+        assert_eq!(scene.attribution.as_ref().unwrap().author, "A");
+        // The grid stands on the terrain: heights follow the stored field.
+        let centre = scene.grid.cell_centre(Cell::new(0, 0));
+        assert!(centre.y.is_finite());
+        assert_eq!(scene.grid.ground_height(-1.0, 1.0), 2.0);
+        assert_eq!(scene.grid.ground_height(-0.5, -0.5), 1.5);
+    }
+
+    #[test]
+    fn scan_scene_fields_are_validated() {
+        let bad = |edit: fn(&mut serde_json::Value)| scan_scene(edit).unwrap_err();
+        assert!(matches!(
+            bad(|v| v["splat"]["url"] = "/assets/splat/abc/v1/meta.json".into()),
+            SceneFileError::Splat(_)
+        ));
+        assert!(matches!(bad(|v| v["splat"]["levels"] = serde_json::json!([3, 1])), SceneFileError::Splat("levels")));
+        assert!(matches!(bad(|v| v["splat"]["clip"]["radius_m"] = 0.into()), SceneFileError::Splat("clip")));
+        assert!(matches!(
+            bad(|v| v["splat"]["grade"]["preset"] = "noon".into()),
+            SceneFileError::Splat("grade preset")
+        ));
+        assert!(matches!(
+            bad(|v| v["splat"]["grade"]["ambient"] = 3.into()),
+            SceneFileError::Splat("grade")
+        ));
+        assert!(matches!(
+            bad(|v| v["distribution"] = "everyone".into()),
+            SceneFileError::Distribution(_)
+        ));
+        // A private-test-only scene must say where its scan came from.
+        assert!(matches!(
+            bad(|v| v["distribution"] = "private-test-only".into()),
+            SceneFileError::Attribution(_)
+        ));
+        assert!(matches!(
+            bad(|v| {
+                v["terrain"] = serde_json::json!({
+                    "origin": [0, 0], "step_m": 1.0, "cols": 2, "rows": 2, "heights_cm": [0, 1, 2]
+                })
+            }),
+            SceneFileError::Terrain(_)
+        ));
+        // Layouts need the version 2 schema.
+        assert_eq!(
+            bad(|v| {
+                v["schema"] = 1.into();
+                v["layouts"] = serde_json::json!([{"id": "x"}]);
+            }),
+            SceneFileError::NeedsSchemaTwo("layouts")
+        );
+    }
+
+    #[test]
+    fn the_embedded_scan_scenes_are_private_test_only_unless_licensed_and_leave_the_rotation() {
+        let mut private = 0;
+        for id in embedded_ids().filter(|id| id.starts_with("scan-")) {
+            let scene = load_embedded(id).unwrap().unwrap();
+            let layer = scene.splat.as_ref().expect("a scan scene has a splat layer");
+            assert_eq!(layer.format, SplatFormat::Lod, "{id}");
+            assert!(layer.url.ends_with("/v1/lod-meta.json"), "{id}");
+            let attribution = scene.attribution.as_ref().expect("scans name their source");
+            if scene.distribution == Distribution::PrivateTestOnly {
+                private += 1;
+                assert!(attribution.licence.contains("private test only"), "{id}");
+            } else {
+                assert_eq!(attribution.licence, "CC BY 4.0", "{id}");
+            }
+            assert!(scene.grid.terrain().is_some(), "{id} follows measured ground");
+            assert!(scene.grid.walkable_cells().count() >= 40, "{id}");
+        }
+        assert_eq!(private, 3, "three unlicensed scans");
+        // No location of the adventure tables is a scan: the default rotation never reaches one.
+        let table = include_str!("../../../../content/adventure-tables/locations.json");
+        assert!(!table.contains("scan-"));
+        assert!(!LOCATIONS.iter().any(|id| id.starts_with("scan-")));
+    }
 }

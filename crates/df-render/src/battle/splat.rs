@@ -687,6 +687,35 @@ pub fn pack_records(raw: &[RawSplat], transform: SplatTransform) -> (Vec<u32>, u
 
 const SORT_BUCKETS: usize = 1 << 16;
 
+/// The depth sort key the GPU projection pass writes (`project_splat` in `splat_shaders.rs`):
+/// far splats get small keys so ascending key order is back to front, and the square-root
+/// spacing keeps the finest steps near the camera. Kept here, pure, so the mapping is tested.
+pub fn depth_sort_key(depth_m: f32, range_m: f32) -> u32 {
+    let t = (depth_m / range_m).clamp(0.0, 1.0);
+    65535 - (t.sqrt() * 65535.0) as u32
+}
+
+/// What the GPU's counting sort produces from keys: indexes grouped by ascending key. Within one
+/// key the GPU's order is arbitrary (atomic slot claims), which cannot be seen because splats in
+/// one key are within a few millimetres of each other in depth; this stable version is the
+/// reference the tests compare against.
+pub fn counting_order(keys: &[u32]) -> Vec<u32> {
+    let mut counts = vec![0u32; SORT_BUCKETS + 1];
+    for key in keys {
+        counts[*key as usize + 1] += 1;
+    }
+    for bin in 1..counts.len() {
+        counts[bin] += counts[bin - 1];
+    }
+    let mut order = vec![0u32; keys.len()];
+    for (index, key) in keys.iter().enumerate() {
+        let slot = &mut counts[*key as usize];
+        order[*slot as usize] = index as u32;
+        *slot += 1;
+    }
+    order
+}
+
 /// Orders splats back to front by quantised view depth with a counting sort, and remembers the
 /// camera of the last sort so it re-sorts only when the view has moved enough to change the order.
 pub struct SplatSorter {
@@ -1234,5 +1263,35 @@ mod tests {
             matrix[2][0] * scan.x + matrix[2][1] * scan.y + matrix[2][2] * scan.z,
         ) + translation;
         assert!((by_matrix - world).length() < 1e-4);
+    }
+
+    #[test]
+    fn the_gpu_depth_key_orders_back_to_front_with_millimetre_steps_near_the_camera() {
+        let range = 900.0;
+        let mut random = Lcg(11);
+        let depths: Vec<f32> = (0..20_000).map(|_| 0.2 + random.next() * 300.0).collect();
+        let keys: Vec<u32> = depths.iter().map(|d| depth_sort_key(*d, range)).collect();
+        let order = counting_order(&keys);
+        assert_eq!(order.len(), depths.len());
+        // Back to front: depth never increases along the order by more than one key step.
+        for pair in order.windows(2) {
+            let (far, near) = (depths[pair[0] as usize], depths[pair[1] as usize]);
+            let step = 2.0 * (far * range).sqrt() / 65535.0 + 1e-3;
+            assert!(near <= far + step, "{far} then {near}");
+        }
+        // The nearest and farthest splats land at the two ends.
+        assert_eq!(depths[order[0] as usize], depths.iter().cloned().fold(f32::MIN, f32::max));
+        let last = *order.last().unwrap() as usize;
+        assert_eq!(depths[last], depths.iter().cloned().fold(f32::MAX, f32::min));
+        // Resolution: one key step is a few millimetres at 10 m and under 3 cm at 300 m.
+        let step_at = |d: f32| (depth_sort_key(d, range) - depth_sort_key(d + 0.05, range)) as f32;
+        assert!(step_at(10.0) >= 1.0 && depth_sort_key(0.0, range) == 65535);
+        assert!(depth_sort_key(2000.0, range) == 0, "beyond the range everything shares the far key");
+    }
+
+    #[test]
+    fn counting_order_groups_equal_keys_and_keeps_them_in_input_order() {
+        assert_eq!(counting_order(&[5, 1, 5, 0, 1]), vec![3, 1, 4, 0, 2]);
+        assert!(counting_order(&[]).is_empty());
     }
 }
