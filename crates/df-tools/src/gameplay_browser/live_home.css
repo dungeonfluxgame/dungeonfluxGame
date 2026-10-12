@@ -1,9 +1,10 @@
 /* PLAY-V05 home screen. The server's theme places the title, the join block and the party panel
    (custom properties in percent of the viewport), sets the location's mood and draws its
-   atmosphere. Without a theme the default lobby rules above apply unchanged. */
+   atmosphere. Without a theme the default lobby rules above apply unchanged. The effects are always
+   on: no rule here checks the device's motion setting. */
 .tv-title-block{display:contents}
 .tv-atmosphere{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1}
-.tv-stage[data-home]{--home-accent:#e8cb94;--home-tint:#0b1623;--home-vignette:.55;--home-brightness:1;--home-contrast:1;--home-saturation:1}
+.tv-stage[data-home]{--home-accent:#e8cb94;--home-tint:#0b1623;--home-vignette:.55;--home-brightness:1;--home-contrast:1;--home-saturation:1;--home-glass:.94}
 .tv-stage[data-home] .tv-art,.tv-stage[data-home] .tv-art-previous{filter:brightness(var(--home-brightness)) contrast(var(--home-contrast)) saturate(var(--home-saturation))}
 .tv-stage[data-home][data-tv-mode=lobby] .tv-scrim{background:radial-gradient(ellipse at 50% 46%,rgb(2 4 10/0) 46%,rgb(2 4 10/var(--home-vignette)) 100%),linear-gradient(0deg,#03060ef2 0%,#03060e99 34%,#03060e00 66%)}
 .tv-stage[data-home] .tv-safe{inset:0}
@@ -26,10 +27,52 @@
 /* The join row (QR beside the room code) and its sizes come from live_join.css; the home layer
    only gives the join block its box, so the row takes the space the block leaves for it. */
 .tv-stage[data-home][data-tv-mode=lobby] .tv-join-row{flex:1 1 auto;min-height:0}
-.tv-stage[data-home] .tv-panel{border-color:color-mix(in srgb,var(--home-accent) 55%,transparent);background:linear-gradient(160deg,color-mix(in srgb,var(--home-tint) 96%,#03060e),color-mix(in srgb,var(--home-tint) 88%,#03060e))}
+/* Panels take the place: an accent edge and glow, and glass as dark as the painting's light needs. */
+.tv-stage[data-home] .tv-panel{border-color:color-mix(in srgb,var(--home-accent) 60%,transparent);background:linear-gradient(160deg,color-mix(in srgb,var(--home-tint) calc(var(--home-glass)*100%),#03060e),color-mix(in srgb,var(--home-tint) calc((var(--home-glass) - .08)*100%),#03060e));box-shadow:inset 0 0 calc(var(--u)*2.4) color-mix(in srgb,var(--home-accent) 22%,transparent),0 calc(var(--u)*1) calc(var(--u)*3) #000a}
 .tv-stage[data-home] .tv-roster[data-count="6"] .tv-party{grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u)*.7)}
 .tv-stage[data-home] .tv-roster[data-count="6"] .tv-card{gap:calc(var(--u)*.6);padding:calc(var(--u)*.3) calc(var(--u)*.6)}
 .tv-stage[data-home] .tv-roster[data-count="6"] .tv-portrait{width:calc(var(--u)*4.6)}
 .tv-stage[data-home] .tv-roster[data-count="6"] .tv-member-name{font-size:calc(var(--u)*1.5)}
 .tv-stage[data-home] .tv-roster[data-count="6"] .tv-member-status{font-size:calc(var(--u)*1.1)}
 .tv-stage[data-home] .tv-roster[data-count="6"] .tv-member-role{display:none}
+
+/* The atmosphere is masked out where the three blocks are, so no effect crosses a block's text. The
+   masks are the blocks' own rectangles from the server's theme, in viewport lengths. */
+.tv-stage[data-home][data-tv-mode=lobby] .tv-atmosphere{
+  -webkit-mask-image:linear-gradient(#000,#000),linear-gradient(#000,#000),linear-gradient(#000,#000),linear-gradient(#000,#000);
+  mask-image:linear-gradient(#000,#000),linear-gradient(#000,#000),linear-gradient(#000,#000),linear-gradient(#000,#000);
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+  -webkit-mask-size:100% 100%,calc(var(--home-title-wp)*1vw/10) calc(var(--home-title-hp)*1vh/10),calc(var(--home-code-wp)*1vw/10) calc(var(--home-code-hp)*1vh/10),calc(var(--home-party-wp)*1vw/10) calc(var(--home-party-hp)*1vh/10);
+  mask-size:100% 100%,calc(var(--home-title-wp)*1vw/10) calc(var(--home-title-hp)*1vh/10),calc(var(--home-code-wp)*1vw/10) calc(var(--home-code-hp)*1vh/10),calc(var(--home-party-wp)*1vw/10) calc(var(--home-party-hp)*1vh/10);
+  -webkit-mask-position:0 0,calc(var(--home-title-xp)*1vw/10) calc(var(--home-title-yp)*1vh/10),calc(var(--home-code-xp)*1vw/10) calc(var(--home-code-yp)*1vh/10),calc(var(--home-party-xp)*1vw/10) calc(var(--home-party-yp)*1vh/10);
+  mask-position:0 0,calc(var(--home-title-xp)*1vw/10) calc(var(--home-title-yp)*1vh/10),calc(var(--home-code-xp)*1vw/10) calc(var(--home-code-yp)*1vh/10),calc(var(--home-party-xp)*1vw/10) calc(var(--home-party-yp)*1vh/10);
+  -webkit-mask-composite:source-over,xor,xor,xor;mask-composite:add,exclude,exclude,exclude;
+}
+
+/* The nine effects. Each is one slow, light layer; none is a sprite or a script. */
+.tv-fx{position:absolute;inset:0;display:block;pointer-events:none;will-change:transform,opacity}
+.tv-fx-mist{background:radial-gradient(ellipse 46% 16% at 22% 78%,rgb(186 202 224/.2),rgb(186 202 224/0) 70%),radial-gradient(ellipse 40% 14% at 78% 66%,rgb(186 202 224/.16),rgb(186 202 224/0) 70%);animation:tv-fx-mist 40s ease-in-out infinite alternate}
+@keyframes tv-fx-mist{from{transform:translate3d(-3%,0,0)}to{transform:translate3d(3%,-1.5%,0)}}
+.tv-fx-fireflies{background:radial-gradient(circle at 14% 58%,#ffe3a0 0 2px,rgb(255 227 160/0) 9px),radial-gradient(circle at 31% 46%,#ffe3a0 0 2px,rgb(255 227 160/0) 9px),radial-gradient(circle at 52% 62%,#ffe3a0 0 1.5px,rgb(255 227 160/0) 8px),radial-gradient(circle at 70% 40%,#ffe3a0 0 2px,rgb(255 227 160/0) 9px),radial-gradient(circle at 86% 55%,#ffe3a0 0 1.5px,rgb(255 227 160/0) 8px);animation:tv-fx-fireflies 11s ease-in-out infinite alternate}
+@keyframes tv-fx-fireflies{from{transform:translate3d(0,0,0);opacity:.35}to{transform:translate3d(1.2%,-1.8%,0);opacity:1}}
+.tv-fx-lantern-glow{background:radial-gradient(circle at 26% 74%,rgb(255 170 84/.32),rgb(255 170 84/0) 16%),radial-gradient(circle at 82% 72%,rgb(255 170 84/.26),rgb(255 170 84/0) 14%);animation:tv-fx-glow 6.5s ease-in-out infinite alternate}
+@keyframes tv-fx-glow{from{opacity:.55}to{opacity:1}}
+.tv-fx-embers{background:radial-gradient(circle at 30% 90%,#ffb36b 0 1.5px,rgb(255 179 107/0) 6px),radial-gradient(circle at 46% 96%,#ffb36b 0 1px,rgb(255 179 107/0) 5px),radial-gradient(circle at 64% 92%,#ffb36b 0 1.5px,rgb(255 179 107/0) 6px),radial-gradient(circle at 78% 98%,#ffb36b 0 1px,rgb(255 179 107/0) 5px);animation:tv-fx-embers 9s linear infinite}
+@keyframes tv-fx-embers{0%{transform:translate3d(0,0,0);opacity:0}15%{opacity:.9}100%{transform:translate3d(2%,-38%,0);opacity:0}}
+.tv-fx-falling-leaves{background:radial-gradient(ellipse 6px 3px at 12% 10%,rgb(214 150 70/.7),rgb(214 150 70/0) 100%),radial-gradient(ellipse 5px 3px at 40% 4%,rgb(190 120 60/.6),rgb(190 120 60/0) 100%),radial-gradient(ellipse 6px 3px at 66% 8%,rgb(220 160 80/.6),rgb(220 160 80/0) 100%);animation:tv-fx-leaves 16s linear infinite}
+@keyframes tv-fx-leaves{0%{transform:translate3d(0,-4%,0) rotate(0)}100%{transform:translate3d(-6%,40%,0) rotate(40deg)}}
+.tv-fx-rain{background:repeating-linear-gradient(100deg,rgb(170 190 215/0) 0 22px,rgb(170 190 215/.14) 22px 23px,rgb(170 190 215/0) 23px 60px);animation:tv-fx-rain 2.4s linear infinite}
+@keyframes tv-fx-rain{from{background-position:0 0}to{background-position:-60px 120px}}
+.tv-fx-dust-motes{background:radial-gradient(circle at 70% 20%,rgb(255 240 200/.16),rgb(255 240 200/0) 30%),radial-gradient(circle at 20% 30%,#fff1cf 0 1px,rgb(255 241 207/0) 4px),radial-gradient(circle at 58% 44%,#fff1cf 0 1px,rgb(255 241 207/0) 4px),radial-gradient(circle at 84% 62%,#fff1cf 0 1px,rgb(255 241 207/0) 4px);animation:tv-fx-dust 28s ease-in-out infinite alternate}
+@keyframes tv-fx-dust{from{transform:translate3d(0,0,0);opacity:.6}to{transform:translate3d(-2%,2%,0);opacity:1}}
+.tv-fx-water-glints{background:radial-gradient(ellipse 5% .6% at 30% 85%,#dff3ff,rgb(223 243 255/0) 100%),radial-gradient(ellipse 4% .5% at 62% 92%,#dff3ff,rgb(223 243 255/0) 100%),radial-gradient(ellipse 6% .5% at 80% 80%,#dff3ff,rgb(223 243 255/0) 100%);animation:tv-fx-glints 7s ease-in-out infinite alternate}
+@keyframes tv-fx-glints{from{opacity:.25;transform:translate3d(-1%,0,0)}to{opacity:.9;transform:translate3d(1%,0,0)}}
+.tv-fx-cloud-shadow{background:linear-gradient(100deg,rgb(3 6 14/0) 0%,rgb(3 6 14/.38) 30%,rgb(3 6 14/0) 60%);background-size:160% 100%;animation:tv-fx-cloud 36s linear infinite}
+@keyframes tv-fx-cloud{from{background-position:0% 0}to{background-position:100% 0}}
+
+/* The sound control is fixed to the top right, where a title on the right would sit. In a small
+   pane it becomes a small icon in the corner, clear of the logo; the TV keeps its label. */
+@media (max-width: 1000px) {
+  body:has(.tv-stage[data-home][data-tv-mode=lobby]) .tv-voice-control{font-size:14px!important;min-height:0!important;padding:.4em!important;right:.8vw!important;top:.8vh!important}
+  body:has(.tv-stage[data-home][data-tv-mode=lobby]) .tv-voice-label{display:none}
+}

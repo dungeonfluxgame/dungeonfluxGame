@@ -40,10 +40,14 @@ pub(super) fn apply(
             return Err(JsValue::from_str("home theme colour is not #rrggbb"));
         }
     }
+    // The glass behind the panels is darker over a brighter painting: the grade's brightness runs
+    // from 0.78 (a bright place) to 0.92 (a dim one), and the glass opacity runs the other way.
+    let shade = f64::from(mood.brightness_permille).clamp(780.0, 920.0);
+    let glass = 0.98 - (shade - 780.0) / 140.0 * 0.08;
     let style = format!(
         "{};{};{};\
          --home-accent:{};--home-tint:{};--home-vignette:{};\
-         --home-brightness:{};--home-contrast:{};--home-saturation:{}",
+         --home-brightness:{};--home-contrast:{};--home-saturation:{};--home-glass:{:.3}",
         boxed("title", title),
         boxed("code", code),
         boxed("party", party),
@@ -53,6 +57,7 @@ pub(super) fn apply(
         f64::from(mood.brightness_permille) / 1000.0,
         f64::from(mood.contrast_permille) / 1000.0,
         f64::from(mood.saturation_permille) / 1000.0,
+        glass,
     );
     stage.set_attribute("style", &style)?;
     stage.set_attribute("data-home", &theme.arrangement)?;
@@ -62,12 +67,19 @@ pub(super) fn apply(
 
 /// The block's box as the custom properties the stylesheet positions it with, in percent.
 fn boxed(block: &str, value: &rpc::HomeBox) -> String {
+    // The percent form places the block; the bare permille numbers let the atmosphere mask cut the
+    // same rectangle out of the effects (CSS turns them into viewport lengths).
     format!(
-        "--home-{block}-x:{}%;--home-{block}-y:{}%;--home-{block}-w:{}%;--home-{block}-h:{}%",
+        "--home-{block}-x:{}%;--home-{block}-y:{}%;--home-{block}-w:{}%;--home-{block}-h:{}%;\
+         --home-{block}-xp:{};--home-{block}-yp:{};--home-{block}-wp:{};--home-{block}-hp:{}",
         f64::from(value.left_permille) / 10.0,
         f64::from(value.top_permille) / 10.0,
         f64::from(value.width_permille) / 10.0,
         f64::from(value.height_permille) / 10.0,
+        value.left_permille,
+        value.top_permille,
+        value.width_permille,
+        value.height_permille,
     )
 }
 
