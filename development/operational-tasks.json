@@ -2581,6 +2581,95 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T00:16:47+00:00",
       "updated_at": "2026-10-12T00:16:47+00:00"
+    },
+    {
+      "id": "PLAY-F02",
+      "feature_id": "F13",
+      "title": "Stage combat on a tilted battlefield with figures, camera and a finishing blow",
+      "objective": "On the TV a fight is shown as a battlefield: the location's ground tilted in perspective with a tile grid, full-body figures of the heroes and enemies standing on lit tiles, the acting figure highlighted, the camera easing to each turn's actor, attacks played as a lunge, impact and damage number, a round and initiative tracker, party and enemy health plates, and a letterboxed finishing-blow cinematic when an enemy falls.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-tools/src/",
+        "assets/ui/generated/"
+      ],
+      "acceptance_json": [
+        "A fight on the TV shows every combatant as a full-body figure on its own tile on a ground that matches the location, readable from across a room at 1920x1080.",
+        "Each turn the acting figure is unmistakable and the camera moves to it without jumping.",
+        "An attack plays in order: the roll, a lunge at the target, hit or miss, damage, health change; a kill plays the finishing-blow cinematic before the scene changes.",
+        "Figure positions are staging only and are labelled as such in code; no rule, range or outcome is decided in the browser.",
+        "With reduced motion requested, camera moves and shakes are replaced by cuts and fades.",
+        "A missing figure or ground image falls back to a portrait token or plain ground; never blank.",
+        "Side by side with reference frames 120-140 the battle reads as the same kind of scene.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests of the pure layout and camera planner with a controlled clock.",
+        "Real browser frame captures of a full fight at TV size, including the finishing blow.",
+        "Coordinator comparison against the reference frames."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M8",
+        "milestone_goal": "A battle worth watching: a staged battlefield on the TV, matching the owner's reference demo.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner reference 2026-10-11 (video of the earlier hackathon demo, frames in artifacts/tmp/reference-video): \"most importantly look at the battle scene as there is where you need the most help\". Today combat on the TV is flat panels over a still painting.",
+        "objective": "On the TV a fight is shown as a battlefield: the location's ground tilted in perspective with a tile grid, full-body figures of the heroes and enemies standing on lit tiles, the acting figure highlighted, the camera easing to each turn's actor, attacks played as a lunge, impact and damage number, a round and initiative tracker, party and enemy health plates, and a letterboxed finishing-blow cinematic when an enemy falls.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Stage combat on a tilted battlefield with figures, camera and a finishing blow",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-presentation.md",
+            "sha256": "ce020b212e9d10b13e7588125396633ab37a549b317ca7aa74b98df1a5a29dcb"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/tempo-engine.md",
+            "sha256": "e227dda990685f5771b577529652c44d59704a23db8ad206e3e59be41f4c81d6"
+          }
+        ],
+        "input_revision": "b8af8e9b7b3fc2056feeb26e8a562735d10e3d0c",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [
+          "Movement, range and position rules (engine roadmap)",
+          "A 3D or splat renderer"
+        ],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 98,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T00:25:46+00:00",
+      "updated_at": "2026-10-12T00:25:46+00:00"
     }
   ],
   "dependencies": [
