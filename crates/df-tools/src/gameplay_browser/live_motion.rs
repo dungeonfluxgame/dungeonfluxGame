@@ -15,7 +15,10 @@ use super::live_sfx::{self, Cue};
 use super::live_stage::{BubbleKind, FloatKind, Fx};
 use super::*;
 use crate::{
-    presentation::{self, ActorSlot, CombatSnapshot, TableKind, TableLine, TableRole, Transitions},
+    presentation::{
+        self, ActorSlot, Card, CombatSnapshot, CombatStage, TableKind, TableLine, TableRole,
+        Transitions,
+    },
     stage_director::{Command, CueKind, StageDirector, StageState, ViewDiff},
 };
 use std::{collections::VecDeque, rc::Weak, time::Duration};
@@ -38,6 +41,8 @@ enum Detail {
     Roll(Box<RollDetail>),
     Line(LineDetail),
     Banner { victory: bool },
+    /// The title card of the story's beginning or the closing card of a fight.
+    Card(Box<Card>),
     Heal,
 }
 
@@ -69,7 +74,19 @@ struct RollDescriptionOwned {
 struct LineDetail {
     speaker: String,
     role: TableRole,
+    kind: TableKind,
     text: String,
+}
+
+impl LineDetail {
+    fn of(line: &TableLine) -> Self {
+        Self {
+            speaker: line.speaker.clone(),
+            role: line.role,
+            kind: line.kind,
+            text: line.text.clone(),
+        }
+    }
 }
 
 struct Motion {
@@ -163,12 +180,12 @@ fn roll_detail(
         verdict: description.verdict,
         tone: description.tone,
     });
+    // The server's own line for this attacker; the roll's phrase only while it has none yet.
     let action_line = lines
         .iter()
         .rev()
-        .find(|line| line.kind == TableKind::Action)
-        .map(TableLine::short_text)
-        .unwrap_or_default();
+        .find(|line| line.kind == TableKind::Action && line.speaker == outcome.actor_name)
+        .map_or_else(|| presentation::action_text(outcome), TableLine::short_text);
     Some(RollDetail {
         attacker: outcome.actor_name.clone(),
         target: outcome.target_name.clone(),
@@ -215,6 +232,10 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let voiced = live_voice::effects_gate().is_some();
     let now = now_ms();
     let planned = with_motion(|motion| {
+        // The server restarts its table-log sequence on a new watch connection.
+        if motion.generation != generation {
+            motion.seen.clear();
+        }
         let restart = motion.previous.is_none() || motion.generation != generation || hidden;
         let transitions = presentation::transitions(motion.previous.as_ref(), &snapshot);
         let scene_changed = motion
@@ -231,11 +252,22 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             .iter()
             .rev()
             .find(|line| line.kind == TableKind::Speech && line.role == TableRole::Npc)
-            .map(|line| LineDetail {
-                speaker: line.speaker.clone(),
-                role: line.role,
-                text: line.text.clone(),
-            });
+            .map(|line| LineDetail::of(line));
+        // A hero's typed line and what a hero did outside a fight are shown at once: they are
+        // table talk, so no cue waits for them and they never hold an outcome back.
+        let in_fight = transitions.new_roll || snapshot.stage != CombatStage::Absent;
+        let immediate: Vec<LineDetail> = if restart || scene_changed {
+            Vec::new()
+        } else {
+            fresh
+                .iter()
+                .filter(|line| match line.kind {
+                    TableKind::Speech => matches!(line.role, TableRole::Hero(_)),
+                    TableKind::Action => !in_fight && line.role != TableRole::Narrator,
+                })
+                .map(|line| LineDetail::of(line))
+                .collect()
+        };
         let healed = !transitions.new_roll
             && motion.party_hit_points.len() == hit_points.len()
             && hit_points
@@ -256,9 +288,17 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 .filter(|roll| roll.target_down)
                 .map(|roll| Detail::Roll(Box::new(roll))),
             heal: healed.then_some(Detail::Heal),
+            title: transitions
+                .story_begun
+                .then(|| Detail::Card(Box::new(presentation::title_card(scene, &narration)))),
             banner: transitions
                 .finished
                 .map(|victory| Detail::Banner { victory }),
+            closing: transitions.finished.map(|victory| {
+                Detail::Card(Box::new(presentation::closing_card(
+                    journey, scene, &narration, victory,
+                )))
+            }),
             narration: (scene_changed && !narration.is_empty()).then(|| {
                 let hold = if voiced {
                     hold_for(&narration)
@@ -269,6 +309,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                     Detail::Line(LineDetail {
                         speaker: NARRATOR_NAME.to_owned(),
                         role: TableRole::Narrator,
+                        kind: TableKind::Speech,
                         text: narration.clone(),
                     }),
                     hold,
@@ -292,9 +333,14 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         } else {
             motion.director.on_view(now, diff)
         };
-        (commands, restart.then_some(speech).flatten(), chime)
+        (
+            commands,
+            restart.then_some(speech).flatten(),
+            chime,
+            immediate,
+        )
     });
-    let Some((commands, seed, chime)) = planned else {
+    let Some((commands, seed, chime, immediate)) = planned else {
         return Ok(());
     };
     if chime {
@@ -304,6 +350,9 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     if let Some(line) = seed {
         // A reload shows the current line silently, attributed to its speaker.
         show_line(client, &line, false)?;
+    }
+    for line in &immediate {
+        show_line(client, line, false)?;
     }
     ensure_frame();
     applied
@@ -351,6 +400,7 @@ fn state_name(state: StageState) -> &'static str {
         StageState::Idle => "",
         StageState::LeavingScene => "leaving",
         StageState::Interstitial => "interstitial",
+        StageState::TitleCard => "title",
         StageState::EnteringScene => "entering",
         StageState::Narrating => "narrating",
         StageState::Speaking => "speaking",
@@ -359,6 +409,7 @@ fn state_name(state: StageState) -> &'static str {
         StageState::Defeat => "defeat",
         StageState::Healing => "healing",
         StageState::Aftermath => "aftermath",
+        StageState::ClosingCard => "closing",
     }
 }
 
@@ -389,6 +440,12 @@ fn enter(
             }
         }
         (StageState::Speaking, Some(Detail::Line(line))) => show_line(client, line, true)?,
+        (StageState::TitleCard | StageState::ClosingCard, Some(Detail::Card(card))) => {
+            let state = client.borrow();
+            if let Some(stage) = state.live.tv.as_ref() {
+                stage.show_card(&state.document, card)?;
+            }
+        }
         (StageState::Aftermath, Some(Detail::Banner { victory })) => {
             live_sfx::play(
                 if *victory {
@@ -565,30 +622,33 @@ fn impact(client: &Rc<RefCell<Client>>, roll: &RollDetail) -> Result<(), JsValue
     Ok(())
 }
 
-fn slot_of(role: TableRole) -> Option<ActorSlot> {
-    match role {
-        TableRole::Hero(index) => Some(ActorSlot::Hero(index)),
-        TableRole::Npc => Some(ActorSlot::Npc),
-        TableRole::Narrator => None,
-    }
-}
-
-/// A character's speech bubble at the figure, with a soft pop when it appears.
+/// A character's line at the figure that speaks it, with a soft pop when it appears: a
+/// non-player line at the character named, a hero's line at that hero.
 fn show_line(client: &Rc<RefCell<Client>>, line: &LineDetail, sound: bool) -> Result<(), JsValue> {
-    let Some(slot) = slot_of(line.role) else {
-        return Ok(());
-    };
     let state = client.borrow();
     let Some(stage) = state.live.tv.as_ref() else {
         return Ok(());
     };
+    let slot = match line.role {
+        TableRole::Hero(index) => Some(ActorSlot::Hero(index)),
+        TableRole::Npc => stage.figures().npc_slot_for(&line.speaker),
+        TableRole::Narrator => None,
+    };
+    let Some(slot) = slot else {
+        return Ok(());
+    };
+    let kind = match (line.kind, line.role) {
+        (TableKind::Action, _) => BubbleKind::Action,
+        (TableKind::Speech, TableRole::Hero(_)) => BubbleKind::Typed,
+        (TableKind::Speech, _) => BubbleKind::Speech,
+    };
     stage.figures().say(
         slot,
-        BubbleKind::Speech,
+        kind,
         &line.speaker,
         &line.text,
         Duration::ZERO,
-        line.role == TableRole::Npc,
+        line.role == TableRole::Npc && line.kind == TableKind::Speech,
     )?;
     if sound {
         live_sfx::play(Cue::BubblePop, Duration::ZERO);
@@ -675,7 +735,17 @@ pub(super) fn on_player_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue
     };
     let snapshot = presentation::snapshot(journey, scene);
     let lines = presentation::table_lines(&view);
-    let hidden = client.borrow().document.hidden();
+    let (hidden, generation) = {
+        let state = client.borrow();
+        (state.document.hidden(), state.generation)
+    };
+    // The server restarts its table-log sequence on a new watch connection.
+    with_motion(|motion| {
+        if motion.generation != generation {
+            motion.generation = generation;
+            motion.seen.clear();
+        }
+    });
     let key = format!("{}|{}", journey.phase, scene.title);
     let scene_changed = with_motion(|motion| {
         let changed = motion

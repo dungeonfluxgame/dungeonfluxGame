@@ -89,40 +89,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The longest lobby lede that still sits on a few TV lines.
-const LEDE_CHARACTERS: usize = 120;
-
-/// The lobby's one-line lede: the room narration's first sentence, ended by a full stop, a
-/// question mark or an exclamation mark. Generated narration can open with a long sentence, so
-/// one that would overrun the line is cut at its last clause break within the limit.
-fn first_sentence(text: &str) -> String {
-    let end = text
-        .char_indices()
-        .find(|&(index, character)| {
-            matches!(character, '.' | '!' | '?')
-                && text[index + character.len_utf8()..].starts_with(' ')
-        })
-        .map_or(text.len(), |(index, character)| {
-            index + character.len_utf8()
-        });
-    let sentence = &text[..end];
-    if sentence.chars().count() <= LEDE_CHARACTERS {
-        return sentence.to_owned();
-    }
-    let clause_end = sentence
-        .char_indices()
-        .filter(|&(index, character)| {
-            let characters = sentence[..index].chars().count();
-            matches!(character, ',' | ';' | ':') && (40..=LEDE_CHARACTERS).contains(&characters)
-        })
-        .map(|(index, _)| index)
-        .next_back();
-    match clause_end {
-        Some(index) => format!("{}.", sentence[..index].trim_end()),
-        None => sentence.to_owned(),
-    }
-}
-
 fn join_label(path: &str) -> String {
     let origin = web_sys::window()
         .and_then(|window| window.location().origin().ok())
@@ -235,7 +201,7 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
     Ok(TvModel {
         mode: if lobby { TvMode::Lobby } else { TvMode::Scene },
         title: input.scene.title.clone(),
-        lede: first_sentence(input.narration),
+        lede: crate::presentation::first_sentence(input.narration),
         narration: input.narration.to_owned(),
         speaker,
         room_code: input.journey.room_code.clone(),
@@ -260,6 +226,9 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         art,
         art_fallback,
         cast: Vec::new(),
+        place: input.scene.place.clone(),
+        rules_note: input.scene.rules_note.clone(),
+        choices: input.journey.table_choices.clone(),
         family: crate::presentation::scene_family(&input.scene.scene_asset),
         scene_key: input.scene.title.clone(),
     })

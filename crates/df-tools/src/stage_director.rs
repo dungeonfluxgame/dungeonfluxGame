@@ -10,6 +10,9 @@
 //! Bounds: every state has a maximum dwell, so a finish signal that never arrives times out;
 //! when the queue is long or the display is far behind, cosmetic cues are dropped and the
 //! outcome-bearing ones (the killing blow, the defeat, the banner) are kept in shortened form.
+//! The dwell of a spoken or narrated line is itself cosmetic: a newly accepted view that
+//! carries an outcome ends it at once, and a plain redraw never waits for it, so the display
+//! cannot lag the phones behind a long line.
 use std::collections::VecDeque;
 
 /// Queue length beyond which stale cosmetic cues are collapsed.
@@ -19,6 +22,9 @@ pub(crate) const LAG_LIMIT_MS: u64 = 4_000;
 const SHORT_FLOOR_MS: u32 = 150;
 const VOICE_MINIMUM_MS: u32 = 1_200;
 const VOICE_GRACE_MS: u32 = 3_000;
+/// The title card is about three seconds; the closing card stays a little longer.
+const TITLE_CARD_MS: u32 = 3_000;
+const CLOSING_CARD_MS: u32 = 4_500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StageState {
@@ -26,6 +32,8 @@ pub(crate) enum StageState {
     LeavingScene,
     /// The wordmark shows while the painting changes underneath.
     Interstitial,
+    /// The adventure's title card over the dimmed painting, before the story's first scene.
+    TitleCard,
     EnteringScene,
     Narrating,
     Speaking,
@@ -34,6 +42,8 @@ pub(crate) enum StageState {
     Defeat,
     Healing,
     Aftermath,
+    /// The closing card that names the heroes once a fight is won or lost.
+    ClosingCard,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +59,8 @@ pub(crate) enum CueKind {
     Narrate,
     Speak,
     Banner,
+    /// Only ever started by a banner: the closing card follows the aftermath.
+    Closing,
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +93,9 @@ pub(crate) enum Command<D> {
 #[derive(Clone, Debug)]
 pub(crate) struct ViewDiff<D> {
     pub(crate) scene_changed: bool,
+    /// The story begins with this view: the scene change shows the title card (the payload)
+    /// after the wordmark and before the scene enters.
+    pub(crate) title: Option<D>,
     pub(crate) roll: Option<D>,
     pub(crate) impact: Option<D>,
     /// The target of the roll dropped to zero hit points.
@@ -88,6 +103,8 @@ pub(crate) struct ViewDiff<D> {
     pub(crate) heal: Option<D>,
     /// The fight ended in this view; the payload describes the banner.
     pub(crate) banner: Option<D>,
+    /// The closing card that follows the banner of a fight that ended in this view.
+    pub(crate) closing: Option<D>,
     pub(crate) narration: Option<(D, u32)>,
     pub(crate) speech: Option<(D, u32)>,
     /// A voice clip is expected, so a line waits for its end signal (up to a bound).
@@ -98,11 +115,13 @@ impl<D> Default for ViewDiff<D> {
     fn default() -> Self {
         Self {
             scene_changed: false,
+            title: None,
             roll: None,
             impact: None,
             defeat: None,
             heal: None,
             banner: None,
+            closing: None,
             narration: None,
             speech: None,
             voiced: false,
@@ -191,8 +210,9 @@ impl<D: Clone> StageDirector<D> {
             cues.extend(diff.roll.map(|d| make(CueKind::Roll, Some(d))));
             cues.extend(diff.impact.map(|d| make(CueKind::Impact, Some(d))));
             cues.extend(diff.defeat.map(|d| make(CueKind::Defeat, Some(d))));
-            cues.push(make(CueKind::Scene, None));
+            cues.push(make(CueKind::Scene, diff.title.clone()));
             cues.extend(diff.banner.map(|d| make(CueKind::Banner, Some(d))));
+            cues.extend(diff.closing.map(|d| make(CueKind::Closing, Some(d))));
         } else {
             cues.push(Self::cue(CueKind::Render, None, now_ms, false));
             cues.extend(
@@ -212,20 +232,50 @@ impl<D: Clone> StageDirector<D> {
                     .map(|d| Self::cue(CueKind::Defeat, Some(d), now_ms, false)),
             );
         }
+        // The title card is a planned wait, not lag: the lines behind it are not "late".
+        let planned_wait = if diff.title.is_some() {
+            u64::from(TITLE_CARD_MS)
+        } else {
+            0
+        };
         for (kind, line) in [
             (CueKind::Narrate, diff.narration),
             (CueKind::Speak, diff.speech),
         ] {
             if let Some((detail, hold_ms)) = line {
-                let mut cue = Self::cue(kind, Some(detail), now_ms, false);
+                let mut cue = Self::cue(kind, Some(detail), now_ms + planned_wait, false);
                 cue.hold_ms = hold_ms;
                 cue.voiced = diff.voiced;
                 cues.push(cue);
             }
         }
         self.queue.extend(cues);
+        self.preempt_cosmetic_dwell();
         self.collapse_if_behind(now_ms);
         self.advance(now_ms)
+    }
+
+    /// A line being narrated or spoken is cosmetic. When the cues just queued carry an outcome
+    /// (a roll, a defeat, a scene change, a banner) the line ends now rather than holding
+    /// that outcome back; the new view's own lines still play after it.
+    fn preempt_cosmetic_dwell(&mut self) {
+        let dwelling = self.active.as_ref().is_some_and(|active| {
+            matches!(active.state, StageState::Narrating | StageState::Speaking)
+        });
+        let outcome = self.queue.iter().any(|cue| {
+            matches!(
+                cue.kind,
+                CueKind::Roll
+                    | CueKind::Impact
+                    | CueKind::Defeat
+                    | CueKind::Scene
+                    | CueKind::Banner
+                    | CueKind::Closing
+            )
+        });
+        if dwelling && outcome {
+            self.active = None;
+        }
     }
 
     pub(crate) fn on_tick(&mut self, now_ms: u64) -> Vec<Command<D>> {
@@ -320,6 +370,16 @@ impl<D: Clone> StageDirector<D> {
                 shorten(1_200, cue.short, 3),
                 false,
             ),
+            StageState::TitleCard => (
+                shorten(TITLE_CARD_MS, cue.short, 3),
+                shorten(TITLE_CARD_MS, cue.short, 3),
+                false,
+            ),
+            StageState::ClosingCard => (
+                shorten(CLOSING_CARD_MS, cue.short, 3),
+                shorten(CLOSING_CARD_MS, cue.short, 3),
+                false,
+            ),
             StageState::Narrating | StageState::Speaking if cue.voiced => (
                 VOICE_MINIMUM_MS.min(cue.hold_ms),
                 cue.hold_ms + VOICE_GRACE_MS,
@@ -365,6 +425,17 @@ impl<D: Clone> StageDirector<D> {
         loop {
             if let Some(active) = self.active.as_ref() {
                 if !Self::finished(active, now_ms) {
+                    // A plain redraw is instant and never waits behind a line's dwell.
+                    if matches!(active.state, StageState::Narrating | StageState::Speaking) {
+                        while self
+                            .queue
+                            .front()
+                            .is_some_and(|cue| cue.kind == CueKind::Render)
+                        {
+                            self.queue.pop_front();
+                            commands.push(Command::Render);
+                        }
+                    }
                     break;
                 }
                 let Some(ended) = self.active.take() else {
@@ -402,6 +473,7 @@ impl<D: Clone> StageDirector<D> {
                 CueKind::Narrate => StageState::Narrating,
                 CueKind::Speak => StageState::Speaking,
                 CueKind::Banner => StageState::Aftermath,
+                CueKind::Closing => StageState::ClosingCard,
             };
             self.start_phase(now_ms, (cue, state), &mut commands);
         }
@@ -410,9 +482,12 @@ impl<D: Clone> StageDirector<D> {
 
     /// The state that follows a scene change's leaving and interstitial phases.
     fn next_phase(&self, ended: &Active<D>) -> Option<(Cue<D>, StageState)> {
+        // A scene change that carries a payload is the story's beginning: its title card
+        // shows between the wordmark and the scene entering.
         let next = match ended.state {
             StageState::LeavingScene => StageState::Interstitial,
-            StageState::Interstitial => StageState::EnteringScene,
+            StageState::Interstitial if ended.detail.is_some() => StageState::TitleCard,
+            StageState::Interstitial | StageState::TitleCard => StageState::EnteringScene,
             _ => return None,
         };
         Some((
@@ -663,5 +738,158 @@ mod tests {
         assert_eq!(director.queue_len(), 0);
         assert_eq!(director.state(), StageState::Idle);
         assert!(director.on_tick(50).is_empty());
+    }
+
+    fn names(commands: &[Command<&'static str>]) -> Vec<String> {
+        states(commands)
+            .into_iter()
+            .filter(|name| name != "rest")
+            .collect()
+    }
+
+    #[test]
+    fn the_story_begins_with_the_wordmark_then_the_title_card_then_the_scene() {
+        let mut director = Director::new();
+        let mut commands = director.on_view(
+            0,
+            ViewDiff {
+                scene_changed: true,
+                title: Some("title"),
+                narration: Some(("opening", 1_500)),
+                ..ViewDiff::default()
+            },
+        );
+        commands.extend(run(&mut director, 50, 9_000));
+        assert_eq!(
+            names(&commands),
+            [
+                "LeavingScene",
+                "render",
+                "Interstitial",
+                "TitleCard",
+                "EnteringScene",
+                "Narrating"
+            ]
+        );
+        let card = commands.iter().find_map(|command| match command {
+            Command::Enter {
+                state: StageState::TitleCard,
+                detail,
+                ..
+            } => *detail,
+            _ => None,
+        });
+        assert_eq!(card, Some("title"), "the card's payload reaches the browser");
+    }
+
+    #[test]
+    fn the_title_card_lasts_about_three_seconds() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                scene_changed: true,
+                title: Some("title"),
+                ..ViewDiff::default()
+            },
+        );
+        // Leaving 350 ms and the interstitial 700 ms come first.
+        director.on_tick(1_050);
+        assert_eq!(director.state(), StageState::TitleCard);
+        director.on_tick(1_050 + 2_950);
+        assert_eq!(director.state(), StageState::TitleCard);
+        director.on_tick(1_050 + 3_000);
+        assert_eq!(director.state(), StageState::EnteringScene);
+    }
+
+    #[test]
+    fn an_ordinary_scene_change_has_no_title_card() {
+        let mut director = Director::new();
+        let mut commands = director.on_view(
+            0,
+            ViewDiff {
+                scene_changed: true,
+                ..ViewDiff::default()
+            },
+        );
+        commands.extend(run(&mut director, 50, 4_000));
+        assert!(!names(&commands).iter().any(|name| name == "TitleCard"));
+    }
+
+    #[test]
+    fn a_won_or_lost_fight_ends_with_the_closing_card_after_the_banner() {
+        let mut director = Director::new();
+        let mut diff = killing_blow();
+        diff.closing = Some("closing");
+        let mut commands = director.on_view(0, diff);
+        commands.extend(run(&mut director, 50, 16_000));
+        let order = names(&commands);
+        assert_eq!(
+            &order[order.len() - 3..],
+            ["EnteringScene", "Aftermath", "ClosingCard"]
+        );
+        assert_eq!(director.state(), StageState::Idle);
+    }
+
+    #[test]
+    fn an_outcome_never_waits_behind_a_narrated_line() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                narration: Some(("long narration", 7_000)),
+                voiced: true,
+                ..ViewDiff::default()
+            },
+        );
+        assert_eq!(director.state(), StageState::Narrating);
+        let commands = director.on_view(
+            500,
+            ViewDiff {
+                roll: Some("roll"),
+                impact: Some("impact"),
+                ..ViewDiff::default()
+            },
+        );
+        assert_eq!(director.state(), StageState::Rolling, "{commands:?}");
+        assert_eq!(names(&commands), ["render", "Rolling"]);
+    }
+
+    #[test]
+    fn a_scene_change_ends_the_line_being_spoken_at_once() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                speech: Some(("old line", 7_000)),
+                ..ViewDiff::default()
+            },
+        );
+        let commands = director.on_view(
+            300,
+            ViewDiff {
+                scene_changed: true,
+                speech: Some(("new line", 2_000)),
+                ..ViewDiff::default()
+            },
+        );
+        assert_eq!(director.state(), StageState::LeavingScene);
+        assert_eq!(names(&commands), ["LeavingScene"]);
+    }
+
+    #[test]
+    fn a_plain_redraw_is_not_held_behind_a_line() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                speech: Some(("line", 7_000)),
+                ..ViewDiff::default()
+            },
+        );
+        let commands = director.on_view(200, ViewDiff::default());
+        assert_eq!(names(&commands), ["render"]);
+        assert_eq!(director.state(), StageState::Speaking);
+        assert_eq!(director.queue_len(), 0);
     }
 }

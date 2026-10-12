@@ -1,11 +1,20 @@
 //! The display's composited stage: the characters standing in the scene painting.
 //!
 //! The painting is the back layer; each character is an independent element above it (the
-//! transparent cut-out, falling back to a feathered 2:3 portrait and finally to the small
-//! portrait), with a contact shadow, a nameplate with a hit-point bar and speech bubbles that
-//! point at the figure. Everything shown comes from the accepted view's cast; the effects
-//! (step forward, shake, lunge, heal shimmer, floating numbers) are CSS animations on the
-//! figure elements, started by `live_motion` and `update` and never owning game state.
+//! server's transparent cut-out, falling back to a feathered 2:3 portrait and finally to the
+//! small portrait), with a contact shadow, a nameplate and speech bubbles that point at the
+//! figure. Everything shown comes from the accepted view's cast; the effects (step forward,
+//! shake, lunge, heal shimmer, floating numbers) are CSS animations on the figure elements,
+//! started by `live_motion` and `update` and never owning game state.
+//!
+//! The cast is arranged by what the scene is doing, and the stylesheet draws each arrangement
+//! from the `data-arrange` flag set here:
+//! - `stage`: a non-player character is speaking. That one figure stands large centre-right
+//!   with its name and line beneath it; the other non-player figures stand back, dimmed; the
+//!   heroes shrink to compact crest plates at the left edge.
+//! - `party`: nobody is centre stage. The heroes stand large at the left and right edges and
+//!   the cast stands between them.
+//! - `combat`: the fight and its aftermath. Heroes at the edges, the foe centre-right.
 //!
 //! The persistent elements are updated in place. Animations that must restart (a second hit,
 //! a new line) alternate between two keyframe names through a `data-fx-tick` flag, so no
@@ -13,20 +22,23 @@
 use super::live_sfx::{self, Cue};
 use super::*;
 use crate::{
-    presentation::{ActorSlot, SceneFamily, StageActor},
+    presentation::{ActorSlot, MAX_NPCS, SceneFamily, StageActor},
     stage_art,
 };
 use std::{cell::Cell, time::Duration};
 use web_sys::Event;
 
 const GENERATED: &str = live_tv::GENERATED;
-const SLOTS: usize = 3;
+const HEROES: usize = 2;
+const SLOTS: usize = HEROES + MAX_NPCS;
 /// Hit-point fraction, in percent, under which a figure breathes heavier and shows a vignette.
 const LOW_HEALTH_PERCENT: u32 = 35;
 /// An action call-out stays this long, plus a little for long text.
 const ACTION_HOLD_MS: u64 = 5500;
 const HOLD_PER_EXTRA_CHARACTER_MS: u64 = 40;
 const MAXIMUM_ACTION_HOLD_MS: u64 = 8500;
+/// A hero's typed line stays this long before it fades; a non-player line stays until replaced.
+const TYPED_HOLD_MS: u64 = 12_000;
 const FADE_OUT_MS: u64 = 500;
 const BUBBLE_OUT_ANIMATION: &str = "df-bubble-out";
 const FLOAT_ANIMATION: &str = "df-float-up";
@@ -60,10 +72,22 @@ impl Fx {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum BubbleKind {
-    /// A character's line: stays attributed until replaced.
+    /// A non-player character's line: stays attributed until replaced.
     Speech,
+    /// A hero's typed line: attributed for a while, then fades.
+    Typed,
     /// A call-out of what a character just did: fades after a few seconds.
     Action,
+}
+
+impl BubbleKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Speech => "speech",
+            Self::Typed => "typed",
+            Self::Action => "action",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -87,19 +111,37 @@ impl FloatKind {
 
 fn index(slot: ActorSlot) -> Option<usize> {
     match slot {
-        ActorSlot::Hero(position) if position < 2 => Some(position),
-        ActorSlot::Hero(_) => None,
-        ActorSlot::Npc => Some(2),
+        ActorSlot::Hero(position) if position < HEROES => Some(position),
+        ActorSlot::Npc(position) if position < MAX_NPCS => Some(HEROES + position),
+        ActorSlot::Hero(_) | ActorSlot::Npc(_) => None,
     }
 }
 
-fn slot_name(position: usize) -> &'static str {
-    ["hero-1", "hero-2", "npc"][position]
+fn slot_at(position: usize) -> ActorSlot {
+    if position < HEROES {
+        ActorSlot::Hero(position)
+    } else {
+        ActorSlot::Npc(position - HEROES)
+    }
 }
 
-/// Where each standing place sits across the screen, as a fraction of the width.
+fn slot_name(position: usize) -> String {
+    if position < HEROES {
+        format!("hero-{}", position + 1)
+    } else {
+        format!("npc-{}", position - HEROES)
+    }
+}
+
+/// Which side of the screen a standing place is on, for the direction of a lunge or a dodge.
 fn slot_position(position: usize) -> f32 {
-    [0.15, 0.87, 0.68][position]
+    if position == 0 {
+        0.15
+    } else if position == 1 {
+        0.87
+    } else {
+        0.68
+    }
 }
 
 /// The art a figure tries in order: the cut-out, the 2:3 portrait, the small portrait.
@@ -111,6 +153,7 @@ struct ArtState {
 struct Figure {
     root: Element,
     image: Element,
+    crest: Element,
     name: Element,
     role: Element,
     hit_points: Element,
@@ -128,26 +171,39 @@ pub(super) struct Figures {
     figures: Vec<Figure>,
     animation_end: Closure<dyn FnMut(Event)>,
     scene: RefCell<String>,
-    remembered: RefCell<Option<StageActor>>,
     document: Document,
 }
 
-fn art_candidates(portrait: &str) -> Vec<(&'static str, String)> {
-    let stem = stage_art::stem_of(portrait);
+fn art_candidates(sprite: &str, portrait: &str) -> Vec<(&'static str, String)> {
     let mut candidates = Vec::new();
-    if let Some(sprite) = stage_art::sprite_stem(stem) {
-        candidates.push(("sprite", format!("{GENERATED}/{sprite}")));
+    if !sprite.is_empty() {
+        candidates.push(("sprite", sprite.to_owned()));
     }
+    let stem = stage_art::stem_of(portrait);
     if stem.starts_with("portrait-") {
         candidates.push(("portrait", format!("{GENERATED}/{stem}-full")));
     }
-    candidates.push(("card", portrait.to_owned()));
+    if !portrait.is_empty() {
+        candidates.push(("card", portrait.to_owned()));
+    }
     candidates
 }
 
 fn use_candidate(figure: &Element, image: &Element, kind: &str, url: &str) -> Result<(), JsValue> {
     figure.set_attribute("data-art", kind)?;
     image.set_attribute("src", url)
+}
+
+/// How the cast stands for this view.
+fn arrangement(cast: &[StageActor], mode: StageMode) -> &'static str {
+    let centre_stage = cast
+        .iter()
+        .any(|actor| matches!(actor.slot, ActorSlot::Npc(_)) && actor.speaking);
+    match mode {
+        StageMode::Combat | StageMode::Aftermath => "combat",
+        StageMode::Scene if centre_stage => "stage",
+        StageMode::Scene => "party",
+    }
 }
 
 impl Figures {
@@ -157,7 +213,7 @@ impl Figures {
         let mut figures = Vec::with_capacity(SLOTS);
         for position in 0..SLOTS {
             let figure = node(document, &root, "figure", "tv-fig", "")?;
-            figure.set_attribute("data-slot", slot_name(position))?;
+            figure.set_attribute("data-slot", &slot_name(position))?;
             figure.set_attribute("data-present", "false")?;
             let bubbles = node(document, &figure, "div", "tv-fig-bubbles", "")?;
             let body = node(document, &figure, "div", "tv-fig-body", "")?;
@@ -166,6 +222,7 @@ impl Figures {
             image.set_attribute("alt", "")?;
             image.set_attribute("decoding", "async")?;
             let effects = node(document, &body, "div", "tv-fig-fx", "")?;
+            let crest = node(document, &figure, "div", "tv-fig-crest", "")?;
             let plate = node(document, &figure, "div", "tv-fig-plate", "")?;
             let name = node(document, &plate, "div", "tv-fig-name", "")?;
             let role = node(document, &plate, "div", "tv-fig-role", "")?;
@@ -196,6 +253,7 @@ impl Figures {
             figures.push(Figure {
                 root: figure,
                 image,
+                crest,
                 name,
                 role,
                 hit_points,
@@ -228,7 +286,6 @@ impl Figures {
             figures,
             animation_end,
             scene: RefCell::new(String::new()),
-            remembered: RefCell::new(None),
             document: document.clone(),
         })
     }
@@ -248,8 +305,8 @@ impl Figures {
         }
     }
 
-    /// Shows the cast of the accepted view. A non-player character who has spoken stays on
-    /// stage, no longer speaking, until the scene changes.
+    /// Shows the cast of the accepted view, arranged by what the scene is doing. The server's
+    /// cast already keeps every character of the scene on stage.
     pub(super) fn update(
         &self,
         cast: &[StageActor],
@@ -266,33 +323,53 @@ impl Figures {
                 StageMode::Aftermath => "aftermath",
             },
         )?;
+        self.root
+            .set_attribute("data-arrange", arrangement(cast, mode))?;
         if *self.scene.borrow() != scene {
             *self.scene.borrow_mut() = scene.to_owned();
-            *self.remembered.borrow_mut() = None;
             self.clear_bubbles()?;
         }
-        if let Some(npc) = cast.iter().find(|actor| actor.slot == ActorSlot::Npc) {
-            *self.remembered.borrow_mut() = Some(npc.clone());
-        }
-        let remembered = self.remembered.borrow().clone().map(|mut npc| {
-            if !cast.iter().any(|actor| actor.slot == ActorSlot::Npc) {
-                npc.speaking = false;
-            }
-            npc
-        });
+        // Non-player figures that do not hold the stage stand back, in the cast's order.
+        let stood_back = cast
+            .iter()
+            .filter(|actor| {
+                matches!(actor.slot, ActorSlot::Npc(_))
+                    && !Self::holds_stage(actor, mode)
+                    && !Self::is_foe(actor, mode)
+            })
+            .count();
+        self.root
+            .set_attribute("data-back", &stood_back.to_string())?;
         let mut lit = false;
+        let mut rank = 0;
         for (position, figure) in self.figures.iter().enumerate() {
             let actor = cast
                 .iter()
-                .find(|actor| index(actor.slot) == Some(position) && actor.slot != ActorSlot::Npc)
-                .or(if position == 2 {
-                    remembered.as_ref()
-                } else {
-                    None
-                });
+                .find(|actor| index(actor.slot) == Some(position));
             match actor {
                 Some(actor) => {
                     lit |= actor.speaking;
+                    let role = if matches!(actor.slot, ActorSlot::Hero(_)) {
+                        None
+                    } else if Self::holds_stage(actor, mode) {
+                        Some("focus")
+                    } else if Self::is_foe(actor, mode) {
+                        Some("foe")
+                    } else {
+                        Some("back")
+                    };
+                    match role {
+                        Some(role) => figure.root.set_attribute("data-role", role)?,
+                        None => figure.root.remove_attribute("data-role")?,
+                    }
+                    if role == Some("back") {
+                        figure
+                            .root
+                            .set_attribute("data-rank", &rank.to_string())?;
+                        rank += 1;
+                    } else {
+                        figure.root.remove_attribute("data-rank")?;
+                    }
                     self.apply(figure, actor, mode)?;
                 }
                 None => {
@@ -306,6 +383,18 @@ impl Figures {
         } else {
             self.root.remove_attribute("data-lit")
         }
+    }
+
+    /// The one non-player character who speaks in a scene stands centre stage.
+    fn holds_stage(actor: &StageActor, mode: StageMode) -> bool {
+        mode == StageMode::Scene && actor.speaking && matches!(actor.slot, ActorSlot::Npc(_))
+    }
+
+    /// In a fight the foe is the non-player character who has hit points.
+    fn is_foe(actor: &StageActor, mode: StageMode) -> bool {
+        mode != StageMode::Scene
+            && matches!(actor.slot, ActorSlot::Npc(_))
+            && actor.hit_points.is_some()
     }
 
     fn apply(&self, figure: &Figure, actor: &StageActor, mode: StageMode) -> Result<(), JsValue> {
@@ -335,7 +424,7 @@ impl Figures {
                 )?;
                 if let Some(before) = figure.last_hit_points.get()
                     && current > before
-                    && index(actor.slot).is_some_and(|position| position < 2)
+                    && matches!(actor.slot, ActorSlot::Hero(_))
                 {
                     self.heal(figure, actor, current - before, mode)?;
                 }
@@ -347,16 +436,28 @@ impl Figures {
                 figure.last_hit_points.set(None);
             }
         }
-        self.choose_art(figure, &actor.portrait)
+        self.choose_art(figure, &actor.sprite, &actor.portrait)
     }
 
     /// Restarts the art chain only when the character changed.
-    fn choose_art(&self, figure: &Figure, portrait: &str) -> Result<(), JsValue> {
-        if figure.root.get_attribute("data-portrait").as_deref() == Some(portrait) {
+    fn choose_art(&self, figure: &Figure, sprite: &str, portrait: &str) -> Result<(), JsValue> {
+        let key = format!("{sprite}|{portrait}");
+        if figure.root.get_attribute("data-portrait").as_deref() == Some(key.as_str()) {
             return Ok(());
         }
-        figure.root.set_attribute("data-portrait", portrait)?;
-        let mut candidates = art_candidates(portrait);
+        figure.root.set_attribute("data-portrait", &key)?;
+        figure.crest.set_attribute(
+            "style",
+            &if portrait.is_empty() {
+                String::new()
+            } else {
+                format!("background-image:url({portrait})")
+            },
+        )?;
+        let mut candidates = art_candidates(sprite, portrait);
+        if candidates.is_empty() {
+            return figure.root.set_attribute("data-art", "none");
+        }
         let (kind, url) = candidates.remove(0);
         {
             let mut state = figure.art.borrow_mut();
@@ -409,19 +510,41 @@ impl Figures {
         index(slot).and_then(|position| self.figures.get(position))
     }
 
+    fn present(figure: &Figure) -> bool {
+        figure.root.get_attribute("data-present").as_deref() == Some("true")
+    }
+
     /// The standing place of the present character called `name`.
     pub(super) fn slot_named(&self, name: &str) -> Option<ActorSlot> {
         self.figures
             .iter()
             .enumerate()
             .find_map(|(position, figure)| {
-                let present = figure.root.get_attribute("data-present").as_deref() == Some("true");
-                (present && *figure.name_text.borrow() == name).then_some(match position {
-                    0 => ActorSlot::Hero(0),
-                    1 => ActorSlot::Hero(1),
-                    _ => ActorSlot::Npc,
-                })
+                (Self::present(figure) && *figure.name_text.borrow() == name)
+                    .then(|| slot_at(position))
             })
+    }
+
+    /// Where a non-player line is shown: the figure named like its speaker, otherwise the one
+    /// holding the stage, otherwise the first non-player figure present.
+    pub(super) fn npc_slot_for(&self, name: &str) -> Option<ActorSlot> {
+        let npcs = || {
+            self.figures
+                .iter()
+                .enumerate()
+                .skip(HEROES)
+                .filter(|(_, figure)| Self::present(figure))
+        };
+        self.slot_named(name)
+            .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
+            .or_else(|| {
+                npcs()
+                    .find(|(_, figure)| {
+                        figure.root.get_attribute("data-role").as_deref() == Some("focus")
+                    })
+                    .map(|(position, _)| slot_at(position))
+            })
+            .or_else(|| npcs().next().map(|(position, _)| slot_at(position)))
     }
 
     /// The sign (+1 right, -1 left) from `from` towards `to` across the screen.
@@ -503,20 +626,17 @@ impl Figures {
         // Newest replaces oldest for the same figure.
         figure.bubbles.set_text_content(None);
         let bubble = node(&self.document, &figure.bubbles, "div", "tv-bubble", "")?;
-        bubble.set_attribute(
-            "data-kind",
-            if kind == BubbleKind::Speech {
-                "speech"
-            } else {
-                "action"
-            },
-        )?;
+        bubble.set_attribute("data-kind", kind.name())?;
         if voiced {
             bubble.set_attribute("data-voice-role", "npc")?;
         }
         let appear_ms = appear.as_millis() as u64;
         let extra = (text.chars().count() as u64).saturating_sub(40) * HOLD_PER_EXTRA_CHARACTER_MS;
-        let hold = (ACTION_HOLD_MS + extra).min(MAXIMUM_ACTION_HOLD_MS);
+        let hold = match kind {
+            BubbleKind::Speech => 0,
+            BubbleKind::Typed => TYPED_HOLD_MS,
+            BubbleKind::Action => (ACTION_HOLD_MS + extra).min(MAXIMUM_ACTION_HOLD_MS),
+        };
         bubble.set_attribute(
             "style",
             &format!(
