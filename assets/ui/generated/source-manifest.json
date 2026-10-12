@@ -3784,6 +3784,481 @@
         "attempts": 1
       },
       "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-chandlers-back-room",
+      "path": "assets/ui/generated/scene-dest-chandlers-back-room.webp",
+      "kind": "scene",
+      "bytes": 275944,
+      "sha256": "da973116e0a8064f54acc5c1b9a601f2391f3755bfab6408e6be74adea891517",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-chandlers-back-room.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux premium AAA fantasy tabletop stage backdrop. Generate ONE new opaque image, wide exact 16:9, ideally 2048x1152 or larger, highest available fidelity. The three input images are APPROVED STYLE REFERENCES only, not edit targets: match their artist precisely, cinematic painterly realism, grounded heroic fantasy, deep navy nocturnal shadows, warm amber practical fire/lantern light, cool moonlight, exquisite tactile aged wood, stone, iron, brass and cloth, convincing construction, rich atmospheric depth, crisp coherent detail without plastic gloss. Composition: eye-level view from INSIDE the room a few paces in, natural perspective, readable depth, unmistakable location silhouette from across a living room. Clear open walkable floor across the ENTIRE foreground and lower third, calm darker low-contrast texture for composited standing character cut-outs and interface text. All furniture, storage, tools and interesting props confined to mid-ground/back and sides ABOVE the lower third, no foreground obstacles. Lighting motivated and restrained, amber pools against navy shadows, preserve detail in dark areas. Absolutely NO people, animals, humanoid forms, statues, figures or silhouettes anywhere, including outdoors. NO text, letters, numbers, labels, writing, signage, watermark, signature, border, frame, UI, collage. No cartoon style, gore, muddy detail or oversmoothed surfaces.\nScene: The back room of a ship chandler's: substantial lamp-oil barrels with iron hoops and neatly coiled hemp ropes stacked along walls, a long scarred wooden worktable set lengthwise along a side wall in the mid-ground, a banked stone hearth with low amber embers, hanging ship lanterns, a shuttered rear window with a narrow cool moonlit gap. Maritime provisioning storeroom, instantly identifiable through ropes, oil barrels and ship lanterns, not a tavern. Timber beams, worn floorboards. Leave the foreground open wall-to-wall.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-charcoal-hut",
+      "path": "assets/ui/generated/scene-dest-charcoal-hut.webp",
+      "kind": "scene",
+      "bytes": 346356,
+      "sha256": "76f4f211e51ec72f78f08a8ea9c0a3502cf4b650c127244591481de8e73a3e4a",
+      "dimensions": [
+        1672,
+        940
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-charcoal-hut.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux premium AAA fantasy tabletop stage backdrop. Generate ONE new opaque image, wide exact 16:9, ideally 2048x1152 or larger, highest available fidelity. The three input images are APPROVED STYLE REFERENCES only, not edit targets: match their artist precisely, cinematic painterly realism, grounded heroic fantasy, deep navy nocturnal shadows, warm amber practical fire/lantern light, cool moonlight, exquisite tactile aged wood, stone, iron, brass and cloth, convincing construction, rich atmospheric depth, crisp coherent detail without plastic gloss. Composition: eye-level view from INSIDE the room a few paces in, natural perspective, readable depth, unmistakable location silhouette from across a living room. Clear open walkable floor across the ENTIRE foreground and lower third, calm darker low-contrast texture for composited standing character cut-outs and interface text. All furniture, storage, tools and interesting props confined to mid-ground/back and sides ABOVE the lower third, no foreground obstacles. Lighting motivated and restrained, amber pools against navy shadows, preserve detail in dark areas. Absolutely NO people, animals, humanoid forms, statues, figures or silhouettes anywhere, including outdoors. NO text, letters, numbers, labels, writing, signage, watermark, signature, border, frame, UI, collage. No cartoon style, gore, muddy detail or oversmoothed surfaces.\nScene: Inside a CHARCOAL-BURNERS' HUT in a pine forest: low smoke-darkened timber and rough stone room, a banked hearth with glowing embers against a side wall, coarse sacks of black charcoal and stacked split logs at the mid-ground sides, modest bunches of drying herbs overhead, rear door ajar onto dark pine trunks in cool moonlight. The sacks visibly contain charcoal chunks, surfaces sooty and worn. Rustic compact shelter with open packed-earth/rough flagstone foreground from wall to wall. Low smoky rafters, convincing tactile materials, cozy amber practical light.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-hermits-cabin",
+      "path": "assets/ui/generated/scene-dest-hermits-cabin.webp",
+      "kind": "scene",
+      "bytes": 213192,
+      "sha256": "bb0d8bf5b0b012b8b893063285d28c0bc569e7feeaae04ad8d4fb76de478a56c",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-hermits-cabin.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux premium AAA fantasy tabletop stage backdrop. Generate ONE new opaque image, wide exact 16:9, ideally 2048x1152 or larger, highest available fidelity. The three input images are APPROVED STYLE REFERENCES only, not edit targets: match their artist precisely, cinematic painterly realism, grounded heroic fantasy, deep navy nocturnal shadows, warm amber practical fire/lantern light, cool moonlight, exquisite tactile aged wood, stone, iron, brass and cloth, convincing construction, rich atmospheric depth, crisp coherent detail without plastic gloss. Composition: eye-level view from INSIDE the room a few paces in, natural perspective, readable depth, unmistakable location silhouette from across a living room. Clear open walkable floor across the ENTIRE foreground and lower third, calm darker low-contrast texture for composited standing character cut-outs and interface text. All furniture, storage, tools and interesting props confined to mid-ground/back and sides ABOVE the lower third, no foreground obstacles. Lighting motivated and restrained, amber pools against navy shadows, preserve detail in dark areas. Absolutely NO people, animals, humanoid forms, statues, figures or silhouettes anywhere, including outdoors. NO text, letters, numbers, labels, writing, signage, watermark, signature, border, frame, UI, collage. No cartoon style, gore, muddy detail or oversmoothed surfaces.\nScene: Inside a HERMIT'S TINY CABIN among pines: one compact candlelit room, a simple narrow cot against one side wall and shelf of worn CLOSED unlettered books against the other in the mid-ground, small iron stove with faint amber glow, simple abstract carved wooden charms hanging from rafters (geometric wood pieces only, no faces or figures), small rear window revealing moonlit pine trunks. Intimate modest low timber cabin, clearly a solitary dwelling. A single candle supplies warm amber light. Weathered plank walls, rough wool bedding, soot-dark stove, tactile grain and book covers. Keep the entire near floor and lower third open and dark; cot and stove well behind the foreground.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-old-boathouse",
+      "path": "assets/ui/generated/scene-dest-old-boathouse.webp",
+      "kind": "scene",
+      "bytes": 255226,
+      "sha256": "b66a420c1d1ec5b2a92abfadcf9144d2d7d543318129e7159b6d52e35518009f",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-old-boathouse.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux premium AAA fantasy tabletop stage backdrop. Generate ONE new opaque image, wide exact 16:9, ideally 2048x1152 or larger, highest available fidelity. The three input images are APPROVED STYLE REFERENCES only, not edit targets: match their artist precisely, cinematic painterly realism, grounded heroic fantasy, deep navy nocturnal shadows, warm amber practical fire/lantern light, cool moonlight, exquisite tactile aged wood, stone, iron, brass and cloth, convincing construction, rich atmospheric depth, crisp coherent detail without plastic gloss. Composition: eye-level view from INSIDE the room a few paces in, natural perspective, readable depth, unmistakable location silhouette from across a living room. Clear open walkable floor across the ENTIRE foreground and lower third, calm darker low-contrast texture for composited standing character cut-outs and interface text. All furniture, storage, tools and interesting props confined to mid-ground/back and sides ABOVE the lower third, no foreground obstacles. Lighting motivated and restrained, amber pools against navy shadows, preserve detail in dark areas. Absolutely NO people, animals, humanoid forms, statues, figures or silhouettes anywhere, including outdoors. NO text, letters, numbers, labels, writing, signage, watermark, signature, border, frame, UI, collage. No cartoon style, gore, muddy detail or oversmoothed surfaces.\nScene: Inside an OLD BOATHOUSE: full upturned wooden skiffs resting on believable trestles along both side walls in the mid-ground, their graceful ribbed hulls immediately readable as boats; oars and fishing nets hanging on walls, one single warm amber hanging lantern. Large timber slipway doors ajar at the back onto cool moonlit dark water. Weathered roof beams and worn wide floor planks, maritime workshop depth. Boats and supports stay out of the entire foreground and lower third. No figures, no birds, no fish.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-tidewatch-lamp-room",
+      "path": "assets/ui/generated/scene-dest-tidewatch-lamp-room.webp",
+      "kind": "scene",
+      "bytes": 305104,
+      "sha256": "afc546805576fffd5653ec12361b66c178701be5a9bbfc9cc44ab3931faf91e5",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-tidewatch-lamp-room.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: DungeonFlux premium AAA fantasy tabletop stage backdrop. Generate ONE new opaque image, wide exact 16:9, ideally 2048x1152 or larger, highest available fidelity. The three input images are APPROVED STYLE REFERENCES only, not edit targets: match their artist precisely, cinematic painterly realism, grounded heroic fantasy, deep navy nocturnal shadows, warm amber practical fire/lantern light, cool moonlight, exquisite tactile aged wood, stone, iron, brass and cloth, convincing construction, rich atmospheric depth, crisp coherent detail without plastic gloss. Composition: eye-level view from INSIDE the room a few paces in, natural perspective, readable depth, unmistakable location silhouette from across a living room. Clear open walkable floor across the ENTIRE foreground and lower third, calm darker low-contrast texture for composited standing character cut-outs and interface text. All furniture, storage, tools and interesting props confined to mid-ground/back and sides ABOVE the lower third, no foreground obstacles. Lighting motivated and restrained, amber pools against navy shadows, preserve detail in dark areas. Absolutely NO people, animals, humanoid forms, statues, figures or silhouettes anywhere, including outdoors. NO text, letters, numbers, labels, writing, signage, watermark, signature, border, frame, UI, collage. No cartoon style, gore, muddy detail or oversmoothed surfaces.\nScene: The lamp room at the TOP of a harbour watch tower: a GREAT BRASS BEACON LAMP behind a coherent glass-paned protective enclosure in the rear mid-ground, glowing amber and throwing a beam outward over black harbour water FAR BELOW, visible through the broad glazed outer tower windows. Clearly an elevated beacon chamber, not a lantern shop. Circular masonry/timber room. A small spiral stair hatch at the rear SIDE edge, safely outside the open foreground, its descending curved steps readable. Unlettered nautical charts showing only coast outlines and no symbols or writing, and oil cans on a narrow side workbench. Foreground: uninterrupted calm dark stone floor, no central pedestal or hatch.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-cairn-house",
+      "path": "assets/ui/generated/scene-dest-cairn-house.webp",
+      "kind": "scene",
+      "bytes": 236212,
+      "sha256": "17c18b0386bf88e0fd519270ac7515d8fdfd6beb08e5417e1e7f0a2a9d58538f",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-cairn-house.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium AAA DungeonFlux fantasy tabletop stage backdrop. The three attached approved images are STYLE REFERENCES ONLY: match their artist, cinematic painterly realism, grounded heroic fantasy, deep navy night shadows, restrained warm amber lantern/firelight, tactile aged wood and stone, rich believable material texture, crisp intentional painterly detail, atmospheric depth. Create a new original interior, not a collage. Output one opaque landscape image, exact 16:9, ideally 2048x1152 or larger at highest available quality. Eye-level viewpoint standing a few paces INSIDE the place, natural perspective, readable room depth. The entire foreground and lower third must be continuous clear open floor, dark and calm for compositing standing character cutouts and interface text; furniture and all props confined to the mid-ground, rear and sides. No objects cutting across the front floor. NO people, animals, creatures, figures, statues of figures, silhouettes, faces, text, letters, numbers, signage, watermark, signature, borders, frame or UI. No cartoon style, gore, plastic materials, muddy detail, fisheye or overhead framing.\nPrimary request: Inside a squat stone refuge house on a high mountain pass, a sturdy simple storm shelter with thick massive dry stone walls and a low rough timber beam roof. A long weathered plank table is pushed against ONE SIDE WALL in the mid-ground, with modest practical unlettered cups. A single iron oil lamp hangs from a central roof beam, casting warm amber light. Neatly stacked firewood rests along the rear-side wall. A heavily built timber storm door stands at the BACK with wind-blown snow gathered only at its foot; a narrow small window reveals cold moonlit storm clouds and snow on a high pass. The scene reads as a rugged refuge house, architectural depth behind a generous continuous open flagstone floor. Furniture ends well above the lower third. The foreground and lower third are wholly empty, calm navy-dark stone floor; snow stays at the rear door. Rich masonry, weathered timber, black iron lamp, cinematic amber against cool moonlight, painterly realism matching approved house art. Night.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-muleteers-inn",
+      "path": "assets/ui/generated/scene-dest-muleteers-inn.webp",
+      "kind": "scene",
+      "bytes": 278516,
+      "sha256": "417f9a4038e433ceb6a5da7a43b0dbd7f68519d083ab1e4c45b016751edc5dee",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-muleteers-inn.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium AAA DungeonFlux fantasy tabletop stage backdrop. The three attached approved images are STYLE REFERENCES ONLY: match their artist, cinematic painterly realism, grounded heroic fantasy, deep navy night shadows, restrained warm amber lantern/firelight, tactile aged wood and stone, rich believable material texture, crisp intentional painterly detail, atmospheric depth. Create a new original interior, not a collage. Output one opaque landscape image, exact 16:9, ideally 2048x1152 or larger at highest available quality. Eye-level viewpoint standing a few paces INSIDE the place, natural perspective, readable room depth. The entire foreground and lower third must be continuous clear open floor, dark and calm for compositing standing character cutouts and interface text; furniture and all props confined to the mid-ground, rear and sides. No objects cutting across the front floor. NO people, animals, creatures, figures, statues of figures, silhouettes, faces, text, letters, numbers, signage, watermark, signature, borders, frame or UI. No cartoon style, gore, plastic materials, muddy detail, fisheye or overhead framing.\nPrimary request: The common room of a mountain muleteers' inn, unmistakably an inn at a glance: spacious welcoming heavy-beamed timber and stone room, a great blazing hearth at the BACK, distinctive worn leather pack saddles and practical harness hanging on the rear and side walls, a rough wooden bar with round kegs on ONE SIDE in the mid-ground, tankards and bottles behind the bar, long benches pushed against the side walls, snow accumulated outside a small diamond-paned window with moonlit mountain weather beyond. Warm amber hanging lantern and firelight, cool blue window moonlight. Tactile aged dark oak, rough hearth masonry, believable supple leather straps and brass harness rings. Bar and benches end before the front third; the whole foreground and lower third is uninterrupted clear dark worn plank floor with restrained reflections. No hanging saddle may resemble any animal; absolutely no animals or figures. Night.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-pilgrims-rest",
+      "path": "assets/ui/generated/scene-dest-pilgrims-rest.webp",
+      "kind": "scene",
+      "bytes": 249552,
+      "sha256": "69080fd17085fe879192922fa82cc3f2f3fb6858c8867d1c31089a715a092742",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-pilgrims-rest.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium AAA DungeonFlux fantasy tabletop stage backdrop. The three attached approved images are STYLE REFERENCES ONLY: match their artist, cinematic painterly realism, grounded heroic fantasy, deep navy night shadows, restrained warm amber lantern/firelight, tactile aged wood and stone, rich believable material texture, crisp intentional painterly detail, atmospheric depth. Create a new original interior, not a collage. Output one opaque landscape image, exact 16:9, ideally 2048x1152 or larger at highest available quality. Eye-level viewpoint standing a few paces INSIDE the place, natural perspective, readable room depth. The entire foreground and lower third must be continuous clear open floor, dark and calm for compositing standing character cutouts and interface text; furniture and all props confined to the mid-ground, rear and sides. No objects cutting across the front floor. NO people, animals, creatures, figures, statues of figures, silhouettes, faces, text, letters, numbers, signage, watermark, signature, borders, frame or UI. No cartoon style, gore, plastic materials, muddy detail, fisheye or overhead framing.\nPrimary request: A pilgrims' rest hall, recognisable immediately as a welcoming roadside shelter for travellers: whitewashed stone walls, substantial long wooden benches pushed along the side walls, a roaring fire in a wide stone hearth at the back, walking staffs and travel cloaks hung neatly on wooden pegs in the rear and sides, a small wayside shrine niche containing only a simple unlettered abstract sacred stone and candles, no humanoid depiction. Warm amber lanterns and candle/firelight, cool blue moonlight through a small window. The whitewash is weathered and subtly textured; dark worn stone floor remains open across the whole foreground. Keep the shrine subordinate to the shelter hall and the great rear hearth. Night.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-shepherds-bothy",
+      "path": "assets/ui/generated/scene-dest-shepherds-bothy.webp",
+      "kind": "scene",
+      "bytes": 265194,
+      "sha256": "5dfbb1434f639f3abfa46d2a1d13c6f0443afe8bb393f61e113026004018ce91",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-shepherds-bothy.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium AAA DungeonFlux fantasy tabletop stage backdrop. The three attached approved images are STYLE REFERENCES ONLY: match their artist, cinematic painterly realism, grounded heroic fantasy, deep navy night shadows, restrained warm amber lantern/firelight, tactile aged wood and stone, rich believable material texture, crisp intentional painterly detail, atmospheric depth. Create a new original interior, not a collage. Output one opaque landscape image, exact 16:9, ideally 2048x1152 or larger at highest available quality. Eye-level viewpoint standing a few paces INSIDE the place, natural perspective, readable room depth. The entire foreground and lower third must be continuous clear open floor, dark and calm for compositing standing character cutouts and interface text; furniture and all props confined to the mid-ground, rear and sides. No objects cutting across the front floor. NO people, animals, creatures, figures, statues of figures, silhouettes, faces, text, letters, numbers, signage, watermark, signature, borders, frame or UI. No cartoon style, gore, plastic materials, muddy detail, fisheye or overhead framing.\nPrimary request: Inside a mountain shepherds' bothy, immediately recognisable as a rugged intimate overnight mountain shelter: thick dry stone-and-turf walls, rough timber roof beams, a sturdy black iron stove with glowing amber fire and a kettle on top in the rear mid-ground, simple timber bunks with folded fleeces tightly along the side walls, shepherds' crooks leaning by a solid timber rear door, a small window showing a distant moonlit mountain pass. Warm amber oil lantern light with cool moonlight entering the window. Dense tactile rough stone, turf at upper wall/roof junctions, weathered bunks, naturally soft fleeces, soot-dark iron stove. The whole front floor and lower third are empty worn stone in calm deep navy shadow; all bunks and props stay behind the foreground. Night.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-tin-street-tea-house",
+      "path": "assets/ui/generated/scene-dest-tin-street-tea-house.webp",
+      "kind": "scene",
+      "bytes": 118506,
+      "sha256": "49ce37e2c39946fc04055314217fcefc9dc61bb1aac173a327bb094a63700080",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-tin-street-tea-house.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium AAA DungeonFlux fantasy tabletop stage backdrop. The three attached approved images are STYLE REFERENCES ONLY: match their artist, cinematic painterly realism, grounded heroic fantasy, deep navy night shadows, restrained warm amber lantern/firelight, tactile aged wood and stone, rich believable material texture, crisp intentional painterly detail, atmospheric depth. Create a new original interior, not a collage. Output one opaque landscape image, exact 16:9, ideally 2048x1152 or larger at highest available quality. Eye-level viewpoint standing a few paces INSIDE the place, natural perspective, readable room depth. The entire foreground and lower third must be continuous clear open floor, dark and calm for compositing standing character cutouts and interface text; furniture and all props confined to the mid-ground, rear and sides. No objects cutting across the front floor. NO people, animals, creatures, figures, statues of figures, silhouettes, faces, text, letters, numbers, signage, watermark, signature, borders, frame or UI. No cartoon style, gore, plastic materials, muddy detail, fisheye or overhead framing.\nPrimary request: Inside a market tea house at night, unmistakably a tranquil tea house: glowing translucent paper screens in dark wooden lattice frames along the BACK, low wooden tables with delicate steaming cups pushed against the SIDE walls in the mid-ground, shelves filled with COMPLETELY PLAIN SMOOTH UNDECORATED ceramic and tin tea caddies with identical blank glazed surfaces and absolutely NO labels, brush marks, symbols, glyphs, calligraphy, embossing, ornament or writing, graceful brass kettles warming on a compact charcoal brazier at the side, warm hanging PAPER LANTERNS made of completely plain unprinted amber paper. A narrow side window reveals deep navy moonlit night, providing restrained cool blue light against amber lanterns and glowing screens. Walls bare wood with no fabric banners, no hanging artwork, no decorative motifs. Every surface entirely free of any marks that could be read as letters. Believable grounded medieval heroic fantasy interior with aged dark timber and tactile handmade paper, ceramic glaze, hammered brass, subtle steam; painted with exactly the cinematic realism and rich amber/navy finish of the approved DungeonFlux references. Keep low tables behind the foreground and lower third, entirely to the sides, leaving continuous unobstructed open dark wood floor across the full foreground. Readable room depth, calm dark lower third. No living figures or shadows of people behind the screens. Night.\nCritical composition correction: ALL furniture, low tables, floor cushions, braziers, cabinets, steps, plinths and props must be in the rear half of the room, above image y=55%. Across the ENTIRE image width, the bottom 40 percent shows NOTHING EXCEPT flat continuous dark empty wooden floor, including both corners and far left/right edges. No raised side platform, no near-edge brazier. Place the brass kettles and compact brazier against the distant side wall beside the rear screens. Foreground floor must be significantly darker than the amber-lit mid-ground, restrained diffuse light and no bright reflection patches. Eye-level natural view, interior readable depth, no text or decorative labels anywhere.",
+        "attempts": 3
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-caretakers-lodge",
+      "path": "assets/ui/generated/scene-dest-caretakers-lodge.webp",
+      "kind": "scene",
+      "bytes": 243884,
+      "sha256": "94ab2dcae5c0dcc5726ab8e2884b1764304720aeed5495fbf927b0ae92faa9ee",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-caretakers-lodge.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nAsset type: premium AAA DungeonFlux fantasy tabletop stage backdrop, opaque PNG.\nInput images: the three provided images are approved HOUSE STYLE REFERENCES ONLY, not edit targets. Match their artist, cinematic painterly realism, deep navy night shadows and warm amber practical light, rich believable tactile texture, grounded heroic fantasy, atmospheric depth and restrained cinematic polish. Create a NEW distinct place.\nComposition/framing: landscape exact 16:9, render 2048x1152 pixels or larger at highest available quality. Eye-level view from inside the room, viewer a few paces in. Clear open floor across the ENTIRE foreground and lower third; no furniture, table, counter, clutter or props blocking that foreground. Furniture and interesting props set in mid-ground, along sides and back. Darker calmer lower third for later interface text and standing character cut-outs; readable perspective and depth behind. No text is to be drawn.\nLighting/mood: nighttime, amber lantern/candle/firelight and cool navy moonlight through any window; shadow detail remains rich and readable. Wood, stone, metal and glass must have crisp natural texture, subtle painterly finish, never plastic or muddy.\nConstraints: absolutely no people, animals, humanoid figures, statues, faces, silhouettes, monsters or creatures anywhere, including in windows and reflected surfaces. No words, letters, numbers, signage, readable writing, labels, watermark, signature, border, frame or baked-in UI. No cartoon aesthetic, gore, modern objects or oversaturated colors.\nPrimary request: A graveyard caretaker's lodge, unmistakably a tidy small caretaker's room adjoining a cemetery. A small stone hearth at one SIDE in the mid-ground holds a black iron kettle over a modest amber fire. On the back wall a wooden board neatly displays distinct hanging iron keys with no labels or lettering. Spades and an unlit lantern rest beside the sturdy back door, all away from foreground. A window at the back gives a clear view of moonlit headstones in an EMPTY graveyard; headstones have absolutely no engraved letters or symbols that resemble writing. Modest worn wooden room, tidy believable tools, small hearth, cool blue moonlit cemetery depth. No skulls, no skeletons, no figures; tranquil atmosphere. Keep whole lower third and front floor vacant.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-lantern-makers-shop",
+      "path": "assets/ui/generated/scene-dest-lantern-makers-shop.webp",
+      "kind": "scene",
+      "bytes": 320898,
+      "sha256": "bc837eddd52db5178589a78511be8c99def410bcea894562a51a4c840051ef8a",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-lantern-makers-shop.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nAsset type: premium AAA DungeonFlux fantasy tabletop stage backdrop, opaque PNG.\nInput images: the three provided images are approved HOUSE STYLE REFERENCES ONLY, not edit targets. Match their artist, cinematic painterly realism, deep navy night shadows and warm amber practical light, rich believable tactile texture, grounded heroic fantasy, atmospheric depth and restrained cinematic polish. Create a NEW distinct place.\nComposition/framing: landscape exact 16:9, render 2048x1152 pixels or larger at highest available quality. Eye-level view from inside the room, viewer a few paces in. Clear open floor across the ENTIRE foreground and lower third; no furniture, table, counter, clutter or props blocking that foreground. Furniture and interesting props set in mid-ground, along sides and back. Darker calmer lower third for later interface text and standing character cut-outs; readable perspective and depth behind. No text is to be drawn.\nLighting/mood: nighttime, amber lantern/candle/firelight and cool navy moonlight through any window; shadow detail remains rich and readable. Wood, stone, metal and glass must have crisp natural texture, subtle painterly finish, never plastic or muddy.\nConstraints: absolutely no people, animals, humanoid figures, statues, faces, silhouettes, monsters or creatures anywhere, including in windows and reflected surfaces. No words, letters, numbers, signage, readable writing, labels, watermark, signature, border, frame or baked-in UI. No cartoon aesthetic, gore, modern objects or oversaturated colors.\nPrimary request: A lantern-maker's workshop, unmistakably a lamp craft shop. Dozens of UNLIT metal and glass lanterns hanging from the overhead rafters like sleeping fruit, varied believable handmade lamps. A workbench at one SIDE in the mid-ground holds loose glass panes, tin snips and solder, organized craft materials. ONLY ONE lit amber lamp illuminates that workbench and surrounding lamps. At the back, a shop window opens onto a deserted lamplit medieval street under cool moonlight. Weathered timber beams, textured stone walls, worn stone floor. Keep the front full width empty and unobstructed; no lamp or workbench in lower third.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-puppet-theater",
+      "path": "assets/ui/generated/scene-dest-puppet-theater.webp",
+      "kind": "scene",
+      "bytes": 252144,
+      "sha256": "6df6e40c74fcc163df86c2bf95dc5c2d7792b49f4c596cbf3d69c3b0c70a15d8",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-puppet-theater.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nAsset type: premium AAA DungeonFlux fantasy tabletop stage backdrop, opaque PNG.\nInput images: the three provided images are approved HOUSE STYLE REFERENCES ONLY, not edit targets. Match their artist, cinematic painterly realism, deep navy night shadows and warm amber practical light, rich believable tactile texture, grounded heroic fantasy, atmospheric depth and restrained cinematic polish. Create a NEW distinct place.\nComposition/framing: landscape exact 16:9, render 2048x1152 pixels or larger at highest available quality. Eye-level view from inside the room, viewer a few paces in. Clear open floor across the ENTIRE foreground and lower third; no furniture, table, counter, clutter or props blocking that foreground. Furniture and interesting props set in mid-ground, along sides and back. Darker calmer lower third for later interface text and standing character cut-outs; readable perspective and depth behind. No text is to be drawn.\nLighting/mood: nighttime, amber lantern/candle/firelight and cool navy moonlight through any window; shadow detail remains rich and readable. Wood, stone, metal and glass must have crisp natural texture, subtle painterly finish, never plastic or muddy.\nConstraints: absolutely no people, animals, humanoid figures, statues, faces, silhouettes, monsters or creatures anywhere, including in windows and reflected surfaces. No words, letters, numbers, signage, readable writing, labels, watermark, signature, border, frame or baked-in UI. No cartoon aesthetic, gore, modern objects or oversaturated colors.\nPrimary request: A small puppet theatre inside a grounded medieval fantasy room. A distinctly MINIATURE raised puppet performance stage is centered at the BACK, with a half-drawn faded deep red velvet curtain across its small proscenium; the curtain reveals an empty little stage and a painted landscape backdrop with no people or animals. Rows of small footlight candles along that BACK stage edge create warm amber light. Shelves along the SIDE walls hold only non-figurative marionette apparatus: wooden control crosses, neatly coiled puppet strings, folded small costume fabric, empty spool boxes, and scenic props; absolutely NO humanoid dolls, puppets shaped as figures, puppet heads, faces or bodies. Painted scenic backdrop panels lean at the sides, showing only landscape scenery with no figures and no lettering. A few low wooden stools pushed entirely aside in the mid-ground. A small window admits cool moonlight. Tactile worn wooden boards and beams, red velvet and amber candle glow, deep navy shadow; immediately reads as a small puppet performance venue. The viewer stands a few paces inside looking toward the far-back little stage, across a broad wholly empty foreground floor for standing character cut-outs. Stage, candles, stools and all props confined to mid-ground/back, never lower third.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-undercroft-study",
+      "path": "assets/ui/generated/scene-dest-undercroft-study.webp",
+      "kind": "scene",
+      "bytes": 263650,
+      "sha256": "d597a70adaf43bdd6f740e933141cb84b9c12ba1039376d8a5065e966e1b9859",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-undercroft-study.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nAsset type: premium AAA DungeonFlux fantasy tabletop stage backdrop, opaque PNG.\nInput images: the three provided images are approved HOUSE STYLE REFERENCES ONLY, not edit targets. Match their artist, cinematic painterly realism, deep navy night shadows and warm amber practical light, rich believable tactile texture, grounded heroic fantasy, atmospheric depth and restrained cinematic polish. Create a NEW distinct place.\nComposition/framing: landscape exact 16:9, render 2048x1152 pixels or larger at highest available quality. Eye-level view from inside the room, viewer a few paces in. Clear open floor across the ENTIRE foreground and lower third; no furniture, table, counter, clutter or props blocking that foreground. Furniture and interesting props set in mid-ground, along sides and back. Darker calmer lower third for later interface text and standing character cut-outs; readable perspective and depth behind. No text is to be drawn.\nLighting/mood: nighttime, amber lantern/candle/firelight and cool navy moonlight through any window; shadow detail remains rich and readable. Wood, stone, metal and glass must have crisp natural texture, subtle painterly finish, never plastic or muddy.\nConstraints: absolutely no people, animals, humanoid figures, statues, faces, silhouettes, monsters or creatures anywhere, including in windows and reflected surfaces. No words, letters, numbers, signage, readable writing, labels, watermark, signature, border, frame or baked-in UI. No cartoon aesthetic, gore, modern objects or oversaturated colors.\nPrimary request: A below-ground study in a chapel undercroft, unmistakably a quiet vaulted subterranean stone study. Low heavy stone rib vaults and weathered masonry create readable architectural depth. A substantial old wooden desk at one SIDE in mid-ground is heaped with loose old blank papers and rolled parchment under a SINGLE warm amber lamp; all paper surfaces completely unmarked with no writing. Shelves of old closed leather ledgers along side and back walls, book spines entirely blank without letters or decorative pseudo-writing. At the back a worn stone stair rises into deep blue shadow toward the chapel, with a very restrained cool moonlit spill from the unseen opening above. Floor of worn flagstones is fully open across the foreground and lower third. Restrained believable chapel architecture, no statues, icons, people, figures, skulls or magical effects.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-vestry",
+      "path": "assets/ui/generated/scene-dest-vestry.webp",
+      "kind": "scene",
+      "bytes": 263328,
+      "sha256": "facd6cb56ad177708d3226560e40da928734b54d3aa9c44b8b37979dd8df2f46",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-vestry.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept.\nAsset type: premium AAA DungeonFlux fantasy tabletop stage backdrop, opaque PNG.\nInput images: the three provided images are approved HOUSE STYLE REFERENCES ONLY, not edit targets. Match their artist, cinematic painterly realism, deep navy night shadows and warm amber practical light, rich believable tactile texture, grounded heroic fantasy, atmospheric depth and restrained cinematic polish. Create a NEW distinct place.\nComposition/framing: landscape exact 16:9, render 2048x1152 pixels or larger at highest available quality. Eye-level view from inside the room, viewer a few paces in. Clear open floor across the ENTIRE foreground and lower third; no furniture, table, counter, clutter or props blocking that foreground. Furniture and interesting props set in mid-ground, along sides and back. Darker calmer lower third for later interface text and standing character cut-outs; readable perspective and depth behind. No text is to be drawn.\nLighting/mood: nighttime, amber lantern/candle/firelight and cool navy moonlight through any window; shadow detail remains rich and readable. Wood, stone, metal and glass must have crisp natural texture, subtle painterly finish, never plastic or muddy.\nConstraints: absolutely no people, animals, humanoid figures, statues, faces, silhouettes, monsters or creatures anywhere, including in windows and reflected surfaces. No words, letters, numbers, signage, readable writing, labels, watermark, signature, border, frame or baked-in UI. No cartoon aesthetic, gore, modern objects or oversaturated colors.\nPrimary request: A chapel vestry, unmistakably a small room where sacred vestments and candle tools are kept. Empty robes visibly hanging flat on wall pegs at one side in the mid-ground, loose unoccupied draped garments with no human shape or bodies inside. A lamplit old wooden table at one SIDE holds candle stubs and a distinctive brass candle snuffer with a small conical bell and long thin handle. A carved wooden cupboard against a side/back wall has restrained geometric carving, no faces or figurative carvings. At the back is a sturdy door leading to the chapel. A narrow pointed Gothic window admits cool moonlight. Weathered stone, old timber, tactile cloth, candle wax and brass. Warm amber lamp glow; tranquil deep navy shadows. All furniture and robes are set back; clear open worn flagstone floor across whole foreground/lower third. No figures, no statues or humanoid representations.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-eel-catchers-hall",
+      "path": "assets/ui/generated/scene-dest-eel-catchers-hall.webp",
+      "kind": "scene",
+      "bytes": 248072,
+      "sha256": "e919a7513ef56ac0184c024bd9b6f90e835e2b9a7a793ce4c97fa83cf44a0949",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-eel-catchers-hall.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium AAA DungeonFlux fantasy tabletop stage backdrop. Create a NEW scene, using all three input images ONLY as approved house-style references: match their cinematic painterly realism, deep navy night palette, amber practical light, grounded heroic fantasy, believable rich tactile texture, atmospheric depth and restrained contrast exactly, as though painted by the same artist. Output a single opaque wide 16:9 image at 2048x1152 or larger native resolution, highest available quality. Eye-level view from a few paces inside the place, never an exterior establishing view. The entire foreground and lower third must be continuous clear open floor, calm, darker and low contrast, ready for standing character cutouts and interface text; no furniture or clutter blocking any foreground floor. All furniture and interesting props in the midground, rear or far sides. Readable spatial depth. No people, no animals, no living figures, no silhouettes, no text, no letters, no signage, no numbers, no UI, no frame, no watermark, no signature. No cartoon, plastic render, muddy detail or gore.\nPrimary request: An eel-catchers' hall on the marsh, unmistakably a smoky rustic communal timber working hall. Stout timber roof beams carry hanging wicker eel-catching baskets and carefully bundled fishing nets; the baskets are EMPTY, no actual eels or other animals anywhere. A long low fire trench runs across the back of the hall, illuminating smoke drifting gently up into the rafters. Plain wooden benches are pushed to the far side walls in the midground. Hanging amber oil lanterns. Narrow openings at the back and sides show cool moonlit marsh reeds and mist. Dark worn timber floor throughout the spacious wholly empty foreground and lower third. Fishing gear is limited to the rear, sides and overhead beams; no objects on the front floor. Rich believable wicker, hemp rope, weathered timber and restrained smoky atmospheric depth.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-ferrymans-hut",
+      "path": "assets/ui/generated/scene-dest-ferrymans-hut.webp",
+      "kind": "scene",
+      "bytes": 216760,
+      "sha256": "ab2faf717dd5f4319e86ec85d93d005ddccaf837b5c7c49d9c3f1ff6d16d59ea",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-ferrymans-hut.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium AAA DungeonFlux fantasy tabletop stage backdrop. Create a NEW scene, using all three input images ONLY as approved house-style references: match their cinematic painterly realism, deep navy night palette, amber practical light, grounded heroic fantasy, believable rich tactile texture, atmospheric depth and restrained contrast exactly, as though painted by the same artist. Output a single opaque wide 16:9 image at 2048x1152 or larger native resolution, highest available quality. Eye-level view from a few paces inside the place, never an exterior establishing view. The entire foreground and lower third must be continuous clear open floor, calm, darker and low contrast, ready for standing character cutouts and interface text; no furniture or clutter blocking any foreground floor. All furniture and interesting props in the midground, rear or far sides. Readable spatial depth. No people, no animals, no living figures, no silhouettes, no text, no letters, no signage, no numbers, no UI, no frame, no watermark, no signature. No cartoon, plastic render, muddy detail or gore.\nPrimary request: Inside a ferryman's hut at the marsh edge, a low intimate but spacious rustic room with a low timber-beamed ceiling. A small iron stove with amber fire glow stands against one side wall in the midground. A simple rope bed is tucked fully against the opposite far side wall; plain hoodless oilskin coats hang flat from side pegs, visibly empty clothing, never shaped like a standing person. A swinging amber oil lamp hangs overhead. The door at the back is OPEN onto a moored flat-bottomed wooden ferry, visibly recognizable through the doorway beyond a small landing, mist and still cool moonlit marsh water behind it. Ferry is empty; no people, birds or animals. Dark worn board floor runs clear across the full foreground and lower third, with no thresholds, rugs or props obstructing the standing stage area. Beautiful tactile rope weave, aged timber, iron stove and waxed oilskins, cool mist outdoors balanced with warm indoor lamplight.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-heron-shrine",
+      "path": "assets/ui/generated/scene-dest-heron-shrine.webp",
+      "kind": "scene",
+      "bytes": 244566,
+      "sha256": "1b1dc00ba296c4bcee75b9b96a6d163b3ffb2db9b51b8c2ef3a82e5c8429381d",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-heron-shrine.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium AAA DungeonFlux fantasy tabletop stage backdrop. Create a NEW scene, using all three input images ONLY as approved house-style references: match their cinematic painterly realism, deep navy night palette, amber practical light, grounded heroic fantasy, believable rich tactile texture, atmospheric depth and restrained contrast exactly, as though painted by the same artist. Output a single opaque wide 16:9 image at 2048x1152 or larger native resolution, highest available quality. Eye-level view from a few paces inside the place, never an exterior establishing view. The entire foreground and lower third must be continuous clear open floor, calm, darker and low contrast, ready for standing character cutouts and interface text; no furniture or clutter blocking any foreground floor. All furniture and interesting props in the midground, rear or far sides. Readable spatial depth. No people, no animals, no living figures, no silhouettes, no text, no letters, no signage, no numbers, no UI, no frame, no watermark, no signature. No cartoon, plastic render, muddy detail or gore.\nPrimary request: A marsh shrine on stilts, seen from INSIDE its open-sided covered wooden sanctuary. A polished dark board floor occupies the whole foreground. Carved heron lanterns glow on wooden posts along both sides; these are clearly inanimate wooden decorative heron shapes carved into posts, NOT living birds. At the back a small unmistakably sacred altar with neatly arranged reed offerings and several warm candles forms a simple focal point. Open sides reveal layered moonlit reeds and still marsh water in cool blue mist. Timber rafters above, warm amber lantern pools along the sides, cool moonlight through the openings. Make the place instantly recognizable as a shrine. Keep the altar wholly behind the spacious compositing floor.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-mill-house",
+      "path": "assets/ui/generated/scene-dest-mill-house.webp",
+      "kind": "scene",
+      "bytes": 216532,
+      "sha256": "7f73a73a566ba366458ecb73b41e58cc40db7ee7ba26cd04a51b405db8b05209",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-mill-house.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium AAA DungeonFlux fantasy tabletop stage backdrop. Create a NEW scene, using all three input images ONLY as approved house-style references: match their cinematic painterly realism, deep navy night palette, amber practical light, grounded heroic fantasy, believable rich tactile texture, atmospheric depth and restrained contrast exactly, as though painted by the same artist. Output a single opaque wide 16:9 image at 2048x1152 or larger native resolution, highest available quality. Eye-level view from a few paces inside the place, never an exterior establishing view. The entire foreground and lower third must be continuous clear open floor, calm, darker and low contrast, ready for standing character cutouts and interface text; no furniture or clutter blocking any foreground floor. All furniture and interesting props in the midground, rear or far sides. Readable spatial depth. No people, no animals, no living figures, no silhouettes, no text, no letters, no signage, no numbers, no UI, no frame, no watermark, no signature. No cartoon, plastic render, muddy detail or gore.\nPrimary request: Inside a rustic functioning MILL HOUSE at night, immediately recognizable as a flour mill. Great heavy wooden gear wheels with convincing intermeshing timber teeth and strong shafts rise across the BACK of the room, driving a broad round stone millstone in its wooden milling housing at the rear. Flour sacks with plain unmarked linen are stacked against the far side walls. A modest supper table with simple crockery is pushed fully against one side wall in the MIDGROUND, well behind the completely open foreground; no table protrudes into front stage floor. Hanging warm amber lanterns illuminate tactile grain, worn stone, woven linen and a little suspended flour dust in narrow light beams. Small rear/side windows admit cool moonlight, deep navy shadows. Spatially coherent grounded mechanical mill, rich believable material details matching the reference paintings. Dark worn board or flagstone floor is clear and continuous across the whole foreground and lower third; no loose sacks, gear parts, food, flour drifts or tools blocking the front. No people, animals, text or numbers.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-old-hayloft",
+      "path": "assets/ui/generated/scene-dest-old-hayloft.webp",
+      "kind": "scene",
+      "bytes": 258650,
+      "sha256": "f0580420a0bd4225c8c9246b3fb4ae3b0e99e5a2ffc95dcfb242b72315bbfb32",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-old-hayloft.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium AAA DungeonFlux fantasy tabletop stage backdrop. Create a NEW scene, using all three input images ONLY as approved house-style references: match their cinematic painterly realism, deep navy night palette, amber practical light, grounded heroic fantasy, believable rich tactile texture, atmospheric depth and restrained contrast exactly, as though painted by the same artist. Output a single opaque wide 16:9 image at 2048x1152 or larger native resolution, highest available quality. Eye-level view from a few paces inside the place, never an exterior establishing view. The entire foreground and lower third must be continuous clear open floor, calm, darker and low contrast, ready for standing character cutouts and interface text; no furniture or clutter blocking any foreground floor. All furniture and interesting props in the midground, rear or far sides. Readable spatial depth. No people, no animals, no living figures, no silhouettes, no text, no letters, no signage, no numbers, no UI, no frame, no watermark, no signature. No cartoon, plastic render, muddy detail or gore.\nPrimary request: INSIDE AN ELEVATED OLD HAYLOFT, the upper story of a barn, unmistakably an upstairs loft rather than the barn ground floor. Eye-level view from a few paces inside the UPPER timber loft. Hay bales stacked against both side walls under close sloping roof rafters with hanging amber lanterns; a sturdy pitchfork leans against a side post in the midground. A small ladder hatch cut into the floor is tucked at the REAR LEFT side behind the stage area, a wooden ladder DESCENDING through it to the barn below, not climbing to the roof. At the back a large open loading door at UPPER-STOREY HEIGHT overlooks an empty moonlit farmyard BELOW: its opening shows the tops of nearby fences far beneath the loft floor, the upper part of a neighboring roof, and blue moonlit countryside. A low rear sill makes the drop clear. Do not show ground-level yard connecting continuously with the interior floor. Spacious uninterrupted dark board floor clear across the entire foreground and lower third, no holes or hay piles in front; bales and tools exclusively against rear and side walls. Tactile straw strands, worn rafters, warm amber lantern pools and cool moonlight from rear opening, matching the approved reference paintings exactly. No people, farm animals or figures.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-archivists-study",
+      "path": "assets/ui/generated/scene-dest-archivists-study.webp",
+      "kind": "scene",
+      "bytes": 183736,
+      "sha256": "9696c3b163572230d2b6fbb75fbf56dcacded4e61affdc026b5e9ea98f4ec8de",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-archivists-study.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium DungeonFlux stage backdrop. Create one finished AAA fantasy environment painting, opaque PNG, wide 16:9 at 2048x1152 or larger native resolution. Match the three approved reference images in this conversation exactly in painterly realism, believable tactile material detail, restrained cinematic lighting, grounded heroic fantasy, deep navy night shadows and warm amber lantern and candle light, subtle cool moonlight. It must feel painted by the same artist as the inn taproom, lamp room and shepherd's fold references, with their rich texture and atmospheric depth. Eye-level view from a few paces inside the place, broad readable depth. Keep the entire foreground and lower third clear open continuous floor, calmer and darker for composited standing character cutouts and interface text; no foreground table, counter, objects or clutter. Furniture and interesting props are in the middle distance and at sides. No people, animals, figures, statues shaped as people, text, letters, inscriptions, labels, signage, watermarks, signatures, frames, borders or UI anywhere. No cartoon style, plastic or muddy detail, gore or exaggerated fantasy.\nScene: A tall narrow archivist's study rendered as a wide eye-level view. Lofty ladder shelves climb into shadow on both sides, filled with plain closed books with completely blank unlettered spines. A writing desk is tucked at one side in the mid-ground, with a green-shaded oil lamp giving warm amber illumination. An elegant small brass orrery with tiny geometric planets glints beside the desk. A round window at the back admits cool moonlight. Rich woodwork, aged leather and brass. Broad empty dark wooden floor clear across the entire foreground and lower third, with a readable central aisle between the shelves.\nAll books must be CLOSED, and any visible paper completely blank, with no glyph-like marks. The entire bottom third should be open floor, including side edges.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-binding-workshop",
+      "path": "assets/ui/generated/scene-dest-binding-workshop.webp",
+      "kind": "scene",
+      "bytes": 253182,
+      "sha256": "3da367753e087f92ce2a0fb39b650fe45cc5b665c5625326e2828f62ec1bab00",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-binding-workshop.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium DungeonFlux stage backdrop. Create one finished AAA fantasy environment painting, opaque PNG, wide 16:9 at 2048x1152 or larger native resolution. Match the three approved reference images in this conversation exactly in painterly realism, believable tactile material detail, restrained cinematic lighting, grounded heroic fantasy, deep navy night shadows and warm amber lantern and candle light, subtle cool moonlight. It must feel painted by the same artist as the inn taproom, lamp room and shepherd's fold references, with their rich texture and atmospheric depth. Eye-level view from a few paces inside the place, broad readable depth. Keep the entire foreground and lower third clear open continuous floor, calmer and darker for composited standing character cutouts and interface text; no foreground table, counter, objects or clutter. Furniture and interesting props are in the middle distance and at sides. No people, animals, figures, statues shaped as people, text, letters, inscriptions, labels, signage, watermarks, signatures, frames, borders or UI anywhere. No cartoon style, plastic or muddy detail, gore or exaggerated fantasy.\nScene: A recognisable bookbinder's workshop within a great medieval library. Side benches hold unfinished plain unlettered books held in substantial wooden screw presses, folded leather hides, small gilt bookbinding tools and spools of thread. A small glue pot rests on a modest burner on a side bench. Tall library shelves rise along the back, full of richly textured closed books with completely blank unmarked spines. A high window admits cool moonlight. Broad empty stone floor in front, unobstructed center aisle. Warm amber lantern and candle light revealing tactile leather, paper edges, wooden presses and burnished tools.\nCritical refinement: show ONLY CLOSED books or stacks of completely blank unprinted loose paper. No open book, no visible writing surface, no glyph-like marks anywhere. Benches and presses begin behind the foreground, occupying only side mid-ground above the bottom third; the bottom third is completely unobstructed floor all the way to both edges. Keep the bookbinder presses, glue pot, thread and leather recognisable.",
+        "attempts": 2
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-cider-cellar",
+      "path": "assets/ui/generated/scene-dest-cider-cellar.webp",
+      "kind": "scene",
+      "bytes": 264860,
+      "sha256": "33723f19e1003f261612627bdf064066db17b4153f78fe50d3d810053ecc88b4",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-cider-cellar.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium DungeonFlux stage backdrop. Create one finished AAA fantasy environment painting, opaque PNG, wide 16:9 at 2048x1152 or larger native resolution. Match the three approved reference images in this conversation exactly in painterly realism, believable tactile material detail, restrained cinematic lighting, grounded heroic fantasy, deep navy night shadows and warm amber lantern and candle light, subtle cool moonlight. It must feel painted by the same artist as the inn taproom, lamp room and shepherd's fold references, with their rich texture and atmospheric depth. Eye-level view from a few paces inside the place, broad readable depth. Keep the entire foreground and lower third clear open continuous floor, calmer and darker for composited standing character cutouts and interface text; no foreground table, counter, objects or clutter. Furniture and interesting props are in the middle distance and at sides. No people, animals, figures, statues shaped as people, text, letters, inscriptions, labels, signage, watermarks, signatures, frames, borders or UI anywhere. No cartoon style, plastic or muddy detail, gore or exaggerated fantasy.\nScene: A recognisable farmhouse cider cellar with warm weathered brick vaults overhead, orderly rows of wooden cider casks along both side walls, a crooked little table with a candle and plain unmarked tankards tucked to one side in the mid-ground, crates of fresh apples tucked beneath the casks, and stone steps rising at the back toward a cool moonlit opening. Rough stone floor across the open foreground. Warm amber lanterns illuminate brick, coopered oak, iron hoops and apples; cool navy light through the back opening. The clear aisle leads between the casks to the steps.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-orrery-library-forecourt",
+      "path": "assets/ui/generated/scene-dest-orrery-library-forecourt.webp",
+      "kind": "scene",
+      "bytes": 264684,
+      "sha256": "dabff66c5d7ed05686abd4fc0237e7b9f54a6455f7b7732896e6ac11f30bf510",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-orrery-library-forecourt.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium DungeonFlux stage backdrop. Create one finished AAA fantasy environment painting, opaque PNG, wide 16:9 at 2048x1152 or larger native resolution. Match the three approved reference images in this conversation exactly in painterly realism, believable tactile material detail, restrained cinematic lighting, grounded heroic fantasy, deep navy night shadows and warm amber lantern and candle light, subtle cool moonlight. It must feel painted by the same artist as the inn taproom, lamp room and shepherd's fold references, with their rich texture and atmospheric depth. Eye-level view from a few paces inside the place, broad readable depth. Keep the entire foreground and lower third clear open continuous floor, calmer and darker for composited standing character cutouts and interface text; no foreground table, counter, objects or clutter. Furniture and interesting props are in the middle distance and at sides. No people, animals, figures, statues shaped as people, text, letters, inscriptions, labels, signage, watermarks, signatures, frames, borders or UI anywhere. No cartoon style, plastic or muddy detail, gore or exaggerated fantasy.\nScene: A recognisable forecourt outside a great domed library at night. Eye-level view from within the courtyard a few paces in, broad open wet flagstones across the entire foreground and lower third. Wide worn stone steps and imposing tall bronze library doors stand at the back, with warm amber lamps on either side. A brass armillary sphere on a simple stone plinth stands at one side in the mid-ground. The great library dome rises behind the entrance, with the moon above it against a deep navy sky. No sculptures of figures. Restrained amber reflections glimmer on wet paving while the lower third remains calmer and dark. Monumental grounded stone architecture, rich patinated bronze and brass, cinematic atmospheric depth.\nThe armillary sphere has plain unlettered brass rings without numerals, symbols or engraving. Library doors are free of lettering. Show the whole dome and moon above it within the wide composition, retaining an eye-level court view and open foreground.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+    },
+    {
+      "name": "scene-dest-reading-gallery",
+      "path": "assets/ui/generated/scene-dest-reading-gallery.webp",
+      "kind": "scene",
+      "bytes": 191854,
+      "sha256": "8c0365ea5ec7ba33527935c0ad3316ffde60a4d60e2bbcfdfe0c514e1815307a",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "synthetic": true,
+      "source_file": "scene-dest-reading-gallery.png",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Use case: stylized-concept. Asset type: premium DungeonFlux stage backdrop. Create one finished AAA fantasy environment painting, opaque PNG, wide 16:9 at 2048x1152 or larger native resolution. Match the three approved reference images in this conversation exactly in painterly realism, believable tactile material detail, restrained cinematic lighting, grounded heroic fantasy, deep navy night shadows and warm amber lantern and candle light, subtle cool moonlight. It must feel painted by the same artist as the inn taproom, lamp room and shepherd's fold references, with their rich texture and atmospheric depth. Eye-level view from a few paces inside the place, broad readable depth. Keep the entire foreground and lower third clear open continuous floor, calmer and darker for composited standing character cutouts and interface text; no foreground table, counter, objects or clutter. Furniture and interesting props are in the middle distance and at sides. No people, animals, figures, statues shaped as people, text, letters, inscriptions, labels, signage, watermarks, signatures, frames, borders or UI anywhere. No cartoon style, plastic or muddy detail, gore or exaggerated fantasy.\nScene: A recognisable great library reading gallery, seen from standing a few paces inside its upper balcony. Broad open dark wooden balcony floor across the entire foreground and lower third. A beautifully carved wooden balcony rail is in the MID-GROUND, beyond the open standing floor, overlooking rows of empty dark reading desks on the lower library level visibly behind and below the rail. A single warm amber lamp sits on the rail. Book shelves line the sides with completely blank unlettered book spines. Tall arched windows at the back reveal moonlit deep navy night and admit cool light. Strong architectural depth and rich believable timber and stone. Do not place the railing at the foreground edge; preserve generous clear foreground floor.\nOnly CLOSED unmarked books or completely blank paper. Exactly one lamp on the railing. The railing is well beyond the foreground standing area, with open balcony floor occupying at least the lower 40 percent.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
     }
   ]
 }

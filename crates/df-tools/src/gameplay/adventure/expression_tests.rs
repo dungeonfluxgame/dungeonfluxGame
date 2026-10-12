@@ -79,6 +79,10 @@ fn rewrites(name: &str, draft: &str, facts: &Value) -> Option<String> {
     let place = facts["location"]["name"].as_str().unwrap();
     let patron = facts["cast"]["patron"]["name"].as_str().unwrap();
     if let Some(scene) = name.strip_suffix("_title") {
+        // A draft that names where it happens ("A Stand at the market") must keep that place.
+        if let Some((_, place)) = draft.split_once(" at ") {
+            return Some(format!("Challenge at {place}"));
+        }
         return Some(title_for(scene, facts));
     }
     match name {

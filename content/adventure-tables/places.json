@@ -694,11 +694,11 @@
       }
     },
     "orrery-library": {
-      "kind": "library-hall",
-      "name": "the hall of the Orrery Library",
-      "short": "the library hall",
-      "exterior": false,
-      "art": "loc-orrery-library-arrival",
+      "kind": "library-forecourt",
+      "name": "the forecourt of the Orrery Library",
+      "short": "the forecourt",
+      "exterior": true,
+      "art": "loc-orrery-library-forecourt",
       "bridges": {
         "die": 4,
         "entries": [
@@ -707,28 +707,28 @@
               1,
               1
             ],
-            "text": "A disturbance draws you to the library hall."
+            "text": "A disturbance draws you to the forecourt."
           },
           {
             "faces": [
               2,
               2
             ],
-            "text": "You follow the commotion to the library hall."
+            "text": "You follow the commotion to the forecourt."
           },
           {
             "faces": [
               3,
               3
             ],
-            "text": "You leave your meeting place for the library hall."
+            "text": "You leave your meeting place for the forecourt."
           },
           {
             "faces": [
               4,
               4
             ],
-            "text": "A cry leads you to the library hall."
+            "text": "A cry leads you to the forecourt."
           }
         ]
       }
@@ -741,19 +741,19 @@
     },
     "chandlers-back-room": {
       "kind": "chandlers-room",
-      "art": null
+      "art": "dest-chandlers-back-room"
     },
     "tidewatch-lamp-room": {
       "kind": "lamp-room",
-      "art": null
+      "art": "dest-tidewatch-lamp-room"
     },
     "old-boathouse": {
       "kind": "boathouse",
-      "art": null
+      "art": "dest-old-boathouse"
     },
     "charcoal-hut": {
       "kind": "charcoal-hut",
-      "art": null
+      "art": "dest-charcoal-hut"
     },
     "woodcutters-lodge": {
       "kind": "woodland-lodge",
@@ -761,11 +761,11 @@
     },
     "hermits-cabin": {
       "kind": "hermits-cabin",
-      "art": null
+      "art": "dest-hermits-cabin"
     },
     "pilgrims-rest": {
       "kind": "pilgrims-hall",
-      "art": null
+      "art": "dest-pilgrims-rest"
     },
     "windward-waystation": {
       "kind": "waystation-hall",
@@ -773,19 +773,19 @@
     },
     "shepherds-bothy": {
       "kind": "bothy",
-      "art": null
+      "art": "dest-shepherds-bothy"
     },
     "muleteers-inn": {
       "kind": "inn",
-      "art": null
+      "art": "dest-muleteers-inn"
     },
     "cairn-house": {
       "kind": "refuge-hall",
-      "art": null
+      "art": "dest-cairn-house"
     },
     "tin-street-tea-house": {
       "kind": "tea-house",
-      "art": null
+      "art": "dest-tin-street-tea-house"
     },
     "brannocks-apothecary": {
       "kind": "apothecary",
@@ -793,15 +793,15 @@
     },
     "puppet-theater": {
       "kind": "theater",
-      "art": null
+      "art": "dest-puppet-theater"
     },
     "lantern-makers-shop": {
       "kind": "lantern-shop",
-      "art": null
+      "art": "dest-lantern-makers-shop"
     },
     "caretakers-lodge": {
       "kind": "caretakers-lodge",
-      "art": null
+      "art": "dest-caretakers-lodge"
     },
     "quiet-bells-chapel": {
       "kind": "chapel",
@@ -809,11 +809,11 @@
     },
     "undercroft-study": {
       "kind": "undercroft-study",
-      "art": null
+      "art": "dest-undercroft-study"
     },
     "vestry": {
       "kind": "vestry",
-      "art": null
+      "art": "dest-vestry"
     },
     "stilt-house": {
       "kind": "stilt-house",
@@ -821,15 +821,15 @@
     },
     "heron-shrine": {
       "kind": "shrine",
-      "art": null
+      "art": "dest-heron-shrine"
     },
     "eel-catchers-hall": {
       "kind": "eel-catchers-hall",
-      "art": null
+      "art": "dest-eel-catchers-hall"
     },
     "ferrymans-hut": {
       "kind": "ferrymans-hut",
-      "art": null
+      "art": "dest-ferrymans-hut"
     },
     "farmhouse-kitchen": {
       "kind": "farm-kitchen",
@@ -837,15 +837,15 @@
     },
     "old-hayloft": {
       "kind": "hayloft",
-      "art": null
+      "art": "dest-old-hayloft"
     },
     "mill-house": {
       "kind": "mill-house",
-      "art": null
+      "art": "dest-mill-house"
     },
     "cider-cellar": {
       "kind": "cider-cellar",
-      "art": null
+      "art": "dest-cider-cellar"
     },
     "map-room": {
       "kind": "map-room",
@@ -853,15 +853,15 @@
     },
     "binding-workshop": {
       "kind": "bindery",
-      "art": null
+      "art": "dest-binding-workshop"
     },
     "archivists-study": {
       "kind": "archivists-study",
-      "art": null
+      "art": "dest-archivists-study"
     },
     "reading-gallery": {
       "kind": "reading-gallery",
-      "art": null
+      "art": "dest-reading-gallery"
     }
   },
   "contact_destinations": {
@@ -872,7 +872,18 @@
       "map-room",
       "woodland-lodge",
       "farm-kitchen",
-      "stilt-house"
+      "stilt-house",
+      "chandlers-room",
+      "lamp-room",
+      "refuge-hall",
+      "tea-house",
+      "lantern-shop",
+      "undercroft-study",
+      "bindery",
+      "archivists-study",
+      "reading-gallery",
+      "inn",
+      "pilgrims-hall"
     ],
     "river-healer": [
       "net-loft",
@@ -880,7 +891,18 @@
       "chapel",
       "stilt-house",
       "farm-kitchen",
-      "apothecary"
+      "apothecary",
+      "boathouse",
+      "charcoal-hut",
+      "hermits-cabin",
+      "pilgrims-hall",
+      "bothy",
+      "shrine",
+      "eel-catchers-hall",
+      "ferrymans-hut",
+      "hayloft",
+      "caretakers-lodge",
+      "tea-house"
     ],
     "watch-sergeant": [
       "net-loft",
@@ -889,13 +911,34 @@
       "chapel",
       "stilt-house",
       "map-room",
-      "farm-kitchen"
+      "farm-kitchen",
+      "chandlers-room",
+      "lamp-room",
+      "boathouse",
+      "inn",
+      "refuge-hall",
+      "tea-house",
+      "theater",
+      "lantern-shop",
+      "caretakers-lodge",
+      "vestry",
+      "eel-catchers-hall",
+      "ferrymans-hut",
+      "reading-gallery",
+      "undercroft-study"
     ],
     "shrine-keeper": [
       "woodland-lodge",
       "chapel",
       "stilt-house",
-      "farm-kitchen"
+      "farm-kitchen",
+      "pilgrims-hall",
+      "hermits-cabin",
+      "vestry",
+      "shrine",
+      "caretakers-lodge",
+      "undercroft-study",
+      "bothy"
     ],
     "tinker": [
       "net-loft",
@@ -904,11 +947,28 @@
       "apothecary",
       "farm-kitchen",
       "map-room",
-      "stilt-house"
+      "stilt-house",
+      "chandlers-room",
+      "boathouse",
+      "charcoal-hut",
+      "bothy",
+      "inn",
+      "refuge-hall",
+      "tea-house",
+      "theater",
+      "lantern-shop",
+      "hayloft",
+      "cider-cellar",
+      "ferrymans-hut",
+      "bindery"
     ],
     "miller": [
       "mill-house",
-      "farm-kitchen"
+      "farm-kitchen",
+      "hayloft",
+      "cider-cellar",
+      "inn",
+      "eel-catchers-hall"
     ]
   }
 }

@@ -740,7 +740,6 @@ fn startup_substitutes_missing_paintings_without_changing_stored_documents() {
 }
 
 #[test]
-#[ignore = "blocked: Orrery arrival art depicts an indoor hall; exterior decision/art pending"]
 fn every_fight_across_two_hundred_seeds_is_exterior() {
     let tables = tables();
     for seed in 0..200 {
