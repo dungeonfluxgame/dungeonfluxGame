@@ -255,6 +255,13 @@ impl rpc::session_service_server::SessionService for Service {
                         .await
                         .map(|(_, view)| view)
                 };
+                if let Err(status) = &next {
+                    println!(
+                        "WATCH failed code={:?} reason={}",
+                        status.code(),
+                        status.message()
+                    );
+                }
                 let failed = next.is_err();
                 Some((
                     next,
@@ -340,6 +347,15 @@ async fn socket(
                 build: crate::BUILD_ID.to_owned(),
             };
             let mut span = df_observe::begin(&context, "gameplay.local_connection");
+            if let Err(error) = &result {
+                // One stream failure for one member: say which error ended the tunnel, so a phone
+                // that loses its connection leaves a diagnostic instead of a silent close.
+                println!("STREAM ended reason={} kind={:?}", error, error.kind());
+                span.event(
+                    "gameplay.stream_failed",
+                    &[("stream.reason", format!("{error}"))],
+                );
+            }
             span.finish_unmeasured(if result.is_ok() {
                 "connection_closed"
             } else {
@@ -957,7 +973,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         // leaving its outcome unknown and the session fenced (see `timing`).
         transaction_bounds: timing::active().transaction_bounds(),
         codec_limits: codec,
-        maximum_receipt_bytes: 4096,
+        maximum_receipt_bytes: df_persistence::local_demo_scope::RECEIPT_RETAINED_BYTES_MAX,
         verifier: Some(df_persistence::local_demo_scope::verifier()),
         recovery: Some(recovery),
     };
@@ -1068,7 +1084,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         actor::Engine(courier_phase.map(|_| courier_reductions.clone())),
         publication,
         initial,
-        4096,
+        df_persistence::local_demo_scope::RECEIPT_RETAINED_BYTES_MAX,
     ) {
         Ok(owner) => owner,
         Err(_) => {
@@ -1294,13 +1310,13 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         )
         .add_service(
             rpc::action_service_server::ActionServiceServer::new(service.clone())
-                .max_decoding_message_size(8192)
-                .max_encoding_message_size(8192),
+                .max_decoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES)
+                .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES),
         )
         .add_service(
             rpc::session_service_server::SessionServiceServer::new(service.clone())
-                .max_decoding_message_size(8192)
-                .max_encoding_message_size(8192),
+                .max_decoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES)
+                .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES),
         )
         .add_service(
             rpc::room_service_server::RoomServiceServer::new(service.clone())

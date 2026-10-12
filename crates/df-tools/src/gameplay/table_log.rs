@@ -210,16 +210,24 @@ pub(super) fn action_lines(
 ) -> Vec<ActionLine> {
     use rpc::GameplayActionKind as Kind;
     let own = combat.iter().find(|outcome| outcome.actor_name == hero);
+    // The resolved attack names the weapon it used (a longbow for an archer); the hero's melee
+    // weapon is only the fallback when the outcome carries none.
+    let used = own
+        .filter(|outcome| !outcome.weapon.is_empty())
+        .map_or_else(
+            || weapon.to_owned(),
+            |outcome| outcome.weapon.replace('-', " "),
+        );
     let phrase = match kind {
         Kind::CreateCharacter | Kind::Unspecified => return Vec::new(),
         Kind::GreatswordAttack => match own {
             Some(outcome) if outcome.hit => format!(
-                "strikes with the {weapon} \u{2014} {}hit, {} damage",
+                "strikes with the {used} \u{2014} {}hit, {} damage",
                 if outcome.critical { "critical " } else { "" },
                 outcome.damage
             ),
-            Some(_) => format!("swings the {weapon} \u{2014} miss"),
-            None => format!("strikes with the {weapon}"),
+            Some(_) => format!("swings the {used} \u{2014} miss"),
+            None => format!("strikes with the {used}"),
         },
         Kind::SecondWind => "catches a second wind".to_owned(),
         Kind::EndTurn => "ends the turn".to_owned(),
