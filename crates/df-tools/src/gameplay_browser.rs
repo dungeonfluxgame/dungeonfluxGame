@@ -14,6 +14,7 @@ mod live_theme;
 mod live_tv;
 mod live_voice;
 mod public_scene_assets;
+mod talk_control;
 mod view_delivery;
 
 use df_client::{

@@ -119,3 +119,36 @@ and allowed origin to your machine's IP:
 ```sh
 DF_GAMEPLAY_LISTEN=0.0.0.0:63309 DF_GAMEPLAY_ALLOWED_ORIGINS=http://<this-machine-ip>:63309 development/run-gameplay.sh
 ```
+
+### Speech input (hold to talk)
+
+On the phone, a "Hold to talk" button sits under the dialogue text box. The player holds it
+(pointer, touch, or Space/Enter), speaks for up to 15 seconds and releases; the server
+transcribes the clip and the words appear in the same text box. The player edits them and
+presses Send (the same path as a typed line) or Clear. Typing works throughout, and a press is
+the only thing that ever asks the browser for the microphone.
+
+Settings (process environment; invalid values refuse startup without echoing them):
+
+- `ELEVENLABS_API_KEY`: the same key as spoken narration; `run-gameplay.sh` exports it from
+  `.env`. Without it speech input is off and the button is not shown.
+- `DF_GAMEPLAY_STT=off`: switch speech input off. The startup line reads `STT on model=<id>
+  budget=<seconds>s` or `STT off (<reason>)`.
+- `DF_GAMEPLAY_STT_SECONDS_BUDGET`: audio seconds the server may transcribe in one run
+  (default 600). Each clip is charged, rounded up to whole seconds, before the provider call
+  and never refunded; when it is spent the phone says so and typing continues.
+- `DF_GAMEPLAY_STT_MODEL`: default and only accepted value today is `scribe_v2`, the model the
+  registered ElevenLabs speech-to-text route sends.
+
+Browsers only grant the microphone on `https` or `localhost`. A phone that joins over plain
+`http://<this-machine-ip>:63309` cannot use it; the button then explains that instead of
+failing silently. To use speech input from a phone on the network, put an HTTPS front or a
+tunnel in front of the server and set `DF_GAMEPLAY_ALLOWED_ORIGINS` to that `https://` origin.
+
+Privacy: the clip is decoded to 16 kHz mono in the page and sent in one request to
+`POST /gameplay/speech`, authenticated with the player's room binding. The server holds the
+audio and the transcript in memory for the length of that request only, and returns the
+words to the player who sent them. Neither is written to disk, cached, logged or put in a
+telemetry span (which records sizes, durations and an outcome label). Only the words are
+used: nothing is derived from the voice, and nothing is kept. Microphone tracks are stopped
+as soon as the recording ends.
