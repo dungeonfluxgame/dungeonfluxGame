@@ -443,19 +443,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -907,19 +907,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -1371,19 +1371,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -1835,19 +1835,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -2700,19 +2700,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -3164,19 +3164,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -3628,19 +3628,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -4092,19 +4092,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -4824,19 +4824,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -5288,19 +5288,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -5752,19 +5752,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -6216,19 +6216,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -6680,19 +6680,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {
@@ -7144,19 +7144,19 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. {stake.short} is where it belongs, and the party goes on together.",
+          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is safe, but the price of the road is plain on every face. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
           "scene": "inn",
           "title": "The End",
-          "narration": "{stake.short} is gone and the road is no safer. {patron.first} and the survivors must begin again.",
+          "narration": "The road is no safer now that {stake.short} is gone. {patron.first} and the survivors must begin again.",
           "line": "Not every errand ends well. This one is over."
         },
         "the-end-lost-all": {

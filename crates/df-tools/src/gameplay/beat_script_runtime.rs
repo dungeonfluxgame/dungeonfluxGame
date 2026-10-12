@@ -706,6 +706,27 @@ pub(super) fn action_label(
     id: &str,
     kind: rpc::GameplayActionKind,
 ) -> Result<String, RepositoryError> {
+/// Whether the story is in its closing steps: the resolution's epilogue or the end card.
+pub(super) fn closing(state: &GameState) -> Result<bool, RepositoryError> {
+    beat_script::with_script(|script| {
+        let Ok(beat) = script.current(state) else {
+            return Ok(false);
+        };
+        Ok(beat.kind == BeatKind::Ending)
+    })
+}
+/// Whether a lost fight has settled: nobody is still making death saves, so the party's next
+/// choice (a rest, or closing the chapter) is a story choice and no longer part of the fight.
+pub(super) fn settled_defeat(state: &GameState) -> Result<bool, RepositoryError> {
+    beat_script::with_script(|script| {
+        let Ok(beat) = script.current(state) else {
+            return Ok(false);
+        };
+        Ok(beat.state.victory == Some(false)
+            && journey::tactical::present(state)
+            && !journey::tactical::dying(state)?)
+    })
+}
     if journey::tactical::enabled() && journey::tactical::combat_action(kind) {
         return Ok(match kind {
             rpc::GameplayActionKind::GreatswordAttack => "Attack",
