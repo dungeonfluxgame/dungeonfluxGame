@@ -2984,6 +2984,255 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T01:10:31+00:00",
       "updated_at": "2026-10-12T01:10:31+00:00"
+    },
+    {
+      "id": "PLAY-F04",
+      "feature_id": "F13",
+      "title": "Vary battlefield layouts with obstacles and add combat sound",
+      "objective": "Each location gets several battlefield layouts with obstacle props that hide and block; figures path around them; a ranged attacker draws and looses an arrow; footsteps, weapon sounds and short effort and pain vocals play in step with the action; downed figures settle on the ground.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-render/src/battle/",
+        "crates/df-tools/src/gameplay_browser/",
+        "content/battle-scenes/",
+        "assets/ui/generated/"
+      ],
+      "acceptance_json": [
+        "Every location has at least three layouts that load, validate and look different.",
+        "A figure walks around a blocking obstacle and is partly hidden when behind one.",
+        "A ranged attack shows draw, flight and impact without the attacker walking up.",
+        "Footstep, weapon and voice sounds occur at the matching moment and never before sound is enabled.",
+        "Layouts and attack styles are staging only until the rules supply them, and say so in code.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for layout validation, path finding and timeline order.",
+        "Real browser frames of six layouts and the sound log of one fight.",
+        "An owner listening check of the new sounds."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M8",
+        "milestone_goal": "A battle worth watching: a staged battlefield on the TV, matching the owner's reference demo.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner feedback 2026-10-11 on the first battlefield: test more varied layouts and obstacles; add grunt, pain and weapon sound effects and footsteps when the players run.",
+        "objective": "Each location gets several battlefield layouts with obstacle props that hide and block; figures path around them; a ranged attacker draws and looses an arrow; footsteps, weapon sounds and short effort and pain vocals play in step with the action; downed figures settle on the ground.",
+        "owners": [
+          "df-render",
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Vary battlefield layouts with obstacles and add combat sound",
+            "owner": "df-render"
+          },
+          {
+            "hook": "Vary battlefield layouts with obstacles and add combat sound",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-F02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-presentation.md",
+            "sha256": "ce020b212e9d10b13e7588125396633ab37a549b317ca7aa74b98df1a5a29dcb"
+          },
+          {
+            "path": "planning/tempo-engine.md",
+            "sha256": "e227dda990685f5771b577529652c44d59704a23db8ad206e3e59be41f4c81d6"
+          }
+        ],
+        "input_revision": "63484e991213266767f04a72350f19bf7cd6274f",
+        "required_capabilities": {
+          "audio": true,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:01:58+00:00",
+      "updated_at": "2026-10-12T02:01:58+00:00"
+    },
+    {
+      "id": "PLAY-T01",
+      "feature_id": "R14",
+      "title": "Tactical combat rules: grid positions, movement, cover, ranged attacks",
+      "objective": "A pure, tested rules module for fights on a grid under standard 2024 rules: positions and movement, difficult terrain, opportunity attacks, Dash, Disengage and Dodge, melee reach, ranged attacks with range and ammunition, cover from obstacles, any number of combatants, legal enemy tactics, and a Fighter build that fights with a longbow.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-rules/",
+        "crates/df-combat/",
+        "crates/df-encounter/",
+        "planning/tactical-combat.md"
+      ],
+      "acceptance_json": [
+        "Complete simulated fights with three heroes against one, two and three enemies are legal at every step and last several rounds.",
+        "Cover, range, disadvantage in melee and ammunition show up in the recorded rolls.",
+        "Every rule cites its SRD section; every simplification is disclosed.",
+        "Existing game tests are unaffected.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native rule tests and fight simulations with fixed dice."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M10",
+        "milestone_goal": "Tactical fights: positions, movement, cover, ranged attacks and several enemies under standard rules.",
+        "record_role": "atomic",
+        "scope_status": "frozen",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11 for a ranged player and for layouts and obstacles that matter; fights today have no positions and end in one or two hits.",
+        "objective": "A pure, tested rules module for fights on a grid under standard 2024 rules: positions and movement, difficult terrain, opportunity attacks, Dash, Disengage and Dodge, melee reach, ranged attacks with range and ammunition, cover from obstacles, any number of combatants, legal enemy tactics, and a Fighter build that fights with a longbow.",
+        "owners": [
+          "df-rules"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Tactical combat rules: grid positions, movement, cover, ranged attacks",
+            "owner": "df-rules"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-B03"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/rules-coverage.md",
+            "sha256": "87a61156b1594c93c235a5815e209fbfb6ba5679e9d625bbacfb500d48d684d5"
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "1e51af33f9af8a6847a3eb21fd299bc6e53185c4c1af148377c4f8b6d182a463"
+          }
+        ],
+        "input_revision": "63484e991213266767f04a72350f19bf7cd6274f",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:01:58+00:00",
+      "updated_at": "2026-10-12T02:01:58+00:00"
+    },
+    {
+      "id": "PLAY-T02",
+      "feature_id": "R14",
+      "title": "Play tactical fights: movement and ranged attacks in the running game",
+      "objective": "Wire the tactical rules into the game: the server keeps each combatant's cell and the chosen layout, players move, dash, disengage, dodge and shoot from their phones, enemies act by the legal tactic policy, the battlefield shows server positions and paths, and a player can create the archer.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/",
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-protocol/proto/gameplay.proto",
+        "content/harbor-journey/"
+      ],
+      "acceptance_json": [
+        "A table plays a fight with two melee heroes and the archer against several enemies on a layout with cover, using only their phones.",
+        "Positions, reachable squares and legal targets come from the server; the browser decides none.",
+        "Reload mid-fight resumes with the same positions.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native journey tests; real browser play of two fights."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M10",
+        "milestone_goal": "Tactical fights: positions, movement, cover, ranged attacks and several enemies under standard rules.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Without this the archer and the layouts are only staging.",
+        "objective": "Wire the tactical rules into the game: the server keeps each combatant's cell and the chosen layout, players move, dash, disengage, dodge and shoot from their phones, enemies act by the legal tactic policy, the battlefield shows server positions and paths, and a player can create the archer.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Play tactical fights: movement and ranged attacks in the running game",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/runtime-reliability.md",
+            "sha256": "176e5a8fb04e1d9cb2402225c9eb1bb4ffd110abf353f226a302e10e780acf05"
+          }
+        ],
+        "input_revision": "63484e991213266767f04a72350f19bf7cd6274f",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 96,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T02:01:58+00:00",
+      "updated_at": "2026-10-12T02:01:58+00:00"
     }
   ],
   "dependencies": [
@@ -3101,6 +3350,18 @@
     },
     {
       "task_id": "PLAY-X05",
+      "prerequisite_task_id": "PLAY-E01"
+    },
+    {
+      "task_id": "PLAY-T02",
+      "prerequisite_task_id": "PLAY-T01"
+    },
+    {
+      "task_id": "PLAY-T02",
+      "prerequisite_task_id": "PLAY-F04"
+    },
+    {
+      "task_id": "PLAY-T02",
       "prerequisite_task_id": "PLAY-E01"
     }
   ]
