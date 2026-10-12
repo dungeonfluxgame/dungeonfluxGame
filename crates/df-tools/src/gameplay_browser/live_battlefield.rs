@@ -74,6 +74,8 @@ struct PreviewRequest {
     restrained: bool,
     /// `&place=<token>:<col>:<row>`: stands a token on a cell, to review one situation.
     places: Vec<(String, Cell)>,
+    /// Frame the still closer (`&close`) to read figures against obstacles.
+    close: bool,
     mode: PreviewMode,
     /// A splat scene served from `/assets/splat/` to use instead of the painted ground.
     splat_file: Option<(String, battle::SplatFormat)>,
@@ -97,6 +99,7 @@ fn preview_request() -> Option<PreviewRequest> {
         reduced_motion: battle::prefers_reduced_motion(),
         restrained: false,
         places: Vec::new(),
+        close: false,
         mode: PreviewMode::Fight,
         splat_file: None,
     };
@@ -108,6 +111,7 @@ fn preview_request() -> Option<PreviewRequest> {
             "restrained" => request.restrained = true,
             "statuses" => request.mode = PreviewMode::Statuses,
             "still" => request.mode = PreviewMode::Still,
+            "close" => request.close = true,
             other if other.starts_with("place=") => {
                 let fields: Vec<&str> = other[6..].split(':').collect();
                 if let [id, col, row] = fields[..]
@@ -520,7 +524,13 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                 }
             }
             PreviewMode::Still => {
-                with_preview(|stage| stage.show_tactical());
+                with_preview(|stage| {
+                    if request.close {
+                        stage.show_close();
+                    } else {
+                        stage.show_tactical();
+                    }
+                });
                 mark(&host, "data-battlefield-phase", "still");
                 TimeoutFuture::new(60_000).await;
             }

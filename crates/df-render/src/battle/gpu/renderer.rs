@@ -527,7 +527,7 @@ impl Renderer {
     pub fn observe_frame_ms(&mut self, milliseconds: f32) {
         self.frame_ms_average += (milliseconds.clamp(0.0, 200.0) - self.frame_ms_average) * 0.08;
         self.frames_seen += 1;
-        if !self.frames_seen.is_multiple_of(40) || self.frame_ms_average < 26.0 {
+        if !self.frames_seen.is_multiple_of(20) || self.frame_ms_average < 26.0 {
             return;
         }
         if self.splat.is_some() && self.quality.splat_cap > 80_000 {

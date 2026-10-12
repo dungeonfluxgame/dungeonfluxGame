@@ -745,12 +745,15 @@ fn strike(
         (base + LUNGE_CONTACT, base + LUNGE)
     };
     builder.at(contact, Step::Target(None));
+    // A blow at close quarters frames both fighters; an arrow's far target is framed on its own
+    // so the number and the recoil can be read.
+    let impact_focus = if ranged {
+        CameraFocus::Token(target.id.clone())
+    } else {
+        CameraFocus::Between(attacker.id.clone(), target.id.clone())
+    };
     let impact_camera = Step::Camera {
-        command: camera(
-            ShotName::Impact,
-            CameraFocus::Between(attacker.id.clone(), target.id.clone()),
-            1.0,
-        ),
+        command: camera(ShotName::Impact, impact_focus, 1.0),
         pan: IMPACT_PAN,
     };
     match result {

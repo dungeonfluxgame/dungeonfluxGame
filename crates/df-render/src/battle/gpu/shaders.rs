@@ -54,22 +54,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 "#;
 
 const GROUND: &str = r#"
-fn hash21(p: vec2<f32>) -> f32 {
-    var q = fract(p * vec2<f32>(123.34, 456.21));
-    q = q + dot(q, q + vec2<f32>(45.32, 45.32));
-    return fract(q.x * q.y);
-}
-
-fn vnoise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (vec2<f32>(3.0, 3.0) - 2.0 * f);
-    return mix(
-        mix(hash21(i), hash21(i + vec2<f32>(1.0, 0.0)), u.x),
-        mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u.x),
-        u.y);
-}
-
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
 
@@ -102,9 +86,6 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // The detail is clamped so a bright highlight never turns into speckle.
     let detail = clamp(base - soft, vec3<f32>(-0.07), vec3<f32>(0.07)) * 1.3;
     var colour = max(base + detail, vec3<f32>(0.0));
-    let near = 1.0 - smoothstep(4.0, 15.0, distance(in.world_xz, frame.eye.xz));
-    let broad = vnoise(in.world_xz * 2.3);
-    colour = colour * (1.0 + (broad - 0.5) * 0.12 * near);
     let offset = abs(in.world_xz - frame.ground.xy);
     let edge = frame.ground.z - max(offset.x, offset.y);
     let sides = smoothstep(0.0, max(frame.ground.w, 0.01), edge);

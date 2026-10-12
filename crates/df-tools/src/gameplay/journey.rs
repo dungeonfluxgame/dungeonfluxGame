@@ -731,7 +731,7 @@ pub(super) fn initiative_rolls(
         rolls.push(rpc::InitiativeRoll {
             participant_id: who.as_bytes().to_vec(),
             name: name(state, *who).map_err(|_| Error::Source)?,
-            die: draw.value as u32,
+            die: draw.value,
             modifier,
             total: draw.value as i32 + modifier,
             order: order as u32 + 1,

@@ -1067,10 +1067,11 @@ impl Stage {
     /// invented here: bloodied is at or below half, unconscious is lying at zero.
     fn display_statuses(&self, runtime: &Runtime) -> StatusSet {
         let mut set = runtime.server_status;
-        if let Some(hp) = runtime.shown_hp {
-            if hp.current > 0 && hp.current * 2 <= hp.maximum {
-                set = set.with(Status::Bloodied);
-            }
+        if let Some(hp) = runtime.shown_hp
+            && hp.current > 0
+            && hp.current * 2 <= hp.maximum
+        {
+            set = set.with(Status::Bloodied);
         }
         if runtime.downed {
             set = set.with(Status::Unconscious);
@@ -1790,10 +1791,10 @@ mod tests {
         let mut stuck = None;
         for _ in 0..300 {
             stage.update(Duration::from_millis(20));
-            if let Some(arrow) = stage.frame().projectiles.first() {
-                if arrow.trail == arrow.tail {
-                    stuck = Some(*arrow);
-                }
+            if let Some(arrow) = stage.frame().projectiles.first()
+                && arrow.trail == arrow.tail
+            {
+                stuck = Some(*arrow);
             }
         }
         let arrow = stuck.expect("the arrow stuck");
@@ -2162,27 +2163,27 @@ mod tests {
         for _ in 0..900 {
             stage.update(Duration::from_millis(20));
             let show = &stage.hud().roll_for_initiative;
-            if let Some(tracker) = &show.tracker {
-                if tracker_sizes.last() != Some(&tracker.len()) {
-                    tracker_sizes.push(tracker.len());
-                    let expected = ["enemy", "hero", "ally"];
-                    assert!(
-                        tracker
-                            .iter()
-                            .zip(expected)
-                            .all(|(have, want)| have.0 == want)
-                    );
-                }
+            if let Some(tracker) = &show.tracker
+                && tracker_sizes.last() != Some(&tracker.len())
+            {
+                tracker_sizes.push(tracker.len());
+                let expected = ["enemy", "hero", "ally"];
+                assert!(
+                    tracker
+                        .iter()
+                        .zip(expected)
+                        .all(|(have, want)| have.0 == want)
+                );
             }
             for badge in &show.badges {
                 if !seen_badges.iter().any(|(order, _)| *order == badge.order) {
                     seen_badges.push((badge.order, badge.name.clone()));
                 }
             }
-            if let Some(banner) = &show.banner {
-                if banners.last() != Some(banner) {
-                    banners.push(banner.clone());
-                }
+            if let Some(banner) = &show.banner
+                && banners.last() != Some(banner)
+            {
+                banners.push(banner.clone());
             }
         }
         assert_eq!(tracker_sizes, vec![0, 1, 2, 3]);
