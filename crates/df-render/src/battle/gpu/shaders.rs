@@ -8,13 +8,28 @@ struct Frame {
     view: mat4x4<f32>,
     eye: vec4<f32>,       // xyz eye, w seconds
     right: vec4<f32>,     // xyz camera right flattened to the ground, w aspect
-    viewport: vec4<f32>,  // width px, height px, focal px, unused
+    viewport: vec4<f32>,  // width px, height px, focal px, decal lift toward the camera (m)
     light: vec4<f32>,     // x, z of the lit centre, light radius, restrained content rating
     ground: vec4<f32>,    // centre x, centre z, half size, fall-off
     backdrop: vec4<f32>,  // wall z, half width, base y, height
     spot: vec4<f32>,      // warm pool under the acting figure: x, z, radius, strength
+    plane: vec4<f32>,     // height of the flat play plane, unused x3
 }
 @group(0) @binding(0) var<uniform> frame: Frame;
+
+// The depth of a point on the play plane moved toward the camera along the line of sight by
+// `viewport.w` metres: where it is on screen does not change, only how near it counts for the
+// depth test against the scan's own depth, so grass and rubble at the ground cannot swallow it.
+fn lifted_depth(world: vec3<f32>) -> f32 {
+    let moved = world + normalize(frame.eye.xyz - world) * frame.viewport.w;
+    let clip = frame.view_proj * vec4<f32>(moved, 1.0);
+    return clamp(clip.z / clip.w, 0.0, 1.0);
+}
+
+struct FOut {
+    @location(0) colour: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+}
 "#;
 
 const BACKDROP: &str = r#"
@@ -102,12 +117,143 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+const GRID: &str = r#"
+// The grid on the flat play plane. Data block (see grid_lines.rs): 32 header words, then one
+// code per cell, row by row. 0 no line, 1 neutral, 2 enemy, 3 hero, 4 reachable, 5 target.
+@group(1) @binding(0) var<storage, read> grid: array<f32>;
+
+struct VOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) xz: vec2<f32>,
+    // 0 for the pass that draws where the line is in front of the scan, 1 for where it is behind.
+    @location(1) @interpolate(flat) behind: f32,
+}
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32, @builtin(instance_index) pass_index: u32) -> VOut {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
+    let c = corners[i];
+    let origin = vec2<f32>(grid[0], grid[1]);
+    let size = vec2<f32>(grid[3], grid[4]) * grid[2];
+    let margin = grid[19];
+    let xz = mix(origin - vec2<f32>(margin), origin + size + vec2<f32>(margin), c);
+    let on_plane = vec3<f32>(xz.x, grid[5], xz.y);
+    var out: VOut;
+    out.pos = frame.view_proj * vec4<f32>(on_plane, 1.0);
+    out.xz = xz;
+    out.behind = f32(pass_index);
+    return out;
+}
+
+fn cell_code(col: i32, row: i32) -> f32 {
+    let cols = i32(grid[3]);
+    let rows = i32(grid[4]);
+    if (col < 0 || row < 0 || col >= cols || row >= rows) {
+        return 0.0;
+    }
+    return grid[32 + row * cols + col];
+}
+
+fn code_colour(code: f32) -> vec3<f32> {
+    // 1 neutral gold, 2 enemy red, 3 hero blue, 4 reachable (hero blue), 5 target (enemy red).
+    if (code > 4.5 || (code > 1.5 && code < 2.5)) {
+        return vec3<f32>(grid[28], grid[29], grid[30]);
+    }
+    if (code > 2.5) {
+        return vec3<f32>(grid[24], grid[25], grid[26]);
+    }
+    return vec3<f32>(grid[20], grid[21], grid[22]);
+}
+
+fn code_boost(code: f32) -> f32 {
+    return select(1.0, grid[14], code > 3.5);
+}
+
+fn shade(in: VOut) -> vec4<f32> {
+    let cell_m = grid[2];
+    let p = (in.xz - vec2<f32>(grid[0], grid[1])) / cell_m;
+    // Derivatives are taken once, before any branch.
+    let per_px = max(fwidth(p), vec2<f32>(1e-5));
+    let to_line = abs(fract(p + vec2<f32>(0.5)) - vec2<f32>(0.5));
+    let line_px = to_line / per_px;
+    let metres_px = per_px * cell_m;
+
+    // Core: world width, never thinner than a pixel and a half; thinner lines fade, not shimmer.
+    let width_px = vec2<f32>(grid[6]) / metres_px;
+    let core_px = max(width_px, vec2<f32>(grid[7]));
+    let core_dim = clamp(width_px / grid[7], vec2<f32>(0.0), vec2<f32>(1.0));
+    let core = (vec2<f32>(1.0) - smoothstep(core_px * 0.5 - vec2<f32>(0.5), core_px * 0.5 + vec2<f32>(0.5), line_px)) * core_dim;
+    // Halo: a Gaussian of the distance to the line, fading as it narrows past the minimum.
+    let halo_w_px = vec2<f32>(grid[9]) / metres_px;
+    let halo_px = max(halo_w_px, vec2<f32>(grid[10]));
+    let halo_dim = clamp(halo_w_px / grid[10], vec2<f32>(0.0), vec2<f32>(1.0));
+    let ratio = line_px / halo_px;
+    let halo = exp(-2.0 * ratio * ratio) * halo_dim;
+    // Lines crowding together (a distant or grazing view) fade out.
+    let spacing = smoothstep(vec2<f32>(grid[15] * 0.5), vec2<f32>(grid[15]), vec2<f32>(1.0) / per_px);
+
+    // Which cells each line separates: vertical lines (fixed x) and horizontal ones (fixed z).
+    let line_x = i32(round(p.x));
+    let line_z = i32(round(p.y));
+    let row = i32(floor(p.y));
+    let col = i32(floor(p.x));
+    let code_x = max(cell_code(line_x - 1, row), cell_code(line_x, row));
+    let code_z = max(cell_code(col, line_z - 1), cell_code(col, line_z));
+    // A blocked cell (0.5) keeps its lines, fainter, so the lattice reads as one continuous grid.
+    let faint = vec2<f32>(select(1.0, grid[31], code_x < 0.75), select(1.0, grid[31], code_z < 0.75));
+    let alive = vec2<f32>(step(0.25, code_x), step(0.25, code_z)) * spacing * faint;
+    let colour_x = code_colour(code_x);
+    let colour_z = code_colour(code_z);
+    let boost = vec2<f32>(code_boost(code_x), code_boost(code_z));
+
+    // Dimmer toward the edge of the arena, like the lit pool the ground has.
+    let from_centre = distance(in.xz, frame.light.xy);
+    let centre_fade = mix(1.0, grid[18], smoothstep(grid[16], grid[17], from_centre));
+
+    let core_a = core * alive * boost;
+    let halo_a = halo * alive * boost;
+    let core_tint = vec3<f32>(grid[23]);
+    let core_rgb_x = mix(colour_x, vec3<f32>(1.0), core_tint) * core_a.x;
+    let core_rgb_z = mix(colour_z, vec3<f32>(1.0), core_tint) * core_a.y;
+    let core_alpha = clamp(max(core_a.x, core_a.y), 0.0, 1.0) * grid[8];
+    let core_rgb = max(core_rgb_x, core_rgb_z) * grid[8];
+    let glow_rgb = (colour_x * halo_a.x + colour_z * halo_a.y) * grid[11];
+    let underlay = max(halo.x * alive.x, halo.y * alive.y) * grid[12];
+    var alpha = clamp(core_alpha + underlay * (1.0 - core_alpha), 0.0, 1.0);
+    var rgb = core_rgb + glow_rgb * (1.0 - core_alpha);
+    var strength = centre_fade;
+    if (in.behind > 0.5) {
+        strength = strength * grid[13];
+    }
+    rgb = rgb * strength;
+    alpha = alpha * strength;
+    if (alpha < 0.002 && max(rgb.r, max(rgb.g, rgb.b)) < 0.002) {
+        discard;
+    }
+    // Premultiplied: the colour adds, the alpha only darkens what is beneath (the underlay).
+    return vec4<f32>(rgb, alpha);
+}
+
+// Only a scan surface well in front of the line (see `lifted_depth`) counts as hiding it: the
+// front pass keeps the line where nothing is, the behind pass dims it where something is.
+@fragment
+fn fs(in: VOut) -> FOut {
+    var out: FOut;
+    out.colour = shade(in);
+    out.depth = lifted_depth(vec3<f32>(in.xz.x, grid[5], in.xz.y));
+    return out;
+}
+"#;
+
 const DECAL: &str = r#"
 struct VOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) c: vec2<f32>,
     @location(1) col: vec4<f32>,
     @location(2) params: vec4<f32>,
+    @location(3) world: vec3<f32>,
 }
 
 @vertex
@@ -121,8 +267,13 @@ fn vs(
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0));
     let c = corners[i];
+    let x = shape.x + c.x * shape.z;
+    let z = shape.y + c.y * shape.w;
     var out: VOut;
-    out.pos = frame.view_proj * vec4<f32>(shape.x + c.x * shape.z, 0.012, shape.y + c.y * shape.w, 1.0);
+    // The marker lies on the flat play plane; its depth is lifted per pixel in `fs`.
+    let on_ground = vec3<f32>(x, frame.plane.x + 0.012, z);
+    out.pos = frame.view_proj * vec4<f32>(on_ground, 1.0);
+    out.world = on_ground;
     out.c = c;
     out.col = col;
     out.params = params;
@@ -137,20 +288,13 @@ fn line(edge: f32, aa: f32, width: f32) -> f32 {
     return 1.0 - smoothstep(width, width + aa * 1.5, edge);
 }
 
-@fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
+fn shade(in: VOut) -> vec4<f32> {
     let kind = i32(in.params.x + 0.5);
     let pulse = 0.5 + 0.5 * sin(frame.eye.w * 4.0);
     let edge = square_edge(in.c);
     // Derivatives are taken once, outside the branches, to stay in uniform control flow.
     let aa = max(fwidth(edge), 0.002);
     let aa_inner = max(fwidth(square_edge(in.c / 0.74)), 0.002);
-    if (kind == 0) {
-        let core = line(edge, aa, 0.018);
-        let halo = exp(-edge * 22.0) * 0.32;
-        let l = max(core, halo);
-        return vec4<f32>(in.col.rgb * l * in.col.a, l * in.col.a);
-    }
     if (kind == 1 || kind == 2) {
         let l = line(edge, aa, 0.05);
         let fill = 0.16 + 0.1 * pulse;
@@ -243,75 +387,13 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let a = outline * in.col.a * 0.9;
     return vec4<f32>(rgb, a);
 }
-"#;
-
-const SPLAT: &str = r#"
-struct Splat {
-    centre: vec3<f32>,
-    colour: u32,
-    cov_a: vec4<f32>,   // xx, xy, xz, yy
-    cov_b: vec2<f32>,   // yz, zz
-}
-@group(1) @binding(0) var<storage, read> splats: array<Splat>;
-@group(1) @binding(1) var<storage, read> order: array<u32>;
-
-struct VOut {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) p: vec2<f32>,
-    @location(1) colour: vec4<f32>,
-}
-
-@vertex
-fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
-    var corners = array<vec2<f32>, 4>(
-        vec2<f32>(-2.0, -2.0), vec2<f32>(2.0, -2.0), vec2<f32>(-2.0, 2.0), vec2<f32>(2.0, 2.0));
-    var out: VOut;
-    out.pos = vec4<f32>(0.0, 0.0, 2.0, 1.0);
-    let s = splats[order[ii]];
-    let view_pos = (frame.view * vec4<f32>(s.centre, 1.0)).xyz;
-    if (view_pos.z > -0.15) {
-        return out;
-    }
-    let clip = frame.view_proj * vec4<f32>(s.centre, 1.0);
-    let d = -view_pos.z;
-    let cov = mat3x3<f32>(
-        vec3<f32>(s.cov_a.x, s.cov_a.y, s.cov_a.z),
-        vec3<f32>(s.cov_a.y, s.cov_a.w, s.cov_b.x),
-        vec3<f32>(s.cov_a.z, s.cov_b.x, s.cov_b.y));
-    let rv = mat3x3<f32>(frame.view[0].xyz, frame.view[1].xyz, frame.view[2].xyz);
-    let cv = rv * cov * transpose(rv);
-    let f = frame.viewport.z;
-    let j0 = vec3<f32>(f / d, 0.0, f * view_pos.x / (d * d));
-    let j1 = vec3<f32>(0.0, f / d, f * view_pos.y / (d * d));
-    let cj0 = cv * j0;
-    let cj1 = cv * j1;
-    let a = dot(j0, cj0) + 0.3;
-    let b = dot(j0, cj1);
-    let c = dot(j1, cj1) + 0.3;
-    let mid = 0.5 * (a + c);
-    let radius = length(vec2<f32>(0.5 * (a - c), b));
-    let l1 = mid + radius;
-    let l2 = max(mid - radius, 0.1);
-    let diag = normalize(vec2<f32>(b, l1 - a));
-    let major = min(sqrt(2.0 * l1), 1024.0) * diag;
-    let minor = min(sqrt(2.0 * l2), 1024.0) * vec2<f32>(diag.y, -diag.x);
-    let corner = corners[vi];
-    let offset_px = corner.x * major + corner.y * minor;
-    let ndc = clip.xy / clip.w + offset_px * 2.0 / frame.viewport.xy;
-    out.pos = vec4<f32>(ndc * clip.w, clip.z, clip.w);
-    out.p = corner;
-    out.colour = unpack4x8unorm(s.colour);
-    return out;
-}
 
 @fragment
-fn fs(in: VOut) -> @location(0) vec4<f32> {
-    let a = -dot(in.p, in.p);
-    if (a < -4.0) {
-        discard;
-    }
-    let weight = exp(a) * in.colour.a;
-    return vec4<f32>(in.colour.rgb * weight, weight);
+fn fs(in: VOut) -> FOut {
+    var out: FOut;
+    out.colour = shade(in);
+    out.depth = lifted_depth(in.world);
+    return out;
 }
 "#;
 
@@ -396,12 +478,12 @@ pub fn ground() -> String {
     format!("{FRAME}{GROUND}")
 }
 
-pub fn decal() -> String {
-    format!("{FRAME}{DECAL}")
+pub fn grid() -> String {
+    format!("{FRAME}{GRID}")
 }
 
-pub fn splat() -> String {
-    format!("{FRAME}{SPLAT}")
+pub fn decal() -> String {
+    format!("{FRAME}{DECAL}")
 }
 
 pub fn post() -> String {

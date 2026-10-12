@@ -810,6 +810,62 @@ pub(super) fn pack_directory(
     })
 }
 
+/// `DF_GAMEPLAY_SPLAT_DIR`: where scan files are served from. Unset means `default`; a relative
+/// path is taken from the current directory. The directory may be absent (nothing is routed), but
+/// the setting itself must be non-empty text without parent-directory steps.
+pub(super) fn splat_directory(
+    input: Result<String, VarError>,
+    default: &Path,
+    current: &Path,
+) -> Result<std::path::PathBuf, io::Error> {
+    let Some(value) = optional(input)? else {
+        return Ok(default.to_owned());
+    };
+    let path = std::path::PathBuf::from(&value);
+    if value.is_empty()
+        || value.contains('\0')
+        || path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(refused("DF_GAMEPLAY_SPLAT_DIR"));
+    }
+    Ok(if path.is_absolute() {
+        path
+    } else {
+        current.join(path)
+    })
+}
+
+/// `DF_GAMEPLAY_BATTLE_SCENE`: the battle scene id used for every fight. Unset leaves the
+/// per-location scenes; a set value must name a scene the display has built in (this is how a
+/// private-test-only scan is selected: there is no other way to reach one in a live game).
+pub(super) fn battle_scene(input: Result<String, VarError>) -> Result<Option<String>, io::Error> {
+    let Some(value) = optional(input)? else {
+        return Ok(None);
+    };
+    if value.len() > 48 || !df_render::battle::embedded_ids().any(|known| known == value) {
+        return Err(refused("DF_GAMEPLAY_BATTLE_SCENE"));
+    }
+    Ok(Some(value))
+}
+
+/// `DF_GAMEPLAY_BATTLE_FPS`: the battlefield's fixed presentation rate, 24 or 30 (default 30).
+/// Anything else is refused at startup rather than silently replaced.
+pub(super) fn battle_fps(input: Result<String, VarError>) -> Result<u32, io::Error> {
+    let Some(value) = optional(input)? else {
+        return Ok(df_render::battle::BattleFps::DEFAULT.hz());
+    };
+    value
+        .parse::<u32>()
+        .ok()
+        .and_then(df_render::battle::BattleFps::from_hz)
+        .map(df_render::battle::BattleFps::hz)
+        .ok_or_else(|| {
+            io::Error::other("DF_GAMEPLAY_BATTLE_FPS invalid: use 24 or 30 (default 30)")
+        })
+}
+
 const DEFAULT_TEXT_MODEL: &str = "gpt-6-luna";
 const DEFAULT_TEXT_TOKEN_BUDGET: u64 = 150_000;
 const MAXIMUM_TEXT_TOKEN_BUDGET: u64 = 100_000_000;
@@ -1668,5 +1724,58 @@ mod adventure_settings_tests {
                 .variable,
             "DF_GAMEPLAY_ADVENTURE_TABLES"
         );
+    }
+
+    #[test]
+    fn the_splat_directory_defaults_resolves_relative_paths_and_refuses_odd_values() {
+        let default = Path::new("/srv/assets/splat");
+        let current = Path::new("/work");
+        let set = |value: &str| Ok::<_, VarError>(value.to_owned());
+        assert_eq!(
+            splat_directory(Err(VarError::NotPresent), default, current).unwrap(),
+            default
+        );
+        assert_eq!(
+            splat_directory(set("/data/scans"), default, current).unwrap(),
+            Path::new("/data/scans")
+        );
+        assert_eq!(
+            splat_directory(set("artifacts/scans"), default, current).unwrap(),
+            Path::new("/work/artifacts/scans")
+        );
+        for bad in ["", "../scans", "a/../b", "bad\0name"] {
+            assert!(
+                splat_directory(set(bad), default, current).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert!(splat_directory(Err(VarError::NotUnicode("x".into())), default, current).is_err());
+    }
+
+    #[test]
+    fn the_battle_scene_setting_accepts_only_a_built_in_scene_id() {
+        let set = |value: &str| Ok::<_, VarError>(value.to_owned());
+        assert_eq!(battle_scene(Err(VarError::NotPresent)).unwrap(), None);
+        assert_eq!(
+            battle_scene(set("salt-quay")).unwrap(),
+            Some("salt-quay".to_owned())
+        );
+        for bad in ["", "nowhere", "../salt-quay", "SALT-QUAY"] {
+            assert!(battle_scene(set(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_battle_frame_rate_is_30_by_default_and_only_24_or_30_are_accepted() {
+        let set = |value: &str| Ok::<_, VarError>(value.to_owned());
+        assert_eq!(battle_fps(Err(VarError::NotPresent)).unwrap(), 30);
+        assert_eq!(battle_fps(set("30")).unwrap(), 30);
+        assert_eq!(battle_fps(set("24")).unwrap(), 24);
+        for bad in [
+            "", "60", "25", "0", "-30", "30.0", "thirty", "24 ", "1000000",
+        ] {
+            assert!(battle_fps(set(bad)).is_err(), "{bad:?}");
+        }
+        assert!(battle_fps(Err(VarError::NotUnicode("x".into()))).is_err());
     }
 }

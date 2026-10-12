@@ -151,6 +151,11 @@ if test -z "${ELEVENLABS_API_KEY:-}" && test -f "$ROOT/.env"; then
   if test -n "$ELEVENLABS_API_KEY"; then export ELEVENLABS_API_KEY; else unset ELEVENLABS_API_KEY; fi
 fi
 export DF_GAMEPLAY_VOICE_CACHE=${DF_GAMEPLAY_VOICE_CACHE:-$ARTIFACT_ROOT/tmp/play/voice-cache}
+# Optional scan settings, passed through to the server when set: serve downloaded splat scans from
+# DF_GAMEPLAY_SPLAT_DIR and stage every fight on the scene DF_GAMEPLAY_BATTLE_SCENE (see development/README.md).
+if test "${DF_GAMEPLAY_SPLAT_DIR+x}" = x; then export DF_GAMEPLAY_SPLAT_DIR; echo "Splat scans are served from $DF_GAMEPLAY_SPLAT_DIR"; fi
+if test "${DF_GAMEPLAY_BATTLE_SCENE+x}" = x; then export DF_GAMEPLAY_BATTLE_SCENE; echo "Every fight is staged on battle scene $DF_GAMEPLAY_BATTLE_SCENE"; fi
+if test "${DF_GAMEPLAY_BATTLE_FPS+x}" = x; then export DF_GAMEPLAY_BATTLE_FPS; echo "The battlefield presents at $DF_GAMEPLAY_BATTLE_FPS fps"; fi
 cd "$ROOT"
 if test "$NO_BUILD" -eq 0; then
   cargo build --locked --offline -j 3 -p df-tools --bin df-transport-fixture

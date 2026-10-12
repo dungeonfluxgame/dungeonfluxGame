@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use super::{
     layout::{Cover, Layout},
     math::Vec3,
+    terrain::HeightField,
 };
 
 pub const MAX_GRID_SIDE: u32 = 64;
@@ -48,6 +49,10 @@ pub struct Grid {
     cols: u32,
     rows: u32,
     walkable: Vec<bool>,
+    /// Ground height under the grid, for scenes whose floor is not flat (a scanned place).
+    terrain: Option<HeightField>,
+    /// Height of the flat play plane (see [`Grid::with_terrain`]).
+    play_plane_y: f32,
     /// Passable but not a place to stop (a low obstacle a figure can step over).
     no_stand: Vec<bool>,
     difficult: Vec<bool>,
@@ -89,6 +94,8 @@ impl Grid {
             cols,
             rows,
             walkable,
+            terrain: None,
+            play_plane_y: 0.0,
             no_stand: vec![false; cells],
             difficult: vec![false; cells],
             cover: vec![Cover::None; cells],
@@ -111,6 +118,71 @@ impl Grid {
             }
         }
         Ok(grid)
+    }
+
+    /// The same grid on a scanned place. The grid, its lines and every figure share one flat play
+    /// plane (a straight grid cannot follow a lumpy floor): its height is the median of the
+    /// field's height under the walkable cell centres, which a few tall tufts or ditches do not
+    /// move. [`Grid::plane_deviation_m`] says how far the field strays from it.
+    pub fn with_terrain(mut self, terrain: HeightField) -> Self {
+        let mut heights: Vec<f32> = self
+            .cells_for_plane()
+            .map(|cell| {
+                let (x, z) = self.centre_xz(cell);
+                terrain.height_at(x, z)
+            })
+            .collect();
+        heights.sort_by(f32::total_cmp);
+        self.play_plane_y = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
+        self.terrain = Some(terrain);
+        self
+    }
+
+    /// The measured ground under the grid, when the scene has one.
+    pub fn terrain(&self) -> Option<&HeightField> {
+        self.terrain.as_ref()
+    }
+
+    /// Height of the flat play plane the grid and figures stand on (`0` unless the grid was fitted
+    /// to a scan).
+    pub fn play_plane_y(&self) -> f32 {
+        self.play_plane_y
+    }
+
+    /// The largest distance, in metres, between the measured ground under a walkable cell centre
+    /// and the play plane: how far a figure may float above or sink into the scan.
+    pub fn plane_deviation_m(&self) -> f32 {
+        let Some(terrain) = &self.terrain else {
+            return 0.0;
+        };
+        self.cells_for_plane()
+            .map(|cell| {
+                let (x, z) = self.centre_xz(cell);
+                (terrain.height_at(x, z) - self.play_plane_y).abs()
+            })
+            .fold(0.0, f32::max)
+    }
+
+    /// Ground height at a world point: the play plane everywhere (`0` on a flat grid).
+    pub fn ground_height(&self, _x: f32, _z: f32) -> f32 {
+        self.play_plane_y
+    }
+
+    /// The walkable cells, or every cell when none is walkable.
+    fn cells_for_plane(&self) -> impl Iterator<Item = Cell> + '_ {
+        let any_walkable = self.walkable.iter().any(|walkable| *walkable);
+        (0..self.rows as i32).flat_map(move |row| {
+            (0..self.cols as i32)
+                .map(move |col| Cell::new(col, row))
+                .filter(move |cell| !any_walkable || self.is_walkable(*cell))
+        })
+    }
+
+    fn centre_xz(&self, cell: Cell) -> (f32, f32) {
+        (
+            self.origin[0] + (cell.col as f32 + 0.5) * self.cell_m,
+            self.origin[1] + (cell.row as f32 + 0.5) * self.cell_m,
+        )
     }
 
     /// This grid with a layout's obstacles applied: blocking obstacles remove cells from
@@ -247,13 +319,11 @@ impl Grid {
         })
     }
 
-    /// The centre of the cell on the ground plane (`y` = 0).
+    /// The centre of the cell on the ground (`y` = 0 unless the grid has terrain).
     pub fn cell_centre(&self, cell: Cell) -> Vec3 {
-        Vec3::new(
-            self.origin[0] + (cell.col as f32 + 0.5) * self.cell_m,
-            0.0,
-            self.origin[1] + (cell.row as f32 + 0.5) * self.cell_m,
-        )
+        let x = self.origin[0] + (cell.col as f32 + 0.5) * self.cell_m;
+        let z = self.origin[1] + (cell.row as f32 + 0.5) * self.cell_m;
+        Vec3::new(x, self.ground_height(x, z), z)
     }
 
     /// The cell under a ground-plane point, or `None` outside the grid.
@@ -267,13 +337,11 @@ impl Grid {
         self.in_bounds(cell).then_some(cell)
     }
 
-    /// The middle of the whole grid on the ground plane.
+    /// The middle of the whole grid on the ground.
     pub fn centre(&self) -> Vec3 {
-        Vec3::new(
-            self.origin[0] + self.cols as f32 * self.cell_m * 0.5,
-            0.0,
-            self.origin[1] + self.rows as f32 * self.cell_m * 0.5,
-        )
+        let x = self.origin[0] + self.cols as f32 * self.cell_m * 0.5;
+        let z = self.origin[1] + self.rows as f32 * self.cell_m * 0.5;
+        Vec3::new(x, self.ground_height(x, z), z)
     }
 
     /// Shortest eight-way path between two walkable cells, both ends included, found with A*
@@ -362,6 +430,36 @@ mod tests {
 
     fn grid() -> Grid {
         Grid::open_except([-3.0, -2.0], 1.5, 4, 3, &[Cell::new(1, 1)]).unwrap()
+    }
+
+    /// A 12 by 10 field one metre apart over the test grid: flat at 0.4 m with one 1.2 m tuft.
+    fn field(tuft_m: f32) -> HeightField {
+        let mut heights = vec![0.4; 12 * 10];
+        heights[5 * 12 + 5] = tuft_m;
+        HeightField::new([-6.0, -5.0], 1.0, 12, 10, heights).unwrap()
+    }
+
+    #[test]
+    fn terrain_gives_one_flat_play_plane_at_the_median_ground_height() {
+        let grid = grid().with_terrain(field(1.2));
+        assert!(
+            (grid.play_plane_y() - 0.4).abs() < 1e-6,
+            "tufts do not move the plane"
+        );
+        for cell in grid.walkable_cells() {
+            assert_eq!(grid.cell_centre(cell).y, grid.play_plane_y());
+        }
+        assert_eq!(grid.ground_height(100.0, -100.0), grid.play_plane_y());
+        assert_eq!(grid.centre().y, grid.play_plane_y());
+        assert!(grid.plane_deviation_m() <= 0.8 + 1e-5);
+    }
+
+    #[test]
+    fn a_grid_without_terrain_is_on_the_zero_plane_with_no_deviation() {
+        let grid = grid();
+        assert_eq!(grid.play_plane_y(), 0.0);
+        assert_eq!(grid.plane_deviation_m(), 0.0);
+        assert!(grid.terrain().is_none());
     }
 
     #[test]
