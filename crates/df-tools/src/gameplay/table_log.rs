@@ -89,6 +89,20 @@ impl TableLog {
         self.wake.subscribe()
     }
 
+    /// A table setting changed: every screen gets one fresh view, though no line was said and the
+    /// game revision did not move. The version it bumps is the one each view carries.
+    pub(super) fn settings_changed(&self) {
+        if !self.enabled {
+            return;
+        }
+        let version = {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            ring.version += 1;
+            ring.version
+        };
+        self.wake.send_replace(version);
+    }
+
     /// Appends one line. Control characters become spaces, the text is cut to
     /// [`LINE_CHARACTERS`] characters and an empty line is dropped.
     pub(super) fn push(

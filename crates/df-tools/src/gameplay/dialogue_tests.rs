@@ -147,6 +147,7 @@ impl RunningActor {
         let actor = actor::Actor {
             table_log: table_log.clone(),
             social: super::social::SocialLedger::none(),
+            table_settings: super::table_settings::TableSettings::startup(None, false),
             tempo: None,
             dialogue: super::dialogue::DialogueState::default(),
             owner,
