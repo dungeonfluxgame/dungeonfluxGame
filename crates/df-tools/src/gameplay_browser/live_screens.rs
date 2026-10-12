@@ -223,9 +223,7 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         lede: crate::presentation::first_sentence(input.narration),
         speaker,
         room_code: input.journey.room_code.clone(),
-        join_label: join_label(join_url),
         join_host: join_host(join_url),
-        join_path: input.journey.join_path.clone(),
         party: input
             .journey
             .party
