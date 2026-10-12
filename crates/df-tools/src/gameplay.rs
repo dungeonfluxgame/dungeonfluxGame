@@ -115,7 +115,7 @@ impl Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
-        let viewed = tokio::time::timeout(Duration::from_secs(5), wait)
+        let viewed = tokio::time::timeout(Duration::from_secs(20), wait)
             .await
             .map_err(|_| Status::deadline_exceeded("gameplay view deadline"))?
             .map_err(|_| Status::unavailable("gameplay actor stopped"))?;
@@ -155,7 +155,7 @@ impl rpc::action_service_server::ActionService for Service {
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
-        let outcome = tokio::time::timeout(Duration::from_secs(5), wait)
+        let outcome = tokio::time::timeout(Duration::from_secs(20), wait)
             .await
             .map_err(|_| Status::deadline_exceeded("retain your gameplay operation for lookup"))?
             .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
@@ -836,9 +836,11 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     };
     let repository_options = NativeRepositoryOptions {
         transaction_bounds: NativeTransactionBounds {
-            transaction: Duration::from_secs(2),
-            rollback: Duration::from_millis(250),
-            driver_join: Duration::from_secs(2),
+            // Generous so a commit that is slow on a busy machine finishes instead of
+            // leaving its outcome unknown and the session fenced.
+            transaction: Duration::from_secs(12),
+            rollback: Duration::from_secs(2),
+            driver_join: Duration::from_secs(5),
         },
         codec_limits: codec,
         maximum_receipt_bytes: 4096,
