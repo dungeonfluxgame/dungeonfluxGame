@@ -3306,15 +3306,15 @@
       "name": "sprite-contact-shrine-keeper",
       "path": "assets/ui/generated/sprite-contact-shrine-keeper.webp",
       "kind": "sprite",
-      "bytes": 228820,
-      "sha256": "0514a092d624b71963af63fb90a22e634c36d0b92fd1cedd234966cbe5839225",
+      "bytes": 206494,
+      "sha256": "ffb0c046fd9a6a39519909739c16f85ce6b6a98bbe97e8b346fe15f94d798482",
       "dimensions": [
         768,
         1152
       ],
       "synthetic": true,
       "source_file": "sprite-contact-shrine-keeper.png",
-      "source_sha256": "d63e0bf9f37213e73f8c80a2c194e9d50f5393c7eecbe45b869c0a5a4a7ddb9b",
+      "source_sha256": "09eba66e144e721812fe333bfaa4892f66035bf26b27023f73b42af8fc283662",
       "art_key": "contact-shrine-keeper",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
@@ -3411,15 +3411,15 @@
       "name": "sprite-villain-fallen-champion",
       "path": "assets/ui/generated/sprite-villain-fallen-champion.webp",
       "kind": "sprite",
-      "bytes": 304086,
-      "sha256": "be3713a1e393132c2f5d8ad32dea6e063c45bc2d1614ac36e58cf5d68245798e",
+      "bytes": 267168,
+      "sha256": "58ea6aa18a88693452ae303a0e012939792c6ca6dbc3c2d751511218597a85d9",
       "dimensions": [
         768,
         1152
       ],
       "synthetic": true,
       "source_file": "sprite-villain-fallen-champion.png",
-      "source_sha256": "6de4c93a1894e518ba76523b986ffacc0d48c59fa55974af6b1a80104e3c077f",
+      "source_sha256": "e14ec3fa7b90779d2aa5fc10e0539d347ee1cc80004445f4aed9248bd213cbd9",
       "art_key": "villain-fallen-champion",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
@@ -3516,15 +3516,15 @@
       "name": "sprite-villain-fiend-envoy",
       "path": "assets/ui/generated/sprite-villain-fiend-envoy.webp",
       "kind": "sprite",
-      "bytes": 290392,
-      "sha256": "0b5880b39eaf6cf82d64f56711688cf45e4d6a9895609639ad1f52e2f4285064",
+      "bytes": 215034,
+      "sha256": "f9ec5625b54ee795fb325ddeafc0a6fe54ff38aaca7aea17eb72d9aa529c4057",
       "dimensions": [
         768,
         1152
       ],
       "synthetic": true,
       "source_file": "sprite-villain-fiend-envoy.png",
-      "source_sha256": "c9f78495341951bdd30b2524ab45fb21d8ec4ecd649d99f0eff055235534b322",
+      "source_sha256": "4d079200ca1f219ff11856050fdf9798b12b07b64c87b485e48c0de6db390ccd",
       "art_key": "villain-fiend-envoy",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
@@ -3537,15 +3537,15 @@
       "name": "sprite-villain-lich",
       "path": "assets/ui/generated/sprite-villain-lich.webp",
       "kind": "sprite",
-      "bytes": 309064,
-      "sha256": "1dacac6fa96d4bfe53a13e9abfdfa30cd8e5a24d38a38739dadec540004cad36",
+      "bytes": 298590,
+      "sha256": "a944a185bb311c0b7e3627cc5d81d21ac773d5724907df140b98915120853709",
       "dimensions": [
         768,
         1152
       ],
       "synthetic": true,
       "source_file": "sprite-villain-lich.png",
-      "source_sha256": "e989b10f30f572ab07ed402c5d12b783be4af0b13d00d1684c37a19de2f1841a",
+      "source_sha256": "f7afa3faf13850aba618ce8bd1200c5dff38e80b1df6b3a5768b048eac278c16",
       "art_key": "villain-lich",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
@@ -3589,6 +3589,195 @@
       "source_file": "sprite-villain-warlord.png",
       "source_sha256": "9a0bac8405c681bbc9c93b4e8297b831213f529bb0ee6102ba89cf3d7bbe19bd",
       "art_key": "villain-warlord",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-bandit",
+      "path": "assets/ui/generated/sprite-ant-bandit.webp",
+      "kind": "sprite",
+      "bytes": 232112,
+      "sha256": "24e1bddbd9d9e02835e7457a253ffee8849bd49390fc17203cc55910b1887778",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-bandit.png",
+      "source_sha256": "3afa943b4afc93eaf1afd39efd6fc0c90a49ed46b97671afdd855e5af495e016",
+      "art_key": "ant-bandit",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-cultist",
+      "path": "assets/ui/generated/sprite-ant-cultist.webp",
+      "kind": "sprite",
+      "bytes": 213948,
+      "sha256": "320d789e6f13f2b6d4a7d46d58a4f29972cd45771f736f6ed1c66f66fcee631b",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-cultist.png",
+      "source_sha256": "3b9fb59868e120d8f9d342ce92c9e55bf298ea51cc1900c937676c84e8d7d1c5",
+      "art_key": "ant-cultist",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-ant-giant-rat",
+      "path": "assets/ui/generated/sprite-ant-giant-rat.webp",
+      "kind": "sprite",
+      "bytes": 318286,
+      "sha256": "2e46db146da32785c163763c21707424cb50664bb9e7d0af91f37686d516f388",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-ant-giant-rat.png",
+      "source_sha256": "3826f5a05ee909d33ce509247ad85765ab096d6cebaabfae04b053629cd53fdc",
+      "art_key": "ant-giant-rat",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-hero-1",
+      "path": "assets/ui/generated/sprite-hero-1.webp",
+      "kind": "sprite",
+      "bytes": 223956,
+      "sha256": "f87d366e9db82b9ce594ebea6b3cd19bfff8bd176f926c914df4c506a87a41e9",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-hero-1.png",
+      "source_sha256": "495490e1f4ad92331115eac3b8d841f7f8a034c09d0192d64fa8c23791101195",
+      "art_key": "hero-1",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-hero-2",
+      "path": "assets/ui/generated/sprite-hero-2.webp",
+      "kind": "sprite",
+      "bytes": 305454,
+      "sha256": "8c5a4bd458dba9b31345f0b45cdb3dd358c219fcf85d87400c2f6772e7836018",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-hero-2.png",
+      "source_sha256": "58aa95ef3e63a90fb79ba2f5304400d594ca3c060d42b6d7caca8a6d75f68620",
+      "art_key": "hero-2",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-spymaster",
+      "path": "assets/ui/generated/sprite-villain-spymaster.webp",
+      "kind": "sprite",
+      "bytes": 231082,
+      "sha256": "7bd7065f998bfb180c5f1f960985998d9a5c62f12f8812ac8303387f77a03d63",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-spymaster.png",
+      "source_sha256": "002a9e22d34ff23958a7970ac7c16dc824048de55ddecab36d10858bcb59d487",
+      "art_key": "villain-spymaster",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-bandit",
+      "path": "assets/ui/generated/sprite-bandit.webp",
+      "kind": "sprite",
+      "bytes": 235352,
+      "sha256": "07674a36d7ace3eb6cab8e242437ba5ab3b833fc52421427bd72978d23c3e15a",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-bandit.png",
+      "source_sha256": "5f2b08ad4d33c05988e4bae2b490a69f1f07484c27ce39de57ca4d428ea03ad5",
+      "art_key": "bandit",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-courier",
+      "path": "assets/ui/generated/sprite-courier.webp",
+      "kind": "sprite",
+      "bytes": 204712,
+      "sha256": "f678242784ddc90f4e189a35208d2377d4120e0065a1eecf161a11a593228d35",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-courier.png",
+      "source_sha256": "0cf8ddae425090adc7878f7c0a76f5b5020ff3e1bc9f81af45f8b0a681babc2d",
+      "art_key": "courier",
+      "generator": {
+        "tool": "Codex CLI gpt-6.1-sol built-in image generation",
+        "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
+        "attempts": 1
+      },
+      "review": "Coordinator visual and alpha review on 2026-10-11"
+    },
+    {
+      "name": "sprite-villain-fey-lord",
+      "path": "assets/ui/generated/sprite-villain-fey-lord.webp",
+      "kind": "sprite",
+      "bytes": 253028,
+      "sha256": "5cfb0bac68bafa8fd6b2df58919de1b78b1d74d64697c1e3f345396d164eca30",
+      "dimensions": [
+        768,
+        1152
+      ],
+      "synthetic": true,
+      "source_file": "sprite-villain-fey-lord.png",
+      "source_sha256": "6212b23cdfd4e32f2467b5c6b069cf8d1d61ab10668f66cc6cbc144f6bd37dc8",
+      "art_key": "villain-fey-lord",
       "generator": {
         "tool": "Codex CLI gpt-6.1-sol built-in image generation",
         "prompt": "Character cut-out sprite on a transparent background, knees up, vertical 2:3, matching the approved portrait of the same character (attached as reference) and lit to match the approved night scene painting: cool moonlight rim, warm lantern key.",
