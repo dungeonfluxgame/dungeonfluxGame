@@ -191,7 +191,7 @@ mod tests {
         std::fs::write(directory.join("pass/meta.json"), b"{}").unwrap();
         std::fs::write(directory.join("pass/means_l.webp"), b"webp").unwrap();
         std::fs::write(directory.join("notes.txt"), b"not routed").unwrap();
-        std::fs::write(directory.join("Quay.splat"), b"uppercase name").unwrap();
+        std::fs::write(directory.join("Upper.splat"), b"uppercase name").unwrap();
         let mut router = router(&directory).unwrap();
 
         let served = get_path(&mut router, "/assets/splat/quay.splat", HeaderMap::new()).await;
@@ -221,7 +221,7 @@ mod tests {
 
         for path in [
             "/assets/splat/notes.txt",
-            "/assets/splat/Quay.splat",
+            "/assets/splat/Upper.splat",
             "/assets/splat/../quay.splat",
             "/assets/splat/pass/other.json",
         ] {

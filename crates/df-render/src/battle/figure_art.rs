@@ -47,7 +47,7 @@ pub fn visible_bounds(
     let mut rows = vec![0u32; h];
     let mut columns = vec![0u32; w];
     for (y, row) in rgba.chunks_exact(w * 4).take(h).enumerate() {
-        for (x, pixel) in row.chunks_exact(4).enumerate() {
+        for (x, pixel) in row.as_chunks::<4>().0.iter().enumerate() {
             if pixel[3] > alpha_floor {
                 rows[y] += 1;
                 columns[x] += 1;

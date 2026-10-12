@@ -31,6 +31,8 @@ const MAX_DEVICE_PIXEL_RATIO: f64 = 2.0;
 const MAX_CANVAS_SIDE: f64 = 3840.0;
 const MAX_SPLAT_FILE_BYTES: usize = 256 * 1024 * 1024;
 const PROCEDURAL_SPLATS: usize = 260_000;
+/// Frames after which the battlefield is shown even if some art is still loading.
+const REVEAL_AFTER_FRAMES: u64 = 240;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Availability {
@@ -56,13 +58,17 @@ struct Inner {
     last_timestamp: Option<f64>,
     frame_handle: Option<i32>,
     disposed: bool,
+    revealed: bool,
     frames: u64,
     stats_every: u64,
 }
 
+/// The animation-frame closure, shared so the loop can reschedule itself and `dispose` can drop it.
+type FrameCallback = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
+
 pub struct BattleStage {
     inner: Rc<RefCell<Inner>>,
-    frame_callback: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>,
+    frame_callback: FrameCallback,
 }
 
 /// Whether the user asked the system for reduced motion.
@@ -109,6 +115,7 @@ impl BattleStage {
                 last_timestamp: None,
                 frame_handle: None,
                 disposed: false,
+                revealed: false,
                 frames: 0,
                 stats_every: 60,
             })),
@@ -191,10 +198,11 @@ impl BattleStage {
             last_timestamp: None,
             frame_handle: None,
             disposed: false,
+            revealed: false,
             frames: 0,
             stats_every: 30,
         }));
-        let callback: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
+        let callback: FrameCallback = Rc::new(RefCell::new(None));
         {
             let inner = inner.clone();
             let callback_for_loop = callback.clone();
@@ -252,7 +260,7 @@ fn teardown(inner: &mut Inner) {
     }
 }
 
-fn schedule(inner: &Rc<RefCell<Inner>>, callback: &Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>) {
+fn schedule(inner: &Rc<RefCell<Inner>>, callback: &FrameCallback) {
     let mut state = inner.borrow_mut();
     if state.disposed || state.availability != Availability::Available {
         return;
@@ -309,6 +317,17 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
     renderer.render(&frame, state.stage.scene(), (width, height));
     renderer.observe_frame_ms(delta_ms as f32);
     state.frames += 1;
+    // Show the battlefield once its art has arrived (or after a moment regardless), so the table
+    // does not watch placeholder discs turn into figures.
+    if !state.revealed
+        && state.frames > 2
+        && (renderer.pending_loads() == 0 || state.frames > REVEAL_AFTER_FRAMES)
+    {
+        state.revealed = true;
+        if let Some(container) = &state.container {
+            let _ = container.set_attribute("data-ready", "");
+        }
+    }
     if let Some(hud) = &mut state.hud {
         let aspect = width as f32 / height.max(1) as f32;
         if hud.update(&state.stage, &frame, aspect).is_err() {
@@ -316,7 +335,7 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
             return;
         }
     }
-    if state.frames % state.stats_every == 0 {
+    if state.frames.is_multiple_of(state.stats_every) {
         let stats = renderer.stats();
         let summary = format!(
             "ms={delta_ms:.1} splats={}/{} cap={} scale={:.2} frames={}",

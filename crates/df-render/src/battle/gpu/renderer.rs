@@ -114,16 +114,27 @@ pub struct Renderer {
     stats: RenderStats,
 }
 
-fn pipeline(
-    core: &GpuCore,
-    wgsl: &str,
-    layout: &JsValue,
+struct PipelineSpec<'a> {
+    wgsl: &'a str,
+    layout: &'a JsValue,
     buffers: Vec<JsValue>,
-    topology: &str,
-    depth: Option<(bool, &str)>,
-    target_format: &str,
+    topology: &'a str,
+    /// Depth write and compare function; `None` for a pass without a depth buffer.
+    depth: Option<(bool, &'a str)>,
+    target_format: &'a str,
     blend: bool,
-) -> GpuRenderPipeline {
+}
+
+fn pipeline(core: &GpuCore, spec: PipelineSpec<'_>) -> GpuRenderPipeline {
+    let PipelineSpec {
+        wgsl,
+        layout,
+        buffers,
+        topology,
+        depth,
+        target_format,
+        blend,
+    } = spec;
     let module = core
         .device
         .create_shader_module(&Descriptor::new().with("code", wgsl).build());
@@ -242,63 +253,75 @@ impl Renderer {
         let pipelines = Pipelines {
             backdrop: pipeline(
                 &core,
-                &shaders::backdrop(),
-                &texture_layout,
-                vec![],
-                "triangle-list",
-                Some((true, "always")),
-                COLOUR_FORMAT,
-                false,
+                PipelineSpec {
+                    wgsl: &shaders::backdrop(),
+                    layout: &texture_layout,
+                    buffers: vec![],
+                    topology: "triangle-list",
+                    depth: Some((true, "always")),
+                    target_format: COLOUR_FORMAT,
+                    blend: false,
+                },
             ),
             ground: pipeline(
                 &core,
-                &shaders::ground(),
-                &texture_layout,
-                vec![],
-                "triangle-list",
-                Some((true, "less-equal")),
-                COLOUR_FORMAT,
-                true,
+                PipelineSpec {
+                    wgsl: &shaders::ground(),
+                    layout: &texture_layout,
+                    buffers: vec![],
+                    topology: "triangle-list",
+                    depth: Some((true, "less-equal")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
             ),
             decal: pipeline(
                 &core,
-                &shaders::decal(),
-                &frame_layout,
-                vec![instance_layout(DECAL_STRIDE, 3)],
-                "triangle-list",
-                Some((false, "less-equal")),
-                COLOUR_FORMAT,
-                true,
+                PipelineSpec {
+                    wgsl: &shaders::decal(),
+                    layout: &frame_layout,
+                    buffers: vec![instance_layout(DECAL_STRIDE, 3)],
+                    topology: "triangle-list",
+                    depth: Some((false, "less-equal")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
             ),
             figure: pipeline(
                 &core,
-                &shaders::figure(),
-                &texture_layout,
-                vec![instance_layout(FIGURE_STRIDE, 5)],
-                "triangle-list",
-                Some((false, "less-equal")),
-                COLOUR_FORMAT,
-                true,
+                PipelineSpec {
+                    wgsl: &shaders::figure(),
+                    layout: &texture_layout,
+                    buffers: vec![instance_layout(FIGURE_STRIDE, 5)],
+                    topology: "triangle-list",
+                    depth: Some((false, "less-equal")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
             ),
             splat: pipeline(
                 &core,
-                &shaders::splat(),
-                &splat_layout,
-                vec![],
-                "triangle-strip",
-                Some((false, "less-equal")),
-                COLOUR_FORMAT,
-                true,
+                PipelineSpec {
+                    wgsl: &shaders::splat(),
+                    layout: &splat_layout,
+                    buffers: vec![],
+                    topology: "triangle-strip",
+                    depth: Some((false, "less-equal")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
             ),
             post: pipeline(
                 &core,
-                &shaders::post(),
-                &post_layout,
-                vec![],
-                "triangle-list",
-                None,
-                core.format,
-                false,
+                PipelineSpec {
+                    wgsl: &shaders::post(),
+                    layout: &post_layout,
+                    buffers: vec![],
+                    topology: "triangle-list",
+                    depth: None,
+                    target_format: core.format,
+                    blend: false,
+                },
             ),
         };
         let frame_buffer = buffer(&core, 256, BUFFER_UNIFORM | BUFFER_COPY_DST);
@@ -320,11 +343,9 @@ impl Renderer {
         );
         let dark_ground = textures::solid(&core, [18, 17, 20, 255]);
         let clear_pixel = Rc::new(textures::solid(&core, [255, 255, 255, 255]));
-        let error = JsValue::from(
-            wasm_bindgen_futures::JsFuture::from(core.device.pop_error_scope())
-                .await
-                .unwrap_or(JsValue::NULL),
-        );
+        let error = wasm_bindgen_futures::JsFuture::from(core.device.pop_error_scope())
+            .await
+            .unwrap_or(JsValue::NULL);
         if !error.is_null() && !error.is_undefined() {
             let message = js_sys::Reflect::get(&error, &JsValue::from_str("message"))
                 .ok()
@@ -423,12 +444,21 @@ impl Renderer {
         }
     }
 
+    /// Pictures still being fetched or decoded.
+    pub fn pending_loads(&self) -> usize {
+        self.cache
+            .borrow()
+            .values()
+            .filter(|slot| matches!(slot, Slot::Loading))
+            .count()
+    }
+
     /// Feeds the frame-time budget. After a sustained slow stretch it lowers the splat cap, then
     /// the render scale, then drops the tilt-shift blur.
     pub fn observe_frame_ms(&mut self, milliseconds: f32) {
         self.frame_ms_average += (milliseconds.clamp(0.0, 200.0) - self.frame_ms_average) * 0.08;
         self.frames_seen += 1;
-        if self.frames_seen % 40 != 0 || self.frame_ms_average < 26.0 {
+        if !self.frames_seen.is_multiple_of(40) || self.frame_ms_average < 26.0 {
             return;
         }
         if self.quality.splat_cap > 80_000 {

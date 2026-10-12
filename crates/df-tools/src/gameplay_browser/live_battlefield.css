@@ -3,6 +3,8 @@
    is 1.3 * --u, which is 25px at 1920x1080 (above 1.6vh = 17px). */
 .battlefield{--u:min(1vw,1.7778vh);--gold:#e8cb94;--ivory:#f7efdc;position:fixed;inset:0;z-index:40;overflow:hidden;background:#05090f;color:var(--ivory);font-family:var(--serif,Georgia,'Times New Roman',serif);text-shadow:0 2px 12px #000c}
 .battlefield *{box-sizing:border-box;min-width:0}
+.battlefield:not([data-ready]){opacity:0}
+.battlefield[data-ready]{transition:opacity .6s ease}
 .battlefield[data-closing]{opacity:0;transition:opacity .7s ease}
 .bf-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .bf-hud{position:absolute;inset:0;pointer-events:none}

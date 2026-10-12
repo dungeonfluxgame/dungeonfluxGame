@@ -13,6 +13,8 @@ pub const MAX_SHAKE: Duration = Duration::from_millis(200);
 pub const MAX_SHAKE_PX: f32 = 32.0;
 /// How long the black dip after a reduced-motion cut takes to clear.
 pub const CUT_FADE: Duration = Duration::from_millis(280);
+/// How dark the dip after a reduced-motion cut starts: a soft blink, not a blackout.
+pub const CUT_FADE_PEAK: f32 = 0.55;
 
 /// The named shots of the earlier protocol. Their poses come from the scene file.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -214,7 +216,7 @@ impl CameraRig {
         if self.reduced_motion || duration.is_zero() {
             self.cut_to(pose);
             if self.reduced_motion {
-                self.cut_fade = 1.0;
+                self.cut_fade = CUT_FADE_PEAK;
             }
             return;
         }
@@ -369,11 +371,11 @@ mod tests {
         rig.pan_to(pose(20.0, 40.0), Duration::from_secs(2));
         assert_eq!(rig.pose(), pose(20.0, 40.0));
         assert!(!rig.is_panning());
-        assert_eq!(rig.transition_fade(), 1.0);
+        assert_eq!(rig.transition_fade(), CUT_FADE_PEAK);
         rig.shake(10.0, Duration::from_millis(200));
         assert_eq!(rig.shake_offset_px(), (0.0, 0.0));
         rig.update(Duration::from_millis(140));
-        assert!((rig.transition_fade() - 0.5).abs() < 0.01);
+        assert!((rig.transition_fade() - CUT_FADE_PEAK * 0.5).abs() < 0.01);
         rig.update(Duration::from_millis(400));
         assert_eq!(rig.transition_fade(), 0.0);
     }
