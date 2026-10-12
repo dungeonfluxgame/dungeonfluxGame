@@ -61,3 +61,34 @@
 .live-health-vignette{position:fixed;inset:0;z-index:28;pointer-events:none;background:radial-gradient(ellipse at center,#0000 55%,#b3101a66 100%)}
 .live-health-vignette[data-health-tier=critical]{background:radial-gradient(ellipse at center,#0000 42%,#c40f1cb3 100%);animation:df-vignette-beat 1.3s ease-in-out infinite}
 @keyframes df-vignette-beat{0%,100%{opacity:.55}18%{opacity:1}32%{opacity:.7}46%{opacity:.95}}
+
+/* ---------- the 3D battlefield's plates (`df-render` hud.rs sets data-health-tier from the shared
+   tier function and keeps a chip beneath the fill) ---------- */
+.bf-hp{height:calc(var(--u)*.95);border:1px solid #d9b77a59}
+.bf-hp-chip{position:absolute;inset:0 auto 0 0;background:var(--hp-chip);box-shadow:0 0 calc(var(--u)*.6) var(--hp-chip)}
+.bf-hp-fill{position:relative;z-index:1;transition:width .6s ease}
+.bf-hp::after{content:'';position:absolute;inset:0;z-index:2;pointer-events:none;background:var(--hp-ticks)}
+.bf-plate[data-health-tier] .bf-hp-tick{display:none}
+.bf-plate[data-health-tier=healthy] .bf-hp-fill{background:linear-gradient(90deg,var(--hp-healthy-a),var(--hp-healthy-b))}
+.bf-plate[data-health-tier=hurt] .bf-hp-fill{background:linear-gradient(90deg,var(--hp-hurt-a),var(--hp-hurt-b))}
+.bf-plate[data-health-tier=bloodied] .bf-hp-fill{background:linear-gradient(90deg,var(--hp-bloodied-a),var(--hp-bloodied-b))}
+.bf-plate[data-health-tier=critical] .bf-hp-fill{background:repeating-linear-gradient(135deg,#0000 0 .5vw,#0000004d .5vw 1vw),linear-gradient(90deg,var(--hp-critical-a),var(--hp-critical-b));animation:df-health-pulse 1.3s ease-in-out infinite}
+.bf-plate[data-health-tier=down] .bf-hp-fill{background:repeating-linear-gradient(90deg,#0000 0 .4vw,#00000059 .4vw .7vw),linear-gradient(90deg,var(--hp-down-a),var(--hp-down-b))}
+.bf-plate[data-health-tier=hurt] .bf-portrait{border-color:var(--hp-hurt-b)}
+.bf-plate[data-health-tier=bloodied] .bf-portrait{border-color:var(--hp-bloodied-b)}
+.bf-plate[data-health-tier=critical] .bf-portrait{border-color:var(--hp-critical-b)}
+.bf-plate[data-health-tier=down] .bf-portrait{border-color:var(--hp-down-b)}
+.bf-plate[data-health-tier=critical]{box-shadow:0 0 calc(var(--u)*1.1) #e53a3266}
+.bf-plate-hp{font-weight:700;color:#efe6cf;text-shadow:0 0 3px #000,0 1px 2px #000}
+.bf-portrait{position:relative;overflow:visible}
+.bf-portrait[data-crop=face]{background-size:300% auto;background-position:50% 4%}
+.bf-plate:is([data-health-tier=hurt],[data-health-tier=bloodied],[data-health-tier=critical],[data-health-tier=down]) .bf-portrait::after{position:absolute;left:50%;bottom:calc(var(--u)*-.55);transform:translateX(-50%);padding:calc(var(--u)*.1) calc(var(--u)*.55);border:1px solid currentColor;border-radius:calc(var(--u)*.6);background:#05080cf2;font:700 calc(var(--u)*.8)/1.2 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap;z-index:2}
+.bf-plate[data-health-tier=hurt] .bf-portrait::after{content:"Hurt";color:var(--hp-hurt-b)}
+.bf-plate[data-health-tier=bloodied] .bf-portrait::after{content:"Bloodied";color:var(--hp-bloodied-b)}
+.bf-plate[data-health-tier=critical] .bf-portrait::after{content:"Critical";color:#ff6b62}
+.bf-plate[data-health-tier=down] .bf-portrait::after{content:"Down";color:#aeb6bd}
+
+/* A fallen character on the television lies with the head toward the middle of the screen, so
+   the whole figure stays on screen (the stage's own pose tipped the left hero out of the corner),
+   and stays readable as a person rather than a dark heap. */
+.tv-fig[data-down] .tv-fig-body{transform:translateY(calc(var(--u)*2)) rotate(calc(var(--toward)*78deg));transform-origin:50% 92%;opacity:.92;filter:saturate(.55) brightness(.9)}

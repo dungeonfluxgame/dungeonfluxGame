@@ -13,7 +13,11 @@ use crate::{
     health_cues::{self, Blow, Pattern, Place, REFERENCE_STAGE_WIDTH_PX, Shake, TREMOR_PX},
     health_tier::{HealthTier, Vitals, tier_of},
 };
+use df_render::battle::health as battlefield;
 use js_sys::{Array, Function, Object, Reflect};
+
+/// Metres on the battlefield for each pixel of the television's 1920-pixel reference shake.
+const BATTLEFIELD_METRES_PER_PIXEL: f64 = 0.01;
 
 /// The animation name of the Critical tier's tremor, so it is started once and cancelled by
 /// name.
@@ -449,4 +453,69 @@ pub(super) fn phone_sync(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         vibrate(health_cues::vibration_ms(blow));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// The 3D battlefield: its plates, figures and reactions take the same tier and the same shake
+// sizes. The renderer owns no threshold: it is handed the classifier, the reaction and the
+// tremor, and the server-made variants by combatant name.
+
+fn battlefield_tone(tier: HealthTier) -> battlefield::Tone {
+    match tier {
+        HealthTier::Healthy => battlefield::Tone::Healthy,
+        HealthTier::Hurt => battlefield::Tone::Hurt,
+        HealthTier::Bloodied => battlefield::Tone::Bloodied,
+        HealthTier::Critical => battlefield::Tone::Critical,
+        HealthTier::Down => battlefield::Tone::Down,
+    }
+}
+
+fn battlefield_reaction(cue: Shake, looping: bool) -> battlefield::Reaction {
+    battlefield::Reaction {
+        frames: cue.pattern.frames(),
+        amplitude_m: (cue.amplitude_px * BATTLEFIELD_METRES_PER_PIXEL) as f32,
+        duration_s: cue.duration_ms as f32 / 1000.0,
+        looping,
+    }
+}
+
+/// Hands the battlefield the shared tier function and the shake model. Called once per page.
+pub(super) fn install_battlefield() {
+    battlefield::install(battlefield::Hooks {
+        tone: |current, maximum, down| {
+            display_tier(Some((current, maximum)), down).map(battlefield_tone)
+        },
+        reaction: |lost, maximum, critical, dropped| {
+            health_cues::blow_shake(
+                Blow {
+                    lost,
+                    maximum,
+                    critical,
+                    dropped,
+                },
+                Place::Display,
+            )
+            .map(|cue| battlefield_reaction(cue, false))
+        },
+        tremor: battlefield_reaction(health_cues::tremor(), true),
+    });
+}
+
+/// Publishes the health variants of this display view for the battlefield, by combatant name:
+/// the heroes' (the art their seat wears in the fight) and the cast's.
+pub(super) fn publish_battlefield_variants(
+    journey: &rpc::JourneyView,
+    scene: Option<&rpc::GameplayScene>,
+) {
+    let heroes = journey.live_faces.iter().filter_map(|face| {
+        let path = crate::presentation::imagery_url(&face.battle_sprite)?;
+        Some((face.name.clone(), path))
+    });
+    let cast = scene.into_iter().flat_map(|scene| {
+        scene.cast.iter().filter_map(|actor| {
+            let path = crate::presentation::imagery_url(&actor.live_sprite)?;
+            Some((actor.name.clone(), path))
+        })
+    });
+    battlefield::set_variants(heroes.chain(cast));
 }

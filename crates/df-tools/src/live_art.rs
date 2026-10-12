@@ -23,7 +23,7 @@ fn faces_well_formed(journey: Option<&rpc::JourneyView>) -> bool {
         journey
             .live_faces
             .iter()
-            .all(|face| well_formed(&face.sprite))
+            .all(|face| well_formed(&face.sprite) && well_formed(&face.battle_sprite))
     })
 }
 
@@ -162,6 +162,7 @@ mod tests {
                             .map(|(name, sprite)| rpc::LiveFace {
                                 name: (*name).to_owned(),
                                 sprite: (*sprite).to_owned(),
+                                ..Default::default()
                             })
                             .collect(),
                         ..Default::default()
@@ -219,6 +220,7 @@ mod tests {
             journey.live_faces = vec![rpc::LiveFace {
                 name: "Rowan".to_owned(),
                 sprite: key('c'),
+                ..Default::default()
             }];
         }
         assert!(merge_art(&mut shown, &newer));

@@ -46,6 +46,24 @@ fn hero_art(index: usize) -> String {
     format!("assets/ui/generated/sprite-hero-{}", index + 1)
 }
 
+/// The cut-out the battlefield dresses the hero at this party position in (the dwarf fighter, the
+/// archer, then the second fighter). SWITCH POINT: this must match `snapshot_of` in
+/// `gameplay_browser/live_battlefield.rs`, so a health variant is made from the art the fight
+/// shows.
+fn battle_hero_art(index: usize) -> String {
+    let art = [1, 3, 2][index % 3];
+    format!("assets/ui/generated/sprite-hero-{art}")
+}
+
+/// What a hero's health variants are made from on each screen, and which are cached.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HeroFace {
+    /// The variant of the exploration stage's art.
+    stage: Option<ImageKey>,
+    /// The variant of the battlefield's art (the same one when the seat wears the same art).
+    battle: Option<ImageKey>,
+}
+
 /// How many of the latest table lines the mood reads (kinds only).
 const RECENT_TABLE_LINES: usize = 6;
 
@@ -512,7 +530,7 @@ struct State {
     /// The health variant each cast member shows now, by cast id.
     health_sprites: BTreeMap<String, SpriteOverlay>,
     /// The health variant each hero shows now, by name.
-    hero_faces: BTreeMap<String, ImageKey>,
+    hero_faces: BTreeMap<String, HeroFace>,
 }
 
 /// What the worker should start.
@@ -598,9 +616,10 @@ fn apply_hero_faces(state: &State, journey: Option<&mut rpc::JourneyView>) {
         journey.live_faces = state
             .hero_faces
             .iter()
-            .map(|(name, key)| rpc::LiveFace {
+            .map(|(name, face)| rpc::LiveFace {
                 name: name.clone(),
-                sprite: key.path(),
+                sprite: face.stage.as_ref().map(ImageKey::path).unwrap_or_default(),
+                battle_sprite: face.battle.as_ref().map(ImageKey::path).unwrap_or_default(),
             })
             .collect();
     }
@@ -609,16 +628,20 @@ fn apply_hero_faces(state: &State, journey: Option<&mut rpc::JourneyView>) {
 /// The characters whose art has health variants in this stage: the party's heroes first, then
 /// the scene's cast.
 fn characters_of(stage: &Stage, facts: &SceneFacts) -> Vec<Character> {
-    let heroes = stage.heroes.iter().map(|hero| {
-        let art = hero_art(hero.index);
-        Character {
+    let heroes = stage.heroes.iter().flat_map(|hero| {
+        let mut arts = vec![hero_art(hero.index)];
+        let battle = battle_hero_art(hero.index);
+        if !arts.contains(&battle) {
+            arts.push(battle);
+        }
+        arts.into_iter().map(|art| Character {
             id: art.clone(),
             art,
             facts: CharacterFacts {
                 role: CharacterRole::Hero,
                 life_stage: LifeStage::Adult,
             },
-        }
+        })
     });
     let cast = facts
         .members
@@ -672,10 +695,15 @@ fn refresh_health(state: &mut State) -> bool {
     };
     let mut hero_faces = BTreeMap::new();
     for hero in &stage.heroes {
-        if let Some(tier) = tier_of(hero.vitals)
-            && let Some((_, key)) = state.book.nearest(&hero_art(hero.index), tier)
-        {
-            hero_faces.insert(hero.name.clone(), key.clone());
+        if let Some(tier) = tier_of(hero.vitals) {
+            let nearest = |art: String| state.book.nearest(&art, tier).map(|(_, key)| key.clone());
+            let face = HeroFace {
+                stage: nearest(hero_art(hero.index)),
+                battle: nearest(battle_hero_art(hero.index)),
+            };
+            if face.stage.is_some() || face.battle.is_some() {
+                hero_faces.insert(hero.name.clone(), face);
+            }
         }
     }
     let mut health_sprites = BTreeMap::new();
@@ -1388,7 +1416,12 @@ impl Inner {
         let now_needed = stage
             .heroes
             .iter()
-            .filter_map(|hero| Some((hero_art(hero.index), tier_of(hero.vitals)?)))
+            .flat_map(|hero| {
+                let tier = tier_of(hero.vitals);
+                [hero_art(hero.index), battle_hero_art(hero.index)]
+                    .into_iter()
+                    .filter_map(move |art| Some((art, tier?)))
+            })
             .chain(
                 facts
                     .members

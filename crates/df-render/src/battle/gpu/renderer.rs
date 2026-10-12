@@ -178,6 +178,8 @@ pub struct Renderer {
     bolt_buffer: GpuBuffer,
     targets: Option<Targets>,
     cache: Cache,
+    /// What each figure's picture was last drawn from, and the one it is fading out of.
+    art_fades: HashMap<String, ArtFade>,
     backdrop_stem: String,
     ground_stem: String,
     dark_ground: ImageTexture,
@@ -200,6 +202,26 @@ pub struct Renderer {
     last_clock_s: f32,
     frames_seen: u32,
     stats: RenderStats,
+}
+
+/// How long a figure's picture takes to cross-fade when its health variant is swapped in or out.
+const ART_FADE_SECONDS: f32 = 0.45;
+
+/// A figure's picture as last drawn, and the previous one while it fades out.
+struct ArtFade {
+    shown: String,
+    texture: Rc<ImageTexture>,
+    from: Option<(Rc<ImageTexture>, f32)>,
+}
+
+/// The URL of a picture: a server-made health variant is already a path, an authored picture is a
+/// stem in the generated-art directory.
+fn art_url(stem: &str) -> String {
+    if stem.starts_with("/gameplay/imagery/") {
+        stem.to_owned()
+    } else {
+        format!("{GENERATED}/{stem}")
+    }
 }
 
 /// One standing sprite of the frame: its instance data, texture and distance along the view.
@@ -578,6 +600,7 @@ impl Renderer {
             bolt_buffer,
             targets: None,
             cache: Rc::new(RefCell::new(HashMap::new())),
+            art_fades: HashMap::new(),
             backdrop_stem: scene.backdrop.stem.clone(),
             ground_stem: scene.ground.stem.clone(),
             dark_ground,
@@ -668,7 +691,7 @@ impl Renderer {
         let cache = self.cache.clone();
         let stem = stem.to_owned();
         wasm_bindgen_futures::spawn_local(async move {
-            let url = format!("{GENERATED}/{stem}");
+            let url = art_url(&stem);
             let slot = match textures::load_image(&core, &url, premultiplied, repeat).await {
                 Ok(mut texture) => {
                     if premultiplied {
@@ -1219,10 +1242,50 @@ impl Renderer {
             }
         }
         for figure in &frame.figures {
-            let cutout = figure.figure.as_deref().and_then(|stem| {
+            // The health variant once it has loaded (until then the authored picture stays), and
+            // a short cross-fade whenever the picture changes.
+            let variant = figure.variant.as_deref().and_then(|stem| {
                 self.request(stem, true, false);
-                self.ready(stem)
+                self.ready(stem).map(|texture| (stem, texture))
             });
+            let authored = figure.figure.as_deref().and_then(|stem| {
+                self.request(stem, true, false);
+                self.ready(stem).map(|texture| (stem, texture))
+            });
+            let chosen = variant.or(authored);
+            let mut fading: Option<(Rc<ImageTexture>, f32)> = None;
+            if let Some((stem, texture)) = &chosen {
+                let entry = self.art_fades.get_mut(&figure.id.0);
+                match entry {
+                    Some(fade) if fade.shown == *stem => {
+                        if let Some((previous, started)) = fade.from.clone() {
+                            let progress = (frame.clock_s - started) / ART_FADE_SECONDS;
+                            if progress >= 1.0 {
+                                fade.from = None;
+                            } else {
+                                fading = Some((previous, progress.max(0.0)));
+                            }
+                        }
+                    }
+                    Some(fade) => {
+                        fade.from = Some((fade.texture.clone(), frame.clock_s));
+                        fading = Some((fade.texture.clone(), 0.0));
+                        fade.shown = (*stem).to_owned();
+                        fade.texture = texture.clone();
+                    }
+                    None => {
+                        self.art_fades.insert(
+                            figure.id.0.clone(),
+                            ArtFade {
+                                shown: (*stem).to_owned(),
+                                texture: texture.clone(),
+                                from: None,
+                            },
+                        );
+                    }
+                }
+            }
+            let cutout = chosen.map(|(_, texture)| texture);
             let portrait = if cutout.is_none() {
                 figure.portrait.as_deref().and_then(|stem| {
                     self.request(stem, true, false);
@@ -1274,6 +1337,45 @@ impl Renderer {
                     effects: false,
                 });
             }
+            // The picture it is changing from fades out beneath, the new one fades in above.
+            let fade_in = fading.as_ref().map_or(1.0, |(_, progress)| *progress);
+            if let Some((previous, progress)) = fading {
+                list.push(Billboard {
+                    data: instance(
+                        [
+                            figure.position.x,
+                            figure.position.y,
+                            figure.position.z,
+                            figure.height_m,
+                        ],
+                        [
+                            figure.lean,
+                            figure.alpha * (1.0 - progress),
+                            figure.red_flash,
+                            figure.heal_glow,
+                        ],
+                        [1.0, 1.0, 1.0, figure.breath],
+                        [
+                            previous.width as f32 / previous.height as f32,
+                            kind,
+                            has_texture,
+                            side,
+                        ],
+                        [
+                            previous.bounds.top,
+                            previous.bounds.bottom,
+                            previous.bounds.centre(),
+                            0.0,
+                        ],
+                        [body_lo, body_hi, edge_lo, edge_hi],
+                        [over_lo, over_hi, figure.slump, figure.thud],
+                        [reduced, figure.dim, figure.heartbeat, figure.phase],
+                    ),
+                    texture: previous,
+                    depth: depth + 0.002,
+                    effects: false,
+                });
+            }
             list.push(Billboard {
                 data: instance(
                     [
@@ -1284,7 +1386,7 @@ impl Renderer {
                     ],
                     [
                         figure.lean,
-                        figure.alpha,
+                        figure.alpha * fade_in,
                         figure.red_flash,
                         figure.heal_glow,
                     ],

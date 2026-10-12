@@ -1392,6 +1392,10 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
     if journey.party.len() > 2 || offers.len() > 4 {
         return Err(JsValue::from_str("server view exceeds bound"));
     }
+    if role == "display" {
+        // PLAY-H01: the battlefield draws the server's health variants of these combatants.
+        live_health::publish_battlefield_variants(&journey, scene.as_ref());
+    }
     let surface = root
         .query_selector(".view")?
         .ok_or_else(|| JsValue::from_str("view absent"))?;

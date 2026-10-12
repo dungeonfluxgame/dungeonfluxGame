@@ -9,11 +9,13 @@ use super::{
     camera::{CameraPose, CameraRig, ShotName},
     director::{self, Anim, FALL_LANDS, FlashTone, PlanError, ReadyStyle, Step, Timeline},
     grid::{Cell, Grid},
+    health::{self, Reaction, Tone},
     layout::{Cover, Layout},
     math::{Vec3, ease_in_out},
     model::{
-        BadgeView, Beat, CameraCommand, CameraFocus, DieView, FLOAT_LIFETIME_S, FinishingBlow,
-        FloatingText, Highlight, HitPoints, HudState, InitiativeShow, Side, Token, TokenId,
+        AttackResult, BadgeView, Beat, CameraCommand, CameraFocus, DieView, FLOAT_LIFETIME_S,
+        FinishingBlow, FloatingText, Highlight, HitPoints, HudState, InitiativeShow, Side, Token,
+        TokenId,
     },
     scene_file::BattleScene,
     sound::{SoundEvent, SoundKind, voice_for},
@@ -29,6 +31,10 @@ pub const MAX_PENDING_SOUNDS: usize = 64;
 const THUD_SECONDS: f32 = 0.32;
 /// Share of the fall at which the body reaches the ground (matches `FALL_LANDS`).
 const FALL_KNEEL: f32 = 0.55;
+/// How much a figure laid low is dimmed and greyed: with its health variant (already ashen and
+/// slumped) hardly at all, in its authored art a little.
+const LAID_LOW_DIM_WITH_VARIANT: f32 = 0.1;
+const LAID_LOW_DIM: f32 = 0.32;
 /// An arrow that missed stays stuck in the ground this long before it is gone.
 const ARROW_STICK_SECONDS: f32 = 0.9;
 
@@ -76,6 +82,13 @@ struct Runtime {
     /// screen (`ShowHitPoints`) or this many seconds pass.
     hp_hold_s: Option<f32>,
     pending_hp: Option<HitPoints>,
+    /// The server-made health variant of this figure's picture that goes with `shown_hp`, so a
+    /// picture never changes before the blow that causes it lands on screen.
+    shown_variant: Option<String>,
+    /// A bodily reaction in progress (a hit's shake, a slump) and how long it has played.
+    reaction: Option<(Reaction, f32)>,
+    /// The next blow on this figure is a critical hit (set when its beat is queued).
+    critical_next: bool,
     /// Statuses the server reports, applied together with the hit points they came with so a
     /// condition never shows before the blow that causes it.
     server_status: StatusSet,
@@ -147,6 +160,10 @@ pub struct FigureView {
     pub figure: Option<String>,
     pub portrait: Option<String>,
     pub hit_points: Option<HitPoints>,
+    /// The server-made health variant to draw instead of the authored art, once it is loaded.
+    pub variant: Option<String>,
+    /// How hurt the figure looks (from the installed classifier), for the plate and the tremor.
+    pub tone: Option<Tone>,
     /// How far the figure has left its resting cell, used to widen its contact shadow.
     pub lift: f32,
 }
@@ -475,7 +492,7 @@ impl Stage {
                         runtime.pending_hp = incoming.hit_points;
                         runtime.pending_status = Some(StatusSet::of(&incoming.statuses));
                     } else {
-                        runtime.shown_hp = incoming.hit_points;
+                        runtime.show_hp(incoming.hit_points);
                         runtime.downed = incoming.hit_points.is_some_and(|hp| hp.current == 0);
                         runtime.server_status = StatusSet::of(&incoming.statuses);
                     }
@@ -492,6 +509,9 @@ impl Stage {
                         shown_hp: incoming.hit_points,
                         hp_hold_s: None,
                         pending_hp: None,
+                        shown_variant: health::variant_for(&incoming.name),
+                        reaction: None,
+                        critical_next: false,
                         server_status: StatusSet::of(&incoming.statuses),
                         pending_status: None,
                         thud_s: 0.0,
@@ -544,6 +564,12 @@ impl Stage {
         if self.queue.len() >= MAX_QUEUED_BEATS {
             return Err(StageError::QueueFull);
         }
+        if let Beat::Attack { target, result, .. } | Beat::Strike { target, result, .. } = &beat
+            && let Some(index) = self.token_index(target)
+        {
+            self.tokens[index].critical_next =
+                matches!(result, AttackResult::Hit { critical: true, .. });
+        }
         self.queue.push_back(beat);
         Ok(())
     }
@@ -588,6 +614,19 @@ impl Stage {
         self.advance_playback(elapsed);
         let mut footfalls = Vec::new();
         for runtime in &mut self.tokens {
+            if runtime.hp_hold_s.is_none() {
+                // The variant follows the shown hit points; while a blow is awaited it waits too.
+                let published = health::variant_for(&runtime.token.name);
+                if runtime.shown_variant != published {
+                    runtime.shown_variant = published;
+                }
+            }
+            if let Some((reaction, age)) = &mut runtime.reaction {
+                *age += dt;
+                if reaction.finished(*age) {
+                    runtime.reaction = None;
+                }
+            }
             for _ in 0..advance_runtime(runtime, dt) {
                 footfalls.push(runtime.token.id.clone());
             }
@@ -596,7 +635,7 @@ impl Stage {
                     // The blow never reached the screen: let the bar catch up with the server.
                     runtime.hp_hold_s = None;
                     if let Some(pending) = runtime.pending_hp.take() {
-                        runtime.shown_hp = Some(pending);
+                        runtime.show_hp(Some(pending));
                         runtime.downed = pending.current == 0;
                     }
                     if let Some(status) = runtime.pending_status.take() {
@@ -798,10 +837,10 @@ impl Stage {
                         runtime.server_status = status;
                     }
                     let maximum = runtime.shown_hp.map_or(current.max(1), |hp| hp.maximum);
-                    runtime.shown_hp = Some(HitPoints {
+                    runtime.show_hp(Some(HitPoints {
                         current: current.min(maximum),
                         maximum,
-                    });
+                    }));
                     runtime.hp_hold_s = None;
                     runtime.pending_hp = None;
                 }
@@ -1214,8 +1253,17 @@ impl Stage {
         } else {
             0.0
         };
-        let dim = if runtime.downed || falling {
-            pose.dim.max(0.45)
+        // A figure laid low (down, falling, or unconscious at 1 hit point) is dimmed only a little,
+        // and less still when it wears its health variant, so it reads as a fallen person and not
+        // a dark heap against a night scan.
+        let unconscious =
+            statuses.contains(Status::Unconscious) || statuses.contains(Status::Dying);
+        let dim = if runtime.downed || falling || unconscious {
+            if runtime.shown_variant.is_some() {
+                LAID_LOW_DIM_WITH_VARIANT
+            } else {
+                LAID_LOW_DIM
+            }
         } else {
             pose.dim
         };
@@ -1225,6 +1273,14 @@ impl Stage {
             0.012 * pose.breath * pose.idle.max(0.4)
         };
         let rest = self.grid.cell_centre(runtime.token.cell);
+        let lift = ((position - rest).length() / reach.max(0.01)).min(2.0);
+        let down = runtime.downed
+            || statuses.contains(Status::Unconscious)
+            || statuses.contains(Status::Dying);
+        let tone = runtime
+            .shown_hp
+            .and_then(|hp| health::tone_of(hp.current, hp.maximum, down));
+        let position = self.shaken(runtime, tone, position);
         FigureView {
             id: runtime.token.id.clone(),
             side: runtime.token.side,
@@ -1252,7 +1308,46 @@ impl Stage {
             figure: runtime.token.figure.clone(),
             portrait: runtime.token.portrait.clone(),
             hit_points: runtime.shown_hp,
-            lift: ((position - rest).length() / reach.max(0.01)).min(2.0),
+            variant: runtime.shown_variant.clone(),
+            tone,
+            lift,
+        }
+    }
+
+    /// `position` moved by the figure's bodily reaction: the shake of a blow it just took, and
+    /// at Critical the slow heartbeat tremor. Sideways is screen-sideways; downward is a stomp
+    /// into the ground. Presentation only, and the one place a figure's reaction is applied.
+    fn shaken(&self, runtime: &Runtime, tone: Option<Tone>, position: Vec3) -> Vec3 {
+        let mut side = 0.0;
+        let mut down = 0.0;
+        if let Some((reaction, age)) = &runtime.reaction {
+            let (dx, dy) = reaction.offset(*age);
+            side += dx;
+            down += dy;
+        }
+        if tone == Some(Tone::Critical)
+            && let Some(tremor) = health::tremor()
+        {
+            let (dx, dy) = tremor.offset(self.clock_s + runtime.phase);
+            side += dx;
+            down += dy;
+        }
+        if side == 0.0 && down == 0.0 {
+            return position;
+        }
+        let pose = self.rig.pose();
+        let right = (pose.target - pose.eye()).normalized().cross(Vec3::UP);
+        let flat = Vec3::new(right.x, 0.0, right.z).normalized();
+        let mut moved = position + flat * side;
+        moved.y -= down;
+        moved
+    }
+
+    /// Starts `reaction` on the figure `id`, replacing any in progress. The one entry point for
+    /// a hit reaction: a director that sequences its own can call it with its own timing.
+    pub fn react(&mut self, id: &TokenId, reaction: Reaction) {
+        if let Some(index) = self.token_index(id) {
+            self.tokens[index].reaction = Some((reaction, 0.0));
         }
     }
 
@@ -1332,6 +1427,31 @@ fn walk_position(walk: &Walk) -> Vec3 {
 }
 
 /// Advances one figure's walk and animation. Returns how many footfalls landed this tick.
+impl Runtime {
+    /// Shows these hit points. A blow that took some starts the figure's reaction (sized by the
+    /// share of the bar it took, bigger when critical, a slump when it dropped the figure), by
+    /// whichever path the new hit points arrive; the health variant of the picture changes with
+    /// them.
+    fn show_hp(&mut self, hp: Option<HitPoints>) {
+        if let (Some(old), Some(new)) = (self.shown_hp, hp)
+            && new.current < old.current
+            && let Some(reaction) = health::reaction_for(
+                old.current - new.current,
+                new.maximum,
+                self.critical_next,
+                new.current == 0,
+            )
+        {
+            self.reaction = Some((reaction, 0.0));
+        }
+        if hp.is_some_and(|hp| hp.current != self.shown_hp.map_or(u32::MAX, |old| old.current)) {
+            self.critical_next = false;
+        }
+        self.shown_hp = hp;
+        self.shown_variant = health::variant_for(&self.token.name);
+    }
+}
+
 fn advance_runtime(runtime: &mut Runtime, dt: f32) -> usize {
     let mut footfalls = 0;
     if let Some(walk) = &mut runtime.walk {
@@ -2461,5 +2581,186 @@ mod tests {
             "target to the left: mirrored"
         );
         assert!(!figure(&stage, "ally").mirror, "only archers mirror");
+    }
+
+    // ---- PLAY-H01 attempt 2: health on the battlefield
+
+    const TEST_SHAKE: &[health::Frame] = &[(0.0, 0.0, 0.0), (0.5, 1.0, 0.0), (1.0, 0.0, 0.0)];
+
+    /// Hooks whose reaction encodes what it was asked in its amplitude: the share of the maximum
+    /// lost, plus 1 for a critical hit and 10 for a drop to 0.
+    fn install_test_hooks() {
+        install_hooks(true);
+    }
+
+    fn install_hooks(reactive: bool) {
+        health::install(health::Hooks {
+            tone: |current, maximum, down| {
+                Some(if down || current == 0 {
+                    Tone::Down
+                } else if current * 4 <= maximum {
+                    Tone::Critical
+                } else {
+                    Tone::Healthy
+                })
+            },
+            reaction: if reactive {
+                |lost, maximum, critical, dropped| {
+                    Some(health::Reaction {
+                        frames: TEST_SHAKE,
+                        amplitude_m: lost as f32 / maximum as f32
+                            + if critical { 1.0 } else { 0.0 }
+                            + if dropped { 10.0 } else { 0.0 },
+                        duration_s: 0.4,
+                        looping: false,
+                    })
+                }
+            } else {
+                |_, _, _, _| None
+            },
+            tremor: health::Reaction {
+                frames: TEST_SHAKE,
+                amplitude_m: 0.01,
+                duration_s: 1.3,
+                looping: true,
+            },
+        });
+    }
+
+    /// The furthest the figure strays from where it stands over `seconds`.
+    fn strongest_shift(stage: &mut Stage, id: &str, seconds: f32) -> f32 {
+        let rest = figure(stage, id).position;
+        let mut furthest: f32 = 0.0;
+        for _ in 0..(seconds / 0.05) as u32 {
+            stage.update(Duration::from_millis(50));
+            furthest = furthest.max((figure(stage, id).position - rest).length());
+        }
+        furthest
+    }
+
+    fn hit(damage: u32, critical: bool, after: u32) -> Beat {
+        Beat::Attack {
+            attacker: TokenId::new("hero"),
+            target: TokenId::new("enemy"),
+            result: AttackResult::Hit {
+                damage,
+                critical,
+                downed: after == 0,
+            },
+            target_hit_points_after: Some(after),
+        }
+    }
+
+    #[test]
+    fn a_blow_shakes_the_struck_figure_by_the_share_of_the_bar_it_took_whichever_path_brings_it() {
+        install_test_hooks();
+        // The staged path: the blow lands at its impact and a drop to 0 is the largest reaction.
+        let mut dropped = stage(false);
+        dropped.stage(killing_blow()).unwrap();
+        run(&mut dropped, 0.5);
+        assert!(strongest_shift(&mut dropped, "enemy", 4.0) > 5.0);
+        // An ordinary hit of 3 of 12 adds a little to the stage's own recoil; the same hit
+        // critical adds a metre more.
+        let shift_of = |blow: Beat, reactive: bool| {
+            install_hooks(reactive);
+            let mut stage = stage(false);
+            stage.stage(blow).unwrap();
+            run(&mut stage, 0.5);
+            strongest_shift(&mut stage, "enemy", 4.0)
+        };
+        let recoil = shift_of(hit(3, false, 2), false);
+        let small = shift_of(hit(3, false, 2), true);
+        let big = shift_of(hit(3, true, 2), true);
+        assert!(small > recoil && small < recoil + 0.35, "{recoil} {small}");
+        assert!(big > small + 0.7, "{big} against {small}");
+        install_hooks(true);
+        // The unstaged path: a view that simply reports fewer hit points reacts as well, and a
+        // view that reports more (a heal) does not.
+        let mut direct = stage(false);
+        direct.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 4), 12),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 3),
+        ]);
+        let shift = strongest_shift(&mut direct, "enemy", 1.0);
+        assert!(shift > 0.1 && shift < 0.3, "{shift}");
+        let mut healed = stage(false);
+        healed.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 4), 12),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 9),
+        ]);
+        assert_eq!(strongest_shift(&mut healed, "enemy", 1.0), 0.0);
+    }
+
+    #[test]
+    fn only_a_critical_figure_trembles() {
+        install_test_hooks();
+        let mut stage = stage(false);
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 4), 2),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 5),
+        ]);
+        assert_eq!(figure(&stage, "hero").tone, Some(Tone::Critical));
+        assert!(strongest_shift(&mut stage, "hero", 2.0) > 0.002);
+        assert_eq!(figure(&stage, "ally").tone, Some(Tone::Healthy));
+        assert_eq!(strongest_shift(&mut stage, "ally", 2.0), 0.0);
+    }
+
+    #[test]
+    fn a_health_variant_of_the_picture_changes_with_the_blow_not_before_it() {
+        install_test_hooks();
+        let variant = format!("/gameplay/imagery/{}", "b".repeat(64));
+        let mut stage = stage(false);
+        stage.hold_hit_points([&TokenId::new("enemy")]);
+        stage.stage(hit(3, false, 2)).unwrap();
+        health::set_variants([("ENEMY".to_owned(), variant.clone())]);
+        run(&mut stage, 0.3);
+        assert_eq!(
+            figure(&stage, "enemy").variant,
+            None,
+            "the blow has not landed"
+        );
+        run(&mut stage, 3.0);
+        assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 2);
+        assert_eq!(figure(&stage, "enemy").variant, Some(variant));
+        // Withdrawn variants (a heal above the line) go back to the authored art.
+        health::set_variants([]);
+        run(&mut stage, 0.2);
+        assert_eq!(figure(&stage, "enemy").variant, None);
+    }
+
+    #[test]
+    fn a_figure_unconscious_at_one_hit_point_is_down_and_not_a_dark_heap() {
+        install_test_hooks();
+        let mut stage = stage(false);
+        let mut knocked_out = token("hero", Side::Hero, Cell::new(3, 4), 1);
+        knocked_out.statuses = vec![Status::Unconscious];
+        stage.set_tokens(vec![
+            knocked_out,
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 5),
+        ]);
+        let hero = figure(&stage, "hero");
+        assert_eq!(
+            hero.tone,
+            Some(Tone::Down),
+            "the knockout flag, not only 0 hit points"
+        );
+        assert_eq!(hero.slump, 1.0);
+        assert!(!hero.downed, "still has a hit point");
+        assert!(
+            hero.dim <= LAID_LOW_DIM + 1e-6 && hero.dim > 0.0,
+            "{}",
+            hero.dim
+        );
+        health::set_variants([(
+            "HERO".to_owned(),
+            format!("/gameplay/imagery/{}", "c".repeat(64)),
+        )]);
+        run(&mut stage, 0.2);
+        assert_eq!(figure(&stage, "hero").dim, LAID_LOW_DIM_WITH_VARIANT);
+        health::set_variants([]);
     }
 }
