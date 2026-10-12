@@ -1150,7 +1150,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "072519d1e82c29c030e6788b77af55483ff477e1290f8ffbe9e5952692cf70cb",
             "fd318025d2d7b016708169b59777687fe1f7b630a3b70eb2715dad37af962933",
-            "361f636fa76c82a4e273329497cba49b312156cd8676484f66f6bad1de477c9e",
+            "59d52d16a87d02c42a9f564fd536ba6bab2a652ad1fed3d6fa4813e9e1e51567",
         ],
     ),
     (
@@ -1158,7 +1158,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "80a4f6aa32d5b1ecbe68ab33a5e2e43ecb6697e5c62a499df1b91001e6c01e44",
             "6e122920b8921cd08441ec5c13360ac3898742e2d143a16e0c8a8d678d367ace",
-            "271687ec628726da615bedf09dc0f1f8f1e4aa120642b3ba5cd723c2490b29ed",
+            "3e8ee5cea2515032c701e3d0d510d29328fe96c4599355fb1df04333a8a85157",
         ],
     ),
     (
@@ -1166,7 +1166,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "2c75bec4abecef0694322db9b71f6bf826b7161641ed6c520f9377008eebb705",
             "d29e661273c6de6896f5723c824099989ad0b023d8f9085a5f9bc73cbb5450d7",
-            "e29d6e92be544df554cfd88ef7480fd8a2aa5737ea2b0400b7f1781b272817a8",
+            "14394ebc68dffb3a3cba2ee7212e6c993d9298d69266726e8b5b70b67ee86032",
         ],
     ),
 ];

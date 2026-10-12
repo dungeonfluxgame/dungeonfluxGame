@@ -251,6 +251,17 @@ pub(crate) struct DossierFacts {
     pub(crate) secret_id: String,
     /// Rendered secret fact and confirmation text; the dossier tables add keyword phrases.
     pub(crate) secret_terms: Vec<String>,
+    /// The statements each speaker makes in the authored scenes, in scene order.
+    pub(crate) authored: Vec<AuthoredLine>,
+}
+
+/// One statement a named speaker makes in an authored scene. The speaker's dossier must say it,
+/// or withhold it because it carries a secret term; it must never be ignorant of it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthoredLine {
+    /// The speaker's name as the scenes print it.
+    pub(crate) speaker: String,
+    pub(crate) text: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -391,6 +402,11 @@ pub(crate) enum DossierError {
     DuplicateNpc(String),
     /// A cast member that cannot speak (beast or undead) was given.
     SilentSpeaker(String),
+    /// A statement the speaker makes in an authored scene is neither said nor withheld.
+    AuthoredLineUnknown {
+        npc_id: String,
+        line: String,
+    },
     EmptyFact(&'static str),
     UnknownSecret(String),
     NoCompatibleEntry {
@@ -414,6 +430,12 @@ impl fmt::Display for DossierError {
             Self::TooManyCast(count) => write!(f, "dossier cast of {count} exceeds {MAX_CAST}"),
             Self::DuplicateNpc(id) => write!(f, "dossier npc id repeated: {id}"),
             Self::SilentSpeaker(id) => write!(f, "dossier npc cannot speak: {id}"),
+            Self::AuthoredLineUnknown { npc_id, line } => {
+                write!(
+                    f,
+                    "dossier {npc_id}: authored line is unknown to it: {line}"
+                )
+            }
             Self::EmptyFact(name) => write!(f, "dossier fact is empty: {name}"),
             Self::UnknownSecret(id) => write!(f, "dossier tables lack secret keywords: {id}"),
             Self::NoCompatibleEntry { npc_id, table } => {
@@ -853,6 +875,12 @@ pub(crate) fn roll_dossiers(
                 term: leak.term,
             });
         }
+        if let Some(line) = unknown_authored_line(&dossier, facts) {
+            return Err(DossierError::AuthoredLineUnknown {
+                npc_id: dossier.npc_id,
+                line,
+            });
+        }
         dossiers.push(dossier);
     }
     Ok(dossiers)
@@ -1094,6 +1122,30 @@ fn roll_one(
     })
 }
 
+/// The first statement the member makes in an authored scene that the dossier neither says in a
+/// tier nor withholds as a secret. A withheld statement is still known; a dropped one is not.
+fn unknown_authored_line(dossier: &Dossier, facts: &DossierFacts) -> Option<String> {
+    let knows = |text: &str| {
+        dossier
+            .knowledge
+            .says_freely
+            .iter()
+            .chain(&dossier.knowledge.says_when_trusted)
+            .any(|item| item.text == text)
+            || dossier
+                .knowledge
+                .never_says
+                .iter()
+                .any(|item| item.text == text)
+    };
+    facts
+        .authored
+        .iter()
+        .filter(|line| line.speaker == dossier.name)
+        .find(|line| !knows(&line.text))
+        .map(|line| line.text.clone())
+}
+
 /// The table entries that feed an NPC's knowledge tiers.
 struct Picks<'t> {
     origin: &'t Profile,
@@ -1171,6 +1223,41 @@ fn knowledge_tiers(
             });
         }
     }
+    // The errand as the authored scenes state it: said freely, unless a secret term makes it
+    // withheld instead. Withheld lines stay known, so the coverage check still holds.
+    let mut withheld = Vec::new();
+    for (topic, source, text) in own_statements(context) {
+        let hits = |terms: &[String]| -> Vec<String> {
+            terms
+                .iter()
+                .filter(|term| mentions_term(&text, term))
+                .cloned()
+                .collect()
+        };
+        let shame = hits(&context.shame);
+        let secret = hits(context.secrets);
+        if !shame.is_empty() {
+            withheld.push(Forbidden {
+                source: format!("{source}_shame"),
+                text,
+                terms: shame,
+                scope: ForbiddenScope::Everywhere,
+            });
+        } else if !secret.is_empty() {
+            withheld.push(Forbidden {
+                source: format!("{source}_secret"),
+                text,
+                terms: secret,
+                scope: ForbiddenScope::PublicOnly,
+            });
+        } else {
+            says_freely.push(Knowledge {
+                topic,
+                source: source.into(),
+                text,
+            });
+        }
+    }
     let tie_line = Knowledge {
         topic: Topic::WhyThisMatters,
         source: "tie_line".into(),
@@ -1206,7 +1293,7 @@ fn knowledge_tiers(
             });
         }
     }
-    let never_says = vec![
+    let mut never_says = vec![
         Forbidden {
             source: "flaw_shame".into(),
             text: shame_text,
@@ -1222,11 +1309,63 @@ fn knowledge_tiers(
             scope: ForbiddenScope::PublicOnly,
         },
     ];
+    never_says.extend(withheld);
     Ok(KnowledgeTiers {
         says_freely,
         says_when_trusted,
         never_says,
     })
+}
+
+/// What the member knows of this adventure's errand from the record: who the contact is, and the
+/// statements the member makes in the authored scenes. Each is (topic, source, text).
+fn own_statements(context: &Context<'_>) -> Vec<(Topic, &'static str, String)> {
+    let member = context.member;
+    let mut statements = Vec::new();
+    if let Some(identity) = identity_line(context) {
+        statements.push((Topic::WhoAreYou, "identity_line", identity));
+    }
+    for line in context
+        .facts
+        .authored
+        .iter()
+        .filter(|line| line.speaker == member.name)
+    {
+        let topic = if matches!(member.role, NpcRole::Antagonist) {
+            Topic::TheAntagonist
+        } else if mentions_term(&line.text, &context.facts.destination) {
+            Topic::ThePlace
+        } else {
+            Topic::WhyThisMatters
+        };
+        statements.push((topic, "authored_line", line.text.clone()));
+    }
+    statements
+}
+
+/// Who the contact is and where the errand leads, as the patron and the contact each know it.
+fn identity_line(context: &Context<'_>) -> Option<String> {
+    let facts = context.facts;
+    match context.member.role {
+        NpcRole::Patron => facts
+            .cast
+            .iter()
+            .find(|member| matches!(member.role, NpcRole::Contact))
+            .map(|contact| {
+                format!(
+                    "{} is {} at {}.",
+                    contact.name,
+                    with_article(&contact.role_label),
+                    facts.destination
+                )
+            }),
+        NpcRole::Contact => Some(format!(
+            "I am {} at {}.",
+            with_article(&context.member.role_label),
+            facts.destination
+        )),
+        _ => None,
+    }
 }
 
 /// Pick one temperament entry that agrees with every tone already taken, then take its tone.
