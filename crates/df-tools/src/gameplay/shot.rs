@@ -31,11 +31,12 @@ const MAXIMUM_EXTRAS: usize = 3;
 const MAXIMUM_DRESSING: usize = 2;
 const MAXIMUM_LIGHTS: usize = 3;
 
-/// Where the speaker's head is asked for, as a fraction of the frame. The model lands heads about
-/// nine percent of the frame height higher than asked (measured in PLAY-V03), so the layout the
-/// display uses is lowered by [`HEAD_RAISE_BIAS_PERMILLE`] from this.
+/// Where the speaker's head is asked for, as a fraction of the frame. The model lands heads higher
+/// than asked: about nine percent of the frame height in PLAY-V03, about fourteen in the pulled-back
+/// plates of PLAY-V09 (asking for 46% down gave 30 to 33%), so the layout the display uses is
+/// raised by [`HEAD_RAISE_BIAS_PERMILLE`] from this.
 const SPEAKER_ASKED_Y_PERMILLE: u16 = 460;
-const HEAD_RAISE_BIAS_PERMILLE: u16 = 90;
+const HEAD_RAISE_BIAS_PERMILLE: u16 = 140;
 const SPEAKER_RIGHT_X_PERMILLE: u16 = 640;
 const SPEAKER_LEFT_X_PERMILLE: u16 = 360;
 /// The head box the display keeps clear: generous, because heads land within about five percent
@@ -776,7 +777,7 @@ fn layout_for(slot: SpeakerSlot, camera: Camera) -> PlateLayout {
         SpeakerSlot::MidRight => SPEAKER_RIGHT_X_PERMILLE,
     };
     let (width, height) = match camera {
-        Camera::SpeakerClose => (HEAD_WIDTH_PERMILLE + 20, HEAD_HEIGHT_PERMILLE + 30),
+        Camera::SpeakerClose => (HEAD_WIDTH_PERMILLE + 20, HEAD_HEIGHT_PERMILLE + 20),
         _ => (HEAD_WIDTH_PERMILLE, HEAD_HEIGHT_PERMILLE),
     };
     PlateLayout {

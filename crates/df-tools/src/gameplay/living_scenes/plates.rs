@@ -45,6 +45,10 @@ const MAXIMUM_ENTRIES: usize = 32;
 const QUEUE_CAPACITY: usize = 16;
 /// The most successor scenes whose plates are requested ahead of time.
 const MAXIMUM_SUCCESSORS: usize = 3;
+/// A plate for a scene that may come next waits this long before it is made, so the plate of the
+/// scene on screen is always the first to reach the image service (the service runs two calls at
+/// a time and serves them in the order they arrive).
+const AHEAD_DELAY: Duration = Duration::from_secs(2);
 /// How often the worker looks for a lasting face to edit into the current plate.
 const POLL: Duration = Duration::from_secs(1);
 
@@ -369,6 +373,8 @@ enum Job {
         scene: PlateScene,
         spec: Box<ShotSpec>,
         heroes: Vec<u8>,
+        /// A plate for a scene that may come next, not the one on screen.
+        ahead: bool,
     },
     Edit {
         scene_key: String,
@@ -520,13 +526,13 @@ impl Shared {
             if let Some(scene) = scene
                 && !view.in_combat
             {
-                self.ensure(&mut book, &scene, &view.heroes);
+                self.ensure(&mut book, &scene, &view.heroes, false);
                 for next in next
                     .iter()
                     .take(MAXIMUM_SUCCESSORS)
                     .filter_map(PlateScene::of)
                 {
-                    self.ensure(&mut book, &next, &view.heroes);
+                    self.ensure(&mut book, &next, &view.heroes, true);
                 }
             }
             woke = true;
@@ -543,7 +549,7 @@ impl Shared {
     }
 
     /// Asks for the plate of `scene` for this party unless the book already knows it.
-    fn ensure(&self, book: &mut Book, scene: &PlateScene, heroes: &[u8]) {
+    fn ensure(&self, book: &mut Book, scene: &PlateScene, heroes: &[u8], ahead: bool) {
         let id = scene.plate_id(heroes);
         if book.entries.contains_key(&id) {
             return;
@@ -560,6 +566,7 @@ impl Shared {
             scene: scene.clone(),
             spec: Box::new(spec),
             heroes: heroes.to_vec(),
+            ahead,
         };
         // A full queue (the worker is busy or gone) drops the request: the next view asks again,
         // and nothing waits.
@@ -626,8 +633,12 @@ impl Shared {
                 scene,
                 spec,
                 heroes,
+                ahead,
             } => {
                 tasks.spawn(async move {
+                    if ahead {
+                        tokio::time::sleep(AHEAD_DELAY).await;
+                    }
                     let started = tokio::time::Instant::now();
                     let result = shared.render_fresh(&scene, &spec, &heroes).await;
                     Done::Fresh {
@@ -849,6 +860,7 @@ impl Shared {
             .inner
             .plate_wanted_face(&speaker.id)
             .filter(|face| *face != Face::AUTHORED);
+        if wanted.is_some() || !matches!(book.edit, Edit::Idle) {}
         match (wanted, book.edit.clone()) {
             (None, Edit::Idle) => {}
             (None, _) => {

@@ -150,11 +150,11 @@ fn the_speaker_is_placed_for_the_bubble_with_heads_below_the_top_band_and_inside
 }
 
 #[test]
-fn the_head_is_asked_for_nine_percent_lower_than_it_is_expected_to_land() {
+fn the_head_is_asked_for_lower_than_it_is_expected_to_land_than_it_is_expected_to_land() {
     let layout = layout_for(SpeakerSlot::MidRight, Camera::OverShoulderLeft);
     let (x, y) = asked_head(&layout);
     assert_eq!((x, y), (640, 460));
-    assert_eq!(layout.head_y_permille, 370);
+    assert_eq!(layout.head_y_permille, 320);
 }
 
 #[test]

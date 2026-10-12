@@ -73,14 +73,14 @@ enum Which {
 }
 
 const PHOTO: &str = "A single frame from a live-action film set, shot on a real camera with a fast prime lens \
-    at about f/2.8, focus on the speaker's face, soft fall-off toward the edges. Real people \
-    in practical costume: sewn, mended, stained wool and linen, creased leather, dull dirty \
-    mail. Real skin with pores, uneven redness, fine lines and stubble, no retouching. \
-    Motivated, uneven light with deep shadows, no studio fill. Light even grain, halation \
-    only around flames and lantern glass. Muted colour grade with deep blacks.";
-const CAMERA: &str = "The camera stands behind and among the party at chest height and well back: the heroes \
-    are small figures in the room, each no wider than about a fifth of the frame width, the \
-    whole place in view.";
+    at about f/2.8, focus on the speaker's face. Real people in practical costume: sewn, \
+    mended, stained wool and linen, creased leather, dull dirty mail. Real skin, pores, \
+    stubble, no retouching. Motivated, uneven light with deep shadows, no studio fill. Light \
+    even grain, halation only around flames and lantern glass. Muted colour grade with deep \
+    blacks.";
+const CAMERA: &str = "A wide shot on a 28mm lens from far back among the party: the heroes are small figures \
+    at the edges of the picture, each no wider than a quarter of the frame, and the room \
+    itself is the subject, its beams, floor and far walls all in view.";
 const PLACE_IS: &str = "The place is";
 const PLACE_REFERENCE: [&str; 4] = [
     "",
@@ -133,10 +133,9 @@ const LIGHT: &str = "Light:";
 const MOOD: &str = "Mood:";
 const PRACTICALS: &str = "Warm practical sources:";
 const EDGES: &str = "the edges of the frame fall darker.";
-const SAFE: &str = "Keep clear for an interface drawn later: no faces or important detail in the top-left \
-    band (top 18%, left 60%), the top-right block (top 30%, right 34%) or the bottom-centre \
-    strip (bottom 12%, middle 30%): use dark architecture or soft blur there. All heads \
-    below the top 22%.";
+const SAFE: &str = "Keep clear for an interface: no faces or important detail in the top-left band (top 18%, \
+    left 60%), the top-right block (top 30%, right 34%) or the bottom-centre strip (bottom \
+    12%, middle 30%). All heads below the top 22%.";
 const HEAD_ABOUT: &str = "The speaker's head is about";
 const HEAD_ACROSS: &str = "% across and";
 const HEAD_DOWN: &str = "% down.";
@@ -164,9 +163,9 @@ const MOMENT_LAST: &str = "Everything else stays identical, and the speaker's he
 
 fn gender_phrase(gender: Option<Gender>) -> &'static str {
     match gender {
-        Some(Gender::He) => "a man,",
-        Some(Gender::She) => "a woman,",
-        Some(Gender::They | Gender::It) | None => "a person,",
+        Some(Gender::He) => "(a man),",
+        Some(Gender::She) => "(a woman),",
+        Some(Gender::They | Gender::It) | None => "(a person),",
     }
 }
 
@@ -241,8 +240,8 @@ fn expression_phrase_of(expression: Expression) -> &'static str {
 
 fn slot_phrase(slot: HeroSlot) -> &'static str {
     match slot {
-        HeroSlot::LeftForeground => "in the left foreground, from behind,",
-        HeroSlot::RightForeground => "in the right foreground, from behind,",
+        HeroSlot::LeftForeground => "at the left side of the frame, seen small from behind,",
+        HeroSlot::RightForeground => "at the right side of the frame, seen small from behind,",
         HeroSlot::LeftMid => "in the left middle distance, three-quarter back,",
         HeroSlot::RightMid => "in the right middle distance, three-quarter back,",
         HeroSlot::BackLeft => "small at the far left, in profile,",
@@ -320,6 +319,7 @@ fn scene_plate_with(
         )));
     }
     parts.push(Part::Fixed(spec.place_description));
+    parts.push(Part::Fixed("."));
     if let Some(number) = references.number(Which::Place) {
         parts.push(Part::Fixed(PLACE_REFERENCE[usize::from(number)]));
     }

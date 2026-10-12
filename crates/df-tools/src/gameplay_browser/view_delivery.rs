@@ -170,7 +170,7 @@ impl GameplayViews {
         generation: &ConnectionGeneration,
         scope: ViewScope,
         view: &rpc::ViewMessage,
-        merge_art: impl FnOnce(&mut rpc::ViewMessage, &rpc::ViewMessage) -> bool,
+        merge_art: impl Fn(&mut rpc::ViewMessage, &rpc::ViewMessage) -> bool,
     ) -> bool {
         let Some(revision) = view
             .revision
@@ -185,13 +185,21 @@ impl GameplayViews {
         else {
             return false;
         };
-        scope == self.scope
-            && self.scope.role == ViewRole::Display
-            && self
-                .views
-                .amend_presentation(generation, scope.binding, revision, |shown| {
-                    merge_art(shown, view)
-                })
+        if scope != self.scope || self.scope.role != ViewRole::Display {
+            return false;
+        }
+        let amended = self
+            .views
+            .amend_presentation(generation, scope.binding, revision, |shown| {
+                merge_art(shown, view)
+            });
+        // PLAY-V09: while a newer table line is shown from the held copy of the view (a typed line
+        // and its reply), that copy is what the display draws, so the art goes into it as well.
+        let held = self
+            .table_talk
+            .as_mut()
+            .is_some_and(|held| merge_art(held, view));
+        amended || held
     }
 
     pub(super) fn current_revision(&self) -> Option<SessionRevision> {

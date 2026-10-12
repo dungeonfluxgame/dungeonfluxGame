@@ -438,3 +438,46 @@ fn an_equal_revision_changes_the_shown_view_only_through_the_art_merge() {
         merge_backdrop
     ));
 }
+
+/// A display frame at `sequence` that carries `talk` as its presentation sequence.
+fn talking_display(sequence: u64, talk: u64, backdrop: &str) -> rpc::ViewMessage {
+    let mut view = display_frame(sequence, "shown", backdrop);
+    if let Some(rpc::view_message::Audience::Display(display)) = view.audience.as_mut()
+        && let Some(journey) = display.journey.as_mut()
+    {
+        journey.presentation_sequence = talk;
+    }
+    view
+}
+
+#[test]
+fn art_reaches_the_held_table_talk_view_the_display_draws() {
+    // PLAY-V09: a typed line and its reply are shown from a held copy of the view; art that
+    // arrives while it is shown (a scene plate edited for the speaker's mood) goes into it too.
+    let display = scope(1, 2, 3, ViewRole::Display);
+    let owner = RpcConnection::new(());
+    let generation = owner.generation();
+    let mut views = GameplayViews::new(display, generation.clone());
+    assert_eq!(
+        views.accept(&generation, display, talking_display(5, 0, "")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+    );
+    assert_eq!(
+        views.accept(&generation, display, talking_display(5, 1, "")),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied)),
+        "a newer table line at the same revision is shown from the held copy"
+    );
+    let art = talking_display(5, 1, "/gameplay/imagery/x");
+    assert_eq!(
+        views.accept(&generation, display, art.clone()),
+        Ok(ConnectionViewAcceptance::View(ViewAcceptance::Duplicate {
+            current: revision(1, 5)
+        }))
+    );
+    assert!(views.accept_art_update(&generation, display, &art, merge_backdrop));
+    assert_eq!(
+        views.current(),
+        Some(&art),
+        "the held view the display draws has the art"
+    );
+}

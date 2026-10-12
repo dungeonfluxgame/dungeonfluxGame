@@ -217,8 +217,14 @@ async fn a_new_scene_requests_its_plate_and_its_successors_once_and_never_waits(
     let jobs = drain(&mut queue);
     assert_eq!(fresh_ids(&jobs).len(), 3, "the scene and both successors");
     assert!(
-        matches!(&jobs[0], Job::Fresh { scene, .. } if scene.title == "Word Before Dawn"),
-        "the current scene's plate is first in the queue"
+        matches!(&jobs[0], Job::Fresh { scene, ahead: false, .. } if scene.title == "Word Before Dawn"),
+        "the current scene's plate is first in the queue and is not held back"
+    );
+    assert!(
+        jobs[1..]
+            .iter()
+            .all(|job| matches!(job, Job::Fresh { ahead: true, .. })),
+        "the successors' plates wait for the current one to reach the image service"
     );
     // The same view again, and a view with a changed revision, ask for nothing more.
     observe(&shared, &current, &[seal, escort], &[1, 2]);
@@ -271,7 +277,7 @@ async fn a_ready_plate_reaches_the_display_and_the_phones_with_its_layout() {
         let layout = scene.plate_layout.as_ref().unwrap();
         assert_eq!(layout.bubble_side, rpc::PlateSide::Left as i32);
         assert_eq!(layout.head_x_permille, 640);
-        assert_eq!(layout.head_y_permille, 370);
+        assert_eq!(layout.head_y_permille, 320);
     }
     assert!(locked(&shared.inner.state).plate_covers);
 }

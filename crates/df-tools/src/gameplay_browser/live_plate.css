@@ -20,7 +20,7 @@
 .tv-plate[data-active="0"] .tv-plate-img[data-i="0"],.tv-plate[data-active="1"] .tv-plate-img[data-i="1"]{opacity:1}
 /* a mood edit of the shown plate: blur out, swap, blur in */
 .tv-plate[data-pull=focus] .tv-plate-img{transition:opacity .5s ease,filter .5s ease;filter:blur(22px)}
-.tv-plate[data-pull=focus][data-active="0"] .tv-plate-img[data-i="0"],.tv-plate[data-pull=focus][data-active="1"] .tv-plate-img[data-i="1"]{filter:blur(0);transition:opacity .55s ease .4s,filter .55s ease .4s}
+.tv-plate[data-pull=focus][data-active="0"] .tv-plate-img[data-i="0"],.tv-plate[data-pull=focus][data-active="1"] .tv-plate-img[data-i="1"]{filter:blur(0);transition:opacity .6s ease .2s,filter .6s ease .2s}
 /* drifting dust motes or embers, added to the light (additive), always on */
 .tv-plate-dust{position:absolute;inset:0;mix-blend-mode:screen;opacity:.6;overflow:hidden}
 .tv-plate-dust::before,.tv-plate-dust::after{content:'';position:absolute;inset:-8% 0;background-repeat:repeat}
@@ -36,7 +36,7 @@
 .tv-stage[data-plate-state=ready][data-tv-mode=scene]>.tv-scrim{background:linear-gradient(0deg,#03060ecc 0%,#03060e66 14%,#03060e00 30%),linear-gradient(180deg,#03060e8c 0%,#03060e00 22%)}
 /* the cut-outs leave as the plate comes in; their speech bubbles stay, standing in the plate's own
    layer beside the speaker's head */
-.tv-stage[data-plate-state=ready]:is([data-plate-loaded],[data-plate-hold]) .tv-fig-body{opacity:0;visibility:hidden;transition:opacity .35s ease,visibility 0s .35s}
+.tv-stage[data-plate-state=ready]:is([data-plate-loaded],[data-plate-hold]) .tv-fig-body{opacity:0;visibility:hidden;transition:opacity 1.1s ease .1s,visibility 0s 1.3s}
 .tv-stage[data-plate-state=ready]:is([data-plate-loaded],[data-plate-hold]) .tv-mist{display:none}
 .tv-plate-bubbles{position:absolute;inset:0;z-index:9;pointer-events:none}
 .tv-plate-bubbles>.tv-fig-bubbles{position:absolute;top:0;left:0;right:auto}

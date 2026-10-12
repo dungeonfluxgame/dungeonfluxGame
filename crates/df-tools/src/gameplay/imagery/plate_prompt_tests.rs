@@ -253,7 +253,7 @@ fn the_heroes_are_named_by_their_place_on_the_sheet_and_the_speaker_by_the_speak
         "first figure on the sheet",
         "second figure on the sheet",
         "third figure on the sheet",
-        "no wider than about a fifth of the frame width",
+        "no wider than a quarter of the frame",
         "All heads below the top 22%",
         "Directly",
     ] {
