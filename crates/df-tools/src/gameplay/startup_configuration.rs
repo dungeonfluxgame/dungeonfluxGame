@@ -101,6 +101,7 @@ pub(super) fn with_test_rating<T>(rating: ContentRating, run: impl FnOnce() -> T
 pub(super) struct SessionInputs {
     pub(super) listen: Result<String, VarError>,
     pub(super) allowed_origins: Result<String, VarError>,
+    pub(super) public_url: Result<String, VarError>,
     pub(super) session_seconds: Result<String, VarError>,
     pub(super) call_budget: Result<String, VarError>,
     pub(super) max_connections: Result<String, VarError>,
@@ -112,6 +113,7 @@ impl SessionInputs {
         Self {
             listen: std::env::var("DF_GAMEPLAY_LISTEN"),
             allowed_origins: std::env::var("DF_GAMEPLAY_ALLOWED_ORIGINS"),
+            public_url: std::env::var("DF_GAMEPLAY_PUBLIC_URL"),
             session_seconds: std::env::var("DF_GAMEPLAY_SESSION_SECONDS"),
             call_budget: std::env::var("DF_GAMEPLAY_CALL_BUDGET"),
             max_connections: std::env::var("DF_GAMEPLAY_MAX_CONNECTIONS"),
@@ -122,13 +124,18 @@ impl SessionInputs {
 
 /// Listener, origin and lifetime bounds of one demonstration run.
 ///
-/// `allowed_origins` is never empty; its first entry is the origin shown to players.
-/// `session` of `None` runs until interrupted. `call_budget` of `None` (plain play with
-/// `DF_GAMEPLAY_CALL_BUDGET` unset) is unlimited; `Some` counts every actor call, including
+/// `allowed_origins` is never empty; its first entry is the origin shown to players. A public
+/// URL is that first entry. `join_origin` is the base address players' devices use for the join
+/// link and its QR code: the public URL, or else the listener's own address (a wildcard listener
+/// is reached through loopback). `join_loopback` is true when that base can only be reached from
+/// this machine. `session` of `None` runs until interrupted. `call_budget` of `None` (plain play
+/// with `DF_GAMEPLAY_CALL_BUDGET` unset) is unlimited; `Some` counts every actor call, including
 /// view refreshes, as a finite lifetime work limit.
 pub(super) struct SessionSettings {
     pub(super) listen: SocketAddr,
     pub(super) allowed_origins: Vec<String>,
+    pub(super) join_origin: String,
+    pub(super) join_loopback: bool,
     pub(super) session: Option<Duration>,
     pub(super) call_budget: Option<u16>,
     pub(super) max_connections: usize,
@@ -141,6 +148,8 @@ impl SessionSettings {
         Self {
             listen: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), QUALIFICATION_PORT),
             allowed_origins: vec![format!("http://127.0.0.1:{QUALIFICATION_PORT}")],
+            join_origin: format!("http://127.0.0.1:{QUALIFICATION_PORT}"),
+            join_loopback: true,
             session: Some(Duration::from_secs(290)),
             call_budget: Some(128),
             max_connections: 4,
@@ -160,7 +169,10 @@ pub(super) fn session_settings(inputs: SessionInputs) -> Result<SessionSettings,
     if listen.port() == 0 {
         return Err(refused("DF_GAMEPLAY_LISTEN"));
     }
-    let allowed_origins = match optional(inputs.allowed_origins)? {
+    let public = optional(inputs.public_url)?
+        .map(|value| public_origin(&value))
+        .transpose()?;
+    let mut allowed_origins = match optional(inputs.allowed_origins)? {
         Some(value) => {
             let origins = value
                 .split(',')
@@ -179,10 +191,30 @@ pub(super) fn session_settings(inputs: SessionInputs) -> Result<SessionSettings,
             format!("http://{listen}"),
             format!("http://localhost:{}", listen.port()),
         ],
+        // The public origin is itself an allowed origin, so it can stand in for the list.
+        None if public.is_some() => Vec::new(),
         None => {
             return Err(io::Error::other(
                 "DF_GAMEPLAY_ALLOWED_ORIGINS required for a non-loopback listener",
             ));
+        }
+    };
+    let (join_origin, join_loopback) = match public {
+        Some((origin, loopback)) => {
+            allowed_origins.retain(|allowed| *allowed != origin);
+            allowed_origins.insert(0, origin.clone());
+            (origin, loopback)
+        }
+        None => {
+            let host = if listen.ip().is_unspecified() {
+                IpAddr::V4(Ipv4Addr::LOCALHOST)
+            } else {
+                listen.ip()
+            };
+            (
+                format!("http://{}", SocketAddr::new(host, listen.port())),
+                host.is_loopback(),
+            )
         }
     };
     let session = match optional(inputs.session_seconds)? {
@@ -199,6 +231,8 @@ pub(super) fn session_settings(inputs: SessionInputs) -> Result<SessionSettings,
     Ok(SessionSettings {
         listen,
         allowed_origins,
+        join_origin,
+        join_loopback,
         session,
         call_budget: optional_bounded_count(inputs.call_budget, "DF_GAMEPLAY_CALL_BUDGET")?,
         max_connections: usize::from(bounded_count(
@@ -411,6 +445,59 @@ fn optional_bounded_count(
             .map_err(|_| refused(name)),
         None => Ok(None),
     }
+}
+
+/// `DF_GAMEPLAY_PUBLIC_URL`: the address players' devices use, written exactly as a browser
+/// origin (`http` or `https`, a host that is not a wildcard address, an optional port) with no
+/// path, query, fragment or user information. Returns the origin and whether its host is
+/// loopback. The refusal never echoes the value.
+fn public_origin(value: &str) -> Result<(String, bool), io::Error> {
+    let refused_public = || {
+        io::Error::other(
+            "DF_GAMEPLAY_PUBLIC_URL refused: expected http:// or https:// with a host and an optional port, and nothing after the port",
+        )
+    };
+    let uri = axum::http::Uri::from_str(value).map_err(|_| refused_public())?;
+    let scheme = match uri.scheme_str() {
+        Some(scheme @ ("http" | "https")) => scheme,
+        _ => return Err(refused_public()),
+    };
+    let authority = uri.authority().ok_or_else(refused_public)?;
+    let host = uri.host().unwrap_or_default();
+    let wildcard = unbracketed(host)
+        .parse::<IpAddr>()
+        .is_ok_and(|address| address.is_unspecified());
+    // A port that is written must be digits naming 1 to 65535 (`Authority::port` hides overflow).
+    let port_ok = match authority.as_str().strip_prefix(authority.host()) {
+        Some("") => true,
+        Some(rest) => rest.strip_prefix(':').is_some_and(|digits| {
+            digits.bytes().all(|byte| byte.is_ascii_digit())
+                && digits.parse::<u16>().is_ok_and(|port| port != 0)
+        }),
+        None => false,
+    };
+    if format!("{scheme}://{authority}") != value
+        || value.contains('@')
+        || host.is_empty()
+        || wildcard
+        || !port_ok
+    {
+        return Err(refused_public());
+    }
+    Ok((value.to_owned(), host_is_loopback(host)))
+}
+
+fn unbracketed(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host)
+}
+
+fn host_is_loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || unbracketed(host)
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 /// A browser `Origin` value: `http` or `https`, a host and optional port, nothing else.
@@ -1378,6 +1465,7 @@ mod tests {
         SessionInputs {
             listen,
             allowed_origins: origins,
+            public_url: Err(VarError::NotPresent),
             session_seconds: seconds,
             call_budget: budget,
             max_connections: connections,
@@ -1526,6 +1614,122 @@ mod tests {
         let mut bad = inputs([None; 6]);
         bad.call_budget = Err(VarError::NotUnicode("x".into()));
         assert!(session_settings(bad).is_err());
+    }
+
+    fn with_public(listen: Option<&str>, origins: Option<&str>, public: &str) -> SessionInputs {
+        let mut value = inputs([listen, origins, None, None, None, None]);
+        value.public_url = Ok(public.to_owned());
+        value
+    }
+
+    #[test]
+    fn valid_public_urls_are_accepted_and_refused_ones_are_named_without_their_value() {
+        for public in [
+            "http://192.168.0.24:63309",
+            "http://192.168.0.24",
+            "https://game.example.test",
+            "http://[fd00::24]:63309",
+            "http://localhost:63309",
+        ] {
+            let settings = session_settings(with_public(None, None, public)).unwrap();
+            assert_eq!(settings.join_origin, public);
+            assert_eq!(settings.allowed_origins[0], public);
+        }
+        for public in [
+            "",
+            "192.168.0.24:63309",
+            "ftp://192.168.0.24:63309",
+            "http://192.168.0.24:63309/",
+            "http://192.168.0.24:63309/gameplay/player",
+            "http://192.168.0.24:63309?room=LANTERN",
+            "http://192.168.0.24:63309#top",
+            "http://player@192.168.0.24:63309",
+            "http://0.0.0.0:63309",
+            "http://[::]:63309",
+            "http://:63309",
+            "http://192.168.0.24:0",
+            "http://192.168.0.24:99999",
+        ] {
+            let error = session_settings(with_public(None, None, public))
+                .err()
+                .unwrap_or_else(|| panic!("{public:?} should be refused"));
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("DF_GAMEPLAY_PUBLIC_URL refused")
+            );
+            if !public.is_empty() {
+                assert!(!error.to_string().contains(public));
+            }
+        }
+    }
+
+    #[test]
+    fn a_public_url_is_the_join_base_and_the_first_allowed_origin() {
+        let settings = session_settings(with_public(
+            Some("0.0.0.0:63309"),
+            Some("http://192.168.0.9:63309,http://192.168.0.24:63309"),
+            "http://192.168.0.24:63309",
+        ))
+        .unwrap();
+        assert_eq!(settings.join_origin, "http://192.168.0.24:63309");
+        assert!(!settings.join_loopback);
+        assert_eq!(
+            settings.allowed_origins,
+            ["http://192.168.0.24:63309", "http://192.168.0.9:63309"]
+        );
+        // The origin check compares the exact string, so the phone's origin is accepted and an
+        // unrelated one is not.
+        let allowed = |origin: &str| settings.allowed_origins.iter().any(|known| known == origin);
+        assert!(allowed("http://192.168.0.24:63309"));
+        assert!(!allowed("http://192.168.0.99:63309"));
+        assert!(!allowed("http://192.168.0.24:63310"));
+
+        let lan_only = session_settings(with_public(
+            Some("0.0.0.0:63309"),
+            None,
+            "http://192.168.0.24:63309",
+        ))
+        .unwrap();
+        assert_eq!(lan_only.allowed_origins, ["http://192.168.0.24:63309"]);
+
+        let loopback = session_settings(with_public(None, None, "http://127.0.0.1:63309")).unwrap();
+        assert!(loopback.join_loopback);
+        assert_eq!(
+            loopback.allowed_origins,
+            ["http://127.0.0.1:63309", "http://localhost:63309"]
+        );
+    }
+
+    #[test]
+    fn without_a_public_url_the_join_base_is_the_listener_or_loopback_for_a_wildcard() {
+        let loopback = session_settings(inputs([None; 6])).unwrap();
+        assert_eq!(loopback.join_origin, "http://127.0.0.1:63309");
+        assert!(loopback.join_loopback);
+
+        let wildcard = session_settings(inputs([
+            Some("0.0.0.0:63309"),
+            Some("http://192.168.1.20:63309"),
+            None,
+            None,
+            None,
+            None,
+        ]))
+        .unwrap();
+        assert_eq!(wildcard.join_origin, "http://127.0.0.1:63309");
+        assert!(wildcard.join_loopback);
+
+        let named = session_settings(inputs([
+            Some("192.168.1.20:63309"),
+            Some("http://192.168.1.20:63309"),
+            None,
+            None,
+            None,
+            None,
+        ]))
+        .unwrap();
+        assert_eq!(named.join_origin, "http://192.168.1.20:63309");
+        assert!(!named.join_loopback);
     }
 }
 

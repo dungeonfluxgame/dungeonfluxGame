@@ -4,6 +4,7 @@ mod live_battlefield;
 mod live_chrome;
 mod live_combat;
 mod live_exploration;
+mod live_health;
 mod live_lobby;
 mod live_motion;
 mod live_music;
@@ -1308,7 +1309,8 @@ fn receive_view(
         ) && views.accept_art_update(generation, scope, &view, crate::live_art::merge_art)
         {
             drop(state);
-            return redraw_current(client);
+            redraw_current(client)?;
+            return live_health::phone_sync(client);
         }
         accepted
     };
@@ -1335,6 +1337,7 @@ fn receive_view(
             live_motion::on_view(client)?;
         } else {
             redraw_current(client)?;
+            live_health::phone_sync(client)?;
             live_voice::observe(client);
             live_motion::on_player_view(client)?;
         }

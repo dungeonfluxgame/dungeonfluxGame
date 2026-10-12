@@ -620,12 +620,17 @@ fn handle_intent(client: &Rc<RefCell<Client>>, intent: CombatIntent) {
         );
         return;
     };
+    // A switch travels only with an offer that asks for it: the server refuses it on any other.
     let (savage, graze) = {
         let state = client.borrow();
-        (
-            state.combat.choice(SAVAGE_ATTACKER),
-            state.combat.choice(GRAZE),
-        )
+        let asked = |group: &str| {
+            offer
+                .input_groups
+                .iter()
+                .any(|input| input.group_id == group)
+                && state.combat.choice(group)
+        };
+        (asked(SAVAGE_ATTACKER), asked(GRAZE))
     };
     match prepare(
         client,

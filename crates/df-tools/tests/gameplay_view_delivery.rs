@@ -2,6 +2,13 @@
 
 #[path = "../src/gameplay_browser/view_delivery.rs"]
 mod view_delivery;
+// `view_delivery`'s own tests merge generated art with the display's real merge.
+#[allow(dead_code)]
+#[path = "../src/live_art.rs"]
+mod live_art;
+#[allow(dead_code)]
+#[path = "../src/presentation.rs"]
+mod presentation;
 
 use df_client::{
     cache::CacheScope, connection::RpcConnection, connection_views::ConnectionViewAcceptance,

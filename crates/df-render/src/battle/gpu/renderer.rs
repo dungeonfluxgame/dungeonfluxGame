@@ -33,6 +33,11 @@ const GENERATED: &str = "/assets/ui/generated";
 const DEPTH_FORMAT: &str = "depth32float";
 const COLOUR_FORMAT: &str = "rgba8unorm";
 const DECAL_STRIDE: usize = 12;
+/// How far above the play plane a scan's ground may rise before it counts as hiding a figure:
+/// turf, stones and tufts within this height never occlude a figure standing on the plane (the
+/// fitted ground is at most 0.45 m from the plane, plus tufts). Taller things in front of the
+/// figure (trunks, walls, palisades) still do. See `standing_depth` in the shaders.
+const FIGURE_GROUND_MARGIN_M: f32 = 0.65;
 /// Vertices per decal: one quad on the flat play plane.
 const DECAL_VERTICES: u32 = 6;
 /// Eight vec4 attributes per billboard: place, pose, tint, kind, bounds and three effect vectors.
@@ -935,7 +940,13 @@ impl Renderer {
             scene.backdrop.height_m,
         ]);
         data.extend_from_slice(&[spot.0, spot.1, 3.4, spot.2]);
-        data.extend_from_slice(&[scene.grid.play_plane_y(), 0.0, 0.0, 0.0]);
+        // Debug bit 16 turns the margin off, showing figures as the scan's depth alone would draw them.
+        let ground_margin = if scene.splat.is_some() && self.debug_switches & 16 == 0 {
+            FIGURE_GROUND_MARGIN_M
+        } else {
+            0.0
+        };
+        data.extend_from_slice(&[scene.grid.play_plane_y(), ground_margin, 0.0, 0.0]);
         self.core
             .queue
             .write_buffer(&self.frame_buffer, 0.0, &float_array(&data));
