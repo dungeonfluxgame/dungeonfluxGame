@@ -757,9 +757,11 @@ fn connect(client: Rc<RefCell<Client>>) {
                 connection.close();
                 return Ok::<(), String>(());
             }
+            // The owner's view carries the combat section (reachable cells, legal targets, budget),
+            // which exceeds 8 KiB in a three-enemy fight; RPC_MESSAGE_BYTES is the bridge's RPC ceiling.
             let mut sessions = SessionClient::new(channel.clone())
-                .max_decoding_message_size(8192)
-                .max_encoding_message_size(8192);
+                .max_decoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES)
+                .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES);
             let connection = RpcConnection::from_browser(sessions.clone(), connection);
             let view_generation = connection.generation();
             {
@@ -773,8 +775,8 @@ fn connect(client: Rc<RefCell<Client>>) {
                 }
                 state.action = Some(
                     ActionClient::new(channel.clone())
-                        .max_decoding_message_size(8192)
-                        .max_encoding_message_size(8192),
+                        .max_decoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES)
+                        .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES),
                 );
                 state.dialogue.bind(channel);
                 state.connection = Some(connection);

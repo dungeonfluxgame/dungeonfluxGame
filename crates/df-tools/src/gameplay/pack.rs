@@ -2450,6 +2450,13 @@ pub(super) fn validate_character(
     let archer = borrowed
         .iter()
         .any(|(key, value)| *key == "array" && *value == "dexterous");
+    // The appearance is presentation only, but it must show the weapon the package grants: the
+    // bow figure only with the longbow package, the sword figures only with a greatsword package.
+    if let Some(portrait) = portrait
+        && (portrait == "portrait-hero-3") != archer
+    {
+        return Err(Error::InvalidChoice);
+    }
     if archer {
         if package != Some("archer") {
             return Err(Error::InvalidChoice);

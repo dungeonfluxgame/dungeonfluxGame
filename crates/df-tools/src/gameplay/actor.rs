@@ -364,8 +364,53 @@ pub(super) fn unavailable(error: RepositoryError) -> tonic::Status {
         RepositoryError::Unauthorized => {
             tonic::Status::permission_denied("local gameplay binding denied")
         }
-        _ => tonic::Status::unavailable("gameplay authority unavailable; retain your operation"),
+        _ => {
+            record_unavailable("authority", &format!("{error:?}"));
+            authority_unavailable()
+        }
     }
+}
+
+fn authority_unavailable() -> tonic::Status {
+    tonic::Status::unavailable("gameplay authority unavailable; retain your operation")
+}
+
+/// One `UNAVAILABLE` line on stdout and the same fact on the shared observability path, for every
+/// place the phone is told to retain its operation or reconnect. `site` names the server path.
+fn record_unavailable(site: &'static str, reason: &str) {
+    println!("UNAVAILABLE site={site} reason={reason}");
+    let context = OperationContext {
+        trace_parent: String::new(),
+        build: crate::BUILD_ID.to_owned(),
+    };
+    let mut span = df_observe::begin(&context, "gameplay.unavailable");
+    span.event(
+        "gameplay.unavailable",
+        &[
+            ("unavailable.site", site.to_owned()),
+            ("unavailable.reason", reason.to_owned()),
+        ],
+    );
+    span.finish_unmeasured("unavailable");
+}
+
+/// One diagnostic per refused or failed gameplay submit: one `REFUSAL` line on stdout and the same
+/// fact on the shared observability path. It names the action kind, the internal reason and the
+/// status the phone receives; it never carries the submitted payload.
+fn record_refusal(action_kind: i32, reason: &str, status: &str) {
+    let kind = rpc::GameplayActionKind::try_from(action_kind)
+        .map_or_else(|_| action_kind.to_string(), |kind| format!("{kind:?}"));
+    println!("REFUSAL action={kind} reason={reason} status={status}");
+    let context = OperationContext {
+        trace_parent: String::new(),
+        build: crate::BUILD_ID.to_owned(),
+    };
+    let mut span = df_observe::begin(&context, "gameplay.action_refused");
+    span.event(
+        "gameplay.action_refused",
+        &[("action.kind", kind), ("refusal.reason", reason.to_owned())],
+    );
+    span.finish_unmeasured(status);
 }
 
 fn after_grant_reconnect<T>(
@@ -396,6 +441,7 @@ pub(super) fn session_lost_status() -> tonic::Status {
 
 pub(super) fn require_readable(fenced: bool) -> Result<(), tonic::Status> {
     if fenced {
+        record_unavailable("owner-fenced", "the owner is fenced until recovery");
         return Err(tonic::Status::unavailable(
             "gameplay owner requires recovery",
         ));
@@ -855,6 +901,7 @@ impl Actor {
                     .matches_uncertain_retry(&scope, &input)
                     .map_err(unavailable)?
                 {
+                    record_unavailable("uncertain-retry", "a different operation is retained");
                     return Err(tonic::Status::unavailable(
                         "exact retained operation required for recovery",
                     ));
@@ -949,9 +996,12 @@ impl Actor {
                                         tonic::Status::internal("committed rejection invalid")
                                     })
                             }
-                            _ => Err(tonic::Status::unavailable(
-                                "rejection commit requires recovery",
-                            )),
+                            _ => {
+                                record_unavailable("rejection-commit", "requires recovery");
+                                Err(tonic::Status::unavailable(
+                                    "rejection commit requires recovery",
+                                ))
+                            }
                         };
                     }
                 }
@@ -978,8 +1028,10 @@ impl Actor {
                     self.recovery_wakeup
                         .send_replace(self.owner.checkpoint().clone());
                 }
-                let accepted =
-                    super::journey::accepted(committed.decision()).map_err(unavailable)?;
+                let accepted = super::journey::accepted(committed.decision()).map_err(|error| {
+                    record_refusal(request.action_kind, &format!("{error:?}"), "unavailable");
+                    authority_unavailable()
+                })?;
                 let replayed = replaying_uncertain || committed.basis().revision <= prior_revision;
                 if !replayed {
                     self.record_table_action(member, &request, &accepted);
@@ -1009,29 +1061,26 @@ impl Actor {
                 Ok(wire::observation(rpc::RejectionCode::OperationConflict))
             }
             SubmissionOutcome::ExpiredOrIndeterminate => {
+                record_refusal(
+                    request.action_kind,
+                    "ExpiredOrIndeterminate",
+                    "lookup-required",
+                );
                 self.fence();
                 Err(tonic::Status::unavailable("operation lookup required"))
             }
             SubmissionOutcome::LookupRequired => {
+                record_refusal(request.action_kind, "LookupRequired", "lookup-required");
                 self.fence();
                 Err(tonic::Status::unavailable("operation lookup required"))
             }
             // The owner stayed current, so no uncertain commit was recorded: the candidate was
             // refused before anything reached durable storage. Nothing applies, so a retry of
             // this operation is refused the same way and the player can choose again.
-            SubmissionOutcome::Refused(RepositoryError::InvalidCandidate)
-                if self.owner.is_current() =>
-            {
-                let context = OperationContext {
-                    trace_parent: String::new(),
-                    build: crate::BUILD_ID.to_owned(),
-                };
-                let mut span = df_observe::begin(&context, "gameplay.action_refused");
-                span.event(
-                    "gameplay.action_refused",
-                    &[("action.kind", request.action_kind.to_string())],
-                );
-                span.finish_unmeasured("refused");
+            SubmissionOutcome::Refused(
+                error @ (RepositoryError::InvalidCandidate | RepositoryError::Capacity),
+            ) if self.owner.is_current() => {
+                record_refusal(request.action_kind, &format!("{error:?}"), "refused");
                 Ok(wire::committed(wire::rejected(
                     current,
                     operation,
@@ -1042,7 +1091,11 @@ impl Actor {
                 if error == RepositoryError::UnresolvedCommit {
                     self.fence();
                 }
-                Err(unavailable(error))
+                if error == RepositoryError::Unauthorized {
+                    return Err(unavailable(error));
+                }
+                record_refusal(request.action_kind, &format!("{error:?}"), "unavailable");
+                Err(authority_unavailable())
             }
         }
     }

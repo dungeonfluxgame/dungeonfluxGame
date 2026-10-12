@@ -227,3 +227,201 @@ fn accepted_creation_keeps_canonical_choices_and_source_backed_inventory() {
     assert_eq!(quantity_for("travelers-clothes"), Some(1));
     assert_eq!(quantity_for("gold-piece"), Some(18));
 }
+
+// The live pack with the tactical section, as the server loads it.
+fn live_pack<T>(run: impl FnOnce() -> T) -> T {
+    let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../../content/harbor-journey/tuning.json"
+    ))
+    .unwrap();
+    tuning["tactical"] =
+        serde_json::json!({"enemies":[{"srd_id":"bandit","count":3,"ammunition":20}]});
+    let loaded = pack::load_from_bytes(
+        include_bytes!("../../../../content/harbor-journey/pack.json"),
+        &serde_json::to_vec(&tuning).unwrap(),
+    )
+    .unwrap();
+    pack::with_test_pack(loaded, run)
+}
+fn phone_create(
+    current: &Checkpoint,
+    operation: u8,
+    name: &str,
+    choices: &[(&str, &str)],
+) -> rpc::SubmitActionRequest {
+    let basis = current.basis();
+    rpc::SubmitActionRequest {
+        session_id: Some(rpc::SessionId {
+            value: Some(basis.session.as_bytes().to_vec()),
+        }),
+        run_id: Some(rpc::RunId {
+            value: Some(basis.run.as_bytes().to_vec()),
+        }),
+        operation_id: Some(rpc::OperationId {
+            value: Some(vec![operation; 16]),
+        }),
+        observed_revision: Some(wire::revision(basis.revision)),
+        offer_id: offer_id(current, rpc::GameplayActionKind::CreateCharacter),
+        action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
+        character: Some(rpc::CharacterSelection {
+            name: name.to_owned(),
+            choices: choices
+                .iter()
+                .map(|(group, option)| rpc::JourneyChoice {
+                    group_id: (*group).to_owned(),
+                    option_id: (*option).to_owned(),
+                })
+                .collect(),
+        }),
+        ..Default::default()
+    }
+}
+const PHONE_SHARED: [(&str, &str); 10] = [
+    ("species", "dwarf"),
+    ("class", "fighter-1"),
+    ("background", "soldier"),
+    ("language-1", "elvish"),
+    ("language-2", "orc"),
+    ("skill-1", "acrobatics"),
+    ("skill-2", "survival"),
+    ("gaming-set", "playing-cards"),
+    ("allied-ties", "join-order"),
+    ("alignment", "chaotic-good"),
+];
+fn joined_room() -> Checkpoint {
+    let mut current = initial().expect("empty room");
+    for operation in [1, 2] {
+        current = stage_join(
+            &current,
+            &super::tests::input(
+                &current,
+                bootstrap_member().expect("bootstrap"),
+                operation,
+                "join-room",
+                vec![],
+            ),
+        )
+        .expect("joined");
+    }
+    current
+}
+/// Creates one hero through the admitted entry the live server uses (`journey_input`, then
+/// `HarborEngine::decide_admitted`) and checks that its receipt fits the live receipt bound.
+fn seat_hero(
+    current: &Checkpoint,
+    seat: [u8; 16],
+    operation: u8,
+    name: &str,
+    package: &str,
+    portrait: &str,
+) -> Checkpoint {
+    let member = MemberId::from_bytes(&seat).expect("member");
+    let mut choices = PHONE_SHARED.to_vec();
+    choices.push(("build-package", package));
+    choices.push(("portrait", portrait));
+    let request = phone_create(current, operation, name, &choices);
+    let input = wire::journey_input(&request, member, current).expect("the phone request converts");
+    let operation_id = OperationId::from_bytes(&[operation; 16]).expect("operation");
+    let mut engine = model::HarborEngine;
+    let next = engine
+        .decide_admitted(current, &input, operation_id)
+        .unwrap_or_else(|error| panic!("{package} seat refused: {error:?}"));
+    let decision = next.state().decisions.last().expect("creation decision");
+    df_session::submission::DecisionReceipt::new(
+        next.basis(),
+        decision.clone(),
+        df_persistence::local_demo_scope::RECEIPT_RETAINED_BYTES_MAX,
+    )
+    .expect("the creation receipt fits the live receipt bound");
+    next
+}
+#[test]
+fn creation_packages_stage_through_the_live_entry_for_each_seat_and_match_their_sheets() {
+    live_pack(|| {
+        for packages in [
+            ["melee-stalwart", "archer"],
+            ["archer", "melee-stalwart"],
+            ["archer", "archer"],
+        ] {
+            let mut current = joined_room();
+            for (index, package) in packages.into_iter().enumerate() {
+                let portrait = if package == "archer" {
+                    "portrait-hero-3"
+                } else {
+                    "portrait-hero-1"
+                };
+                let name = ["Brakka", "Sylvie"][index];
+                current = seat_hero(
+                    &current,
+                    MEMBERS[index],
+                    3 + index as u8,
+                    name,
+                    package,
+                    portrait,
+                );
+                let entity =
+                    player_entity(MemberId::from_bytes(&MEMBERS[index]).unwrap(), &current)
+                        .expect("seated hero");
+                let (armor, hit_points) = if package == "archer" {
+                    (15, 13)
+                } else {
+                    (17, 13)
+                };
+                assert_eq!(value(current.state(), entity, "armor-class"), Ok(armor));
+                assert_eq!(value(current.state(), entity, "hit-points"), Ok(hit_points));
+            }
+        }
+    });
+}
+#[test]
+fn appearance_must_match_the_combat_package_on_the_server() {
+    live_pack(|| {
+        let with = |package: &'static str, portrait: &'static str| {
+            let mut choices = PHONE_SHARED.to_vec();
+            choices.push(("build-package", package));
+            choices.push(("portrait", portrait));
+            pack::validate_character("Sylvie", &choices).is_ok()
+        };
+        assert!(with("archer", "portrait-hero-3"));
+        assert!(!with("archer", "portrait-hero-1"));
+        assert!(with("melee-stalwart", "portrait-hero-1"));
+        assert!(with("melee-stalwart", "portrait-hero-2"));
+        assert!(!with("melee-stalwart", "portrait-hero-3"));
+    });
+}
+#[test]
+fn archer_creation_sheet_states_the_longbow_attack_and_its_ammunition() {
+    live_pack(|| {
+        let current = seat_hero(
+            &joined_room(),
+            MEMBERS[0],
+            3,
+            "Sylvie",
+            "archer",
+            "portrait-hero-3",
+        );
+        let decision = current.state().decisions.last().expect("creation decision");
+        let action = accepted(decision).expect("accepted creation");
+        let sheet = action.character.expect("creation sheet");
+        let facts = sheet
+            .facts
+            .iter()
+            .map(|fact| fact.value.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            facts
+                .iter()
+                .any(|value| value.contains("+7 to hit · 1d8+3"))
+        );
+        let entity = player_entity(MemberId::from_bytes(&MEMBERS[0]).unwrap(), &current)
+            .expect("seated hero");
+        let arrows = current
+            .state()
+            .inventory
+            .iter()
+            .filter(|item| item.owner == entity && item.origin.entry.as_str() == "arrow")
+            .map(|item| item.quantity)
+            .sum::<u64>();
+        assert_eq!(arrows, 20);
+    });
+}

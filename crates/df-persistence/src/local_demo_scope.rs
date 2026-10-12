@@ -35,6 +35,11 @@ pub enum LocalRejectedLookup {
 }
 use crate::{NativeCodecLimits, NativeScope, NativeVerifierSource};
 
+/// Retained bytes allowed for one operation's receipt (the accepted action, hex-encoded, plus
+/// fixed overhead). A Longbow creation sheet alone needs about 2.1 KiB here, so the old 4 KiB
+/// bound refused a valid archer build as a capacity failure. The session owner and the
+/// repository must use this one value.
+pub const RECEIPT_RETAINED_BYTES_MAX: usize = 8192;
 pub const TENANT: [u8; 16] = [0x31; 16];
 pub const CAMPAIGN: [u8; 16] = [0x32; 16];
 pub const PLAYER: [u8; 16] = [0x33; 16];
@@ -223,7 +228,7 @@ impl LocalDemoScopeIssuer {
                 let locked = crate::decision_rows::lock_session(&transaction,scope).await?;
                 // A grant can expire or be revoked while this transaction waits for the row.
                 verifier.verify(&transaction,scope).await?;
-                let accepted = crate::decision_rows::lookup_locked(&transaction,scope,codec_limits,4096).await?;
+                let accepted = crate::decision_rows::lookup_locked(&transaction,scope,codec_limits,RECEIPT_RETAINED_BYTES_MAX).await?;
                 let epoch = scope.epoch.get().to_string();
                 let parameters: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[
                     &scope.tenant.as_slice(), &scope.session.as_bytes().as_slice(),

@@ -1142,25 +1142,25 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
-            "6c712a452151cd563087b25b4f4db8c6b12aa4a22faab8334de7e054781cc65f",
+            "90ce2101ed5685f506f74053c99a4c33f8f74d7eaa025c03e37cdd5ea239ff24",
             "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
-            "057e96f54349f70cc514ec02d83f3ae24f941b65be2961acb724f70b10732a67",
+            "b1f5731bceb25810c6502f26ce9d106b282a8f9bbecb6a3284648af939ea8c2a",
         ],
     ),
     (
         0xdaa66d325ccc5aac,
         [
-            "3439dfadef74fc3e1dae7feda47a4abe782e8cba02a7ed5d2cd043522b754fb0",
+            "a548dfd10ce55700b91bdbcbeec8210a7591a05a385ae8c8f735a9947485ba1d",
             "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
-            "b6033d9f40639c08b9e0a9108d9d124fb623a7b3fa657d778ca1febe0261b7a6",
+            "ad4e6c12367e8f67184078477447bbad40b50487e144e26c2504710422778264",
         ],
     ),
     (
         0x11a25cdccc7d808f,
         [
-            "701d607820e81326cec219c8f7f5da8b9849e4bcd2dcde7f3a34f607e7398968",
+            "386ea601471af31c35f7c21850f6807734b7c68a7dbc6938d947764aecf1270e",
             "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
-            "4118eed983e2d248d3948fac3d134b0b6b6cf88124bb12a0c6ab391a5fec9c1b",
+            "032bb73c9c035395c42efb625fcd8ae4a6f30d8cb4a42356c86a51e63fca19a2",
         ],
     ),
 ];

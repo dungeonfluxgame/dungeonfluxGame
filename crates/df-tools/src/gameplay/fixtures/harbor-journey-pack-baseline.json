@@ -4,7 +4,7 @@
   "locale": "en",
   "room_code": "LANTERN",
   "creation": {
-    "description": "Supported adventure builds: Level 1 Dwarf Fighter / Soldier. Choose one option in each group. Other classes and species remain in development; every submitted build is validated on the server.",
+    "description": "Supported adventure builds: Level 1 Dwarf Fighter / Soldier, as a Greatsword and Defense build or a Longbow and Archery build. Choose one option in each group. Other classes and species remain in development; every submitted build is validated on the server.",
     "groups": [
       {
         "id": "species",

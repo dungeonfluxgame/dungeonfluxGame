@@ -2235,6 +2235,35 @@ pub(super) mod tests {
         });
     }
     #[test]
+    fn three_enemy_fight_views_fit_the_rpc_message_bound_for_each_seat() {
+        let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../../content/harbor-journey/tuning.json"
+        ))
+        .unwrap();
+        tuning["tactical"] =
+            serde_json::json!({"enemies":[{"srd_id":"bandit","count":3,"ammunition":20}]});
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../../content/harbor-journey/pack.json"),
+            &serde_json::to_vec(&tuning).unwrap(),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            let current = fight(true);
+            // The phones decode a watch view with the bridge's RPC ceiling; an owner's combat view
+            // with three enemies must stay under it or the stream is cut mid-fight.
+            for bytes in [MEMBERS[0], MEMBERS[1]] {
+                let member = MemberId::from_bytes(&bytes).unwrap();
+                let view = wire::journey_view(
+                    &current,
+                    df_persistence::local_demo_scope::LocalDemoRole::Player,
+                    member,
+                )
+                .unwrap();
+                assert!(view.encode_to_vec().len() <= df_rpc_bridge::RPC_MESSAGE_BYTES);
+            }
+        });
+    }
+    #[test]
     fn tactical_creation_packages_validate_and_lawful_unimplemented_cross_package_is_refused_explicitly()
      {
         with_live(|| {
