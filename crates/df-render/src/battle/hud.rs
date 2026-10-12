@@ -5,7 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use wasm_bindgen::JsValue;
+use js_sys::{Array, Function, Object, Reflect};
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element};
 
 use super::{
@@ -23,8 +24,76 @@ struct Plate {
     portrait: Element,
     hp_text: Element,
     hp_fill: Element,
+    /// Beneath the fill, as wide as the hit points were before a blow: the lost segment that
+    /// lingers in a bright colour and then drains.
+    hp_chip: Element,
+    /// The bar itself, for the heal flash.
+    hp_bar: Element,
+    /// The hit points last shown on this plate.
+    last_hp: Option<(u32, u32)>,
     status: Element,
     status_signature: String,
+}
+
+/// How long the lost segment lingers (after the fill's own transition) and how long it drains.
+const CHIP_HOLD_MS: f64 = 350.0;
+const CHIP_DRAIN_MS: f64 = 600.0;
+const HEAL_FLASH_MS: f64 = 700.0;
+
+fn set_property(object: &Object, key: &str, value: impl Into<JsValue>) {
+    // A property that cannot be set only leaves that keyframe plain.
+    let _set = Reflect::set(object, &JsValue::from_str(key), &value.into());
+}
+
+/// Starts a Web Animation on `element`; a browser without it simply shows no animation.
+fn animate(element: &Element, frames: &Array, options: &Object) {
+    let target: &JsValue = element.as_ref();
+    if let Some(method) = Reflect::get(target, &JsValue::from_str("animate"))
+        .ok()
+        .and_then(|method| method.dyn_into::<Function>().ok())
+    {
+        let _started = method.call2(target, frames, options);
+    }
+}
+
+/// The lost segment of the bar lingers in the chip colour and drains; a heal flashes the bar.
+fn bar_changed(plate: &Plate, before: (u32, u32), now: (u32, u32)) {
+    let share = |hp: (u32, u32)| f64::from(hp.0.min(hp.1)) * 100.0 / f64::from(hp.1.max(1));
+    if now.0 < before.0 {
+        let (from, to) = (
+            format!("{:.1}%", share(before)),
+            format!("{:.1}%", share(now)),
+        );
+        let total = CHIP_HOLD_MS + CHIP_DRAIN_MS;
+        let frames = Array::new();
+        for (offset, width) in [(0.0, &from), (CHIP_HOLD_MS / total, &from), (1.0, &to)] {
+            let frame = Object::new();
+            set_property(&frame, "offset", offset);
+            set_property(&frame, "width", width.as_str());
+            frames.push(&frame);
+        }
+        let options = Object::new();
+        set_property(&options, "duration", total);
+        set_property(&options, "easing", "ease-in");
+        animate(&plate.hp_chip, &frames, &options);
+    } else if now.0 > before.0 {
+        let frames = Array::new();
+        for (offset, glow, brightness) in [
+            (0.0, "#7dffa000", 1.0),
+            (0.25, "#7dffa0e6", 1.7),
+            (1.0, "#7dffa000", 1.0),
+        ] {
+            let frame = Object::new();
+            set_property(&frame, "offset", offset);
+            set_property(&frame, "boxShadow", format!("0 0 14px 4px {glow}"));
+            set_property(&frame, "filter", format!("brightness({brightness})"));
+            frames.push(&frame);
+        }
+        let options = Object::new();
+        set_property(&options, "duration", HEAL_FLASH_MS);
+        set_property(&options, "easing", "ease-out");
+        animate(&plate.hp_bar, &frames, &options);
+    }
 }
 
 /// A group of status icons: the signature says which are shown, so the DOM is only rebuilt when
@@ -200,6 +269,7 @@ impl Hud {
         let name = element(&self.document, &words, "div", "bf-plate-name", "")?;
         let hp_text = element(&self.document, &words, "div", "bf-plate-hp", "")?;
         let bar = element(&self.document, &words, "div", "bf-hp", "")?;
+        let hp_chip = element(&self.document, &bar, "div", "bf-hp-chip", "")?;
         let hp_fill = element(&self.document, &bar, "div", "bf-hp-fill", "")?;
         element(&self.document, &bar, "div", "bf-hp-tick", "")?;
         let status = element(&self.document, &words, "div", "bf-plate-status", "")?;
@@ -211,6 +281,9 @@ impl Hud {
                 portrait,
                 hp_text,
                 hp_fill,
+                hp_chip,
+                hp_bar: bar,
+                last_hp: None,
                 status,
                 status_signature: String::new(),
             },
@@ -321,9 +394,21 @@ impl Hud {
             if plate.name.text_content().as_deref() != Some(figure.name.as_str()) {
                 plate.name.set_text_content(Some(&figure.name));
             }
-            plate
-                .portrait
-                .set_attribute("style", &portrait_style(figure.portrait.as_deref()))?;
+            match figure.variant.as_deref() {
+                // The health variant's face: the head and shoulders of the same full-body picture.
+                Some(variant) => {
+                    plate
+                        .portrait
+                        .set_attribute("style", &format!("background-image:url({variant})"))?;
+                    plate.portrait.set_attribute("data-crop", "face")?;
+                }
+                None => {
+                    plate
+                        .portrait
+                        .set_attribute("style", &portrait_style(figure.portrait.as_deref()))?;
+                    plate.portrait.remove_attribute("data-crop")?;
+                }
+            }
             let glyph = if figure.portrait.is_some() {
                 String::new()
             } else {
@@ -337,9 +422,18 @@ impl Hud {
             if plate.hp_text.text_content().as_deref() != Some(text.as_str()) {
                 plate.hp_text.set_text_content(Some(&text));
             }
-            plate
-                .hp_fill
-                .set_attribute("style", &format!("width:{:.1}%", fraction * 100.0))?;
+            // The width the chip rests at, so it only shows while it animates from the old one.
+            let width = format!("width:{:.1}%", fraction * 100.0);
+            plate.hp_fill.set_attribute("style", &width)?;
+            plate.hp_chip.set_attribute("style", &width)?;
+            match figure.tone {
+                Some(tone) => plate.root.set_attribute("data-health-tier", tone.label())?,
+                None => plate.root.remove_attribute("data-health-tier")?,
+            }
+            let now = figure.hit_points.map(|hp| (hp.current, hp.maximum));
+            if let (Some(before), Some(now)) = (plate.last_hp, now) {
+                bar_changed(plate, before, now);
+            }
             plate
                 .root
                 .set_attribute("data-active", if figure.active { "true" } else { "false" })?;
@@ -368,6 +462,7 @@ impl Hud {
             }
             if let Some(plate) = self.plates.get_mut(&figure.id) {
                 plate.status_signature = signature;
+                plate.last_hp = figure.hit_points.map(|hp| (hp.current, hp.maximum));
             }
         }
 

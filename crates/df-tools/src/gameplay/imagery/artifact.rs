@@ -21,7 +21,7 @@ const MAXIMUM_SUBJECT_CHARACTERS: usize = 40;
 const CLOSE_UP: &str = "A close-up illustration of a single object, centered, filling most of \
     the frame, in sharp detail with a shallow depth of field.";
 const IN_PLACE: &str = "It is shown as it would look in this place, lit by the same light and \
-    made of the same materials as the reference painting.";
+    made of the same materials as the reference photograph.";
 const OBJECT_IS: &str = "The object is";
 
 /// Why an artifact subject phrase was refused.

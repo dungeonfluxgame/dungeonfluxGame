@@ -981,7 +981,7 @@ impl Inner {
         let state = locked(&self.state);
         heroes
             .iter()
-            .filter_map(|(art, name)| Some((*art, state.hero_faces.get(name)?.clone())))
+            .filter_map(|(art, name)| Some((*art, state.hero_faces.get(name)?.stage.clone()?)))
             .collect()
     }
 

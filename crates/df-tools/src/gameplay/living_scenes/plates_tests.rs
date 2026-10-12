@@ -497,9 +497,13 @@ async fn a_hurt_hero_stands_in_the_plate_as_their_health_variant_and_makes_anoth
     observe(&shared, &current, &[], &[1, 2]);
     let healthy = drain(&mut queue);
     assert!(matches!(&healthy[0], Job::Fresh { faces, .. } if faces.is_empty()));
-    locked(&shared.inner.state)
-        .hero_faces
-        .insert("Hero 1".to_owned(), key('d'));
+    locked(&shared.inner.state).hero_faces.insert(
+        "Hero 1".to_owned(),
+        crate::gameplay::living_scenes::HeroFace {
+            stage: Some(key('d')),
+            battle: None,
+        },
+    );
     // The same party with a hurt first hero in another scene: its plate is another picture.
     let other = scene(SceneKey::Victory, "What the Fight Cost 2", Some("Kestrel"));
     observe(&shared, &other, &[], &[1, 2]);

@@ -30,6 +30,8 @@ pub(super) fn install(document: &Document) -> Result<(), JsValue> {
     if document.query_selector("style[data-live-theme]")?.is_some() {
         return Ok(());
     }
+    // PLAY-H01: the battlefield takes the shared tier function and shake model.
+    super::live_health::install_battlefield();
     let style = document.create_element("style")?;
     style.set_attribute("data-live-theme", "")?;
     style.set_text_content(Some(&format!(

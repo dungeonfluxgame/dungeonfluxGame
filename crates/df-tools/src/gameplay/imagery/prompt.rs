@@ -19,8 +19,10 @@ use super::super::{
 
 const MAXIMUM_FACT_CHARACTERS: usize = 80;
 
-const HOUSE_STYLE: &str = "Painterly cinematic realism matching the reference art: grounded \
-    materials, natural skin, deep navy shadows with warm amber highlights.";
+const HOUSE_STYLE: &str = "Photographic realism, matching the reference: a frame from a \
+    big-budget live-action epic fantasy film with real materials, real skin and fabric, a \
+    believable lens and natural depth of field, motivated practical light, a restrained colour \
+    grade and fine film grain.";
 const NO_TEXT: &str = "No text, letters, numbers, logos or watermarks.";
 const NO_REAL_PEOPLE: &str = "No real people, celebrities or likenesses of real persons.";
 const ADULTS_ONLY: &str = "Every person shown is an adult.";
@@ -28,9 +30,9 @@ const RESTRAINED_LIMITS: &str = "No gore, no nudity, no sexual content.";
 const MATURE_STANCE: &str = "Mature content rating: violence, horror and desire are shown as \
     the story demands, not softened.";
 const KEEP_PLACE: &str = "Keep the same place: its architecture, props, palette and perspective \
-    exactly as in the reference painting.";
+    exactly as in the reference photograph.";
 pub(super) const NO_PEOPLE: &str =
-    "Paint no people, no figures and no silhouettes anywhere; the characters are added separately.";
+    "Show no people, no figures and no silhouettes anywhere; the characters are added separately.";
 const KEEP_FLOOR: &str = "Keep a wide, clear, open floor across the lower third of the frame, \
     with the floor perspective and horizon of the reference, so figures can stand on it.";
 const KEEP_FRAME: &str = "Keep the exact aspect ratio and framing of the reference.";
@@ -38,7 +40,7 @@ const KEEP_PERSON: &str = "Keep exactly the same person: face, hair, beard, buil
     pose, framing, camera distance and lighting as in the reference image.";
 const KEEP_TRANSPARENT: &str = "Keep the background fully transparent.";
 const CHANGE_ONLY: &str = "Change only the following.";
-const RECAMERA: &str = "Repaint the reference painting from a changed camera and light.";
+const RECAMERA: &str = "Re-shoot the reference photograph from a changed camera and light.";
 const SCENE_SETTING: &str = "The place is";
 const CHARACTER_IS: &str = "The character is";
 const SHOW_EXPRESSION: &str = "The face shows";

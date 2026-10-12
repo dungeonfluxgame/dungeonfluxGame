@@ -50,7 +50,7 @@ message CombatView { repeated PartyMemberView participants = 1; string active_ac
 message InitiativeRoll { bytes participant_id = 1; string name = 2; uint32 die = 3; sint32 modifier = 4; sint32 total = 5; uint32 order = 6; }
 message JourneyView { JourneyPhase phase = 1; string room_code = 2; string join_path = 3; repeated PartyMemberView party = 4; CharacterCreationOffer creation = 5; CharacterSheet own_character = 6; CombatView combat = 7; string speaker = 8; string dialogue = 9; repeated TableLine table_log = 10; TempoCue tempo = 11; repeated string table_choices = 12; repeated NpcStanding standing = 13; repeated LiveFace live_faces = 14; uint64 presentation_sequence = 15; string reply_speaker = 16; HomeTheme home = 30; string join_url = 45; bool adventure_ended = 50; string adventure_title = 51; }
 // A server-generated health variant of a hero's cut-out (`/gameplay/imagery/<key>`), by the party member's name; presentation only.
-message LiveFace { string name = 1; string sprite = 2; }
+message LiveFace { string name = 1; string sprite = 2; string battle_sprite = 3; }
 enum TableRole { TABLE_ROLE_UNSPECIFIED = 0; HERO = 1; NPC = 2; NARRATOR = 3; }
 enum TableKind { TABLE_KIND_UNSPECIFIED = 0; ACTION = 1; SPEECH = 2; }
 // Player view only: how a present NPC feels about this hero. attitude: 0 unknown, 1 hostile, 2 indifferent, 3 friendly (standard 2024 scale).

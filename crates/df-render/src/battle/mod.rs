@@ -22,6 +22,7 @@ mod formation;
 pub mod framing;
 mod grid;
 pub mod grid_lines;
+pub mod health;
 mod layout;
 mod lod;
 mod math;

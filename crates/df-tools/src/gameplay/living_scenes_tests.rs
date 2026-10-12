@@ -399,7 +399,9 @@ fn a_fight_shows_the_nearest_cached_variant_and_nothing_further() {
         display.journey.as_ref().unwrap().live_faces,
         [rpc::LiveFace {
             name: "Rowan".to_owned(),
-            sprite: key('b').path()
+            sprite: key('b').path(),
+            // Hero one wears the same art on the battlefield, so the same variant.
+            battle_sprite: key('b').path(),
         }]
     );
     assert_eq!(
@@ -500,6 +502,45 @@ fn the_foes_of_the_adventures_fights_are_warmed_too_after_the_party_and_the_stag
         arts,
         [HERO_ONE_ART, "sprite-patron-merchant", "sprite-ant-bandit"]
     );
+}
+
+#[test]
+fn the_second_hero_gets_variants_of_the_art_the_battlefield_dresses_the_seat_in() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    let mut stage = hurt_stage(2, true, 4, 13);
+    stage.heroes.push(StageHero {
+        index: 1,
+        name: "Thrain".to_owned(),
+        vitals: Vitals::new(4, 13),
+    });
+    inner.observe_at(stage, seconds(20));
+    // The exploration stage shows hero two as `sprite-hero-2`, the fight as the archer
+    // `sprite-hero-3`: both are looked for, and a fight shows the variant of the fight's art.
+    let labels = job_labels(&inner.evaluate_at(seconds(60)));
+    assert!(labels.contains(&"peek assets/ui/generated/sprite-hero-2".to_owned()));
+    assert!(labels.contains(&"peek assets/ui/generated/sprite-hero-3".to_owned()));
+    learn(
+        &inner,
+        "assets/ui/generated/sprite-hero-2",
+        HealthTier::Bloodied,
+        'c',
+    );
+    learn(
+        &inner,
+        "assets/ui/generated/sprite-hero-3",
+        HealthTier::Bloodied,
+        'd',
+    );
+    let mut message = display_message(true);
+    inner.apply(stage_of(&message).as_ref(), &mut message);
+    let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
+        panic!("display view");
+    };
+    let faces = &display.journey.as_ref().unwrap().live_faces;
+    let thrain = faces.iter().find(|face| face.name == "Thrain").unwrap();
+    assert_eq!(thrain.sprite, key('c').path());
+    assert_eq!(thrain.battle_sprite, key('d').path());
 }
 
 #[test]
