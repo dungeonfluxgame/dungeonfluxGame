@@ -185,12 +185,14 @@ fn remember(seen: &mut VecDeque<u64>, sequence: u64) -> bool {
     true
 }
 
+/// The most outcomes of one view that are staged one by one; older ones are history.
+const MAXIMUM_STAGED_OUTCOMES: usize = 6;
+
 fn roll_detail(
-    journey: &rpc::JourneyView,
+    outcome: &rpc::CombatOutcome,
     lines: &[TableLine],
     transitions: Transitions,
 ) -> Option<RollDetail> {
-    let outcome = journey.combat.as_ref()?.outcomes.last()?;
     let description = live_combat::describe(outcome).map(|description| RollDescriptionOwned {
         label: description.label,
         value: description.value,
@@ -432,15 +434,35 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 .zip(&motion.party_hit_points)
                 .zip(&journey.party)
                 .any(|((now, before), member)| member.character_ready && now > before);
-        let roll = if transitions.new_roll {
-            roll_detail(journey, &lines, transitions)
+        // Every outcome the view adds is staged in order: a tactical fight resolves several turns
+        // between two views. At a fight's start the server's already-resolved opening turns are
+        // held and staged after the entrance; otherwise the newest is the view's own blow.
+        let mut staged: Vec<RollDetail> = if transitions.new_roll {
+            let fresh = presentation::new_outcomes(motion.previous.as_ref(), journey);
+            let from = fresh.len().saturating_sub(MAXIMUM_STAGED_OUTCOMES);
+            fresh
+                .into_iter()
+                .skip(from)
+                .filter_map(|outcome| roll_detail(outcome, &lines, transitions))
+                .collect()
         } else {
+            Vec::new()
+        };
+        let roll = if transitions.entered_combat {
             None
+        } else {
+            staged.pop()
+        };
+        let (before, after) = if transitions.entered_combat {
+            (Vec::new(), staged)
+        } else {
+            (staged, Vec::new())
         };
         let diff = ViewDiff {
             scene_changed,
+            enters_combat: transitions.entered_combat
+                || (restart && snapshot.stage == CombatStage::Fighting),
             turn_changed: transitions.turn_changed,
-            enters_combat: transitions.entered_combat,
             roll: roll.clone().map(|roll| Detail::Roll(Box::new(roll))),
             impact: roll.clone().map(|roll| Detail::Roll(Box::new(roll))),
             defeat: roll
@@ -481,11 +503,31 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         }
         motion.conductor.set_sound(sound_on);
         motion.conductor.set_battlefield_expected(gpu_expected());
-        let mut commands = if restart {
-            motion.conductor.restart(now, plan)
-        } else {
-            motion.conductor.on_view(now, plan)
+        let blow_plan = |roll: &RollDetail| ViewPlan {
+            diff: ViewDiff {
+                roll: Some(Detail::Roll(Box::new(roll.clone()))),
+                impact: Some(Detail::Roll(Box::new(roll.clone()))),
+                defeat: roll
+                    .target_down
+                    .then(|| Detail::Roll(Box::new(roll.clone()))),
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: plan.cast.clone(),
         };
+        let mut commands = Vec::new();
+        if restart {
+            commands.extend(motion.conductor.restart(now, plan));
+        } else {
+            for earlier in &before {
+                commands.extend(motion.conductor.on_view(now, blow_plan(earlier)));
+            }
+            let later: Vec<ViewPlan<Detail>> = after.iter().map(blow_plan).collect();
+            commands.extend(motion.conductor.on_view(now, plan));
+            for turn in later {
+                commands.extend(motion.conductor.on_view(now, turn));
+            }
+        }
         commands.extend(motion.conductor.on_intents(now, intents));
         (commands, chime)
     });
@@ -950,7 +992,12 @@ fn battlefield_live() -> bool {
 
 fn set_scene_state(client: &Rc<RefCell<Client>>, state: SceneState) -> Result<(), JsValue> {
     match client.borrow().live.tv.as_ref() {
-        Some(stage) => stage.root().set_attribute("data-scene-state", state.name()),
+        Some(stage) => {
+            if state == SceneState::Entering {
+                stage.clear_narration()?;
+            }
+            stage.root().set_attribute("data-scene-state", state.name())
+        }
         None => Ok(()),
     }
 }

@@ -389,7 +389,7 @@ pub(crate) fn battle_next(state: BattleState, event: BattleEvent) -> Option<Batt
         (TurnEnd, TurnOpen) => Some(TurnStart),
         (TurnStart, ActBegin) => Some(Acting),
         (Acting, ResolveBegin) => Some(Resolving),
-        (Resolving, TurnClose) => Some(TurnEnd),
+        (Acting | Resolving, TurnClose) => Some(TurnEnd),
         (TurnStart | Acting | Resolving | TurnEnd, Finish) => Some(Finishing),
         (Finishing, FinishDone) => Some(Exiting),
         (Exiting, ExitDone) => Some(Absent),

@@ -442,6 +442,11 @@ impl TvStage {
             caption.set_attribute("data-line-id", &id.to_string())?;
             caption.set_attribute("data-line-state", state.name())?;
         }
+        if state == LineState::Done {
+            // A finished line leaves nothing behind for the next scene's first frame to show.
+            self.narration.set_text_content(None);
+            self.narration.remove_attribute("title")?;
+        }
         match state {
             LineState::Speaking => self.narration.class_list().add_1("speaking")?,
             LineState::Lingering | LineState::Closing | LineState::Done => {
@@ -450,6 +455,13 @@ impl TvStage {
             _ => {}
         }
         Ok(opened)
+    }
+
+    /// Empties the Dungeon Master's box: a new scene starts with none of the old scene's words.
+    pub(super) fn clear_narration(&self) -> Result<(), JsValue> {
+        self.narration.set_text_content(None);
+        self.narration.remove_attribute("title")?;
+        self.narration.class_list().remove_1("speaking")
     }
 
     /// Restarts the staggered title, narration and figure entrance.

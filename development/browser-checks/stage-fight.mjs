@@ -63,7 +63,7 @@ while (Date.now() < stop) {
   const now = await sample();
   if (frame < 600) { await tv.screenshot({ path: `${out}-strip-${String(frame).padStart(3, '0')}.jpg`, type: 'jpeg', quality: 55 }); frame += 1; }
   if (!now.aftermath && !now.stage && now.battle && ['turn-start', 'turn-end'].includes(now.battle) && Date.now() - lastSwing > 7000) {
-    const swung = (await click(s, pa, 'Greatsword strike', { optional: true, wait: 0 })) || (await click(s, pb, 'Greatsword strike', { optional: true, wait: 0 }));
+    const swung = (await click(s, pa, 'Attack', { optional: true, wait: 0 })) || (await click(s, pb, 'Attack', { optional: true, wait: 0 })) || (await click(s, pa, 'End turn', { optional: true, wait: 0 })) || (await click(s, pb, 'End turn', { optional: true, wait: 0 }));
     if (swung) lastSwing = Date.now();
   }
   if (frame % 40 === 20 && Date.now() - lastSwing > 25000) s.note(`stalled? phone A buttons: ${JSON.stringify(await pa.evaluate(() => [...document.querySelectorAll('button:not([disabled])')].map((b) => b.textContent.trim()).slice(0, 8)))} phase ${JSON.stringify(now)}`);

@@ -789,6 +789,24 @@ pub(super) fn validate_step(
     with_script(|script| {
         let beat = script.current(before.state())?;
         let next = script.current(after.state())?;
+        if journey::tactical::present(before.state())
+            && beat.kind != BeatKind::Fight
+            && action == rpc::GameplayActionKind::EndTurn
+            && journey::tactical::dying(before.state())?
+            && beat.id == next.id
+        {
+            return Ok(());
+        }
+        let action = if journey::tactical::present(before.state())
+            && journey::tactical::combat_action(action)
+            && !matches!(
+                action,
+                rpc::GameplayActionKind::SecondWind | rpc::GameplayActionKind::EndTurn
+            ) {
+            rpc::GameplayActionKind::GreatswordAttack
+        } else {
+            action
+        };
         let offer = beat
             .offers
             .iter()

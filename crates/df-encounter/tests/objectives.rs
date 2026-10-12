@@ -35,6 +35,7 @@ fn encounter(value: u8) -> EncounterState {
         active_turn: Some(entity(4)),
         objectives: vec![content(), content()],
         combat_policy: content(),
+        tactical: None,
     }
 }
 

@@ -223,17 +223,18 @@ impl<D: Clone> StageDirector<D> {
                 diff.heal
                     .map(|d| Self::cue(CueKind::Heal, Some(d), now_ms, false)),
             );
+            // A blow is an outcome: when the display is behind it is shortened, never dropped.
             cues.extend(
                 diff.roll
-                    .map(|d| Self::cue(CueKind::Roll, Some(d), now_ms, false)),
+                    .map(|d| Self::cue(CueKind::Roll, Some(d), now_ms, true)),
             );
             cues.extend(
                 diff.impact
-                    .map(|d| Self::cue(CueKind::Impact, Some(d), now_ms, false)),
+                    .map(|d| Self::cue(CueKind::Impact, Some(d), now_ms, true)),
             );
             cues.extend(
                 diff.defeat
-                    .map(|d| Self::cue(CueKind::Defeat, Some(d), now_ms, false)),
+                    .map(|d| Self::cue(CueKind::Defeat, Some(d), now_ms, true)),
             );
         }
         self.queue.extend(cues);

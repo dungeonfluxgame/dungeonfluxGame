@@ -65,7 +65,7 @@ while (Date.now() < stop) {
   const now = await sample();
   // Swing whenever a strike is offered and nothing is playing (a miss lets the fight go on and swing again).
   if (!now.aftermath && Date.now() - lastSwing > 7000 && (!now.stage) && ['turn-start', 'turn-end'].includes(now.battle)) {
-    const swung = (await click(s, pa, 'Greatsword strike', { optional: true, wait: 0 })) || (await click(s, pb, 'Greatsword strike', { optional: true, wait: 0 }));
+    const swung = (await click(s, pa, 'Attack', { optional: true, wait: 0 })) || (await click(s, pb, 'Attack', { optional: true, wait: 0 })) || (await click(s, pa, 'End turn', { optional: true, wait: 0 })) || (await click(s, pb, 'End turn', { optional: true, wait: 0 }));
     if (swung) { attacked = true; lastSwing = Date.now(); }
   }
   if (attacked && frame < 400) { await tv.screenshot({ path: `${out}-strip-${String(frame).padStart(3, '0')}.jpg`, type: 'jpeg', quality: 60 }); frame += 1; }

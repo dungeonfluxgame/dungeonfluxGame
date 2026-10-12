@@ -1744,6 +1744,7 @@ pub(super) struct AdventureInputs {
     pub(super) seed: Result<String, VarError>,
     pub(super) creatures: Result<String, VarError>,
     pub(super) tables: Result<String, VarError>,
+    pub(super) chapter_type: Result<String, VarError>,
 }
 impl AdventureInputs {
     pub(super) fn from_environment() -> Self {
@@ -1752,6 +1753,7 @@ impl AdventureInputs {
             seed: std::env::var("DF_GAMEPLAY_ADVENTURE_SEED"),
             creatures: std::env::var("DF_GAMEPLAY_ADVENTURE_CREATURES"),
             tables: std::env::var("DF_GAMEPLAY_ADVENTURE_TABLES"),
+            chapter_type: std::env::var("DF_GAMEPLAY_CHAPTER_TYPE"),
         }
     }
 }
@@ -1760,6 +1762,8 @@ pub(super) struct AdventureSettings {
     pub(super) seed: Option<u64>,
     pub(super) tables: std::path::PathBuf,
     pub(super) rules_mode: super::adventure::RulesMode,
+    /// A development override of the random adventure's chapter type (`mystery`, `parley`, ...).
+    pub(super) chapter_type: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct AdventureSettingsError {
@@ -1852,6 +1856,20 @@ pub(super) fn adventure_settings(
         });
     }
     let tables = std::path::PathBuf::from(tables);
+    let chapter_type = adventure_input(inputs.chapter_type, "DF_GAMEPLAY_CHAPTER_TYPE")?;
+    if let Some(kind) = &chapter_type {
+        let shaped = !kind.is_empty()
+            && kind.len() <= 64
+            && kind
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !shaped || mode != AdventureMode::Random {
+            return Err(AdventureSettingsError {
+                variable: "DF_GAMEPLAY_CHAPTER_TYPE",
+                expected: "a chapter type id such as mystery, with DF_GAMEPLAY_ADVENTURE=random",
+            });
+        }
+    }
     Ok(AdventureSettings {
         mode,
         seed,
@@ -1861,6 +1879,7 @@ pub(super) fn adventure_settings(
         } else {
             current.join(tables)
         },
+        chapter_type,
     })
 }
 #[cfg(test)]
@@ -1872,6 +1891,40 @@ mod adventure_settings_tests {
             seed: Err(VarError::NotPresent),
             creatures: Err(VarError::NotPresent),
             tables: Err(VarError::NotPresent),
+            chapter_type: Err(VarError::NotPresent),
+        }
+    }
+    #[test]
+    fn chapter_type_override_is_random_only_and_shaped_as_an_id() {
+        let default = adventure_settings(inputs(), Path::new("/game")).unwrap();
+        assert_eq!(default.chapter_type, None);
+        let mut raw = inputs();
+        raw.mode = Ok("random".into());
+        raw.chapter_type = Ok("mystery".into());
+        assert_eq!(
+            adventure_settings(raw, Path::new("/game"))
+                .unwrap()
+                .chapter_type,
+            Some("mystery".into())
+        );
+        for (mode, kind) in [
+            (None, "mystery"),
+            (Some("campaign"), "mystery"),
+            (Some("random"), ""),
+            (Some("random"), "Mystery"),
+            (Some("random"), "mystery one"),
+        ] {
+            let mut raw = inputs();
+            raw.mode = mode.map_or(Err(VarError::NotPresent), |m| Ok(m.into()));
+            raw.chapter_type = Ok(kind.into());
+            assert_eq!(
+                adventure_settings(raw, Path::new("/game"))
+                    .err()
+                    .unwrap()
+                    .variable,
+                "DF_GAMEPLAY_CHAPTER_TYPE",
+                "{mode:?} {kind:?}"
+            );
         }
     }
     #[test]

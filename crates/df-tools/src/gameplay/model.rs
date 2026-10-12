@@ -96,6 +96,16 @@ fn source_digests() -> &'static SourceDigests {
             include_bytes!("../../../df-rules/src/ability_check.rs").as_slice(),
             include_bytes!("../../../df-rules/src/local_journey.rs").as_slice(),
             include_bytes!("journey.rs").as_slice(),
+            include_bytes!("journey/tactical.rs").as_slice(),
+            include_bytes!("../../../df-rules/src/tactical/mod.rs").as_slice(),
+            include_bytes!("../../../df-rules/src/srd_creatures.rs").as_slice(),
+            include_bytes!("../../../df-rules/src/tactical/state.rs").as_slice(),
+            include_bytes!("../../../df-rules/src/tactical/snapshot.rs").as_slice(),
+            include_bytes!("../../../df-rules/src/tactical/resolve.rs").as_slice(),
+            include_bytes!("../../../df-rules/src/tactical/map.rs").as_slice(),
+            include_bytes!("../../../df-rules/src/tactical/weapons.rs").as_slice(),
+            include_bytes!("../../../df-rules/src/tactical/build.rs").as_slice(),
+            include_bytes!("../../../df-combat/src/tactical.rs").as_slice(),
             include_bytes!("beat_script.rs").as_slice(),
             include_bytes!("beat_script_runtime.rs").as_slice(),
             include_bytes!("pack.rs").as_slice(),
@@ -116,6 +126,16 @@ fn source_digests() -> &'static SourceDigests {
         let mut content = Sha256::new();
         for source in [
             CONTENT,
+            include_bytes!("../../../../content/battle-scenes/harbor-journey.json").as_slice(),
+            include_bytes!("../../../../content/battle-scenes/salt-quay.json").as_slice(),
+            include_bytes!("../../../../content/battle-scenes/pinewood-trail.json").as_slice(),
+            include_bytes!("../../../../content/battle-scenes/windward-pass.json").as_slice(),
+            include_bytes!("../../../../content/battle-scenes/lamplit-market.json").as_slice(),
+            include_bytes!("../../../../content/battle-scenes/rookhill-gate.json").as_slice(),
+            include_bytes!("../../../../content/battle-scenes/reedmoor-boardwalk.json").as_slice(),
+            include_bytes!("../../../../content/battle-scenes/thistledown-farm.json").as_slice(),
+            include_bytes!("../../../../content/battle-scenes/orrery-library.json").as_slice(),
+            include_bytes!("../../../../content/hero-builds/dwarf-archer.json").as_slice(),
             include_bytes!("fixtures/harbor-journey-pack-baseline.json").as_slice(),
             include_bytes!("courier_ai.rs").as_slice(),
             include_bytes!("journey/narrative_phase.rs").as_slice(),
@@ -172,9 +192,14 @@ fn revision_digest(
 pub(super) fn source_revision() -> String {
     match super::pack::active() {
         Some(loaded) if !loaded.departures.is_empty() => format!(
-            "{}+custom-{}",
+            "{}+custom-{}{}",
             df_rules::local_journey::SOURCE_REVISION,
-            &loaded.tuning_revision.to_hex()[..12]
+            &loaded.tuning_revision.to_hex()[..12],
+            if loaded.tuning.tactical.is_some() {
+                "; tactical.cover-centre-line: cover is adjudicated along cell centres"
+            } else {
+                ""
+            }
         ),
         _ => df_rules::local_journey::SOURCE_REVISION.to_owned(),
     }
@@ -200,7 +225,7 @@ pub(super) fn pins() -> Result<CheckpointPins, RepositoryError> {
     let legacy = legacy_source_digests();
     let digests = if loaded
         .as_ref()
-        .is_some_and(|loaded| loaded.pack.beat_script.is_some())
+        .is_some_and(|loaded| loaded.pack.beat_script.is_some() || loaded.tuning.tactical.is_some())
     {
         source_digests()
     } else {
@@ -295,10 +320,22 @@ pub(super) fn member() -> Result<MemberId, RepositoryError> {
 }
 pub(super) fn limits() -> CheckpointLimits {
     CheckpointLimits {
-        maximum_records: 512,
+        maximum_records: if super::journey::tactical::enabled() {
+            4096
+        } else {
+            512
+        },
         maximum_text_bytes: 4096,
-        maximum_total_text_bytes: 65536,
-        maximum_retained_bytes: 1024 * 1024,
+        maximum_total_text_bytes: if super::journey::tactical::enabled() {
+            1024 * 1024
+        } else {
+            65536
+        },
+        maximum_retained_bytes: if super::journey::tactical::enabled() {
+            2 * 1024 * 1024
+        } else {
+            1024 * 1024
+        },
     }
 }
 pub(super) fn recovery() -> Result<NativeRecoverySource, RepositoryError> {
@@ -727,7 +764,9 @@ impl HarborEngine {
             if action.entry.as_str() == "join-room" {
                 return super::journey::stage_join(current, input);
             }
-            if super::journey::CONTENT_ENTRIES.contains(&action.entry.as_str()) {
+            if super::journey::CONTENT_ENTRIES.contains(&action.entry.as_str())
+                || action.entry.as_str() == super::beat_script_runtime::CHOICE_ACTION
+            {
                 return stage_registered_journey(current, input);
             }
         }
@@ -1025,7 +1064,7 @@ mod tuning_pin_tests {
     use super::super::pack;
     use super::*;
     const PACK: &[u8] = include_bytes!("../../../../content/harbor-journey/pack.json");
-    const TUNING: &[u8] = include_bytes!("../../../../content/harbor-journey/tuning.json");
+    const TUNING: &[u8] = include_bytes!("fixtures/harbor-journey-tuning-baseline.json");
     #[test]
     fn identical_files_bind_stable_standard_pins_and_each_byte_edit_changes_its_digest() {
         let baseline = pins().unwrap();
@@ -1093,6 +1132,7 @@ mod tuning_pin_tests {
             );
             assert!(
                 super::super::wire::creation_offer()
+                    .unwrap()
                     .source_revision
                     .ends_with(&suffix)
             );

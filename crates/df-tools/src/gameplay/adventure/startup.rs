@@ -121,7 +121,7 @@ async fn fresh_adventure(
         &tables,
         seed,
         options,
-        &ForcedEntries::new(),
+        &forced_entries(settings),
         &baseline,
         storyteller,
     )
@@ -154,10 +154,18 @@ fn pattern_adventure(
             rules_mode: settings.rules_mode,
             rating: content_rating(),
         },
-        &ForcedEntries::new(),
+        &forced_entries(settings),
     )
     .map_err(StartupError::Generate)?;
     Ok((tables, seed, generated))
+}
+/// Development override of the chapter type; the generator refuses ids missing from the tables.
+fn forced_entries(settings: &AdventureSettings) -> ForcedEntries {
+    settings
+        .chapter_type
+        .iter()
+        .map(|kind| (super::beat_tables::CHAPTER_TYPE.into(), kind.clone()))
+        .collect()
 }
 /// Store state determines fresh/resume; requested seed/tables apply only to a fresh database.
 #[cfg(test)]

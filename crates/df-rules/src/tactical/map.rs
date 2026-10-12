@@ -1,9 +1,9 @@
 use super::RuleError;
-use serde::{Deserialize, de::IgnoredAny};
+use serde::{Deserialize, Serialize, de::IgnoredAny};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Column/row of a five-foot square. Coordinates are zero based.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Cell(pub u16, pub u16);
 impl Cell {
     /// SRD Playing on a Grid: every square, including diagonals, counts as five feet.
@@ -13,7 +13,7 @@ impl Cell {
 }
 
 /// Authored obstacle coverage, interpreted by the disclosed centre-line convention.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "kebab-case")]
 pub enum Cover {
     None,

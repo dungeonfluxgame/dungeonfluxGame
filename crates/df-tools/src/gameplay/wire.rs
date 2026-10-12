@@ -74,6 +74,14 @@ pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
         "greatsword-attack" => rpc::GameplayActionKind::GreatswordAttack,
         "second-wind" => rpc::GameplayActionKind::SecondWind,
         "end-turn" => rpc::GameplayActionKind::EndTurn,
+        "move" => rpc::GameplayActionKind::Move,
+        "dash" => rpc::GameplayActionKind::Dash,
+        "dodge" => rpc::GameplayActionKind::Dodge,
+        "disengage" => rpc::GameplayActionKind::Disengage,
+        "opportunity-attack" => rpc::GameplayActionKind::OpportunityAttack,
+        "decline-reaction" => rpc::GameplayActionKind::DeclineReaction,
+        "stand" => rpc::GameplayActionKind::Stand,
+        "pick-up-weapon" => rpc::GameplayActionKind::PickUpWeapon,
         "short-rest" => rpc::GameplayActionKind::ShortRest,
         "choose-harbor-scene" => rpc::GameplayActionKind::ChooseHarborScene,
         _ => return None,
@@ -90,6 +98,14 @@ pub(super) fn action_entry(kind: rpc::GameplayActionKind) -> Option<&'static str
         rpc::GameplayActionKind::GreatswordAttack => "greatsword-attack",
         rpc::GameplayActionKind::SecondWind => "second-wind",
         rpc::GameplayActionKind::EndTurn => "end-turn",
+        rpc::GameplayActionKind::Move => "move",
+        rpc::GameplayActionKind::Dash => "dash",
+        rpc::GameplayActionKind::Dodge => "dodge",
+        rpc::GameplayActionKind::Disengage => "disengage",
+        rpc::GameplayActionKind::OpportunityAttack => "opportunity-attack",
+        rpc::GameplayActionKind::DeclineReaction => "decline-reaction",
+        rpc::GameplayActionKind::Stand => "stand",
+        rpc::GameplayActionKind::PickUpWeapon => "pick-up-weapon",
         rpc::GameplayActionKind::ShortRest => "short-rest",
         rpc::GameplayActionKind::ChooseHarborScene => "choose-harbor-scene",
         _ => return None,
@@ -125,7 +141,22 @@ pub(super) fn journey_input(
     if request.offer_id.len() > 96 {
         return Err(tonic::Status::invalid_argument("offer exceeds bound"));
     }
-    let mut choices = Vec::new();
+    if request.action_choices.len() > 2
+        || (!super::journey::tactical::present(current.state())
+            && !request.action_choices.is_empty())
+    {
+        return Err(invalid());
+    }
+    let mut choices = request
+        .action_choices
+        .iter()
+        .map(|choice| {
+            Ok((
+                model::label(&choice.group_id).map_err(|_| invalid())?,
+                model::label(&choice.option_id).map_err(|_| invalid())?,
+            ))
+        })
+        .collect::<Result<Vec<_>, tonic::Status>>()?;
     if let Some(id) = super::beat_script_runtime::submitted_id(&request.offer_id) {
         choices.push((
             model::label(super::beat_script_runtime::CHOICE_GROUP).map_err(|_| invalid())?,
@@ -171,7 +202,14 @@ pub(super) fn journey_input(
             ));
         }
     }
-    if kind == rpc::GameplayActionKind::GreatswordAttack {
+    if super::journey::tactical::present(current.state())
+        && (request.savage_attacker || request.graze)
+    {
+        return Err(invalid());
+    }
+    if kind == rpc::GameplayActionKind::GreatswordAttack
+        && !super::journey::tactical::present(current.state())
+    {
         for (key, value) in [
             ("savage-attacker", request.savage_attacker),
             ("graze", request.graze),
@@ -218,9 +256,13 @@ fn attack_group(id: &str, label: &str, description: &str) -> rpc::JourneyGroup {
         ],
     }
 }
-pub(super) fn creation_offer() -> rpc::CharacterCreationOffer {
+fn journey_tactical_creation() -> bool {
+    super::journey::tactical::enabled()
+}
+pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, RepositoryError> {
     use super::pack;
     pack::with_content(|content| {
+        let tactical = journey_tactical_creation();
         let mut groups = Vec::new();
         for group in &content.creation.groups {
             let options = group
@@ -249,11 +291,14 @@ pub(super) fn creation_offer() -> rpc::CharacterCreationOffer {
                     },
                 })
                 .collect();
-            groups.push(rpc::JourneyGroup {
-                group_id: group.id.clone(),
-                label: group.label.clone(),
-                options,
-            });
+            if !tactical || !["array", "equipment", "style-masteries"].contains(&group.id.as_str())
+            {
+                groups.push(rpc::JourneyGroup {
+                    group_id: group.id.clone(),
+                    label: group.label.clone(),
+                    options,
+                });
+            }
             if group.id == "array" {
                 let lists = &content.creation.pick_lists;
                 for (id, label, values) in [
@@ -279,11 +324,33 @@ pub(super) fn creation_offer() -> rpc::CharacterCreationOffer {
                 }
             }
         }
-        rpc::CharacterCreationOffer {
+        if tactical {
+            let packages = pack::build_packages().map_err(|_| RepositoryError::InvalidCandidate)?;
+            {
+                groups.push(rpc::JourneyGroup {group_id:"build-package".to_owned(),label:"Combat training and starting package".to_owned(),options:packages.into_iter().map(|package| rpc::JourneyOption {option_id:package.id,label:package.label,description:"Equipment, ability training, fighting style and masteries are coupled in this supported package. Other lawful SRD combinations remain unsupported.".to_owned()}).collect()});
+            }
+            groups.push(rpc::JourneyGroup {
+                group_id: "portrait".to_owned(),
+                label: "Hero appearance (presentation only)".to_owned(),
+                options: [
+                    ("portrait-hero-1", "Greatsword hero"),
+                    ("portrait-hero-2", "Second hero"),
+                    ("portrait-hero-3", "Woman with a bow"),
+                ]
+                .into_iter()
+                .map(|(id, label)| rpc::JourneyOption {
+                    option_id: id.to_owned(),
+                    label: label.to_owned(),
+                    description: "Art only; this changes no character rules.".to_owned(),
+                })
+                .collect(),
+            });
+        }
+        Ok(rpc::CharacterCreationOffer {
             description: content.creation.description.clone(),
             groups,
             source_revision: model::source_revision(),
-        }
+        })
     })
 }
 
@@ -298,7 +365,7 @@ fn party_member(
         .first()
         .and_then(|encounter| encounter.active_turn)
         == Some(who);
-    Ok(rpc::PartyMemberView {
+    let mut view = rpc::PartyMemberView {
         name: if ready {
             journey::name(state, who)?
         } else {
@@ -320,7 +387,25 @@ fn party_member(
         active_turn: active,
         unconscious: ready && journey::value(state, who, "unconscious")? != 0,
         participant_id: who.as_bytes().to_vec(),
-    })
+
+        ..Default::default()
+    };
+    if ready
+        && let Some(character) = state
+            .characters
+            .iter()
+            .find(|character| character.entity == who)
+        && let Some(portrait) = character
+            .choices
+            .iter()
+            .find(|choice| choice.offer.as_str() == "portrait")
+    {
+        view.portrait = portrait.selected.as_str().to_owned();
+    }
+    if journey::tactical::present(state) && ready {
+        journey::tactical::project_member(state, who, &mut view)?;
+    }
+    Ok(view)
 }
 
 fn shared_source_decision(
@@ -345,10 +430,22 @@ fn shared_source_decision(
         .copied()
         .find(|fact| Some(&fact.id) == owner.facts.last())
         .ok_or(RepositoryError::InvalidCandidate)?;
+    let preceding = match super::beat_script_runtime::choice(state, owner)? {
+        Some((marker, _, _)) if marker.ordinal > source.ordinal => {
+            if source.ordinal.checked_add(1) != Some(marker.ordinal)
+                || marker.cause != Some(source.id)
+                || marker.ordinal.checked_add(1) != Some(terminal.ordinal)
+            {
+                return Err(RepositoryError::InvalidCandidate);
+            }
+            marker
+        }
+        _ => source,
+    };
     if source.audience != AudienceScope::Shared
         || terminal.audience != AudienceScope::Shared
-        || source.ordinal.checked_add(1) != Some(terminal.ordinal)
-        || terminal.cause != Some(source.id)
+        || preceding.ordinal.checked_add(1) != Some(terminal.ordinal)
+        || terminal.cause != Some(preceding.id)
         || !matches!(&terminal.value, FactValue::ContentEvent { definition, subjects }
             if *definition == model::content(terminal_entry)? && subjects.is_empty())
     {
@@ -419,9 +516,9 @@ fn witnessed_courier_support(
             audience_observer,
             expected_witness,
             df_knowledge::perception::PerceptionLimits {
-                maximum_scan_records: 512,
-                maximum_member_comparisons: 512,
-                maximum_selected_facts: 512,
+                maximum_scan_records: model::limits().maximum_records,
+                maximum_member_comparisons: model::limits().maximum_records,
+                maximum_selected_facts: model::limits().maximum_records,
             },
         )
         .map_err(|error| match error {
@@ -573,11 +670,11 @@ pub(super) fn project_journey(
         &model::pins()?,
         observer,
         // The admitted local checkpoint caps aggregate records, including
-        // membership and nested audience entries, at 512.
+        // membership and nested audience entries, at the same bounded model limit.
         df_knowledge::perception::PerceptionLimits {
-            maximum_scan_records: 512,
-            maximum_member_comparisons: 512,
-            maximum_selected_facts: 512,
+            maximum_scan_records: model::limits().maximum_records,
+            maximum_member_comparisons: model::limits().maximum_records,
+            maximum_selected_facts: model::limits().maximum_records,
         },
     )
     .map_err(|error| match error {
@@ -619,7 +716,7 @@ pub(super) fn project_journey(
         {
             own = Some(journey::character_sheet(state, who)?);
         } else {
-            creation = Some(creation_offer());
+            creation = Some(creation_offer()?);
         }
         for (kind, label, offer_id) in super::beat_script_runtime::view_offers(current, principal)?
         {
@@ -635,7 +732,9 @@ pub(super) fn project_journey(
                 } else {
                     Vec::new()
                 },
-                input_groups: if kind == rpc::GameplayActionKind::GreatswordAttack {
+                input_groups: if journey::tactical::present(state) {
+                    journey::tactical::groups(current, principal, kind)?
+                } else if kind == rpc::GameplayActionKind::GreatswordAttack {
                     vec![
                         attack_group(
                             "savage-attacker",
@@ -672,7 +771,15 @@ pub(super) fn project_journey(
     let mut combat = None;
     if let Some(encounter) = state.encounters.first() {
         let mut participants = party.clone();
-        participants.push(party_member(state, journey::entity([0x65; 16])?, true)?);
+        if journey::tactical::present(state) {
+            participants = encounter
+                .participants
+                .iter()
+                .map(|who| party_member(state, *who, true))
+                .collect::<Result<Vec<_>, _>>()?;
+        } else {
+            participants.push(party_member(state, journey::entity([0x65; 16])?, true)?);
+        }
         let outcomes = state
             .decisions
             .iter()
@@ -710,7 +817,19 @@ pub(super) fn project_journey(
                 journey::CombatRoundError::Capacity => RepositoryError::Capacity,
                 _ => RepositoryError::InvalidCandidate,
             })?,
+
+            ..Default::default()
         });
+    }
+    if journey::tactical::present(state)
+        && let Some(view) = combat.as_mut()
+    {
+        let own = if role == LocalDemoRole::Player {
+            Some(journey::player_entity(principal, current)?)
+        } else {
+            None
+        };
+        journey::tactical::project_combat(current, own, view)?;
     }
     use super::pack::{self, SceneKey};
     let authored = super::beat_script_runtime::scene(state)?;
@@ -738,7 +857,9 @@ pub(super) fn project_journey(
         }),
         None => narration.to_owned(),
     };
-    let narration = if super::pack::active().is_some_and(|loaded| !loaded.departures.is_empty()) {
+    let narration = if super::pack::active()
+        .is_some_and(|loaded| !loaded.departures.is_empty() && loaded.tuning.tactical.is_none())
+    {
         format!("{narration} Custom rules: {}.", model::source_revision())
     } else {
         narration
@@ -760,11 +881,14 @@ pub(super) fn project_journey(
     // belonged to the text they replace.
     let epilogue_replaces =
         key == SceneKey::Inn && pack::with_content(|content| content.campaign_epilogue.is_some());
-    let rules_note = if rested || epilogue_replaces {
+    let mut rules_note = if rested || epilogue_replaces {
         String::new()
     } else {
         authored.rules_note.clone()
     };
+    if key == SceneKey::Combat && super::journey::tactical::present(current.state()) {
+        rules_note.push_str(" Disclosed custom rule tactical.cover-centre-line: cover is adjudicated along the segment between cell centres.");
+    }
     let table_choices = if role == LocalDemoRole::Display {
         table_choices(current, phase)?
     } else {
@@ -855,3 +979,57 @@ pub(super) fn project_journey(
 #[cfg(test)]
 #[path = "perception_tests.rs"]
 mod perception_tests;
+
+pub(super) fn current_combat_turn(
+    current: &Checkpoint,
+    member: df_types::MemberId,
+) -> Result<bool, RepositoryError> {
+    if super::journey::tactical::present(current.state()) {
+        return super::journey::tactical::has_turn(current, member);
+    }
+    Ok(current
+        .state()
+        .encounters
+        .first()
+        .and_then(|encounter| encounter.active_turn)
+        == Some(super::journey::player_entity(member, current)?))
+}
+pub(super) fn tactical_selection_rejected(
+    current: &Checkpoint,
+    member: df_types::MemberId,
+    kind: rpc::GameplayActionKind,
+    choices: &[rpc::JourneyChoice],
+) -> Result<bool, RepositoryError> {
+    if !super::journey::tactical::present(current.state()) {
+        return Ok(false);
+    }
+    Ok(!super::journey::tactical::valid_selection(
+        current, member, kind, choices,
+    )?)
+}
+
+/// Shared submitted-offer admission used by the native owner before durable staging.
+pub(super) fn action_offer_rejection(
+    current: &Checkpoint,
+    member: df_types::MemberId,
+    kind: rpc::GameplayActionKind,
+    offer: &str,
+    choices: &[rpc::JourneyChoice],
+) -> Result<Option<rpc::RejectionCode>, RepositoryError> {
+    if super::journey::phase(current)? == rpc::JourneyPhase::Combat
+        && !current_combat_turn(current, member)?
+    {
+        return Ok(Some(rpc::RejectionCode::WrongTurn));
+    }
+    if !super::beat_script_runtime::matches_id(current, kind, offer)?
+        || !super::journey::offered(current, member)?
+            .iter()
+            .any(|(offered, _)| *offered == kind)
+    {
+        return Ok(Some(rpc::RejectionCode::StaleOffer));
+    }
+    if tactical_selection_rejected(current, member, kind, choices)? {
+        return Ok(Some(rpc::RejectionCode::InvalidSelection));
+    }
+    Ok(None)
+}

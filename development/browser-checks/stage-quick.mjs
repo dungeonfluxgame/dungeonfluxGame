@@ -17,7 +17,7 @@ await clearEvents(tv);
 const start = Date.now();
 await click(s, pa, s.label('ask-courier'), { wait: 100 });
 await click(s, pa, s.label('defend-courier'), { wait: 100 });
-const attacked = (await click(s, pa, 'Greatsword strike', { optional: true, wait: 0 })) || (await click(s, pb, 'Greatsword strike', { optional: true, wait: 0 }));
+const attacked = (await click(s, pa, 'Attack', { optional: true, wait: 0 })) || (await click(s, pb, 'Attack', { optional: true, wait: 0 }));
 const lastAction = Date.now();
 s.note(`three actions in ${lastAction - start} ms (attack clicked: ${attacked})`);
 await tv.screenshot({ path: `${out}-1-just-after.png` });

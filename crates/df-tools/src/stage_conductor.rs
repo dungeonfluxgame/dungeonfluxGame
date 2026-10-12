@@ -418,6 +418,12 @@ impl<D: Clone> Conductor<D> {
         out.push(Command::Scene(self.scene));
         self.restore_cast(&plan.cast, now_ms, &mut out);
         self.install_script(plan.script, now_ms, &mut out);
+        if plan.diff.enters_combat {
+            // The display came up (first view, reload, reconnect, a tab that was hidden) with a
+            // fight already under way: the battle machine still enters, so the flat combat screen
+            // stays hidden until the battlefield is live (or will not appear).
+            self.move_battle(now_ms, BattleEvent::Begin, &mut out);
+        }
         self.step(now_ms, &mut out);
         out
     }
@@ -672,8 +678,10 @@ impl<D: Clone> Conductor<D> {
             let commands = self.director.on_blow(now_ms, blow);
             self.absorb(now_ms, commands, out);
         } else {
+            let turn_changed = diff.turn_changed;
             let commands = self.director.on_view(now_ms, diff);
             self.absorb(now_ms, commands, out);
+            self.follow_turn(turn_changed, now_ms, out);
         }
     }
 
@@ -704,9 +712,11 @@ impl<D: Clone> Conductor<D> {
 
     /// Follows the cue sequencer's dice and blows through the battle machine.
     fn follow_battle(&mut self, state: StageState, now_ms: u64, out: &mut Vec<Command<D>>) {
-        if self.battle == BattleState::Resolving
-            && !matches!(state, StageState::Impact | StageState::Defeat)
-        {
+        let closing_blow = self.battle == BattleState::Resolving
+            && !matches!(state, StageState::Impact | StageState::Defeat);
+        // A roll whose impact was never queued still ends with the director at rest.
+        let unresolved_roll = self.battle == BattleState::Acting && state == StageState::Idle;
+        if closing_blow || unresolved_roll {
             self.move_battle(now_ms, BattleEvent::TurnClose, out);
         }
         match state {
@@ -2629,5 +2639,113 @@ mod tests {
             .expect("the goblin's turn plays");
         assert!(rolling >= ready_at);
         assert!(harness.entered(StageState::Impact).is_some());
+    }
+
+    #[test]
+    fn a_display_that_comes_up_in_a_fight_still_enters_it_behind_the_battlefield() {
+        let mut conductor = TestConductor::new();
+        conductor.set_battlefield_expected(true);
+        let commands = conductor.restart(
+            0,
+            ViewPlan {
+                diff: ViewDiff {
+                    enters_combat: true,
+                    ..ViewDiff::default()
+                },
+                script: Vec::new(),
+                cast: vec![0, 2],
+            },
+        );
+        assert!(commands.contains(&Command::Battle(BattleState::Entering)));
+        assert_eq!(conductor.battle_state(), BattleState::Entering);
+        assert!(conductor.wants_battlefield());
+        let released = conductor.on_battlefield(100, Battlefield::Ready);
+        assert!(released.contains(&Command::Battle(BattleState::TurnStart)));
+    }
+
+    #[test]
+    fn several_outcomes_in_one_view_play_in_order_after_the_entrance() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 2]);
+        harness.conductor.set_battlefield_expected(true);
+        harness.view(fight_start());
+        for (index, turn) in ["first enemy", "second enemy", "third enemy"]
+            .into_iter()
+            .enumerate()
+        {
+            harness.view(ViewPlan {
+                diff: ViewDiff {
+                    roll: Some(turn),
+                    impact: Some(turn),
+                    ..ViewDiff::default()
+                },
+                script: Vec::new(),
+                cast: vec![0, 2],
+            });
+            assert_eq!(
+                harness.conductor.battle_state(),
+                BattleState::Entering,
+                "{index}"
+            );
+        }
+        harness.run_to(2_000);
+        assert!(harness.entered(StageState::Rolling).is_none());
+        harness.now += 50;
+        let commands = harness
+            .conductor
+            .on_battlefield(harness.now, Battlefield::Ready);
+        harness.record(commands);
+        harness.run_to(harness.now + 12_000);
+        let rolls: Vec<&str> = harness
+            .log
+            .iter()
+            .filter_map(|(_, command)| match command {
+                Command::Enter {
+                    state: StageState::Rolling,
+                    detail,
+                    ..
+                } => *detail,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rolls, ["first enemy", "second enemy", "third enemy"]);
+    }
+
+    #[test]
+    fn three_enemy_turns_resolved_at_once_each_show_their_blow_and_the_turn_closes() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 2]);
+        harness.view(fight_start());
+        harness.run_to(6_000);
+        assert_eq!(harness.conductor.battle_state(), BattleState::TurnStart);
+        // The hero's blow and three enemy turns arrive in one burst; the display is slow.
+        for turn in ["hero", "first enemy", "second enemy", "third enemy"] {
+            harness.view(ViewPlan {
+                diff: ViewDiff {
+                    roll: Some(turn),
+                    impact: Some(turn),
+                    turn_changed: turn == "third enemy",
+                    ..ViewDiff::default()
+                },
+                script: Vec::new(),
+                cast: vec![0, 2],
+            });
+        }
+        harness.run_to(harness.now + 20_000);
+        let impacts: Vec<&str> = harness
+            .log
+            .iter()
+            .filter_map(|(_, command)| match command {
+                Command::Enter {
+                    state: StageState::Impact,
+                    detail,
+                    ..
+                } => *detail,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            impacts,
+            ["hero", "first enemy", "second enemy", "third enemy"]
+        );
+        assert_eq!(harness.conductor.battle_state(), BattleState::TurnStart);
     }
 }

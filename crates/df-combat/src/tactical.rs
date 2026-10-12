@@ -350,6 +350,7 @@ fn weapon_use(weapon: Weapon, ranged: bool) -> AttackUse {
         finesse_dexterity: weapon.finesse(),
         knockout: false,
         savage_attacker: false,
-        use_mastery: true,
+        // Stat-block actions do not grant Fighter weapon masteries.
+        use_mastery: false,
     }
 }

@@ -1,0 +1,31 @@
+// Evaluator tooling: prints what phone A offers around an Attack in a tactical fight (to learn the target-pick flow).
+import fs from 'node:fs';
+import path from 'node:path';
+import { runner, startServer, launchGpu, playToOpening, click, settle, until, framesDir, artifactRoot, root } from './stage.mjs';
+
+const { s, check, finish } = runner('stage-probe-attack', framesDir);
+const pack = path.join(artifactRoot, 'tmp', 'play-f06', 'oneshot-pack');
+fs.rmSync(pack, { recursive: true, force: true });
+fs.cpSync(path.join(root, 'content', 'harbor-journey'), pack, { recursive: true });
+const tuning = JSON.parse(fs.readFileSync(path.join(pack, 'tuning.json'), 'utf8'));
+tuning.bandit.hit_points = 1;
+tuning.bandit.armor_class = 1;
+fs.writeFileSync(path.join(pack, 'tuning.json'), JSON.stringify(tuning, null, 2));
+await startServer({ DF_GAMEPLAY_PACK_DIR: pack });
+Object.assign(s.labels, JSON.parse(fs.readFileSync(path.join(pack, 'pack.json'), 'utf8')).offer_labels);
+const browser = await launchGpu(true);
+const { tv, pa, pb } = await playToOpening(s, browser, { base: process.env.DF_BASE, sound: false });
+await click(s, pa, s.label('begin-story'), { wait: 100 });
+await until(tv, (now) => now.scene === 'awaiting-choice', 60000);
+await click(s, pa, s.label('escort-courier'), { wait: 100 });
+await until(tv, (now) => now.title && now.title.includes('Oath') && now.scene === 'awaiting-choice', 60000);
+await click(s, pa, s.label('defend-courier'), { wait: 100 });
+await until(tv, (now) => ['turn-start', 'turn-end'].includes(now.battle), 120000);
+await settle(2000);
+const list = async (page) => page.evaluate(() => [...document.querySelectorAll('button')].map((b) => `${b.disabled ? '(x)' : ''}${b.textContent.trim().replace(/\s+/g, ' ')}`).filter(Boolean).slice(0, 25));
+for (const [name, page] of [['A', pa], ['B', pb]]) s.note(`${name} before: ${JSON.stringify(await list(page))}`);
+const attacked = (await click(s, pa, 'Attack', { optional: true, wait: 800 })) || (await click(s, pb, 'Attack', { optional: true, wait: 800 }));
+s.note(`clicked Attack: ${attacked}`);
+for (const [name, page] of [['A', pa], ['B', pb]]) s.note(`${name} after: ${JSON.stringify(await list(page))} text: ${(await page.evaluate(() => document.body.innerText)).replace(/\s+/g, ' ').slice(0, 400)}`);
+check(true, 'probed');
+await finish(browser);

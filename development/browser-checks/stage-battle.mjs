@@ -55,7 +55,7 @@ while (Date.now() < stop) {
   if (now.stage === 'rolling') { sawRolling = true; if (shot === 3) { shot = 4; await tv.screenshot({ path: `${out}-4-first-attack.png` }); } }
   if (sawRolling && now.stage === null && now.battle === 'turn-end') break;
   if (!sawRolling && now.battle === 'turn-start' && !attacked) {
-    attacked = (await click(s, pa, 'Greatsword strike', { optional: true, wait: 0 })) || (await click(s, pb, 'Greatsword strike', { optional: true, wait: 0 }));
+    attacked = (await click(s, pa, 'Attack', { optional: true, wait: 0 })) || (await click(s, pb, 'Attack', { optional: true, wait: 0 }));
   }
   await settle(80);
 }

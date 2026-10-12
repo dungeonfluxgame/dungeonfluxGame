@@ -111,6 +111,25 @@ pub(crate) fn snapshot(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -
     }
 }
 
+/// The outcomes a view carries that the previous view did not, oldest first. A tactical fight can
+/// resolve several turns (an enemy's move and attack, then another's) between two views, so more
+/// than the newest outcome may be new; the display stages each one, in order.
+pub(crate) fn new_outcomes<'a>(
+    previous: Option<&CombatSnapshot>,
+    journey: &'a rpc::JourneyView,
+) -> Vec<&'a rpc::CombatOutcome> {
+    let Some(combat) = journey.combat.as_ref() else {
+        return Vec::new();
+    };
+    combat
+        .outcomes
+        .iter()
+        .filter(|outcome| {
+            previous.is_none_or(|before| !before.rolls.contains(&fingerprint(outcome)))
+        })
+        .collect()
+}
+
 /// The changes the display should present. With no previous view (first view, reconnect,
 /// a tab that was hidden) nothing is presented: obsolete cues are skipped, not replayed.
 pub(crate) fn transitions(previous: Option<&CombatSnapshot>, next: &CombatSnapshot) -> Transitions {

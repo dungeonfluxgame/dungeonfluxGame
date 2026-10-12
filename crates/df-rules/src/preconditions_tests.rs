@@ -1384,6 +1384,7 @@ fn movement_state() -> GameState {
         active_turn: Some(entity(4)),
         objectives: vec![content()],
         combat_policy: content(),
+        tactical: None,
     });
     state.continuity.environment.push(EnvironmentalState {
         location: entity(6),
