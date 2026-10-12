@@ -3810,6 +3810,89 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T03:54:44+00:00",
       "updated_at": "2026-10-12T03:54:44+00:00"
+    },
+    {
+      "id": "PLAY-F06",
+      "feature_id": "F04",
+      "title": "Sequence the display with state machines: speech-led entrances and exits",
+      "objective": "The display presents every scene through explicit state machines with enter and exit steps: scene, each actor, each line and bubble, each voice clip, music, and the battle phases. A bubble or narrator box appears when its clip starts and closes when it ends; a new view never cuts speech, it becomes the pending successor and the swap happens in the scene's exit; choices appear after the lines; several quick actions catch up within a bound; combat is not held behind story speech and enters through banner and initiative before any attack is shown.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-tools/src/presentation.rs",
+        "development/browser-checks/",
+        "planning/client-architecture.md"
+      ],
+      "acceptance_json": [
+        "Each line's bubble or narrator box opens with its clip and closes after it; one speaker at a time.",
+        "A choice made mid-speech leaves the old scene up until the line ends, then transitions.",
+        "Three quick actions end on the newest scene within the stated bound, nothing old still playing.",
+        "Muted or failed audio runs the same sequence on reading-time timers.",
+        "A fight enters through banner and initiative roll-call before the first attack is shown; the flat fallback never flashes before the 3D battlefield.",
+        "Transitions are a closed tested table; states are exposed on the DOM; a watchdog exits a stuck state through the normal exit path.",
+        "Phones are never delayed and no server or rules behaviour changes.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests of the transition tables, ordering, catch-up and mute timing.",
+        "Browser checks asserting on exposed states, with frames and a clip-versus-bubble timing log.",
+        "One real-voice listen-through."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M7",
+        "milestone_goal": "Coherent staging: where a scene happens, who is in it and who is speaking all agree.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner feedback during a live playthrough on 2026-10-12: the speech bubbles are not playing at the right time and the scene is changing before the speech can complete; make sure everything is state machined properly with proper entrances and exits so that does not happen.",
+        "objective": "The display presents every scene through explicit state machines with enter and exit steps: scene, each actor, each line and bubble, each voice clip, music, and the battle phases. A bubble or narrator box appears when its clip starts and closes when it ends; a new view never cuts speech, it becomes the pending successor and the swap happens in the scene's exit; choices appear after the lines; several quick actions catch up within a bound; combat is not held behind story speech and enters through banner and initiative before any attack is shown.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Sequence the display with state machines: speech-led entrances and exits",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/tempo-engine.md",
+            "sha256": "e227dda990685f5771b577529652c44d59704a23db8ad206e3e59be41f4c81d6"
+          }
+        ],
+        "input_revision": "ae919ff8f85b17dbe591b66e592523519c668b6d",
+        "required_capabilities": {
+          "audio": true,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "Media events can be missed; never wait on one without a bounded watchdog."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 99,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T04:04:08+00:00",
+      "updated_at": "2026-10-12T04:04:08+00:00"
     }
   ],
   "dependencies": [
