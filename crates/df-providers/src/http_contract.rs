@@ -83,6 +83,25 @@ impl HttpRequest {
         }
     }
 
+    /// A bearer-authenticated `POST` with a caller-built body, such as a multipart image edit.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn bearer_native(
+        endpoint: &str,
+        credential: &str,
+        content_type: String,
+        body: Vec<u8>,
+    ) -> Self {
+        Self {
+            method: HttpMethod::Post,
+            url: endpoint.to_owned(),
+            headers: vec![
+                ("Authorization", format!("Bearer {credential}")),
+                ("Content-Type", content_type),
+            ],
+            body,
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn headers(&self) -> &[(&'static str, String)] {
         &self.headers

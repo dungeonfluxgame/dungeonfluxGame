@@ -592,6 +592,7 @@ dependencies = [
 name = "df-providers"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "df-model",
  "df-provider-api",
  "df-types",
