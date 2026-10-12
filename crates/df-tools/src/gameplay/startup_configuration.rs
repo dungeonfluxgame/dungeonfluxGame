@@ -475,11 +475,18 @@ pub(super) fn load_extra_assets(
         .iter()
         .filter_map(|stem| crate::stage_art::sprite_stem(stem))
         .collect();
-    for stem in named
+    // The 2:3 portrait is the display's fallback when a cut-out is absent.
+    let fulls: Vec<String> = named
+        .iter()
+        .filter(|stem| stem.starts_with("portrait-") && !stem.ends_with("-full"))
+        .map(|stem| format!("{stem}-full"))
+        .collect();
+    let stems = named
         .iter()
         .copied()
         .chain(sprites.iter().map(String::as_str))
-    {
+        .chain(fulls.iter().map(String::as_str));
+    for stem in stems {
         for (extension, mime) in GENERATED_EXTENSIONS {
             candidates.push((
                 asset_root
@@ -702,6 +709,7 @@ mod tests {
         std::fs::write(generated.join("sfx/unlisted.mp3"), b"no").unwrap();
         std::fs::write(generated.join("sprite-hero-1.png"), b"sprite").unwrap();
         std::fs::write(generated.join("sprite-unknown.png"), b"no").unwrap();
+        std::fs::write(generated.join("portrait-courier-full.png"), b"full").unwrap();
         let loaded = load_extra_assets(&root).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
         let served: Vec<(&str, &str)> = loaded
@@ -711,6 +719,7 @@ mod tests {
         assert_eq!(
             served,
             [
+                ("/assets/ui/generated/portrait-courier-full", "image/png"),
                 ("/assets/ui/generated/sprite-hero-1", "image/png"),
                 ("/assets/ui/generated/sfx/hit", "audio/mpeg"),
             ]
