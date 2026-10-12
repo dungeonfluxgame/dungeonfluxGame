@@ -236,6 +236,26 @@ fn a_total_party_defeat_waits_for_the_death_saves_then_ends_without_reviving_any
             runtime::fight_outcome(current.state()).unwrap(),
             FightOutcome::LostAll
         );
+        // The settled defeat is drawn as a story scene, not as the fight; while a hero is still
+        // dying it keeps the fight's own screen.
+        let story = |current: &Checkpoint| {
+            let Some(rpc::view_message::Audience::Player(view)) = wire::journey_view(
+                current,
+                df_persistence::local_demo_scope::LocalDemoRole::Player,
+                first(),
+            )
+            .unwrap()
+            .audience
+            else {
+                panic!("player audience");
+            };
+            (
+                view.scene.unwrap().destination == rpc::HarborDestination::HarborInn as i32,
+                view.journey.unwrap().combat.is_none(),
+            )
+        };
+        assert_eq!(story(&current), (true, true));
+        assert_eq!(story(&lost_fight()), (false, false));
         // Nobody is revived: there is no rest to take, only the ending.
         assert!(!kinds(&current).contains(&K::ShortRest));
         assert_eq!(kinds(&current), vec![K::ResolveErrand]);

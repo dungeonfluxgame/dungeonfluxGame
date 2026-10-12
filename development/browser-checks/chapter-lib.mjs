@@ -58,10 +58,16 @@ export async function options(table) {
 
 // One story or fight step: the best fight offer if a fight is on, otherwise the first offer that is not
 // a Short Rest (a rest is always offered and never moves the story on).
-export function choose(all, skip = /^Short Rest|^Say something/) {
-  for (const pattern of FIGHT_ORDER) {
+let consecutiveMoves = 0;
+export function choose(all, skip = /^Short Rest|^Say something|^Begin a new adventure|^Go on to chapter|^Ready\. |^Starting/) {
+  // A hero that has moved twice ends the turn: Move stays offered and would otherwise be pressed for ever.
+  const order = consecutiveMoves >= 2 ? [FIGHT_ORDER[0], FIGHT_ORDER[1], FIGHT_ORDER[2], FIGHT_ORDER[5], FIGHT_ORDER[3], FIGHT_ORDER[4]] : FIGHT_ORDER;
+  for (const pattern of order) {
     const hit = all.find((o) => pattern.test(o.label));
-    if (hit) return hit;
+    if (hit) {
+      consecutiveMoves = /^Move/.test(hit.label) ? consecutiveMoves + 1 : 0;
+      return hit;
+    }
   }
   return all.find((o) => !skip.test(o.label)) ?? null;
 }

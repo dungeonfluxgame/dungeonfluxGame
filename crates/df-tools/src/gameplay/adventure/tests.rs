@@ -1154,30 +1154,31 @@ fn sha256(bytes: &[u8]) -> String {
 /// closing-scene patterns and four beats in `beat-scripts.json`), so the pack and record hashes
 /// moved. Verified for all three seeds by generating with the previous table: the old pack hash
 /// matched the pin above this change, the pack minus its `beat_script` was byte-identical to the
-/// new one, and the tuning hash is unchanged.
+/// new one, and the tuning hash is unchanged. The end-card narrations were reworded once more
+/// (no sentence starts with a lower-case stake) and re-pinned the same way (tuning unchanged).
 const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
-            "1b16ac7a2166fb290dd0635a71b80a84138556f67fc65b898623a7071d95e4eb",
+            "575733f0349983b147b0cbc9511a3aa0b9cf7ed9244076dded9f97afae2f4bef",
             "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
-            "7fbd3f5aa72c7b25747524b5179b034891b21805d82d467ba6c8d7e70c4eb727",
+            "03838919d2a5d5f262e361d2dc7367a91709d8f945ee105ce6eab2651b3efb23",
         ],
     ),
     (
         0xdaa66d325ccc5aac,
         [
-            "9b0b741f88a0844859c29dce56a1b71d218839ac64361ad7ee30a18451cc0282",
+            "94829369c00648864f8c968fb01b5f9736b8504197404813bae399c2b34e44c8",
             "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
-            "50b400a98c37ee1b026fbbd66d8967d129ee208f979e9c60fbadde44b8613fc2",
+            "36a302524da8bf5c8ac9fef4e9189542806ae750ae7761fd87f7d7505521e00d",
         ],
     ),
     (
         0x11a25cdccc7d808f,
         [
-            "3fa6fa40122363e9c884f5627b40d0a9cff858a135efde16a25721f61742856f",
+            "f281627efc12c4dd8fccdc14cadd747ffdf77bbf1ee17ddb06d0cb14ef728674",
             "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
-            "808f6857143a5362de861e0804ff766ac2129d41d7129a687ab7fc73ab10302f",
+            "4a8255c3fbcb61eda81a312f95a1d1a3cd7622b10eb2b7c9e510fc838c7a6a6c",
         ],
     ),
 ];

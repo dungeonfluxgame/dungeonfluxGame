@@ -900,7 +900,7 @@ pub(super) fn project_journey(
     } else {
         Vec::new()
     };
-    let journey = rpc::JourneyView {
+    let mut journey = rpc::JourneyView {
         phase: if creation.is_some() {
             rpc::JourneyPhase::CharacterCreation as i32
         } else {
@@ -953,6 +953,14 @@ pub(super) fn project_journey(
     scene.cast = scene_cast(&authored);
     scene.rules_note = rules_note;
     scene.place = authored
+    // A chapter's closing scenes are story scenes, not the aftermath of its fight: the screens
+    // draw them as the peaceful chapters' resolution, epilogue and end card.
+    if super::beat_script_runtime::closing(state)?
+        || super::beat_script_runtime::settled_defeat(state)?
+    {
+        scene.destination = rpc::HarborDestination::HarborInn as i32;
+        journey.combat = None;
+    }
         .setting
         .as_ref()
         .map(|setting| setting.name.clone())
