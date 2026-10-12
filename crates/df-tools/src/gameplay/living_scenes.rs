@@ -757,6 +757,23 @@ impl Inner {
 
     /// Records a finished render. A scene refresh waits for a quiet moment before it lands.
     fn finish(&self, done: Done) {
+        let (kind, outcome) = match &done {
+            Done::Expression { result, .. } => ("expression", result),
+            Done::Refresh { result, .. } => ("refresh", result),
+        };
+        record(
+            "gameplay.living_scene.render_finished",
+            &[
+                ("scene.kind", kind.to_owned()),
+                (
+                    "scene.outcome",
+                    outcome
+                        .as_ref()
+                        .map_or_else(|failure| failure.label(), |_| "ready")
+                        .to_owned(),
+                ),
+            ],
+        );
         let mut state = locked(&self.state);
         match done {
             Done::Expression {

@@ -1048,9 +1048,20 @@ fn receive_view(
             .views
             .as_mut()
             .ok_or_else(|| JsValue::from_str("view owner absent"))?;
-        views
-            .accept(generation, scope, view)
-            .map_err(|_| JsValue::from_str("server view scope or projection invalid"))?
+        let accepted = views
+            .accept(generation, scope, view.clone())
+            .map_err(|_| JsValue::from_str("server view scope or projection invalid"))?;
+        // PLAY-L01: the display's view of an equal revision that differs only in generated art
+        // replaces the shown one and redraws; nothing else is accepted at an equal revision.
+        if matches!(
+            accepted,
+            ConnectionViewAcceptance::View(ViewAcceptance::Duplicate { .. })
+        ) && views.accept_art_update(generation, scope, &view, crate::live_art::merge_art)
+        {
+            drop(state);
+            return redraw_current(client);
+        }
+        accepted
     };
     if acceptance == ConnectionViewAcceptance::View(ViewAcceptance::Applied) {
         let mut state = client.borrow_mut();
