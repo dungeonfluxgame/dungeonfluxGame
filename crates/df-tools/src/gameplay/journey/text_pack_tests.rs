@@ -405,7 +405,11 @@ fn the_display_lists_the_pack_offer_labels_and_nothing_private() {
             rpc::GameplayActionKind::ShortRest,
             rpc::GameplayActionKind::ChooseHarborScene,
         ]
-        .map(pack::offer_label);
+        .map(pack::offer_label)
+        .into_iter()
+        // The ending step of a chapter without its own text.
+        .chain(["Settle the errand".to_owned()])
+        .collect::<Vec<_>>();
         let mut listed = 0;
         for (key, _, checkpoint) in scenes() {
             let display = display_view(&checkpoint);

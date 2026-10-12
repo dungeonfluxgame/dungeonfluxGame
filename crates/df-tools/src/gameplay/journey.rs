@@ -23,6 +23,8 @@ mod creation_tests;
 mod encounter_admission;
 mod encounter_outcome;
 mod enemy_tactics;
+#[cfg(test)]
+mod fight_ending_tests;
 mod narrative_phase;
 #[cfg(test)]
 mod narrative_runtime_tests;
@@ -626,6 +628,11 @@ fn beat(state: &mut GameState, next: &str) -> Result<(), RepositoryError> {
     Ok(())
 }
 pub(super) fn offer_id(current: &Checkpoint, kind: rpc::GameplayActionKind) -> String {
+    if kind == rpc::GameplayActionKind::ResolveErrand
+        && let Some(id) = super::beat_script_runtime::resolve_id(current)
+    {
+        return id;
+    }
     if tactical::present(current.state()) {
         return format!(
             "tactical-{}-{}-{}",
@@ -2778,6 +2785,10 @@ fn stage_using(
             let target = pure_target
                 .as_ref()
                 .ok_or(RepositoryError::InvalidCandidate)?;
+            // A fight does not end while a hero is still making death saves.
+            if tactical::present(&state) && tactical::dying(&state)? {
+                return Err(RepositoryError::InvalidCandidate);
+            }
             if selected.effect == super::beat_script::BeatEffect::ChooseHarborScene {
                 if choices.as_slice()
                     != [(

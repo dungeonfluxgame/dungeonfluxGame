@@ -275,16 +275,18 @@ fn plan(baseline: &GeneratedAdventure) -> Result<Vec<Planned<'_>>, Declined> {
     // expression policy and accepted-text replay are shared with existing slots.
     let mut script_slots = Vec::new();
     if let Some(script) = &baseline.pack.beat_script {
-        for slot in script.labels.keys() {
-            script_slots.push((format!("beat_{slot}"), "beat_label", Group::Voices));
+        // A storyteller slot name is lowercase letters, digits and underscores in 32 bytes, so
+        // the script's kebab-case label and scene ids are numbered in their table order.
+        for number in 0..script.labels.len() {
+            script_slots.push((format!("beat_label_{number}"), "beat_label", Group::Voices));
         }
-        for id in script.scenes.keys() {
+        for number in 0..script.scenes.len() {
             for (slot, group) in [
                 ("title", Group::Scenes),
                 ("narration", Group::Scenes),
                 ("line", Group::Voices),
             ] {
-                script_slots.push((format!("beat_{id}_{slot}"), slot, group));
+                script_slots.push((format!("beat_scene_{number}_{slot}"), slot, group));
             }
         }
     }
