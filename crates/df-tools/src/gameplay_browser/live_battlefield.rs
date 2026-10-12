@@ -26,6 +26,8 @@ use std::cell::Cell as StdCell;
 const STYLE: &str = include_str!("live_battlefield.css");
 const STYLE_ATTRIBUTE: &str = "data-battlefield-style";
 const PREVIEW_HASH: &str = "#battle-preview";
+/// The default tier of a streamed scan: the second largest, not the largest.
+const DEFAULT_SPLAT_LOD: u32 = 1;
 
 thread_local! {
     static PREVIEW: RefCell<Option<BattleStage>> = const { RefCell::new(None) };
@@ -97,6 +99,9 @@ struct PreviewRequest {
     /// `&tempo=0..1000`: the tempo intensity the camera sway follows (the live game reads the
     /// server's tempo cue).
     tempo: Option<u16>,
+    /// `&lod=0..3`: the tier of a streamed scan drawn as the finest (1 when absent, as in the
+    /// live game).
+    splat_lod: u32,
 }
 
 fn free_camera(text: &str) -> Option<battle::CameraPose> {
@@ -145,6 +150,7 @@ fn preview_request() -> Option<PreviewRequest> {
         fps: battle::BattleFps::DEFAULT,
         feel_off: false,
         tempo: None,
+        splat_lod: DEFAULT_SPLAT_LOD,
         demo: None,
         slow: None,
     };
@@ -223,6 +229,9 @@ fn preview_request() -> Option<PreviewRequest> {
             }
             other if other.starts_with("slow=") => request.slow = other[5..].parse().ok(),
             other if other.starts_with("tempo=") => request.tempo = other[6..].parse().ok(),
+            other if other.starts_with("lod=") => {
+                request.splat_lod = other[4..].parse().unwrap_or(DEFAULT_SPLAT_LOD);
+            }
             other if other.starts_with("fps=") => {
                 request.fps = other[4..]
                     .parse::<u32>()
@@ -513,6 +522,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             fps: request.fps,
             feel_off: request.feel_off,
             slow: request.slow,
+            splat_lod: request.splat_lod,
             ..StageOptions::default()
         },
     )
@@ -1426,6 +1436,11 @@ fn start_mount(
         .and_then(|value| value.parse::<u32>().ok())
         .and_then(battle::BattleFps::from_hz)
         .unwrap_or_default();
+    // `DF_GAMEPLAY_SPLAT_LOD` reaches the page as `data-battle-splat-lod` (validated at startup).
+    let splat_lod = host
+        .get_attribute("data-battle-splat-lod")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_SPLAT_LOD);
     let layout = server_layout.or_else(|| chosen_layout_id(&scene, key));
     let _ = host.set_attribute(
         "data-battlefield-layout",
@@ -1451,6 +1466,7 @@ fn start_mount(
                 fps,
                 feel_off: false,
                 slow: None,
+                splat_lod,
             },
         )
         .await;

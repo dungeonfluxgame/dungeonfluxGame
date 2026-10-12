@@ -61,6 +61,10 @@ pub struct StageOptions {
     /// Runs the stage's clock at this share of real time (a review harness captures slow motion
     /// strips with it); `None` is real time.
     pub slow: Option<f32>,
+    /// Which tier of a streamed scan to draw as the finest: 0 is the largest tier the scene
+    /// authors for the scan, 1 the next one down (the default of the live game), and so on, never
+    /// coarser than the scene's coarsest tier.
+    pub splat_lod: u32,
 }
 
 /// Quality held constant for benchmarks (`#battle-preview=...&fixed&budget=..&minc=..&rscale=..`).
@@ -231,6 +235,7 @@ impl BattleStage {
                 scene.grid.centre(),
                 scene.grid.cols() as f32 * scene.grid.cell_m(),
                 scene.grid.rows() as f32 * scene.grid.cell_m(),
+                options.splat_lod,
             );
         }
         mark(host, "active");
@@ -537,6 +542,7 @@ fn spawn_splat_load(
     grid_centre: super::math::Vec3,
     grid_width_m: f32,
     grid_depth_m: f32,
+    splat_lod: u32,
 ) {
     wasm_bindgen_futures::spawn_local(async move {
         let transform = SplatTransform {
@@ -554,7 +560,8 @@ fn spawn_splat_load(
             // Finest detail covers the grid and a margin; the scene file may widen it.
             let derived =
                 0.5 * (grid_width_m * grid_width_m + grid_depth_m * grid_depth_m).sqrt() + 3.0;
-            let (finest, coarsest) = layer.levels.unwrap_or((0, 0));
+            let (authored_finest, coarsest) = layer.levels.unwrap_or((0, 0));
+            let finest = authored_finest.saturating_add(splat_lod).min(coarsest);
             splat_stream::stream(
                 gpu,
                 shared,
