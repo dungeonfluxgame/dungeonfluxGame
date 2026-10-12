@@ -3574,6 +3574,242 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T02:12:38+00:00",
       "updated_at": "2026-10-12T02:12:38+00:00"
+    },
+    {
+      "id": "PLAY-F03",
+      "feature_id": "F04",
+      "title": "Stage the story: bubbles follow the voice, cast stands in the scene",
+      "objective": "On the display the speech bubble belongs to whoever is being voiced and sits beside their head, the cast is composited into the painting with depth and floor contact rather than as flat cut-outs, the chapter title and closing use styled cards, rules wording is split from story narration, and the table sees the current choices.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-tools/src/gameplay/wire.rs",
+        "crates/df-protocol/proto/gameplay.proto"
+      ],
+      "acceptance_json": [
+        "While a voiced NPC line plays the bubble is on that NPC, and returns to the narrator after.",
+        "No bubble overlaps a face at TV and laptop sizes, including with a two-line place name.",
+        "Every character in the scene is visible, stands on the floor and is lit to match the painting.",
+        "The title and closing cards are styled and branding appears only on load and transitions.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Real browser frames of opening, conversation, victory and closing at two viewport sizes."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M7",
+        "milestone_goal": "Coherent staging: where a scene happens, who is in it and who is speaking all agree.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner feedback 2026-10-11: the bubble showed the DM while an NPC was speaking, the scene title was unstyled, characters looked like posters, and bubbles covered faces.",
+        "objective": "On the display the speech bubble belongs to whoever is being voiced and sits beside their head, the cast is composited into the painting with depth and floor contact rather than as flat cut-outs, the chapter title and closing use styled cards, rules wording is split from story narration, and the table sees the current choices.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Stage the story: bubbles follow the voice, cast stands in the scene",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          }
+        ],
+        "input_revision": "ff9091dae662c37fc7cb90aec57f93d4eed78a43",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "A passing unit test does not prove the running game. Identify the commit and build tested."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 97,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T03:54:44+00:00",
+      "updated_at": "2026-10-12T03:54:44+00:00"
+    },
+    {
+      "id": "PLAY-F05",
+      "feature_id": "F06",
+      "title": "Keep a live session alive: lease recovery and live-play defect fixes",
+      "objective": "A table that sits idle or runs on a busy machine must not lose its game. The session owner renews or re-acquires its lease, a slow commit recovers by itself, and every surface says plainly when it is recovering. Also: typed hero lines appear on the display with the reply in the same beat, an NPC-is-thinking indicator, no microphone prompt until the player asks to talk, sound that enables on the first click, a generated room code, and a longer music release.",
+      "stage": "implementation",
+      "edit_areas_json": [
+        "crates/df-tools/src/gameplay/",
+        "crates/df-tools/src/gameplay.rs",
+        "crates/df-tools/src/gameplay_browser/",
+        "crates/df-persistence/src/local_demo_scope/",
+        "development/run-gameplay.sh"
+      ],
+      "acceptance_json": [
+        "With a controlled clock, a session left idle past its lease then accepts a choice, a typed line and a watch re-open from the same members.",
+        "A commit that exceeds its bound ends in a recovered session, not a permanently fenced one; the bounds are settings with documented defaults.",
+        "While recovering, the display and phones say so and resume on their own; a member still in the room is never told their saved game was cleared.",
+        "A typed line shows on the display as the hero speaking and the NPC reply follows in that beat.",
+        "The page asks for the microphone only when the player first holds to talk.",
+        "Agent tests and harness runs use their own PostgreSQL data directory and ports.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Native tests for lease lapse, slow commit, dialogue membership and watch resume.",
+        "Real browser run: two players, idle five minutes, then a typed line, a choice and a reload."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M1",
+        "milestone_goal": "Plays by hand: the existing harbor journey runs from main with one command.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Coordinator playthroughs on 2026-10-11: the session lease expired four minutes after the last action and never recovered, so choices returned \"outcome unknown\", typed lines were refused with a permission error and a page reload cleared the saved player, while the display showed nothing wrong. Earlier runs fenced the session when a commit exceeded its two-second bound.",
+        "objective": "A table that sits idle or runs on a busy machine must not lose its game. The session owner renews or re-acquires its lease, a slow commit recovers by itself, and every surface says plainly when it is recovering. Also: typed hero lines appear on the display with the reply in the same beat, an NPC-is-thinking indicator, no microphone prompt until the player asks to talk, sound that enables on the first click, a generated room code, and a longer music release.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Keep a live session alive: lease recovery and live-play defect fixes",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-B02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/runtime-reliability.md",
+            "sha256": "176e5a8fb04e1d9cb2402225c9eb1bb4ffd110abf353f226a302e10e780acf05"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          }
+        ],
+        "input_revision": "ff9091dae662c37fc7cb90aec57f93d4eed78a43",
+        "required_capabilities": {
+          "audio": true,
+          "computer_use": true,
+          "vision": true
+        },
+        "known_pitfalls": [
+          "Never release unknown outcomes because a lease expired; re-acquire and reconcile.",
+          "The live preview shares port 55517; tests must not."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 99,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T03:54:44+00:00",
+      "updated_at": "2026-10-12T03:54:44+00:00"
+    },
+    {
+      "id": "PLAY-C07",
+      "feature_id": "F04",
+      "title": "Design backstory-driven hero creation: pick a history or write one",
+      "objective": "A player builds a hero by choosing their history step by step (origin, upbringing, calling, a defining event, a bond and a flaw) or by writing free text that the server parses into the same choices. The history proposes species, class, subclass path, background, skills, languages and equipment under the standard 2024 rules; the player confirms or changes each proposal.",
+      "stage": "design",
+      "edit_areas_json": [
+        "planning/character-backstory-creation.md"
+      ],
+      "acceptance_json": [
+        "Every history choice maps to named standard options, and no choice grants anything the rules do not.",
+        "The free-text path yields the same structured history, shows what it understood and asks about anything it could not place; nothing is applied until the player confirms.",
+        "Works with the text provider off: the picker alone builds a complete legal hero.",
+        "The backstory is saved with the hero and is available to the narrator and NPC replies.",
+        "The design names the wire, storage and rules-catalog changes and the order to build them.",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "Coordinator review of the design against the rules-support and client-architecture documents."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M11",
+        "milestone_goal": "Heroes with a past: a backstory the player picks or writes builds the character.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-11: the character creator needs a way to generate a backstory that gives the character its classes, subclasses and jobs, as a multiple-choice picker per piece of history or free text parsed into a backstory.",
+        "objective": "A player builds a hero by choosing their history step by step (origin, upbringing, calling, a defining event, a bond and a flaw) or by writing free text that the server parses into the same choices. The history proposes species, class, subclass path, background, skills, languages and equipment under the standard 2024 rules; the player confirms or changes each proposal.",
+        "owners": [
+          "df-tools"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Design backstory-driven hero creation: pick a history or write one",
+            "owner": "df-tools"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/rules-support.md",
+            "sha256": "a9b38b632d6ff669217da6e2e19be756c00925042afb79966e081581ec09eba4"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/adventure-generator.md",
+            "sha256": "6c04bdd223eb877d8ac8beeaa75e6aa56c6f9cacf5235fa99c1ef99054fba14d"
+          }
+        ],
+        "input_revision": "ff9091dae662c37fc7cb90aec57f93d4eed78a43",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "Subclasses start at level 3 under the 2024 rules: a level-1 hero gets a path, not the subclass features."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "pending",
+      "blocking_reason": null,
+      "originating_task_id": null,
+      "priority": 93,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T03:54:44+00:00",
+      "updated_at": "2026-10-12T03:54:44+00:00"
     }
   ],
   "dependencies": [
