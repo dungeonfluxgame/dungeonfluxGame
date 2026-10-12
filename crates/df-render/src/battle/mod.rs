@@ -46,7 +46,7 @@ pub use scene_file::{
     SplatLayer, embedded_ids, load_embedded, parse as parse_scene,
 };
 pub use sound::{
-    ALL_CLIPS, SoundEvent, SoundKind, Surface, VariationPicker, VoiceSet, voice_for,
+    ALL_CLIPS, ContentRating, SoundEvent, SoundKind, Surface, VariationPicker, VoiceSet, voice_for,
 };
 pub use status::{Resolved, Status, StatusPose, StatusSet, icon_statuses, pose_for, resolve};
 pub use splat::{

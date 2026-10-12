@@ -58,6 +58,26 @@ pub enum SoundKind {
     HealBreath,
 }
 
+/// How graphic the combat sound is. The game is for adults, so `Mature` is the default; the
+/// `Restrained` set swaps the wet, bone-crunching impacts and death screams for plainer ones. One
+/// switch (the page's content rating) selects the set; no sound is ever sexualised in either.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum ContentRating {
+    #[default]
+    Mature,
+    Restrained,
+}
+
+impl ContentRating {
+    pub fn from_key(key: &str) -> Option<Self> {
+        Some(match key {
+            "mature" => Self::Mature,
+            "restrained" => Self::Restrained,
+            _ => return None,
+        })
+    }
+}
+
 /// One sound to play now. `token` is whose body it comes from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SoundEvent {
@@ -109,8 +129,22 @@ macro_rules! voice_group {
 }
 
 impl SoundEvent {
-    /// The clips this event may play; the engine picks one without repeating the last.
-    pub fn clips(&self) -> &'static [&'static str] {
+    /// The clips this event may play; the engine picks one without repeating the last. The
+    /// restrained set replaces the graphic impacts and death cries with the plainer pack clips.
+    pub fn clips(&self, rating: ContentRating) -> &'static [&'static str] {
+        if rating == ContentRating::Restrained {
+            match self.kind {
+                SoundKind::BladeHit | SoundKind::ArrowImpact => return &["hit"],
+                SoundKind::Down => {
+                    return SoundEvent {
+                        kind: SoundKind::Pain,
+                        ..self.clone()
+                    }
+                    .clips(rating);
+                }
+                _ => {}
+            }
+        }
         match self.kind {
             SoundKind::Footstep => match self.surface {
                 Surface::Wood => WOOD_STEPS,
@@ -134,8 +168,8 @@ impl SoundEvent {
                 Humanoid => ["voice-humanoid-effort"],
             ]),
             SoundKind::Pain => voice_group!(self.voice, [
-                HeroMale => ["voice-male-pain", "voice-male-pain-2"],
-                HeroFemale => ["voice-female-pain", "voice-female-pain-2"],
+                HeroMale => ["voice-male-pain"],
+                HeroFemale => ["voice-female-pain"],
                 SmallCreature => ["voice-small-pain"],
                 Beast => ["voice-beast-pain"],
                 Undead => ["voice-undead-pain"],
@@ -189,12 +223,10 @@ pub const ALL_CLIPS: &[&str] = &[
     "voice-male-effort",
     "voice-male-effort-2",
     "voice-male-pain",
-    "voice-male-pain-2",
     "voice-male-down",
     "voice-female-effort",
     "voice-female-effort-2",
     "voice-female-pain",
-    "voice-female-pain-2",
     "voice-female-down",
     "voice-small-effort",
     "voice-small-pain",
@@ -210,6 +242,8 @@ pub const ALL_CLIPS: &[&str] = &[
     "voice-humanoid-down",
     "body-fall",
     "heal-breath",
+    // The plainer impact used by the restrained set; part of the original pack.
+    "hit",
 ];
 
 /// Picks among a group's clips without playing the same one twice in a row. Deterministic for a
@@ -318,14 +352,16 @@ mod tests {
             SoundKind::HealBreath,
         ];
         let mut used = std::collections::BTreeSet::new();
-        for kind in kinds {
-            for voice in voices {
-                for surface in [Surface::Wood, Surface::Dirt, Surface::Stone] {
-                    let clips = event(kind, voice, surface).clips();
-                    assert!(!clips.is_empty());
-                    for clip in clips {
-                        assert!(ALL_CLIPS.contains(clip), "{clip} missing from ALL_CLIPS");
-                        used.insert(*clip);
+        for rating in [ContentRating::Mature, ContentRating::Restrained] {
+            for kind in kinds {
+                for voice in voices {
+                    for surface in [Surface::Wood, Surface::Dirt, Surface::Stone] {
+                        let clips = event(kind, voice, surface).clips(rating);
+                        assert!(!clips.is_empty());
+                        for clip in clips {
+                            assert!(ALL_CLIPS.contains(clip), "{clip} missing from ALL_CLIPS");
+                            used.insert(*clip);
+                        }
                     }
                 }
             }
@@ -336,10 +372,30 @@ mod tests {
     }
 
     #[test]
+    fn the_restrained_set_swaps_graphic_impacts_and_death_cries_for_plain_ones() {
+        let mature = |kind, voice| event(kind, voice, Surface::Stone).clips(ContentRating::Mature);
+        let plain = |kind, voice| event(kind, voice, Surface::Stone).clips(ContentRating::Restrained);
+        assert_eq!(mature(SoundKind::BladeHit, VoiceSet::HeroMale), &["blade-hit-1", "blade-hit-2"]);
+        assert_eq!(plain(SoundKind::BladeHit, VoiceSet::HeroMale), &["hit"]);
+        assert_eq!(plain(SoundKind::ArrowImpact, VoiceSet::Beast), &["hit"]);
+        assert_eq!(mature(SoundKind::Down, VoiceSet::Undead), &["voice-undead-down"]);
+        assert_eq!(plain(SoundKind::Down, VoiceSet::Undead), plain(SoundKind::Pain, VoiceSet::Undead));
+        // Everything else is the same in both sets.
+        assert_eq!(
+            mature(SoundKind::SwordSwing, VoiceSet::HeroMale),
+            plain(SoundKind::SwordSwing, VoiceSet::HeroMale)
+        );
+        assert_eq!(ContentRating::default(), ContentRating::Mature);
+        assert_eq!(ContentRating::from_key("restrained"), Some(ContentRating::Restrained));
+        assert_eq!(ContentRating::from_key("PG"), None);
+    }
+
+    #[test]
     fn each_surface_has_its_own_footsteps_with_at_least_two_variations() {
-        let wood = event(SoundKind::Footstep, VoiceSet::HeroMale, Surface::Wood).clips();
-        let dirt = event(SoundKind::Footstep, VoiceSet::HeroMale, Surface::Dirt).clips();
-        let stone = event(SoundKind::Footstep, VoiceSet::HeroMale, Surface::Stone).clips();
+        let steps = |surface| {
+            event(SoundKind::Footstep, VoiceSet::HeroMale, surface).clips(ContentRating::Mature)
+        };
+        let (wood, dirt, stone) = (steps(Surface::Wood), steps(Surface::Dirt), steps(Surface::Stone));
         for group in [wood, dirt, stone] {
             assert!(group.len() >= 2);
         }
@@ -368,5 +424,18 @@ mod tests {
         let mut picker = VariationPicker::new(0);
         assert_eq!(picker.pick(&["only"]), Some("only"));
         assert_eq!(picker.pick(&[]), None);
+    }
+
+    #[test]
+    fn the_pack_ships_every_clip_and_the_server_allowlist_names_it() {
+        let allowlist = include_str!("../../../df-tools/src/gameplay/startup_configuration.rs");
+        let folder = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/ui/generated/sfx");
+        for clip in ALL_CLIPS {
+            assert!(allowlist.contains(&format!("\"{clip}\",")), "{clip} not in SFX_NAMES");
+            let bytes = std::fs::metadata(format!("{folder}/{clip}.mp3"))
+                .unwrap_or_else(|error| panic!("{clip}.mp3: {error}"))
+                .len();
+            assert!((2_000..200_000).contains(&bytes), "{clip}.mp3 is {bytes} bytes");
+        }
     }
 }
