@@ -218,7 +218,8 @@ impl NpcReplyContext {
         } else {
             ""
         };
-        let mut facts = npc_dossier::facts(&Inputs {
+        let conversation = social.conversation(member, dossier, scene_key);
+        let (mut facts, offered) = npc_dossier::facts(&Inputs {
             dossier,
             name: &actor.name,
             hero: &hero.name,
@@ -229,7 +230,13 @@ impl NpcReplyContext {
             choices: &choices,
             words: &words,
             withheld: &withheld,
+            conversation: &conversation,
         });
+        let said: Vec<String> = recent
+            .iter()
+            .filter(|(from_hero, _)| !from_hero)
+            .map(|(_, text)| text.clone())
+            .collect();
         add_character_limits(
             &mut facts,
             story
@@ -256,6 +263,9 @@ impl NpcReplyContext {
                 scene: scene_key.to_owned(),
                 standing,
                 withheld,
+                offered,
+                said,
+                conversation,
             })),
         })
     }
@@ -626,6 +636,8 @@ impl NpcVoice {
                         &context.typed_words,
                         approach,
                         &turn.withheld,
+                        &turn.conversation,
+                        &turn.said,
                     ),
                     approach,
                 )
@@ -646,6 +658,8 @@ impl NpcVoice {
             &context.typed_words,
             &text,
         );
+        turn.ledger
+            .remember_offered(context.member, &turn.dossier, &turn.offered);
         if let Some(shift) = recorded.shift {
             log.push(
                 &context.speaker,

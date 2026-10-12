@@ -870,3 +870,24 @@ fn print_review_sheets() {
         println!("{}", render_dossier(&dossier));
     }
 }
+
+#[test]
+fn every_speaker_knows_their_own_side_of_the_errand_across_200_seeds() {
+    let chapter = chapter_tables();
+    let tables = dossier_tables();
+    let mut checked = 0;
+    for index in 0..200 {
+        let generated = adventure(&chapter, seed(index));
+        let facts = facts_from(&chapter, &generated);
+        for dossier in roll_dossiers(&tables, &facts, generated.seed).unwrap() {
+            let says_identity = dossier
+                .knowledge
+                .says_freely
+                .iter()
+                .any(|item| item.source == "identity_line");
+            assert!(says_identity, "{} has no identity line", dossier.name);
+            checked += 1;
+        }
+    }
+    assert!(checked >= 400, "only {checked} speakers were checked");
+}
