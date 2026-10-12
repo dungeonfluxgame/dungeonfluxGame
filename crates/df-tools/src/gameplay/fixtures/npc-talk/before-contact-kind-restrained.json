@@ -1,0 +1,172 @@
+{
+ "conversation": "contact-kind-restrained",
+ "seed": "0xbc0b22191fc2b96d",
+ "rating": "restrained",
+ "tone": "kind",
+ "hero": "Sunniva",
+ "holds_private_clue": false,
+ "clue_in_play": false,
+ "deflects": false,
+ "clue_only_terms": [
+  "my fault",
+  "unguarded",
+  "Whitlock"
+ ],
+ "never_terms": [
+  "accused rightly",
+  "flinched at questions"
+ ],
+ "speaker": {
+  "name": "Corwin",
+  "style_phrases": [
+   "meets a question with 'Now why do you ask?'",
+   "Now why do you ask?",
+   "Mind you."
+  ],
+  "colour_lines": [
+   "The great orrery is wound each dawn by the youngest scribe, as a rite of passage.",
+   "Ask anyone around the Orrery Library about the Reading Gallery and they will tell you to go early and bring something for the host.",
+   "Somebody chalked a child's drawing of the guard on the wall by the well."
+  ],
+  "own_lines": [
+   "I was born in a lighthouse keeper's cottage on a windy headland.",
+   "I mucked out a coaching inn for years. Every traveller leaves a story with the horse.",
+   "I once cooked a feast for a hundred people from nearly nothing. I have been proud of it for twenty years.",
+   "Every question deserves an honest attempt at an answer, even a foolish one. Especially a foolish one.",
+   "There is a child I look after who is not mine by blood. I would walk through fire for that little one.",
+   "I want the council to take me seriously, just once. Just to see their faces.",
+   "The great orrery is wound each dawn by the youngest scribe, as a rite of passage.",
+   "Ask anyone around the Orrery Library about the Reading Gallery and they will tell you to go early and bring something for the host.",
+   "Somebody chalked a child's drawing of the guard on the wall by the well.",
+   "I am a watch sergeant at the Reading Gallery.",
+   "Garrick sent word that you would come for the steady lantern.",
+   "Do not blame Garrick.",
+   "What matters is that you came.",
+   "Rest easy.",
+   "I will vouch for you to anyone who matters in this region."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Thank you for seeing us, Corwin. Garrick spoke well of you.",
+   "reply": "Garrick spoke true, then. I expect no less than being heard; there\u2019s a child I look after, not mine by blood, and I\u2019d walk through fire for them. So ask your question plainly.",
+   "from_model": true,
+   "approach": "flattery",
+   "attitude_before": "hostile",
+   "attitude_after": "hostile",
+   "facts": {
+    "new_material": [
+     {
+      "line": "Every question deserves an honest attempt at an answer, even a foolish one. Especially a foolish one.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "There is a child I look after who is not mine by blood. I would walk through fire for that little one.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "That sounds hard. What do you need from us most?",
+   "reply": "I need you to hear me out\u2014and not blame Garrick. I want the council to take me seriously, just once; will you help me make them listen?",
+   "from_model": true,
+   "approach": "kindness",
+   "attitude_before": "hostile",
+   "attitude_after": "hostile",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I want the council to take me seriously, just once. Just to see their faces.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "Do not blame Garrick.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "Every question deserves an honest attempt at an answer, even a foolish one. Especially a foolish one.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "I am sorry you carry this. Who is behind the trouble?",
+   "reply": "I don\u2019t know who\u2019s behind the trouble, Sunniva. I can tell you what I\u2019ve seen, but I won\u2019t name someone without cause.",
+   "from_model": true,
+   "approach": "kindness",
+   "attitude_before": "hostile",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I was born in a lighthouse keeper's cottage on a windy headland.",
+      "topic": "who are you"
+     },
+     {
+      "line": "I mucked out a coaching inn for years. Every traveller leaves a story with the horse.",
+      "topic": "who are you"
+     },
+     {
+      "line": "Every question deserves an honest attempt at an answer, even a foolish one. Especially a foolish one.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "We will do our best. What should we look out for?",
+   "reply": "Good. Keep an eye on the great orrery; the youngest scribe winds it each dawn as a rite of passage. Tell me if anything seems amiss there.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I once cooked a feast for a hundred people from nearly nothing. I have been proud of it for twenty years.",
+      "topic": "your past"
+     },
+     {
+      "line": "The great orrery is wound each dawn by the youngest scribe, as a rite of passage.",
+      "topic": "the place"
+     },
+     {
+      "line": "Every question deserves an honest attempt at an answer, even a foolish one. Especially a foolish one.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "Thank you. What is our next step?",
+   "reply": "Go to the Reading Gallery early, and bring something for the host; ask anyone around the Orrery Library, and they\u2019ll point you there. There\u2019s a child\u2019s drawing of the guard chalked by the well\u2014look at it before you go.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "Ask anyone around the Orrery Library about the Reading Gallery and they will tell you to go early and bring something for the host.",
+      "topic": "the place"
+     },
+     {
+      "line": "Somebody chalked a child's drawing of the guard on the wall by the well.",
+      "topic": "the antagonist"
+     },
+     {
+      "line": "Every question deserves an honest attempt at an answer, even a foolish one. Especially a foolish one.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  }
+ ]
+}

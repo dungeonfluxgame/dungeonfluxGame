@@ -1,0 +1,170 @@
+{
+ "conversation": "patron-rude-mature",
+ "seed": "0x5f67268141c3f7fd",
+ "rating": "mature",
+ "tone": "rude",
+ "hero": "Vex",
+ "holds_private_clue": false,
+ "clue_in_play": false,
+ "deflects": false,
+ "clue_only_terms": [
+  "my fault",
+  "unguarded",
+  "Marlow"
+ ],
+ "never_terms": [
+  "wrong ear",
+  "said too much"
+ ],
+ "speaker": {
+  "name": "Liora",
+  "style_phrases": [
+   "ends with 'And that's how it was.'",
+   "Listen.",
+   "And that's how it was."
+  ],
+  "colour_lines": [
+   "The harbor-master's lamp burns until the last boat is in, and goes out the moment it is.",
+   "The Tidewatch Lamp Room keeps odd hours, so knock twice, wait, and do not take it personally.",
+   "Most of what is said about the giant weasel is probably exaggerated, but not all of it."
+  ],
+  "own_lines": [
+   "I was grown up in a trade caravan, never sleeping twice in the same bed.",
+   "I copied ledgers for a counting house. Numbers lie less than people do, though not by much.",
+   "I was caught at the edge of a border skirmish once and walked away without a scratch. I do not take that for granted.",
+   "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+   "My old dog is waiting at home. He has opinions about how late I am getting back.",
+   "I want a small garden and a quiet chair. I have wanted them for years.",
+   "The harbor-master's lamp burns until the last boat is in, and goes out the moment it is.",
+   "The Tidewatch Lamp Room keeps odd hours, so knock twice, wait, and do not take it personally.",
+   "Most of what is said about the giant weasel is probably exaggerated, but not all of it.",
+   "Perrin is a watch sergeant at the Tidewatch Lamp Room.",
+   "An old friend, Perrin, holds a sack of precious seed-grain for me.",
+   "Collecting it alone has become dangerous.",
+   "Someone else wants it as badly as I do, and they have been watching my door.",
+   "Perrin waits at the Tidewatch Lamp Room.",
+   "Walk me there, and I'll make sure you're repaid.",
+   "We are safe here, and damn glad of it.",
+   "Thank you for seeing me through."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Quit stalling. What do you want from us?",
+   "reply": "Listen, Vex, I need you to bring me the sack of precious seed-grain Perrin holds; my word is the one coin I carry that cannot be forged, so I spend it carefully. My old dog is waiting at home, with opinions about how late I am getting back. And that's how it was.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "My old dog is waiting at home. He has opinions about how late I am getting back.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "That tells me nothing. Who is Perrin Marlow, and why should I care?",
+   "reply": "Listen, Perrin is an old friend, and he holds the sack of precious seed-grain I need for the small garden and quiet chair I\u2019ve wanted for years; perhaps that sounds little to you, but it\u2019s the life I\u2019ve been waiting for. And that\u2019s how it was.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I want a small garden and a quiet chair. I have wanted them for years.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "An old friend, Perrin, holds a sack of precious seed-grain for me.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "You are wasting my time. What is out on the road?",
+   "reply": "Listen, I don't know what's out on the road, and there's no use dressing that up. The harbor-master's lamp burns until the last boat is in; at the Tidewatch Lamp Room, knock twice and wait, and that's how it was.",
+   "from_model": true,
+   "approach": "insult",
+   "attitude_before": "indifferent",
+   "attitude_after": "indifferent",
+   "facts": {
+    "new_material": [
+     {
+      "line": "The harbor-master's lamp burns until the last boat is in, and goes out the moment it is.",
+      "topic": "the place"
+     },
+     {
+      "line": "The Tidewatch Lamp Room keeps odd hours, so knock twice, wait, and do not take it personally.",
+      "topic": "the place"
+     }
+    ]
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "Pathetic. Is that really all you know?",
+   "reply": "Listen, I grew up in a trade caravan, never sleeping twice in the same bed; later, I copied ledgers for a counting house. Numbers lie less than people do, though not by much. And that's how it was.",
+   "from_model": true,
+   "approach": "insult",
+   "attitude_before": "indifferent",
+   "attitude_after": "hostile",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I was grown up in a trade caravan, never sleeping twice in the same bed.",
+      "topic": "who are you"
+     },
+     {
+      "line": "I copied ledgers for a counting house. Numbers lie less than people do, though not by much.",
+      "topic": "who are you"
+     },
+     {
+      "line": "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "Fine. Where do we go?",
+   "reply": "Listen, take the lead I gave you already; I\u2019ve no better road to offer. Most of what they say about the giant weasel is likely blown up, but not all of it, and I\u2019ve survived one skirmish by not taking danger lightly. And that's how it was.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "hostile",
+   "attitude_after": "hostile",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I was caught at the edge of a border skirmish once and walked away without a scratch. I do not take that for granted.",
+      "topic": "your past"
+     },
+     {
+      "line": "Most of what is said about the giant weasel is probably exaggerated, but not all of it.",
+      "topic": "the antagonist"
+     },
+     {
+      "line": "My word is the one coin I carry that cannot be forged. I spend it carefully.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  }
+ ]
+}

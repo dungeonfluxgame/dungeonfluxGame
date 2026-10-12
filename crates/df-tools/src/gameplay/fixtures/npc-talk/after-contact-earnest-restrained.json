@@ -1,0 +1,126 @@
+{
+ "conversation": "contact-earnest-restrained",
+ "seed": "0x5f67268141c3f7fd",
+ "rating": "restrained",
+ "tone": "earnest",
+ "hero": "Brakka",
+ "holds_private_clue": false,
+ "clue_in_play": false,
+ "deflects": false,
+ "clue_only_terms": [
+  "my fault",
+  "unguarded",
+  "Marlow"
+ ],
+ "never_terms": [
+  "bad dream",
+  "sent a friend away"
+ ],
+ "speaker": {
+  "name": "Perrin",
+  "style_phrases": [
+   "opens with 'How kind.' whatever was said",
+   "How kind.",
+   "Quite so."
+  ],
+  "colour_lines": [
+   "Boats tied up after the evening bell lose their berth to whoever wants it.",
+   "The walk to the Tidewatch Lamp Room is shorter than it looks and longer than it feels."
+  ],
+  "own_lines": [
+   "I was fostered by a travelling puppet troupe.",
+   "I drove mules over the high roads. You learn which stretches are safe and which only look it.",
+   "A widow taught me my letters and asked only that I teach someone else. I have kept to that bargain.",
+   "Trouble does its planning in the quiet hours. So I keep an eye on the quiet.",
+   "I have one old friend, and the letters come twice a year. They are the best part of my winter.",
+   "I am saving to buy back the family stall. Every coin has a name on it.",
+   "Boats tied up after the evening bell lose their berth to whoever wants it.",
+   "The walk to the Tidewatch Lamp Room is shorter than it looks and longer than it feels.",
+   "Folk around the Salt Quay have started locking their doors early since the giant weasel turned up.",
+   "The seed sack is safe behind the doors of the Tidewatch Lamp Room, and not a moment before.",
+   "I have been waiting at the Tidewatch Lamp Room for the seed sack, and I will not rest until it is inside.",
+   "I am a watch sergeant at the Tidewatch Lamp Room.",
+   "Liora sent word that you would come for the seed sack.",
+   "Do not blame Liora.",
+   "What matters is that you came.",
+   "Rest easy.",
+   "You have friends here now, whether you wanted them or not."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Perrin? Liora sent us. What have you got for us?",
+   "reply": "Liora sent word you\u2019d come for the seed sack, Brakka. Please don\u2019t blame her; she only passed along the message.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "Liora sent word that you would come for the seed sack.",
+     "Do not blame Liora."
+    ]
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "What do you know about the seed sack?",
+   "reply": "The seed sack is safe behind the doors of the Tidewatch Lamp Room, and not a moment before. I\u2019ve been waiting there for it, and I will not rest until it is inside.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "The seed sack is safe behind the doors of the Tidewatch Lamp Room, and not a moment before.",
+     "I have been waiting at the Tidewatch Lamp Room for the seed sack, and I will not rest until it is inside."
+    ]
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "Who is making trouble out here?",
+   "reply": "A giant weasel has turned up; folk around the Salt Quay have started locking their doors early. I serve as watch sergeant at the Tidewatch Lamp Room.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "The road toward the Tidewatch Lamp Room is quietest an hour before dawn, and if trouble comes it will come when the light is worst.",
+     "Folk around the Salt Quay have started locking their doors early since the giant weasel turned up."
+    ],
+    "volunteer": "I am a watch sergeant at the Tidewatch Lamp Room."
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "What would you do in our place?",
+   "reply": "I\u2019d take heart that you came; you have friends here now, whether you wanted them or not. The road toward the Tidewatch Lamp Room is quietest an hour before dawn, and if trouble comes it will come when the light is worst.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "What matters is that you came.",
+     "You have friends here now, whether you wanted them or not."
+    ],
+    "volunteer": "The road toward the Tidewatch Lamp Room is quietest an hour before dawn, and if trouble comes it will come when the light is worst."
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "Where do we go from here?",
+   "reply": "I can\u2019t say more about the way ahead. A short rest is the next step; after that, speak with Liora about the seed sack.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": []
+   }
+  }
+ ]
+}

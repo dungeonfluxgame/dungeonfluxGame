@@ -1,0 +1,135 @@
+{
+ "conversation": "witness-holder-restrained",
+ "seed": "0x239526218e58be66",
+ "rating": "restrained",
+ "tone": "earnest",
+ "hero": "Brakka",
+ "holds_private_clue": true,
+ "clue_in_play": true,
+ "deflects": false,
+ "clue_only_terms": [
+  "quicker way",
+  "gap most travelers miss",
+  "Whitlock"
+ ],
+ "never_terms": [
+  "spread a rumour",
+  "cost them their post"
+ ],
+ "speaker": {
+  "name": "Kelbin",
+  "style_phrases": [
+   "begins corrections with 'To be exact.'",
+   "To be exact.",
+   "That is all."
+  ],
+  "colour_lines": [
+   "Muleteers sing as they cross so the ones ahead will hear them in the cloud.",
+   "The Windward Waystation keeps odd hours, so knock twice, wait, and do not take it personally."
+  ],
+  "own_lines": [
+   "I was brought up in a mill town where everyone knew everyone's business.",
+   "I carried letters for a grain merchant. I know most of the lanes between the towns around here.",
+   "I walked alone to the nearest great city at fifteen. It took eleven days and one very lucky ride on a hay cart.",
+   "I do the small job as well as the great one. Nobody can tell the difference until it matters.",
+   "I have a neighbour I have been competing with for thirty years. I would be lost without them.",
+   "I want this errand finished and a whole day of sleep after. In that order, if luck allows.",
+   "Muleteers sing as they cross so the ones ahead will hear them in the cloud.",
+   "The Windward Waystation keeps odd hours, so knock twice, wait, and do not take it personally.",
+   "Most of what is said about the guard is probably exaggerated, but not all of it.",
+   "The way to the Windward Waystation runs through the Windward Pass, and I would not linger there.",
+   "I need the iron coffer carried to the Windward Waystation, and there is no one else I can ask.",
+   "Tomas is a watch sergeant at the Windward Waystation.",
+   "I swore to an old friend that the iron coffer would reach Tomas.",
+   "Tonight I may not keep my word.",
+   "My friend is gone now.",
+   "This is all I have left of the promise, and I won't see it lost.",
+   "Thank you.",
+   "Tomas will be at the Windward Waystation.",
+   "Get me there, and my promise is kept.",
+   "Thank you.",
+   "We can catch our breath here.",
+   "I carried the iron coffer once before, as a child, walking beside my grandmother. I was too small to know what it meant."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Kelbin, about what you told me quietly. Say more about it.",
+   "reply": "The iron coffer goes to Tomas Whitlock at the Windward Waystation. There is also a quicker way to the end of the journey, through a gap most travelers miss.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "The iron coffer goes to Tomas Whitlock at the Windward Waystation.",
+     "There is a quicker way to the end of the journey, through a gap most travelers miss."
+    ],
+    "you_told_this_hero_in_private": "Kelbin draws you close. The iron coffer goes to Tomas Whitlock at the Windward Waystation. There is a quicker way to the end of the journey, through a gap most travelers miss. Keep it between us."
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "Tell me about Tomas Whitlock and Windward Waystation.",
+   "reply": "Tomas is a watch sergeant at the Windward Waystation. The way there runs through the Windward Pass, and I would not linger there.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "Tomas is a watch sergeant at the Windward Waystation.",
+     "The way to the Windward Waystation runs through the Windward Pass, and I would not linger there."
+    ],
+    "you_told_this_hero_in_private": "Kelbin draws you close. The iron coffer goes to Tomas Whitlock at the Windward Waystation. There is a quicker way to the end of the journey, through a gap most travelers miss. Keep it between us."
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "And the other way you hinted at. How do I find it?",
+   "reply": "Ask whoever you meet on the way after the Windward Waystation by name; a friendly mention may open doors there. I need the iron coffer carried there, and there is no one else I can ask.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "Whoever you meet on the way, ask after the Windward Waystation by name first, because doors there open for a friendly mention."
+    ],
+    "volunteer": "I need the iron coffer carried to the Windward Waystation, and there is no one else I can ask.",
+    "you_told_this_hero_in_private": "Kelbin draws you close. The iron coffer goes to Tomas Whitlock at the Windward Waystation. There is a quicker way to the end of the journey, through a gap most travelers miss. Keep it between us."
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "Why keep it between us? Who would stop us?",
+   "reply": "I swore to an old friend that the iron coffer would reach Tomas, and tonight I may not keep my word. Most of what is said about the guard is probably exaggerated, but not all of it.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "Tonight I may not keep my word.",
+     "Most of what is said about the guard is probably exaggerated, but not all of it."
+    ],
+    "volunteer": "I swore to an old friend that the iron coffer would reach Tomas.",
+    "you_told_this_hero_in_private": "Kelbin draws you close. The iron coffer goes to Tomas Whitlock at the Windward Waystation. There is a quicker way to the end of the journey, through a gap most travelers miss. Keep it between us."
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "What should I do first?",
+   "reply": "First, pledge your help to me, and then press on to the waystation with the coffer. I would be grateful to have this errand finished.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [],
+    "you_told_this_hero_in_private": "Kelbin draws you close. The iron coffer goes to Tomas Whitlock at the Windward Waystation. There is a quicker way to the end of the journey, through a gap most travelers miss. Keep it between us."
+   }
+  }
+ ]
+}

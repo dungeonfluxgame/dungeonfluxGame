@@ -1,0 +1,174 @@
+{
+ "conversation": "witness-outsider-mature",
+ "seed": "0x239526218e58be66",
+ "rating": "mature",
+ "tone": "earnest",
+ "hero": "Tamsin",
+ "holds_private_clue": false,
+ "clue_in_play": true,
+ "deflects": true,
+ "clue_only_terms": [
+  "quicker way",
+  "gap most travelers miss",
+  "Whitlock"
+ ],
+ "never_terms": [
+  "spread a rumour",
+  "cost them their post"
+ ],
+ "speaker": {
+  "name": "Kelbin",
+  "style_phrases": [
+   "begins corrections with 'To be exact.'",
+   "To be exact.",
+   "That is all."
+  ],
+  "colour_lines": [
+   "Muleteers sing as they cross so the ones ahead will hear them in the cloud.",
+   "The Windward Waystation keeps odd hours, so knock twice, wait, and do not take it personally.",
+   "A shopkeeper swears the guard was in town three nights running."
+  ],
+  "own_lines": [
+   "I was brought up in a mill town where everyone knew everyone's business.",
+   "I carried letters for a grain merchant. I know most of the lanes between the towns around here.",
+   "I walked alone to the nearest great city at fifteen. It took eleven days and one very lucky ride on a hay cart.",
+   "I do the small job as well as the great one. Nobody can tell the difference until it matters.",
+   "I have a neighbour I have been competing with for thirty years. I would be lost without them.",
+   "I want this errand finished and a whole day of sleep after. In that order, if luck allows.",
+   "Muleteers sing as they cross so the ones ahead will hear them in the cloud.",
+   "The Windward Waystation keeps odd hours, so knock twice, wait, and do not take it personally.",
+   "A shopkeeper swears the guard was in town three nights running.",
+   "Tomas is a watch sergeant at the Windward Waystation.",
+   "I swore to an old friend that the iron coffer would reach Tomas.",
+   "Tonight I may not keep my word.",
+   "My friend is gone now.",
+   "This is all I have left of the promise, and I won't see it lost.",
+   "Thank you.",
+   "Tomas will be at the Windward Waystation.",
+   "Get me there, and my promise is kept.",
+   "Thank you.",
+   "Gods, that was close.",
+   "We can catch our breath here.",
+   "I carried the iron coffer once before, as a child, walking beside my grandmother. I was too small to know what it meant."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "Kelbin, what did you whisper to Brakka just now? I want to hear it too.",
+   "reply": "To be exact, I don't know what I whispered to Brakka. I do the small job as carefully as the great one, Tamsin; what is it you need to hear?",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I do the small job as well as the great one. Nobody can tell the difference until it matters.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "I have a neighbour I have been competing with for thirty years. I would be lost without them.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "Where does the iron coffer go, and who meets us there?",
+   "reply": "To be exact, I swore to an old friend that the iron coffer would reach Tomas. I have no name to give you for who meets us there; I want this errand finished, then a whole day of sleep.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I want this errand finished and a whole day of sleep after. In that order, if luck allows.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "I swore to an old friend that the iron coffer would reach Tomas.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "I do the small job as well as the great one. Nobody can tell the difference until it matters.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "Is there a quicker way to get there?",
+   "reply": "To be exact, I can\u2019t lay out the way from what I know. I carried the iron coffer once before, beside my grandmother, but I was too small to understand what it meant.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I carried the iron coffer once before, as a child, walking beside my grandmother. I was too small to know what it meant.",
+      "topic": "why this matters to you"
+     },
+     {
+      "line": "I was brought up in a mill town where everyone knew everyone's business.",
+      "topic": "who are you"
+     },
+     {
+      "line": "I do the small job as well as the great one. Nobody can tell the difference until it matters.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "Why keep secrets from us? Who would stop us?",
+   "reply": "To be exact, I keep my words close because I know only what I can answer for. I carried letters for a grain merchant and know most of the lanes between these towns; that is what I can guide you by, Tamsin.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "new_material": [
+     {
+      "line": "I carried letters for a grain merchant. I know most of the lanes between the towns around here.",
+      "topic": "who are you"
+     },
+     {
+      "line": "I walked alone to the nearest great city at fifteen. It took eleven days and one very lucky ride on a hay cart.",
+      "topic": "your past"
+     }
+    ]
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "What should I do first?",
+   "reply": "To be exact, knock twice at the Windward Waystation, then wait; it keeps odd hours, so do not take the silence personally. Muleteers sing as they cross in the cloud, so listen for them\u2014and go now, Tamsin.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "new_material": [
+     {
+      "line": "Muleteers sing as they cross so the ones ahead will hear them in the cloud.",
+      "topic": "the place"
+     },
+     {
+      "line": "The Windward Waystation keeps odd hours, so knock twice, wait, and do not take it personally.",
+      "topic": "the place"
+     },
+     {
+      "line": "I do the small job as well as the great one. Nobody can tell the difference until it matters.",
+      "topic": "why this matters to you"
+     }
+    ]
+   }
+  }
+ ]
+}

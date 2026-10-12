@@ -55,7 +55,10 @@ use df_types::{
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use super::startup_configuration::{ContentRating, StorytellerMode, StorytellerSettings};
+use super::{
+    speech_text::SpokenRule,
+    startup_configuration::{ContentRating, StorytellerMode, StorytellerSettings},
+};
 
 /// Changing the fixed instruction or the schema shape invalidates every cached result.
 const PROMPT_VERSION: &str = "storyteller-2";
@@ -172,6 +175,8 @@ pub(super) struct Slot {
     /// Terms the text must not use that are never shown to the model: they are checked after
     /// generation only, so they cannot be echoed back by a prompt that never contained them.
     pub(super) withheld: Vec<String>,
+    /// Rules about how the line is spoken, checked after generation.
+    pub(super) spoken: Vec<SpokenRule>,
 }
 
 impl Slot {
@@ -182,6 +187,7 @@ impl Slot {
             must_mention: Vec::new(),
             forbidden: Vec::new(),
             withheld: Vec::new(),
+            spoken: Vec::new(),
         }
     }
 
@@ -192,6 +198,13 @@ impl Slot {
 
     pub(super) fn forbidding(mut self, terms: Vec<String>) -> Self {
         self.forbidden = terms;
+        self
+    }
+
+    /// Adds rules about how the line is spoken; a line that breaks one is refused like any other
+    /// invalid text, with the rule named in the retry's complaint.
+    pub(super) fn speaking(mut self, rules: Vec<SpokenRule>) -> Self {
+        self.spoken = rules;
         self
     }
 
@@ -274,6 +287,11 @@ pub(super) enum ValidationFailure {
     ControlCharacter {
         slot: String,
     },
+    /// The line broke a [`SpokenRule`]; the reason is a fixed phrase, never the text.
+    SpokenRule {
+        slot: String,
+        reason: &'static str,
+    },
     NotTheRequestedShape,
 }
 
@@ -289,6 +307,7 @@ impl ValidationFailure {
             Self::MechanicsLeak { .. } => "game_numbers",
             Self::ForbiddenTerm { .. } => "forbidden_term",
             Self::ControlCharacter { .. } => "control_character",
+            Self::SpokenRule { .. } => "spoken_rule",
             Self::NotTheRequestedShape => "shape",
         }
     }
@@ -321,6 +340,7 @@ impl ValidationFailure {
             Self::ControlCharacter { slot } => {
                 format!("slot \"{slot}\" contained a control character or line break")
             }
+            Self::SpokenRule { slot, reason } => format!("slot \"{slot}\": {reason}"),
             Self::NotTheRequestedShape => {
                 "the answer was not the requested JSON object of string fields".to_owned()
             }
@@ -1355,6 +1375,12 @@ fn validate_slot(
     {
         return Err(ValidationFailure::ForbiddenTerm {
             slot: slot.name.clone(),
+        });
+    }
+    if let Some(reason) = slot.spoken.iter().find_map(|rule| rule.violation(text)) {
+        return Err(ValidationFailure::SpokenRule {
+            slot: slot.name.clone(),
+            reason,
         });
     }
     Ok(())

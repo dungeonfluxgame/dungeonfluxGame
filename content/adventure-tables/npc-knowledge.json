@@ -67,7 +67,7 @@
       {"faces": [11, 11], "id": "shorter-than-it-looks", "text": "The walk to {destination} is shorter than it looks and longer than it feels."},
       {"faces": [12, 12], "id": "who-holds-the-door", "text": "If you want to know the people around {location}, watch who holds the door."}
     ]},
-    "rumours": {"die": 12, "entries": [
+    "rumours": {"die": 20, "entries": [
       {"faces": [1, 1], "id": "asking-questions", "foes": ["person", "goblinoid"], "text": "People say {antagonist} has been seen near {location} after dark, asking quiet questions."},
       {"faces": [2, 2], "id": "alone-and-runs", "foes": ["person", "goblinoid"], "text": "They say {antagonist} always works alone and always runs when outnumbered."},
       {"faces": [3, 3], "id": "early-doors", "text": "Folk around {location} have started locking their doors early since {antagonist_the} turned up."},
@@ -79,7 +79,15 @@
       {"faces": [9, 9], "id": "chalk-drawing", "text": "Somebody chalked a child's drawing of {antagonist_the} on the wall by the well."},
       {"faces": [10, 10], "id": "half-exaggerated", "text": "Most of what is said about {antagonist_the} is probably exaggerated, but not all of it."},
       {"faces": [11, 11], "id": "bought-bread", "foes": ["person"], "text": "{antagonist} was seen buying bread yesterday, which surprised everyone."},
-      {"faces": [12, 12], "id": "worsening-song", "text": "A song has started up about {antagonist_the}, and the verses get worse every time it is sung."}
+      {"faces": [12, 12], "id": "worsening-song", "text": "A song has started up about {antagonist_the}, and the verses get worse every time it is sung."},
+      {"faces": [13, 13], "id": "road-watched", "text": "Word is {antagonist_the} is watching the road toward {destination}, waiting for anyone who carries {stake}."},
+      {"faces": [14, 14], "id": "asked-after", "text": "Somebody has been asking after {stake} at every inn between {location} and {destination}."},
+      {"faces": [15, 15], "id": "lamps-out", "text": "The lamps along the road to {destination} have been put out by someone who does not want travelers seen."},
+      {"faces": [16, 16], "id": "shaken-travelers", "text": "Travelers who come through {location} lately will not say what they saw, only that they did not stay."},
+      {"faces": [17, 17], "id": "daylight-only", "text": "Whatever {antagonist_the} is, it has not been seen on the road toward {destination} in full daylight."},
+      {"faces": [18, 18], "id": "late-riders", "text": "Two riders came through {location} before dawn, looking over their shoulders, and neither stopped to eat."},
+      {"faces": [19, 19], "id": "a-price", "text": "There is a price on {stake}, and not everyone who knows it is honest."},
+      {"faces": [20, 20], "id": "barred-doors", "text": "{destination|cap} keeps its doors barred after dark these nights, and opens them only for a name it knows."}
     ]},
     "hints": {"die": 12, "entries": [
       {"faces": [1, 1], "id": "back-lanes", "text": "If you lose sight of {antagonist_the}, check the narrow places around {location}, because that is where this sort of trouble goes to ground."},
@@ -104,6 +112,23 @@
       {"faces": [6, 6], "id": "villain-letters", "text": "Letters mentioning {villain} have been turning up where they should not, and nobody admits to writing them."},
       {"faces": [7, 7], "id": "villain-lanterns", "text": "Whenever {villain} is mentioned, someone at the back of the room changes the subject."},
       {"faces": [8, 8], "id": "villain-careful", "text": "Older folk will tell you to be careful what you say about {villain}, and will not tell you why."}
+    ]},
+    "errand": {"die": 20, "entries": [
+      {"faces": [1, 1], "id": "p-no-one-else", "roles": ["patron"], "text": "I need {stake} carried to {destination}, and there is no one else I can ask."},
+      {"faces": [2, 2], "id": "p-sleep-again", "roles": ["patron"], "text": "Once {stake} is inside {destination}, I will sleep again; until then I do not."},
+      {"faces": [3, 3], "id": "p-through-location", "roles": ["patron"], "text": "The way to {destination} runs through {location}, and I would not linger there."},
+      {"faces": [4, 4], "id": "p-keep-it-hidden", "roles": ["patron"], "text": "Keep {stake} out of sight on the road, because I have told no one it is moving."},
+      {"faces": [5, 5], "id": "c-waiting", "roles": ["contact"], "text": "I have been waiting at {destination} for {stake}, and I will not rest until it is inside."},
+      {"faces": [6, 6], "id": "c-behind-doors", "roles": ["contact"], "text": "{stake|cap} is safe behind the doors of {destination}, and not a moment before."},
+      {"faces": [7, 7], "id": "c-road-noticed", "roles": ["contact"], "text": "Nothing crosses from {location} to {destination} without somebody noticing, so move quietly."},
+      {"faces": [8, 8], "id": "c-open-late", "roles": ["contact"], "text": "I will have the door of {destination} open for you at any hour, so do not wait for daylight."},
+      {"faces": [9, 9], "id": "a-hand-over", "roles": ["antagonist", "villain", "lieutenant"], "text": "Hand over {stake} and this ends here."},
+      {"faces": [10, 10], "id": "a-nothing-passes", "roles": ["antagonist", "villain", "lieutenant"], "text": "Nothing passes {location} toward {destination} while I stand here."},
+      {"faces": [11, 12], "id": "p-not-lightly", "roles": ["patron"], "text": "I would not ask this of you if there were anyone else I could trust with it."},
+      {"faces": [13, 14], "id": "p-no-dawdling", "roles": ["patron"], "text": "Every hour it stays unfinished weighs on me, so please do not dawdle."},
+      {"faces": [15, 16], "id": "c-ready", "roles": ["contact"], "text": "I have kept everything ready on my side, and I will not be caught unprepared."},
+      {"faces": [17, 18], "id": "c-watching", "roles": ["contact"], "text": "I have been watching the road for days, and I trust very few of the faces on it."},
+      {"faces": [19, 20], "id": "a-no-passing", "roles": ["antagonist", "villain", "lieutenant"], "text": "You will not get past me tonight, so spare yourselves the effort."}
     ]},
     "secret_keywords": {
       "leak": ["leak", "sold word", "someone i trust"],

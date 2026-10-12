@@ -165,6 +165,7 @@ fn list_seeds_for_the_live_conversations() {
         let withheld = super::npc_dossier::Withheld::new(
             patron,
             adventure.pack.secret_terms.clone(),
+            Vec::new(),
             super::startup_configuration::content_rating(),
         );
         if patron.starting_attitude == super::adventure::dossier::Attitude::Indifferent

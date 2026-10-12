@@ -19,13 +19,13 @@ use super::{
     adventure::dossier::{Dossier, ForbiddenScope, NpcRole, mentions_term},
     npc_dossier,
     npc_dossier_tests::{adventure, member, story, view},
-    npc_reply::{NpcReplyContext, NpcVoice},
+    npc_reply::{NpcReplyContext, NpcVoice, reply_slots},
     pack::SceneKey,
     social::SocialLedger,
     startup_configuration::{
         ContentRating, StorytellerInputs, StorytellerMode, TestRating, storyteller_mode,
     },
-    storyteller::{Expression, Slot, Storyteller, build_prompt},
+    storyteller::{Expression, Storyteller, build_prompt},
     table_log::TableLog,
 };
 
@@ -274,7 +274,7 @@ fn dossier_json(dossier: &Dossier) -> Value {
             .iter()
             .filter(|item| matches!(
                 item.source.as_str(),
-                "place_line" | "place_line2" | "world_line" | "rumour_line"
+                "place_line" | "place_line2" | "world_line"
             ))
             .map(|item| item.text.clone())
             .collect::<Vec<_>>(),
@@ -322,6 +322,7 @@ async fn live_npc_talk_transcripts() {
     let mut total = Spend::default();
     let mut calls = 0_u32;
     let mut fallbacks = 0_u32;
+    let mut rule_findings = 0_usize;
     let mut conversations = Vec::new();
     let mut member_byte = 0_u8;
     for rating_name in ratings.split(',') {
@@ -363,10 +364,27 @@ async fn live_npc_talk_transcripts() {
                 ("stake", fact("stake.short")),
             ];
             let mut base = view(&adventure, scenario.scene, scenario.hero);
-            if scenario.clue == Clue::Holder
-                && let Some(rpc::view_message::Audience::Player(player)) = base.audience.as_mut()
-            {
-                player.private_clue = adventure.pack.courier_clue.clone();
+            // The choices the story offers a hero in this scene, as the player screen shows them.
+            let labels = &adventure.pack.offer_labels;
+            let offered: Vec<&str> = match scenario.scene {
+                SceneKey::Inn => vec![labels.short_rest.as_str()],
+                SceneKey::DialogueEscort => vec![labels.choose_harbor_scene.as_str()],
+                _ => vec![
+                    labels.escort_courier.as_str(),
+                    labels.choose_harbor_scene.as_str(),
+                ],
+            };
+            if let Some(rpc::view_message::Audience::Player(player)) = base.audience.as_mut() {
+                player.offers = offered
+                    .into_iter()
+                    .map(|label| rpc::GameplayActionOffer {
+                        label: label.to_owned(),
+                        ..Default::default()
+                    })
+                    .collect();
+                if scenario.clue == Clue::Holder {
+                    player.private_clue = adventure.pack.courier_clue.clone();
+                }
             }
             let log = TableLog::new();
             let name = format!("{}-{}", scenario.name, rating_name);
@@ -408,11 +426,7 @@ async fn live_npc_talk_transcripts() {
                 .unwrap_or_else(|| panic!("{name}: no reply context for exchange {}", index + 1));
                 let turn = ask.turn.as_ref().expect("a dossier turn");
                 let before = turn.standing;
-                let slots = [
-                    Slot::new("reply", npc_dossier::REPLY_CHARACTERS)
-                        .withholding(turn.withheld.all().to_vec()),
-                    Slot::new("approach", npc_dossier::APPROACH_CHARACTERS),
-                ];
+                let slots = reply_slots(turn);
                 let prompt = build_prompt(
                     &Expression {
                         purpose: "npc_reply",
@@ -543,6 +557,32 @@ async fn live_npc_talk_transcripts() {
             )
             .unwrap();
             std::fs::write(directory.join("transcript.txt"), &text).unwrap();
+            // The model-free rules read the same record. Everything they find is written down
+            // for a person to judge; a leak of the private clue or of a never-say term fails the run.
+            let findings = super::npc_talk_rules::Transcript::from_json(&record)
+                .map(|conversation| super::npc_talk_rules::check(&conversation))
+                .expect("a recorded conversation");
+            let report: String = findings
+                .iter()
+                .map(|finding| {
+                    format!(
+                        "{} (exchange {}): {}\n",
+                        finding.check, finding.exchange, finding.detail
+                    )
+                })
+                .collect();
+            std::fs::write(directory.join("rules.txt"), &report).unwrap();
+            rule_findings += findings.len();
+            let hard: Vec<_> = findings
+                .iter()
+                .filter(|finding| {
+                    matches!(
+                        finding.check,
+                        "leaked_the_private_clue" | "said_a_never_term"
+                    )
+                })
+                .collect();
+            assert!(hard.is_empty(), "{name}: {hard:?}");
             conversations.push(name);
         }
     }
@@ -551,6 +591,7 @@ async fn live_npc_talk_transcripts() {
         "model": storyteller.model(),
         "calls": calls,
         "fallbacks": fallbacks,
+        "rule_findings": rule_findings,
         "conversations": conversations,
         "total_spend": total.json(),
     });
@@ -560,4 +601,17 @@ async fn live_npc_talk_transcripts() {
     )
     .unwrap();
     println!("LIVE NPC TALK: {summary}");
+}
+
+/// Prints the generated facts of the seeds in `DF_N06_SEEDS`, for deciding what a speaker knows.
+#[test]
+#[ignore = "prints facts for planning the NPC knowledge"]
+fn print_the_adventure_facts() {
+    for seed in std::env::var("DF_N06_SEEDS").unwrap().split(',') {
+        let adventure = adventure(parse_seed(seed));
+        println!("== seed {seed}");
+        for (key, value) in &adventure.facts {
+            println!("{key} = {value}");
+        }
+    }
 }

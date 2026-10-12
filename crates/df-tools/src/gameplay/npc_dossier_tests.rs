@@ -14,6 +14,7 @@ use super::{
         generate,
     },
     npc_dossier::{self, Inputs, Withheld, facts, fallback},
+    npc_facts,
     npc_reply::{NpcReplyContext, NpcVoice, StoryFacts},
     pack::SceneKey,
     social::{Approach, Conversation, SocialLedger, Standing, classify_keywords},
@@ -88,7 +89,12 @@ fn unheard(adventure: &GeneratedAdventure, dossier: &Dossier) -> Vec<String> {
 }
 
 fn withheld_of(adventure: &GeneratedAdventure, dossier: &Dossier) -> Withheld {
-    Withheld::new(dossier, unheard(adventure, dossier), content_rating())
+    Withheld::new(
+        dossier,
+        unheard(adventure, dossier),
+        Vec::new(),
+        content_rating(),
+    )
 }
 
 /// Exactly the phrases that must never reach the model, nothing about leaving character.
@@ -123,6 +129,8 @@ fn facts_for(
         choices: &["Ask what is wrong"],
         words,
         withheld: &withheld_of(adventure, dossier),
+        later_lines: &[],
+        clue: npc_dossier::Clue::Absent,
         // A friendly hero is at the third exchange, when confidences are first released.
         conversation: &Conversation {
             exchange: if standing.attitude == Attitude::Friendly {
@@ -157,11 +165,35 @@ fn every_standing() -> [Standing; 4] {
     ]
 }
 
+/// Every string inside a JSON value, each on its own.
+fn strings_of(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::String(text) => vec![text.clone()],
+        serde_json::Value::Array(items) => items.iter().flat_map(strings_of).collect(),
+        serde_json::Value::Object(fields) => fields.values().flat_map(strings_of).collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn json_inner(text: &str) -> String {
     serde_json::to_string(text)
         .unwrap()
         .trim_matches('"')
         .to_owned()
+}
+
+/// The questions a hero asks that the trusted tier can answer: about the speaker, the danger.
+const TRUSTED_QUESTIONS: [&str; 4] = [
+    "What are you hiding from me?",
+    "Who is behind this trouble?",
+    "Why does this matter to you so much?",
+    "Is there anything I should be careful about?",
+];
+
+fn offered_lines(facts: &serde_json::Value) -> Vec<String> {
+    let mut lines = answer_lines(facts);
+    lines.extend(facts["volunteer"].as_str().map(str::to_owned));
+    lines
 }
 
 #[test]
@@ -182,48 +214,29 @@ fn a_hero_at_the_starting_attitude_hears_the_free_tier_only_and_a_friendly_one_t
         if trusted.is_empty() || free.is_empty() {
             continue;
         }
-
-        let indifferent = facts_for(
-            &adventure,
-            dossier,
-            Standing {
-                attitude: Attitude::Indifferent,
-                trust: 0,
-            },
-            "Who are you?",
-        )
-        .to_string();
-        let friendly = facts_for(
-            &adventure,
-            dossier,
-            Standing {
-                attitude: Attitude::Friendly,
-                trust: 0,
-            },
-            "Who are you?",
-        )
-        .to_string();
-
-        assert!(
-            free.iter()
-                .any(|line| indifferent.contains(&json_inner(line))),
-            "seed {seed}"
-        );
-        assert!(!indifferent.contains("says_when_trusted"), "seed {seed}");
-        for line in &trusted {
-            assert!(
-                !indifferent.contains(&json_inner(line)),
-                "seed {seed}: {line}"
-            );
-        }
-        // One confidence at a time: the friendly hero at the third exchange hears one of them.
-        assert!(
-            trusted
+        let indifferent = Standing {
+            attitude: Attitude::Indifferent,
+            trust: 0,
+        };
+        let mut heard_free = false;
+        let mut heard_trusted = false;
+        for question in TRUSTED_QUESTIONS {
+            let stranger = offered_lines(&facts_for(&adventure, dossier, indifferent, question));
+            heard_free |= stranger.iter().any(|line| free.contains(&line.as_str()));
+            for line in &trusted {
+                assert!(
+                    !stranger.iter().any(|said| said == line),
+                    "seed {seed}: a stranger heard {line}"
+                );
+            }
+            // A friendly hero at the third exchange.
+            let friend = offered_lines(&facts_for(&adventure, dossier, friendly(), question));
+            heard_trusted |= trusted
                 .iter()
-                .any(|line| friendly.contains(&json_inner(line))),
-            "seed {seed}"
-        );
-        assert!(friendly.contains("says_when_trusted"));
+                .any(|line| friend.iter().any(|said| said == line));
+        }
+        assert!(heard_free, "seed {seed}: a stranger hears the free tier");
+        assert!(heard_trusted, "seed {seed}: a friend hears a confidence");
         proved += 1;
     }
     assert!(
@@ -250,17 +263,26 @@ fn never_says_and_secret_terms_never_enter_a_prompt_or_a_prepared_reply(rating: 
             let withheld = withheld_of(&adventure, dossier);
             for standing in every_standing() {
                 for line in LINES {
-                    let sent = facts_for(&adventure, dossier, standing, line).to_string();
-                    assert!(
-                        !secrets.leaks(&sent),
-                        "seed {seed} {} {standing:?} {line}: a withheld term reached the facts",
-                        dossier.npc_id
-                    );
+                    let value = facts_for(&adventure, dossier, standing, line);
+                    let sent = value.to_string();
+                    for text in strings_of(&value) {
+                        assert!(
+                            !secrets.leaks(&text),
+                            "seed {seed} {} {standing:?} {line}: a withheld term reached the facts: {text}",
+                            dossier.npc_id
+                        );
+                    }
                     for hidden in &dossier.knowledge.never_says {
                         assert!(!sent.contains(&hidden.text), "seed {seed}: never_says text");
                     }
-                    let answer =
-                        fallback_of(dossier, standing, line, classify_keywords(line), &withheld);
+                    let answer = fallback_of(
+                        dossier,
+                        standing,
+                        line,
+                        classify_keywords(line),
+                        &withheld,
+                        &[],
+                    );
                     assert!(
                         !secrets.leaks(&answer) && !answer.is_empty(),
                         "seed {seed} {} {standing:?} {line}: {answer}",
@@ -451,26 +473,28 @@ async fn earning_friendship_through_kindness_opens_the_trusted_tier_in_the_next_
         .iter()
         .map(|body| facts_of_request(body["input"].as_str().unwrap()))
         .collect();
-    // Confidences are released from the third exchange, one per reply, never before.
+    // A confidence is offered only once the hero is trusted, never before.
     for facts in &sent[..2] {
         assert!(
             !facts.contains(&json_inner(&confided)),
             "the trusted tier leaked early"
         );
-        assert!(!facts.contains("says_when_trusted"));
     }
-    let released: Vec<serde_json::Value> = sent[2..]
+    let parsed: Vec<serde_json::Value> = sent
         .iter()
-        .filter_map(|facts| serde_json::from_str::<serde_json::Value>(facts).ok())
-        .filter_map(|value| value.get("says_when_trusted").cloned())
+        .map(|facts| serde_json::from_str(facts).unwrap())
         .collect();
-    assert!(!released.is_empty(), "{sent:?}");
-    assert!(
-        released
-            .iter()
-            .all(|lines| lines.as_array().is_some_and(|lines| lines.len() == 1)),
-        "{sent:?}"
-    );
+    let trusted_lines: Vec<&str> = dossier
+        .knowledge
+        .says_when_trusted
+        .iter()
+        .map(|item| item.text.as_str())
+        .collect();
+    let released = parsed[2..]
+        .iter()
+        .flat_map(offered_lines)
+        .any(|line| trusted_lines.contains(&line.as_str()));
+    assert!(released, "{sent:?}");
     assert!(sent[3].contains("\"attitude_toward_hero\":\"friendly\""));
     assert_eq!(
         ledger.standing(member(1), &dossier).attitude,
@@ -507,6 +531,7 @@ async fn a_secret_reply_is_refused(tag: &str) {
     let (voice, cache) = voice(&endpoint, &format!("dossier-leak-{tag}"));
     let log = TableLog::new();
     let ask = context(&adventure, &ledger, SceneKey::Opening, "Who are you?");
+    let offered = ask.turn.as_ref().unwrap().offered.clone();
     let expected = fallback_of(
         &dossier,
         Standing {
@@ -516,6 +541,7 @@ async fn a_secret_reply_is_refused(tag: &str) {
         "Who are you?",
         Approach::Question,
         &withheld_of(&adventure, &dossier),
+        &offered,
     );
 
     let answer = voice.converse(ask, &log).await.unwrap();
@@ -618,12 +644,14 @@ async fn with_the_text_model_off_every_line_still_gets_the_dossiers_answer_by_to
         "What is this place like?",
     ] {
         let ask = context(&adventure, &ledger, SceneKey::Opening, words);
-        answers.push(voice.converse(ask, &log).await.unwrap());
+        let offered = ask.turn.as_ref().unwrap().offered.clone();
+        let answer = voice.converse(ask, &log).await.unwrap();
+        // The lines chosen to answer this hero are what the dossier says without a model.
+        assert!(!offered.is_empty(), "{words}");
+        assert!(answer.starts_with(&offered[0].text), "{words}: {answer}");
+        answers.push(answer);
     }
-
-    assert!(answers[0].starts_with(&dossier.prepared_answers[&Topic::WhoAreYou]));
-    assert!(answers[1].starts_with(&dossier.prepared_answers[&Topic::YourPast]));
-    assert!(answers[2].starts_with(&dossier.prepared_answers[&Topic::ThePlace]));
+    assert_eq!(answers.len(), 3);
 
     // The same NPC after being insulted twice in one scene is curt, not friendly.
     for _ in 0..2 {
@@ -643,7 +671,6 @@ async fn with_the_text_model_off_every_line_still_gets_the_dossiers_answer_by_to
     let ask = context(&adventure, &ledger, SceneKey::Opening, "Who are you?");
     let hostile = voice.converse(ask, &log).await.unwrap();
     assert!(dossier.curt_answers.contains(&hostile), "{hostile}");
-    assert_ne!(hostile, dossier.prepared_answers[&Topic::WhoAreYou]);
 }
 
 #[test]
@@ -666,6 +693,7 @@ fn a_trusted_hero_who_asks_what_is_hidden_hears_a_confidence_and_a_stranger_a_de
         "What are you hiding?",
         Approach::Question,
         &withheld,
+        &[],
     );
     let deflected = fallback_of(
         dossier,
@@ -673,6 +701,7 @@ fn a_trusted_hero_who_asks_what_is_hidden_hears_a_confidence_and_a_stranger_a_de
         "What are you hiding?",
         Approach::Question,
         &withheld,
+        &[],
     );
 
     assert!(
@@ -896,6 +925,7 @@ fn flirts_are_declined_played_along_or_returned_by_each_npcs_own_temperament_whe
             line,
             classify_keywords(line),
             &withheld_of(adventure, dossier),
+            &[],
         );
         assert_eq!(dossier.temperament.flirting.effect, effect, "{id}");
         assert!(
@@ -1010,6 +1040,7 @@ async fn a_crude_reply_is_kept_when_mature_and_replaced_by_the_prepared_answer_w
         let _rating = TestRating::set(rating);
         let (adventure, ledger) = confiding_patron(Attitude::Indifferent);
         let dossier = adventure.dossiers[0].clone();
+        let ask = context(&adventure, &ledger, SceneKey::Opening, words);
         let expected = fallback_of(
             &dossier,
             Standing {
@@ -1019,6 +1050,7 @@ async fn a_crude_reply_is_kept_when_mature_and_replaced_by_the_prepared_answer_w
             words,
             Approach::Intimidation,
             &withheld_of(&adventure, &dossier),
+            &ask.turn.as_ref().unwrap().offered,
         );
         let endpoint = FakeEndpoint::start(vec![
             reply(crude, "intimidation"),
@@ -1026,7 +1058,6 @@ async fn a_crude_reply_is_kept_when_mature_and_replaced_by_the_prepared_answer_w
         ]);
         let (voice, cache) = voice(&endpoint, &format!("dossier-crude-{rating:?}"));
         let log = TableLog::new();
-        let ask = context(&adventure, &ledger, SceneKey::Opening, words);
 
         let answer = voice.converse(ask, &log).await.unwrap();
 
@@ -1096,6 +1127,7 @@ fn fallback_of(
     typed: &str,
     approach: Approach,
     withheld: &Withheld,
+    offered: &[npc_facts::Offered],
 ) -> String {
     fallback(
         dossier,
@@ -1103,8 +1135,11 @@ fn fallback_of(
         typed,
         approach,
         withheld,
-        &Conversation::default(),
-        &[],
+        &npc_dossier::Memory {
+            conversation: &Conversation::default(),
+            said: &[],
+            offered,
+        },
     )
 }
 
@@ -1115,7 +1150,7 @@ fn conversation_facts(
     standing: Standing,
     words: &str,
     conversation: &Conversation,
-) -> (serde_json::Value, Vec<String>) {
+) -> (serde_json::Value, Vec<npc_facts::Offered>) {
     facts(&Inputs {
         dossier,
         name: &dossier.name,
@@ -1128,6 +1163,8 @@ fn conversation_facts(
         words,
         withheld: &withheld_of(adventure, dossier),
         conversation,
+        later_lines: &[],
+        clue: npc_dossier::Clue::Absent,
     })
 }
 
@@ -1138,94 +1175,165 @@ fn friendly() -> Standing {
     }
 }
 
-#[test]
-fn a_trait_already_voiced_is_not_restated_unless_the_hero_asks_about_it_again() {
-    let adventure = adventure(0x3c6e_f378_dd81_de97);
-    let dossier = adventure.dossiers[0].clone();
-    let voiced = Conversation {
-        exchange: 2,
-        voiced: vec!["trait:want".to_owned()],
-        ..Conversation::default()
-    };
-    let (repeat, offered) = conversation_facts(
-        &adventure,
-        &dossier,
-        friendly(),
-        "Go on, tell me more.",
-        &voiced,
-    );
-    assert!(repeat.get("wants").is_none(), "{repeat}");
-    assert!(!offered.contains(&"trait:want".to_owned()));
-    assert!(
-        repeat["already_said"]
-            .as_array()
-            .unwrap()
-            .contains(&json!(dossier.want.text)),
-        "{repeat}"
-    );
-    let (asked, offered) = conversation_facts(
-        &adventure,
-        &dossier,
-        friendly(),
-        "Why does this matter to you so much?",
-        &voiced,
-    );
-    assert_eq!(asked["wants"], json!(dossier.want.text), "{asked}");
-    assert!(offered.contains(&"trait:want".to_owned()));
+/// The lines offered as answers, as texts.
+fn answer_lines(facts: &serde_json::Value) -> Vec<String> {
+    facts["answer_from"]
+        .as_array()
+        .map(|lines| {
+            lines
+                .iter()
+                .filter_map(|line| line.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[test]
-fn trusted_confidences_are_released_one_at_a_time_from_the_third_exchange() {
+fn a_line_already_said_is_not_offered_again() {
     let adventure = adventure(0x3c6e_f378_dd81_de97);
     let dossier = adventure.dossiers[0].clone();
-    let early = Conversation {
+    let (first, offered) = conversation_facts(
+        &adventure,
+        &dossier,
+        friendly(),
+        "What is going on here?",
+        &Conversation {
+            exchange: 1,
+            ..Conversation::default()
+        },
+    );
+    let first_lines = answer_lines(&first);
+    assert!(!first_lines.is_empty(), "{first}");
+    let voiced = Conversation {
         exchange: 2,
-        ..Conversation::default()
-    };
-    let (first, _) = conversation_facts(
-        &adventure,
-        &dossier,
-        friendly(),
-        "What are you hiding from me?",
-        &early,
-    );
-    assert!(first.get("says_when_trusted").is_none(), "{first}");
-    let third = Conversation {
-        exchange: 3,
-        ..Conversation::default()
-    };
-    let (released, offered) = conversation_facts(
-        &adventure,
-        &dossier,
-        friendly(),
-        "What are you hiding from me?",
-        &third,
-    );
-    let lines = released["says_when_trusted"].as_array().unwrap();
-    assert_eq!(lines.len(), 1, "{released}");
-    assert!(offered.iter().any(|key| key.starts_with("trusted:")));
-    let fourth = Conversation {
-        exchange: 4,
-        voiced: offered,
+        voiced: offered.iter().map(|line| line.key.clone()).collect(),
         ..Conversation::default()
     };
     let (next, _) = conversation_facts(
         &adventure,
         &dossier,
         friendly(),
-        "What are you hiding from me?",
-        &fourth,
+        "What is going on here?",
+        &voiced,
     );
-    if let Some(next_lines) = next.get("says_when_trusted") {
-        assert_ne!(
-            next_lines[0], lines[0],
-            "the same confidence is not given twice"
+    for line in answer_lines(&next) {
+        assert!(!first_lines.contains(&line), "repeated: {line}");
+    }
+    for line in &first_lines {
+        assert!(
+            next["already_said"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(line)),
+            "{next}"
         );
     }
 }
 
 #[test]
-fn the_speech_style_closer_is_never_sent_to_the_model_as_a_stock_sentence() {
+fn the_speakers_own_past_is_offered_only_when_the_hero_asks_about_the_speaker() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    for dossier in &adventure.dossiers {
+        let personal: Vec<&str> = dossier
+            .knowledge
+            .says_freely
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.source.as_str(),
+                    "origin_line" | "trade_line" | "event_line" | "ideal_line" | "bond_line"
+                )
+            })
+            .map(|item| item.text.as_str())
+            .collect();
+        for question in ["What should we do next?", "Who is making trouble here?"] {
+            let (value, _) = conversation_facts(
+                &adventure,
+                dossier,
+                friendly(),
+                question,
+                &Conversation {
+                    exchange: 3,
+                    ..Conversation::default()
+                },
+            );
+            for line in answer_lines(&value) {
+                assert!(!personal.contains(&line.as_str()), "{question}: {line}");
+            }
+            let want = dossier.want.text.as_str();
+            assert_eq!(value["inner_state"]["want"], json!(want), "{value}");
+        }
+        let (about_you, _) = conversation_facts(
+            &adventure,
+            dossier,
+            friendly(),
+            "Tell me about your past. How did you end up in this?",
+            &Conversation::default(),
+        );
+        assert!(
+            answer_lines(&about_you)
+                .iter()
+                .all(|line| personal.contains(&line.as_str()) || !line.is_empty()),
+            "{about_you}"
+        );
+        assert!(
+            answer_lines(&about_you)
+                .iter()
+                .any(|line| personal.contains(&line.as_str())),
+            "{} should speak of their past: {about_you}",
+            dossier.name
+        );
+    }
+}
+
+#[test]
+fn trusted_confidences_are_released_from_the_second_exchange_to_a_trusted_hero_only() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let dossier = adventure.dossiers[0].clone();
+    let confidences: Vec<&str> = dossier
+        .knowledge
+        .says_when_trusted
+        .iter()
+        .map(|item| item.text.as_str())
+        .collect();
+    let said_by = |standing: Standing, exchange: u32| {
+        let (value, _) = conversation_facts(
+            &adventure,
+            &dossier,
+            standing,
+            "Is there anything else I should be careful about?",
+            &Conversation {
+                exchange,
+                ..Conversation::default()
+            },
+        );
+        value.to_string()
+    };
+    let indifferent = Standing {
+        attitude: Attitude::Indifferent,
+        trust: 0,
+    };
+    let any_confidence = |facts: &str| {
+        confidences
+            .iter()
+            .any(|line| facts.contains(&json_inner(line)))
+    };
+    assert!(!any_confidence(&said_by(indifferent, 4)));
+    assert!(!any_confidence(&said_by(friendly(), 1)));
+    let released = said_by(friendly(), 3);
+    let withheld = withheld_of(&adventure, &dossier);
+    let usable = withheld
+        .safe_lines(&dossier.knowledge.says_when_trusted)
+        .any(|item| released.contains(&json_inner(&item.text)));
+    let possible = withheld
+        .safe_lines(&dossier.knowledge.says_when_trusted)
+        .count()
+        > 0;
+    assert!(usable || !possible, "{released}");
+}
+
+#[test]
+fn the_speech_style_tic_and_opener_are_never_sent_to_the_model() {
     let adventure = adventure(0x3c6e_f378_dd81_de97);
     for dossier in adventure.dossiers.clone() {
         let (value, _) = conversation_facts(
@@ -1235,54 +1343,197 @@ fn the_speech_style_closer_is_never_sent_to_the_model_as_a_stock_sentence() {
             "Who are you?",
             &Conversation::default(),
         );
-        assert!(
-            value["speech_style"].get("usual_closer").is_none(),
-            "{value}"
-        );
+        assert!(value.get("speech_style").is_none(), "{value}");
+        let sent = value.to_string();
+        for phrase in npc_dossier::style_phrases(&dossier) {
+            assert!(!sent.contains(&phrase), "{phrase} was sent: {sent}");
+        }
+        assert!(value["how_you_speak"]["vocabulary"].is_string(), "{value}");
     }
 }
 
 #[test]
-fn with_the_text_model_off_no_answer_repeats_and_each_leaves_a_hook_or_a_redirect() {
+fn with_the_text_model_off_the_chosen_lines_answer_and_none_repeats() {
     let adventure = adventure(0x3c6e_f378_dd81_de97);
     let dossier = adventure.dossiers[0].clone();
     let withheld = withheld_of(&adventure, &dossier);
     let mut said: Vec<String> = Vec::new();
+    let mut voiced: Vec<String> = Vec::new();
     for (index, line) in [
-        "Who are you?",
-        "Tell me about your past.",
-        "Why does this matter to you so much?",
+        "What is going on here?",
         "Who is behind this trouble?",
-        "What is this place like?",
-        "What are you hiding from me?",
-        "What are you hiding from me?",
+        "Where do we go from here?",
+        "Anything else before we set out?",
     ]
     .into_iter()
     .enumerate()
     {
         let conversation = Conversation {
             exchange: u32::try_from(index).unwrap() + 1,
+            voiced: voiced.clone(),
             ..Conversation::default()
         };
+        let (_, offered) =
+            conversation_facts(&adventure, &dossier, friendly(), line, &conversation);
         let answer = fallback(
             &dossier,
             friendly(),
             line,
             classify_keywords(line),
             &withheld,
-            &conversation,
-            &said,
+            &npc_dossier::Memory {
+                conversation: &conversation,
+                said: &said,
+                offered: &offered,
+            },
         );
         assert!(!said.contains(&answer), "repeated: {answer}");
-        let hooked = npc_dossier::FALLBACK_HOOKS
-            .iter()
-            .any(|hook| answer.ends_with(hook));
-        let redirect = npc_dossier::FALLBACK_REDIRECTS.contains(&answer.as_str());
-        assert!(
-            answer.ends_with('?') || hooked || redirect,
-            "no hook or redirect: {answer}"
-        );
+        assert!(!withheld.leaks(&answer), "{answer}");
+        if let Some(first) = offered.first() {
+            assert!(answer.starts_with(&first.text), "{answer}");
+        }
+        voiced.extend(offered.iter().map(|line| line.key.clone()));
         said.push(answer);
+    }
+}
+
+/// The view of a hero in the opening scene who was (or was not) whispered the adventure's clue.
+fn view_with_clue(adventure: &GeneratedAdventure, told: bool) -> rpc::ViewMessage {
+    let mut view = view(adventure, SceneKey::Opening, "Brannoch");
+    if told && let Some(rpc::view_message::Audience::Player(player)) = view.audience.as_mut() {
+        player.private_clue = adventure.pack.courier_clue.clone();
+    }
+    view
+}
+
+/// The pack's secret terms that only the clue says: the ones a hero must be told to hear.
+fn clue_only_terms(adventure: &GeneratedAdventure) -> Vec<String> {
+    let spoken = super::npc_reply::spoken_names(&adventure.pack);
+    adventure
+        .pack
+        .secret_terms
+        .iter()
+        .filter(|term| mentions_term(&adventure.pack.courier_clue, term))
+        .filter(|term| !spoken.iter().any(|name| name.eq_ignore_ascii_case(term)))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn the_hero_told_a_clue_in_private_hears_it_discussed_and_no_other_hero_gets_a_word_of_it() {
+    let mut proved = 0;
+    for seed in 1..200 {
+        let adventure = adventure(seed);
+        let clue = adventure.pack.courier_clue.clone();
+        let terms = clue_only_terms(&adventure);
+        if terms.is_empty() || !mentions_term(&clue, &adventure.dossiers[0].name) {
+            continue;
+        }
+        let ledger = SocialLedger::open(adventure.dossiers.clone(), "0xclue", None).unwrap();
+        let ask = |told: bool, hero: u8| {
+            NpcReplyContext::for_cast(
+                &view_with_clue(&adventure, told),
+                member(hero),
+                "Say more about what you told me quietly.",
+                &story(&adventure),
+                &ledger,
+                "Opening",
+            )
+            .unwrap()
+        };
+        let (holder, outsider) = (ask(true, 1), ask(false, 2));
+
+        assert_eq!(holder.facts["you_told_this_hero_in_private"], json!(clue));
+        assert!(holder.facts.get("private_matter").is_none());
+        let holder_turn = holder.turn.as_ref().unwrap();
+        let outsider_turn = outsider.turn.as_ref().unwrap();
+        assert!(
+            holder.facts["answer_from"]
+                .as_array()
+                .is_some_and(|lines| !lines.is_empty())
+        );
+        assert!(
+            outsider
+                .facts
+                .get("you_told_this_hero_in_private")
+                .is_none()
+        );
+        assert!(outsider.facts.get("private_matter").is_some());
+        for term in &terms {
+            assert!(
+                !holder_turn.withheld.leaks_secret(term),
+                "seed {seed}: the told hero may hear {term}"
+            );
+            assert!(
+                outsider_turn.withheld.leaks_secret(term),
+                "seed {seed}: no other hero may hear {term}"
+            );
+            for text in strings_of(&outsider.facts) {
+                assert!(
+                    !mentions_term(&text, term),
+                    "seed {seed}: {term} reached another hero: {text}"
+                );
+            }
+        }
+        proved += 1;
+    }
+    assert!(
+        proved > 100,
+        "only {proved} of 199 seeds had a clue to test"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_reply_about_the_private_clue_reaches_only_the_hero_who_was_told() {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let clue = adventure.pack.courier_clue.clone();
+    let terms = clue_only_terms(&adventure);
+    let term = terms.first().expect("the clue has a secret term").clone();
+    let endpoint = FakeEndpoint::start(vec![reply(
+        &format!("It all comes down to {term}, friend."),
+        "question",
+    )]);
+    let (voice, cache) = voice(&endpoint, "dossier-private-clue");
+    let log = TableLog::new();
+    let ask = NpcReplyContext::for_cast(
+        &view_with_clue(&adventure, true),
+        member(1),
+        &format!("Is it {term}?"),
+        &story(&adventure),
+        &ledger,
+        "Opening",
+    )
+    .unwrap();
+    assert_eq!(ask.facts["you_told_this_hero_in_private"], json!(clue));
+    ask.publish_typed_line(&log);
+
+    let answer = voice.converse(ask, &log).await.unwrap();
+
+    assert!(
+        answer.contains(&term),
+        "the told hero is answered: {answer}"
+    );
+    let table: Vec<String> = log.lines().iter().map(|line| line.text.clone()).collect();
+    assert!(
+        table.iter().all(|line| !line.contains(&term)),
+        "the table never reads {term}: {table:?}"
+    );
+    assert!(
+        table.iter().any(|line| line == "murmurs to Brannoch"),
+        "{table:?}"
+    );
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+#[test]
+fn the_reply_rules_fit_the_storytellers_guidance_limit_in_both_ratings() {
+    for rating in [ContentRating::Restrained, ContentRating::Mature] {
+        let rules = npc_dossier::profile(rating).guidance;
+        assert!(
+            rules.chars().count() <= 4000,
+            "{rating:?}: {} characters",
+            rules.chars().count()
+        );
     }
 }
 

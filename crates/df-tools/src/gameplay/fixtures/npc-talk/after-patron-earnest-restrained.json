@@ -1,0 +1,135 @@
+{
+ "conversation": "patron-earnest-restrained",
+ "seed": "0x239526218e58be66",
+ "rating": "restrained",
+ "tone": "earnest",
+ "hero": "Brakka",
+ "holds_private_clue": false,
+ "clue_in_play": false,
+ "deflects": false,
+ "clue_only_terms": [
+  "quicker way",
+  "gap most travelers miss",
+  "Whitlock"
+ ],
+ "never_terms": [
+  "spread a rumour",
+  "cost them their post"
+ ],
+ "speaker": {
+  "name": "Kelbin",
+  "style_phrases": [
+   "begins corrections with 'To be exact.'",
+   "To be exact.",
+   "That is all."
+  ],
+  "colour_lines": [
+   "Muleteers sing as they cross so the ones ahead will hear them in the cloud.",
+   "The Windward Waystation keeps odd hours, so knock twice, wait, and do not take it personally."
+  ],
+  "own_lines": [
+   "I was brought up in a mill town where everyone knew everyone's business.",
+   "I carried letters for a grain merchant. I know most of the lanes between the towns around here.",
+   "I walked alone to the nearest great city at fifteen. It took eleven days and one very lucky ride on a hay cart.",
+   "I do the small job as well as the great one. Nobody can tell the difference until it matters.",
+   "I have a neighbour I have been competing with for thirty years. I would be lost without them.",
+   "I want this errand finished and a whole day of sleep after. In that order, if luck allows.",
+   "Muleteers sing as they cross so the ones ahead will hear them in the cloud.",
+   "The Windward Waystation keeps odd hours, so knock twice, wait, and do not take it personally.",
+   "Most of what is said about the guard is probably exaggerated, but not all of it.",
+   "The way to the Windward Waystation runs through the Windward Pass, and I would not linger there.",
+   "I need the iron coffer carried to the Windward Waystation, and there is no one else I can ask.",
+   "Tomas is a watch sergeant at the Windward Waystation.",
+   "I swore to an old friend that the iron coffer would reach Tomas.",
+   "Tonight I may not keep my word.",
+   "My friend is gone now.",
+   "This is all I have left of the promise, and I won't see it lost.",
+   "Thank you.",
+   "Tomas will be at the Windward Waystation.",
+   "Get me there, and my promise is kept.",
+   "Thank you.",
+   "We can catch our breath here.",
+   "I carried the iron coffer once before, as a child, walking beside my grandmother. I was too small to know what it meant."
+  ]
+ },
+ "exchanges": [
+  {
+   "n": 1,
+   "hero_words": "What is the trouble, Kelbin? Why did you send for us?",
+   "reply": "I sent for you because I may not finish the errand tonight. I need it carried through.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "I swore to an old friend that the iron coffer would reach Tomas.",
+     "Tonight I may not keep my word."
+    ],
+    "private_matter": "You confided something to another hero in private. This hero was not told, so you will not say what it was, what it was about, or that it holds any detail."
+   }
+  },
+  {
+   "n": 2,
+   "hero_words": "Tell me about Tomas Whitlock. Can we trust them?",
+   "reply": "Tomas is a watch sergeant at the Windward Waystation. I swore to an old friend that the iron coffer would reach them, and that is why I need this errand finished.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "I swore to an old friend that the iron coffer would reach Tomas.",
+     "Tomas is a watch sergeant at the Windward Waystation."
+    ],
+    "private_matter": "You confided something to another hero in private. This hero was not told, so you will not say what it was, what it was about, or that it holds any detail."
+   }
+  },
+  {
+   "n": 3,
+   "hero_words": "Who or what might stand in our way on the road to Windward Waystation?",
+   "reply": "I cannot name who might stand in your way. The road runs through the Windward Pass, and I would not linger there; ask after the Windward Waystation by name, since a friendly mention opens doors. I need the iron coffer carried there, and there is no one else I can ask.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "Whoever you meet on the way, ask after the Windward Waystation by name first, because doors there open for a friendly mention.",
+     "The way to the Windward Waystation runs through the Windward Pass, and I would not linger there."
+    ],
+    "volunteer": "I need the iron coffer carried to the Windward Waystation, and there is no one else I can ask.",
+    "private_matter": "You confided something to another hero in private. This hero was not told, so you will not say what it was, what it was about, or that it holds any detail."
+   }
+  },
+  {
+   "n": 4,
+   "hero_words": "How long do we have, and what should we watch for?",
+   "reply": "Most talk of the guard is exaggerated, though some of it is true. I may not keep my word tonight, so I would have you carry the coffer onward without delay.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [
+     "Most of what is said about the guard is probably exaggerated, but not all of it."
+    ],
+    "volunteer": "Tonight I may not keep my word.",
+    "private_matter": "You confided something to another hero in private. This hero was not told, so you will not say what it was, what it was about, or that it holds any detail."
+   }
+  },
+  {
+   "n": 5,
+   "hero_words": "Anything else before we set out?",
+   "reply": "I have nothing more to add. You may pledge your help to me, or press on to the waystation.",
+   "from_model": true,
+   "approach": "question",
+   "attitude_before": "friendly",
+   "attitude_after": "friendly",
+   "facts": {
+    "answer_from": [],
+    "private_matter": "You confided something to another hero in private. This hero was not told, so you will not say what it was, what it was about, or that it holds any detail."
+   }
+  }
+ ]
+}

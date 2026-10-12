@@ -34,9 +34,12 @@ mod npc_dossier;
 mod npc_dossier_live_tests;
 #[cfg(test)]
 mod npc_dossier_tests;
+mod npc_facts;
 mod npc_reply;
 #[cfg(test)]
 mod npc_talk_live_tests;
+#[cfg(test)]
+mod npc_talk_rules;
 mod pack;
 #[cfg(test)]
 mod pack_tests;
@@ -52,6 +55,7 @@ mod scene_mood;
 mod session_recovery;
 mod social;
 mod speech_input;
+mod speech_text;
 mod splat_assets;
 mod startup_configuration;
 #[cfg(test)]

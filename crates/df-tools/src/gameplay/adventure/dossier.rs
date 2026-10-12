@@ -11,7 +11,7 @@
 )]
 use super::{
     Roll, RollStatus,
-    dossier_tables::{DossierTables, Faced, Profile, StyleEntry, Tie, slots_of},
+    dossier_tables::{DossierTables, ERRAND_LINES, Faced, Profile, StyleEntry, Tie, slots_of},
     render,
     rng::Dice,
     schema::Table,
@@ -1005,6 +1005,19 @@ fn roll_one(
         }
     }
 
+    // What the speaker says it knows of the errand: two lines for a friendly speaker, one for
+    // an enemy. Each is a different entry.
+    let mut errand: Vec<&Profile> = Vec::new();
+    let errand_lines = if opposing { 1 } else { ERRAND_LINES };
+    for name in ["errand", "errand_more"].into_iter().take(errand_lines) {
+        let entry = roller.pick(name, &knowledge.errand, |entry| {
+            entry.roles.contains(&member.role)
+                && !errand.iter().any(|chosen| chosen.id == entry.id)
+                && context.profile_fits(entry, &[(Some(&entry.text), Audience::Public)])
+        })?;
+        errand.push(entry);
+    }
+
     let knowledge = knowledge_tiers(
         context,
         &Picks {
@@ -1022,6 +1035,7 @@ fn roll_one(
             rumour,
             hint,
             world,
+            errand,
         },
         &story_tie,
         shame_text,
@@ -1162,6 +1176,8 @@ struct Picks<'t> {
     rumour: Option<&'t Profile>,
     hint: Option<&'t Profile>,
     world: Option<&'t Profile>,
+    /// What the role says it knows of the errand.
+    errand: Vec<&'t Profile>,
 }
 
 /// Sort what the NPC knows into what is said freely, what waits for trust and what is never said.
@@ -1222,6 +1238,13 @@ fn knowledge_tiers(
                 text: spoken(context, entry, table)?,
             });
         }
+    }
+    for entry in &picks.errand {
+        says_freely.push(Knowledge {
+            topic: Topic::WhyThisMatters,
+            source: "errand_line".into(),
+            text: spoken(context, entry, "errand")?,
+        });
     }
     // The errand as the authored scenes state it: said freely, unless a secret term makes it
     // withheld instead. Withheld lines stay known, so the coverage check still holds.
