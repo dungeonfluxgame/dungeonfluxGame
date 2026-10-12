@@ -289,12 +289,14 @@ downloaded) and point the server at it.
   to the next even divisor (15, 10, 7.5 fps for the 30 setting) and tries the faster rate again
   later. `data-battlefield-stats` reports `fps_target`, `fps_presented`, `fps_divisor`,
   `display_hz` and `cost_ms`. The `#battle-preview` address takes `&fps=24` or `&fps=30`.
-- `DF_GAMEPLAY_SPLAT_LOD=<0-3>`: which tier of a streamed scan the battlefield draws as its finest;
-  default 1. Every scan is stored in tiers (level 0 the most splats, each next level about half as
-  many); the scene file authors the largest tier worth drawing for it (`levels`), which is level 0
-  here, and level 1 is the next one down (about half the splats, a lighter and faster load). A
-  tier never goes past the scene's coarsest one. Any other value
-  refuses startup. The `#battle-preview` address takes `&lod=<0-3>`.
+- `DF_GAMEPLAY_SPLAT_LOD=<0-3>`: which level of a streamed scan the battlefield draws as its finest, counted
+  from the best level the scan has on disk (the scene file's `levels`): 0 is the best on disk, 1 (the default) the
+  second best, and so on, never past the scene's coarsest. A scan stores its own levels (each about half the splats of
+  the one before); the village scan has 11 and only levels 3 to 10 are downloaded, so its 0 is the scan's own level 3
+  and its 1 the scan's level 4; the other scans have 4 and levels 1 to 3 are downloaded. The chosen level is drawn
+  complete out to as far from the grid as the splat budget allows (up to 60 m); only beyond that does the level step
+  coarser with distance, so there is no thinner ring just past the play area. Nothing is thinned, down-scaled or blurred
+  on top while the frame time holds. Any other value refuses startup. The `#battle-preview` address takes `&lod=<0-3>`.
 
 Run a real fight on a scan (the scans listed in `artifacts/tmp/splat-dl/README.txt`):
 

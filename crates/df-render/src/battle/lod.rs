@@ -377,6 +377,42 @@ impl LodIndex {
     }
 }
 
+impl LodIndex {
+    /// The widest detail radius, between `least` and `most` (scan units), at which the whole of
+    /// what lies inside it is drawn at the finest level `limits` allows without the budget forcing
+    /// anything coarser. Past it the level steps coarser with distance as usual. A scene drawn at
+    /// one level near the fight therefore has no thinner ring just beyond the grid: the distance
+    /// rule starts where the budget runs out, not at the edge of the play area.
+    pub fn widest_full_detail_radius(
+        &self,
+        centre: Vec3,
+        limits: Limits,
+        least: f32,
+        most: f32,
+    ) -> f32 {
+        let fits = |radius: f32| {
+            let selection = self.select(Focus { centre, radius }, limits, None);
+            selection.bias == 0 && selection.total <= limits.budget
+        };
+        if most <= least || !fits(least) {
+            return least;
+        }
+        if fits(most) {
+            return most;
+        }
+        let (mut low, mut high) = (least, most);
+        for _ in 0..16 {
+            let middle = 0.5 * (low + high);
+            if fits(middle) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        low
+    }
+}
+
 fn choose(
     leaf: &Leaf,
     want: u32,
@@ -457,6 +493,41 @@ mod tests {
             "\"1\":{\"file\":2,\"offset\":0,\"count\":500}",
         );
         assert_eq!(LodIndex::parse(&crossed).unwrap_err(), LodError::FileIndex);
+    }
+
+    #[test]
+    fn the_full_detail_radius_grows_until_the_budget_runs_out() {
+        let index = LodIndex::parse(&synthetic()).unwrap();
+        let centre = Vec3::new(0.5, 0.5, 0.5);
+        // Room for the first leaf at level 0 (1000) but not the second as well (2000 in all).
+        let narrow = Limits {
+            finest: 0,
+            coarsest: 2,
+            budget: 1600,
+        };
+        let radius = index.widest_full_detail_radius(centre, narrow, 10.0, 5000.0);
+        assert!(
+            (10.0..1000.0).contains(&radius),
+            "stops short of the second leaf: {radius}"
+        );
+        // Room for everything at the finest level: the widest allowed.
+        let roomy = Limits {
+            budget: u32::MAX,
+            ..narrow
+        };
+        assert_eq!(
+            index.widest_full_detail_radius(centre, roomy, 10.0, 5000.0),
+            5000.0
+        );
+        // No room even at the least radius: the least comes back.
+        let tight = Limits {
+            budget: 10,
+            ..narrow
+        };
+        assert_eq!(
+            index.widest_full_detail_radius(centre, tight, 10.0, 5000.0),
+            10.0
+        );
     }
 
     #[test]
