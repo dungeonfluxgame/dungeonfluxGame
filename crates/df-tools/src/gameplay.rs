@@ -21,6 +21,7 @@ mod dialogue_tests;
 mod health_faces;
 mod imagery;
 mod inn_qualification;
+mod join_link;
 mod journey;
 mod living_scenes;
 mod model;
@@ -538,6 +539,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         startup_configuration::SessionSettings::qualification()
     };
+    join_link::install(&settings.join_origin)?;
     if interactive {
         let rating = startup_configuration::content_rating_setting(std::env::var(
             "DF_GAMEPLAY_CONTENT_RATING",
@@ -698,6 +700,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         println!("ROOM {}", loaded.pack.room_code);
         pack::install(loaded)?;
     }
+    // The join code encodes the room code the pack above has fixed, before anything is started.
+    let join_qr = join_link::JoinQr::for_room(&journey::room_code())
+        .map_err(|_| io::Error::other("join QR code refused"))?;
     let voice = voice::Voice::start(
         if interactive {
             startup_configuration::voice_settings(
@@ -1337,7 +1342,8 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             speech.clone(),
             speech_input::actor_identity(sender.clone()),
             settings.allowed_origins.clone().into(),
-        ));
+        ))
+        .merge(join_link::router(join_qr));
     let npc = npc_phase.map(|phase| {
         tokio::spawn(courier_npc_qualification::run(
             service.clone(),
@@ -1407,6 +1413,18 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", voice.startup_line());
         println!("{}", imagery.startup_line());
         println!("{}", speech.startup_line());
+        // PLAY-Q01: the join link and its QR code, from the public base address when one is set.
+        println!(
+            "JOIN url={} qr={}",
+            join_link::join_url(&journey::room_code()),
+            join_link::QR_PATH
+        );
+        if settings.join_loopback {
+            println!(
+                "JOIN phones on the network cannot reach {} (loopback only): start with development/run-gameplay.sh --lan",
+                settings.join_origin
+            );
+        }
         println!(
             "READY display={origin}/gameplay/display player={origin}/gameplay/player?room={} room={}",
             journey::room_code(),

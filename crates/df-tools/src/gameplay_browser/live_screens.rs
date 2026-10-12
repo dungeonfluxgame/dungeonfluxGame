@@ -89,15 +89,35 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn join_label(path: &str) -> String {
-    let origin = web_sys::window()
-        .and_then(|window| window.location().origin().ok())
-        .unwrap_or_default();
-    let origin = origin
-        .strip_prefix("https://")
-        .or_else(|| origin.strip_prefix("http://"))
-        .unwrap_or(&origin);
-    format!("{origin}{path}")
+/// The join address the server offered for this room: its player page at the server's public
+/// base address (`join_url`), which the path (`join_path`) must end.
+fn join_address(journey: &rpc::JourneyView) -> Result<&str, JsValue> {
+    let path_ok = journey.join_path.starts_with("/gameplay/player?room=");
+    let url_ok =
+        journey.join_url.starts_with("http") && journey.join_url.ends_with(&journey.join_path);
+    if !path_ok || !url_ok {
+        return Err(JsValue::from_str("join route invalid"));
+    }
+    Ok(&journey.join_url)
+}
+
+/// The join address as shown: the base address and path without the scheme.
+// PLAY-Q01: the address now comes from the server, not from the page this browser loaded.
+fn join_label(url: &str) -> String {
+    url.strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url)
+        .to_owned()
+}
+
+/// The host a player types the room code at, from the join address.
+// PLAY-Q01
+fn join_host(url: &str) -> String {
+    join_label(url)
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn fallback_art(
@@ -183,13 +203,7 @@ fn speaker_portrait_stem(name: &str) -> Option<&'static str> {
 
 fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
     let lobby = input.phase == rpc::JourneyPhase::Room;
-    if !input
-        .journey
-        .join_path
-        .starts_with("/gameplay/player?room=")
-    {
-        return Err(JsValue::from_str("join route invalid"));
-    }
+    let join_url = join_address(input.journey)?;
     let (art, art_fallback) = art(input.phase, input.scene);
     let speaker = (!input.journey.dialogue.is_empty()).then(|| TvSpeaker {
         name: if input.journey.speaker.is_empty() {
@@ -209,7 +223,8 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         lede: crate::presentation::first_sentence(input.narration),
         speaker,
         room_code: input.journey.room_code.clone(),
-        join_label: join_label(&input.journey.join_path),
+        join_label: join_label(join_url),
+        join_host: join_host(join_url),
         join_path: input.journey.join_path.clone(),
         party: input
             .journey
@@ -313,19 +328,13 @@ fn lobby_model(input: &SceneInput<'_>, client: &Client) -> Result<LobbyModel, Js
         .offers
         .iter()
         .find(|offer| offer.action_kind == rpc::GameplayActionKind::BeginStory as i32);
-    if !input
-        .journey
-        .join_path
-        .starts_with("/gameplay/player?room=")
-    {
-        return Err(JsValue::from_str("join route invalid"));
-    }
+    let join_url = join_address(input.journey)?;
     Ok(LobbyModel {
         stage: JoinStage::Lobby,
         title: input.scene.title.clone(),
         narration: input.narration.to_owned(),
         code: input.journey.room_code.clone(),
-        join_url: join_label(&input.journey.join_path),
+        join_url: join_label(join_url),
         join_label: "Join this room",
         panel_heading: "Your party gathers",
         panel_description: if all_ready {
