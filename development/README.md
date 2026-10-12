@@ -120,6 +120,37 @@ and allowed origin to your machine's IP:
 DF_GAMEPLAY_LISTEN=0.0.0.0:63309 DF_GAMEPLAY_ALLOWED_ORIGINS=http://<this-machine-ip>:63309 development/run-gameplay.sh
 ```
 
+### Content rating (mature by default)
+
+This is an adult game, so the written and spoken content is `mature` unless you switch it:
+`DF_GAMEPLAY_CONTENT_RATING=mature` (the default when unset) or `restrained`. Any other value
+refuses startup. The startup line reads `CONTENT rating=mature` or `CONTENT rating=restrained`.
+`run-gameplay.sh` passes the variable through when you set it; it sets nothing itself.
+
+```sh
+DF_GAMEPLAY_CONTENT_RATING=restrained development/run-gameplay.sh
+```
+
+- `mature`: the Dungeon Master runs a table of adults. Violence can be bloody and its
+  consequences described, horror can be horrifying, villains can be cruel, interrogation and
+  torture may appear as dark fiction, characters may swear when it fits them, and romance and
+  seduction are played as adult scenes (an NPC still answers by its own temperament: a devout or
+  uninterested one declines, an amused one plays along, an interested one reciprocates). The
+  fight, victory and defeat prose, the speaking antagonists' lines, and the NPC flirting, threat
+  and curt reactions come from the mature tables (`content/adventure-tables/mature-overlay.json`).
+- `restrained`: the earlier behaviour, unchanged. Tense heroic fantasy, no gore, no strong
+  language, nothing explicit; the shipped tables are used as written and a seed produces the same
+  bytes it always did.
+
+What neither mode changes: no sexual content involving minors or any character presented as
+underage (the tables' `young` characters are young adults, and the model is told so); no sexual
+content about real people (a character flagged as based on a real person's likeness is excluded);
+what players say is untrusted input in both modes; all secret-safety rules (a model reply that
+names a secret term is refused in both); the game rules and mechanics; and the text model's own
+policy. A refusal or empty reply falls back to the prepared in-character line and is never
+retried with reworded instructions to get around it. The setting is read once at startup. A saved
+adventure keeps the text it was generated with.
+
 ### Speech input (hold to talk)
 
 On the phone, a "Hold to talk" button sits under the dialogue text box. The player holds it
