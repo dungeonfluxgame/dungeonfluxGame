@@ -10,21 +10,33 @@
         "id": "species",
         "label": "Ancestry",
         "options": [
-          { "id": "dwarf", "label": "Dwarf", "description": "Dwarven Toughness, Darkvision, Dwarven Resilience and Stonecunning retained." }
+          {
+            "id": "dwarf",
+            "label": "Dwarf",
+            "description": "Dwarven Toughness, Darkvision, Dwarven Resilience and Stonecunning retained."
+          }
         ]
       },
       {
         "id": "class",
         "label": "Class",
         "options": [
-          { "id": "fighter-1", "label": "Fighter · level 1", "description": "Weapon training, Fighting Style, Second Wind, three masteries." }
+          {
+            "id": "fighter-1",
+            "label": "Fighter · level 1",
+            "description": "Weapon training, Fighting Style, Second Wind, three masteries."
+          }
         ]
       },
       {
         "id": "background",
         "label": "Background",
         "options": [
-          { "id": "soldier", "label": "Soldier", "description": "Athletics, Intimidation, gaming set and Savage Attacker." }
+          {
+            "id": "soldier",
+            "label": "Soldier",
+            "description": "Athletics, Intimidation, gaming set and Savage Attacker."
+          }
         ]
       },
       {
@@ -32,55 +44,144 @@
         "label": "Ability training",
         "description_template": "STR{0} DEX{1} CON{2} INT{3} WIS{4} CHA{5} · Soldier +{bonus_str}STR/+{bonus_con}CON",
         "options": [
-          { "id": "stalwart", "label": "Stalwart" },
-          { "id": "vanguard", "label": "Vanguard" }
+          {
+            "id": "stalwart",
+            "label": "Stalwart"
+          },
+          {
+            "id": "vanguard",
+            "label": "Vanguard"
+          }
         ]
       },
       {
         "id": "equipment",
         "label": "Starting equipment",
         "options": [
-          { "id": "fighter-a-soldier-a", "label": "Fighter A + Soldier A", "description": "Chain Mail, Greatsword, Flail, 8 Javelins, Dungeoneer's Pack; Spear, Shortbow, 20 arrows, gaming set, Healer's Kit, Quiver, Traveler's Clothes; 18 GP." }
+          {
+            "id": "fighter-a-soldier-a",
+            "label": "Fighter A + Soldier A",
+            "description": "Chain Mail, Greatsword, Flail, 8 Javelins, Dungeoneer's Pack; Spear, Shortbow, 20 arrows, gaming set, Healer's Kit, Quiver, Traveler's Clothes; 18 GP."
+          }
         ]
       },
       {
         "id": "style-masteries",
         "label": "Fighting Style and masteries",
         "options": [
-          { "id": "defense-greatsword-flail-javelin", "label": "Defense · Greatsword / Flail / Javelin", "description": "Defense +1 armored AC. Graze / Sap / Slow masteries. This encounter offers Greatsword only." }
+          {
+            "id": "defense-greatsword-flail-javelin",
+            "label": "Defense · Greatsword / Flail / Javelin",
+            "description": "Defense +1 armored AC. Graze / Sap / Slow masteries. This encounter offers Greatsword only."
+          }
         ]
       },
       {
         "id": "allied-ties",
         "label": "Initiative tie agreement",
         "options": [
-          { "id": "join-order", "label": "Party agrees: earlier join acts first", "description": "Party ties use join order; the GM chooses allies before the Bandit when tied." }
+          {
+            "id": "join-order",
+            "label": "Party agrees: earlier join acts first",
+            "description": "Party ties use join order; the GM chooses allies before the Bandit when tied."
+          }
         ]
       }
     ],
     "pick_lists": {
-      "alignment": ["lawful-good", "neutral-good", "chaotic-good", "lawful-neutral", "neutral", "chaotic-neutral"],
-      "language": ["common-sign", "draconic", "dwarvish", "elvish", "giant", "gnomish", "goblin", "halfling", "orc"],
-      "skill": ["acrobatics", "animal-handling", "history", "insight", "persuasion", "perception", "survival"],
-      "gaming-set": ["dice", "dragonchess", "playing-cards", "three-dragon-ante"]
+      "alignment": [
+        "lawful-good",
+        "neutral-good",
+        "chaotic-good",
+        "lawful-neutral",
+        "neutral",
+        "chaotic-neutral"
+      ],
+      "language": [
+        "common-sign",
+        "draconic",
+        "dwarvish",
+        "elvish",
+        "giant",
+        "gnomish",
+        "goblin",
+        "halfling",
+        "orc"
+      ],
+      "skill": [
+        "acrobatics",
+        "animal-handling",
+        "history",
+        "insight",
+        "persuasion",
+        "perception",
+        "survival"
+      ],
+      "gaming-set": [
+        "dice",
+        "dragonchess",
+        "playing-cards",
+        "three-dragon-ante"
+      ]
     }
   },
   "equipment": [
-    { "item": "chain-mail", "quantity": 1 },
-    { "item": "greatsword", "quantity": 1 },
-    { "item": "flail", "quantity": 1 },
-    { "item": "javelin", "quantity": 8 },
-    { "item": "dungeoneer-pack", "quantity": 1 },
-    { "item": "spear", "quantity": 1 },
-    { "item": "shortbow", "quantity": 1 },
-    { "item": "arrow", "quantity": 20 },
-    { "item": "gaming-set", "quantity": 1 },
-    { "item": "healers-kit", "quantity": 1 },
-    { "item": "quiver", "quantity": 1 },
-    { "item": "travelers-clothes", "quantity": 1 },
-    { "item": "gold-piece", "quantity": 18 }
+    {
+      "item": "chain-mail",
+      "quantity": 1
+    },
+    {
+      "item": "greatsword",
+      "quantity": 1
+    },
+    {
+      "item": "flail",
+      "quantity": 1
+    },
+    {
+      "item": "javelin",
+      "quantity": 8
+    },
+    {
+      "item": "dungeoneer-pack",
+      "quantity": 1
+    },
+    {
+      "item": "spear",
+      "quantity": 1
+    },
+    {
+      "item": "shortbow",
+      "quantity": 1
+    },
+    {
+      "item": "arrow",
+      "quantity": 20
+    },
+    {
+      "item": "gaming-set",
+      "quantity": 1
+    },
+    {
+      "item": "healers-kit",
+      "quantity": 1
+    },
+    {
+      "item": "quiver",
+      "quantity": 1
+    },
+    {
+      "item": "travelers-clothes",
+      "quantity": 1
+    },
+    {
+      "item": "gold-piece",
+      "quantity": 18
+    }
   ],
-  "bandit": { "name": "Dockside Bandit" },
+  "bandit": {
+    "name": "Dockside Bandit"
+  },
   "offer_labels": {
     "create-character": "Bring your hero to life",
     "begin-story": "Enter the Lantern Wharf",
@@ -110,7 +211,17 @@
       "narration": "You reach the Lantern Wharf as a frightened courier slips from the shadows. Behind him, a boot scrapes across the boards.",
       "speaker": "Courier",
       "dialogue": "Please. I can't deliver this alone. The seal was broken before the ship reached port.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png"
+      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "cast": [
+        {
+          "id": "courier",
+          "name": "Courier",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-courier",
+          "portrait": "assets/ui/generated/portrait-courier",
+          "voice": "hurried and anxious"
+        }
+      ]
     },
     {
       "key": "dialogue-seal",
@@ -118,7 +229,25 @@
       "narration": "The courier presses the packet against his coat. A dockside enforcer approaches, one hand on a scimitar.",
       "speaker": "Courier",
       "dialogue": "The crest belongs to a ship that never appears on the ledger. I think someone aboard followed me.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png"
+      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "cast": [
+        {
+          "id": "courier",
+          "name": "Courier",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-courier",
+          "portrait": "assets/ui/generated/portrait-courier",
+          "voice": "hurried and anxious"
+        },
+        {
+          "id": "bandit",
+          "name": "Bandit",
+          "role": "antagonist",
+          "sprite": "assets/ui/generated/sprite-bandit",
+          "portrait": "assets/ui/generated/portrait-bandit",
+          "voice": "sneering and rough"
+        }
+      ]
     },
     {
       "key": "dialogue-escort",
@@ -126,15 +255,44 @@
       "narration": "The courier steadies himself behind you. The approaching enforcer draws a scimitar and demands the packet.",
       "speaker": "Courier",
       "dialogue": "If you help me reach the inn, I'll tell Vell what I saw aboard that ship. But he won't let us leave.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png"
+      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "cast": [
+        {
+          "id": "courier",
+          "name": "Courier",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-courier",
+          "portrait": "assets/ui/generated/portrait-courier",
+          "voice": "hurried and anxious"
+        },
+        {
+          "id": "bandit",
+          "name": "Bandit",
+          "role": "antagonist",
+          "sprite": "assets/ui/generated/sprite-bandit",
+          "portrait": "assets/ui/generated/portrait-bandit",
+          "voice": "sneering and rough"
+        }
+      ]
     },
     {
       "key": "combat",
       "title": "Steel Beneath the Lanterns",
-      "narration": "The Bandit is within 5 feet of both heroes. All weapons are wielded openly: no surprise, cover or movement. This encounter uses nonlethal melee attacks.",
+      "narration": "The Bandit steps out of the rain, blade drawn, and bars the way to the packet.",
+      "rules_note": "The Bandit is within 5 feet of both heroes. All weapons are wielded openly: no surprise, cover or movement. This encounter uses nonlethal melee attacks.",
       "speaker": "Bandit",
       "dialogue": "Hand over the packet. Last warning.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png"
+      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "cast": [
+        {
+          "id": "bandit",
+          "name": "Bandit",
+          "role": "antagonist",
+          "sprite": "assets/ui/generated/sprite-bandit",
+          "portrait": "assets/ui/generated/portrait-bandit",
+          "voice": "sneering and rough"
+        }
+      ]
     },
     {
       "key": "inn",
@@ -142,21 +300,43 @@
       "narration": "Warm lamplight frames the next chapter with your party and the courier. The sealed packet remains unresolved.",
       "speaker": "Courier",
       "dialogue": "We'll keep the packet close. Its journey isn't over.",
-      "asset": "assets/concept-art/scene-tavern-barkeep-talk-rain.webp"
+      "asset": "assets/concept-art/scene-tavern-barkeep-talk-rain.webp",
+      "cast": [
+        {
+          "id": "courier",
+          "name": "Courier",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-courier",
+          "portrait": "assets/ui/generated/portrait-courier",
+          "voice": "hurried and anxious"
+        }
+      ]
     },
     {
       "key": "victory",
       "title": "The Courier's Road",
-      "narration": "The Bandit falls unconscious with 1 HP. The courier lowers his shaking hands. The packet—and its secret—remain with your party. His Short Rest has begun; campaign time has not completed it.",
+      "narration": "The courier lowers his shaking hands. The packet—and its secret—remain with your party.",
+      "rules_note": "The Bandit falls unconscious with 1 HP. His Short Rest has begun; campaign time has not completed it.",
       "narration_rested": "The Bandit was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Knocked-out creatures are awake with 1 HP, still Prone; their held weapons remain dropped. The original victory and the courier's unresolved journey remain.",
       "speaker": "Courier",
       "dialogue": "You stood your ground. Come on. There's a light waiting for us at the inn.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png"
+      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "cast": [
+        {
+          "id": "courier",
+          "name": "Courier",
+          "role": "patron",
+          "sprite": "assets/ui/generated/sprite-courier",
+          "portrait": "assets/ui/generated/portrait-courier",
+          "voice": "hurried and anxious"
+        }
+      ]
     },
     {
       "key": "defeat",
       "title": "A Costly Encounter",
-      "narration": "Both heroes are unconscious with 1 HP after nonlethal attacks. Their Short Rests have begun; campaign time has not completed them. The Bandit takes the packet and leaves.",
+      "narration": "The Bandit takes the packet and leaves.",
+      "rules_note": "Both heroes are unconscious with 1 HP after nonlethal attacks. Their Short Rests have begun; campaign time has not completed them.",
       "narration_rested": "Both heroes were defeated by nonlethal attacks. An uninterrupted hour has passed without Hit Point Dice or healing. They awaken with 1 HP, still Prone, and their held weapons remain dropped. That rest does not change the original defeat: the Bandit took the packet and left.",
       "speaker": "",
       "dialogue": "",

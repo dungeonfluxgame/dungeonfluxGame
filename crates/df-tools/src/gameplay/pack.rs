@@ -489,6 +489,29 @@ pub(super) struct PackFile {
     pub(super) speakers: Vec<SpeakerProfile>,
 }
 
+/// One character on stage in a scene.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SceneCastMember {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) role: CastRole,
+    /// The cut-out figure's asset stem: the portrait's stem with `portrait-` replaced by
+    /// `sprite-`.
+    pub(super) sprite: String,
+    pub(super) portrait: String,
+    pub(super) voice: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CastRole {
+    Patron,
+    Antagonist,
+    Contact,
+    Bystander,
+}
+
 /// What a language model needs to voice one speaking character in character.
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -610,6 +633,14 @@ pub(super) struct Scene {
     pub(super) key: SceneKey,
     pub(super) title: String,
     pub(super) narration: String,
+    /// The rules wording of a scene (positions, outcomes, rest), kept apart from the story text
+    /// so a story writer never touches it. Display joins it after the narration.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(super) rules_note: String,
+    /// The characters on stage besides the heroes. Sprite and portrait are asset stems the
+    /// client may not have; it falls back, so unknown ones are not an error here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) cast: Vec<SceneCastMember>,
     /// Narration once the Short Rest has completed; present for victory and defeat only.
     #[serde(default)]
     pub(super) narration_rested: Option<String>,
@@ -1512,6 +1543,22 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
             0,
             TEXT_CHARACTERS_MAX,
         )?;
+        text(
+            FILE,
+            &format!("{at}.rules_note"),
+            &scene.rules_note,
+            0,
+            TEXT_CHARACTERS_MAX,
+        )?;
+        range(FILE, &format!("{at}.cast"), length(scene.cast.len()), 0, 6)?;
+        for (position, actor) in scene.cast.iter().enumerate() {
+            let member = format!("{at}.cast[{position}]");
+            text(FILE, &format!("{member}.id"), &actor.id, 1, 64)?;
+            text(FILE, &format!("{member}.name"), &actor.name, 1, 48)?;
+            text(FILE, &format!("{member}.sprite"), &actor.sprite, 0, 128)?;
+            text(FILE, &format!("{member}.portrait"), &actor.portrait, 0, 128)?;
+            text(FILE, &format!("{member}.voice"), &actor.voice, 0, 96)?;
+        }
         if let Some(rested) = &scene.narration_rested {
             text(
                 FILE,

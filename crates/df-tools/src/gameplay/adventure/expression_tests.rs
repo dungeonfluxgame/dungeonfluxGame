@@ -59,9 +59,28 @@ fn model_that(
     }))
 }
 
+/// Distinct titles that are about this adventure's place, as the section 7 title rule wants.
+fn title_for(scene: &str, facts: &Value) -> String {
+    let place = facts["location"]["name"].as_str().unwrap();
+    let word = match scene {
+        "room" => "Gathering",
+        "opening" => "Request",
+        "dialogue_seal" => "Question",
+        "dialogue_escort" => "Promise",
+        "combat" => "Challenge",
+        "inn" => "Arrival",
+        "victory" => "Reprieve",
+        _ => "Setback",
+    };
+    format!("{place} {word}")
+}
+
 fn rewrites(name: &str, draft: &str, facts: &Value) -> Option<String> {
     let place = facts["location"]["name"].as_str().unwrap();
     let patron = facts["cast"]["patron"]["name"].as_str().unwrap();
+    if let Some(scene) = name.strip_suffix("_title") {
+        return Some(title_for(scene, facts));
+    }
     match name {
         "begin_label" => Some(format!("Slip into {place}")),
         // Digits are not a storyteller rule, so this reaches the section 7 semantic check.
@@ -70,16 +89,14 @@ fn rewrites(name: &str, draft: &str, facts: &Value) -> Option<String> {
         "help_label" => Some(format!("Attack beside {patron}")),
         // The secret may only be told in the private clue and the closing lines.
         "opening_narration" => Some(format!("{draft} It is my fault.")),
-        _ => {
-            let _ = draft;
-            None
-        }
+        _ => None,
     }
 }
 
-/// Each group is asked once, and the group whose slot is refused is asked a second time.
-fn four_answers() -> Vec<Reply> {
-    (0..4).map(|_| model_that(rewrites)).collect()
+/// Plenty of answers: each group is asked once, a refused slot is asked again, and the lint may
+/// ask a third time.
+fn answers() -> Vec<Reply> {
+    (0..8).map(|_| model_that(rewrites)).collect()
 }
 
 async fn express_with(
@@ -106,7 +123,7 @@ async fn express_with(
 
 #[tokio::test(flavor = "current_thread")]
 async fn accepted_slots_take_the_model_text_and_refused_slots_keep_their_pattern_text() {
-    let endpoint = FakeEndpoint::start(four_answers());
+    let endpoint = FakeEndpoint::start(answers());
     let cache = cache_directory("expression-mixed");
 
     let (baseline, outcome) = express_with(&endpoint, &cache).await;
@@ -126,13 +143,14 @@ async fn accepted_slots_take_the_model_text_and_refused_slots_keep_their_pattern
         baseline.pack.offer_labels.escort_courier
     );
     assert!(model.model_slots.contains(&"begin_label".to_owned()));
+    assert!(model.model_slots.contains(&"combat_title".to_owned()));
     for refused in ["ask_label", "help_label", "opening_narration"] {
         assert!(
             model.pattern_slots.contains(&refused.to_owned()),
             "{refused}"
         );
     }
-    assert!(model.refused.contains(&"ask_label: semantic".to_owned()));
+    assert!(model.refused.contains(&"ask_label: lint_digits".to_owned()));
     assert!(
         model
             .refused
@@ -146,19 +164,18 @@ async fn accepted_slots_take_the_model_text_and_refused_slots_keep_their_pattern
     assert_eq!(model.model, "gpt-test-model");
     assert_eq!(
         model.tokens,
-        140 * 4,
-        "two groups, and the voices retried once"
+        140 * u64::try_from(endpoint.connections()).unwrap()
     );
-    // The mechanical sentences and the rest of the pack are exactly the pattern adventure's.
-    let narrations = |adventure: &GeneratedAdventure| {
+    // The rules sentences and the rest of the pack are exactly the pattern adventure's.
+    let rules = |adventure: &GeneratedAdventure| {
         adventure
             .pack
             .scenes
             .iter()
-            .map(|scene| (scene.narration.clone(), scene.narration_rested.clone()))
+            .map(|scene| (scene.rules_note.clone(), scene.narration_rested.clone()))
             .collect::<Vec<_>>()
     };
-    assert_eq!(narrations(&generated), narrations(&baseline));
+    assert_eq!(rules(&generated), rules(&baseline));
     assert_eq!(generated.pack.secret_terms, baseline.pack.secret_terms);
     assert_eq!(generated.tuning, baseline.tuning);
     assert_eq!(generated.rolls, baseline.rolls);
@@ -167,7 +184,7 @@ async fn accepted_slots_take_the_model_text_and_refused_slots_keep_their_pattern
 
 #[tokio::test(flavor = "current_thread")]
 async fn the_final_adventure_reloads_and_records_the_model_slots() {
-    let endpoint = FakeEndpoint::start(four_answers());
+    let endpoint = FakeEndpoint::start(answers());
     let cache = cache_directory("expression-record");
 
     let (_, outcome) = express_with(&endpoint, &cache).await;
@@ -179,14 +196,7 @@ async fn the_final_adventure_reloads_and_records_the_model_slots() {
     let (loaded, stored) = record::reload(&documents).unwrap();
     assert_eq!(loaded.pack, generated.pack);
     assert_eq!(stored.prose_summary(), model.summary());
-    assert_eq!(
-        model.summary(),
-        format!(
-            "prose=model slots={}/{} tokens=560",
-            model.model_slots.len(),
-            model.model_slots.len() + model.pattern_slots.len()
-        )
-    );
+    assert!(model.summary().starts_with("prose=model slots="));
     let record_text = String::from_utf8(documents.record).unwrap();
     assert!(record_text.contains("\"source\": \"model\""));
     assert!(record_text.contains("\"model\": \"gpt-test-model\""));
@@ -196,7 +206,7 @@ async fn the_final_adventure_reloads_and_records_the_model_slots() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn the_requests_carry_low_reasoning_a_large_cap_and_tell_the_secret_only_where_it_belongs() {
-    let endpoint = FakeEndpoint::start(four_answers());
+    let endpoint = FakeEndpoint::start(answers());
     let cache = cache_directory("expression-request");
 
     let (baseline, outcome) = express_with(&endpoint, &cache).await;
@@ -228,7 +238,30 @@ async fn the_requests_carry_low_reasoning_a_large_cap_and_tell_the_secret_only_w
         "the scene group is never told the secret"
     );
     assert!(voices[0].contains(&secret));
-    assert!(voices[0].contains("Never write a slot's forbidden terms"));
+    assert!(voices[0].contains("never write a slot's forbidden terms"));
+    assert!(voices[0].contains("STORY, NOT RULES"));
+    // The invitation to the players is not narration, and the rules wording is never sent.
+    assert!(!scenes[0].contains("Share the room"));
+    assert!(
+        !inputs
+            .iter()
+            .any(|input| input.contains("no surprise, cover"))
+    );
+    // The lint asked again for the label with digits, and said what to fix.
+    let reasks: Vec<&&str> = inputs
+        .iter()
+        .filter(|input| input.contains("rewrite_notes"))
+        .collect();
+    assert!(
+        reasks
+            .iter()
+            .any(|input| input.contains("contains digits; write numbers in words"))
+    );
+    for input in reasks {
+        if !input.contains("\"secret\":") {
+            assert!(!input.contains(&secret), "a rewrite without the secret");
+        }
+    }
     let _ = std::fs::remove_dir_all(cache);
 }
 
@@ -262,31 +295,189 @@ async fn a_failing_or_off_storyteller_leaves_the_pattern_adventure_to_the_caller
     let _ = std::fs::remove_dir_all(cache);
 }
 
+fn sheet_of<'a>(baseline: &'a GeneratedAdventure, slot: &str) -> &'a FactSheet {
+    baseline
+        .fact_sheet
+        .iter()
+        .find(|sheet| sheet.slot == slot)
+        .unwrap()
+}
+
 #[test]
 fn the_semantic_check_refuses_digits_markup_and_names_the_facts_do_not_hold() {
     let tables = tables();
     let baseline = baseline(&tables);
     let known = known_words(&baseline);
-    let narration = baseline
+    let specific = specific_words(&baseline);
+    let narration = sheet_of(&baseline, "narration");
+    let patron = baseline.facts["patron.first"].clone();
+    let check = |text: &str| semantic_problem(narration, text, &known, &specific);
+    assert_eq!(
+        check(&format!("Rain falls. {patron} waits by the lamp.")),
+        None
+    );
+    assert_eq!(check("Rain falls on 3 roofs."), Some("digits"));
+    assert_eq!(check("Rain *falls* softly."), Some("markup"));
+    assert_eq!(
+        check("Rain falls. Then Zorblax the Unseen waits by the lamp."),
+        Some("new_name")
+    );
+    assert_eq!(check("Rain falls; the lamp sways."), Some("punctuation"));
+    assert_eq!(check("Rain falls. Who waits?"), Some("punctuation"));
+    assert_eq!(
+        check("He says \"wait\" and waits."),
+        Some("quotation_marks")
+    );
+}
+
+#[test]
+fn a_spoken_line_may_not_be_narration_and_narration_may_not_quote_a_line() {
+    let tables = tables();
+    let baseline = baseline(&tables);
+    let known = known_words(&baseline);
+    let specific = specific_words(&baseline);
+    let line = baseline
         .fact_sheet
         .iter()
-        .find(|sheet| sheet.slot == "narration")
+        .find(|sheet| sheet.slot == "line" && !sheet.speaker.is_empty())
         .unwrap();
-    let patron = baseline.facts["patron.first"].clone();
-    assert!(!semantic_problem(
-        narration,
-        &format!("Rain falls. {patron} waits by the lamp."),
-        &known
-    ));
-    assert!(semantic_problem(
-        narration,
-        "Rain falls on 3 roofs.",
-        &known
-    ));
-    assert!(semantic_problem(narration, "Rain *falls* softly.", &known));
-    assert!(semantic_problem(
-        narration,
-        "Rain falls. Then Zorblax the Unseen waits by the lamp.",
-        &known
-    ));
+    let speaker = line.speaker.clone();
+    let check = |text: &str| semantic_problem(line, text, &known, &specific);
+    assert_eq!(check("I need your help, and I need it tonight."), None);
+    assert_eq!(
+        check(&format!("{speaker} lowers a shaking hand and waits.")),
+        Some("narration_in_line")
+    );
+    assert_eq!(
+        check("The clash falls quiet as the dust settles over the stones."),
+        Some("narration_in_line")
+    );
+    assert_eq!(
+        check("I said \"wait\" and I meant it."),
+        Some("quotation_marks")
+    );
+    let narration = sheet_of(&baseline, "narration");
+    assert_eq!(
+        semantic_problem(
+            narration,
+            "He growls, \"Give it here.\" Then he waits.",
+            &known,
+            &specific
+        ),
+        Some("quotation_marks")
+    );
+}
+
+#[test]
+fn a_title_must_be_specific_short_and_not_a_stock_phrase() {
+    let tables = tables();
+    let baseline = baseline(&tables);
+    let known = known_words(&baseline);
+    let specific = specific_words(&baseline);
+    let title = sheet_of(&baseline, "title");
+    let check = |text: &str| semantic_problem(title, text, &known, &specific);
+    assert_eq!(check("The Lamplit Market Bell"), None);
+    assert_eq!(check("A Moment of Quiet"), Some("title"));
+    assert_eq!(check("Safe at Last"), Some("title"));
+    assert_eq!(check("Lamplit"), Some("title"));
+    assert_eq!(
+        check("The Long Wait for a Message at the Market"),
+        Some("title")
+    );
+    assert_eq!(check("A Quiet Evening Alone"), Some("title"));
+    assert_eq!(check(&title.baseline.clone()), Some("title"));
+}
+
+#[test]
+fn the_lint_finds_stock_phrases_long_sentences_and_repeats_across_slots() {
+    let tables = tables();
+    let baseline = baseline(&tables);
+    let planned = plan(&baseline).unwrap();
+    let known = known_words(&baseline);
+    let specific = specific_words(&baseline);
+    let texts = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, text)| ((*name).to_owned(), (*text).to_owned()))
+            .collect()
+    };
+    let long = "Over the market the lanterns sway above the crowd while the hawkers shout over \
+                the sizzling pans and somebody drops a tray of bells and a child laughs at \
+                the noise tonight.";
+    let found = find_problems(
+        &planned,
+        &texts(&[
+            ("opening_narration", "Now, then. Rain falls on the awnings."),
+            ("room_narration", long),
+            (
+                "combat_narration",
+                "Rain falls on the old awnings again. The crowd parts.",
+            ),
+            (
+                "inn_narration",
+                "Rain falls on the old awnings again. Softly.",
+            ),
+            ("victory_narration", "The lanterns sway in the damp air."),
+            ("defeat_narration", "The lanterns sway in the damp air."),
+            ("dialogue_seal_narration", "Ilsa steps close and waits."),
+            ("dialogue_escort_narration", "Ilsa steps close and waits."),
+        ]),
+        &known,
+        &specific,
+    );
+    assert_eq!(found["opening_narration"], "stock_phrase");
+    assert_eq!(found["room_narration"], "long_sentence");
+    assert_eq!(found["inn_narration"], "repeated_sentence");
+    assert!(
+        !found.contains_key("defeat_narration") && !found.contains_key("victory_narration"),
+        "slots of which only one is played may share sentences"
+    );
+    assert!(
+        !found.contains_key("dialogue_escort_narration"),
+        "the two answers to the patron are alternatives"
+    );
+    let found = find_problems(
+        &planned,
+        &texts(&[
+            ("opening_line", "The lamps are burning low tonight."),
+            ("combat_line", "The lamps are all that I wanted."),
+        ]),
+        &known,
+        &specific,
+    );
+    assert_eq!(found["combat_line"], "same_opening");
+}
+
+#[test]
+fn narration_and_rules_notes_are_separate_end_to_end() {
+    let tables = tables();
+    let baseline = baseline(&tables);
+    let rules_words = ["HP", "Short Rest", "feet", "Prone", "campaign time"];
+    for scene in &baseline.pack.scenes {
+        for word in rules_words {
+            assert!(
+                !scene.narration.contains(word),
+                "{:?} narration has {word}",
+                scene.key
+            );
+        }
+    }
+    let note = |key| {
+        baseline
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == key)
+            .unwrap()
+            .rules_note
+            .clone()
+    };
+    assert!(note(super::super::super::pack::SceneKey::Combat).contains("5 feet"));
+    assert!(note(super::super::super::pack::SceneKey::Victory).contains("Short Rest"));
+    assert!(note(super::super::super::pack::SceneKey::Defeat).contains("unconscious"));
+    assert!(note(super::super::super::pack::SceneKey::Room).is_empty());
+    for sheet in &baseline.fact_sheet {
+        assert!(!sheet.baseline.contains("5 feet"));
+        assert!(!sheet.baseline.contains("Short Rest"));
+    }
 }

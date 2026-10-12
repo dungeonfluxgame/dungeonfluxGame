@@ -1377,6 +1377,58 @@ fn antagonist_weapon_is_a_bounded_display_label() {
 }
 
 #[test]
+fn shipped_pack_puts_its_characters_on_stage_and_unknown_sprites_are_just_strings() {
+    use super::pack::{CastRole, SceneKey};
+    let loaded = load_from_bytes(shipped_pack().as_bytes(), shipped_tuning().as_bytes()).unwrap();
+    let cast = |key: SceneKey| -> Vec<(String, CastRole, bool)> {
+        let scene = loaded
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == key)
+            .unwrap();
+        super::wire::scene_cast(scene)
+            .into_iter()
+            .zip(&scene.cast)
+            .map(|(actor, member)| (actor.name, member.role, actor.speaking))
+            .collect()
+    };
+    assert_eq!(
+        cast(SceneKey::Opening),
+        [("Courier".to_owned(), CastRole::Patron, true)]
+    );
+    assert_eq!(
+        cast(SceneKey::DialogueSeal),
+        [
+            ("Courier".to_owned(), CastRole::Patron, true),
+            ("Bandit".to_owned(), CastRole::Antagonist, false)
+        ]
+    );
+    assert_eq!(
+        cast(SceneKey::Combat),
+        [("Bandit".to_owned(), CastRole::Antagonist, true)]
+    );
+    assert_eq!(cast(SceneKey::Inn).len(), 1);
+    assert!(cast(SceneKey::Room).is_empty());
+    assert!(cast(SceneKey::Defeat).is_empty());
+    let sprite = &loaded.pack.scenes[1].cast[0].sprite;
+    assert_eq!(sprite, "assets/ui/generated/sprite-courier");
+    // A sprite the client has never heard of is not a loader failure.
+    let pack = set(
+        &shipped_pack(),
+        "/scenes/1/cast/0/sprite",
+        json!("assets/elsewhere/not-a-known-stem"),
+    );
+    assert!(load_from_bytes(pack.as_bytes(), shipped_tuning().as_bytes()).is_ok());
+    // But the cast is bounded.
+    let pack = set(&shipped_pack(), "/scenes/1/cast/0/name", json!(""));
+    assert!(matches!(
+        refusal(&pack, &shipped_tuning()),
+        PackError::Bounds { .. }
+    ));
+}
+
+#[test]
 fn shipped_pack_lists_its_secret_terms_and_speakers_and_bad_ones_are_refused() {
     let loaded = load_from_bytes(shipped_pack().as_bytes(), shipped_tuning().as_bytes()).unwrap();
     assert_eq!(loaded.pack.secret_terms, ["Vell", "Harbor Inn"]);

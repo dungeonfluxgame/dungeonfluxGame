@@ -657,6 +657,28 @@ pub(crate) fn generate_with_prose(
             .text,
         &context,
     )?;
+    use super::super::pack::CastRole;
+    let patron_actor = super::listener::cast_member(
+        CastRole::Patron,
+        &patron.id,
+        &patron_first,
+        &tables.asset(&patron.art)?,
+        &patron.voice,
+    );
+    let contact_actor = super::listener::cast_member(
+        CastRole::Contact,
+        &contact.id,
+        &contact_first,
+        &tables.asset(&contact.art)?,
+        &contact.voice,
+    );
+    let antagonist_actor = super::listener::cast_member(
+        CastRole::Antagonist,
+        &ant.id,
+        &pack.bandit.name,
+        &tables.asset(&ant.art)?,
+        &ant.voice,
+    );
     let arrival_art = tables.asset(&loc.art.arrival)?;
     let interior_art = tables.asset(&loc.art.interior)?;
     for scene in &mut pack.scenes {
@@ -748,29 +770,38 @@ pub(crate) fn generate_with_prose(
             arrival_art.clone()
         };
         scene.speaker_portrait = portrait;
+        // Who is on stage: the patron through the story, the antagonist from the beat that
+        // brings it in, the contact at the destination, nobody but the heroes in the lobby.
+        scene.cast = match scene.key {
+            SceneKey::Opening | SceneKey::Victory => vec![patron_actor.clone()],
+            SceneKey::DialogueSeal | SceneKey::DialogueEscort => {
+                vec![patron_actor.clone(), antagonist_actor.clone()]
+            }
+            SceneKey::Combat => vec![antagonist_actor.clone()],
+            SceneKey::Inn => vec![contact_actor.clone()],
+            SceneKey::Room | SceneKey::Defeat => Vec::new(),
+        };
         let mechanic = match scene.key {
             SceneKey::Combat => Some("combat_mech"),
             SceneKey::Victory => Some("victory_mech"),
             SceneKey::Defeat => Some("defeat_mech"),
             _ => None,
         };
-        scene.narration = if let Some(key) = mechanic {
+        scene.narration = story;
+        if let Some(key) = mechanic {
+            // The pinned rules sentences stay out of the story text: they are their own field.
             let mut mechanical_context = context.clone();
-            mechanical_context.insert("story".into(), story.clone());
+            mechanical_context.insert("story".into(), String::new());
             let text = &named(&tables.prose, key)?
                 .variants
                 .first()
                 .ok_or_else(|| GenerateError::MissingTable(key.into()))?
                 .text;
-            let mechanics = render::render(text, &mechanical_context)?;
-            if key == "combat_mech" {
-                format!("{story} {mechanics}")
-            } else {
-                mechanics
-            }
-        } else {
-            story
-        };
+            scene.rules_note = render::render(text, &mechanical_context)?
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
         if matches!(scene.key, SceneKey::Victory | SceneKey::Defeat) {
             let key = if scene.key == SceneKey::Victory {
                 "victory_rested"

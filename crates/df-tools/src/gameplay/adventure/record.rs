@@ -1,5 +1,5 @@
 //! Exact immutable bytes are authority on resume; changed tables are never consulted.
-use super::super::pack::{self, LoadedPack, SpeakerProfile};
+use super::super::pack::{self, CastRole, LoadedPack, SpeakerProfile};
 use super::{GenerateError, GeneratedAdventure, Roll, RollStatus, RulesMode};
 use df_persistence::local_demo_scope::DemoAdventure;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,17 @@ pub(crate) struct AdventureRecord {
     secret_terms: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     speakers: Vec<SpeakerProfile>,
+    /// Who is on stage in each scene, copied from the pack.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scene_cast: Vec<SceneCastRecord>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SceneCastRecord {
+    scene: String,
+    id: String,
+    name: String,
+    role: CastRole,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +65,9 @@ pub(crate) struct ModelExpression {
     pub(crate) refused: Vec<String>,
     /// Supplier-reported tokens of the calls made.
     pub(crate) tokens: u64,
+    /// Wall-clock milliseconds the whole expression step took.
+    #[serde(default)]
+    pub(crate) elapsed_ms: u64,
 }
 impl ModelExpression {
     pub(crate) fn summary(&self) -> String {
@@ -127,6 +141,23 @@ impl GeneratedAdventure {
             seeded_dice,
             secret_terms: self.pack.secret_terms.clone(),
             speakers: self.pack.speakers.clone(),
+            scene_cast: self
+                .pack
+                .scenes
+                .iter()
+                .flat_map(|scene| {
+                    let key = serde_json::to_value(scene.key)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    scene.cast.iter().map(move |actor| SceneCastRecord {
+                        scene: key.clone(),
+                        id: actor.id.clone(),
+                        name: actor.name.clone(),
+                        role: actor.role,
+                    })
+                })
+                .collect(),
         };
         let record =
             serde_json::to_vec_pretty(&record).map_err(|_| GenerateError::Serialization)?;

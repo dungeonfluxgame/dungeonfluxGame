@@ -1,7 +1,7 @@
 //! Listener-safety data the generator derives from the rolled facts: the phrases that give the
 //! private clue away, and who each speaking character is. The pack carries both so that an
 //! in-character reply never has to guess them from prose.
-use super::super::pack::SpeakerProfile;
+use super::super::pack::{CastRole, SceneCastMember, SpeakerProfile};
 use super::schema::{Antagonist, Destination, Secret};
 use std::collections::BTreeMap;
 
@@ -29,6 +29,32 @@ pub(super) fn secret_terms(
         }
     }
     terms
+}
+
+/// The cut-out figure for a portrait: `portrait-` becomes `sprite-` in the asset stem.
+pub(super) fn sprite_of(portrait: &str) -> String {
+    match portrait.rsplit_once("/portrait-") {
+        Some((directory, stem)) => format!("{directory}/sprite-{stem}"),
+        None => String::new(),
+    }
+}
+
+/// One character on stage.
+pub(super) fn cast_member(
+    role: CastRole,
+    id: &str,
+    name: &str,
+    portrait: &str,
+    voice: &str,
+) -> SceneCastMember {
+    SceneCastMember {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        role,
+        sprite: sprite_of(portrait),
+        portrait: portrait.to_owned(),
+        voice: voice.to_owned(),
+    }
 }
 
 /// The patron, the contact and, when it speaks, the antagonist, under the names the scenes

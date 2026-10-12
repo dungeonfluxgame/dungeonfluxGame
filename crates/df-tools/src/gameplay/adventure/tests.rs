@@ -607,6 +607,99 @@ fn record_binding_and_compiled_mechanical_text_fail_closed() {
     );
 }
 #[test]
+fn every_scene_has_its_cast_and_the_speaker_is_the_one_marked_speaking() {
+    use super::super::{pack::SceneKey, wire::scene_cast};
+    use df_protocol::common as rpc;
+    let tables = tables();
+    let cast_of = |seed: u64| -> Vec<(SceneKey, Vec<(String, i32, bool)>)> {
+        let adventure = generate(
+            &tables,
+            seed,
+            GenerateOptions::default(),
+            &ForcedEntries::new(),
+        )
+        .unwrap();
+        adventure
+            .pack
+            .scenes
+            .iter()
+            .map(|scene| {
+                for actor in &scene.cast {
+                    assert_eq!(
+                        actor.sprite,
+                        actor.portrait.replace("/portrait-", "/sprite-"),
+                        "sprite stem follows the portrait stem"
+                    );
+                    assert!(actor.portrait.contains("/portrait-"));
+                }
+                (
+                    scene.key,
+                    scene_cast(scene)
+                        .into_iter()
+                        .map(|actor| (actor.name, actor.role, actor.speaking))
+                        .collect(),
+                )
+            })
+            .collect()
+    };
+    let patron = rpc::SceneRole::Patron as i32;
+    let enemy = rpc::SceneRole::Antagonist as i32;
+    let contact = rpc::SceneRole::Contact as i32;
+    // A goblin speaks; a giant rat does not.
+    let goblin = cast_of(0x3c6ef378dd81de97);
+    let scene = |cast: &[(SceneKey, Vec<(String, i32, bool)>)], key| {
+        cast.iter()
+            .find(|(candidate, _)| *candidate == key)
+            .unwrap()
+            .1
+            .clone()
+    };
+    let ilsa = ("Ilsa".to_owned(), patron);
+    let snag = ("Snag the Goblin".to_owned(), enemy);
+    assert_eq!(
+        scene(&goblin, SceneKey::Opening),
+        [(ilsa.0.clone(), ilsa.1, true)]
+    );
+    assert_eq!(
+        scene(&goblin, SceneKey::DialogueSeal),
+        [
+            (ilsa.0.clone(), ilsa.1, true),
+            (snag.0.clone(), snag.1, false)
+        ]
+    );
+    assert_eq!(scene(&goblin, SceneKey::DialogueEscort).len(), 2);
+    assert_eq!(scene(&goblin, SceneKey::Combat), [(snag.0, snag.1, true)]);
+    assert_eq!(
+        scene(&goblin, SceneKey::Inn),
+        [("Lorcan".to_owned(), contact, true)]
+    );
+    assert_eq!(scene(&goblin, SceneKey::Victory), [(ilsa.0, ilsa.1, true)]);
+    assert!(scene(&goblin, SceneKey::Room).is_empty());
+    assert!(scene(&goblin, SceneKey::Defeat).is_empty());
+    let rat = cast_of(0xdaa66d325ccc5aac);
+    let combat = scene(&rat, SceneKey::Combat);
+    assert_eq!(combat.len(), 1);
+    assert_eq!(combat[0].1, enemy);
+    assert!(
+        !combat[0].2,
+        "a creature that does not speak is never speaking"
+    );
+    assert_eq!(scene(&rat, SceneKey::DialogueSeal).len(), 2);
+    let documents = generate(
+        &tables,
+        0x3c6ef378dd81de97,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap()
+    .documents(false)
+    .unwrap();
+    let record = String::from_utf8(documents.record).unwrap();
+    assert!(record.contains("\"scene_cast\""));
+    assert!(record.contains("\"role\": \"antagonist\""));
+}
+
+#[test]
 fn generated_packs_carry_secret_terms_and_a_profile_for_every_shown_speaker() {
     let tables = tables();
     let adventure = generate(
