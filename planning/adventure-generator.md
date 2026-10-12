@@ -630,7 +630,7 @@ Validation at load: standard dice only (d4, d6, d8, d10, d12, d20); entries at m
 | background | talents | d12 | 12 | DM only |
 | character | ideals, bonds | d20 | 20 each | classic personality tradition; some role- or speaker-filtered |
 | character | flaws | d20 | 20 | each has a never-spoken `shame` line and `shame_terms` |
-| character | wants | d20 | 20 | role-filtered: 12 for patron and contact, 5 for antagonist and lieutenant, 3 for villain |
+| character | wants | d20 | 20 | role-filtered: 12 for patron and contact, 6 each for antagonist and lieutenant, 3 for villain |
 | character | fears | d12 | 12 | each has a `confide` line for the trusted tier |
 | ties | patron, contact, antagonist | d20 | 20 each | bindings: stake, antagonist, location, destination, another cast member, faction, villain |
 | ties | villain | d12 | 12 | |

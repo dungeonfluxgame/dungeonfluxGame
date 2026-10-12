@@ -557,13 +557,33 @@ impl<'a> Roller<'a> {
         self.record(name, table.die, 0, entry.entry_id(), RollStatus::Fallback);
         Ok(entry)
     }
+    /// Roll on a table of profiles. The DM text is never restricted; the line the NPC would
+    /// speak (confided, spoken, or the plain text) must be allowed for `audience`.
+    fn profile<'t>(
+        &mut self,
+        context: &Context<'_>,
+        name: &str,
+        table: &'t Table<Profile>,
+        audience: Audience,
+    ) -> Result<&'t Profile, DossierError> {
+        self.pick(name, table, |entry| match spoken_template(entry) {
+            Some(line) => context.profile_fits(
+                entry,
+                &[
+                    (Some(&entry.text), Audience::DmOnly),
+                    (Some(line), audience),
+                ],
+            ),
+            None => context.profile_fits(entry, &[(Some(&entry.text), audience)]),
+        })
+    }
     /// Choose one of `count` items with the smallest standard die that holds them.
     fn pick_index(&mut self, name: &str, count: usize) -> Result<usize, DossierError> {
         let die = DICE
             .iter()
             .copied()
             .find(|die| usize::from(*die) >= count)
-            .ok_or_else(|| DossierError::TooManyCast(count))?;
+            .ok_or(DossierError::TooManyCast(count))?;
         loop {
             let natural = self.dice.roll(die);
             let accepted = usize::from(natural) <= count;
@@ -586,6 +606,7 @@ impl<'a> Roller<'a> {
 }
 
 /// Everything fixed about one NPC while its dice are rolled.
+#[derive(Clone)]
 struct Context<'a> {
     tables: &'a DossierTables,
     facts: &'a DossierFacts,
@@ -593,6 +614,8 @@ struct Context<'a> {
     slots: BTreeMap<String, String>,
     secrets: &'a [String],
     given_tags: BTreeSet<String>,
+    /// Phrases from this NPC's own shame; empty until the flaw is rolled.
+    shame: Vec<String>,
 }
 impl<'a> Context<'a> {
     fn new(
@@ -643,6 +666,13 @@ impl<'a> Context<'a> {
             slots,
             secrets,
             given_tags,
+            shame: Vec::new(),
+        }
+    }
+    fn with_shame(&self, shame: Vec<String>) -> Self {
+        Self {
+            shame,
+            ..self.clone()
         }
     }
     fn render(&self, template: &str) -> Option<String> {
@@ -653,11 +683,11 @@ impl<'a> Context<'a> {
         slots.extend(extra.clone());
         render::render(template, &slots).ok()
     }
-    fn permitted(&self, text: &str, audience: Audience, shame: &[String]) -> bool {
+    fn permitted(&self, text: &str, audience: Audience) -> bool {
         let hits = |terms: &[String]| terms.iter().any(|term| mentions_term(text, term));
         match audience {
-            Audience::Public => !hits(self.secrets) && !hits(shame),
-            Audience::Trusted => !hits(shame),
+            Audience::Public => !hits(self.secrets) && !hits(&self.shame),
+            Audience::Trusted => !hits(&self.shame),
             Audience::DmOnly => true,
         }
     }
@@ -669,18 +699,13 @@ impl<'a> Context<'a> {
     }
     /// A profile fits when its filters admit this NPC and every field renders and is allowed
     /// in its audience. `fields` pairs each template with the audience that will hear it.
-    fn profile_fits(
-        &self,
-        profile: &Profile,
-        fields: &[(Option<&str>, Audience)],
-        shame: &[String],
-    ) -> bool {
+    fn profile_fits(&self, profile: &Profile, fields: &[(Option<&str>, Audience)]) -> bool {
         self.admitted(&profile.roles, &profile.speakers, &profile.foes)
             && !profile.except.contains(&self.member.archetype)
             && fields.iter().all(|(template, audience)| {
                 template.is_none_or(|template| {
                     self.render(template)
-                        .is_some_and(|text| self.permitted(&text, *audience, shame))
+                        .is_some_and(|text| self.permitted(&text, *audience))
                 })
             })
     }
@@ -728,6 +753,16 @@ fn field<'p>(
     value
         .as_deref()
         .ok_or_else(|| template_error(npc_id, table))
+}
+
+/// The template an NPC would say aloud for this entry, when it has one apart from its DM text.
+fn spoken_template(profile: &Profile) -> Option<&str> {
+    profile.confide.as_deref().or(profile.speak.as_deref())
+}
+/// The rendered line an NPC says for this entry (its plain text when it has no separate line).
+fn spoken(context: &Context<'_>, profile: &Profile, table: &str) -> Result<String, DossierError> {
+    let template = spoken_template(profile).unwrap_or(&profile.text);
+    require(context.render(template), &context.member.id, table)
 }
 
 fn validate_facts(
@@ -808,12 +843,12 @@ pub(crate) fn roll_dossiers(
 }
 
 fn roll_one(
-    context: &Context<'_>,
+    base: &Context<'_>,
     seed: u64,
     used_ties: &mut BTreeSet<String>,
 ) -> Result<Dossier, DossierError> {
-    let tables = context.tables;
-    let member = context.member;
+    let tables = base.tables;
+    let member = base.member;
     let npc = member.id.as_str();
     let mut roller = Roller::new(seed, npc);
     let attitude = roller
@@ -826,93 +861,37 @@ fn roll_one(
 
     // The flaw comes first so its shame terms can keep every later public line clean.
     let flaw = roller.pick("flaw", &tables.character.flaws, |entry| {
-        context.profile_fits(
+        base.profile_fits(
             entry,
             &[
                 (Some(&entry.text), Audience::DmOnly),
                 (entry.shame.as_deref(), Audience::DmOnly),
             ],
-            &[],
         )
     })?;
-    let shame_text = require(
-        context.render(field(&flaw.shame, npc, "flaw")?),
-        npc,
-        "flaw",
-    )?;
+    let shame_text = require(base.render(field(&flaw.shame, npc, "flaw")?), npc, "flaw")?;
     let shame_terms = flaw.shame_terms.clone();
-    let shame = shame_terms.as_slice();
+    let context = &base.with_shame(shame_terms.clone());
 
-    let origin = roller.pick("origin", &tables.background.origins, |entry| {
-        context.profile_fits(entry, &[(Some(&entry.text), Audience::Public)], shame)
-    })?;
-    let trade = roller.pick("past_trade", &tables.background.past_trades, |entry| {
-        context.profile_fits(
-            entry,
-            &[
-                (Some(&entry.text), Audience::DmOnly),
-                (entry.speak.as_deref(), Audience::Public),
-            ],
-            shame,
-        )
-    })?;
-    let event = roller.pick(
-        "formative_event",
-        &tables.background.formative_events,
-        |entry| {
-            context.profile_fits(
-                entry,
-                &[
-                    (Some(&entry.text), Audience::DmOnly),
-                    (entry.speak.as_deref(), Audience::Public),
-                ],
-                shame,
-            )
-        },
+    let (background, character, ties) = (&tables.background, &tables.character, &tables.ties);
+    let origin = roller.profile(context, "origin", &background.origins, Audience::Public)?;
+    let trade = roller.profile(
+        context,
+        "past_trade",
+        &background.past_trades,
+        Audience::Public,
     )?;
-    let ideal = roller.pick("ideal", &tables.character.ideals, |entry| {
-        context.profile_fits(
-            entry,
-            &[
-                (Some(&entry.text), Audience::DmOnly),
-                (entry.speak.as_deref(), Audience::Public),
-            ],
-            shame,
-        )
-    })?;
-    let bond = roller.pick("bond", &tables.character.bonds, |entry| {
-        context.profile_fits(
-            entry,
-            &[
-                (Some(&entry.text), Audience::DmOnly),
-                (entry.speak.as_deref(), Audience::Public),
-            ],
-            shame,
-        )
-    })?;
-    let want = roller.pick("want", &tables.character.wants, |entry| {
-        context.profile_fits(
-            entry,
-            &[
-                (Some(&entry.text), Audience::DmOnly),
-                (entry.speak.as_deref(), Audience::Public),
-            ],
-            shame,
-        )
-    })?;
-    let fear = roller.pick("fear", &tables.character.fears, |entry| {
-        context.profile_fits(
-            entry,
-            &[
-                (Some(&entry.text), Audience::DmOnly),
-                (entry.confide.as_deref(), Audience::Trusted),
-            ],
-            shame,
-        )
-    })?;
-    let talent = roller.pick("talent", &tables.background.talents, |entry| {
-        context.profile_fits(entry, &[(Some(&entry.text), Audience::DmOnly)], shame)
-    })?;
+    let event = roller.profile(
+        context,
+        "formative_event",
+        &background.formative_events,
+        Audience::Public,
+    )?;
+    let ideal = roller.profile(context, "ideal", &character.ideals, Audience::Public)?;
+    let bond = roller.profile(context, "bond", &character.bonds, Audience::Public)?;
+    let want = roller.profile(context, "want", &character.wants, Audience::Public)?;
+    let fear = roller.profile(context, "fear", &character.fears, Audience::Trusted)?;
+    let talent = roller.profile(context, "talent", &background.talents, Audience::DmOnly)?;
 
     // Speech style and temperament must agree with the traits the NPC already has.
     let mut taken = context.given_tags.clone();
@@ -927,7 +906,6 @@ fn roll_one(
         "flattery",
         &social.flattery,
         &mut taken,
-        shame,
     )?;
     let flirting = pick_reaction(
         context,
@@ -935,247 +913,76 @@ fn roll_one(
         "flirting",
         &social.flirting,
         &mut taken,
-        shame,
     )?;
-    let threats = pick_reaction(
-        context,
-        &mut roller,
-        "threats",
-        &social.threats,
-        &mut taken,
-        shame,
-    )?;
-    let lies = pick_reaction(
-        context,
-        &mut roller,
-        "lies",
-        &social.lies,
-        &mut taken,
-        shame,
-    )?;
-    let bribes = pick_reaction(
-        context,
-        &mut roller,
-        "bribes",
-        &social.bribes,
-        &mut taken,
-        shame,
-    )?;
-    let deflection = roller.pick("deflection", &tables.social.deflections, |entry| {
+    let threats = pick_reaction(context, &mut roller, "threats", &social.threats, &mut taken)?;
+    let lies = pick_reaction(context, &mut roller, "lies", &social.lies, &mut taken)?;
+    let bribes = pick_reaction(context, &mut roller, "bribes", &social.bribes, &mut taken)?;
+    let deflection = roller.pick("deflection", &social.deflections, |entry| {
         context.clear_of_tags(&entry.tags, &taken)
-            && context.profile_fits(entry, &[(entry.speak.as_deref(), Audience::Public)], shame)
+            && context.profile_fits(entry, &[(entry.speak.as_deref(), Audience::Public)])
     })?;
 
-    let (story_tie, tie_cast) = roll_tie(context, &mut roller, used_ties, shame)?;
-    let (motive, stand_down) = if member.role.opposes_party() {
-        let motive = roller.pick("motive", &tables.ties.motives, |entry| {
-            context.profile_fits(
-                entry,
-                &[
-                    (Some(&entry.text), Audience::DmOnly),
-                    (entry.speak.as_deref(), Audience::Public),
-                ],
-                shame,
-            )
-        })?;
-        let stand_down = roller.pick("stand_down", &tables.ties.stand_downs, |entry| {
-            context.profile_fits(
-                entry,
-                &[
-                    (Some(&entry.text), Audience::DmOnly),
-                    (entry.speak.as_deref(), Audience::Trusted),
-                ],
-                shame,
-            )
-        })?;
-        (Some(motive), Some(stand_down))
+    let (story_tie, tie_cast) = roll_tie(context, &mut roller, used_ties)?;
+    let opposing = member.role.opposes_party();
+    let motive = if opposing {
+        Some(roller.profile(context, "motive", &ties.motives, Audience::Public)?)
     } else {
-        (None, None)
+        None
+    };
+    let stand_down = if opposing {
+        Some(roller.profile(context, "stand_down", &ties.stand_downs, Audience::Trusted)?)
+    } else {
+        None
     };
 
-    // Public colour: one place line from the location, one generic, and (for the friendly
-    // cast) a rumour about the antagonist, a trusted hint and a line about the wider world.
-    let specific = tables
-        .knowledge
+    // Colour: a place line from the location and a generic one for everyone; the friendly cast
+    // also knows a rumour, a hint to share once trusted, and a line about the wider world.
+    let knowledge = &tables.knowledge;
+    let specific = knowledge
         .place_specific
         .get(&context.facts.location_id)
         .ok_or_else(|| DossierError::NoCompatibleEntry {
             npc_id: npc.to_owned(),
             table: "place_specific".into(),
         })?;
-    let place = roller.pick("place_specific", specific, |entry| {
-        context.profile_fits(entry, &[(Some(&entry.text), Audience::Public)], shame)
-    })?;
-    let place_generic = roller.pick("place_generic", &tables.knowledge.place_generic, |entry| {
-        context.profile_fits(entry, &[(Some(&entry.text), Audience::Public)], shame)
-    })?;
-    let mut rumour = None;
-    let mut hint = None;
-    let mut world = None;
-    if !member.role.opposes_party() {
-        rumour = Some(roller.pick("rumour", &tables.knowledge.rumours, |entry| {
-            context.profile_fits(entry, &[(Some(&entry.text), Audience::Public)], shame)
-        })?);
-        hint = Some(roller.pick("hint", &tables.knowledge.hints, |entry| {
-            context.profile_fits(entry, &[(Some(&entry.text), Audience::Trusted)], shame)
-        })?);
+    let place = roller.profile(context, "place_specific", specific, Audience::Public)?;
+    let place_generic = roller.profile(
+        context,
+        "place_generic",
+        &knowledge.place_generic,
+        Audience::Public,
+    )?;
+    let (mut rumour, mut hint, mut world) = (None, None, None);
+    if !opposing {
+        rumour = Some(roller.profile(context, "rumour", &knowledge.rumours, Audience::Public)?);
+        hint = Some(roller.profile(context, "hint", &knowledge.hints, Audience::Trusted)?);
         if context.facts.faction.is_some() || context.facts.villain.is_some() {
-            world = Some(roller.pick("world", &tables.knowledge.world, |entry| {
-                context.profile_fits(entry, &[(Some(&entry.text), Audience::Public)], shame)
-            })?);
+            world = Some(roller.profile(context, "world", &knowledge.world, Audience::Public)?);
         }
     }
 
-    let mut says_freely = Vec::new();
-    let mut says_when_trusted = Vec::new();
-    let mut free = |topic: Topic, source: &str, text: String| {
-        says_freely.push(Knowledge {
-            topic,
-            source: source.to_owned(),
-            text,
-        });
-    };
-    free(
-        Topic::WhoAreYou,
-        "origin_line",
-        format!(
-            "I was {}.",
-            require(context.render(&origin.text), npc, "origin")?
-        ),
-    );
-    free(
-        Topic::WhoAreYou,
-        "trade_line",
-        require(
-            context.render(field(&trade.speak, npc, "past_trade")?),
-            npc,
-            "past_trade",
-        )?,
-    );
-    free(
-        Topic::YourPast,
-        "event_line",
-        require(
-            context.render(field(&event.speak, npc, "formative_event")?),
-            npc,
-            "formative_event",
-        )?,
-    );
-    free(
-        Topic::WhyThisMatters,
-        "ideal_line",
-        require(
-            context.render(field(&ideal.speak, npc, "ideal")?),
-            npc,
-            "ideal",
-        )?,
-    );
-    free(
-        Topic::WhyThisMatters,
-        "bond_line",
-        require(
-            context.render(field(&bond.speak, npc, "bond")?),
-            npc,
-            "bond",
-        )?,
-    );
-    free(
-        Topic::WhyThisMatters,
-        "want_line",
-        require(
-            context.render(field(&want.speak, npc, "want")?),
-            npc,
-            "want",
-        )?,
-    );
-    if story_tie.public {
-        free(Topic::WhyThisMatters, "tie_line", story_tie.speak.clone());
-    } else {
-        says_when_trusted.push(Knowledge {
-            topic: Topic::WhyThisMatters,
-            source: "tie_line".into(),
-            text: story_tie.speak.clone(),
-        });
-    }
-    if let Some(motive) = motive {
-        free(
-            Topic::WhyThisMatters,
-            "motive_line",
-            require(
-                context.render(field(&motive.speak, npc, "motive")?),
-                npc,
-                "motive",
-            )?,
-        );
-    }
-    free(
-        Topic::ThePlace,
-        "place_line",
-        require(context.render(&place.text), npc, "place_specific")?,
-    );
-    free(
-        Topic::ThePlace,
-        "place_line2",
-        require(context.render(&place_generic.text), npc, "place_generic")?,
-    );
-    if let Some(rumour) = rumour {
-        free(
-            Topic::TheAntagonist,
-            "rumour_line",
-            require(context.render(&rumour.text), npc, "rumour")?,
-        );
-    }
-    if let Some(world) = world {
-        free(
-            Topic::ThePlace,
-            "world_line",
-            require(context.render(&world.text), npc, "world")?,
-        );
-    }
-    if let Some(hint) = hint {
-        says_when_trusted.push(Knowledge {
-            topic: Topic::TheAntagonist,
-            source: "hint_line".into(),
-            text: require(context.render(&hint.text), npc, "hint")?,
-        });
-    }
-    if let Some(stand_down) = stand_down {
-        says_when_trusted.push(Knowledge {
-            topic: Topic::TheAntagonist,
-            source: "stand_down_line".into(),
-            text: require(
-                context.render(field(&stand_down.speak, npc, "stand_down")?),
-                npc,
-                "stand_down",
-            )?,
-        });
-    }
-    says_when_trusted.push(Knowledge {
-        topic: Topic::WhatAreYouHiding,
-        source: "fear_line".into(),
-        text: require(
-            context.render(field(&fear.confide, npc, "fear")?),
-            npc,
-            "fear",
-        )?,
-    });
-    let never_says = vec![
-        Forbidden {
-            source: "flaw_shame".into(),
-            text: shame_text,
-            terms: shame_terms.clone(),
-            scope: ForbiddenScope::Everywhere,
+    let knowledge = knowledge_tiers(
+        context,
+        &Picks {
+            origin,
+            trade,
+            event,
+            ideal,
+            bond,
+            want,
+            fear,
+            place,
+            place_generic,
+            motive,
+            stand_down,
+            rumour,
+            hint,
+            world,
         },
-        Forbidden {
-            source: "adventure_secret".into(),
-            text: "The adventure's secret; its terms are listed here and are never confirmed \
-                   or hinted at by this person."
-                .into(),
-            terms: context.secrets.to_vec(),
-            scope: ForbiddenScope::PublicOnly,
-        },
-    ];
-
+        &story_tie,
+        shame_text,
+        shame_terms,
+    )?;
     let temperament = Temperament {
         flattery: reaction_entry(context, flattery)?,
         flirting: reaction_entry(context, flirting)?,
@@ -1183,7 +990,8 @@ fn roll_one(
         lies: reaction_entry(context, lies)?,
         bribes: reaction_entry(context, bribes)?,
     };
-    let lines: BTreeMap<String, String> = says_freely
+    let lines: BTreeMap<String, String> = knowledge
+        .says_freely
         .iter()
         .map(|item| (item.source.clone(), item.text.clone()))
         .collect();
@@ -1193,12 +1001,8 @@ fn roll_one(
             Topic::ComplimentOrFlirt => temperament.flirting.answer.clone(),
             Topic::Threat => temperament.threats.answer.clone(),
             Topic::Bribe => temperament.bribes.answer.clone(),
-            Topic::WhatAreYouHiding => require(
-                context.render(field(&deflection.speak, npc, "deflection")?),
-                npc,
-                "deflection",
-            )?,
-            _ => frame_answer(context, &mut roller, topic, &lines, shame)?,
+            Topic::WhatAreYouHiding => spoken(context, deflection, "deflection")?,
+            _ => frame_answer(context, &mut roller, topic, &lines)?,
         };
         prepared_answers.insert(topic, with_tic(topic, body, style, context));
     }
@@ -1242,11 +1046,7 @@ fn roll_one(
         stand_down: stand_down
             .map(|entry| render_trait(entry, "stand_down"))
             .transpose()?,
-        knowledge: KnowledgeTiers {
-            says_freely,
-            says_when_trusted,
-            never_says,
-        },
+        knowledge,
         temperament,
         starting_attitude: attitude,
         speech_style: SpeechStyle {
@@ -1263,6 +1063,141 @@ fn roll_one(
     })
 }
 
+/// The table entries that feed an NPC's knowledge tiers.
+struct Picks<'t> {
+    origin: &'t Profile,
+    trade: &'t Profile,
+    event: &'t Profile,
+    ideal: &'t Profile,
+    bond: &'t Profile,
+    want: &'t Profile,
+    fear: &'t Profile,
+    place: &'t Profile,
+    place_generic: &'t Profile,
+    motive: Option<&'t Profile>,
+    stand_down: Option<&'t Profile>,
+    rumour: Option<&'t Profile>,
+    hint: Option<&'t Profile>,
+    world: Option<&'t Profile>,
+}
+
+/// Sort what the NPC knows into what is said freely, what waits for trust and what is never said.
+fn knowledge_tiers(
+    context: &Context<'_>,
+    picks: &Picks<'_>,
+    story_tie: &StoryTie,
+    shame_text: String,
+    shame_terms: Vec<String>,
+) -> Result<KnowledgeTiers, DossierError> {
+    let mut says_freely = vec![Knowledge {
+        topic: Topic::WhoAreYou,
+        source: "origin_line".into(),
+        text: format!("I was {}.", spoken(context, picks.origin, "origin")?),
+    }];
+    let free_lines = [
+        (
+            Topic::WhoAreYou,
+            "trade_line",
+            Some(picks.trade),
+            "past_trade",
+        ),
+        (
+            Topic::YourPast,
+            "event_line",
+            Some(picks.event),
+            "formative_event",
+        ),
+        (
+            Topic::WhyThisMatters,
+            "ideal_line",
+            Some(picks.ideal),
+            "ideal",
+        ),
+        (Topic::WhyThisMatters, "bond_line", Some(picks.bond), "bond"),
+        (Topic::WhyThisMatters, "want_line", Some(picks.want), "want"),
+        (Topic::WhyThisMatters, "motive_line", picks.motive, "motive"),
+        (
+            Topic::ThePlace,
+            "place_line",
+            Some(picks.place),
+            "place_specific",
+        ),
+        (
+            Topic::ThePlace,
+            "place_line2",
+            Some(picks.place_generic),
+            "place_generic",
+        ),
+        (Topic::TheAntagonist, "rumour_line", picks.rumour, "rumour"),
+        (Topic::ThePlace, "world_line", picks.world, "world"),
+    ];
+    for (topic, source, entry, table) in free_lines {
+        if let Some(entry) = entry {
+            says_freely.push(Knowledge {
+                topic,
+                source: source.into(),
+                text: spoken(context, entry, table)?,
+            });
+        }
+    }
+    let tie_line = Knowledge {
+        topic: Topic::WhyThisMatters,
+        source: "tie_line".into(),
+        text: story_tie.speak.clone(),
+    };
+    let mut says_when_trusted = Vec::new();
+    if story_tie.public {
+        says_freely.push(tie_line);
+    } else {
+        says_when_trusted.push(tie_line);
+    }
+    let trusted_lines = [
+        (Topic::TheAntagonist, "hint_line", picks.hint, "hint"),
+        (
+            Topic::TheAntagonist,
+            "stand_down_line",
+            picks.stand_down,
+            "stand_down",
+        ),
+        (
+            Topic::WhatAreYouHiding,
+            "fear_line",
+            Some(picks.fear),
+            "fear",
+        ),
+    ];
+    for (topic, source, entry, table) in trusted_lines {
+        if let Some(entry) = entry {
+            says_when_trusted.push(Knowledge {
+                topic,
+                source: source.into(),
+                text: spoken(context, entry, table)?,
+            });
+        }
+    }
+    let never_says = vec![
+        Forbidden {
+            source: "flaw_shame".into(),
+            text: shame_text,
+            terms: shame_terms,
+            scope: ForbiddenScope::Everywhere,
+        },
+        Forbidden {
+            source: "adventure_secret".into(),
+            text: "The adventure's secret; its terms are listed here and are never confirmed \
+                   or hinted at by this person."
+                .into(),
+            terms: context.secrets.to_vec(),
+            scope: ForbiddenScope::PublicOnly,
+        },
+    ];
+    Ok(KnowledgeTiers {
+        says_freely,
+        says_when_trusted,
+        never_says,
+    })
+}
+
 /// Pick one temperament entry that agrees with every tone already taken, then take its tone.
 fn pick_reaction<'t>(
     context: &Context<'_>,
@@ -1270,7 +1205,6 @@ fn pick_reaction<'t>(
     name: &str,
     table: &'t Table<Profile>,
     taken: &mut BTreeSet<String>,
-    shame: &[String],
 ) -> Result<&'t Profile, DossierError> {
     let entry = roller.pick(name, table, |entry| {
         context.admitted(&entry.roles, &entry.speakers, &[])
@@ -1281,7 +1215,6 @@ fn pick_reaction<'t>(
                     (Some(&entry.text), Audience::DmOnly),
                     (entry.speak.as_deref(), Audience::Public),
                 ],
-                shame,
             )
     })?;
     taken.extend(entry.tags.iter().cloned());
@@ -1319,7 +1252,6 @@ fn roll_tie(
     context: &Context<'_>,
     roller: &mut Roller<'_>,
     used_ties: &mut BTreeSet<String>,
-    shame: &[String],
 ) -> Result<(StoryTie, Option<String>), DossierError> {
     let npc = context.member.id.as_str();
     let table = context.tables.ties.for_role(context.member.role);
@@ -1334,7 +1266,7 @@ fn roll_tie(
                 } else {
                     Audience::Trusted
                 };
-                context.permitted(&text, public, shame) && context.permitted(&speak, public, shame)
+                context.permitted(&text, public) && context.permitted(&speak, public)
             })
     })?;
     used_ties.insert(tie.id.clone());
@@ -1400,7 +1332,6 @@ fn frame_answer(
     roller: &mut Roller<'_>,
     topic: Topic,
     lines: &BTreeMap<String, String>,
-    shame: &[String],
 ) -> Result<String, DossierError> {
     let npc = context.member.id.as_str();
     let table = context
@@ -1419,7 +1350,7 @@ fn frame_answer(
             admits(&entry.roles, context.member.role)
                 && render::render(&entry.text, &slots).is_ok_and(|text| {
                     sentence_count(&text) <= MAX_SENTENCES
-                        && context.permitted(&text, Audience::Public, shame)
+                        && context.permitted(&text, Audience::Public)
                 })
         },
     )?;
@@ -1428,15 +1359,11 @@ fn frame_answer(
 
 /// Add the speech tic as an opener or a closer, alternating by topic, when it still fits.
 fn with_tic(topic: Topic, body: String, style: &StyleEntry, context: &Context<'_>) -> String {
-    let tic = if topic.ordinal() % 2 == 0 {
-        &style.opener
+    // Even topics open with the tic and odd topics close with it, so answers do not all sound alike.
+    let styled = if topic.ordinal().is_multiple_of(2) {
+        format!("{} {body}", style.opener)
     } else {
-        &style.closer
-    };
-    let styled = if topic.ordinal() % 2 == 0 {
-        format!("{tic} {body}")
-    } else {
-        format!("{body} {tic}")
+        format!("{body} {}", style.closer)
     };
     let secret_free = !context
         .secrets
