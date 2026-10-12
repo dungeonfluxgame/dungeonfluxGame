@@ -19,11 +19,13 @@ mod director;
 mod figure_art;
 mod formation;
 mod grid;
+mod lod;
 mod math;
 mod model;
 mod scene_file;
 mod splat;
 mod stage;
+mod terrain;
 mod theme;
 
 pub use camera::{CameraPose, CameraRig, PoseError, ShotName};
@@ -32,6 +34,7 @@ pub use director::{Anim, FlashTone, PlanError, Step, TimedStep, Timeline, plan};
 pub use figure_art::{VisibleBounds, visible_bounds};
 pub use formation::{Formation, FormationError, derive as derive_formation};
 pub use grid::{Cell, Grid, GridError};
+pub use lod::{ChunkFile, Focus, Limits, LodError, LodIndex, Pick, Range, Selection};
 pub use math::{Mat4, Quat, Vec3};
 pub use model::{
     AttackResult, Beat, CameraCommand, CameraFocus, FinishingBlow, FloatTone, FloatingText,
@@ -46,6 +49,10 @@ pub use splat::{
     SplatFileLoader, SplatLoader, SplatSorter, SplatTransform, encode_splat_file,
 };
 pub use stage::{FigureView, FlashView, FrameView, Stage, StageError};
+pub use terrain::{
+    GroundPoint, GroundSettings, HeightField, TerrainError, WalkSettings, blocked_cells,
+    estimate_height_field,
+};
 pub use theme::{ColorGrade, Theme};
 
 #[cfg(target_arch = "wasm32")]
