@@ -100,6 +100,30 @@ pub(in crate::gameplay) fn party_sheet(
     Ok(ReferenceImage::new(ImageFormat::Jpeg, Bytes::from(encoded)))
 }
 
+/// A finished plate as the vision model is shown it: at most 1024 pixels wide, a JPEG.
+pub(in crate::gameplay) fn vision_picture(
+    bytes: &[u8],
+    format: ImageFormat,
+) -> Result<Vec<u8>, SheetError> {
+    let decoded = image::load_from_memory_with_format(bytes, container_of(format))
+        .map_err(|_| SheetError::Decode)?;
+    let picture = flatten(&decoded);
+    let width = picture.width().min(1024);
+    if width == 0 || picture.height() == 0 {
+        return Err(SheetError::Decode);
+    }
+    let height =
+        u32::try_from(u64::from(picture.height()) * u64::from(width) / u64::from(picture.width()))
+            .map_err(|_| SheetError::Decode)?
+            .max(1);
+    let scaled = imageops::resize(&picture, width, height, imageops::FilterType::Triangle);
+    let mut encoded = Vec::new();
+    JpegEncoder::new_with_quality(&mut Cursor::new(&mut encoded), 80)
+        .encode_image(&scaled)
+        .map_err(|_| SheetError::Encode)?;
+    Ok(encoded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +161,18 @@ mod tests {
         assert!(
             right.iter().all(|channel| channel.abs_diff(GREY) < 12),
             "a fully transparent figure leaves grey: {right:?}"
+        );
+    }
+
+    #[test]
+    fn a_plate_is_shown_to_the_vision_model_as_a_small_jpeg() {
+        let big = figure(2560, 1440, 255, [30, 40, 50]);
+        let small = vision_picture(&big.bytes, ImageFormat::Png).unwrap();
+        let decoded = image::load_from_memory_with_format(&small, Container::Jpeg).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (1024, 576));
+        assert_eq!(
+            vision_picture(b"not an image", ImageFormat::Png),
+            Err(SheetError::Decode)
         );
     }
 

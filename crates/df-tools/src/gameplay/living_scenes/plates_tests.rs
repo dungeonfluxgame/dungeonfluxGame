@@ -281,7 +281,7 @@ async fn a_ready_plate_reaches_the_display_and_the_phones_with_its_layout() {
         let layout = scene.plate_layout.as_ref().unwrap();
         assert_eq!(layout.bubble_side, rpc::PlateSide::Left as i32);
         assert_eq!(layout.head_x_permille, 640);
-        assert_eq!(layout.head_y_permille, 320);
+        assert_eq!(layout.head_y_permille, 380);
     }
     assert!(locked(&shared.inner.state).plate_covers);
 }

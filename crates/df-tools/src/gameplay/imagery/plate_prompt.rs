@@ -138,7 +138,7 @@ const PRACTICALS: &str = "Warm practical sources:";
 const EDGES: &str = "the edges of the frame fall darker.";
 const SAFE: &str = "Keep clear for an interface: no faces or important detail in the top-left band (top 18%, \
     left 60%), the top-right block (top 30%, right 34%) or the bottom-centre strip (bottom \
-    12%, middle 30%). All heads below the top 22%.";
+    12%, middle 30%). All heads below the top 30%.";
 const HEAD_ABOUT: &str = "The speaker's head is about";
 const HEAD_ACROSS: &str = "% across and";
 const HEAD_DOWN: &str = "% down.";
@@ -243,8 +243,12 @@ fn expression_phrase_of(expression: Expression) -> &'static str {
 
 fn slot_phrase(slot: HeroSlot) -> &'static str {
     match slot {
-        HeroSlot::LeftForeground => "at the left side of the frame, seen small from behind,",
-        HeroSlot::RightForeground => "at the right side of the frame, seen small from behind,",
+        HeroSlot::LeftForeground => {
+            "at the left side of the frame, small, from behind, head 55% down,"
+        }
+        HeroSlot::RightForeground => {
+            "at the right side of the frame, small, from behind, head 55% down,"
+        }
         HeroSlot::LeftMid => "in the left middle distance, three-quarter back,",
         HeroSlot::RightMid => "in the right middle distance, three-quarter back,",
         HeroSlot::BackLeft => "small at the far left, in profile,",

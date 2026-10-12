@@ -137,7 +137,7 @@ fn the_speaker_is_placed_for_the_bubble_with_heads_below_the_top_band_and_inside
             let layout = layout_for(slot, camera);
             let head = layout.head_box();
             let calm = layout.calm_box();
-            assert!(head.top >= 220, "heads stay below the top 22%: {head:?}");
+            assert!(head.top >= 280, "heads stay below the top 28%: {head:?}");
             assert!(head.left >= 0 && head.right <= 1000 && head.bottom <= 1000);
             assert!(
                 calm.left >= 0 && calm.right <= 1000 && calm.top >= 0,
@@ -150,11 +150,30 @@ fn the_speaker_is_placed_for_the_bubble_with_heads_below_the_top_band_and_inside
 }
 
 #[test]
+fn a_measured_head_gives_the_layout_with_the_bubble_on_the_side_of_the_middle() {
+    let right = measured_layout(0.328, 0.25, 0.396, 0.413);
+    assert_eq!(right.bubble_side, Side::Right, "a head left of the middle");
+    assert_eq!((right.head_x_permille, right.head_y_permille), (362, 332));
+    assert_eq!(
+        right.head_width_permille, 90,
+        "a small head still gets the least box"
+    );
+    let left = measured_layout(0.62, 0.2, 0.72, 0.4);
+    assert_eq!(left.bubble_side, Side::Left);
+    assert!(left.head_box().left < 620 && left.head_box().right > 720);
+    let huge = measured_layout(0.0, 0.0, 1.0, 1.0);
+    assert_eq!(
+        (huge.head_width_permille, huge.head_height_permille),
+        (240, 300)
+    );
+}
+
+#[test]
 fn the_head_is_asked_for_lower_than_it_is_expected_to_land_than_it_is_expected_to_land() {
     let layout = layout_for(SpeakerSlot::MidRight, Camera::OverShoulderLeft);
     let (x, y) = asked_head(&layout);
-    assert_eq!((x, y), (640, 460));
-    assert_eq!(layout.head_y_permille, 320);
+    assert_eq!((x, y), (700, 560));
+    assert_eq!(layout.head_y_permille, 380);
 }
 
 #[test]

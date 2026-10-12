@@ -231,6 +231,15 @@ hit). Combat and the lobby never get one.
 - Wire: `GameplayScene.live_plate` (20), `plate_layout` (21: the speaker's head box and the calm
   side for the bubble, in permille of the plate, the measured 9% head-raise bias corrected) and
   `plate_state` (22: unspecified, pending, ready, failed). Display and phones both get them.
+- Head placement: the image model does not obey a requested position (asked 70% across, the
+  speaker landed at 37 to 62%), so each finished plate is shown once, downscaled, to a vision model
+  (`df-providers/src/head_locate.rs`, `gpt-5.5`, about 4 s and a fraction of a cent, never charged to
+  the image budget) with the speaker's fixed description, and the measured head box becomes the
+  layout; when the call fails the director's prediction stands (asked head 70/30% across and 56% down,
+  corrected by the measured drift: 14 to 18% of the frame height higher, 6% toward the middle).
+- Recipe (PLAY-V09 tuning, `artifacts/tmp/play-v09/tune`): a wide shot on a 28mm lens from far back,
+  heroes no wider than a quarter of the frame with their heads about 55% down, all heads below the top
+  30% (the display's title block sits top right), photographic capture terms rather than a style.
 - Display: a ready plate is the scene picture; the cut-outs of the heroes and the cast are not
   drawn and their speech bubbles stand beside the speaker's head (`plate_layout.rs`); until it
   is ready, and if it fails, the scene looks as it always did. The plate has a slow push-in,

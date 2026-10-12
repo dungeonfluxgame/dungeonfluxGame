@@ -89,6 +89,10 @@ pub use native_media_fetch::FalCdnPin;
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_fal_media_provider;
 #[cfg(not(target_arch = "wasm32"))]
+mod head_locate;
+#[cfg(not(target_arch = "wasm32"))]
+pub use head_locate::{HeadBox, HeadLocateConfig, HeadLocateError, NativeHeadLocator};
+#[cfg(not(target_arch = "wasm32"))]
 mod image_edit;
 #[cfg(not(target_arch = "wasm32"))]
 pub use image_edit::{
