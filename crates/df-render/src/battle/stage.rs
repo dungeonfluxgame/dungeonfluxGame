@@ -110,6 +110,8 @@ const PARTY_HOLD_MIN_S: f32 = 1.6;
 const STING_AT_S: f32 = 0.9;
 /// The camera's pan to the party, in seconds.
 const PARTY_PAN_S: f32 = 1.1;
+/// How much closer than the fitted wide shot the party is held (all stay inside the safe area).
+const PARTY_DOLLY: f32 = 0.85;
 /// Gap between one hero's reaction and the next, in seconds.
 const REACT_STAGGER_S: f32 = 0.3;
 
@@ -1597,7 +1599,7 @@ impl Stage {
             framing::FRAMED_ASPECT,
             home_yaw,
         );
-        Some(shot.pose)
+        Some(shot.pose.dollied(PARTY_DOLLY))
     }
 
     fn start_anim(&mut self, id: &TokenId, anim: Anim) {
