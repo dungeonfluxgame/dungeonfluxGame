@@ -616,9 +616,21 @@ fn every_archetype_voice_agrees_with_its_gender_and_has_an_explicit_age() {
         .entries
         .iter()
         .chain(&tables.contacts.entries)
-        .map(|npc| (npc.id.as_str(), npc.gender.as_str(), npc.voice.as_str(), npc.age.as_str()))
+        .map(|npc| {
+            (
+                npc.id.as_str(),
+                npc.gender.as_str(),
+                npc.voice.as_str(),
+                npc.age.as_str(),
+            )
+        })
         .chain(tables.antagonists.entries.iter().map(|ant| {
-            (ant.id.as_str(), ant.gender.as_str(), ant.voice.as_str(), ant.age.as_str())
+            (
+                ant.id.as_str(),
+                ant.gender.as_str(),
+                ant.voice.as_str(),
+                ant.age.as_str(),
+            )
         }));
     for (id, gender, voice, age) in archetypes {
         let voice_words: Vec<String> = voice
@@ -630,7 +642,10 @@ fn every_archetype_voice_agrees_with_its_gender_and_has_an_explicit_age() {
         match gender {
             "he" => assert!(!has(&female), "{id}: {voice:?} contradicts he"),
             "she" => assert!(!has(&male), "{id}: {voice:?} contradicts she"),
-            "it" => assert!(!has(&female) && !has(&male), "{id}: {voice:?} contradicts it"),
+            "it" => assert!(
+                !has(&female) && !has(&male),
+                "{id}: {voice:?} contradicts it"
+            ),
             other => assert_eq!(other, "they", "{id}"),
         }
         assert!(["young", "adult", "elder"].contains(&age), "{id}: {age}");
@@ -638,7 +653,10 @@ fn every_archetype_voice_agrees_with_its_gender_and_has_an_explicit_age() {
         if voice.contains("young") {
             assert_eq!(age, "young", "{id}");
         }
-        if ["old", "older", "elderly", "grizzled"].iter().any(|w| voice_words.contains(&(*w).to_owned())) {
+        if ["old", "older", "elderly", "grizzled"]
+            .iter()
+            .any(|w| voice_words.contains(&(*w).to_owned()))
+        {
             assert_eq!(age, "elder", "{id}");
         }
         if voice.contains("middle") {
@@ -666,7 +684,10 @@ fn generated_prose_pronouns_match_each_characters_gender_and_the_pack_says_it_ex
             &ForcedEntries::new(),
         )
         .unwrap();
-        for (prefix, entries) in [("patron", &tables.patrons.entries), ("contact", &tables.contacts.entries)] {
+        for (prefix, entries) in [
+            ("patron", &tables.patrons.entries),
+            ("contact", &tables.contacts.entries),
+        ] {
             let id = &adventure.facts[&format!("{prefix}.id")];
             let archetype = entries.iter().find(|npc| &npc.id == id).unwrap();
             let sub = &adventure.facts[&format!("{prefix}.sub")];
@@ -674,7 +695,9 @@ fn generated_prose_pronouns_match_each_characters_gender_and_the_pack_says_it_ex
             let mannerism = adventure.facts[&format!("{prefix}.mannerism")].to_lowercase();
             for word in opposite(&archetype.gender) {
                 assert!(
-                    !mannerism.split(|c: char| !c.is_alphabetic()).any(|w| w == word),
+                    !mannerism
+                        .split(|c: char| !c.is_alphabetic())
+                        .any(|w| w == word),
                     "{id} mannerism {mannerism:?}"
                 );
             }
@@ -694,10 +717,17 @@ fn generated_prose_pronouns_match_each_characters_gender_and_the_pack_says_it_ex
         );
         assert!(patron.gender.is_some() && patron.age.is_some());
         let contact = by_name(&adventure.facts["contact.first"]);
-        assert_eq!(contact.age, Age::from_table(&adventure.facts["contact.age"]));
+        assert_eq!(
+            contact.age,
+            Age::from_table(&adventure.facts["contact.age"])
+        );
         for scene in &adventure.pack.scenes {
             for actor in &scene.cast {
-                assert!(actor.gender.is_some() && actor.age.is_some(), "{}", actor.name);
+                assert!(
+                    actor.gender.is_some() && actor.age.is_some(),
+                    "{}",
+                    actor.name
+                );
             }
         }
     }
@@ -723,7 +753,8 @@ fn every_scene_has_its_cast_and_the_speaker_is_the_one_marked_speaking() {
     use super::super::{pack::SceneKey, wire::scene_cast};
     use df_protocol::common as rpc;
     let tables = tables();
-    let cast_of = |seed: u64| -> Vec<(SceneKey, Vec<(String, i32, bool)>)> {
+    type SceneCast = Vec<(SceneKey, Vec<(String, i32, bool)>)>;
+    let cast_of = |seed: u64| -> SceneCast {
         let adventure = generate(
             &tables,
             seed,
@@ -759,7 +790,7 @@ fn every_scene_has_its_cast_and_the_speaker_is_the_one_marked_speaking() {
     let contact = rpc::SceneRole::Contact as i32;
     // A goblin speaks; a giant rat does not.
     let goblin = cast_of(0x3c6ef378dd81de97);
-    let scene = |cast: &[(SceneKey, Vec<(String, i32, bool)>)], key| {
+    let scene = |cast: &SceneCast, key| {
         cast.iter()
             .find(|(candidate, _)| *candidate == key)
             .unwrap()

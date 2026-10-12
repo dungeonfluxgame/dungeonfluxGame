@@ -529,13 +529,12 @@ fn semantic_problem(
 }
 
 /// A spoken line is first-person speech. Text that starts with the speaker's own name, or that
-/// runs eight words or more without once saying I, me, we, you or the like, is narration that
-/// slipped into a line.
+/// runs six words or more without once saying I, me, my, we, us or our (and is no question),
+/// is narration that slipped into a line.
 fn reads_as_narration(text: &str, speaker: &str) -> bool {
-    const SPEECH_WORDS: &[&str] = &[
-        "i", "i'm", "i'd", "i'll", "i've", "me", "my", "mine", "we", "we're", "we'll", "us", "our",
-        "you", "you're", "you'll", "your", "yours", "let's", "let", "don't", "can't", "won't",
-        "please",
+    const FIRST_PERSON: &[&str] = &[
+        "i", "i'm", "i'd", "i'll", "i've", "me", "my", "mine", "we", "we're", "we'll", "we've",
+        "us", "our", "let's",
     ];
     let lowered = text.to_lowercase();
     let spoken = words(&lowered);
@@ -547,7 +546,9 @@ fn reads_as_narration(text: &str, speaker: &str) -> bool {
     {
         return true;
     }
-    spoken.len() >= 8 && !spoken.iter().any(|word| SPEECH_WORDS.contains(word))
+    spoken.len() >= 6
+        && !text.trim_end().ends_with('?')
+        && !spoken.iter().any(|word| FIRST_PERSON.contains(word))
 }
 
 /// Single-slot lint: stock phrases and sentences too long to read aloud.

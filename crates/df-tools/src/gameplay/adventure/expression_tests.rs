@@ -439,7 +439,7 @@ fn the_lint_finds_stock_phrases_long_sentences_and_repeats_across_slots() {
     let found = find_problems(
         &planned,
         &texts(&[
-            ("opening_line", "The lamps are burning low tonight."),
+            ("opening_line", "The lamps are burning low and I fear it."),
             ("combat_line", "The lamps are all that I wanted."),
         ]),
         &known,
