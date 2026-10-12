@@ -790,3 +790,227 @@ async fn a_slot_that_gives_away_the_secret_is_refused_the_same_way_in_both_ratin
         assert_eq!(asks, 2, "{rating:?}");
     }
 }
+
+fn live_storyteller() -> (Storyteller, u64) {
+    use super::super::super::startup_configuration::{
+        StorytellerInputs, StorytellerMode, storyteller_mode,
+    };
+    let mode = storyteller_mode(
+        StorytellerInputs::from_environment(),
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+    )
+    .unwrap();
+    assert!(
+        matches!(mode, StorytellerMode::On(_)),
+        "the storyteller is off"
+    );
+    let storyteller = Storyteller::from_mode(mode);
+    let start = storyteller.remaining_tokens().unwrap();
+    (storyteller, start)
+}
+
+/// Asks the model for the listed groups of one seed in each rating, one group after another, and
+/// writes for every slot the model's accepted text, or why it was refused, beside the pattern
+/// draft. Needs `OPENAI_API_KEY`, `DF_GAMEPLAY_TEXT_TOKEN_BUDGET`, `DF_GAMEPLAY_TEXT_CACHE`,
+/// `DF_PLAY_R01_OUT` (a directory), `DF_PLAY_R01_SEED`, `DF_PLAY_R01_RATINGS` (comma-separated
+/// `mature`, `restrained`) and `DF_PLAY_R01_GROUPS` (comma-separated `scenes`, `voices`).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "calls the real text model and spends its token budget"]
+async fn live_adventure_prose_in_each_rating() {
+    use std::fmt::Write as _;
+    let (storyteller, start) = live_storyteller();
+    let out = std::path::PathBuf::from(std::env::var("DF_PLAY_R01_OUT").unwrap());
+    std::fs::create_dir_all(&out).unwrap();
+    let seed: u64 = std::env::var("DF_PLAY_R01_SEED").unwrap().parse().unwrap();
+    let groups = std::env::var("DF_PLAY_R01_GROUPS").unwrap();
+    let tables = tables();
+    for name in std::env::var("DF_PLAY_R01_RATINGS").unwrap().split(',') {
+        let rating = match name.trim() {
+            "mature" => ContentRating::Mature,
+            "restrained" => ContentRating::Restrained,
+            other => panic!("unknown rating {other}"),
+        };
+        let baseline = generate(&tables, seed, rated(rating), &ForcedEntries::new()).unwrap();
+        let planned = plan(&baseline).unwrap();
+        let mut text = format!("=== {name} seed {seed} ===\n");
+        for (label, group) in [("scenes", Group::Scenes), ("voices", Group::Voices)] {
+            if !groups.split(',').any(|asked| asked == label) {
+                continue;
+            }
+            let answer = ask(
+                &storyteller,
+                &baseline,
+                &planned,
+                None,
+                Some(group),
+                None,
+                DEADLINE,
+            )
+            .await;
+            let _ = writeln!(text, "\n--- group {label} ---");
+            let answer = match answer {
+                Ok(answer) => answer,
+                Err(error) => {
+                    let _ = writeln!(text, "THE CALL FAILED: {error}");
+                    continue;
+                }
+            };
+            let _ = writeln!(text, "tokens (supplier-reported): {}", answer.tokens);
+            let cleaned = cleaned(&planned, &answer.accepted);
+            for slot in planned.iter().filter(|slot| slot.group == group) {
+                let verdict = match (cleaned.get(&slot.name), answer.refused.get(&slot.name)) {
+                    (Some(text), _) => format!("MODEL: {text}"),
+                    (None, Some(reason)) => format!("REFUSED ({reason})"),
+                    (None, None) => "NOT RETURNED".to_owned(),
+                };
+                let _ = writeln!(
+                    text,
+                    "[{}]\n  pattern: {}\n  {verdict}",
+                    slot.name, slot.sheet.baseline
+                );
+            }
+        }
+        std::fs::write(out.join(format!("adventure-{name}-{seed}.txt")), text).unwrap();
+    }
+    let used = start - storyteller.remaining_tokens().unwrap();
+    println!("LIVE CHECK adventure: {used} tokens used");
+}
+
+/// One raw model attempt for the scenes group of one seed and rating, with the verdict of the
+/// storyteller's own checks on each returned slot. Same environment as the live prose check.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "calls the real text model and spends its token budget"]
+async fn live_one_raw_scenes_attempt() {
+    use super::super::super::storyteller::{CallProfile, Expression, validate};
+    use std::fmt::Write as _;
+    let (storyteller, start) = live_storyteller();
+    let out = std::path::PathBuf::from(std::env::var("DF_PLAY_R01_OUT").unwrap());
+    let seed: u64 = std::env::var("DF_PLAY_R01_SEED").unwrap().parse().unwrap();
+    let rating = match std::env::var("DF_PLAY_R01_RATINGS").unwrap().as_str() {
+        "mature" => ContentRating::Mature,
+        _ => ContentRating::Restrained,
+    };
+    let tables = tables();
+    let baseline = generate(&tables, seed, rated(rating), &ForcedEntries::new()).unwrap();
+    let planned = plan(&baseline).unwrap();
+    let asked: Vec<&Planned<'_>> = planned
+        .iter()
+        .filter(|slot| slot.group == Group::Scenes)
+        .collect();
+    let slots: Vec<Slot> = asked
+        .iter()
+        .map(|slot| slot_spec(slot, &baseline))
+        .collect();
+    let facts = group_facts(&baseline, &planned, false, None);
+    let request = Expression {
+        purpose: "adventure",
+        facts: &facts,
+        slots: &slots,
+        style: super::super::super::storyteller::ADVENTURE_STYLE,
+        profile: CallProfile {
+            guidance: guidance(rating),
+            reasoning: Some(df_providers::ReasoningEffort::Low),
+            output_tokens: Some(2500),
+            ..Default::default()
+        },
+    };
+    let mut text = format!("=== raw scenes attempt, {rating:?}, seed {seed} ===\n");
+    match storyteller.single_attempt(&request).await {
+        Err(error) => {
+            let _ = writeln!(text, "ERROR: {error}");
+        }
+        Ok(None) => {
+            let _ = writeln!(text, "THE ANSWER WAS NOT THE REQUESTED SHAPE");
+        }
+        Ok(Some(values)) => {
+            for slot in &slots {
+                let single = [slot.clone()];
+                let one = Expression {
+                    slots: &single,
+                    ..request
+                };
+                let returned: BTreeMap<String, String> = values
+                    .iter()
+                    .filter(|(name, _)| **name == slot.name)
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect();
+                let _ = writeln!(
+                    text,
+                    "[{}] {:?}\n  {}",
+                    slot.name,
+                    validate(&one, &returned).err(),
+                    returned.get(&slot.name).map_or("(missing)", String::as_str)
+                );
+            }
+        }
+    }
+    std::fs::write(out.join(format!("raw-scenes-{rating:?}-{seed}.txt")), text).unwrap();
+    println!(
+        "LIVE CHECK raw scenes: {} tokens used",
+        start - storyteller.remaining_tokens().unwrap()
+    );
+}
+
+/// Writes the pattern text (no model) of one seed in each rating, for reading side by side.
+#[test]
+#[ignore = "writes files for the live check; set DF_PLAY_R01_OUT and DF_PLAY_R01_SEED"]
+fn write_the_pattern_prose_of_each_rating() {
+    use std::fmt::Write as _;
+    let out = std::path::PathBuf::from(std::env::var("DF_PLAY_R01_OUT").unwrap());
+    let seed: u64 = std::env::var("DF_PLAY_R01_SEED").unwrap().parse().unwrap();
+    let tables = tables();
+    for (name, rating) in [
+        ("mature", ContentRating::Mature),
+        ("restrained", ContentRating::Restrained),
+    ] {
+        let adventure = generate(&tables, seed, rated(rating), &ForcedEntries::new()).unwrap();
+        let mut text = format!("=== pattern prose, {name}, seed {seed} ===\n");
+        for scene in &adventure.pack.scenes {
+            let _ = writeln!(
+                text,
+                "[{:?}] {}\n  {}\n  {}: {}",
+                scene.key, scene.title, scene.narration, scene.speaker, scene.dialogue
+            );
+        }
+        std::fs::write(out.join(format!("pattern-{name}-{seed}.txt")), text).unwrap();
+    }
+}
+
+/// Prints how large the prompts of the live check are, without calling any model.
+#[test]
+#[ignore = "prints sizes for planning the live check"]
+fn print_the_adventure_prompt_sizes() {
+    let tables = tables();
+    for rating in [ContentRating::Mature, ContentRating::Restrained] {
+        let baseline = generate(&tables, SEED, rated(rating), &ForcedEntries::new()).unwrap();
+        let planned = plan(&baseline).unwrap();
+        for group in [Group::Scenes, Group::Voices] {
+            let asked: Vec<&Planned<'_>> =
+                planned.iter().filter(|slot| slot.group == group).collect();
+            let slots: Vec<Slot> = asked
+                .iter()
+                .map(|slot| slot_spec(slot, &baseline))
+                .collect();
+            let facts = group_facts(&baseline, &planned, group == Group::Voices, None);
+            let prompt = super::super::super::storyteller::build_prompt(
+                &super::super::super::storyteller::Expression {
+                    purpose: "adventure",
+                    facts: &facts,
+                    slots: &slots,
+                    style: "style",
+                    profile: super::super::super::storyteller::CallProfile {
+                        guidance: guidance(rating),
+                        ..Default::default()
+                    },
+                },
+                None,
+            );
+            println!(
+                "{rating:?} group {} slots {} bytes {}",
+                group == Group::Voices,
+                slots.len(),
+                prompt.len()
+            );
+        }
+    }
+}

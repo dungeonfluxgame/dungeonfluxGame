@@ -74,7 +74,8 @@ const MAXIMUM_CACHE_FILE_BYTES: u64 = 64 * 1024;
 /// Tokens the model may spend thinking before it writes, on top of the visible prose.
 const REASONING_ALLOWANCE_TOKENS: usize = 200;
 
-const ADVENTURE_STYLE: &str = "vivid adventure prose in an experienced Dungeon Master's warm voice";
+pub(super) const ADVENTURE_STYLE: &str =
+    "vivid adventure prose in an experienced Dungeon Master's warm voice";
 /// A batched adventure answer is long, so it gets a larger cap but little hidden reasoning.
 const ADVENTURE_PROFILE: CallProfile = CallProfile {
     reasoning: Some(ReasoningEffort::Low),
@@ -492,6 +493,27 @@ impl Storyteller {
             },
         })
         .await
+    }
+
+    /// One budgeted model attempt and the answer's raw fields, with no validation and no retry;
+    /// `None` when the answer was not the requested shape. For diagnosing a live refusal.
+    #[cfg(test)]
+    pub(super) async fn single_attempt(
+        &self,
+        request: &Expression<'_>,
+    ) -> Result<Option<BTreeMap<String, String>>, StorytellerError> {
+        let online = self.online.as_ref().ok_or(StorytellerError::Off)?;
+        check_request(request)?;
+        let key = cache_key(&online.model, request);
+        let prompt = build_prompt(request, None);
+        let reserved = online.reserve(&prompt, request)?;
+        match online
+            .attempt(request, &key, 1, &prompt, reserved, Instant::now())
+            .await?
+        {
+            Attempt::Text(values, _) => Ok(Some(values)),
+            Attempt::BadShape => Ok(None),
+        }
     }
 
     /// One validated expression: cache, then at most two budgeted model attempts.

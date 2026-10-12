@@ -2,6 +2,8 @@
 //! membership, not production bootstrap. The action and its outcome use generated RPC.
 mod actor;
 mod adventure;
+#[cfg(test)]
+mod content_rating_live_tests;
 mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;

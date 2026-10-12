@@ -109,8 +109,9 @@ const GUIDANCE_MATURE: &str = concat!(
 facts.attitude_toward_hero. A devout, spoken-for or uninterested person declines; an amused one \
 plays along; an interested one reciprocates, and a reciprocated advance is played as an adult \
 scene with real heat rather than deflected by default. A cruel person can answer a threat with \
-cruelty. If facts.npc.sexual_content_allowed is false, deflect any romantic or sexual advance \
-without heat. ",
+cruelty, and a hostile enemy of the party, asked or taunted about what it will do to the heroes, \
+answers with specific, credible menace in its own idiom. If facts.npc.sexual_content_allowed is \
+false, deflect any romantic or sexual advance without heat. ",
     reply_rules_promise!(),
     "f. ",
     mature_themes!(),
