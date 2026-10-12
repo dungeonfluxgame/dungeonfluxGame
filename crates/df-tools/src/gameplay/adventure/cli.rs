@@ -83,6 +83,12 @@ pub(crate) fn run(arguments: &[OsString]) -> Result<(), Box<dyn std::error::Erro
     );
     for scene in &generated.pack.scenes {
         println!("\n{:?}: {}\n{}", scene.key, scene.title, scene.narration);
+        if let Some(setting) = &scene.setting {
+            println!(
+                "Setting: {} | short={} | kind={:?} | exterior={} | art={}",
+                setting.name, setting.short, setting.kind, setting.exterior, setting.art_key
+            );
+        }
         if !scene.dialogue.is_empty() {
             println!("{}: \"{}\"", scene.speaker, scene.dialogue);
         }
@@ -201,6 +207,16 @@ pub(crate) fn campaign(
             );
             for scene in &generated.pack.scenes {
                 println!("\n{:?}: {}\n{}", scene.key, scene.title, scene.narration);
+                if let Some(setting) = &scene.setting {
+                    println!(
+                        "Setting: {} | short={} | kind={:?} | exterior={} | art={}",
+                        setting.name,
+                        setting.short,
+                        setting.kind,
+                        setting.exterior,
+                        setting.art_key
+                    );
+                }
                 if !scene.dialogue.is_empty() {
                     println!("{}: \"{}\"", scene.speaker, scene.dialogue);
                 }

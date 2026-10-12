@@ -6,6 +6,12 @@
 //! otherwise from one single-flight ElevenLabs call whose characters are charged to a
 //! per-run budget before the call and never refunded. Every refusal is an empty 503 or 404;
 //! the browser then simply stays silent.
+//!
+//! The public key never includes a voice: the browser does not know voices. Each named
+//! speaker is cast to a roster voice at startup, and the on-disk cache name additionally
+//! includes the voice id, so a speaker recast to another voice never replays old audio.
+mod casting;
+
 use std::{
     collections::{HashMap, VecDeque},
     io,
@@ -22,6 +28,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
+use casting::{Roster, RosterVoice, cast_speakers};
 use df_model::checkpoint::{Basis, ContentDigest, ExecutionMode, JobId};
 use df_observe::OperationContext;
 use df_protocol::common as rpc;
@@ -37,6 +44,7 @@ use df_types::{
     LocaleTag, OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage,
     UsageUnit,
 };
+use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use super::startup_configuration::{VoiceConfiguration, VoiceOff, VoiceSettings};
@@ -49,6 +57,84 @@ const MAXIMUM_ROLE_BYTES: usize = 96;
 const MAXIMUM_AUDIO_BYTES: usize = 4 * 1024 * 1024;
 const SYNTHESIS_DEADLINE: Duration = Duration::from_secs(30);
 const CACHE_CONTROL: &str = "private, max-age=86400";
+
+/// The gender a speaker is voiced with. It is a hard constraint when casting.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum Gender {
+    He,
+    She,
+    They,
+    It,
+}
+
+impl Gender {
+    pub(super) fn parse(text: &str) -> Option<Self> {
+        match text {
+            "he" => Some(Self::He),
+            "she" => Some(Self::She),
+            "they" => Some(Self::They),
+            "it" => Some(Self::It),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::He => "he",
+            Self::She => "she",
+            Self::They => "they",
+            Self::It => "it",
+        }
+    }
+
+    /// The roster field naming this gender's voices, for errors.
+    fn roster_group_field(self) -> &'static str {
+        match self {
+            Self::He => "npc_voices.he",
+            Self::She => "npc_voices.she",
+            Self::They => "npc_voices.they",
+            Self::It => "npc_voices.it",
+        }
+    }
+}
+
+/// How old a speaker sounds; casting prefers a voice of the same age.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum Age {
+    Young,
+    Adult,
+    Elder,
+}
+
+impl Age {
+    pub(super) fn parse(text: &str) -> Option<Self> {
+        match text {
+            "young" => Some(Self::Young),
+            "adult" => Some(Self::Adult),
+            "elder" => Some(Self::Elder),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Young => "young",
+            Self::Adult => "adult",
+            Self::Elder => "elder",
+        }
+    }
+}
+
+/// One speaking character of the adventure, as the caller knows them at startup.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) struct SpeakerCasting {
+    /// The name the dialogue is attributed to (the display's speaker).
+    pub(super) name: String,
+    pub(super) gender: Gender,
+    pub(super) age: Option<Age>,
+    /// Free-text casting phrase, such as "gruff older woman"; only its words are compared.
+    pub(super) tone: String,
+}
 
 /// Why a registered line could not be turned into audio. The client never sees the
 /// difference: every variant is an empty 503.
@@ -113,10 +199,71 @@ struct Budget {
     exhausted: bool,
 }
 
+/// The voice one line is spoken with.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ChosenVoice {
+    voice_id: String,
+    /// Short name for diagnostics; never a credential.
+    name: String,
+    /// The speaker had no casting entry, so the neutral fallback voice was used.
+    fallback: bool,
+}
+
+impl ChosenVoice {
+    fn from_roster(voice: &RosterVoice, fallback: bool) -> Self {
+        Self {
+            voice_id: voice.voice_id.clone(),
+            name: voice.name.clone(),
+            fallback,
+        }
+    }
+}
+
+/// Which voice speaks which line.
+struct Casting {
+    narrator: ChosenVoice,
+    /// When set, every NPC line uses it (a testing override).
+    forced: Option<ChosenVoice>,
+    /// Cast voices by lowercase speaker name.
+    by_speaker: HashMap<String, ChosenVoice>,
+    fallback: ChosenVoice,
+}
+
+fn speaker_key(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+impl Casting {
+    fn voice_for(&self, line: &VoiceLine) -> &ChosenVoice {
+        if !line.is_npc() {
+            return &self.narrator;
+        }
+        let speaker = line.speaker().unwrap_or_default();
+        self.forced
+            .as_ref()
+            .or_else(|| self.by_speaker.get(&speaker_key(speaker)))
+            .unwrap_or(&self.fallback)
+    }
+}
+
+/// On-disk cache file name: the voice id is part of the audio's identity, so recasting a
+/// speaker never replays audio made with another voice. Voice ids contain no newline.
+fn cache_file_name(voice_id: &str, line: &VoiceLine) -> String {
+    let mut hasher = Sha256::new();
+    for part in [voice_id, &line.role, &line.text] {
+        hasher.update(part.as_bytes());
+        hasher.update(b"\n");
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 struct Synthesis {
     provider: NativeSpeechProvider,
-    narrator_voice: String,
-    npc_voice: String,
+    casting: Casting,
     cache_dir: PathBuf,
     budget: Mutex<Budget>,
     in_flight: Mutex<HashMap<String, watch::Receiver<Option<Outcome>>>>,
@@ -158,12 +305,20 @@ impl Voice {
         }
     }
 
-    /// Builds the production ElevenLabs flash route from validated settings.
-    pub(super) fn start(settings: VoiceSettings) -> Result<Self, io::Error> {
+    /// Builds the production ElevenLabs flash route from validated settings. `speakers` are
+    /// cast from the roster file named by the settings; `run_identifier` (the adventure
+    /// seed) varies the cast between adventures. An unusable roster refuses startup.
+    pub(super) fn start(
+        settings: VoiceSettings,
+        speakers: &[SpeakerCasting],
+        run_identifier: &str,
+    ) -> Result<Self, io::Error> {
         let configuration = match settings {
             VoiceSettings::Off(reason) => return Ok(Self::disabled(reason)),
             VoiceSettings::On(configuration) => configuration,
         };
+        let roster = Roster::load(&configuration.casting_path)
+            .map_err(|error| io::Error::other(error.to_string()))?;
         let limits = NativeHttpLimits {
             connect_timeout: Duration::from_secs(5),
             read_timeout: SYNTHESIS_DEADLINE,
@@ -179,26 +334,89 @@ impl Voice {
             limits,
         )
         .map_err(|_| io::Error::other("voice provider configuration refused"))?;
-        Self::new(configuration, provider)
+        Self::new(configuration, provider, &roster, speakers, run_identifier)
     }
 
     /// Uses `provider` for synthesis; tests pass one pointed at a loopback fake.
     fn new(
         configuration: VoiceConfiguration,
         provider: NativeSpeechProvider,
+        roster: &Roster,
+        speakers: &[SpeakerCasting],
+        run_identifier: &str,
     ) -> Result<Self, io::Error> {
         std::fs::create_dir_all(&configuration.cache_dir)?;
-        let summary = format!(
+        let cast = cast_speakers(
+            roster,
+            &configuration.narrator_voice,
+            speakers,
+            run_identifier,
+        );
+        let forced = configuration
+            .npc_voice_override
+            .map(|voice_id| ChosenVoice {
+                name: voice_id.clone(),
+                voice_id,
+                fallback: false,
+            });
+        let mut summary = format!(
             "VOICE on narrator={} npc={} budget={} cache={}",
             configuration.narrator_voice,
-            configuration.npc_voice,
+            match &forced {
+                Some(forced) => format!("forced:{}", forced.voice_id),
+                None => format!(
+                    "cast({} speakers, fallback {})",
+                    cast.len(),
+                    roster.fallback.name
+                ),
+            },
             configuration.character_budget,
             configuration.cache_dir.display()
         );
+        let mut by_speaker = HashMap::new();
+        if forced.is_none() {
+            for speaker in speakers {
+                let Some(voice) = cast.get(&speaker.name).and_then(|id| roster.voice(id)) else {
+                    continue;
+                };
+                let known = by_speaker
+                    .insert(
+                        speaker_key(&speaker.name),
+                        ChosenVoice::from_roster(voice, false),
+                    )
+                    .is_some();
+                if known {
+                    continue;
+                }
+                let age = speaker
+                    .age
+                    .map_or_else(String::new, |age| format!("/{}", age.label()));
+                summary.push_str(&format!(
+                    "\nVOICE cast {} {}{age} -> {}",
+                    speaker.name,
+                    speaker.gender.label(),
+                    voice.name
+                ));
+            }
+        }
+        let narrator_name = if configuration.narrator_voice == roster.narrator_voice_id {
+            roster.narrator_name.clone()
+        } else {
+            configuration.narrator_voice.clone()
+        };
+        let casting = Casting {
+            narrator: ChosenVoice {
+                voice_id: configuration.narrator_voice,
+                name: narrator_name,
+                fallback: false,
+            },
+            forced,
+            by_speaker,
+            fallback: ChosenVoice::from_roster(&roster.fallback, true),
+        };
         let synthesis = Synthesis {
             provider,
-            narrator_voice: configuration.narrator_voice,
-            npc_voice: configuration.npc_voice,
+            casting,
             cache_dir: configuration.cache_dir,
             budget: Mutex::new(Budget {
                 remaining: configuration.character_budget,
@@ -217,7 +435,8 @@ impl Voice {
         })
     }
 
-    /// The single startup line; it never contains the credential.
+    /// The startup lines (the summary, then one per cast speaker); they never contain the
+    /// credential.
     pub(super) fn startup_line(&self) -> String {
         match &self.inner.mode {
             Mode::Off(reason) => format!("VOICE off ({})", reason.reason()),
@@ -244,7 +463,7 @@ impl Voice {
         let Mode::On { synthesis, .. } = &self.inner.mode else {
             return Lookup::Unavailable;
         };
-        match synthesis.audio(key, line).await {
+        match synthesis.audio(line).await {
             Ok(bytes) => Lookup::Audio(bytes),
             Err(_) => Lookup::Unavailable,
         }
@@ -252,18 +471,20 @@ impl Voice {
 }
 
 impl Synthesis {
-    async fn audio(self: &Arc<Self>, key: &str, line: VoiceLine) -> Outcome {
-        if let Some(bytes) = self.read_cached(key).await {
+    async fn audio(self: &Arc<Self>, line: VoiceLine) -> Outcome {
+        let voice = self.casting.voice_for(&line).clone();
+        let key = cache_file_name(&voice.voice_id, &line);
+        if let Some(bytes) = self.read_cached(&key).await {
             return Ok(bytes);
         }
         let mut receiver = {
             let mut flights = locked(&self.in_flight);
-            match flights.get(key) {
+            match flights.get(&key) {
                 Some(receiver) => receiver.clone(),
                 None => {
                     let (sender, receiver) = watch::channel(None);
-                    flights.insert(key.to_owned(), receiver.clone());
-                    tokio::spawn(Arc::clone(self).fly(key.to_owned(), line, sender));
+                    flights.insert(key.clone(), receiver.clone());
+                    tokio::spawn(Arc::clone(self).fly(key, voice, line, sender));
                     receiver
                 }
             }
@@ -275,21 +496,23 @@ impl Synthesis {
         finished.clone().unwrap_or(Err(Failure::Interrupted))
     }
 
-    /// The one task of a key. Callers that go away do not cancel it: its charge is already
-    /// spent, so its audio is finished and cached for the next request.
+    /// The one task of a cache key (voice, role and text). Callers that go away do not cancel
+    /// it: its charge is already spent, so its audio is finished and cached for the next
+    /// request.
     async fn fly(
         self: Arc<Self>,
         key: String,
+        voice: ChosenVoice,
         line: VoiceLine,
         sender: watch::Sender<Option<Outcome>>,
     ) {
-        let outcome = self.produce(&key, &line).await;
+        let outcome = self.produce(&key, &voice, &line).await;
         locked(&self.in_flight).remove(&key);
         // No receiver left means every requester disconnected; the cache holds the result.
         sender.send_replace(Some(outcome));
     }
 
-    async fn produce(&self, key: &str, line: &VoiceLine) -> Outcome {
+    async fn produce(&self, key: &str, voice: &ChosenVoice, line: &VoiceLine) -> Outcome {
         // A flight that finished between the caller's cache check and this one wrote it.
         if let Some(bytes) = self.read_cached(key).await {
             return Ok(bytes);
@@ -299,7 +522,14 @@ impl Synthesis {
             build: crate::BUILD_ID.to_owned(),
         };
         let mut span = df_observe::begin(&context, "gameplay.voice_synthesis");
-        let outcome = self.synthesize(key, line).await;
+        span.event(
+            "gameplay.voice.chosen",
+            &[
+                ("gameplay.voice.name", voice.name.clone()),
+                ("gameplay.voice.fallback", voice.fallback.to_string()),
+            ],
+        );
+        let outcome = self.synthesize(key, voice, line).await;
         span.finish_unmeasured(match &outcome {
             Ok((_, true)) => "synthesized",
             Ok((_, false)) => "synthesized_uncached",
@@ -310,15 +540,15 @@ impl Synthesis {
 
     /// Charges first, calls the provider once and caches the audio; the boolean tells
     /// whether the cache write succeeded.
-    async fn synthesize(&self, key: &str, line: &VoiceLine) -> Result<(Bytes, bool), Failure> {
+    async fn synthesize(
+        &self,
+        key: &str,
+        voice: &ChosenVoice,
+        line: &VoiceLine,
+    ) -> Result<(Bytes, bool), Failure> {
         let characters = u32::try_from(line.text.chars().count()).map_err(|_| Failure::Request)?;
         self.charge(characters)?;
-        let voice = if line.is_npc() {
-            &self.npc_voice
-        } else {
-            &self.narrator_voice
-        };
-        let audio = self.request_audio(voice, line).await?;
+        let audio = self.request_audio(&voice.voice_id, line).await?;
         if audio.is_empty() || audio.len() > MAXIMUM_AUDIO_BYTES {
             return Err(Failure::Provider);
         }
@@ -512,6 +742,7 @@ mod tests {
     use super::super::startup_configuration::{
         VoiceCredential, VoiceInputs, VoiceOff, voice_settings,
     };
+    use super::casting::fixtures::test_roster;
     use super::*;
 
     const AUDIO: &[u8] = b"ID3 fake mpeg audio";
@@ -637,11 +868,21 @@ mod tests {
             character_budget: budget,
             cache_dir: cache.to_path_buf(),
             narrator_voice: "narratorvoice".to_owned(),
-            npc_voice: "npcvoice".to_owned(),
+            npc_voice_override: None,
+            casting_path: PathBuf::from("voice-casting.json"),
         }
     }
 
     fn voice_with(fake: &FakeEleven, cache: &Path, budget: u32) -> Voice {
+        voice_cast(fake, configuration(cache, budget), &[], "0x1")
+    }
+
+    fn voice_cast(
+        fake: &FakeEleven,
+        configuration: VoiceConfiguration,
+        speakers: &[SpeakerCasting],
+        run_identifier: &str,
+    ) -> Voice {
         let limits = NativeHttpLimits {
             connect_timeout: Duration::from_secs(1),
             read_timeout: Duration::from_secs(5),
@@ -659,7 +900,14 @@ mod tests {
         .unwrap()
         .for_loopback_fixture(fake.address)
         .unwrap();
-        Voice::new(configuration(cache, budget), provider).unwrap()
+        Voice::new(
+            configuration,
+            provider,
+            &test_roster(),
+            speakers,
+            run_identifier,
+        )
+        .unwrap()
     }
 
     fn narrator(text: &str) -> VoiceLine {
@@ -724,7 +972,8 @@ mod tests {
         assert_eq!(body.as_ref(), AUDIO);
         assert_eq!(second.status(), StatusCode::OK);
         assert_eq!(fake.calls(), 1);
-        assert_eq!(std::fs::read(cache.join(&key)).unwrap(), AUDIO);
+        let name = cache_file_name("narratorvoice", &narrator("The lanterns sway."));
+        assert_eq!(std::fs::read(cache.join(name)).unwrap(), AUDIO);
         let first_target = fake.targets.lock().unwrap()[0].clone();
         assert!(first_target.contains("/v1/text-to-speech/narratorvoice/stream"));
     }
@@ -843,26 +1092,242 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(fake.calls(), 1);
-        assert!(!cache.join(&key).exists());
         assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 0);
     }
 
+    fn npc(speaker: &str, text: &str) -> VoiceLine {
+        VoiceLine {
+            role: format!("npc:{speaker}"),
+            text: text.to_owned(),
+        }
+    }
+
+    fn speaker(name: &str, gender: Gender, age: Option<Age>, tone: &str) -> SpeakerCasting {
+        SpeakerCasting {
+            name: name.to_owned(),
+            gender,
+            age,
+            tone: tone.to_owned(),
+        }
+    }
+
+    /// Speaks `line` and returns the voice id the fake provider's latest request targeted.
+    async fn voice_id_requested(voice: &Voice, fake: &FakeEleven, line: &VoiceLine) -> String {
+        let key = register(voice, line);
+        assert_eq!(
+            voice.audio(&key).await,
+            Lookup::Audio(Bytes::from_static(AUDIO))
+        );
+        let target = fake.targets.lock().unwrap().last().unwrap().clone();
+        let path = target.split_whitespace().nth(1).unwrap().to_owned();
+        path.strip_prefix("/v1/text-to-speech/")
+            .and_then(|rest| rest.split('/').next())
+            .unwrap()
+            .to_owned()
+    }
+
+    fn roster_voice_gender(voice_id: &str) -> Option<Gender> {
+        test_roster().voice(voice_id).map(|voice| voice.gender)
+    }
+
     #[tokio::test]
-    async fn named_speakers_use_the_npc_voice() {
-        let cache = scratch("npc");
+    async fn a_she_speaker_is_voiced_with_a_she_voice_and_a_he_speaker_with_a_he_voice() {
+        let cache = scratch("gender");
         let fake = FakeEleven::start(Duration::ZERO, true);
-        let voice = voice_with(&fake, &cache, 1000);
-        let npc = VoiceLine {
-            role: "npc:Courier".to_owned(),
-            text: "You are late.".to_owned(),
+        let speakers = [
+            speaker("Wren", Gender::She, Some(Age::Elder), "warm older woman"),
+            speaker("Garrick", Gender::He, Some(Age::Adult), "gruff man"),
+        ];
+        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+
+        let wren = voice_id_requested(&voice, &fake, &npc("Wren", "Welcome in.")).await;
+        let garrick = voice_id_requested(&voice, &fake, &npc("Garrick", "Move along.")).await;
+
+        assert_eq!(roster_voice_gender(&wren), Some(Gender::She));
+        assert_eq!(roster_voice_gender(&garrick), Some(Gender::He));
+    }
+
+    #[tokio::test]
+    async fn they_and_it_speakers_get_their_own_gender_groups() {
+        let cache = scratch("they-it");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let speakers = [
+            speaker("Marl", Gender::They, None, "calm"),
+            speaker("Skrit", Gender::It, None, "raspy"),
+        ];
+        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+
+        let marl = voice_id_requested(&voice, &fake, &npc("Marl", "Hello.")).await;
+        let skrit = voice_id_requested(&voice, &fake, &npc("Skrit", "Hiss.")).await;
+
+        assert_eq!(roster_voice_gender(&marl), Some(Gender::They));
+        assert_eq!(skrit, "it1");
+    }
+
+    #[tokio::test]
+    async fn two_speakers_of_one_adventure_are_voiced_differently() {
+        let cache = scratch("distinct");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let speakers = [
+            speaker("Wren", Gender::She, Some(Age::Young), "warm"),
+            speaker("Brisa", Gender::She, Some(Age::Young), "warm"),
+        ];
+        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+
+        let wren = voice_id_requested(&voice, &fake, &npc("Wren", "Welcome in.")).await;
+        let brisa = voice_id_requested(&voice, &fake, &npc("Brisa", "Welcome in.")).await;
+
+        assert_ne!(wren, brisa);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_speaker_gets_the_neutral_fallback_never_a_gendered_voice() {
+        let cache = scratch("fallback");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let speakers = [speaker("Wren", Gender::She, None, "")];
+        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+
+        let stranger = voice_id_requested(&voice, &fake, &npc("Stranger", "Who goes?")).await;
+
+        assert_eq!(stranger, "they1");
+        let Mode::On { synthesis, .. } = &voice.inner.mode else {
+            panic!("voice should be on");
         };
-        let key = register(&voice, &npc);
+        assert!(
+            synthesis
+                .casting
+                .voice_for(&npc("Stranger", "Who goes?"))
+                .fallback
+        );
+        assert!(!synthesis.casting.voice_for(&npc("Wren", "Hm.")).fallback);
+    }
 
-        let lookup = voice.audio(&key).await;
+    #[tokio::test]
+    async fn speaker_names_match_regardless_of_case_and_the_narrator_keeps_its_voice() {
+        let cache = scratch("case");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let speakers = [speaker("Wren", Gender::She, None, "")];
+        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
 
-        assert_eq!(lookup, Lookup::Audio(Bytes::from_static(AUDIO)));
-        let target = fake.targets.lock().unwrap()[0].clone();
-        assert!(target.contains("/v1/text-to-speech/npcvoice/stream"));
+        let loud = voice_id_requested(&voice, &fake, &npc(" WREN ", "Hello.")).await;
+        let narration = voice_id_requested(&voice, &fake, &narrator("Rain falls.")).await;
+
+        assert_eq!(roster_voice_gender(&loud), Some(Gender::She));
+        assert_eq!(narration, "narratorvoice");
+    }
+
+    #[tokio::test]
+    async fn the_forced_npc_voice_speaks_every_named_speaker() {
+        let cache = scratch("forced");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let mut forced = configuration(&cache, 1000);
+        forced.npc_voice_override = Some("npcvoice".to_owned());
+        let speakers = [speaker("Wren", Gender::She, None, "")];
+        let voice = voice_cast(&fake, forced, &speakers, "0x7");
+
+        let wren = voice_id_requested(&voice, &fake, &npc("Wren", "Hello.")).await;
+        let stranger = voice_id_requested(&voice, &fake, &npc("Stranger", "Hello.")).await;
+
+        assert_eq!((wren.as_str(), stranger.as_str()), ("npcvoice", "npcvoice"));
+        let line = voice.startup_line();
+        assert!(line.contains("npc=forced:npcvoice"));
+        assert!(!line.contains("VOICE cast"));
+    }
+
+    #[test]
+    fn startup_reports_one_line_per_cast_speaker_without_the_credential() {
+        let cache = scratch("startup-lines");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let speakers = [
+            speaker("Wren", Gender::She, Some(Age::Elder), "warm"),
+            speaker("Odo", Gender::He, None, ""),
+        ];
+        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+
+        let text = voice.startup_line();
+
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].starts_with("VOICE on narrator=narratorvoice npc=cast(2 speakers"));
+        assert!(lines[1].starts_with("VOICE cast Wren she/elder -> she"));
+        assert!(lines[2].starts_with("VOICE cast Odo he -> he"));
+        assert!(!text.contains("test-credential"));
+    }
+
+    #[tokio::test]
+    async fn recasting_a_speaker_changes_the_cache_file_but_not_the_public_key() {
+        let cache = scratch("recast");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let line = npc("Wren", "Welcome in.");
+        let first = voice_cast(
+            &fake,
+            configuration(&cache, 1000),
+            &[speaker("Wren", Gender::She, Some(Age::Young), "")],
+            "0x7",
+        );
+        let first_voice = voice_id_requested(&first, &fake, &line).await;
+        let public_key = line.key();
+
+        let recast = voice_cast(
+            &fake,
+            configuration(&cache, 1000),
+            &[speaker("Wren", Gender::She, Some(Age::Elder), "")],
+            "0x7",
+        );
+        let second_voice = voice_id_requested(&recast, &fake, &line).await;
+
+        assert_ne!(first_voice, second_voice);
+        assert_eq!(line.key(), public_key);
+        assert_eq!(
+            fake.calls(),
+            2,
+            "the old voice's cached audio must not be replayed"
+        );
+        assert!(cache.join(cache_file_name(&first_voice, &line)).is_file());
+        assert!(cache.join(cache_file_name(&second_voice, &line)).is_file());
+        assert!(!cache.join(&public_key).exists());
+    }
+
+    #[test]
+    fn cache_names_are_the_sha256_of_voice_role_and_text() {
+        let line = npc("Wren", "Welcome in.");
+
+        let name = cache_file_name("abc", &line);
+
+        let mut expected = Sha256::new();
+        expected.update(b"abc\nnpc:Wren\nWelcome in.\n");
+        let expected: String = expected
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(name, expected);
+        assert_ne!(name, line.key());
+    }
+
+    #[test]
+    fn starting_with_an_unusable_roster_is_refused_with_a_typed_message() {
+        let dir = scratch("roster-file");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("voice-casting.json");
+        std::fs::write(&path, br#"{"schema":"df-voice-casting/1"}"#).unwrap();
+        let mut malformed = configuration(&dir, 1000);
+        malformed.casting_path = path;
+        let mut missing = configuration(&dir, 1000);
+        missing.casting_path = dir.join("absent.json");
+
+        let malformed = Voice::start(VoiceSettings::On(malformed), &[], "0x1")
+            .err()
+            .unwrap();
+        let missing = Voice::start(VoiceSettings::On(missing), &[], "0x1")
+            .err()
+            .unwrap();
+
+        assert!(
+            malformed.to_string().contains("voice roster malformed"),
+            "{malformed}"
+        );
+        assert!(missing.to_string().contains("unreadable"), "{missing}");
     }
 
     #[tokio::test]
@@ -952,6 +1417,7 @@ mod tests {
             cache_dir: pick("DF_GAMEPLAY_VOICE_CACHE"),
             narrator_voice: pick("DF_GAMEPLAY_VOICE_NARRATOR"),
             npc_voice: pick("DF_GAMEPLAY_VOICE_NPC"),
+            casting: pick("DF_GAMEPLAY_VOICE_CASTING"),
         }
     }
 
@@ -978,7 +1444,11 @@ mod tests {
             PathBuf::from("artifacts/tmp/play/voice-cache")
         );
         assert_eq!(configuration.narrator_voice, "JBFqnCBsd6RMkjVDRZzb");
-        assert_eq!(configuration.npc_voice, "N2lVS1w4EtoT3dr4eOWO");
+        assert_eq!(configuration.npc_voice_override, None);
+        assert_eq!(
+            configuration.casting_path,
+            PathBuf::from("content/voice-casting.json")
+        );
         assert!(format!("{configuration:?}").contains("[REDACTED]"));
     }
 
@@ -990,6 +1460,7 @@ mod tests {
             ("DF_GAMEPLAY_VOICE_CACHE", "/tmp/somewhere"),
             ("DF_GAMEPLAY_VOICE_NARRATOR", "narr_1"),
             ("DF_GAMEPLAY_VOICE_NPC", "npc-2"),
+            ("DF_GAMEPLAY_VOICE_CASTING", "/roster/voices.json"),
         ];
         let VoiceSettings::On(configuration) = voice_settings(inputs(&overrides)).unwrap() else {
             panic!("voice should be on");
@@ -997,7 +1468,11 @@ mod tests {
         assert_eq!(configuration.character_budget, 300);
         assert_eq!(configuration.cache_dir, PathBuf::from("/tmp/somewhere"));
         assert_eq!(configuration.narrator_voice, "narr_1");
-        assert_eq!(configuration.npc_voice, "npc-2");
+        assert_eq!(configuration.npc_voice_override.as_deref(), Some("npc-2"));
+        assert_eq!(
+            configuration.casting_path,
+            PathBuf::from("/roster/voices.json")
+        );
 
         let off = voice_settings(inputs(&[
             ("ELEVENLABS_API_KEY", "k"),

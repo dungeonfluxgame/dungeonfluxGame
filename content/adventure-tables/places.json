@@ -1,0 +1,974 @@
+{
+  "schema": "df-adventure-places/1",
+  "meeting_places": {
+    "innkeeper": {
+      "kind": "inn",
+      "name": "the taproom of the inn beside {loc.name}",
+      "short": "the taproom",
+      "exterior": false,
+      "art": "place-inn-taproom",
+      "excluded_locations": [],
+      "details": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A hearth crackles."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "Mugs clink softly."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "Warm ale scents the air."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "The benches creak."
+          }
+        ]
+      }
+    },
+    "acolyte": {
+      "kind": "temple",
+      "name": "the sanctuary beside {loc.name}",
+      "short": "the sanctuary",
+      "exterior": false,
+      "art": "place-temple-sanctuary",
+      "excluded_locations": [],
+      "details": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "Candles flicker."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "Incense hangs in the air."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "A prayer fades away."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "Cool stone catches the light."
+          }
+        ]
+      }
+    },
+    "archivist": {
+      "kind": "archive",
+      "name": "the archive beside {loc.name}",
+      "short": "the archive",
+      "exterior": false,
+      "art": "place-archive-stacks",
+      "excluded_locations": [],
+      "details": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "Paper rustles."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "Dust drifts in lamplight."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "Leather bindings scent the air."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A ladder creaks."
+          }
+        ]
+      }
+    },
+    "ferry-clerk": {
+      "kind": "ferry-office",
+      "name": "the ferry office near {loc.name}",
+      "short": "the ferry office",
+      "exterior": false,
+      "art": "place-ferry-office",
+      "excluded_locations": [],
+      "details": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A ledger lies open."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "A rope bell chimes."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "Damp coats scent the air."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "Coins clink on a desk."
+          }
+        ]
+      }
+    },
+    "merchant": {
+      "kind": "shop",
+      "name": "the cloth shop near {loc.name}",
+      "short": "the cloth shop",
+      "exterior": false,
+      "art": "place-cloth-shop",
+      "excluded_locations": [],
+      "details": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "Silk rustles."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "Dyed cloth fills the shelves."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "A lamp warms the counter."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A shutter rattles."
+          }
+        ]
+      }
+    },
+    "herbwife": {
+      "kind": "herb-shed",
+      "name": "the herb shed near {loc.name}",
+      "short": "the herb shed",
+      "exterior": false,
+      "art": "place-herb-shed",
+      "excluded_locations": [],
+      "details": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "Dried mint scents the air."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "Herbs sway from the beams."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "A mortar taps softly."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A kettle steams."
+          }
+        ]
+      }
+    },
+    "lamp-warden": {
+      "kind": "lamp-room",
+      "name": "the lamp room near {loc.name}",
+      "short": "the lamp room",
+      "exterior": false,
+      "art": "place-lamp-room",
+      "excluded_locations": [],
+      "details": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "Lamp oil scents the air."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "Brass gleams warmly."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "A wick hisses."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "Glass lenses catch the light."
+          }
+        ]
+      }
+    },
+    "shepherd": {
+      "kind": "sheepfold",
+      "name": "the sheepfold near {loc.name}",
+      "short": "the sheepfold",
+      "exterior": true,
+      "art": "place-shepherds-fold",
+      "excluded_locations": [],
+      "details": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "Sheep stir in the straw."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "A gate creaks."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "Wool catches the moonlight."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A bell jingles softly."
+          }
+        ]
+      }
+    },
+    "veteran": {
+      "kind": "guardhouse",
+      "name": "the guardhouse near {loc.name}",
+      "short": "the guardhouse",
+      "exterior": false,
+      "art": "place-guardhouse",
+      "excluded_locations": [],
+      "details": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "Boots scrape stone."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "A shield hangs by the door."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "A brazier glows."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "Leather creaks."
+          }
+        ]
+      }
+    },
+    "bell-ringer": {
+      "kind": "bell-chamber",
+      "name": "the bell chamber near {loc.name}",
+      "short": "the bell chamber",
+      "exterior": false,
+      "art": "place-bell-chamber",
+      "excluded_locations": [],
+      "details": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A bell hums softly."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "Ropes sway in the draft."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "Bronze catches the light."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "Timbers creak overhead."
+          }
+        ]
+      }
+    }
+  },
+  "confrontation": {
+    "salt-quay": {
+      "kind": "quay",
+      "name": "the Salt Quay",
+      "short": "the quay",
+      "exterior": true,
+      "art": "loc-salt-quay-arrival",
+      "bridges": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A disturbance draws you to the quay."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "You follow the commotion to the quay."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "You leave your meeting place for the quay."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A cry leads you to the quay."
+          }
+        ]
+      }
+    },
+    "pinewood-trail": {
+      "kind": "forest-trail",
+      "name": "the Pinewood Trail",
+      "short": "the trail",
+      "exterior": true,
+      "art": "loc-pinewood-trail-arrival",
+      "bridges": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A disturbance draws you to the trail."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "You follow the commotion to the trail."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "You leave your meeting place for the trail."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A cry leads you to the trail."
+          }
+        ]
+      }
+    },
+    "windward-pass": {
+      "kind": "mountain-pass",
+      "name": "the Windward Pass",
+      "short": "the pass",
+      "exterior": true,
+      "art": "loc-windward-pass-arrival",
+      "bridges": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A disturbance draws you to the pass."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "You follow the commotion to the pass."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "You leave your meeting place for the pass."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A cry leads you to the pass."
+          }
+        ]
+      }
+    },
+    "lamplit-market": {
+      "kind": "market-street",
+      "name": "the Lamplit Market",
+      "short": "the market",
+      "exterior": true,
+      "art": "loc-lamplit-market-arrival",
+      "bridges": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A disturbance draws you to the market."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "You follow the commotion to the market."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "You leave your meeting place for the market."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A cry leads you to the market."
+          }
+        ]
+      }
+    },
+    "rookhill-gate": {
+      "kind": "graveyard-gate",
+      "name": "the Rookhill Gate",
+      "short": "the gate",
+      "exterior": true,
+      "art": "loc-rookhill-gate-arrival",
+      "bridges": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A disturbance draws you to the gate."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "You follow the commotion to the gate."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "You leave your meeting place for the gate."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A cry leads you to the gate."
+          }
+        ]
+      }
+    },
+    "reedmoor-boardwalk": {
+      "kind": "marsh-boardwalk",
+      "name": "the Reedmoor Boardwalk",
+      "short": "the boardwalk",
+      "exterior": true,
+      "art": "loc-reedmoor-boardwalk-arrival",
+      "bridges": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A disturbance draws you to the boardwalk."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "You follow the commotion to the boardwalk."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "You leave your meeting place for the boardwalk."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A cry leads you to the boardwalk."
+          }
+        ]
+      }
+    },
+    "thistledown-farm": {
+      "kind": "farmyard",
+      "name": "Thistledown Farm",
+      "short": "the farm",
+      "exterior": true,
+      "art": "loc-thistledown-farm-arrival",
+      "bridges": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A disturbance draws you to the farm."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "You follow the commotion to the farm."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "You leave your meeting place for the farm."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A cry leads you to the farm."
+          }
+        ]
+      }
+    },
+    "orrery-library": {
+      "kind": "library-forecourt",
+      "name": "the forecourt of the Orrery Library",
+      "short": "the forecourt",
+      "exterior": true,
+      "art": "loc-orrery-library-forecourt",
+      "bridges": {
+        "die": 4,
+        "entries": [
+          {
+            "faces": [
+              1,
+              1
+            ],
+            "text": "A disturbance draws you to the forecourt."
+          },
+          {
+            "faces": [
+              2,
+              2
+            ],
+            "text": "You follow the commotion to the forecourt."
+          },
+          {
+            "faces": [
+              3,
+              3
+            ],
+            "text": "You leave your meeting place for the forecourt."
+          },
+          {
+            "faces": [
+              4,
+              4
+            ],
+            "text": "A cry leads you to the forecourt."
+          }
+        ]
+      }
+    }
+  },
+  "destinations": {
+    "net-loft": {
+      "kind": "net-loft",
+      "art": "loc-salt-quay-interior"
+    },
+    "chandlers-back-room": {
+      "kind": "chandlers-room",
+      "art": "dest-chandlers-back-room"
+    },
+    "tidewatch-lamp-room": {
+      "kind": "lamp-room",
+      "art": "dest-tidewatch-lamp-room"
+    },
+    "old-boathouse": {
+      "kind": "boathouse",
+      "art": "dest-old-boathouse"
+    },
+    "charcoal-hut": {
+      "kind": "charcoal-hut",
+      "art": "dest-charcoal-hut"
+    },
+    "woodcutters-lodge": {
+      "kind": "woodland-lodge",
+      "art": "loc-pinewood-trail-interior"
+    },
+    "hermits-cabin": {
+      "kind": "hermits-cabin",
+      "art": "dest-hermits-cabin"
+    },
+    "pilgrims-rest": {
+      "kind": "pilgrims-hall",
+      "art": "dest-pilgrims-rest"
+    },
+    "windward-waystation": {
+      "kind": "waystation-hall",
+      "art": "loc-windward-pass-interior"
+    },
+    "shepherds-bothy": {
+      "kind": "bothy",
+      "art": "dest-shepherds-bothy"
+    },
+    "muleteers-inn": {
+      "kind": "inn",
+      "art": "dest-muleteers-inn"
+    },
+    "cairn-house": {
+      "kind": "refuge-hall",
+      "art": "dest-cairn-house"
+    },
+    "tin-street-tea-house": {
+      "kind": "tea-house",
+      "art": "dest-tin-street-tea-house"
+    },
+    "brannocks-apothecary": {
+      "kind": "apothecary",
+      "art": "loc-lamplit-market-interior"
+    },
+    "puppet-theater": {
+      "kind": "theater",
+      "art": "dest-puppet-theater"
+    },
+    "lantern-makers-shop": {
+      "kind": "lantern-shop",
+      "art": "dest-lantern-makers-shop"
+    },
+    "caretakers-lodge": {
+      "kind": "caretakers-lodge",
+      "art": "dest-caretakers-lodge"
+    },
+    "quiet-bells-chapel": {
+      "kind": "chapel",
+      "art": "loc-rookhill-gate-interior"
+    },
+    "undercroft-study": {
+      "kind": "undercroft-study",
+      "art": "dest-undercroft-study"
+    },
+    "vestry": {
+      "kind": "vestry",
+      "art": "dest-vestry"
+    },
+    "stilt-house": {
+      "kind": "stilt-house",
+      "art": "loc-reedmoor-boardwalk-interior"
+    },
+    "heron-shrine": {
+      "kind": "shrine",
+      "art": "dest-heron-shrine"
+    },
+    "eel-catchers-hall": {
+      "kind": "eel-catchers-hall",
+      "art": "dest-eel-catchers-hall"
+    },
+    "ferrymans-hut": {
+      "kind": "ferrymans-hut",
+      "art": "dest-ferrymans-hut"
+    },
+    "farmhouse-kitchen": {
+      "kind": "farm-kitchen",
+      "art": "loc-thistledown-farm-interior"
+    },
+    "old-hayloft": {
+      "kind": "hayloft",
+      "art": "dest-old-hayloft"
+    },
+    "mill-house": {
+      "kind": "mill-house",
+      "art": "dest-mill-house"
+    },
+    "cider-cellar": {
+      "kind": "cider-cellar",
+      "art": "dest-cider-cellar"
+    },
+    "map-room": {
+      "kind": "map-room",
+      "art": "loc-orrery-library-interior"
+    },
+    "binding-workshop": {
+      "kind": "bindery",
+      "art": "dest-binding-workshop"
+    },
+    "archivists-study": {
+      "kind": "archivists-study",
+      "art": "dest-archivists-study"
+    },
+    "reading-gallery": {
+      "kind": "reading-gallery",
+      "art": "dest-reading-gallery"
+    }
+  },
+  "contact_destinations": {
+    "old-mapmaker": [
+      "net-loft",
+      "waystation-hall",
+      "apothecary",
+      "map-room",
+      "woodland-lodge",
+      "farm-kitchen",
+      "stilt-house",
+      "chandlers-room",
+      "lamp-room",
+      "refuge-hall",
+      "tea-house",
+      "lantern-shop",
+      "undercroft-study",
+      "bindery",
+      "archivists-study",
+      "reading-gallery",
+      "inn",
+      "pilgrims-hall"
+    ],
+    "river-healer": [
+      "net-loft",
+      "woodland-lodge",
+      "chapel",
+      "stilt-house",
+      "farm-kitchen",
+      "apothecary",
+      "boathouse",
+      "charcoal-hut",
+      "hermits-cabin",
+      "pilgrims-hall",
+      "bothy",
+      "shrine",
+      "eel-catchers-hall",
+      "ferrymans-hut",
+      "hayloft",
+      "caretakers-lodge",
+      "tea-house"
+    ],
+    "watch-sergeant": [
+      "net-loft",
+      "waystation-hall",
+      "apothecary",
+      "chapel",
+      "stilt-house",
+      "map-room",
+      "farm-kitchen",
+      "chandlers-room",
+      "lamp-room",
+      "boathouse",
+      "inn",
+      "refuge-hall",
+      "tea-house",
+      "theater",
+      "lantern-shop",
+      "caretakers-lodge",
+      "vestry",
+      "eel-catchers-hall",
+      "ferrymans-hut",
+      "reading-gallery",
+      "undercroft-study"
+    ],
+    "shrine-keeper": [
+      "woodland-lodge",
+      "chapel",
+      "stilt-house",
+      "farm-kitchen",
+      "pilgrims-hall",
+      "hermits-cabin",
+      "vestry",
+      "shrine",
+      "caretakers-lodge",
+      "undercroft-study",
+      "bothy"
+    ],
+    "tinker": [
+      "net-loft",
+      "woodland-lodge",
+      "waystation-hall",
+      "apothecary",
+      "farm-kitchen",
+      "map-room",
+      "stilt-house",
+      "chandlers-room",
+      "boathouse",
+      "charcoal-hut",
+      "bothy",
+      "inn",
+      "refuge-hall",
+      "tea-house",
+      "theater",
+      "lantern-shop",
+      "hayloft",
+      "cider-cellar",
+      "ferrymans-hut",
+      "bindery"
+    ],
+    "miller": [
+      "mill-house",
+      "farm-kitchen",
+      "hayloft",
+      "cider-cellar",
+      "inn",
+      "eel-catchers-hall"
+    ]
+  }
+}

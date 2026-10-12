@@ -659,6 +659,7 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
         title: pack::scene(pack::SceneKey::Inn).title,
         scene_asset: pack::scene(pack::SceneKey::Inn).asset,
         speaker_portrait: pack::scene(pack::SceneKey::Inn).speaker_portrait,
+        cast: Vec::new(),
     }
 }
 pub(super) fn accepted(
@@ -2857,6 +2858,275 @@ mod tests {
                 assert_eq!(pack::bandit_weapon_item(), "scimitar");
             });
         }
+    }
+
+    #[test]
+    fn live_tempo_follows_real_journey_and_projects_identical_public_cues() {
+        use crate::gameplay::actor::tempo::TempoOwner;
+        use df_persistence::local_demo_scope::{DISPLAY, LocalDemoRole};
+        use std::time::{Duration, Instant};
+        let origin = Instant::now();
+        let room = initial().unwrap();
+        let mut tempo = TempoOwner::start(&room, pack::TempoTuning::default(), origin).unwrap();
+        let checkpoints = tuning_journey();
+        for (index, checkpoint) in checkpoints.iter().enumerate() {
+            let before = checkpoint.clone();
+            let accepted = accepted(checkpoint.state().decisions.last().unwrap()).unwrap();
+            let kind = if index == 7 {
+                rpc::GameplayActionKind::ShortRest
+            } else if index == 8 {
+                rpc::GameplayActionKind::ChooseHarborScene
+            } else {
+                rpc::GameplayActionKind::Unspecified
+            };
+            let now = origin + Duration::from_secs((index as u64 + 1) * 8);
+            tempo
+                .accepted(checkpoint, &accepted, kind as i32, now)
+                .unwrap();
+            let mut display = wire::journey_view(
+                checkpoint,
+                LocalDemoRole::Display,
+                MemberId::from_bytes(&DISPLAY).unwrap(),
+            )
+            .unwrap();
+            let mut player = wire::journey_view(
+                checkpoint,
+                LocalDemoRole::Player,
+                MemberId::from_bytes(&MEMBERS[0]).unwrap(),
+            )
+            .unwrap();
+            tempo.decorate(&mut display, checkpoint, now).unwrap();
+            tempo.decorate(&mut player, checkpoint, now).unwrap();
+            let rpc::view_message::Audience::Display(display) = display.audience.unwrap() else {
+                panic!("display")
+            };
+            let rpc::view_message::Audience::Player(player) = player.audience.unwrap() else {
+                panic!("player")
+            };
+            assert_eq!(
+                display.journey.unwrap().tempo,
+                player.journey.unwrap().tempo
+            );
+            assert_eq!(
+                checkpoint, &before,
+                "tempo leaves all mechanical state and pins unchanged"
+            );
+        }
+        let rest = &checkpoints[7];
+        let mut resumed_rest =
+            TempoOwner::start(rest, pack::TempoTuning::default(), origin).unwrap();
+        let mut rested_view = wire::journey_view(
+            rest,
+            LocalDemoRole::Display,
+            MemberId::from_bytes(&DISPLAY).unwrap(),
+        )
+        .unwrap();
+        resumed_rest
+            .decorate(&mut rested_view, rest, origin)
+            .unwrap();
+        let rpc::view_message::Audience::Display(rested_view) = rested_view.audience.unwrap()
+        else {
+            panic!("display")
+        };
+        assert_eq!(
+            rested_view
+                .journey
+                .unwrap()
+                .tempo
+                .unwrap()
+                .intensity_permille,
+            80
+        );
+        let mut authored: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../content/harbor-journey/pack.json"
+        ))
+        .unwrap();
+        for scene in authored["scenes"].as_array_mut().unwrap() {
+            if scene["key"] == "victory" {
+                scene["narration"] = serde_json::json!("The fight is over.");
+            }
+            if scene["key"] == "defeat" {
+                scene["narration"] = serde_json::json!("The fight is over. Your party falls.");
+            }
+            if scene["key"] == "victory" || scene["key"] == "defeat" {
+                scene["narration_rested"] = serde_json::json!("The fight is over.");
+            }
+        }
+        let loaded = pack::load_from_bytes(
+            &serde_json::to_vec(&authored).unwrap(),
+            include_bytes!("../../../../content/harbor-journey/tuning.json"),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            let edited = tuning_journey();
+            let mut resumed =
+                TempoOwner::start(&edited[7], pack::TempoTuning::default(), origin).unwrap();
+            let mut view = wire::journey_view(
+                &edited[7],
+                LocalDemoRole::Display,
+                MemberId::from_bytes(&DISPLAY).unwrap(),
+            )
+            .unwrap();
+            resumed.decorate(&mut view, &edited[7], origin).unwrap();
+            let rpc::view_message::Audience::Display(view) = view.audience.unwrap() else {
+                panic!("display")
+            };
+            assert_eq!(
+                view.journey.unwrap().tempo.unwrap().intensity_permille,
+                80,
+                "public typed rest survives identical and overlapping prose"
+            );
+        });
+        let opening = &checkpoints[0];
+        let victory = &checkpoints[6];
+        let before_recovery = victory.clone();
+        let mut recovered =
+            TempoOwner::start(opening, pack::TempoTuning::default(), origin).unwrap();
+        let mut recovered_view = wire::journey_view(
+            victory,
+            LocalDemoRole::Display,
+            MemberId::from_bytes(&DISPLAY).unwrap(),
+        )
+        .unwrap();
+        let recovery_now = origin + Duration::from_secs(10);
+        recovered
+            .decorate(&mut recovered_view, victory, recovery_now)
+            .unwrap();
+        let rpc::view_message::Audience::Display(recovered_public) =
+            recovered_view.audience.as_ref().unwrap()
+        else {
+            panic!("display")
+        };
+        let recovered_cue = recovered_public.journey.as_ref().unwrap().tempo.unwrap();
+        assert_eq!(recovered_cue.intensity_permille, 200);
+        assert_eq!(recovered_cue.phase, rpc::TempoPhase::Release as i32);
+        assert!(recovered_cue.sequence > 1);
+        recovered
+            .decorate(&mut recovered_view, victory, recovery_now)
+            .unwrap();
+        let rpc::view_message::Audience::Display(repeated_public) =
+            recovered_view.audience.unwrap()
+        else {
+            panic!("display")
+        };
+        assert_eq!(
+            repeated_public.journey.unwrap().tempo.unwrap(),
+            recovered_cue
+        );
+        assert_eq!(victory, &before_recovery);
+        let mut combat_recovery =
+            TempoOwner::start(&checkpoints[2], pack::TempoTuning::default(), origin).unwrap();
+        let mut rest_view = wire::journey_view(
+            rest,
+            LocalDemoRole::Display,
+            MemberId::from_bytes(&DISPLAY).unwrap(),
+        )
+        .unwrap();
+        combat_recovery
+            .decorate(&mut rest_view, rest, recovery_now)
+            .unwrap();
+        let rpc::view_message::Audience::Display(rest_public) = rest_view.audience.unwrap() else {
+            panic!("display")
+        };
+        let rest_cue = rest_public.journey.unwrap().tempo.unwrap();
+        assert_eq!(rest_cue.intensity_permille, 80);
+        assert_eq!(rest_cue.phase, rpc::TempoPhase::Calm as i32);
+        assert!(rest_cue.sequence > 1);
+        let mut resumed = TempoOwner::start(
+            checkpoints.last().unwrap(),
+            pack::TempoTuning::default(),
+            origin,
+        )
+        .unwrap();
+        let mut view = wire::journey_view(
+            checkpoints.last().unwrap(),
+            LocalDemoRole::Display,
+            MemberId::from_bytes(&DISPLAY).unwrap(),
+        )
+        .unwrap();
+        resumed
+            .decorate(&mut view, checkpoints.last().unwrap(), origin)
+            .unwrap();
+        let rpc::view_message::Audience::Display(view) = view.audience.unwrap() else {
+            panic!("display")
+        };
+        let cue = view.journey.unwrap().tempo.unwrap();
+        assert_eq!(cue.intensity_permille, 60);
+        assert_eq!(cue.phase, rpc::TempoPhase::Calm as i32);
+        assert_eq!(cue.sequence, 1);
+    }
+
+    #[test]
+    fn live_tempo_cannot_observe_private_note_or_unrevealed_antagonist_statistics() {
+        use crate::gameplay::actor::tempo::TempoOwner;
+        use df_persistence::local_demo_scope::{DISPLAY, LocalDemoRole};
+        use std::time::{Duration, Instant};
+        let origin = Instant::now();
+        let now = origin + Duration::from_secs(10);
+        let opening = opening_story();
+        let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let dialogue = stage_with_supplier(
+            &opening,
+            &input(&opening, first, 6, "ask-courier", vec![]),
+            &mut |_| panic!("dialogue dice"),
+        )
+        .unwrap();
+        let mut changed = dialogue.state().clone();
+        let hidden = changed.facts.iter_mut().find(|fact| fact.audience == AudienceScope::Members(vec![first]) && matches!(&fact.value, FactValue::ContentEvent { definition, .. } if definition.entry.as_str() == "private-courier-note")).unwrap();
+        hidden.value = FactValue::ContentEvent {
+            definition: model::content("harbor").unwrap(),
+            subjects: vec![],
+        };
+        let changed = model::checkpoint(dialogue.basis(), changed).unwrap();
+        let accepted = accepted(dialogue.state().decisions.last().unwrap()).unwrap();
+        let observe = |opening: &Checkpoint, current: &Checkpoint| {
+            let mut owner =
+                TempoOwner::start(opening, pack::TempoTuning::default(), origin).unwrap();
+            owner
+                .accepted(
+                    current,
+                    &accepted,
+                    rpc::GameplayActionKind::AskCourier as i32,
+                    now,
+                )
+                .unwrap();
+            let mut view = wire::journey_view(
+                current,
+                LocalDemoRole::Display,
+                MemberId::from_bytes(&DISPLAY).unwrap(),
+            )
+            .unwrap();
+            owner.decorate(&mut view, current, now).unwrap();
+            let rpc::view_message::Audience::Display(view) = view.audience.unwrap() else {
+                panic!("display")
+            };
+            view.journey.unwrap().tempo.unwrap()
+        };
+        let original = observe(&opening, &dialogue);
+        assert_eq!(original, observe(&opening, &changed));
+        let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../content/harbor-journey/tuning.json"
+        ))
+        .unwrap();
+        tuning["bandit"]["attack_bonus"] = serde_json::json!(19);
+        tuning["bandit"]["abilities"]["intelligence"] = serde_json::json!(20);
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../content/harbor-journey/pack.json"),
+            &serde_json::to_vec(&tuning).unwrap(),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            // Rule departure text is publicly disclosed, but mechanical stats themselves never
+            // enter the tempo input. Public phase/outcomes/HP alone select the exact same cue.
+            let changed_opening = opening_story();
+            let changed_dialogue = stage_with_supplier(
+                &changed_opening,
+                &input(&changed_opening, first, 6, "ask-courier", vec![]),
+                &mut |_| panic!("dialogue dice"),
+            )
+            .unwrap();
+            assert_eq!(original, observe(&changed_opening, &changed_dialogue));
+        });
     }
 
     #[test]
@@ -5070,7 +5340,9 @@ mod tests {
                             .as_str()
                             .unwrap();
                         let mut expected = if key == "defeat_mech" {
-                            mandatory.replace("{story}", &ending.defeat)
+                            let rules = mandatory.replace("{story}", "");
+                            let rules = rules.split_whitespace().collect::<Vec<_>>().join(" ");
+                            format!("{} {rules}", ending.defeat)
                         } else {
                             format!("{} {mandatory}", ending.defeat)
                         };

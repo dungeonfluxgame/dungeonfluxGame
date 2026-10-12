@@ -1375,3 +1375,157 @@ fn antagonist_weapon_is_a_bounded_display_label() {
         Err(PackError::Bounds { .. })
     ));
 }
+
+#[test]
+fn shipped_pack_puts_its_characters_on_stage_and_unknown_sprites_are_just_strings() {
+    use super::pack::{CastRole, SceneKey};
+    let loaded = load_from_bytes(shipped_pack().as_bytes(), shipped_tuning().as_bytes()).unwrap();
+    let cast = |key: SceneKey| -> Vec<(String, CastRole, bool)> {
+        let scene = loaded
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == key)
+            .unwrap();
+        super::wire::scene_cast(scene)
+            .into_iter()
+            .zip(&scene.cast)
+            .map(|(actor, member)| (actor.name, member.role, actor.speaking))
+            .collect()
+    };
+    assert_eq!(
+        cast(SceneKey::Opening),
+        [("Courier".to_owned(), CastRole::Patron, true)]
+    );
+    assert_eq!(
+        cast(SceneKey::DialogueSeal),
+        [
+            ("Courier".to_owned(), CastRole::Patron, true),
+            ("Bandit".to_owned(), CastRole::Antagonist, false)
+        ]
+    );
+    assert_eq!(
+        cast(SceneKey::Combat),
+        [("Bandit".to_owned(), CastRole::Antagonist, true)]
+    );
+    assert_eq!(cast(SceneKey::Inn).len(), 1);
+    assert!(cast(SceneKey::Room).is_empty());
+    assert!(cast(SceneKey::Defeat).is_empty());
+    let sprite = &loaded.pack.scenes[1].cast[0].sprite;
+    assert_eq!(sprite, "assets/ui/generated/sprite-courier");
+    // A sprite the client has never heard of is not a loader failure.
+    let pack = set(
+        &shipped_pack(),
+        "/scenes/1/cast/0/sprite",
+        json!("assets/elsewhere/not-a-known-stem"),
+    );
+    assert!(load_from_bytes(pack.as_bytes(), shipped_tuning().as_bytes()).is_ok());
+    // But the cast is bounded.
+    let pack = set(&shipped_pack(), "/scenes/1/cast/0/name", json!(""));
+    assert!(matches!(
+        refusal(&pack, &shipped_tuning()),
+        PackError::Bounds { .. }
+    ));
+}
+
+#[test]
+fn shipped_pack_lists_its_secret_terms_and_speakers_and_bad_ones_are_refused() {
+    let loaded = load_from_bytes(shipped_pack().as_bytes(), shipped_tuning().as_bytes()).unwrap();
+    assert_eq!(loaded.pack.secret_terms, ["Vell", "Harbor Inn"]);
+    let names: Vec<&str> = loaded
+        .pack
+        .speakers
+        .iter()
+        .map(|speaker| speaker.name.as_str())
+        .collect();
+    assert_eq!(names, ["Courier", "Bandit"]);
+    for scene in &loaded.pack.scenes {
+        assert!(
+            scene.speaker.is_empty() || names.contains(&scene.speaker.as_str()),
+            "every shown speaker has a profile"
+        );
+    }
+    for (pointer, value) in [
+        ("/speakers/0/role", json!("")),
+        ("/speakers/0/voice", json!("v".repeat(97))),
+        ("/secret_terms/0", json!("")),
+    ] {
+        let pack = set(&shipped_pack(), pointer, value);
+        assert!(
+            matches!(refusal(&pack, &shipped_tuning()), PackError::Bounds { .. }),
+            "{pointer}"
+        );
+    }
+    use super::pack::{Age, Gender};
+    assert_eq!(loaded.pack.speakers[0].gender, Some(Gender::He));
+    assert_eq!(loaded.pack.speakers[0].age, Some(Age::Young));
+    assert_eq!(
+        super::pack::with_test_pack(loaded.clone(), super::pack::speakers).len(),
+        2
+    );
+    for (pointer, value) in [
+        ("/speakers/0/gender", json!("xe")),
+        ("/speakers/0/age", json!("ancient")),
+        ("/scenes/1/cast/0/gender", json!("")),
+    ] {
+        let pack = set(&shipped_pack(), pointer, value);
+        assert!(
+            matches!(refusal(&pack, &shipped_tuning()), PackError::Parse { .. }),
+            "{pointer}"
+        );
+    }
+    let pack = edit(&shipped_pack(), |document| {
+        document["speakers"][0]["mood"] = json!("cheerful");
+    });
+    assert!(matches!(
+        refusal(&pack, &shipped_tuning()),
+        PackError::Parse { .. }
+    ));
+}
+
+#[test]
+fn tempo_is_optional_revisioned_presentation_tuning_without_rules_departures() {
+    let pack = shipped_pack();
+    let tuning = shipped_tuning();
+    let shipped = load_from_bytes(pack.as_bytes(), tuning.as_bytes()).unwrap();
+    let omitted = remove(&tuning, "/tempo");
+    let legacy = load_from_bytes(pack.as_bytes(), omitted.as_bytes()).unwrap();
+    assert_eq!(legacy.tuning.tempo, shipped.tuning.tempo);
+    let edited = set(&tuning, "/tempo/impulses_permille/critical", json!(200));
+    let changed = load_from_bytes(pack.as_bytes(), edited.as_bytes()).unwrap();
+    assert!(changed.departures.is_empty());
+    assert_ne!(shipped.tuning_revision, changed.tuning_revision);
+    assert_ne!(shipped.tuning.tempo, changed.tuning.tempo);
+}
+
+#[test]
+fn invalid_tempo_is_refused_with_a_typed_tuning_error() {
+    for (pointer, value) in [
+        ("/tempo/base_intensity_permille/combat", json!(1001)),
+        ("/tempo/impulses_permille/critical", json!(1001)),
+        ("/tempo/inertia_half_life_millis", json!(0)),
+        ("/tempo/phase_thresholds_permille", json!([500, 200, 600])),
+        ("/tempo/fatigue_charge_permille", json!(1001)),
+        ("/tempo/hysteresis_permille", json!(300)),
+    ] {
+        let changed = set(&shipped_tuning(), pointer, value);
+        assert!(matches!(
+            refusal(&shipped_pack(), &changed),
+            PackError::Bounds {
+                file: SourceFile::Tuning,
+                ..
+            } | PackError::Malformed {
+                file: SourceFile::Tuning,
+                ..
+            }
+        ));
+    }
+    let unknown = set(&shipped_tuning(), "/tempo/secret", json!(1));
+    assert!(matches!(
+        refusal(&shipped_pack(), &unknown),
+        PackError::Parse {
+            file: SourceFile::Tuning,
+            ..
+        }
+    ));
+}

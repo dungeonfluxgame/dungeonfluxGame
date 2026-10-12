@@ -12,7 +12,11 @@ use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 
-use super::{Service, actor, credential, journey, model, npc_reply::NpcReplyContext, wire};
+use super::{
+    Service, actor, credential, journey, model,
+    npc_reply::{NpcReplyContext, StoryFacts},
+    wire,
+};
 
 const MAXIMUM_MESSAGE_BYTES: usize = 8192;
 const MAXIMUM_TEXT_BYTES: usize = 4096;
@@ -114,7 +118,10 @@ impl rpc::dialogue_service_server::DialogueService for Service {
                 // The model call runs here, off the actor thread; on any failure the
                 // response is exactly the classification the actor produced.
                 if let Some(context) = npc
-                    && let Some(reply) = self.npc_voice.reply(context).await
+                    && let Some(reply) = self
+                        .npc_voice
+                        .reply_in_public(context, &self.table_log)
+                        .await
                 {
                     response.npc_reply = reply;
                 }
@@ -360,6 +367,10 @@ impl actor::Actor {
             ))
         .then(|| self.npc_reply_context(member, &request.text))
         .flatten();
+        // Typed words to the scene's speaker are table talk, answered or not.
+        if let Some(context) = &npc {
+            context.publish_typed_line(&self.table_log);
+        }
         Ok((
             rpc::DialogueResponse {
                 input_id: request.input_id,
@@ -378,8 +389,8 @@ impl actor::Actor {
     fn npc_reply_context(&self, member: MemberId, typed: &str) -> Option<NpcReplyContext> {
         let view =
             wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member).ok()?;
-        let clue = super::pack::with_content(|pack| pack.courier_clue.clone());
-        NpcReplyContext::from_view(&view, member, typed, &clue)
+        let story = super::pack::with_content(StoryFacts::from_pack);
+        NpcReplyContext::from_view(&view, member, typed, &story)
     }
 
     fn confirm_dialogue(

@@ -1,0 +1,123 @@
+{
+  "schema": "df-npc-tables/1",
+  "file": "npc-knowledge",
+  "description": "What a friendly local can say about the place and the trouble. place_specific is keyed by location id (four lines each); place_generic, rumours and world are said freely; hints are the one useful, mechanically neutral pointer an NPC shares only once trusted. secret_keywords lists, per secret id in secrets.json, phrases no dossier may say in a public line. Every text is one speakable sentence. Original prose.",
+  "tables": {
+    "place_specific": {
+      "salt-quay": {"die": 4, "entries": [
+        {"faces": [1, 1], "id": "tide-chalk", "text": "The tide tables on the quay wall are chalked fresh each dawn by the same old woman."},
+        {"faces": [2, 2], "id": "evening-berths", "text": "Boats tied up after the evening bell lose their berth to whoever wants it."},
+        {"faces": [3, 3], "id": "hat-thieves", "text": "The gulls here steal hats far more often than fish, and nobody has ever caught one at it."},
+        {"faces": [4, 4], "id": "harbor-lamp", "text": "The harbor-master's lamp burns until the last boat is in, and goes out the moment it is."}
+      ]},
+      "pinewood-trail": {"die": 4, "entries": [
+        {"faces": [1, 1], "id": "crossing-lanterns", "text": "The charcoal burners hang a lantern at each crossing so that no one walks off the trail by night."},
+        {"faces": [2, 2], "id": "pilgrim-pebbles", "text": "Pilgrims leave a pebble at the old cairn to ask for a safe road home."},
+        {"faces": [3, 3], "id": "talking-pines", "text": "The pines creak loudest before the weather turns, and the locals call it the trail talking."},
+        {"faces": [4, 4], "id": "blue-resin", "text": "Resin from these pines burns blue, and the lodge sells it by the cup."}
+      ]},
+      "windward-pass": {"die": 4, "entries": [
+        {"faces": [1, 1], "id": "morning-wind", "text": "The wind on the pass blows downhill in the morning and uphill by evening, so plan your climb by it."},
+        {"faces": [2, 2], "id": "singing-muleteers", "text": "Muleteers sing as they cross so the ones ahead will hear them in the cloud."},
+        {"faces": [3, 3], "id": "ridge-fires", "text": "Three families have taken turns lighting the signal fires on the ridge for a hundred years."},
+        {"faces": [4, 4], "id": "early-snow", "text": "Snow comes early on the north side of the pass, and it is always a surprise to somebody."}
+      ]},
+      "lamplit-market": {"die": 4, "entries": [
+        {"faces": [1, 1], "id": "lamp-order", "text": "The stalls light their lanterns in order of age, oldest first."},
+        {"faces": [2, 2], "id": "cracked-bowl", "text": "The tea house takes every coin in the same cracked bowl and has never lost one."},
+        {"faces": [3, 3], "id": "swapped-corners", "text": "Stall holders swap corners each festival so that nobody keeps the best spot for long."},
+        {"faces": [4, 4], "id": "forty-year-play", "text": "The puppet show on Tin Street has run the same story for forty years, with a different ending every night."}
+      ]},
+      "rookhill-gate": {"die": 4, "entries": [
+        {"faces": [1, 1], "id": "bickering-rooks", "text": "The rooks at the gate roost on the same stones every night and bicker about it."},
+        {"faces": [2, 2], "id": "soft-bells", "text": "The caretaker rings the quiet bells softly so as not to wake anyone, and the sound carries all the same."},
+        {"faces": [3, 3], "id": "mourners-lanterns", "text": "Mourners leave small lanterns by the gate, and the rooks have never once touched them."},
+        {"faces": [4, 4], "id": "sticking-door", "text": "The vestry door sticks in damp weather, and everyone has learned to lift and push."}
+      ]},
+      "reedmoor-boardwalk": {"die": 4, "entries": [
+        {"faces": [1, 1], "id": "tarred-planks", "text": "The boardwalk planks are tarred each spring by whichever families live nearest."},
+        {"faces": [2, 2], "id": "counting-herons", "text": "The herons on the posts are said to count the boats, and the fen-folk nod to them as they pass."},
+        {"faces": [3, 3], "id": "humming-reeds", "text": "The reeds hum a low note whenever the wind changes."},
+        {"faces": [4, 4], "id": "singing-traps", "text": "The eel-catchers sing to their traps, and they swear it helps."}
+      ]},
+      "thistledown-farm": {"die": 4, "entries": [
+        {"faces": [1, 1], "id": "deep-well", "text": "The farm's well has never run dry, which the neighbours consider almost rude."},
+        {"faces": [2, 2], "id": "old-owl", "text": "The owl in the hayloft has outlived three farm dogs."},
+        {"faces": [3, 3], "id": "cider-cups", "text": "Cider pressing is a village event, and everyone brings their own cup."},
+        {"faces": [4, 4], "id": "drumming-wheel", "text": "The mill wheel creaks in a pattern the children like to drum along to."}
+      ]},
+      "orrery-library": {"die": 4, "entries": [
+        {"faces": [1, 1], "id": "dawn-winding", "text": "The great orrery is wound each dawn by the youngest scribe, as a rite of passage."},
+        {"faces": [2, 2], "id": "loud-cats", "text": "Silence is kept so strictly here that the library cats are the loudest residents."},
+        {"faces": [3, 3], "id": "copied-never-lent", "text": "The maps in the map room are copied and never lent."},
+        {"faces": [4, 4], "id": "warm-corner", "text": "The binding workshop smells of glue and cedar, and the apprentices fight over its warm corner."}
+      ]}
+    },
+    "place_generic": {"die": 12, "entries": [
+      {"faces": [1, 1], "id": "go-early", "text": "Ask anyone around {location} about {destination} and they will tell you to go early and bring something for the host."},
+      {"faces": [2, 2], "id": "quiet-mornings", "text": "{location|cap} is quiet before noon and crowded after, and nobody can explain why."},
+      {"faces": [3, 3], "id": "slow-good-news", "text": "Folk around {location} say good news travels slowly and bad news arrives before breakfast."},
+      {"faces": [4, 4], "id": "arguing-clock", "text": "You can tell the hour around {location} by which neighbours are arguing."},
+      {"faces": [5, 5], "id": "older-than-grandmothers", "text": "{destination|cap} has been there longer than anyone's grandmother can remember, and she can remember quite a lot."},
+      {"faces": [6, 6], "id": "good-evening", "text": "Strangers are welcome around {location}, so long as they say good evening."},
+      {"faces": [7, 7], "id": "umbrella-advice", "text": "Nobody around {location} will lend you an umbrella, but everyone will tell you it is going to rain."},
+      {"faces": [8, 8], "id": "every-road-supper", "text": "The oldest saying around {location} is that every road ends at somebody's supper."},
+      {"faces": [9, 9], "id": "knock-twice", "text": "{destination|cap} keeps odd hours, so knock twice, wait, and do not take it personally."},
+      {"faces": [10, 10], "id": "always-return", "text": "People who leave {location} always come back, and they never admit they missed it."},
+      {"faces": [11, 11], "id": "shorter-than-it-looks", "text": "The walk to {destination} is shorter than it looks and longer than it feels."},
+      {"faces": [12, 12], "id": "who-holds-the-door", "text": "If you want to know the people around {location}, watch who holds the door."}
+    ]},
+    "rumours": {"die": 12, "entries": [
+      {"faces": [1, 1], "id": "asking-questions", "foes": ["person", "goblinoid"], "text": "People say {antagonist} has been seen near {location} after dark, asking quiet questions."},
+      {"faces": [2, 2], "id": "alone-and-runs", "foes": ["person", "goblinoid"], "text": "They say {antagonist} always works alone and always runs when outnumbered."},
+      {"faces": [3, 3], "id": "early-doors", "text": "Folk around {location} have started locking their doors early since {antagonist_the} turned up."},
+      {"faces": [4, 4], "id": "three-nights", "text": "A shopkeeper swears {antagonist_the} was in town three nights running."},
+      {"faces": [5, 5], "id": "barking-dogs", "foes": ["beast"], "text": "The dogs bark all night whenever {antagonist_the} is near."},
+      {"faces": [6, 6], "id": "quiet-graves", "foes": ["undead"], "text": "The old graves have been quieter than usual since {antagonist_the} walked, which people find worse."},
+      {"faces": [7, 7], "id": "followed-in-mud", "foes": ["person", "goblinoid"], "text": "Somebody paid a boy to follow {antagonist}, and the boy came back with nothing but mud."},
+      {"faces": [8, 8], "id": "missing-spoons", "foes": ["goblinoid"], "text": "Small things go missing wherever {antagonist} is about, spoons mostly."},
+      {"faces": [9, 9], "id": "chalk-drawing", "text": "Somebody chalked a child's drawing of {antagonist_the} on the wall by the well."},
+      {"faces": [10, 10], "id": "half-exaggerated", "text": "Most of what is said about {antagonist_the} is probably exaggerated, but not all of it."},
+      {"faces": [11, 11], "id": "bought-bread", "foes": ["person"], "text": "{antagonist} was seen buying bread yesterday, which surprised everyone."},
+      {"faces": [12, 12], "id": "worsening-song", "text": "A song has started up about {antagonist_the}, and the verses get worse every time it is sung."}
+    ]},
+    "hints": {"die": 12, "entries": [
+      {"faces": [1, 1], "id": "back-lanes", "text": "If you lose sight of {antagonist_the}, check the narrow places around {location}, because that is where this sort of trouble goes to ground."},
+      {"faces": [2, 2], "id": "more-frightened", "foes": ["person", "goblinoid"], "text": "{antagonist} is more frightened than angry, so speak calmly and you will see it in the eyes before anything else."},
+      {"faces": [3, 3], "id": "dawn-hour", "text": "The road toward {destination} is quietest an hour before dawn, and if trouble comes it will come when the light is worst."},
+      {"faces": [4, 4], "id": "name-the-destination", "text": "Whoever you meet on the way, ask after {destination} by name first, because doors there open for a friendly mention."},
+      {"faces": [5, 5], "id": "kind-word", "foes": ["person"], "text": "{antagonist} flinches at a kind word, and I have never understood why."},
+      {"faces": [6, 6], "id": "sealed-food", "foes": ["beast"], "text": "Beasts like {antagonist_the} follow the smell of food, so keep whatever you carry well wrapped."},
+      {"faces": [7, 7], "id": "lit-path", "foes": ["undead"], "text": "The dead do not follow roads, only memories, so keep to the lit path."},
+      {"faces": [8, 8], "id": "market-hush", "text": "Listen for the noise around {location} to fall silent, because that is when trouble has arrived."},
+      {"faces": [9, 9], "id": "thin-purse", "text": "Whoever hired {antagonist_the}, if anyone did, was not paying much, since a full purse would have sent more than one."},
+      {"faces": [10, 10], "id": "thin-walls", "text": "Keep your voices low near {destination}, because the walls there carry sound into the next room."},
+      {"faces": [11, 11], "id": "offer-a-seat", "foes": ["person", "goblinoid"], "text": "If you want {antagonist} to listen, offer a seat and not a threat, because it works more often than you would think."},
+      {"faces": [12, 12], "id": "warm-faces", "text": "Watch the hands of anyone who greets you too warmly on the way, because the kindest faces are not always the kindest people."}
+    ]},
+    "world": {"die": 8, "entries": [
+      {"faces": [1, 1], "id": "faction-watch", "text": "{faction|cap} keeps a quiet watch on every road into {location}."},
+      {"faces": [2, 2], "id": "faction-polite", "text": "Anyone who asks {faction} politely for help gets it, and anyone who demands gets a long form to fill in."},
+      {"faces": [3, 3], "id": "faction-joke", "text": "People joke about {faction}, but nobody joked at their last meeting."},
+      {"faces": [4, 4], "id": "faction-recruiting", "text": "{faction|cap} has been recruiting lately, and the old hands do not like the new faces."},
+      {"faces": [5, 5], "id": "villain-whisper", "text": "Folk say a figure called {villain} is behind a good deal of this, though nobody can say how they know."},
+      {"faces": [6, 6], "id": "villain-letters", "text": "Letters mentioning {villain} have been turning up where they should not, and nobody admits to writing them."},
+      {"faces": [7, 7], "id": "villain-lanterns", "text": "Whenever {villain} is mentioned, someone at the back of the room changes the subject."},
+      {"faces": [8, 8], "id": "villain-careful", "text": "Older folk will tell you to be careful what you say about {villain}, and will not tell you why."}
+    ]},
+    "secret_keywords": {
+      "leak": ["leak", "sold word", "someone i trust"],
+      "worth-more": ["worth far more", "worth more than anyone"],
+      "do-not-open": ["do not open", "one pair of hands"],
+      "passphrase": ["lamps are low", "passphrase"],
+      "owes-kindness": ["old kindness", "owes me an old"],
+      "green-ring": ["green stone", "green ring"],
+      "shortcut": ["quicker way", "shortcut", "most travelers miss"],
+      "my-fault": ["my fault", "left something unguarded"],
+      "moonset": ["moonset"],
+      "false-trail": ["false trail", "different destination"],
+      "hidden-watcher": ["watches from the dark", "friend watches"],
+      "true-owner": ["does not truly belong", "truly belong", "rightful owner"]
+    }
+  }
+}

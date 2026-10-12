@@ -39,10 +39,10 @@ fn condition(member: &rpc::PartyMemberView) -> &'static str {
 /// "Victory" when the server projects the courier's closing line, which only the won encounter
 /// has; otherwise "Defeat".
 fn outcome_word(view: &LiveView<'_>) -> &'static str {
-    if view.journey.dialogue.is_empty() {
-        "Defeat"
-    } else {
+    if crate::presentation::is_victory(view.journey) {
         "Victory"
+    } else {
+        "Defeat"
     }
 }
 
@@ -192,7 +192,8 @@ pub(super) fn present_rest(
         _ => offer.label.clone(),
     });
     let single_destination = proceed.is_some_and(|offer| offer.destinations.len() == 1);
-    let location = format!("{} · The Lantern Wharf", outcome_word(view));
+    // The view carries no location name, so the eyebrow is only the outcome.
+    let location = outcome_word(view);
     let result_line = if view.journey.dialogue.is_empty() {
         None
     } else {
@@ -205,7 +206,7 @@ pub(super) fn present_rest(
         owner_generation: revision.epoch().get(),
         revision: revision.sequence(),
         title: &view.scene.title,
-        location: &location,
+        location,
         narration: view.narration,
         party_label: "Your party",
         notice: match (&result_line, rest.is_some() || proceed.is_some()) {

@@ -22,7 +22,8 @@
             "mountain",
             "market"
           ],
-          "art": "contact-old-mapmaker"
+          "art": "contact-old-mapmaker",
+          "age": "elder"
         },
         {
           "faces": [
@@ -40,7 +41,8 @@
             "farm",
             "sacred"
           ],
-          "art": "contact-river-healer"
+          "art": "contact-river-healer",
+          "age": "adult"
         },
         {
           "faces": [
@@ -60,7 +62,8 @@
             "scholar",
             "grave"
           ],
-          "art": "contact-watch-sergeant"
+          "art": "contact-watch-sergeant",
+          "age": "adult"
         },
         {
           "faces": [
@@ -78,7 +81,8 @@
             "wild",
             "farm"
           ],
-          "art": "contact-shrine-keeper"
+          "art": "contact-shrine-keeper",
+          "age": "elder"
         },
         {
           "faces": [
@@ -97,7 +101,8 @@
             "mountain",
             "town"
           ],
-          "art": "contact-tinker"
+          "art": "contact-tinker",
+          "age": "adult"
         },
         {
           "faces": [
@@ -115,7 +120,8 @@
             "market",
             "water"
           ],
-          "art": "contact-miller"
+          "art": "contact-miller",
+          "age": "adult"
         }
       ]
     }

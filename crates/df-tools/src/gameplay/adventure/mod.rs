@@ -11,11 +11,19 @@ pub(crate) mod campaign_tables;
 #[cfg(test)]
 mod campaign_tests;
 pub(crate) mod cli;
+pub(crate) mod dossier;
+pub(crate) mod dossier_render;
+pub(crate) mod dossier_tables;
+#[cfg(test)]
+mod dossier_tests;
+mod expression;
 mod generate;
+mod listener;
 pub(crate) mod record;
 mod render;
 mod rng;
 mod schema;
+pub(crate) mod setting;
 pub(crate) mod startup;
 mod tables;
 #[cfg(test)]
@@ -101,6 +109,7 @@ pub(crate) struct GeneratedAdventure {
     pub(crate) rolls: Vec<Roll>,
     pub(crate) pack: PackFile,
     pub(crate) tuning: TuningFile,
+    pub(crate) settings: setting::ChapterSettings,
 }
 #[derive(Clone, Debug)]
 pub(crate) enum GenerateError {

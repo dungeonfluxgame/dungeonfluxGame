@@ -25,6 +25,7 @@ fn display_view() -> DisplayGameplayView {
             title: "Lantern Wharf".to_owned(),
             scene_asset: "assets/scenes/harbor.png".to_owned(),
             speaker_portrait: String::new(),
+            ..Default::default()
         }),
         journey: Some(JourneyView {
             phase: JourneyPhase::Combat as i32,

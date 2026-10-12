@@ -97,6 +97,7 @@ fn view(player: bool, frame: FixtureFrame) -> rpc::ViewMessage {
         },
         scene_asset: "assets/ui/scenes/mara-harbor-v4.png".to_owned(),
         speaker_portrait: String::new(),
+        ..Default::default()
     };
     let narration = if stale {
         "This delayed snapshot belongs to epoch 1, sequence 99.".to_owned()

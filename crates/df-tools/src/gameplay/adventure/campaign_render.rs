@@ -352,9 +352,12 @@ pub(crate) fn generate_chapter(
         plan.recap.teaser.clone()
     };
     check(&room_dialogue, 160, "Previously")?;
-    let mut opening = String::new();
+    let mut opening = format!(
+        "You meet {} in {}.",
+        plan.patron.first, generated.settings.meeting.name
+    );
     let mut opening_dialogue = String::new();
-    let mut followup = format!("The fate of {} hangs in the balance.", frame.artifact.name);
+    let mut followup = String::new();
     let mut followup_dialogue = String::new();
     let hook_context = if plan.desperate {
         format!("Time is running out. {}", plan.hook_context)
@@ -368,6 +371,16 @@ pub(crate) fn generate_chapter(
     {
         return Err(CampaignError::Invalid(
             "hook continuity exceeds visible public fields".into(),
+        ));
+    }
+    let fate = format!("The fate of {} hangs in the balance.", frame.artifact.name);
+    if !append(&mut followup, &fate, 220)
+        && !append(&mut opening_dialogue, &fate, 160)
+        && !append(&mut followup_dialogue, &fate, 160)
+        && !append(&mut opening, &fate, 220)
+    {
+        return Err(CampaignError::Invalid(
+            "artifact continuity exceeds visible public fields".into(),
         ));
     }
     // Lobby hides its dialogue and all but the first narration sentence. Required
@@ -427,7 +440,13 @@ pub(crate) fn generate_chapter(
         .find(|c| c.vehicle == "contact")
         .ok_or_else(|| CampaignError::Invalid("contact lead".into()))?;
     let mut mechanical = generated.facts.clone();
-    mechanical.insert("story".into(), victory.text.clone());
+    mechanical.insert(
+        "story".into(),
+        format!(
+            "You reach {}. {}",
+            generated.settings.destination.short, victory.text
+        ),
+    );
     let defeat_ending = (plan.chapter_type == "finale")
         .then(|| epilogue(frame, plan, false, super::campaign::Approach::Escorted));
     for scene in &mut generated.pack.scenes {
@@ -462,9 +481,16 @@ pub(crate) fn generate_chapter(
                         .ok_or_else(|| CampaignError::Missing(key.into()))?;
                     let text = super::render::render(&template.text, &mechanical)?;
                     if rested {
-                        scene.narration_rested = Some(format!("{} {text}", victory.text));
+                        scene.narration_rested = Some(format!(
+                            "You reach {}. {} {text}",
+                            generated.settings.destination.short, victory.text
+                        ));
                     } else {
-                        scene.narration = text;
+                        // The rules sentences are the scene's own `rules_note`; display joins them.
+                        scene.narration = format!(
+                            "You reach {}. {}",
+                            generated.settings.destination.short, victory.text
+                        );
                     }
                 }
             }
@@ -486,7 +512,7 @@ pub(crate) fn generate_chapter(
                     if rested {
                         scene.narration_rested = Some(format!("{ending} {text}"));
                     } else {
-                        scene.narration = text;
+                        scene.narration = ending.clone();
                     }
                 }
             }

@@ -13,6 +13,7 @@
     "complications.json",
     "secrets.json",
     "destinations.json",
+    "places.json",
     "contacts.json",
     "rewards.json",
     "names.json",
@@ -101,14 +102,14 @@
       "table": "destination",
       "file": "destinations.json",
       "die": 4,
-      "filter": "sub-table of location.id"
+      "filter": "location sub-table; matching depicted art and a compatible contact (including forced campaign contact)"
     },
     {
       "n": 9,
       "table": "contact",
       "file": "contacts.json",
       "die": 6,
-      "filter": "contact.fits intersects location.tags"
+      "filter": "contact fits location and destination kind is in places.contact_destinations"
     },
     {
       "n": 10,
@@ -140,6 +141,13 @@
     },
     {
       "n": 14,
+      "table": "setting.meeting.detail, setting.confrontation.bridge",
+      "file": "places.json",
+      "die": 4,
+      "filter": "patron meeting place and location confrontation"
+    },
+    {
+      "n": 15,
       "table": "prose.* (beat order), antagonist.arrival, antagonist.warning (speakers only)",
       "file": "prose-patterns.json",
       "die": "4 (2-variant lists use d4 with two faces each)",
@@ -198,14 +206,16 @@
     "destinations": 32,
     "contacts": 6,
     "rewards": 12,
-    "art_images": 56,
+    "art_images": 66,
     "campaign_premises": 16,
     "villain_types": 12,
     "factions": 12,
     "chapter_types": 16,
     "twists": 12,
     "clocks": 9,
-    "artifacts": 12
+    "artifacts": 12,
+    "meeting_places": 10,
+    "confrontation_settings": 8
   },
   "compat_tags": [
     "water",

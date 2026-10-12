@@ -4,7 +4,8 @@
 //! scenario content and `tuning.json` holds gameplay numbers. [`load`] reads each file once under
 //! a size cap, hashes the exact bytes it parsed, refuses unknown or duplicate keys and wrong types,
 //! enforces the bounds table, checks the cross-file references and reports the values that differ
-//! from the compiled SRD 5.2.1 baseline. Nothing here falls back to a default: a missing
+//! from the compiled SRD 5.2.1 baseline. Only an absent optional tempo section selects the
+//! explicitly shipped presentation profile. For required gameplay files and fields, a missing
 //! directory, missing file or any violation is a typed [`PackError`] naming the file and the JSON
 //! location.
 //!
@@ -355,6 +356,9 @@ pub(super) struct TuningFile {
     pub(super) combat: CombatTuning,
     pub(super) rest: RestTuning,
     pub(super) narrative: NarrativeTuning,
+    /// Missing section explicitly selects the shipped presentation profile.
+    #[serde(default)]
+    pub(super) tempo: TempoTuning,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -457,6 +461,107 @@ pub(super) struct NarrativeTuning {
     pub(super) intervention_budget: u8,
 }
 
+/// Presentation-only tuning; deliberately excluded from standard-rules departures.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TempoTuning {
+    /// Room, opening, dialogue, combat, victory, defeat, rested, destination.
+    pub(super) base_intensity_permille: TempoBases,
+    /// Story, scene, reveal, combat, miss, hit, critical, graze, hero-low, drop,
+    /// victory, defeat, rest, arrival. Positive attack impulses apply to either side.
+    pub(super) impulses_permille: TempoImpulses,
+    pub(super) inertia_half_life_millis: u32,
+    pub(super) decay_half_life_millis: u32,
+    pub(super) fatigue_half_life_millis: u32,
+    pub(super) fatigue_charge_permille: u16,
+    pub(super) fatigue_attenuation_permille: u16,
+    pub(super) phase_thresholds_permille: [u16; 3],
+    pub(super) hysteresis_permille: u16,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TempoBases {
+    pub(super) room: u16,
+    pub(super) opening: u16,
+    pub(super) dialogue: u16,
+    pub(super) combat: u16,
+    pub(super) victory: u16,
+    pub(super) defeat: u16,
+    pub(super) rest: u16,
+    pub(super) arrival: u16,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TempoImpulses {
+    pub(super) story_begun: i16,
+    pub(super) scene_changed: i16,
+    pub(super) antagonist_revealed: i16,
+    pub(super) combat_begun: i16,
+    pub(super) miss: i16,
+    pub(super) hit: i16,
+    pub(super) critical: i16,
+    pub(super) graze: i16,
+    pub(super) hero_low: i16,
+    pub(super) combatant_dropped: i16,
+    pub(super) victory: i16,
+    pub(super) defeat: i16,
+    pub(super) short_rest: i16,
+    pub(super) arrival: i16,
+}
+
+impl Default for TempoTuning {
+    fn default() -> Self {
+        Self {
+            base_intensity_permille: TempoBases {
+                room: 60,
+                opening: 260,
+                dialogue: 480,
+                combat: 720,
+                victory: 200,
+                defeat: 300,
+                rest: 80,
+                arrival: 60,
+            },
+            impulses_permille: TempoImpulses {
+                story_begun: 180,
+                scene_changed: 30,
+                antagonist_revealed: 180,
+                combat_begun: 220,
+                miss: 20,
+                hit: 65,
+                critical: 150,
+                graze: 40,
+                hero_low: 180,
+                combatant_dropped: 100,
+                victory: -200,
+                defeat: -80,
+                short_rest: -140,
+                arrival: -80,
+            },
+            inertia_half_life_millis: 2000,
+            decay_half_life_millis: 6000,
+            fatigue_half_life_millis: 20000,
+            fatigue_charge_permille: 60,
+            fatigue_attenuation_permille: 500,
+            phase_thresholds_permille: [200, 450, 650],
+            hysteresis_permille: 20,
+        }
+    }
+}
+impl TempoTuning {
+    pub(super) fn policy(self) -> df_tempo::presentation::PresentationPolicy {
+        df_tempo::presentation::PresentationPolicy {
+            inertia_half_life_millis: self.inertia_half_life_millis,
+            decay_half_life_millis: self.decay_half_life_millis,
+            fatigue_half_life_millis: self.fatigue_half_life_millis,
+            fatigue_charge_permille: self.fatigue_charge_permille,
+            fatigue_attenuation_permille: self.fatigue_attenuation_permille,
+            thresholds: self.phase_thresholds_permille,
+            hysteresis_permille: self.hysteresis_permille,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // pack.json
 // ---------------------------------------------------------------------------------------------
@@ -484,6 +589,99 @@ pub(super) struct PackFile {
     /// Appended to scene narration after a space; contains the `{name}` placeholder once.
     pub(super) escort_support_suffix: String,
     pub(super) scenes: Vec<Scene>,
+    /// Phrases that give the private clue away. A listener who has not been told the clue
+    /// must never hear them, whoever is speaking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) secret_terms: Vec<String>,
+    /// Who each speaking character is, by the name a scene shows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) speakers: Vec<SpeakerProfile>,
+}
+
+/// One character on stage in a scene.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SceneCastMember {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) role: CastRole,
+    /// The cut-out figure's asset stem: the portrait's stem with `portrait-` replaced by
+    /// `sprite-`.
+    pub(super) sprite: String,
+    pub(super) portrait: String,
+    pub(super) voice: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) gender: Option<Gender>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) age: Option<Age>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CastRole {
+    Patron,
+    Antagonist,
+    Contact,
+    Bystander,
+}
+
+/// The pronoun set a character is cast and voiced with.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Gender {
+    He,
+    She,
+    They,
+    It,
+}
+
+/// How old a character sounds.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Age {
+    Young,
+    Adult,
+    Elder,
+}
+
+impl Gender {
+    pub(super) fn from_table(text: &str) -> Option<Self> {
+        match text {
+            "he" => Some(Self::He),
+            "she" => Some(Self::She),
+            "they" => Some(Self::They),
+            "it" => Some(Self::It),
+            _ => None,
+        }
+    }
+}
+
+impl Age {
+    pub(super) fn from_table(text: &str) -> Option<Self> {
+        match text {
+            "young" => Some(Self::Young),
+            "adult" => Some(Self::Adult),
+            "elder" => Some(Self::Elder),
+            _ => None,
+        }
+    }
+}
+
+/// What a language model needs to voice one speaking character in character, and what voice
+/// casting needs to pick a voice without reading the free-text `voice` phrase.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SpeakerProfile {
+    /// Equals the `speaker` of the scenes this character speaks in.
+    pub(super) name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) gender: Option<Gender>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) age: Option<Age>,
+    /// Who the character is to the party, in a short phrase.
+    pub(super) role: String,
+    /// How the character sounds, in a short phrase.
+    pub(super) voice: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -609,6 +807,14 @@ pub(super) struct Scene {
     pub(super) key: SceneKey,
     pub(super) title: String,
     pub(super) narration: String,
+    /// The rules wording of a scene (positions, outcomes, rest), kept apart from the story text
+    /// so a story writer never touches it. Display joins it after the narration.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(super) rules_note: String,
+    /// The characters on stage besides the heroes. Sprite and portrait are asset stems the
+    /// client may not have; it falls back, so unknown ones are not an error here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) cast: Vec<SceneCastMember>,
     /// Narration once the Short Rest has completed; present for victory and defeat only.
     #[serde(default)]
     pub(super) narration_rested: Option<String>,
@@ -616,6 +822,8 @@ pub(super) struct Scene {
     pub(super) dialogue: String,
     /// Served asset path without a leading slash.
     pub(super) asset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) setting: Option<super::adventure::setting::SceneSetting>,
     #[serde(default)]
     pub(super) speaker_portrait: String,
 }
@@ -907,6 +1115,7 @@ fn placeholders_are_defined(text: &str, allowed: &[&str]) -> bool {
 fn validate_tuning(tuning: &TuningFile) -> Result<(), PackError> {
     const FILE: SourceFile = SourceFile::Tuning;
     identifier(FILE, "pack", &tuning.pack)?;
+    validate_tempo(tuning.tempo)?;
     let hero = &tuning.hero;
     range(
         FILE,
@@ -1250,7 +1459,41 @@ fn validate_pack(pack: &PackFile) -> Result<(), PackError> {
             "text with exactly one {name} placeholder and no other braces",
         ));
     }
-    validate_scenes(&pack.scenes)
+    validate_scenes(&pack.scenes)?;
+    validate_speaking_notes(pack)
+}
+
+fn validate_speaking_notes(pack: &PackFile) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Pack;
+    range(FILE, "secret_terms", length(pack.secret_terms.len()), 0, 16)?;
+    for (index, term) in pack.secret_terms.iter().enumerate() {
+        text(FILE, &format!("secret_terms[{index}]"), term, 1, 64)?;
+    }
+    range(FILE, "speakers", length(pack.speakers.len()), 0, 8)?;
+    for (index, speaker) in pack.speakers.iter().enumerate() {
+        text(
+            FILE,
+            &format!("speakers[{index}].name"),
+            &speaker.name,
+            1,
+            48,
+        )?;
+        text(
+            FILE,
+            &format!("speakers[{index}].role"),
+            &speaker.role,
+            1,
+            96,
+        )?;
+        text(
+            FILE,
+            &format!("speakers[{index}].voice"),
+            &speaker.voice,
+            1,
+            96,
+        )?;
+    }
+    Ok(())
 }
 
 fn validate_creation(creation: &CreationPack) -> Result<(), PackError> {
@@ -1518,6 +1761,22 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
             0,
             TEXT_CHARACTERS_MAX,
         )?;
+        text(
+            FILE,
+            &format!("{at}.rules_note"),
+            &scene.rules_note,
+            0,
+            TEXT_CHARACTERS_MAX,
+        )?;
+        range(FILE, &format!("{at}.cast"), length(scene.cast.len()), 0, 6)?;
+        for (position, actor) in scene.cast.iter().enumerate() {
+            let member = format!("{at}.cast[{position}]");
+            text(FILE, &format!("{member}.id"), &actor.id, 1, 64)?;
+            text(FILE, &format!("{member}.name"), &actor.name, 1, 48)?;
+            text(FILE, &format!("{member}.sprite"), &actor.sprite, 0, 128)?;
+            text(FILE, &format!("{member}.portrait"), &actor.portrait, 0, 128)?;
+            text(FILE, &format!("{member}.voice"), &actor.voice, 0, 96)?;
+        }
         if let Some(rested) = &scene.narration_rested {
             text(
                 FILE,
@@ -1534,6 +1793,35 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
                 CrossRefReason::RestedNarrationMismatch,
             ));
         }
+        if let Some(setting) = &scene.setting {
+            identifier(FILE, &format!("{at}.setting.place_id"), &setting.place_id)?;
+            identifier(FILE, &format!("{at}.setting.art_key"), &setting.art_key)?;
+            text(
+                FILE,
+                &format!("{at}.setting.name"),
+                &setting.name,
+                1,
+                LABEL_CHARACTERS_MAX,
+            )?;
+            text(
+                FILE,
+                &format!("{at}.setting.short"),
+                &setting.short,
+                1,
+                LABEL_CHARACTERS_MAX,
+            )?;
+        }
+        if scene
+            .setting
+            .as_ref()
+            .is_some_and(|setting| !super::adventure::setting::validates(setting, &scene.asset))
+        {
+            return Err(PackError::Malformed {
+                file: FILE,
+                path: format!("{at}.setting"),
+                expected: "setting with art depicting its kind",
+            });
+        }
         if !served_asset(&scene.asset)
             || (!scene.speaker_portrait.is_empty() && !served_asset(&scene.speaker_portrait))
         {
@@ -1543,6 +1831,13 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
                 CrossRefReason::AssetNotServed,
             ));
         }
+    }
+    if scenes.iter().any(|s| s.setting.is_some()) && scenes.iter().any(|s| s.setting.is_none()) {
+        return Err(PackError::Malformed {
+            file: FILE,
+            path: "scenes.setting".into(),
+            expected: "all scene settings, or legacy with no settings",
+        });
     }
     for key in SceneKey::ALL {
         let mut matches = scenes
@@ -1959,6 +2254,11 @@ pub(super) fn bandit() -> df_rules::local_journey::BanditRules {
         }
     })
 }
+/// Every speaking character of the active pack, for voice casting: name, gender, age and the
+/// free-text voice phrase.
+pub(super) fn speakers() -> Vec<SpeakerProfile> {
+    with_content(|pack| pack.speakers.clone())
+}
 pub(super) fn narrative_budget() -> u64 {
     active().map_or(8, |loaded| {
         u64::from(loaded.tuning.narrative.intervention_budget)
@@ -2048,5 +2348,75 @@ pub(super) fn offer_label(kind: df_protocol::common::GameplayActionKind) -> Stri
             _ => unreachable!("only compiled authored offers have labels"),
         }
         .clone()
+    })
+}
+
+fn validate_tempo(tempo: TempoTuning) -> Result<(), PackError> {
+    let file = SourceFile::Tuning;
+    for (index, value) in [
+        ("room", tempo.base_intensity_permille.room),
+        ("opening", tempo.base_intensity_permille.opening),
+        ("dialogue", tempo.base_intensity_permille.dialogue),
+        ("combat", tempo.base_intensity_permille.combat),
+        ("victory", tempo.base_intensity_permille.victory),
+        ("defeat", tempo.base_intensity_permille.defeat),
+        ("rest", tempo.base_intensity_permille.rest),
+        ("arrival", tempo.base_intensity_permille.arrival),
+    ]
+    .iter()
+    {
+        range(
+            file,
+            &format!("tempo.base_intensity_permille.{index}"),
+            i64::from(*value),
+            0,
+            1000,
+        )?;
+    }
+    for (index, value) in [
+        ("story_begun", tempo.impulses_permille.story_begun),
+        ("scene_changed", tempo.impulses_permille.scene_changed),
+        (
+            "antagonist_revealed",
+            tempo.impulses_permille.antagonist_revealed,
+        ),
+        ("combat_begun", tempo.impulses_permille.combat_begun),
+        ("miss", tempo.impulses_permille.miss),
+        ("hit", tempo.impulses_permille.hit),
+        ("critical", tempo.impulses_permille.critical),
+        ("graze", tempo.impulses_permille.graze),
+        ("hero_low", tempo.impulses_permille.hero_low),
+        (
+            "combatant_dropped",
+            tempo.impulses_permille.combatant_dropped,
+        ),
+        ("victory", tempo.impulses_permille.victory),
+        ("defeat", tempo.impulses_permille.defeat),
+        ("short_rest", tempo.impulses_permille.short_rest),
+        ("arrival", tempo.impulses_permille.arrival),
+    ]
+    .iter()
+    {
+        range(
+            file,
+            &format!("tempo.impulses_permille.{index}"),
+            i64::from(*value),
+            -1000,
+            1000,
+        )?;
+    }
+    for (name, value) in [
+        ("inertia_half_life_millis", tempo.inertia_half_life_millis),
+        ("decay_half_life_millis", tempo.decay_half_life_millis),
+        ("fatigue_half_life_millis", tempo.fatigue_half_life_millis),
+    ] {
+        range(file, &format!("tempo.{name}"), i64::from(value), 1, 300000)?;
+    }
+    tempo.policy().validate().map_err(|_| {
+        malformed(
+            file,
+            "tempo",
+            "ordered thresholds and bounded fatigue/hysteresis",
+        )
     })
 }

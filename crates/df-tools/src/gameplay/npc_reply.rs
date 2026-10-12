@@ -6,9 +6,11 @@
 //! because the storyteller rejects game numbers that are not in the facts.
 //!
 //! Listener safety: the facts hold only what the asking player has already been told. The
-//! scene's secret clue is included only when this member has privately received it;
-//! otherwise its key terms go into `forbidden`, and the storyteller refuses any reply that
-//! uses them.
+//! scene's secret clue is included only when this member has privately received it, and the
+//! facts then say so plainly so the speaker does not deflect. Otherwise the pack's explicit
+//! `secret_terms` (minus anything the whole room already sees) go into `forbidden`, and the
+//! storyteller refuses any reply that uses them. A pack without that list falls back to the
+//! proper names found in the clue text.
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -20,7 +22,11 @@ use df_protocol::common as rpc;
 use df_types::MemberId;
 use serde_json::{Value, json};
 
-use super::storyteller::{Expression, Slot, Storyteller, contains_whole_word};
+use super::{
+    pack::{PackFile, SpeakerProfile},
+    storyteller::{CallProfile, Expression, Slot, Storyteller, contains_whole_word},
+    table_log::TableLog,
+};
 
 /// Longest in-character reply, in characters.
 pub(super) const REPLY_CHARACTERS: usize = 220;
@@ -29,15 +35,39 @@ const MAXIMUM_PLAYER_CHARACTERS: usize = 500;
 const REPLIES_PER_WINDOW: usize = 6;
 const WINDOW: Duration = Duration::from_secs(60);
 
-const STYLE: &str = "A spoken line in character, in the first person, with no quotation marks. \
-It may refuse or deflect. It never promises mechanical results. When asked what to do, it \
-nudges toward the offered choices. Plain, brief and warm.";
+const STYLE: &str = "A spoken line in character, in the first person, with no quotation marks, \
+shaped by facts.npc (role, voice). It deflects only what facts.forbidden or the scene hides; when \
+the hero was told the secret, it speaks of it plainly and quietly instead. An enemy taunts, \
+threatens or bargains and never helps. It never promises mechanical results. When asked what \
+to do, it nudges toward the offered choices. Plain and brief.";
+
+/// What the pack says about the story that a reply needs: the private clue, the phrases that
+/// give it away and who each speaking character is.
+pub(super) struct StoryFacts {
+    clue: String,
+    secret_terms: Vec<String>,
+    speakers: Vec<SpeakerProfile>,
+}
+
+impl StoryFacts {
+    pub(super) fn from_pack(pack: &PackFile) -> Self {
+        Self {
+            clue: pack.courier_clue.clone(),
+            secret_terms: pack.secret_terms.clone(),
+            speakers: pack.speakers.clone(),
+        }
+    }
+}
 
 /// Everything one reply needs, captured by the actor and owned so the model call can run
 /// elsewhere.
 pub(super) struct NpcReplyContext {
     member: MemberId,
     facts: Value,
+    speaker: String,
+    hero_name: String,
+    hero_index: u32,
+    typed_words: String,
 }
 
 impl NpcReplyContext {
@@ -47,7 +77,7 @@ impl NpcReplyContext {
         view: &rpc::ViewMessage,
         member: MemberId,
         typed: &str,
-        secret_clue: &str,
+        story: &StoryFacts,
     ) -> Option<Self> {
         let Some(rpc::view_message::Audience::Player(player)) = &view.audience else {
             return None;
@@ -68,10 +98,17 @@ impl NpcReplyContext {
             .filter(|offer| offer.action_kind != rpc::GameplayActionKind::CreateCharacter as i32)
             .map(|offer| offer.label.as_str())
             .collect();
+        let profile = story
+            .speakers
+            .iter()
+            .find(|speaker| speaker.name == journey.speaker);
         let mut facts = json!({
             "npc": {
                 "name": journey.speaker,
-                "role": "the speaker the scene narration describes",
+                "role": profile.map_or("the speaker the scene narration describes", |speaker| {
+                    speaker.role.as_str()
+                }),
+                "voice": profile.map_or("", |speaker| speaker.voice.as_str()),
             },
             "scene": {
                 "title": title.unwrap_or_default(),
@@ -81,22 +118,54 @@ impl NpcReplyContext {
             "player": {"hero_name": hero.name, "exact_words": words},
             "offered_choices": choices,
         });
+        // Typed conversation is public table talk, so the secret's terms stay forbidden for
+        // every asker; the room hears the reply.
+        let public = format!(
+            "{} {} {} {} {}",
+            title.unwrap_or_default(),
+            player.narration,
+            journey.dialogue,
+            hero.name,
+            choices.join(" "),
+        );
+        facts["forbidden"] = json!(unheard_secret_terms(story, &public));
         if player.private_clue.is_empty() {
-            let public = format!(
-                "{} {} {} {} {}",
-                title.unwrap_or_default(),
-                player.narration,
-                journey.dialogue,
-                hero.name,
-                choices.join(" "),
+            facts["listener_knowledge"] = json!(
+                "This hero has NOT been told the secret. Never reveal it or hint at the \
+                 forbidden terms; deflect questions about them in character."
             );
-            facts["forbidden"] = json!(secret_terms(secret_clue, &public));
         } else {
-            facts["secret_clue_this_player_was_privately_told_and_may_be_reminded_of"] =
-                json!(player.private_clue);
-            facts["forbidden"] = json!([]);
+            facts["secret_clue_this_player_was_privately_told"] = json!(player.private_clue);
+            facts["listener_knowledge"] = json!(
+                "This hero knows your secret; others are listening, so allude to it without \
+                 stating it. Never use the forbidden terms."
+            );
         }
-        Some(Self { member, facts })
+        let hero_index = journey
+            .party
+            .iter()
+            .position(|party_member| party_member.name == hero.name)
+            .and_then(|position| u32::try_from(position).ok())
+            .unwrap_or(0);
+        Some(Self {
+            member,
+            facts,
+            speaker: journey.speaker.clone(),
+            hero_name: hero.name.clone(),
+            hero_index,
+            typed_words: words,
+        })
+    }
+
+    /// Publishes the hero's typed words as public table talk, before any answer.
+    pub(super) fn publish_typed_line(&self, log: &TableLog) {
+        log.push(
+            &self.hero_name,
+            rpc::TableRole::Hero,
+            self.hero_index,
+            rpc::TableKind::Speech,
+            &self.typed_words,
+        );
     }
 }
 
@@ -115,6 +184,21 @@ fn sanitize_player_words(typed: &str) -> String {
         .collect::<String>()
         .trim()
         .to_owned()
+}
+
+/// The pack's explicit secret terms the whole room has not already seen; a pack that lists none
+/// falls back to the proper names in its clue text.
+fn unheard_secret_terms(story: &StoryFacts, public: &str) -> Vec<String> {
+    if story.secret_terms.is_empty() {
+        return secret_terms(&story.clue, public);
+    }
+    let public = public.to_lowercase();
+    story
+        .secret_terms
+        .iter()
+        .filter(|term| !contains_whole_word(&public, &term.to_lowercase()))
+        .cloned()
+        .collect()
 }
 
 /// Proper names in the clue (runs of capitalized words after the first word of a sentence), minus anything the whole room already sees in `public`.
@@ -239,6 +323,26 @@ impl NpcVoice {
 
     /// The reply text, or `None` when the storyteller is off, the member is over its bounds,
     /// or the model failed, timed out or broke a rule. `None` means "answer as before".
+    /// [`Self::reply`], and the reply also becomes public table talk: the asker gets it in the
+    /// dialogue response and the whole room sees it in the table log. A reply that never came
+    /// adds nothing, so only the player's own line stands.
+    pub(super) async fn reply_in_public(
+        &self,
+        context: NpcReplyContext,
+        log: &TableLog,
+    ) -> Option<String> {
+        let speaker = context.speaker.clone();
+        let reply = self.reply(context).await?;
+        log.push(
+            &speaker,
+            rpc::TableRole::Npc,
+            0,
+            rpc::TableKind::Speech,
+            &reply,
+        );
+        Some(reply)
+    }
+
     pub(super) async fn reply(&self, context: NpcReplyContext) -> Option<String> {
         if !self.storyteller.is_on() {
             return None;
@@ -252,6 +356,7 @@ impl NpcVoice {
                 facts: &context.facts,
                 slots: &slots,
                 style: STYLE,
+                profile: CallProfile::short_reply(),
             })
             .await
             .ok()?;
@@ -284,6 +389,39 @@ mod tests {
     use super::*;
 
     const CLUE: &str = "The courier quietly tells you: the sealed packet is addressed to Vell at the Harbor Inn. Keep its destination between you.";
+
+    /// A pack from before the explicit lists: only the clue text is known.
+    fn story() -> StoryFacts {
+        StoryFacts {
+            clue: CLUE.to_owned(),
+            secret_terms: Vec::new(),
+            speakers: Vec::new(),
+        }
+    }
+
+    /// A generated pack: explicit secret terms and a profile for each speaker.
+    fn listed_story() -> StoryFacts {
+        StoryFacts {
+            clue: CLUE.to_owned(),
+            secret_terms: vec!["Vell".to_owned(), "Harbor Inn".to_owned()],
+            speakers: vec![
+                SpeakerProfile {
+                    name: "Courier".to_owned(),
+                    gender: None,
+                    age: None,
+                    role: "a frightened courier carrying a sealed packet".to_owned(),
+                    voice: "hurried and anxious".to_owned(),
+                },
+                SpeakerProfile {
+                    name: "Bandit".to_owned(),
+                    gender: None,
+                    age: None,
+                    role: "a hostile bandit fighting the heroes".to_owned(),
+                    voice: "sneering and rough".to_owned(),
+                },
+            ],
+        }
+    }
 
     fn member(byte: u8) -> MemberId {
         MemberId::from_bytes(&[byte; 16]).unwrap()
@@ -321,9 +459,13 @@ mod tests {
 
     #[test]
     fn a_player_without_the_clue_gets_its_key_terms_forbidden_and_not_its_text() {
-        let context =
-            NpcReplyContext::from_view(&view("", "Courier"), member(1), "Where is it going?", CLUE)
-                .unwrap();
+        let context = NpcReplyContext::from_view(
+            &view("", "Courier"),
+            member(1),
+            "Where is it going?",
+            &story(),
+        )
+        .unwrap();
 
         let facts = &context.facts;
         assert_eq!(facts["player"]["exact_words"], "Where is it going?");
@@ -354,7 +496,7 @@ mod tests {
         };
         player.narration = "Rain beats on the harbor. Vell is waiting.".to_owned();
 
-        let context = NpcReplyContext::from_view(&shared, member(1), "Who?", CLUE).unwrap();
+        let context = NpcReplyContext::from_view(&shared, member(1), "Who?", &story()).unwrap();
 
         assert_eq!(context.facts["forbidden"], json!(["Harbor Inn", "Inn"]));
     }
@@ -366,20 +508,91 @@ mod tests {
             "Courier",
         );
 
-        let context = NpcReplyContext::from_view(&told, member(1), "Where exactly?", CLUE).unwrap();
+        let context =
+            NpcReplyContext::from_view(&told, member(1), "Where exactly?", &story()).unwrap();
 
-        assert_eq!(context.facts["forbidden"], json!([]));
+        // Table talk is public: the secret's terms stay forbidden for the asker who holds it.
         assert_eq!(
-            context.facts["secret_clue_this_player_was_privately_told_and_may_be_reminded_of"],
+            context.facts["forbidden"],
+            json!(["Vell", "Harbor Inn", "Inn"])
+        );
+        assert_eq!(
+            context.facts["secret_clue_this_player_was_privately_told"],
             "The packet is addressed to Vell at the Harbor Inn."
         );
     }
 
     #[test]
-    fn nobody_answers_when_no_one_is_speaking_or_the_text_is_empty() {
-        assert!(NpcReplyContext::from_view(&view("", ""), member(1), "Hello", CLUE).is_none());
+    fn explicit_secret_terms_replace_the_guess_and_the_speakers_role_and_voice_are_sent() {
+        let context = NpcReplyContext::from_view(
+            &view("", "Courier"),
+            member(1),
+            "Where is it going?",
+            &listed_story(),
+        )
+        .unwrap();
+
+        let facts = &context.facts;
+        assert_eq!(facts["forbidden"], json!(["Vell", "Harbor Inn"]));
+        assert_eq!(
+            facts["npc"],
+            json!({
+                "name": "Courier",
+                "role": "a frightened courier carrying a sealed packet",
+                "voice": "hurried and anxious",
+            })
+        );
         assert!(
-            NpcReplyContext::from_view(&view("", "Courier"), member(1), " \n ", CLUE).is_none()
+            facts["listener_knowledge"]
+                .as_str()
+                .unwrap()
+                .contains("NOT been told")
+        );
+    }
+
+    #[test]
+    fn a_hero_who_holds_the_secret_is_told_so_plainly() {
+        let told = view(
+            "The packet is addressed to Vell at the Harbor Inn.",
+            "Courier",
+        );
+
+        let context =
+            NpcReplyContext::from_view(&told, member(1), "Where exactly?", &listed_story())
+                .unwrap();
+
+        assert!(
+            context.facts["listener_knowledge"]
+                .as_str()
+                .unwrap()
+                .contains("others are listening, so allude to it without stating it")
+        );
+        assert_eq!(context.facts["forbidden"], json!(["Vell", "Harbor Inn"]));
+    }
+
+    #[test]
+    fn the_enemy_speaking_in_the_confrontation_answers_as_the_enemy() {
+        let context = NpcReplyContext::from_view(
+            &view("", "Bandit"),
+            member(1),
+            "Surrender!",
+            &listed_story(),
+        )
+        .unwrap();
+
+        assert_eq!(context.facts["npc"]["name"], "Bandit");
+        assert_eq!(
+            context.facts["npc"]["role"],
+            "a hostile bandit fighting the heroes"
+        );
+        assert_eq!(context.facts["npc"]["voice"], "sneering and rough");
+    }
+
+    #[test]
+    fn nobody_answers_when_no_one_is_speaking_or_the_text_is_empty() {
+        assert!(NpcReplyContext::from_view(&view("", ""), member(1), "Hello", &story()).is_none());
+        assert!(
+            NpcReplyContext::from_view(&view("", "Courier"), member(1), " \n ", &story()).is_none()
         );
     }
 
@@ -450,7 +663,7 @@ mod tests {
     }
 
     fn question(words: &str) -> NpcReplyContext {
-        NpcReplyContext::from_view(&view("", "Courier"), member(1), words, CLUE).unwrap()
+        NpcReplyContext::from_view(&view("", "Courier"), member(1), words, &story()).unwrap()
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -470,6 +683,137 @@ mod tests {
         assert!(sent.contains("Who is following you?"));
         assert!(sent.contains("\"forbidden\":[\"Vell\",\"Harbor Inn\",\"Inn\"]"));
         assert!(!sent.contains("addressed to"));
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    fn holder_question(words: &str) -> NpcReplyContext {
+        let told = view(
+            "The packet is addressed to Vell at the Harbor Inn. Keep its destination between you.",
+            "Courier",
+        );
+        NpcReplyContext::from_view(&told, member(1), words, &listed_story()).unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_scripted_conversation_reaches_the_table_log_in_order_without_the_secret() {
+        use super::super::table_log::{TableLog, action_lines};
+        let endpoint = FakeEndpoint::start(vec![
+            // A reply that states the secret is refused whole, twice.
+            Reply::Output(json!({"reply": "It goes to Vell at the Harbor Inn, friend."})),
+            Reply::Output(json!({"reply": "Vell waits at the Harbor Inn."})),
+            // A reply that alludes to it is delivered.
+            Reply::Output(json!({"reply": "You know where it must go. Keep your voice down."})),
+            Reply::Status(500, json!({"error": {}})),
+        ]);
+        let (voice, cache) = voice(&endpoint, "voice-table-log");
+        let log = TableLog::new();
+        for line in action_lines(
+            rpc::GameplayActionKind::AskCourier,
+            "Brannoch",
+            &[],
+            "greatsword",
+            "",
+            "Ask the courier what he knows",
+        ) {
+            log.push(
+                &line.speaker,
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Action,
+                &line.text,
+            );
+        }
+
+        // The holder asks; the model leaks, so only the player's own line is public.
+        let first = holder_question("Where exactly does it go?");
+        first.publish_typed_line(&log);
+        assert_eq!(voice.reply_in_public(first, &log).await, None);
+        // A second question is answered discreetly.
+        let second = holder_question("You know. Tell me quietly.");
+        second.publish_typed_line(&log);
+        let reply = voice.reply_in_public(second, &log).await;
+        assert_eq!(
+            reply.as_deref(),
+            Some("You know where it must go. Keep your voice down.")
+        );
+        // A failing model adds only the player's line.
+        let third = holder_question("And then?");
+        third.publish_typed_line(&log);
+        assert_eq!(voice.reply_in_public(third, &log).await, None);
+
+        let lines = log.lines();
+        let shown: Vec<(&str, i32, i32, &str)> = lines
+            .iter()
+            .map(|line| {
+                (
+                    line.speaker.as_str(),
+                    line.role,
+                    line.kind,
+                    line.text.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (
+                    "Brannoch",
+                    rpc::TableRole::Hero as i32,
+                    rpc::TableKind::Action as i32,
+                    "asks the courier what he knows"
+                ),
+                (
+                    "Brannoch",
+                    rpc::TableRole::Hero as i32,
+                    rpc::TableKind::Speech as i32,
+                    "Where exactly does it go?"
+                ),
+                (
+                    "Brannoch",
+                    rpc::TableRole::Hero as i32,
+                    rpc::TableKind::Speech as i32,
+                    "You know. Tell me quietly."
+                ),
+                (
+                    "Courier",
+                    rpc::TableRole::Npc as i32,
+                    rpc::TableKind::Speech as i32,
+                    "You know where it must go. Keep your voice down."
+                ),
+                (
+                    "Brannoch",
+                    rpc::TableRole::Hero as i32,
+                    rpc::TableKind::Speech as i32,
+                    "And then?"
+                ),
+            ]
+        );
+        assert!(
+            lines
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+        let everything: String = lines.iter().map(|line| line.text.to_lowercase()).collect();
+        for hidden in ["vell", "harbor inn", "addressed to", "destination"] {
+            assert!(!everything.contains(hidden), "{hidden} reached the table");
+        }
+        // The model was told the secret's terms are forbidden even though the asker holds it.
+        let sent = endpoint.bodies()[0]["input"].as_str().unwrap().to_owned();
+        assert!(sent.contains("\"forbidden\":[\"Vell\",\"Harbor Inn\"]"));
+        assert!(sent.contains("allude to it without stating it"));
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_reply_asks_for_low_reasoning_and_a_cap_of_three_hundred_tokens() {
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({"reply": "Quiet now."}))]);
+        let (voice, cache) = voice(&endpoint, "voice-effort");
+
+        voice.reply(question("Who is following you?")).await;
+
+        let body = &endpoint.bodies()[0];
+        assert_eq!(body["reasoning"], json!({"effort": "low"}));
+        assert_eq!(body["max_output_tokens"], 300);
         std::fs::remove_dir_all(cache).unwrap();
     }
 

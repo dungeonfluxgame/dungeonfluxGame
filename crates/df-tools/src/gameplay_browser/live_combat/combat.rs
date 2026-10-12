@@ -198,6 +198,39 @@ fn rolls(combat: &rpc::CombatView) -> Vec<RollText> {
         .collect()
 }
 
+/// How one roll reads on the display, for the final-blow overlay that shows a roll the
+/// combat screen never got to draw.
+pub(in crate::gameplay_browser) struct RollDescription {
+    pub(in crate::gameplay_browser) label: String,
+    pub(in crate::gameplay_browser) value: String,
+    pub(in crate::gameplay_browser) explanation: String,
+    pub(in crate::gameplay_browser) source: String,
+    pub(in crate::gameplay_browser) verdict: &'static str,
+    pub(in crate::gameplay_browser) tone: &'static str,
+}
+
+pub(in crate::gameplay_browser) fn describe(
+    outcome: &rpc::CombatOutcome,
+) -> Option<RollDescription> {
+    let single = rpc::CombatView {
+        outcomes: vec![outcome.clone()],
+        ..Default::default()
+    };
+    let roll = rolls(&single).into_iter().next()?;
+    Some(RollDescription {
+        label: roll.label,
+        value: roll.value,
+        explanation: roll.explanation,
+        source: roll.source,
+        verdict: roll.verdict.0,
+        tone: match roll.verdict.1 {
+            CombatTone::Success => "success",
+            CombatTone::Failure => "failure",
+            CombatTone::Neutral => "neutral",
+        },
+    })
+}
+
 fn offered_input(group: &rpc::JourneyGroup) -> Option<&str> {
     let known = matches!(group.group_id.as_str(), SAVAGE_ATTACKER | GRAZE);
     let shape = group.options.len() == 2

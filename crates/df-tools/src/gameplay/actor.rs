@@ -1,3 +1,6 @@
+#[path = "tempo.rs"]
+pub(super) mod tempo;
+
 use df_model::checkpoint::{Checkpoint, EffectId, GameInput};
 use df_observe::OperationContext;
 use df_persistence::local_demo_scope::{
@@ -291,7 +294,10 @@ impl CompletionRetry {
 }
 pub(super) struct Actor {
     pub owner: Owner,
+    /// The public table log; an accepted action and a typed line are appended here.
+    pub table_log: std::sync::Arc<super::table_log::TableLog>,
     pub dialogue: super::dialogue::DialogueState,
+    pub tempo: Option<tempo::TempoOwner>,
     pub bootstrap_credential: [u8; 32],
     pub issuer: LocalDemoScopeIssuer,
     pub codec: NativeCodecLimits,
@@ -720,6 +726,21 @@ impl Actor {
                 }
                 let accepted =
                     super::journey::accepted(committed.decision()).map_err(unavailable)?;
+                let replayed = replaying_uncertain || committed.basis().revision <= prior_revision;
+                if !replayed {
+                    self.record_table_action(member, &request, &accepted);
+                }
+                if committed.basis().revision > prior_revision
+                    && self.owner.is_current()
+                    && let Some(tempo) = self.tempo.as_mut()
+                {
+                    tempo::observe(tempo.accepted(
+                        self.owner.checkpoint(),
+                        &accepted,
+                        request.action_kind,
+                        Instant::now(),
+                    ));
+                }
                 if let Some(inputs) = self.qualification_inputs.as_mut() {
                     retain_qualification_input(inputs, credential, &request);
                 }
@@ -747,6 +768,61 @@ impl Actor {
                 }
                 Err(unavailable(error))
             }
+        }
+    }
+    /// Publishes an accepted action as public table talk: the acting hero's name and a short
+    /// phrase from the offer's label and visible result, then what the enemy did in answer.
+    fn record_table_action(
+        &self,
+        member: df_types::MemberId,
+        request: &rpc::SubmitActionRequest,
+        accepted: &rpc::AcceptedAction,
+    ) {
+        let Ok(view) = wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member)
+        else {
+            return;
+        };
+        let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+            return;
+        };
+        let Some(journey) = player.journey else {
+            return;
+        };
+        let Some(hero) = journey.own_character.map(|character| character.name) else {
+            return;
+        };
+        let index = journey
+            .party
+            .iter()
+            .position(|party_member| party_member.name == hero)
+            .and_then(|position| u32::try_from(position).ok())
+            .unwrap_or(0);
+        let Ok(kind) = rpc::GameplayActionKind::try_from(request.action_kind) else {
+            return;
+        };
+        let weapon = super::pack::hero_weapon_item().replace('-', " ");
+        let destination = super::pack::destination_label();
+        let label = super::pack::offer_label(kind);
+        for line in super::table_log::action_lines(
+            kind,
+            &hero,
+            &accepted.combat,
+            &weapon,
+            &destination,
+            &label,
+        ) {
+            let (role, hero_index) = if line.speaker == hero {
+                (rpc::TableRole::Hero, index)
+            } else {
+                (rpc::TableRole::Npc, 0)
+            };
+            self.table_log.push(
+                &line.speaker,
+                role,
+                hero_index,
+                rpc::TableKind::Action,
+                &line.text,
+            );
         }
     }
     fn view(
@@ -792,10 +868,12 @@ impl Actor {
         }
         let member = df_types::MemberId::from_bytes(&principal)
             .map_err(|_| tonic::Status::permission_denied("binding invalid"))?;
-        Ok((
-            role,
-            wire::journey_view(current, role, member).map_err(unavailable)?,
-        ))
+        let mut view = wire::journey_view(current, role, member).map_err(unavailable)?;
+        self.table_log.attach(&mut view);
+        if let Some(tempo) = self.tempo.as_mut() {
+            tempo::observe(tempo.decorate(&mut view, current, Instant::now()));
+        }
+        Ok((role, view))
     }
 }
 impl Reducer<Call> for Actor {

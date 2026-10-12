@@ -429,6 +429,14 @@ fn ally(
 ) -> Result<CampaignAlly, CampaignError> {
     let a = roller.select(&format!("ally.{prefix}"), table, |a| {
         intersects(&a.fits, &location.tags)
+            && if prefix.contains("contact") {
+                tables
+                    .chapter
+                    .places
+                    .contact_can_visit(&a.id, location, &tables.chapter)
+            } else {
+                tables.chapter.places.patron_fits(&a.id, location)
+            }
     })?;
     let first = roller
         .select(
@@ -1641,13 +1649,11 @@ pub(crate) fn next_chapter(
                     || a.id == "bandit"
             }
     })?;
-    let patron = if tables
-        .chapter
-        .patrons
-        .entries
-        .iter()
-        .any(|p| p.id == frame.patron.archetype && intersects(&p.fits, &location.tags))
-    {
+    let patron = if tables.chapter.patrons.entries.iter().any(|p| {
+        p.id == frame.patron.archetype
+            && intersects(&p.fits, &location.tags)
+            && tables.chapter.places.patron_fits(&p.id, location)
+    }) {
         frame.patron.clone()
     } else {
         ally(
@@ -1659,13 +1665,14 @@ pub(crate) fn next_chapter(
             None,
         )?
     };
-    let mut contact = if tables
-        .chapter
-        .contacts
-        .entries
-        .iter()
-        .any(|p| p.id == frame.contact.archetype && intersects(&p.fits, &location.tags))
-    {
+    let mut contact = if tables.chapter.contacts.entries.iter().any(|p| {
+        p.id == frame.contact.archetype
+            && intersects(&p.fits, &location.tags)
+            && tables
+                .chapter
+                .places
+                .contact_can_visit(&p.id, location, &tables.chapter)
+    }) {
         frame.contact.clone()
     } else {
         ally(

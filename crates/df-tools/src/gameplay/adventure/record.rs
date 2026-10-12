@@ -1,5 +1,5 @@
 //! Exact immutable bytes are authority on resume; changed tables are never consulted.
-use super::super::pack::{self, LoadedPack};
+use super::super::pack::{self, CastRole, LoadedPack, SpeakerProfile};
 use super::{GenerateError, GeneratedAdventure, Roll, RollStatus, RulesMode};
 use df_persistence::local_demo_scope::DemoAdventure;
 use serde::{Deserialize, Serialize};
@@ -28,13 +28,60 @@ pub(crate) struct AdventureRecord {
     pub(crate) seeded_dice: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     campaign: Option<pack::CampaignIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) settings: Option<super::setting::ChapterSettings>,
+    /// Copies of the pack's listener-safety data, so a review of the record shows them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    secret_terms: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    speakers: Vec<SpeakerProfile>,
+    /// Who is on stage in each scene, copied from the pack.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scene_cast: Vec<SceneCastRecord>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SceneCastRecord {
+    scene: String,
+    id: String,
+    name: String,
+    role: CastRole,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Expression {
+    /// `patterns` or `model`; `model` carries the details below.
     source: String,
     fact_sheet_sha256: String,
     output_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<ModelExpression>,
+}
+/// What the language model wrote: which slots took its text and which kept the pattern text.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ModelExpression {
+    pub(crate) model: String,
+    pub(crate) model_slots: Vec<String>,
+    pub(crate) pattern_slots: Vec<String>,
+    /// Why a pattern slot kept its pattern text, as `slot: reason`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) refused: Vec<String>,
+    /// Supplier-reported tokens of the calls made.
+    pub(crate) tokens: u64,
+    /// Wall-clock milliseconds the whole expression step took.
+    #[serde(default)]
+    pub(crate) elapsed_ms: u64,
+}
+impl ModelExpression {
+    pub(crate) fn summary(&self) -> String {
+        format!(
+            "prose=model slots={}/{} tokens={}",
+            self.model_slots.len(),
+            self.model_slots.len() + self.pattern_slots.len(),
+            self.tokens
+        )
+    }
 }
 #[derive(Debug)]
 pub(crate) enum RecordError {
@@ -59,7 +106,16 @@ fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 impl GeneratedAdventure {
+    /// The documents of an adventure whose text is entirely the pattern text.
     pub(crate) fn documents(&self, seeded_dice: bool) -> Result<DemoAdventure, GenerateError> {
+        self.documents_expressed(seeded_dice, None)
+    }
+    /// The documents, recording how the language model took part when it did.
+    pub(crate) fn documents_expressed(
+        &self,
+        seeded_dice: bool,
+        model: Option<ModelExpression>,
+    ) -> Result<DemoAdventure, GenerateError> {
         let pack =
             serde_json::to_vec_pretty(&self.pack).map_err(|_| GenerateError::Serialization)?;
         let tuning =
@@ -75,7 +131,8 @@ impl GeneratedAdventure {
             rules_mode: self.rules_mode,
             rolls: self.rolls.clone(),
             expression: Expression {
-                source: "patterns".into(),
+                source: if model.is_some() { "model" } else { "patterns" }.into(),
+                model,
                 fact_sheet_sha256: hash(
                     &serde_json::to_vec(&self.fact_sheet)
                         .map_err(|_| GenerateError::Serialization)?,
@@ -86,6 +143,26 @@ impl GeneratedAdventure {
             tuning_sha256: hash(&tuning),
             seeded_dice,
             campaign: self.pack.campaign.clone(),
+            secret_terms: self.pack.secret_terms.clone(),
+            speakers: self.pack.speakers.clone(),
+            scene_cast: self
+                .pack
+                .scenes
+                .iter()
+                .flat_map(|scene| {
+                    let key = serde_json::to_value(scene.key)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    scene.cast.iter().map(move |actor| SceneCastRecord {
+                        scene: key.clone(),
+                        id: actor.id.clone(),
+                        name: actor.name.clone(),
+                        role: actor.role,
+                    })
+                })
+                .collect(),
+            settings: Some(self.settings.clone()),
         };
         let record =
             serde_json::to_vec_pretty(&record).map_err(|_| GenerateError::Serialization)?;
@@ -116,7 +193,10 @@ pub(crate) fn reload(
         |value: &str| value.len() == 64 && value.bytes().all(|c| c.is_ascii_hexdigit());
     if record.schema != RECORD_SCHEMA
         || record.generator_version != GENERATOR_VERSION
-        || record.expression.source != "patterns"
+        || !matches!(
+            (record.expression.source.as_str(), &record.expression.model),
+            ("patterns", None) | ("model", Some(_))
+        )
         || !valid_hash(&record.tables_revision)
         || !valid_hash(&record.expression.fact_sheet_sha256)
         || record.pack_sha256 != hash(&documents.pack)
@@ -133,6 +213,23 @@ pub(crate) fn reload(
     output.update(&documents.tuning);
     if record.expression.output_sha256 != format!("{:x}", output.finalize()) {
         return Err(RecordError::Invalid("expression output hash"));
+    }
+    match record.setting_state() {
+        SettingState::LegacyNoSettings
+            if loaded.pack.scenes.iter().any(|s| s.setting.is_some()) =>
+        {
+            return Err(RecordError::Invalid("legacy record with scene settings"));
+        }
+        SettingState::Defined(settings)
+            if loaded
+                .pack
+                .scenes
+                .iter()
+                .any(|s| s.setting.as_ref() != Some(settings.scene(s.key))) =>
+        {
+            return Err(RecordError::Invalid("record scene settings binding"));
+        }
+        _ => {}
     }
     let mut story = BTreeSet::new();
     for (index, roll) in record.rolls.iter().enumerate() {
@@ -184,7 +281,17 @@ pub(crate) fn reload(
     }
     Ok((loaded, record))
 }
+pub(crate) enum SettingState<'a> {
+    LegacyNoSettings,
+    Defined(&'a super::setting::ChapterSettings),
+}
 impl AdventureRecord {
+    pub(crate) fn setting_state(&self) -> SettingState<'_> {
+        match &self.settings {
+            Some(settings) => SettingState::Defined(settings),
+            None => SettingState::LegacyNoSettings,
+        }
+    }
     pub(crate) fn entry(&self, table: &str) -> Result<&str, RecordError> {
         self.rolls
             .iter()
@@ -197,6 +304,13 @@ impl AdventureRecord {
             })
             .map(|r| r.entry_id.as_str())
             .ok_or(RecordError::Invalid("missing selected story entry"))
+    }
+    /// The startup summary of how the story text was written.
+    pub(crate) fn prose_summary(&self) -> String {
+        match &self.expression.model {
+            Some(model) => model.summary(),
+            None => "prose=patterns (stored adventure uses the pattern text)".to_owned(),
+        }
     }
     pub(crate) fn tables_revision(&self) -> &str {
         &self.tables_revision

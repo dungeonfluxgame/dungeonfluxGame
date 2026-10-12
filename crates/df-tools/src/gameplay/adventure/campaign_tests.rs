@@ -2,6 +2,7 @@ use super::GenerateOptions;
 use super::campaign::*;
 use super::campaign_render::generate_chapter;
 use super::campaign_tables::CampaignTables;
+use crate::gameplay::pack::SceneKey;
 use std::path::Path;
 fn tables() -> CampaignTables {
     CampaignTables::load(
@@ -67,6 +68,36 @@ fn two_hundred_campaigns_complete_with_clock_deadlines_and_act_invariants() {
             };
             let generated = generate_chapter(&t, &frame, &mut plan)
                 .unwrap_or_else(|e| panic!("seed {seed} chapter {}: {e}", plan.number));
+            assert!(
+                generated
+                    .pack
+                    .scenes
+                    .iter()
+                    .all(|s| s.setting.as_ref() == Some(generated.settings.scene(s.key)))
+            );
+            let victory_setting = generated
+                .pack
+                .scenes
+                .iter()
+                .find(|s| s.key == SceneKey::Victory)
+                .unwrap();
+            assert!(
+                victory_setting
+                    .narration
+                    .contains(&generated.settings.destination.short)
+            );
+            let opening_setting = generated
+                .pack
+                .scenes
+                .iter()
+                .find(|s| s.key == SceneKey::Opening)
+                .unwrap();
+            assert!(
+                opening_setting
+                    .narration
+                    .to_lowercase()
+                    .contains(&generated.settings.meeting.short.to_lowercase())
+            );
             assert_eq!(plan.leads.len(), 3);
             for rescued in &plan.rescued {
                 let visible = generated
@@ -263,8 +294,11 @@ fn canonical_encoding_and_appendix_seed_are_reproducible() {
         canonical_bytes(&frame).unwrap(),
         canonical_bytes(&again).unwrap()
     );
-    let golden: serde_json::Value =
+    let mut golden: serde_json::Value =
         serde_json::from_slice(include_bytes!("fixtures/campaign-appendix-b.json")).unwrap();
+    // The tables are editable content and the frame pins their revision; every rolled value
+    // must still match the recorded frame.
+    golden["tables_revision"] = serde_json::to_value(&frame).unwrap()["tables_revision"].clone();
     assert_eq!(
         canonical_bytes(&frame).unwrap(),
         canonical_bytes(&golden).unwrap()
