@@ -253,6 +253,13 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         home: input.journey.home.clone(),
         // PLAY-V09: the scene as one composed picture, when the server has made it.
         plate: crate::presentation::plate_of(input.scene),
+        end: input.journey.adventure_ended.then(|| {
+            crate::presentation::end_card(
+                input.journey,
+                &input.journey.adventure_title,
+                input.narration,
+            )
+        }),
     })
 }
 

@@ -584,3 +584,4 @@ field dungeonflux.public.v1.PlateLayout 4 head_width_permille type=13 label=1 pr
 field dungeonflux.public.v1.PlateLayout 5 head_height_permille type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 45 join_url type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 50 adventure_ended type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 51 adventure_title type=9 label=1 presence=false target=- oneof=-

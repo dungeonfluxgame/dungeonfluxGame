@@ -196,6 +196,10 @@
 .tv-bigcard-kicker{margin:0;font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.34em;text-transform:uppercase;color:#e8cb94;text-shadow:none}
 .tv-bigcard-title{margin:0;max-width:calc(var(--u)*72);font:400 calc(var(--u)*5.4)/1.08 var(--serif);color:#f9f1de;text-shadow:0 4px 32px #000}
 .tv-bigcard-rule{width:calc(var(--u)*34);height:calc(var(--u)*2);background:url(/assets/ui/generated/divider) center/contain no-repeat}
+.tv-stage[data-ended] .tv-bigcard{opacity:1;visibility:visible;transition:opacity .7s ease,visibility 0s}
+.tv-stage[data-ended] .tv-bubble{opacity:0;visibility:hidden}
+.tv-bigcard-next{margin:calc(var(--u)*1) 0 0;font:var(--fs-label)/1.3 var(--serif);letter-spacing:.2em;text-transform:uppercase;color:#d1b883}
+.tv-bigcard-next[hidden]{display:none}
 .tv-bigcard-line{margin:0;max-width:calc(var(--u)*54);font:italic calc(var(--u)*2.1)/1.3 var(--serif);color:#e6dbc2}
 .tv-bigcard-place{margin:0;font:var(--fs-label)/1.3 var(--serif);letter-spacing:.22em;text-transform:uppercase;color:#d1b883}
 .tv-bigcard-heroes{display:flex;gap:calc(var(--u)*5);margin:calc(var(--u)*1.4) 0 0;padding:0;list-style:none}

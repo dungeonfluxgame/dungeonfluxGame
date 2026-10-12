@@ -77,6 +77,8 @@ pub(super) struct TvModel {
     pub(super) home: Option<rpc::HomeTheme>,
     /// PLAY-V09: the scene's composed plate, which replaces the painting and the cut-outs.
     pub(super) plate: PlateView,
+    /// The adventure's end card, shown over the scene and kept up until the next step.
+    pub(super) end: Option<crate::presentation::Card>,
 }
 
 struct WordmarkSlot {
@@ -205,6 +207,10 @@ fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue>
     let line = node(document, &root, "p", "tv-bigcard-line", "")?;
     let place = node(document, &root, "p", "tv-bigcard-place", "")?;
     let heroes = node(document, &root, "ul", "tv-bigcard-heroes", "")?;
+    // The next-step prompt of the end card belongs here; it stays empty until that step exists.
+    let next = node(document, &root, "p", "tv-bigcard-next", "")?;
+    next.set_attribute("data-slot", "next-step")?;
+    set_hidden(&next, true)?;
     Ok(BigCard {
         root,
         kicker,
@@ -492,6 +498,7 @@ impl TvStage {
                 CardKind::Title => "title",
                 CardKind::Victory => "victory",
                 CardKind::Defeat => "defeat",
+                CardKind::End => "end",
             },
         )?;
         shown.kicker.set_text_content(Some(&card.kicker));
@@ -586,6 +593,19 @@ impl TvStage {
         self.rules_text.set_text_content(Some(&model.rules_note));
         set_hidden(&self.rules, model.rules_note.is_empty() || lobby)?;
         self.set_choices(if lobby { &[] } else { &model.choices })?;
+        match &model.end {
+            Some(card) => {
+                self.root.set_attribute("data-ended", "")?;
+                let document = self
+                    .root
+                    .owner_document()
+                    .ok_or_else(|| JsValue::from_str("display document absent"))?;
+                self.show_card(&document, card)?;
+            }
+            None => {
+                self.root.remove_attribute("data-ended")?;
+            }
+        }
         set_hidden(&self.lobby_row, !lobby)?;
         set_hidden(&self.stagebox, lobby)?;
         // The party cards are one set of nodes that moves with the mode.

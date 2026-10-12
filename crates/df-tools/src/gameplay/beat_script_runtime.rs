@@ -597,6 +597,13 @@ pub(super) fn dialogue_labels(
         Ok(Some(labels))
     })
 }
+/// The adventure's title for its end card: the opening scene's title, which names the errand.
+pub(super) fn adventure_title(state: &GameState) -> Result<String, RepositoryError> {
+    if !ended(state)? {
+        return Ok(String::new());
+    }
+    Ok(pack::scene(pack::SceneKey::Opening).title)
+}
 /// The adventure's end card: an authored ending beat that offers nothing more.
 pub(super) fn ended(state: &GameState) -> Result<bool, RepositoryError> {
     beat_script::with_script(|script| {

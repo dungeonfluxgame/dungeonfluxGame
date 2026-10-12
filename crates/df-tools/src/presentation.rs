@@ -176,6 +176,8 @@ pub(crate) enum CardKind {
     Victory,
     /// A fight lost.
     Defeat,
+    /// The adventure's end: its title, "The End", the party and the outcome.
+    End,
 }
 
 /// One hero named on the closing card.
@@ -244,6 +246,33 @@ pub(crate) fn closing_card(
             .map(|(index, member)| CardHero {
                 name: member.name.clone(),
                 role: HERO_ROLE.to_owned(),
+                portrait: format!("{GENERATED}/portrait-hero-{}", index + 1),
+            })
+            .collect(),
+    }
+}
+
+/// The adventure's end card: the errand's title, "The End", each hero's state and the outcome.
+pub(crate) fn end_card(journey: &rpc::JourneyView, adventure: &str, outcome: &str) -> Card {
+    Card {
+        kind: CardKind::End,
+        kicker: adventure.to_owned(),
+        headline: "The End".to_owned(),
+        subline: first_sentence(outcome),
+        place: String::new(),
+        heroes: journey
+            .party
+            .iter()
+            .enumerate()
+            .take(2)
+            .filter(|(_, member)| member.character_ready)
+            .map(|(index, member)| CardHero {
+                name: member.name.clone(),
+                role: if member.unconscious || member.hit_points == 0 {
+                    "down".to_owned()
+                } else {
+                    format!("{} / {} HP", member.hit_points, member.maximum_hit_points)
+                },
                 portrait: format!("{GENERATED}/portrait-hero-{}", index + 1),
             })
             .collect(),

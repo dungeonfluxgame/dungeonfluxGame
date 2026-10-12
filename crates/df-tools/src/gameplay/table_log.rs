@@ -273,8 +273,21 @@ pub(super) fn third_person(label: &str) -> String {
     if rest.is_empty() {
         conjugated
     } else {
-        format!("{conjugated} {rest}")
+        format!("{conjugated} {}", third_person_words(rest))
     }
+}
+
+/// The second-person words of an imperative label, turned to the third person the log speaks in.
+fn third_person_words(rest: &str) -> String {
+    rest.split(' ')
+        .map(|word| match word {
+            "yourself" => "themselves",
+            "your" => "their",
+            "you" => "them",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -588,6 +601,13 @@ mod tests {
                 format!("{verb}s")
             };
             assert_eq!(form, expected, "label {label:?}");
+            let words: Vec<&str> = third.split(' ').collect();
+            assert!(
+                !words
+                    .iter()
+                    .any(|word| matches!(*word, "your" | "you" | "yourself")),
+                "second person left in {third:?}"
+            );
         }
         assert_eq!(
             third_person("Carry the clue onward"),
@@ -596,5 +616,10 @@ mod tests {
         assert_eq!(third_person("Study the markings"), "studies the markings");
         assert_eq!(third_person("Buy the ticket"), "buys the ticket");
         assert_eq!(third_person("Rally the crowd"), "rallies the crowd");
+        assert_eq!(
+            third_person("Pledge your help to Kestrel"),
+            "pledges their help to Kestrel"
+        );
+        assert_eq!(third_person("Trust you"), "trusts them");
     }
 }
