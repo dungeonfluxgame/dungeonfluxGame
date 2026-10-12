@@ -205,7 +205,22 @@ fn rolls(combat: &rpc::CombatView) -> Vec<RollText> {
             };
             RollText {
                 key: format!("roll-{index}"),
-                label: format!("{} attacks {}", outcome.actor_name, outcome.target_name),
+                // The card says what kind of attack it was: a shot or a melee strike, and with what.
+                label: if outcome.weapon.is_empty() {
+                    format!("{} attacks {}", outcome.actor_name, outcome.target_name)
+                } else {
+                    format!(
+                        "{} {} {} \u{b7} {}",
+                        outcome.actor_name,
+                        if outcome.attack_style == 2 {
+                            "shoots"
+                        } else {
+                            "strikes"
+                        },
+                        outcome.target_name,
+                        df_render::battle::float_text::attack_name(&outcome.weapon)
+                    )
+                },
                 value: outcome.attack_die.to_string(),
                 explanation: if outcome.target_armor_class == 0 {
                     format!(

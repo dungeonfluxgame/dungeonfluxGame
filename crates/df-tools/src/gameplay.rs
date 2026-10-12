@@ -570,6 +570,18 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let battle_scene =
         startup_configuration::battle_scene(std::env::var("DF_GAMEPLAY_BATTLE_SCENE"))?;
     journey::tactical::force_scene(battle_scene.as_deref()).map_err(std::io::Error::other)?;
+    let test_fight = startup_configuration::test_fight(
+        std::env::var("DF_GAMEPLAY_TEST_FIGHT"),
+        std::env::var("DF_GAMEPLAY_TEST_FOE"),
+    )?;
+    if interactive && let Some(test) = &test_fight {
+        println!(
+            "TEST FIGHT enemies={} foe={} (development setting: the first choice starts the fight)",
+            test.enemies,
+            test.foe.as_deref().unwrap_or("the adventure's own")
+        );
+    }
+    journey::tactical::force_test_fight(test_fight).map_err(std::io::Error::other)?;
     let battle_fps = startup_configuration::battle_fps(std::env::var("DF_GAMEPLAY_BATTLE_FPS"))?;
     let splat_lod = startup_configuration::splat_lod(std::env::var("DF_GAMEPLAY_SPLAT_LOD"))?;
     let choice_hints_hidden = if interactive {

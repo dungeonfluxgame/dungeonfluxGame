@@ -2453,7 +2453,7 @@ pub(super) fn validate_character(
     // The appearance is presentation only, but it must show the weapon the package grants: the
     // bow figure only with the longbow package, the sword figures only with a greatsword package.
     if let Some(portrait) = portrait
-        && (portrait == "portrait-hero-3") != archer
+        && appearance_is_archer(portrait) != archer
     {
         return Err(Error::InvalidChoice);
     }
@@ -2490,6 +2490,17 @@ pub(super) fn validate_character(
         return Err(Error::InvalidChoice);
     }
     with_creation(|rules| df_rules::local_journey::validate_character(rules, name, &borrowed))
+}
+
+/// The appearance that shows a bow; every other appearance shows a sword.
+fn appearance_is_archer(appearance: &str) -> bool {
+    appearance == "portrait-hero-3"
+}
+
+/// Whether `appearance` may be chosen with the build package `package`: the bow figure only with
+/// the archer package, the sword figures only with the others. The offer lists exactly these.
+pub(super) fn appearance_fits_package(appearance: &str, package: &str) -> bool {
+    appearance_is_archer(appearance) == (package == "archer")
 }
 
 pub(super) fn combat() -> df_rules::local_journey::CombatRules {

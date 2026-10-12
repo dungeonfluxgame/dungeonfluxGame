@@ -992,7 +992,7 @@ fn demo_blow(attacker: &TokenId, target: &TokenId, label: &str, result: AttackRe
     let (attacker, target) = (attacker.clone(), target.clone());
     let label = label.to_owned();
     with_preview(move |stage| {
-        stage.set_attack_label(&attacker, &label);
+        stage.set_attack_label(&attacker, &label, "");
         let after = match result {
             AttackResult::Miss => None,
             AttackResult::Hit { downed: true, .. } => Some(0),
@@ -1252,6 +1252,7 @@ pub(super) fn start_preview(document: &Document) -> Result<(), JsValue> {
 // ---------------------------------------------------------------------------------------------
 
 use super::live_combat::LiveView;
+use crate::presentation::GridCell;
 use df_render::battle::{CombatFeed, CombatSnapshot, FeedMode, Member, Outcome, RollCard};
 
 /// What the cue director knows about a roll, copied from its own detail.
@@ -1263,6 +1264,15 @@ pub(super) struct RollSummary {
     pub(super) grazed: bool,
     pub(super) damage: u32,
     pub(super) target_down: bool,
+    /// The attack's name and the rules' damage type for the floating text.
+    pub(super) attack_label: Option<String>,
+    pub(super) damage_type: String,
+    /// The blow resolved was ranged: the figure draws or swings accordingly.
+    pub(super) ranged: bool,
+    /// The attacker's turn begins with this blow.
+    pub(super) turn_start: bool,
+    /// The cells the attacker walks from and to before this blow, when the turn includes a move.
+    pub(super) walk: Option<(GridCell, GridCell)>,
     pub(super) card: Option<RollCard>,
 }
 
@@ -1291,6 +1301,18 @@ struct Live {
     initiative_seen: bool,
     reachable: Vec<Cell>,
     targets: Vec<Cell>,
+    /// Movers whose server cell is not shown yet: they stand where they did until the cue
+    /// stream reaches their turn and walks them (name, cell they stand on, when held).
+    held_moves: Vec<(String, Cell, f64)>,
+    /// Outcomes of accepted views whose cues have not yet been staged: while any wait, the label
+    /// stays with the attacker being shown.
+    pending_cues: usize,
+    /// A reaction the server waits on: who moves and who decides, as the latest view says.
+    reaction: Option<(String, String)>,
+    /// The prompt now shown for it.
+    shown_prompt: Option<String>,
+    /// When `pending_cues` last grew, so a cue stream that never arrives cannot hold the label.
+    pending_at: f64,
 }
 
 thread_local! {
@@ -1306,6 +1328,11 @@ thread_local! {
         initiative_seen: false,
         reachable: Vec::new(),
         targets: Vec::new(),
+        held_moves: Vec::new(),
+        pending_cues: 0,
+        reaction: None,
+        shown_prompt: None,
+        pending_at: 0.0,
     });
 }
 
@@ -1533,6 +1560,7 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
                 downed: outcome.knocked_out || outcome.target_hit_points == 0,
                 weapon: outcome.weapon.clone(),
                 grazed: outcome.grazed,
+                damage_type: outcome.damage_type.clone(),
             })
         })
         .collect();
@@ -1586,6 +1614,15 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
     let phase_idle = LIVE.with(|live| {
         let mut live = live.borrow_mut();
         if let Some(combat) = &view.journey.combat {
+            live.reaction = (!combat.reaction_participant_id.is_empty())
+                .then(|| {
+                    let reactor = combat
+                        .participants
+                        .iter()
+                        .find(|member| member.participant_id == combat.reaction_participant_id)?;
+                    Some((combat.active_actor.clone(), reactor.name.clone()))
+                })
+                .flatten();
             live.reachable = combat
                 .reachable_cells
                 .iter()
@@ -1801,6 +1838,22 @@ fn sync() {
         let feed = &mut live.feed;
         let mut shown = snapshot.clone();
         shown.begun_live = live.begun_live;
+        let now = now_ms();
+        live.held_moves
+            .retain(|(.., at)| now - at < HOLD_PATIENCE_MS);
+        if now - live.pending_at > HOLD_PATIENCE_MS {
+            live.pending_cues = 0;
+        }
+        // A mover that has not had its turn yet still stands where it did.
+        for member in &mut shown.members {
+            if let Some((_, from, _)) = live
+                .held_moves
+                .iter()
+                .find(|(name, ..)| *name == member.name)
+            {
+                member.cell = Some(*from);
+            }
+        }
         if live.begun_live {
             // The fight is opening in front of the audience: show it as it stood at the roll for
             // initiative, before any combatant's turn. A view that already carries the enemy's
@@ -1820,6 +1873,29 @@ fn sync() {
         }
         let fits = stage
             .with_stage(|stage| {
+                stage.hold_active(live.pending_cues > 0);
+                // A suspended turn is shown once the attacks before it have been: who decides and
+                // what, with the camera on the two figures.
+                let prompt = live
+                    .reaction
+                    .as_ref()
+                    .filter(|_| live.pending_cues == 0)
+                    .map(|(_, reactor)| format!("{reactor}: Opportunity Attack?"));
+                if prompt != live.shown_prompt {
+                    stage.set_prompt(prompt.clone());
+                    if let (Some(_), Some((mover, reactor))) = (&prompt, &live.reaction) {
+                        let id_of = |name: &str| {
+                            stage
+                                .tokens()
+                                .find(|token| token.name == name)
+                                .map(|token| token.id.clone())
+                        };
+                        if let (Some(attacker), Some(target)) = (id_of(mover), id_of(reactor)) {
+                            let _ = stage.stage(Beat::Approach { attacker, target });
+                        }
+                    }
+                    live.shown_prompt = prompt;
+                }
                 stage.set_tactical_highlights(live.reachable.clone(), live.targets.clone());
                 feed.apply(stage, &shown)
             })
@@ -1853,6 +1929,30 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
     let Some(roll) = roll else {
         return;
     };
+    // The mover's hold ends as its turn is staged; an outcome is no longer waiting once its blow
+    // is. The label is released when none is left.
+    let mut drained = false;
+    let released = LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        let released = match state {
+            "rolling" => live
+                .held_moves
+                .iter()
+                .position(|(name, ..)| *name == roll.attacker)
+                .map(|at| live.held_moves.remove(at)),
+            _ => None,
+        };
+        if state == "impact" {
+            live.pending_cues = live.pending_cues.saturating_sub(1);
+            if live.pending_cues == 0 {
+                // The attacks of the view are over: anyone who only moved walks now.
+                live.held_moves.clear();
+                drained = true;
+            }
+        }
+        released
+    });
+
     LIVE.with(|live| {
         let guard = live.borrow();
         let Some(stage) = guard
@@ -1880,9 +1980,30 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
             else {
                 return;
             };
+            stage.hold_active(guard.pending_cues > 0);
             match state {
                 "rolling" => {
-                    // Dropped, not fatal: the queue is bounded and the view sync still lands.
+                    // This attacker's turn, strictly in order: its label, the walk the server
+                    // gave it, then the attack. Dropped, not fatal: the queue is bounded and the
+                    // view sync still lands.
+                    if roll.turn_start {
+                        let _ = stage.stage(Beat::TurnStart {
+                            actor: attacker.clone(),
+                        });
+                    }
+                    if let (Some(_), Some((_, to))) = (released, roll.walk)
+                        && let Some(to) = cell_of(to)
+                    {
+                        let _ = stage.stage_move(&attacker, to);
+                    }
+                    stage.set_attack_style(
+                        &attacker,
+                        if roll.ranged {
+                            AttackStyle::Ranged
+                        } else {
+                            AttackStyle::Melee
+                        },
+                    );
                     let _ = stage.stage(Beat::Approach { attacker, target });
                     // The card waits for the camera to arrive on the two fighters.
                     if let Some(card) = roll.card.clone() {
@@ -1890,19 +2011,8 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                     }
                 }
                 "impact" => {
-                    // The view's latest outcome for this pair names the attack.
-                    let label = guard.latest.as_ref().and_then(|snapshot| {
-                        snapshot
-                            .outcomes
-                            .iter()
-                            .rev()
-                            .find(|outcome| {
-                                outcome.actor == attacker.0 && outcome.target == target.0
-                            })
-                            .and_then(Outcome::attack_label)
-                    });
-                    if let Some(label) = label {
-                        stage.set_attack_label(&attacker, &label);
+                    if let Some(label) = &roll.attack_label {
+                        stage.set_attack_label(&attacker, label, &roll.damage_type);
                     }
                     let result = if roll.hit || roll.grazed {
                         AttackResult::Hit {
@@ -1924,6 +2034,9 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
             }
         });
     });
+    if drained {
+        sync();
+    }
 }
 
 /// How far the battlefield is with a fight's entrance, read by the display's battle machine:
@@ -1994,6 +2107,55 @@ fn splat_streaming(live: &Live) -> bool {
     })
 }
 
+/// A mover of an accepted view that has outcomes still to be shown stays on `from` until the cue
+/// stream reaches its turn. The first hold of a mover stands (a newer view carries the same walk).
+pub(super) fn hold_move(name: &str, from: GridCell) {
+    let Some(from) = cell_of(from) else {
+        return;
+    };
+    LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        if !live.held_moves.iter().any(|(held, ..)| held == name) {
+            live.held_moves.push((name.to_owned(), from, now_ms()));
+        }
+    });
+}
+
+/// `count` outcomes of an accepted view are waiting to be shown one after another.
+pub(super) fn expect_cues(count: usize) {
+    LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        live.pending_cues += count;
+        live.pending_at = now_ms();
+    });
+}
+
+/// Nothing is waiting any more (a restart, or the fight is over): holds are released.
+pub(super) fn drop_pending() {
+    LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        live.held_moves.clear();
+        live.pending_cues = 0;
+    });
+    sync();
+}
+
+/// How long a hold or an expectation may outlive the cues that should release it.
+const HOLD_PATIENCE_MS: f64 = 90_000.0;
+
+fn now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map_or(0.0, |performance| performance.now())
+}
+
+fn cell_of((col, row): GridCell) -> Option<Cell> {
+    Some(Cell::new(
+        i32::try_from(col).ok()?,
+        i32::try_from(row).ok()?,
+    ))
+}
+
 /// Applies the latest accepted snapshot again: called when a turn's beats are over so the turn
 /// label and marker follow the server's active combatant.
 pub(super) fn resync() {
@@ -2016,8 +2178,6 @@ pub(super) fn fade_out() {
 /// the speaker's head, and the camera eases in on it. Call it when the line's voice starts, and
 /// [`end_speech`] when it ends. Returns false (and shows nothing) when that speaker is not on the
 /// field, so the caller can fall back to its own presentation.
-// Called by the display's line sequencer (the stage-machines work), which lands separately.
-#[allow(dead_code)]
 pub(super) fn speak(speaker_name: &str, text: &str, line_id: u64) -> bool {
     LIVE.with(|live| {
         let live = live.borrow();
@@ -2031,8 +2191,6 @@ pub(super) fn speak(speaker_name: &str, text: &str, line_id: u64) -> bool {
 
 /// The line `line_id` ended: its bubble closes and the camera eases back. Any other line's end
 /// is ignored.
-// Called by the display's line sequencer (the stage-machines work), which lands separately.
-#[allow(dead_code)]
 pub(super) fn end_speech(line_id: u64) {
     LIVE.with(|live| {
         if let Some(stage) = &live.borrow().stage {
@@ -2042,6 +2200,10 @@ pub(super) fn end_speech(line_id: u64) {
 }
 
 fn reset_fight(live: &mut Live) {
+    live.reaction = None;
+    live.shown_prompt = None;
+    live.held_moves.clear();
+    live.pending_cues = 0;
     live.initiative_pending = false;
     live.initiative_seen = false;
     live.phase = Phase::Idle;

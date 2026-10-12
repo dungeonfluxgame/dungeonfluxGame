@@ -63,6 +63,8 @@ pub struct Outcome {
     pub weapon: String,
     /// A graze: the blow missed but its mastery still dealt `damage`.
     pub grazed: bool,
+    /// The damage type the server's rules name ("slashing"); empty when it did not say.
+    pub damage_type: String,
 }
 
 impl Outcome {
@@ -224,7 +226,11 @@ impl CombatFeed {
             if self.mode == FeedMode::StageOutcomes {
                 for outcome in &fresh {
                     if let Some(label) = outcome.attack_label() {
-                        stage.set_attack_label(&TokenId::new(outcome.actor.clone()), &label);
+                        stage.set_attack_label(
+                            &TokenId::new(outcome.actor.clone()),
+                            &label,
+                            &outcome.damage_type,
+                        );
                     }
                     match stage.stage(beat_for(outcome)) {
                         Ok(()) => report.staged += 1,
@@ -356,6 +362,7 @@ mod tests {
             downed,
             weapon: String::new(),
             grazed: false,
+            damage_type: String::new(),
         }
     }
 
@@ -501,6 +508,7 @@ mod hold_tests {
             downed: false,
             weapon: String::new(),
             grazed: false,
+            damage_type: String::new(),
         };
         let report = feed.apply(&mut stage, &snapshot(7, vec![hit])).unwrap();
         assert_eq!(report.staged, 0);

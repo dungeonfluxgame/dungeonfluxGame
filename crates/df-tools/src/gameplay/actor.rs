@@ -59,6 +59,17 @@ fn retain_qualification_input(
     }
 }
 
+/// Whether a submission was accepted and applied now, not replayed from an earlier one.
+fn accepted_now(result: &Result<rpc::SubmitActionResponse, tonic::Status>) -> bool {
+    matches!(
+        result,
+        Ok(rpc::SubmitActionResponse {
+            outcome: Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)),
+        }) if !receipt.replayed
+            && matches!(receipt.outcome, Some(rpc::decision_receipt::Outcome::Accepted(_)))
+    )
+}
+
 pub(super) enum Call {
     QualificationInputs {
         reply: oneshot::Sender<Result<QualificationSnapshot, tonic::Status>>,
@@ -1165,6 +1176,86 @@ impl Actor {
     }
     /// Publishes an accepted action as public table talk: the acting hero's name and a short
     /// phrase from the offer's label and visible result, then what the enemy did in answer.
+    /// The test fight setting (`DF_GAMEPLAY_TEST_FIGHT`): the opening's first choice is followed
+    /// at once by the courier defence, so it leads straight to a tactical fight. The follow-up is
+    /// an ordinary submission of the same member through the same checks, one revision after the
+    /// choice; a refusal is reported, never hidden.
+    fn begin_test_fight(
+        &mut self,
+        credential: [u8; 32],
+        asked: &rpc::SubmitActionRequest,
+        result: &Result<rpc::SubmitActionResponse, tonic::Status>,
+    ) {
+        let first_choice = matches!(
+            rpc::GameplayActionKind::try_from(asked.action_kind),
+            Ok(rpc::GameplayActionKind::AskCourier | rpc::GameplayActionKind::EscortCourier)
+        );
+        if !super::journey::tactical::test_fight_enabled() || !first_choice || !accepted_now(result)
+        {
+            return;
+        }
+        match self.test_fight_request(&credential, asked) {
+            Ok(request) => {
+                let kind = request.action_kind;
+                let followed = self.submit(credential, request);
+                match &followed {
+                    Err(status) => record_refusal(kind, "test-fight-follow-up", status.message()),
+                    Ok(_) if !accepted_now(&followed) => {
+                        record_refusal(kind, "test-fight-follow-up", "not accepted");
+                    }
+                    Ok(_) => {}
+                }
+            }
+            Err(reason) => record_unavailable("test-fight", reason),
+        }
+    }
+
+    fn test_fight_request(
+        &self,
+        credential: &[u8; 32],
+        asked: &rpc::SubmitActionRequest,
+    ) -> Result<rpc::SubmitActionRequest, &'static str> {
+        let principal = self
+            .issuer
+            .principal(credential)
+            .map_err(|_| "member unavailable")?;
+        let member =
+            df_types::MemberId::from_bytes(&principal).map_err(|_| "member binding invalid")?;
+        let checkpoint = self.owner.checkpoint();
+        let offer_id = super::beat_script_runtime::view_offers(checkpoint, member)
+            .map_err(|_| "offers unavailable")?
+            .into_iter()
+            .find(|(kind, ..)| *kind == rpc::GameplayActionKind::DefendCourier)
+            .map(|(.., id)| id)
+            .ok_or("the courier defence is not offered")?;
+        let basis = checkpoint.basis();
+        let mut hasher = Sha256::new();
+        hasher.update(
+            asked
+                .operation_id
+                .as_ref()
+                .and_then(|id| id.value.as_deref())
+                .unwrap_or_default(),
+        );
+        hasher.update(b"test-fight");
+        let operation: [u8; 32] = hasher.finalize().into();
+        Ok(rpc::SubmitActionRequest {
+            session_id: Some(rpc::SessionId {
+                value: Some(basis.session.as_bytes().to_vec()),
+            }),
+            run_id: Some(rpc::RunId {
+                value: Some(basis.run.as_bytes().to_vec()),
+            }),
+            operation_id: Some(rpc::OperationId {
+                value: Some(operation[..16].to_vec()),
+            }),
+            observed_revision: Some(wire::revision(basis.revision)),
+            offer_id,
+            action_kind: rpc::GameplayActionKind::DefendCourier as i32,
+            ..Default::default()
+        })
+    }
+
     fn record_table_action(
         &self,
         member: df_types::MemberId,
@@ -1418,11 +1509,13 @@ impl Reducer<Call> for Actor {
                 credential,
                 request,
                 reply,
-            } => reply
-                .send(after_grant_reconnect(reconnected, || {
-                    self.submit(credential, request)
-                }))
-                .is_ok(),
+            } => {
+                let asked = request.clone();
+                let result =
+                    after_grant_reconnect(reconnected, || self.submit(credential, request));
+                self.begin_test_fight(credential, &asked, &result);
+                reply.send(result).is_ok()
+            }
             Call::View {
                 credential,
                 request,
