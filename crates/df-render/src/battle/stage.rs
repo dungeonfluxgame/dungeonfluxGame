@@ -20,6 +20,7 @@ use super::{
         FloatingText, Highlight, HitPoints, HudState, InitiativeShow, Side, Token, TokenId,
     },
     particles::Particles,
+    rest_shot,
     scene_file::BattleScene,
     sound::{SoundEvent, SoundKind, voice_for},
     speech,
@@ -126,6 +127,14 @@ const PARTY_PAN_S: f32 = 1.1;
 const PARTY_DOLLY: f32 = 0.85;
 /// Gap between one hero's reaction and the next, in seconds.
 const REACT_STAGGER_S: f32 = 0.3;
+
+/// How far the resting shot leans toward the figure whose turn begins (a share of its distance).
+pub const LEAN_DOLLY: f32 = 0.72;
+/// The resting shot is refitted (and the camera eased there) only when the new one differs this much.
+const REFIT_TARGET_M: f32 = 0.6;
+const REFIT_DISTANCE_SHARE: f32 = 0.06;
+const REFIT_YAW_DEG: f32 = 4.0;
+const REFIT_PAN_S: f32 = 1.0;
 
 /// Attack names waiting for their blows, at most.
 const MAX_PENDING_LABELS: usize = 16;
@@ -341,6 +350,12 @@ pub struct Stage {
     last_angles: Option<(f32, f32)>,
     /// Who the camera was last framed on, to pull focus when the subject changes.
     last_framing: Option<(TokenId, Option<TokenId>)>,
+    /// The resting wide shot the camera was last sent to, while it is the shot being held.
+    rest_pose: Option<CameraPose>,
+    /// Something the resting shot depends on changed (figures, cells, a beat ended): refit it once
+    /// the stage is idle.
+    rest_dirty: bool,
+    was_idle: bool,
 }
 
 fn flat_direction(from: Vec3, to: Vec3) -> Vec3 {
@@ -395,6 +410,9 @@ impl Stage {
             feel_enabled: true,
             last_angles: None,
             last_framing: None,
+            rest_pose: None,
+            rest_dirty: false,
+            was_idle: true,
         }
     }
 
@@ -614,13 +632,13 @@ impl Stage {
                 runtime.anim = None;
             }
         }
-        let focus = self.hud.active.clone().map(CameraFocus::Token);
         let command = CameraCommand {
-            shot: ShotName::TurnFocus,
-            focus: focus.unwrap_or(CameraFocus::Scene),
+            shot: ShotName::CombatEst,
+            focus: CameraFocus::Wide,
             dolly: 1.0,
         };
         if let Some((pose, _)) = self.camera_pose_for(&command) {
+            self.rest_pose = Some(pose);
             self.rig.cut_to(pose);
         }
     }
@@ -652,6 +670,16 @@ impl Stage {
 
     pub fn camera_pose(&self) -> CameraPose {
         self.rig.pose()
+    }
+
+    /// Which shot the camera is holding, for a harness: `wide` is the solved resting shot, `action`
+    /// anything else (a lean at the start of a turn, a strike, a speaker, a finishing blow).
+    pub fn camera_label(&self) -> &'static str {
+        if self.rest_pose.is_some() {
+            "wide"
+        } else {
+            "action"
+        }
     }
 
     /// Holds the wide tactical shot (the layout stills frame the whole field with it).
@@ -687,7 +715,10 @@ impl Stage {
         if let Some(wide) = self.scene.cameras.get(&ShotName::Tactical) {
             self.rig.cut_to(*wide);
         }
-        if let Some(combat) = self.scene.cameras.get(&ShotName::CombatEst) {
+        if let Some(rest) = self.wide_pose() {
+            self.rest_pose = Some(rest);
+            self.rig.pan_to(rest, Duration::from_millis(2600));
+        } else if let Some(combat) = self.scene.cameras.get(&ShotName::CombatEst) {
             self.rig.pan_to(*combat, Duration::from_millis(2600));
         }
     }
@@ -706,6 +737,7 @@ impl Stage {
                 cells: reachable,
             },
         ];
+        self.rest_dirty = true;
     }
     pub fn set_tokens(&mut self, tokens: Vec<Token>) {
         if self.is_busy() {
@@ -713,6 +745,7 @@ impl Stage {
             return;
         }
         self.pending_tokens = None;
+        self.rest_dirty = true;
         self.tokens
             .retain(|runtime| tokens.iter().any(|token| token.id == runtime.token.id));
         // Figures the server moved since the last view: they walk there, they are not teleported.
@@ -986,6 +1019,14 @@ impl Stage {
         {
             self.set_tokens(tokens);
         }
+        let idle = !self.is_busy();
+        if idle && !self.was_idle {
+            self.rest_dirty = true;
+        }
+        self.was_idle = idle;
+        if idle && self.rest_dirty {
+            self.refit_rest();
+        }
     }
 
     /// An archer's art is drawn aiming to the right of the picture. She is mirrored when her
@@ -1052,8 +1093,8 @@ impl Stage {
             })
         };
         match focus {
-            CameraFocus::Scene => None,
-            CameraFocus::Token(id) => chest(id),
+            CameraFocus::Scene | CameraFocus::Wide => None,
+            CameraFocus::Token(id) | CameraFocus::Lean(id) => chest(id),
             CameraFocus::Between(a, b) => Some(chest(a)?.lerp(chest(b)?, 0.5)),
             CameraFocus::Action { actor, target, .. } => match target {
                 Some(target) => Some(chest(actor)?.lerp(chest(target)?, 0.55)),
@@ -1099,8 +1140,93 @@ impl Stage {
         self.last_angles = Some((pose.yaw_deg, pose.pitch_deg));
     }
 
+    /// The resting shot: solved from everyone alive, the cells the server says can be reached or
+    /// targeted, and the scene's own wide shot as a hint (see `rest_shot`).
+    fn wide_pose(&self) -> Option<CameraPose> {
+        let hint = *self.scene.cameras.get(&ShotName::Tactical)?;
+        let mut bodies: Vec<Body> = self
+            .tokens
+            .iter()
+            .filter(|runtime| !runtime.downed)
+            .map(|runtime| Body {
+                feet: runtime.position,
+                height_m: runtime.token.clamped_height(),
+            })
+            .collect();
+        if bodies.is_empty() {
+            bodies = self
+                .tokens
+                .iter()
+                .map(|runtime| Body {
+                    feet: runtime.position,
+                    height_m: runtime.token.clamped_height(),
+                })
+                .collect();
+        }
+        if bodies.is_empty() {
+            return Some(hint);
+        }
+        let mut ground = Vec::new();
+        for highlight in &self.tactical_highlights {
+            for cell in &highlight.cells {
+                ground.extend(rest_shot::cell_corners(
+                    self.grid.cell_centre(*cell),
+                    self.grid.cell_m(),
+                ));
+            }
+        }
+        // Where the figures stand, a cell each: a fight with nothing to reach still shows its place.
+        for body in &bodies {
+            ground.extend(rest_shot::cell_corners(body.feet, self.grid.cell_m()));
+        }
+        Some(rest_shot::rest_pose(&rest_shot::RestInput {
+            bodies: &bodies,
+            ground: &ground,
+            hint: &hint,
+            previous_yaw: Some(self.rig.pose().yaw_deg),
+            aspect: framing::FRAMED_ASPECT,
+        }))
+    }
+
+    /// Eases the camera to a refitted resting shot when what it depends on changed and it is the
+    /// shot being held, if the new one is noticeably different.
+    fn refit_rest(&mut self) {
+        self.rest_dirty = false;
+        let Some(held) = self.rest_pose else {
+            return;
+        };
+        if self.speech.is_some() {
+            self.rest_dirty = true;
+            return;
+        }
+        let Some(fresh) = self.wide_pose() else {
+            return;
+        };
+        let moved = (fresh.target - held.target).length();
+        let changed = moved > REFIT_TARGET_M
+            || (fresh.distance / held.distance - 1.0).abs() > REFIT_DISTANCE_SHARE
+            || framing::wrap_deg(fresh.yaw_deg - held.yaw_deg).abs() > REFIT_YAW_DEG;
+        if changed {
+            self.rest_pose = Some(fresh);
+            self.rig.pan_to(fresh, Duration::from_secs_f32(REFIT_PAN_S));
+        }
+    }
+
     /// The pose for a camera command, and whether reaching it is a cut (a swing too big to pan).
     fn camera_pose_for(&self, command: &CameraCommand) -> Option<(CameraPose, bool)> {
+        match &command.focus {
+            CameraFocus::Wide => return Some((self.wide_pose()?.dollied(command.dolly), false)),
+            CameraFocus::Lean(id) => {
+                let chest = self.focus_point(&CameraFocus::Token(id.clone()))?;
+                return Some((
+                    self.wide_pose()?
+                        .aimed_at(chest)
+                        .dollied(LEAN_DOLLY * command.dolly),
+                    false,
+                ));
+            }
+            _ => {}
+        }
         let base = *self.scene.cameras.get(&command.shot)?;
         if let CameraFocus::Action {
             actor,
@@ -1221,6 +1347,7 @@ impl Stage {
             Step::SetActive(active) => self.hud.active = active,
             Step::Camera { command, pan } => {
                 if let Some((pose, cut)) = self.camera_pose_for(&command) {
+                    self.rest_pose = (command.focus == CameraFocus::Wide).then_some(pose);
                     let framing = match &command.focus {
                         CameraFocus::Action { actor, target, .. } => {
                             Some((actor.clone(), target.clone()))
@@ -4374,5 +4501,144 @@ mod tests {
         }
         assert_eq!(text, "Bite - 7, critical, down");
         assert_eq!(hold, float_text::HOLD_EMPHASIS_S);
+    }
+    /// A fight of `heroes` against `enemies` seated by the derived formation, with everything the
+    /// first hero can reach (every walkable cell within six) and every foe highlighted.
+    fn sized_stage(id: &str, heroes: usize, enemies: usize) -> Option<(Stage, Vec<Cell>)> {
+        let scene = load_embedded(id).unwrap().unwrap();
+        let formation = crate::battle::derive_formation(&scene.grid, heroes, enemies).ok()?;
+        let mut stage = Stage::new(scene);
+        stage.establish();
+        let mut tokens = Vec::new();
+        for (index, cell) in formation.heroes.iter().enumerate() {
+            tokens.push(token(&format!("hero{index}"), Side::Hero, *cell, 12));
+        }
+        for (index, cell) in formation.enemies.iter().enumerate() {
+            tokens.push(token(&format!("foe{index}"), Side::Enemy, *cell, 12));
+        }
+        for token in &mut tokens {
+            token.height_m = if token.side == Side::Hero { 1.35 } else { 1.0 };
+        }
+        stage.set_tokens(tokens);
+        let actor = formation.heroes[0];
+        let reachable: Vec<Cell> = stage
+            .grid()
+            .walkable_cells()
+            .filter(|cell| {
+                (cell.col - actor.col)
+                    .abs()
+                    .max((cell.row - actor.row).abs())
+                    <= 6
+            })
+            .collect();
+        stage.set_tactical_highlights(reachable.clone(), formation.enemies.clone());
+        Some((stage, reachable))
+    }
+
+    #[test]
+    fn a_turn_leans_toward_its_figure_and_is_back_on_the_wide_shot_within_a_second_and_a_half() {
+        let (mut stage, _) = sized_stage("scan-village", 3, 3).unwrap();
+        run(&mut stage, 2.0);
+        let rest = stage.rig.pose();
+        stage
+            .stage(Beat::TurnStart {
+                actor: TokenId::new("hero0"),
+            })
+            .unwrap();
+        run(&mut stage, 0.6);
+        let leaning = stage.rig.pose();
+        assert!(
+            leaning.distance < rest.distance * 0.85,
+            "{leaning:?} vs {rest:?}"
+        );
+        run(&mut stage, 1.0);
+        let back = stage.rig.pose();
+        assert!(
+            (back.distance - rest.distance).abs() < rest.distance * 0.03,
+            "{back:?} vs {rest:?}"
+        );
+        assert!((back.target - rest.target).length() < 0.6);
+    }
+
+    #[test]
+    fn the_camera_rests_on_a_wide_shot_that_holds_everyone_clear_of_the_hud_on_every_scene() {
+        use crate::battle::rest_shot::{REST_AREA, hud_keep_outs, rects_overlap};
+        let mut cases = 0;
+        for id in crate::battle::embedded_ids() {
+            for (heroes, enemies) in [(1, 1), (4, 3), (6, 6)] {
+                let Some((mut stage, reachable)) = sized_stage(id, heroes, enemies) else {
+                    continue;
+                };
+                stage
+                    .stage(Beat::TurnStart {
+                        actor: TokenId::new("hero0"),
+                    })
+                    .unwrap();
+                run(&mut stage, 4.0);
+                let pose = stage.rig.pose();
+                let keep_outs = hud_keep_outs(heroes, enemies);
+                let inside = |rect: (f32, f32, f32, f32), area: (f32, f32, f32, f32)| {
+                    rect.0 >= area.0 && rect.1 >= area.1 && rect.2 <= area.2 && rect.3 <= area.3
+                };
+                for figure in stage.frame().figures {
+                    let body = framing::Body {
+                        feet: figure.position,
+                        height_m: figure.height_m,
+                    };
+                    let rect = framing::project_body(&pose, framing::FRAMED_ASPECT, &body)
+                        .unwrap_or_else(|| panic!("{id} {heroes}v{enemies}: behind the camera"));
+                    assert!(
+                        inside(rect, framing::SAFE_AREA) && inside(rect, REST_AREA),
+                        "{id} {heroes}v{enemies}: {} at {rect:?}",
+                        figure.id.0
+                    );
+                    for keep_out in &keep_outs {
+                        assert!(
+                            !rects_overlap(rect, *keep_out),
+                            "{id} {heroes}v{enemies}: {} {rect:?} under {keep_out:?}",
+                            figure.id.0
+                        );
+                    }
+                }
+                for cell in &reachable {
+                    for corner in crate::battle::rest_shot::cell_corners(
+                        stage.grid().cell_centre(*cell),
+                        stage.grid().cell_m(),
+                    ) {
+                        let (x, y) =
+                            framing::project_point(&pose, framing::FRAMED_ASPECT, corner).unwrap();
+                        assert!(
+                            (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y),
+                            "{id} {heroes}v{enemies}: a reachable cell leaves the frame"
+                        );
+                    }
+                }
+                cases += 1;
+            }
+        }
+        assert!(cases >= 20, "{cases}");
+    }
+
+    #[test]
+    fn a_move_keeps_the_wide_shot_and_refits_when_the_reachable_cells_change() {
+        let (mut stage, _) = sized_stage("scan-village", 2, 3).unwrap();
+        run(&mut stage, 2.0);
+        stage
+            .stage(Beat::TurnStart {
+                actor: TokenId::new("hero0"),
+            })
+            .unwrap();
+        run(&mut stage, 3.0);
+        let before = stage.rig.pose();
+        // The server now offers only a couple of cells: the held region shrinks, the camera follows.
+        stage.set_tactical_highlights(vec![Cell::new(2, 3)], vec![Cell::new(2, 2)]);
+        run(&mut stage, 2.5);
+        let after = stage.rig.pose();
+        assert!(after.pitch_deg >= 33.0 && before.pitch_deg >= 33.0);
+        assert!(
+            (after.distance - before.distance).abs() > 1e-3
+                || (after.target - before.target).length() > 1e-3,
+            "{before:?} {after:?}"
+        );
     }
 }

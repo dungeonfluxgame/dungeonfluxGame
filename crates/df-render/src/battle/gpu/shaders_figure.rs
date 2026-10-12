@@ -573,6 +573,13 @@ pub fn figure() -> String {
     format!("{FRAME}{}{HELPERS}{FIGURE}", status_consts())
 }
 
+/// The figure as it reads where scan geometry truly stands between the camera and it: the same
+/// cut-out drawn faintly (a third of its strength) over what hides it.
+pub fn figure_ghost() -> String {
+    let faint = FIGURE.replace("out.colour = shade(in);", "out.colour = shade(in) * 0.32;");
+    format!("{FRAME}{}{HELPERS}{faint}", status_consts())
+}
+
 pub fn effects() -> String {
     format!("{FRAME}{}{HELPERS}{EFFECTS}", status_consts())
 }

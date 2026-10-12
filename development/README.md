@@ -290,13 +290,27 @@ DF_GAMEPLAY_SPLAT_DIR=artifacts/tmp/splat-dl DF_GAMEPLAY_BATTLE_SCENE=scan-villa
   development/run-gameplay.sh
 ```
 
-The grid on every scene (scans and painted grounds alike) is drawn as straight, glowing lines on one
-flat play plane: a bright core with a soft additive halo, warm gold when neutral, cool blue on hero
-cells and red on enemy cells, brighter on reachable and targeted cells. Where scan geometry stands
-well in front of a line the line dims instead of breaking. The look is tuned in one place,
+The grid on every scene (scans and painted grounds alike) is drawn as straight hairlines (about one pixel at
+1080p, low contrast, no glow) on one flat play plane: warm gold when neutral, cool blue on hero cells and red on
+enemy cells, fading with distance and toward the edge of the field. A hero's reachable region is one faint tint
+over its cells with a single thin outline around its outer edge (the lines inside it keep the base strength);
+legal targets and the acting figure's cell are thin rings, the only strong marks on the field. Where scan
+geometry stands well in front of a line the line dims instead of breaking. The look is tuned in one place,
 `crates/df-render/src/battle/grid_lines.rs`. A scan's plane sits at the median ground height under the
 open cells and figures stand on it; cells whose ground is more than 0.45 m from the plane are
 blocked at fitting time (`--deviation`), so nobody floats or sinks further than that.
+
+The camera rests on a solved wide shot (`crates/df-render/src/battle/rest_shot.rs`): from the combatants, the
+cells the server offers this turn and the scene's authored `tactical` shot as a hint for direction and lens, it
+finds a raised three-quarter view that holds every living figure and the reachable region between the HUD
+cards (the party and enemy columns, the round strip and the dice card are keep-out rectangles) with the place
+showing beyond the grid. A turn begins with a short lean toward its figure and back out within 1.5 s; strikes,
+projectiles, speakers and the finishing shot keep their own shots. `data-battlefield-camera` reports the shot
+held (`wide` or `action`) and its pose.
+
+Scan splats that are beside or behind a figure never hide it (`figure_clear.rs`, applied per splat in the
+projection pass): only a splat centred in front of the figure over its screen box hides it, and where scan
+geometry truly stands between the camera and a figure the figure is drawn faintly over it so it still reads.
 
 The scenes are `scan-riverbed`, `scan-valley-bridges` and `scan-summit` (private test only, no
 licence: do not publish, record or ship them) and `scan-village` (CC BY 4.0, attribution in
@@ -328,7 +342,8 @@ with `&` and may come in any order:
 | `shot=<name>` | Cut to a named camera: `tactical`, `combat_est`, `turn_focus`, `impact`, `ko`, `victory`. |
 | `cam=<x,y,z>,<distance>,<yaw>,<pitch>,<fov>` | A free camera. |
 | `place=<token>:<col>:<row>` | Stand a token on a cell (repeatable). |
-| `beat=<kind>` | Stage one thing after the camera has idled, then hold: `graze`, `heavy`, `critical`, `miss`, `finish` (one blow of that kind), `selfheal`, `enemyhit`, `shoot` (the archer across the field), `speak` (an enemy's line, then a hero's, each with its bubble and the camera easing in and back), `named`, `namedmiss`, `namedcrit` (a blow whose floating result names the attack), `chain` (every enemy strikes in a row: stacked results), `victory` (every foe brought down: the held victory beat), `defeat` (every hero brought down). |
+| `reach` | Show the first hero's full reach (every walkable cell within six, 30 ft) as reachable cells and every foe as a target, as on a hero's turn. |
+| `beat=<kind>` | Stage one thing after the camera has idled, then hold: `rest` (a hero's turn begins: the lean toward it, then the solved resting shot), `graze`, `heavy`, `critical`, `miss`, `finish` (one blow of that kind), `selfheal`, `enemyhit`, `shoot` (the archer across the field), `speak` (an enemy's line, then a hero's, each with its bubble and the camera easing in and back), `named`, `namedmiss`, `namedcrit` (a blow whose floating result names the attack), `chain` (every enemy strikes in a row: stacked results), `victory` (every foe brought down: the held victory beat), `defeat` (every hero brought down). |
 | `lod=<0-3>` | The scan tier drawn as the finest (default 1; 0 is the largest). |
 | `splat` | Replace the scene's scan with the built-in procedural ground. |
 | `sog=<name>`, `splatfile=<name>` | A splat scene served from `/assets/splat/`. |

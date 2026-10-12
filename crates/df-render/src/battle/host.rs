@@ -660,6 +660,20 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
             state.frames
         );
         let _ = state.host.set_attribute("data-battlefield-stats", &summary);
+        let pose = state.stage.camera_pose();
+        let _ = state.host.set_attribute(
+            "data-battlefield-camera",
+            &format!(
+                "{} distance={:.1} pitch={:.0} yaw={:.0} target={:.1},{:.1},{:.1}",
+                state.stage.camera_label(),
+                pose.distance,
+                pose.pitch_deg,
+                pose.yaw_deg,
+                pose.target.x,
+                pose.target.y,
+                pose.target.z
+            ),
+        );
         if let Some(splat) = renderer.splat_shared() {
             let shared = splat.borrow();
             let label = match (stats.given_up, shared.state) {
