@@ -42,7 +42,8 @@ const geometry = await page.evaluate(() => {
     tint: style?.getPropertyValue('--home-tint').trim(),
     vignette: style?.getPropertyValue('--home-vignette').trim(),
     atmosphere: [...document.querySelectorAll('.tv-fx')].map((e) => e.className),
-    art: getComputedStyle(document.querySelector('.tv-art')).backgroundImage.slice(0, 160),
+    // Every background image on the stage that names a generated painting: the painting in use.
+    paintings: [...document.querySelectorAll('.tv-stage *')].map((e) => getComputedStyle(e).backgroundImage).filter((v) => v.includes('/generated/scene-')).map((v) => v.match(/generated\/([^"')]+)/)?.[1]).filter(Boolean),
     title: rect('.tv-title'),
     titleBlock: rect('.tv-title-block'),
     join: rect('.tv-join'),

@@ -122,25 +122,25 @@ pub(crate) const ARRANGEMENTS: [Arrangement; 7] = [
     Arrangement {
         name: FALLBACK_ARRANGEMENT,
         title: Boxed::new(45, 50, 520, 420),
-        code: Boxed::new(40, 600, 430, 360),
+        code: Boxed::new(40, 580, 430, 380),
         party: Boxed::new(490, 590, 480, 370),
     },
     Arrangement {
         name: "title-top-right-panels-stacked-left",
         title: Boxed::new(490, 50, 470, 420),
-        code: Boxed::new(40, 300, 430, 340),
-        party: Boxed::new(40, 650, 500, 320),
+        code: Boxed::new(40, 280, 430, 380),
+        party: Boxed::new(40, 680, 500, 280),
     },
     Arrangement {
         name: "title-centre-panels-bottom-corners",
-        title: Boxed::new(230, 190, 540, 420),
-        code: Boxed::new(30, 625, 420, 340),
-        party: Boxed::new(500, 625, 480, 340),
+        title: Boxed::new(230, 170, 540, 420),
+        code: Boxed::new(30, 600, 420, 360),
+        party: Boxed::new(500, 600, 480, 360),
     },
     Arrangement {
         name: "title-top-right-panels-bottom-band",
         title: Boxed::new(490, 50, 470, 420),
-        code: Boxed::new(40, 560, 430, 360),
+        code: Boxed::new(40, 560, 430, 380),
         party: Boxed::new(490, 560, 480, 400),
     },
     Arrangement {
@@ -158,8 +158,8 @@ pub(crate) const ARRANGEMENTS: [Arrangement; 7] = [
     Arrangement {
         name: "single-bottom-band",
         title: Boxed::new(45, 50, 520, 420),
-        code: Boxed::new(30, 600, 400, 360),
-        party: Boxed::new(460, 600, 500, 360),
+        code: Boxed::new(30, 580, 400, 380),
+        party: Boxed::new(460, 580, 500, 380),
     },
 ];
 
@@ -251,7 +251,7 @@ impl std::error::Error for HomeThemeError {
 /// Measures are cached per content hash. `hashes` remembers which hash a painting path had, so a
 /// painting's bytes are read and hashed once per process.
 #[derive(Default)]
-struct Cache {
+pub(crate) struct Cache {
     hashes: BTreeMap<String, [u8; 32]>,
     measures: BTreeMap<[u8; 32], Measures>,
 }
@@ -295,7 +295,19 @@ pub(crate) fn theme_for(
     painting: &str,
     kind: Option<SettingKind>,
 ) -> Result<Theme, HomeThemeError> {
-    let measures = measures_for(root, painting)?;
+    let mut cache = CACHE.lock().map_err(|_| HomeThemeError::CacheUnavailable)?;
+    theme_from_cache(&mut cache, root, painting, kind)
+}
+
+/// The theme of one painting, measured through `cache`. The result depends only on the painting's
+/// bytes; the cache only saves repeating the measurement.
+pub(crate) fn theme_from_cache(
+    cache: &mut Cache,
+    root: &Path,
+    painting: &str,
+    kind: Option<SettingKind>,
+) -> Result<Theme, HomeThemeError> {
+    let measures = measures_in(cache, root, painting)?;
     let arrangement =
         choose_arrangement(&measures).ok_or_else(|| HomeThemeError::NoUncoveredArrangement {
             painting: painting.to_owned(),
@@ -318,40 +330,29 @@ pub(crate) fn choose_arrangement(measures: &Measures) -> Option<&'static Arrange
         .map(|(arrangement, _)| arrangement)
 }
 
-fn measures_for(root: &Path, painting: &str) -> Result<Measures, HomeThemeError> {
-    let known = with_cache(|cache| {
-        cache
-            .hashes
-            .get(painting)
-            .copied()
-            .and_then(|hash| cache.measures.get(&hash).cloned())
-    })?;
-    if let Some(measures) = known {
-        return Ok(measures);
+/// The measures of a painting: from the cache when its bytes were measured before, otherwise
+/// read, hashed, decoded and measured once.
+fn measures_in(cache: &mut Cache, root: &Path, painting: &str) -> Result<Measures, HomeThemeError> {
+    if let Some(known) = cache
+        .hashes
+        .get(painting)
+        .and_then(|hash| cache.measures.get(hash))
+    {
+        return Ok(known.clone());
     }
     let path = painting_file(root, painting)?;
     let bytes = read_painting(painting, &path)?;
     let hash: [u8; 32] = Sha256::digest(&bytes).into();
-    let cached = with_cache(|cache| cache.measures.get(&hash).cloned())?;
-    let measures = match cached {
-        Some(measures) => measures,
+    let measures = match cache.measures.get(&hash) {
+        Some(measures) => measures.clone(),
         None => {
             let measures = decode_and_measure(painting, &bytes)?;
-            with_cache(|cache| {
-                cache.measures.insert(hash, measures.clone());
-            })?;
+            cache.measures.insert(hash, measures.clone());
             measures
         }
     };
-    with_cache(|cache| {
-        cache.hashes.insert(painting.to_owned(), hash);
-    })?;
+    cache.hashes.insert(painting.to_owned(), hash);
     Ok(measures)
-}
-
-fn with_cache<R>(use_cache: impl FnOnce(&mut Cache) -> R) -> Result<R, HomeThemeError> {
-    let mut guard = CACHE.lock().map_err(|_| HomeThemeError::CacheUnavailable)?;
-    Ok(use_cache(&mut guard))
 }
 
 /// The file a painting path names. A scene's path is a stem without an extension, so the file is

@@ -5,8 +5,8 @@
 use super::adventure::setting::SettingKind;
 use super::home_theme::analysis::{self, AnalysisError, Measures, VIEWPORTS};
 use super::home_theme::{
-    ARRANGEMENTS, Arrangement, Atmosphere, HomeThemeError, atmosphere_for, choose_arrangement,
-    lobby_view, theme_for,
+    ARRANGEMENTS, Arrangement, Atmosphere, Cache, HomeThemeError, atmosphere_for,
+    choose_arrangement, lobby_view, theme_for, theme_from_cache,
 };
 use image::{Rgb, RgbImage};
 use prost::Message;
@@ -194,7 +194,8 @@ fn every_arrangement_gives_the_join_block_a_qr_tile_and_the_party_two_rows_of_th
         let join_1080 = blocks_px(&arrangement, (1920, 1080))[1];
         let join_height = join_1080[3] - join_1080[1];
         assert!(
-            join_height >= 0.22 * 1080.0,
+            // The QR tile (22% of the height) plus the address and hint lines, with the padding.
+            join_height >= 0.35 * 1080.0,
             "{} join block is {join_height}px tall, short of the QR tile",
             arrangement.name
         );
@@ -229,6 +230,46 @@ fn every_location_arrival_painting_gets_a_theme_from_its_pixels() {
         themed >= 8,
         "the eight arrival paintings are all themed, found {themed}"
     );
+}
+
+#[test]
+fn the_arrangement_is_the_same_cold_warm_and_in_any_order_of_paintings() {
+    // Arrange: two real paintings whose layouts are close, measured in two orders with fresh caches.
+    let farm = "assets/ui/generated/scene-thistledown-farm-arrival.webp";
+    let reedmoor = "assets/ui/generated/scene-reedmoor-boardwalk-arrival.webp";
+    let root = asset_root();
+    let kind = Some(SettingKind::Farmyard);
+    // Act: a cold cache measures the farm, then the same cache answers it again from memory.
+    let mut ordered = Cache::default();
+    let farm_cold = theme_from_cache(&mut ordered, &root, farm, kind).expect("farm is themed");
+    let farm_warm = theme_from_cache(&mut ordered, &root, farm, kind).expect("farm is themed");
+    let reedmoor_second = theme_from_cache(&mut ordered, &root, reedmoor, kind).expect("reedmoor");
+    // A second fresh cache measures the reedmoor first, then the farm.
+    let mut reversed = Cache::default();
+    let reedmoor_first = theme_from_cache(&mut reversed, &root, reedmoor, kind).expect("reedmoor");
+    let farm_later = theme_from_cache(&mut reversed, &root, farm, kind).expect("farm is themed");
+    // Assert: every answer for a painting is the same theme, whatever the cache held.
+    assert_eq!(
+        farm_cold, farm_warm,
+        "a cached answer differs from the cold one"
+    );
+    assert_eq!(
+        farm_cold, farm_later,
+        "the farm depends on the order of paintings"
+    );
+    assert_eq!(
+        reedmoor_second, reedmoor_first,
+        "reedmoor depends on the order of paintings"
+    );
+    assert_eq!(farm_cold.arrangement.name, farm_later.arrangement.name);
+    // The farm's layout must leave the focal region clear at every reference viewport.
+    let measures = analysis::measure(
+        &image::open(root.join("generated/scene-thistledown-farm-arrival.webp"))
+            .expect("the farm painting decodes")
+            .into_rgb8(),
+    )
+    .expect("the farm measures");
+    assert!(analysis::fit(farm_cold.arrangement.boxes(), &measures).is_clear());
 }
 
 #[test]
