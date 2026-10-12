@@ -316,7 +316,7 @@ pub(crate) struct Reaction {
     pub(crate) id: String,
     /// DM-facing description.
     pub(crate) text: String,
-    /// First-person line, family-suitable, never a mechanical benefit.
+    /// First-person line, never a mechanical benefit.
     pub(crate) answer: String,
     pub(crate) tags: Vec<String>,
     /// Whether this reaction warms, cools or leaves the attitude where it was.

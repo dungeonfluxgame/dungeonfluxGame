@@ -25,9 +25,13 @@ use serde_json::{Value, json};
 use super::{
     adventure::dossier::{Dossier, mentions_term},
     npc_dossier::{self, Inputs, Turn, Withheld},
-    pack::{PackFile, SpeakerProfile},
+    pack::{Age, PackFile, SpeakerProfile},
     social::{Approach, Shift, SocialLedger, classify_keywords, shift_line},
-    storyteller::{CallProfile, Expression, Slot, Storyteller, contains_whole_word},
+    startup_configuration::content_rating,
+    storyteller::{
+        CallProfile, Expression, Slot, Storyteller, age_group, contains_whole_word,
+        sexual_content_allowed,
+    },
     table_log::TableLog,
 };
 
@@ -59,6 +63,33 @@ impl StoryFacts {
             secret_terms: pack.secret_terms.clone(),
             speakers: pack.speakers.clone(),
         }
+    }
+}
+
+/// The age and likeness facts that bound what a speaker may be written into, in either rating.
+/// A speaker's age comes from the pack's profile and stays unstated when the pack has none;
+/// `based_on_real_person` is false for every character today, because no character is cast
+/// from a real person's likeness.
+fn character_limits(profile: Option<&SpeakerProfile>) -> Value {
+    let age = match profile.and_then(|profile| profile.age) {
+        Some(Age::Young) => "young",
+        Some(Age::Adult) => "adult",
+        Some(Age::Elder) => "elder",
+        None => "",
+    };
+    json!({
+        "age_group": age_group(age),
+        "based_on_real_person": false,
+        "sexual_content_allowed": sexual_content_allowed(age, false),
+    })
+}
+
+/// Adds [`character_limits`] to the `npc` object of the reply facts.
+fn add_character_limits(facts: &mut Value, profile: Option<&SpeakerProfile>) {
+    if let (Some(npc), Value::Object(limits)) =
+        (facts["npc"].as_object_mut(), character_limits(profile))
+    {
+        npc.extend(limits);
     }
 }
 
@@ -172,7 +203,11 @@ impl NpcReplyContext {
             choices.join(" "),
             on_stage.join(" "),
         );
-        let withheld = Withheld::new(dossier, unheard_secret_terms(story, &public));
+        let withheld = Withheld::new(
+            dossier,
+            unheard_secret_terms(story, &public),
+            content_rating(),
+        );
         let standing = social.standing(member, dossier);
         let recent = social.recent(member, &dossier.npc_id);
         let scripted = if actor.speaking {
@@ -180,7 +215,7 @@ impl NpcReplyContext {
         } else {
             ""
         };
-        let facts = npc_dossier::facts(&Inputs {
+        let mut facts = npc_dossier::facts(&Inputs {
             dossier,
             name: &actor.name,
             hero: &hero.name,
@@ -192,6 +227,13 @@ impl NpcReplyContext {
             words: &words,
             withheld: &withheld,
         });
+        add_character_limits(
+            &mut facts,
+            story
+                .speakers
+                .iter()
+                .find(|speaker| speaker.name == actor.name),
+        );
         let hero_index = journey
             .party
             .iter()
@@ -262,6 +304,7 @@ impl NpcReplyContext {
             "player": {"hero_name": hero.name, "exact_words": words},
             "offered_choices": choices,
         });
+        add_character_limits(&mut facts, profile);
         // Typed conversation is public table talk, so the secret's terms stay forbidden for
         // every asker; the room hears the reply.
         let public = format!(
@@ -609,6 +652,7 @@ impl NpcVoice {
         context: &NpcReplyContext,
     ) -> Option<(String, Option<Approach>)> {
         let turn = context.turn.as_ref()?;
+        let rating = content_rating();
         if !self.storyteller.is_on() {
             return None;
         }
@@ -625,7 +669,7 @@ impl NpcVoice {
                 facts: &context.facts,
                 slots: &slots,
                 style: npc_dossier::STYLE,
-                profile: npc_dossier::PROFILE,
+                profile: npc_dossier::profile(rating),
             })
             .await
             .ok()?;
@@ -640,6 +684,7 @@ impl NpcVoice {
     }
 
     pub(super) async fn reply(&self, context: NpcReplyContext) -> Option<String> {
+        let rating = content_rating();
         if !self.storyteller.is_on() {
             return None;
         }
@@ -652,7 +697,7 @@ impl NpcVoice {
                 facts: &context.facts,
                 slots: &slots,
                 style: STYLE,
-                profile: CallProfile::short_reply(),
+                profile: CallProfile::short_reply(rating),
             })
             .await
             .ok()?;
@@ -836,6 +881,9 @@ mod tests {
                 "name": "Courier",
                 "role": "a frightened courier carrying a sealed packet",
                 "voice": "hurried and anxious",
+                "age_group": "not stated",
+                "based_on_real_person": false,
+                "sexual_content_allowed": false,
             })
         );
         assert!(

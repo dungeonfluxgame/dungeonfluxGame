@@ -288,3 +288,23 @@ Steps 1-3 deliver the "edit, restart, see change" loop for combat/rest numbers. 
 7. **Wasm graph.** `df-tools` also builds as a wasm cdylib; keep all new dependencies and `pack.rs` under `cfg(not(target_arch = "wasm32"))` and add a wasm compile check.
 8. **Cargo.lock change.** Enabling serde `derive` edits `Cargo.lock` (offline-resolvable); confirm no unrelated lock churn.
 9. **Hash coupling.** Any tuning byte (including whitespace) changes `catalog_digest` and strands stored runs, even for non-rules keys like log depth. Accepted; it is exactly the "edited file is a new revision" rule, but editors should expect it.
+
+## 11. Content rating (PLAY-R01)
+
+Owner decision, 2026-10-11: "note this is an adult game so no censorship, but leave a config that allows to toggle censorship on if needed". One setting, read once at startup: `DF_GAMEPLAY_CONTENT_RATING` = `mature` (the default when unset) or `restrained`; any other value refuses startup with the usual typed configuration error, without echoing it. It is `ContentRating` and `content_rating()` in `startup_configuration.rs`, and the startup line is `CONTENT rating=<value>`. Earlier prompts, tables and tests assumed a family table ("tense, never gory", "family-suitable", "never anything explicit"); that came from task briefs, not the owner, and is now the `restrained` behaviour only.
+
+What each mode changes:
+
+| Item | `restrained` (as before) | `mature` (default) |
+|---|---|---|
+| Adventure craft guidance | "Heroic fantasy for a living-room table: tense, never gory." | Mature themes are allowed; describe stated violence vividly, never invent a wound, death or outcome |
+| NPC reply rules e and f | flirting "never anything explicit"; "suitable for a family table" | flirting and threats answered by the NPC's own temperament, a reciprocated advance played as an adult scene; mature themes allowed |
+| Quick NPC replies (no backstory) | no rating wording | mature themes allowed |
+| Model word lists | gore words and strong language refused in adventure text and in NPC replies | both allowed; rules, outcome and modern words are still refused |
+| Fact-sheet tone | "heroic fantasy for a living-room table" | "heroic fantasy for an adult table, dark where the story calls for it" |
+| Fight, victory, defeat prose; antagonist arrival and warning lines | shipped `prose-patterns.json` and `antagonists.json` | `mature-overlay.json` replacements (still the nonlethal fight the rules produce) |
+| NPC flirting, threat and curt tables | shipped `npc-social.json` | `mature-overlay.json` replacements, with decline, play along and reciprocate entries |
+
+The overlay is applied over the shipped tables before validation and is not listed in `tables.json`, so a restrained adventure keeps its recorded bytes and revisions (a test pins three seeds' hashes); a mature adventure's revisions also hash the overlay.
+
+Limits in both modes, not part of the toggle: no sexual content involving minors or any character presented as underage (`young` archetypes are young adults, and the facts say `age_group: "young adult"`; an unstated age is `not stated` and excluded); no sexual content about real people (`based_on_real_person` is in the speaker facts, false for every character today, and `sexual_content_allowed` is false for a flagged or unstated-age character); player words stay untrusted; all secret-safety and prompt-injection rules are unchanged; mechanics and rules are never rated. The text model's own policy still applies: a refusal or an empty reply falls back to the prepared in-character line as before, and is never retried with reworded instructions to get around it. Campaign chapter tables (premises, villains, twists) are not split by rating yet.
