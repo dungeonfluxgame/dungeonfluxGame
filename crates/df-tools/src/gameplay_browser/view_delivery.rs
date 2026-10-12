@@ -2,6 +2,7 @@ use df_client::{
     cache::CacheScope,
     connection::ConnectionGeneration,
     connection_views::{ConnectionViewAcceptance, ConnectionViews},
+    revisions::ViewAcceptance,
 };
 use df_protocol::common as rpc;
 use df_types::{ClientBindingId, RecoveryEpoch, RunId, SessionId, SessionRevision};
@@ -65,11 +66,14 @@ impl ViewScope {
 
 /// Admission of the actual generated gameplay snapshots for one authorized scope.
 /// The connection owner issues generations; reconnect preserves the durable watermark.
-/// The current wire has no independent presentation sequence, so equal revisions
-/// cannot deliver changed content. Local receipt redraws borrow the retained view.
+/// An equal revision never replaces a view, with one exception: table talk (what heroes and
+/// speakers said) changes the room's screens without moving the game revision, so a same-revision
+/// view whose `presentation_sequence` differs is kept beside the store as the current view
+/// until a newer revision arrives. Local receipt redraws borrow the retained view.
 pub(super) struct GameplayViews {
     scope: ViewScope,
     views: ConnectionViews<rpc::ViewMessage>,
+    table_talk: Option<rpc::ViewMessage>,
 }
 
 impl GameplayViews {
@@ -77,6 +81,7 @@ impl GameplayViews {
         Self {
             scope,
             views: ConnectionViews::new(scope.binding, generation),
+            table_talk: None,
         }
     }
 
@@ -129,7 +134,22 @@ impl GameplayViews {
         if journey.party.len() > 2 || offer_count > 4 {
             return Err(ViewDeliveryError::InvalidProjection);
         }
-        Ok(self.views.accept(generation, scope.binding, revision, view))
+        let refresh = self
+            .current()
+            .is_some_and(|current| crate::presentation::table_talk_changed(current, &view))
+            .then(|| view.clone());
+        let acceptance = self.views.accept(generation, scope.binding, revision, view);
+        match (acceptance, refresh) {
+            (ConnectionViewAcceptance::View(ViewAcceptance::Applied), _) => {
+                self.table_talk = None;
+                Ok(acceptance)
+            }
+            (ConnectionViewAcceptance::View(ViewAcceptance::Duplicate { .. }), Some(refresh)) => {
+                self.table_talk = Some(refresh);
+                Ok(ConnectionViewAcceptance::View(ViewAcceptance::Applied))
+            }
+            _ => Ok(acceptance),
+        }
     }
 
     pub(super) fn current_revision(&self) -> Option<SessionRevision> {
@@ -137,6 +157,8 @@ impl GameplayViews {
     }
 
     pub(super) fn current(&self) -> Option<&rpc::ViewMessage> {
-        self.views.current().map(|(_, view)| view)
+        self.table_talk
+            .as_ref()
+            .or_else(|| self.views.current().map(|(_, view)| view))
     }
 }

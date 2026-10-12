@@ -46,7 +46,8 @@ const ACTION_HOLD_MS: u64 = 5500;
 const HOLD_PER_EXTRA_CHARACTER_MS: u64 = 40;
 const MAXIMUM_ACTION_HOLD_MS: u64 = 8500;
 /// A hero's typed line stays this long before it fades; a non-player line stays until replaced.
-const TYPED_HOLD_MS: u64 = 12_000;
+/// It outlasts a slow model-written reply, which the hero's line waits beside.
+const TYPED_HOLD_MS: u64 = 20_000;
 const FADE_OUT_MS: u64 = 500;
 const BUBBLE_OUT_ANIMATION: &str = "df-bubble-out";
 const FLOAT_ANIMATION: &str = "df-float-up";
@@ -900,9 +901,48 @@ impl Figures {
         }
     }
 
-    fn clear_bubbles(&self) -> Result<(), JsValue> {
+    pub(super) fn clear_bubbles(&self) -> Result<(), JsValue> {
         for figure in &self.figures {
             figure.bubbles.set_text_content(None);
+            figure.root.remove_attribute("data-thinking")?;
+        }
+        Ok(())
+    }
+
+    /// Removes every hero's typed-line bubble: the reply to it takes its place.
+    pub(super) fn clear_typed(&self) {
+        for figure in &self.figures {
+            let typed = figure.bubbles.first_element_child().is_some_and(|bubble| {
+                bubble.get_attribute("data-kind").as_deref() == Some(BubbleKind::Typed.name())
+            });
+            if typed {
+                figure.bubbles.set_text_content(None);
+            }
+        }
+    }
+
+    /// Shows the small thinking indicator at the figure in `slot` (a speaker writing a reply),
+    /// or at none. Showing it where it already is changes nothing, so its animation is not
+    /// restarted by every view.
+    pub(super) fn set_thinking(&self, slot: Option<ActorSlot>) -> Result<(), JsValue> {
+        let target = slot.and_then(|slot| self.figure(slot));
+        for figure in &self.figures {
+            let wanted = target.is_some_and(|target| target.root.is_same_node(Some(&figure.root)));
+            let shown = figure.root.has_attribute("data-thinking");
+            if wanted && !shown {
+                figure.root.set_attribute("data-thinking", "")?;
+                let dots = node(&self.document, &figure.bubbles, "div", "tv-thinking", "")?;
+                dots.set_attribute("aria-hidden", "true")?;
+                for _ in 0..3 {
+                    node(&self.document, &dots, "i", "", "")?;
+                }
+                self.place_bubble(figure);
+            } else if !wanted && shown {
+                figure.root.remove_attribute("data-thinking")?;
+                if let Some(dots) = figure.bubbles.query_selector(".tv-thinking")? {
+                    dots.remove();
+                }
+            }
         }
         Ok(())
     }

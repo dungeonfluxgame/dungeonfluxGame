@@ -439,6 +439,8 @@ pub(crate) struct TableLine {
     pub(crate) kind: TableKind,
     /// The whole line. A compact surface shows [`TableLine::short_text`].
     pub(crate) text: String,
+    /// The scene's own authored speaker line, as opposed to something said at the table.
+    pub(crate) scripted: bool,
 }
 
 impl TableLine {
@@ -496,7 +498,44 @@ fn scene_line(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) ->
         role,
         kind: TableKind::Speech,
         text: text.to_owned(),
+        scripted: true,
     })
+}
+
+/// The server's table-talk counter of an audience view: it moves when a line is logged or a
+/// reply starts or ends, while the game revision does not.
+fn presentation_sequence(view: &rpc::ViewMessage) -> Option<u64> {
+    let journey = match view.audience.as_ref()? {
+        rpc::view_message::Audience::Display(display) => display.journey.as_ref(),
+        rpc::view_message::Audience::Player(player) => player.journey.as_ref(),
+    };
+    journey.map(|journey| journey.presentation_sequence)
+}
+
+/// Who is writing a reply to a hero's typed words right now, as the server says, unless that
+/// speaker's answer is already the last thing logged (the mark can outlive the line by a moment).
+pub(crate) fn replying_speaker(view: &rpc::ViewMessage) -> Option<String> {
+    let journey = match view.audience.as_ref()? {
+        rpc::view_message::Audience::Display(display) => display.journey.as_ref(),
+        rpc::view_message::Audience::Player(player) => player.journey.as_ref(),
+    }?;
+    let speaker = journey.reply_speaker.trim();
+    if speaker.is_empty() {
+        return None;
+    }
+    let answered = journey.table_log.last().is_some_and(|last| {
+        rpc::TableRole::try_from(last.role) == Ok(rpc::TableRole::Npc)
+            && rpc::TableKind::try_from(last.kind) == Ok(rpc::TableKind::Speech)
+            && last.speaker.trim() == speaker
+    });
+    (!answered).then(|| speaker.to_owned())
+}
+
+/// Whether `incoming`, which carries the same game revision as `current`, differs in table
+/// talk. A conversation changes what the room sees without changing any game state, so such a
+/// view must still reach the screens.
+pub(crate) fn table_talk_changed(current: &rpc::ViewMessage, incoming: &rpc::ViewMessage) -> bool {
+    presentation_sequence(current) != presentation_sequence(incoming)
 }
 
 /// The table lines of one audience view, oldest first: the scene's own speaker line, then the
@@ -543,6 +582,7 @@ fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> +
             role,
             kind,
             text: line.text.trim().to_owned(),
+            scripted: false,
         })
     })
 }
@@ -696,6 +736,62 @@ mod tests {
             kind: kind as i32,
             text: text.to_owned(),
         }
+    }
+
+    fn talk_view(sequence: u64, replying: &str, last: Option<rpc::TableLine>) -> rpc::ViewMessage {
+        let mut shown = journey(rpc::JourneyPhase::Opening, false, vec![]);
+        shown.presentation_sequence = sequence;
+        shown.reply_speaker = replying.to_owned();
+        shown.table_log = last.into_iter().collect();
+        view(shown)
+    }
+
+    #[test]
+    fn table_talk_changes_a_view_whose_game_revision_did_not_move() {
+        let before = talk_view(3, "", None);
+        assert!(!table_talk_changed(&before, &talk_view(3, "", None)));
+        let hero_line = server_line(
+            1,
+            "Brakka",
+            rpc::TableRole::Hero,
+            0,
+            rpc::TableKind::Speech,
+            "Who sent you?",
+        );
+        assert!(table_talk_changed(
+            &before,
+            &talk_view(4, "", Some(hero_line))
+        ));
+        assert!(table_talk_changed(&before, &talk_view(4, "Courier", None)));
+    }
+
+    #[test]
+    fn a_reply_in_progress_is_named_until_that_speaker_has_answered() {
+        assert_eq!(replying_speaker(&talk_view(1, "", None)), None);
+        let asked = server_line(
+            1,
+            "Brakka",
+            rpc::TableRole::Hero,
+            0,
+            rpc::TableKind::Speech,
+            "Who sent you?",
+        );
+        assert_eq!(
+            replying_speaker(&talk_view(2, "Courier", Some(asked))).as_deref(),
+            Some("Courier")
+        );
+        let answered = server_line(
+            2,
+            "Courier",
+            rpc::TableRole::Npc,
+            0,
+            rpc::TableKind::Speech,
+            "Keep your voice down.",
+        );
+        assert_eq!(
+            replying_speaker(&talk_view(3, "Courier", Some(answered))),
+            None
+        );
     }
 
     #[test]

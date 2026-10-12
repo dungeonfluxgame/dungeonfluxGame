@@ -792,6 +792,8 @@ pub(super) fn project_journey(
         tempo: None,
         standing: Vec::new(),
         table_choices,
+        presentation_sequence: 0,
+        reply_speaker: String::new(),
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
     let mut scene = if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] {
