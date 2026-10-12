@@ -237,6 +237,26 @@ async fn live_plan() {
 }
 
 #[test]
+#[ignore = "prints how each adventure's patron answers flattery and flirting"]
+fn live_temperaments() {
+    for seed in 0..60 {
+        let generated = adventure(seed);
+        for dossier in &generated.dossiers {
+            if dossier.npc_id.starts_with("patron:") {
+                println!(
+                    "TEMPER seed={seed} npc={} start={:?} flattery={:?} flirting={:?} threats={:?}",
+                    dossier.npc_id,
+                    dossier.starting_attitude,
+                    dossier.temperament.flattery.effect,
+                    dossier.temperament.flirting.effect,
+                    dossier.temperament.threats.effect,
+                );
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "prints candidate adventures for the operator"]
 fn live_candidates() {
     for seed in 0..40 {

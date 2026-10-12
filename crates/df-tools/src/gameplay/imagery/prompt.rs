@@ -30,7 +30,7 @@ const MATURE_STANCE: &str = "Mature content rating: violence, horror and desire 
 const KEEP_PLACE: &str = "Keep the same place: its architecture, props, palette and perspective \
     exactly as in the reference painting.";
 pub(super) const NO_PEOPLE: &str =
-    "Paint no people and no figures; the characters are added separately.";
+    "Paint no people, no figures and no silhouettes anywhere; the characters are added separately.";
 const KEEP_FLOOR: &str = "Keep a wide, clear, open floor across the lower third of the frame, \
     with the floor perspective and horizon of the reference, so figures can stand on it.";
 const KEEP_FRAME: &str = "Keep the exact aspect ratio and framing of the reference.";
@@ -327,14 +327,14 @@ fn shot_phrase(shot: Shot) -> &'static str {
     match shot {
         Shot::WideEstablishing => "a wide establishing view of the whole place",
         Shot::MediumConversation => {
-            "a medium view, as if framing two people in conversation near the middle of the room"
+            "a medium-distance view of the middle of the room, the open floor wide in the foreground"
         }
         Shot::CloseOnSpeaker => {
-            "a closer, more intimate view, the camera nearer to where the speaker stands"
+            "a closer, more intimate view, the camera nearer to the middle of the room"
         }
         Shot::OverShoulderTowardSpeaker => {
-            "an over-the-shoulder view, the camera low behind the party looking toward where the \
-             speaker stands"
+            "a view from low and slightly to one side, looking across the open floor toward the \
+             far side of the room"
         }
         Shot::LowAngle => "a low camera angle looking up so the place looms over the viewer",
         Shot::HighAngle => "a high camera angle looking down on the place",
