@@ -81,7 +81,7 @@
 .bf-plate[data-health-tier=critical]{box-shadow:0 0 calc(var(--u)*1.1) #e53a3266}
 .bf-plate-hp{font-weight:700;color:#efe6cf;text-shadow:0 0 3px #000,0 1px 2px #000}
 .bf-portrait{position:relative;overflow:visible}
-.bf-portrait[data-crop=face]{background-size:300% auto;background-position:50% 4%}
+.bf-portrait[data-crop=face]{background-size:200% auto;background-position:50% 6%}
 .bf-plate:is([data-health-tier=hurt],[data-health-tier=bloodied],[data-health-tier=critical],[data-health-tier=down]) .bf-portrait::after{position:absolute;left:50%;bottom:calc(var(--u)*-.55);transform:translateX(-50%);padding:calc(var(--u)*.1) calc(var(--u)*.55);border:1px solid currentColor;border-radius:calc(var(--u)*.6);background:#05080cf2;font:700 calc(var(--u)*.8)/1.2 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap;z-index:2}
 .bf-plate[data-health-tier=hurt] .bf-portrait::after{content:"Hurt";color:var(--hp-hurt-b)}
 .bf-plate[data-health-tier=bloodied] .bf-portrait::after{content:"Bloodied";color:var(--hp-bloodied-b)}
