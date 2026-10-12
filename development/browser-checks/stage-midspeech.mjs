@@ -17,7 +17,9 @@ s.note(`old scene "${oldTitle}" narrator speaking`);
 await clearEvents(tv);
 // The table chooses while the narrator is still speaking.
 await click(s, pa, s.label('ask-courier'), { wait: 0 });
-await settle(400);
+// The choice reaches the display through the server: wait for its pending successor, not for a fixed delay.
+await until(tv, (now) => now.pending === 'true', 8000);
+await settle(200);
 const just = await states(tv);
 await tv.screenshot({ path: `${out}-1-just-after-choice.png` });
 s.note(`just after: ${JSON.stringify({ scene: just.scene, line: just.line, pending: just.pending, title: just.title, narrator: just.narrator })}`);

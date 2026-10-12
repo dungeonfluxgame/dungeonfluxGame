@@ -187,7 +187,7 @@ async fn live_conversations_in_each_rating() {
             )
             .unwrap();
             let npc = ask.turn.as_ref().unwrap().dossier.clone();
-            ask.publish_typed_line(&log);
+            ask.publish_typed_line(&log, &ask.typed_words);
             let exchange = voice.converse_in_character(ask, &log).await.unwrap();
             calls += 1;
             let used = start - storyteller.remaining_tokens().unwrap();

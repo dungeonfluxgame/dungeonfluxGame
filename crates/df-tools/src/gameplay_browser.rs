@@ -9,6 +9,7 @@ mod live_home;
 mod live_lobby;
 mod live_motion;
 mod live_music;
+mod live_presence;
 mod live_rules;
 mod live_screens;
 mod live_sfx;
@@ -26,7 +27,7 @@ use df_client::{
     revisions::ViewAcceptance,
 };
 use df_protocol::common as rpc;
-use df_rpc_bridge::{BrowserChannel, BrowserConnection};
+use df_rpc_bridge::{BrowserChannel, BrowserConnection, RPC_MESSAGE_BYTES};
 use df_ui::{
     CharacterAction, CharacterActionKind, CharacterFact, CharacterGroup, CharacterLimits,
     CharacterOption, CharacterPhaseSurface, CharacterPhaseView, CharacterStatus,
@@ -761,8 +762,8 @@ fn connect(client: Rc<RefCell<Client>>) {
             // The owner's view carries the combat section (reachable cells, legal targets, budget),
             // which exceeds 8 KiB in a three-enemy fight; RPC_MESSAGE_BYTES is the bridge's RPC ceiling.
             let mut sessions = SessionClient::new(channel.clone())
-                .max_decoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES)
-                .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES);
+                .max_decoding_message_size(RPC_MESSAGE_BYTES)
+                .max_encoding_message_size(RPC_MESSAGE_BYTES);
             let connection = RpcConnection::from_browser(sessions.clone(), connection);
             let view_generation = connection.generation();
             {
@@ -776,8 +777,8 @@ fn connect(client: Rc<RefCell<Client>>) {
                 }
                 state.action = Some(
                     ActionClient::new(channel.clone())
-                        .max_decoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES)
-                        .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES),
+                        .max_decoding_message_size(RPC_MESSAGE_BYTES)
+                        .max_encoding_message_size(RPC_MESSAGE_BYTES),
                 );
                 state.dialogue.bind(channel);
                 state.connection = Some(connection);

@@ -971,6 +971,13 @@ fn expected_current_descriptor() -> Vec<DescriptorMethod> {
             ".dungeonflux.public.v1.DialogueResponse",
             RpcMode::Unary,
         ),
+        actual(
+            "dungeonflux.public.v1.DialogueService",
+            "Compose",
+            ".dungeonflux.public.v1.ComposeRequest",
+            ".dungeonflux.public.v1.ComposeResponse",
+            RpcMode::Unary,
+        ),
     ]
 }
 

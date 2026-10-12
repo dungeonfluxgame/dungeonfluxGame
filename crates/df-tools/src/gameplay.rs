@@ -26,6 +26,7 @@ mod imagery;
 mod inn_qualification;
 mod join_link;
 mod journey;
+mod line_cleanup;
 mod living_scenes;
 mod model;
 mod music_assets;
@@ -1314,6 +1315,8 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                 .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES),
         )
         .add_service(
+            // A tactical view (cells, targets, budget, table log) is larger than a small
+            // request: a view may be as large as one RPC message.
             rpc::session_service_server::SessionServiceServer::new(service.clone())
                 .max_decoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES)
                 .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES),

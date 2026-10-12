@@ -104,7 +104,10 @@ pub(super) struct NpcReplyContext {
     pub(super) speaker: String,
     hero_name: String,
     hero_index: u32,
-    typed_words: String,
+    pub(super) typed_words: String,
+    /// Names present in the scene (heroes, cast, places): the only names a cleaned-up line may
+    /// be corrected to.
+    known_names: Vec<String>,
     /// Set when the addressed NPC has a backstory: the reply then draws on it and moves the
     /// NPC's attitude toward this hero.
     pub(super) turn: Option<Box<Turn>>,
@@ -257,6 +260,7 @@ impl NpcReplyContext {
             hero_name: hero.name.clone(),
             hero_index,
             typed_words: words,
+            known_names: scene_names(journey, player.scene.as_ref()),
             turn: Some(Box::new(Turn {
                 ledger: social.clone(),
                 dossier: dossier.clone(),
@@ -354,20 +358,51 @@ impl NpcReplyContext {
             hero_name: hero.name.clone(),
             hero_index,
             typed_words: words,
+            known_names: scene_names(journey, player.scene.as_ref()),
             turn: None,
         })
     }
 
-    /// Publishes the hero's typed words as public table talk, before any answer.
-    pub(super) fn publish_typed_line(&self, log: &TableLog) {
+    /// Publishes the hero's line as public table talk, before any answer. `shown` is the display
+    /// version (see `line_cleanup`); the raw words stay what the reply reasons about.
+    pub(super) fn publish_typed_line(&self, log: &TableLog, shown: &str) {
         log.push(
             &self.hero_name,
             rpc::TableRole::Hero,
             self.hero_index,
             rpc::TableKind::Speech,
-            &self.typed_words,
+            shown,
         );
     }
+}
+
+/// The names a scene shows: its heroes, cast, speaker and the capitalised words of its title.
+fn scene_names(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) -> Vec<String> {
+    let mut names: Vec<String> = journey
+        .party
+        .iter()
+        .map(|member| member.name.clone())
+        .chain(std::iter::once(journey.speaker.clone()))
+        .collect();
+    if let Some(scene) = scene {
+        names.extend(scene.cast.iter().map(|actor| actor.name.clone()));
+        names.extend(
+            scene
+                .title
+                .split_whitespace()
+                .filter(|word| word.chars().next().is_some_and(char::is_uppercase))
+                // "The Broken Seal" names a place; "The" alone must not capitalise every "the".
+                .filter(|word| {
+                    !["the", "a", "an", "of", "and", "at", "in", "on", "to", "for"]
+                        .contains(&word.to_lowercase().as_str())
+                })
+                .map(str::to_owned),
+        );
+    }
+    names.retain(|name| !name.trim().is_empty());
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// Control characters become spaces and only the first part of the text is kept.
@@ -689,6 +724,19 @@ impl NpcVoice {
             from_model,
             shift: recorded.shift,
         })
+    }
+
+    /// The display version of the hero's line (see `line_cleanup`): the model's tidy-up when it
+    /// passes validation within its short deadline, else the deterministic normaliser.
+    pub(super) async fn display_line(&self, context: &NpcReplyContext) -> String {
+        super::line_cleanup::display_line(
+            &self.storyteller,
+            &context.typed_words,
+            &context.known_names,
+            content_rating(),
+        )
+        .await
+        .text
     }
 
     /// The text model's in-character reply and its reading of the hero's approach. `None` when
@@ -1137,11 +1185,11 @@ mod tests {
 
         // The holder asks; the model leaks, so only the player's own line is public.
         let first = holder_question("Where exactly does it go?");
-        first.publish_typed_line(&log);
+        first.publish_typed_line(&log, &first.typed_words);
         assert_eq!(voice.reply_in_public(first, &log).await, None);
         // A second question is answered discreetly.
         let second = holder_question("You know. Tell me quietly.");
-        second.publish_typed_line(&log);
+        second.publish_typed_line(&log, &second.typed_words);
         let reply = voice.reply_in_public(second, &log).await;
         assert_eq!(
             reply.as_deref(),
@@ -1149,7 +1197,7 @@ mod tests {
         );
         // A failing model adds only the player's line.
         let third = holder_question("And then?");
-        third.publish_typed_line(&log);
+        third.publish_typed_line(&log, &third.typed_words);
         assert_eq!(voice.reply_in_public(third, &log).await, None);
 
         let lines = log.lines();

@@ -31,7 +31,9 @@ use crate::health_cues::Blow;
 use crate::{
     plate_layout::{self, PlateFrame, Rect, Side},
     presentation::{ActorSlot, MAX_NPCS, PlateGeometry, SceneFamily, StageActor},
-    stage_art, stage_depth,
+    stage_art,
+    stage_conductor::IntentKind,
+    stage_depth,
     stage_machines::{ActorState, LineState},
 };
 use std::{cell::Cell, time::Duration};
@@ -135,6 +137,11 @@ fn index(slot: ActorSlot) -> Option<usize> {
 /// The stage position of a standing place: heroes first, then the non-player figures.
 pub(super) fn slot_index(slot: ActorSlot) -> Option<usize> {
     index(slot)
+}
+
+/// The standing place at a stage position (the inverse of [`slot_index`]).
+pub(super) fn slot_of_index(position: usize) -> ActorSlot {
+    slot_at(position)
 }
 
 fn slot_at(position: usize) -> ActorSlot {
@@ -1165,6 +1172,73 @@ impl Figures {
             .iter()
             .any(|other| other.root.has_attribute("data-speaking"));
         flag(&self.root, "data-lit", lit)
+    }
+
+    /// Applies one transition of a hero's speech-intent loader: a small loader bubble (dots for
+    /// typing, a wave for speaking) on that hero's figure, or on the hero's HUD card during a
+    /// fight so it never covers the battlefield. Not game state: the machine alone adds,
+    /// closes and removes it.
+    pub(super) fn set_intent(
+        &self,
+        position: usize,
+        id: u64,
+        state: LineState,
+        kind: IntentKind,
+        hero: &str,
+    ) -> Result<(), JsValue> {
+        let (Some(figure), Some(card)) = (self.figures.get(position), self.hud.get(position))
+        else {
+            return Ok(());
+        };
+        let combat = self.root.get_attribute("data-arrange").as_deref() == Some("combat");
+        let host = if combat { &card.root } else { &figure.bubbles };
+        let selector = format!("[data-line-id=\"{id}\"]");
+        let existing = host.query_selector(&selector)?;
+        let loader = match (existing, state) {
+            (Some(loader), _) => loader,
+            (None, LineState::Composing | LineState::Submitted) => {
+                let loader = node(&self.document, host, "div", "tv-bubble tv-intent", "")?;
+                loader.set_attribute("data-kind", "intent")?;
+                loader.set_attribute("data-line-id", &id.to_string())?;
+                loader.set_attribute("data-managed", "")?;
+                loader.set_attribute("data-hero", hero)?;
+                loader.set_attribute("aria-hidden", "true")?;
+                let dots = node(&self.document, &loader, "span", "tv-intent-dots", "")?;
+                for _ in 0..3 {
+                    node(&self.document, &dots, "i", "", "")?;
+                }
+                let wave = node(&self.document, &loader, "i", "tv-wave", "")?;
+                for _ in 0..3 {
+                    node(&self.document, &wave, "b", "", "")?;
+                }
+                if !combat {
+                    self.place_bubble(figure);
+                }
+                loader
+            }
+            (None, _) => return Ok(()),
+        };
+        let shown = match kind {
+            IntentKind::Typing | IntentKind::Submitted => "typing",
+            IntentKind::Speaking => "speaking",
+        };
+        loader.set_attribute("data-intent", shown)?;
+        loader.set_attribute("data-line-state", state.name())?;
+        flag(
+            &loader,
+            "data-submitted",
+            matches!(kind, IntentKind::Submitted),
+        )?;
+        let live = matches!(state, LineState::Composing | LineState::Submitted);
+        if live {
+            figure.root.set_attribute("data-intent", state.name())?;
+        } else {
+            figure.root.remove_attribute("data-intent")?;
+        }
+        if state == LineState::Done {
+            loader.remove();
+        }
+        Ok(())
     }
 
     /// Applies one transition of a line's machine to its bubble at the figure at `position`:

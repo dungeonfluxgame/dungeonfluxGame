@@ -13,6 +13,7 @@ const { tv, pa } = await playToOpening(s, browser, { base: process.env.DF_BASE, 
 // Unlock, then mute: the state the owner described.
 const control = tv.locator('.tv-voice-control');
 await control.click();
+await settle(800);
 await control.click();
 await settle(300);
 check((await control.getAttribute('data-voice-state')) === 'muted', 'the display is muted');
@@ -24,9 +25,11 @@ await pa.screenshot({ path: `${out}-0-phone.png` });
 const samples = [];
 const stop = Date.now() + 45000;
 let shot = 0;
+let narrationText = '';
 while (Date.now() < stop) {
   const now = await states(tv);
   samples.push({ t: Date.now(), ...now });
+  if (now.narrator === 'speaking' && !narrationText) narrationText = await tv.evaluate(() => document.querySelector('.tv-narration')?.textContent.trim() ?? '');
   if (now.narrator === 'speaking' && shot === 0) { shot = 1; await tv.screenshot({ path: `${out}-1-narrator-reading.png` }); }
   if (now.bubbles.some((b) => b.kind === 'speech' && b.state === 'speaking') && shot === 1) { shot = 2; await tv.screenshot({ path: `${out}-2-courier-reading.png` }); }
   if (now.scene === 'awaiting-choice' && now.line === 'lingering') break;
@@ -43,7 +46,7 @@ check(Boolean(narrator && courier), 'both lines opened');
 if (narrator && courier) {
   const text = samples.find((m) => m.narrator === 'speaking');
   const gap = courier.t - narrator.t;
-  const narration = await tv.evaluate(() => document.querySelector('.tv-narration').textContent.trim());
+  const narration = narrationText;
   const reading = Math.min(7000, Math.max(2500, 1800 + 35 * [...narration].length));
   s.note(`narration ${[...narration].length} characters: reading time ${reading} ms; narrator>courier gap ${gap} ms`);
   check(gap >= reading && gap <= reading + 250 + 700 + 400, `the courier opens one reading time (${reading} ms) plus open and linger after the narrator (${gap} ms)`);

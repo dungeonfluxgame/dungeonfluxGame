@@ -55,7 +55,7 @@ while (Date.now() < stop) {
   if (now.stage === 'rolling') { sawRolling = true; if (shot === 3) { shot = 4; await tv.screenshot({ path: `${out}-4-first-attack.png` }); } }
   if (sawRolling && now.stage === null && now.battle === 'turn-end') break;
   if (!sawRolling && now.battle === 'turn-start' && !attacked) {
-    attacked = (await click(s, pa, 'Greatsword strike', { optional: true, wait: 0 })) || (await click(s, pb, 'Greatsword strike', { optional: true, wait: 0 }));
+    attacked = (await click(s, pa, 'Attack', { optional: true, wait: 0 })) || (await click(s, pb, 'Attack', { optional: true, wait: 0 }));
   }
   await settle(80);
 }
@@ -65,12 +65,13 @@ fs.writeFileSync(`${out}-samples.json`, JSON.stringify(samples.map(({ t, battle,
 const at = (predicate) => log.find(predicate)?.t;
 const battle = (value) => at((e) => e.type === 'attr' && e.name === 'data-battle-state' && e.value === value);
 const entering = battle('entering');
-const turnStart = battle('turn-start');
+// When the enemy won initiative its held turn follows the entrance at once, so TurnStart may last no time at all.
+const turnStart = battle('turn-start') ?? battle('acting');
 const acting = battle('acting');
 const rolling = at((e) => e.type === 'attr' && e.name === 'data-stage' && e.value === 'rolling');
 s.note(`battle states: ${log.filter((e) => e.type === 'attr' && e.name === 'data-battle-state').map((e) => e.value).filter((v, i, a) => i === 0 || v !== a[i - 1]).join(' > ')}`);
-check(Boolean(entering && turnStart && turnStart > entering), 'the battle machine ran Entering then TurnStart');
-check(Boolean(acting && acting >= turnStart), 'Acting only after TurnStart');
+check(Boolean(entering && turnStart && turnStart >= entering), 'the battle machine ran Entering and then began the first turn');
+check(Boolean(acting && acting >= turnStart), 'Acting only after the entrance');
 check(Boolean(rolling && turnStart && rolling >= turnStart), `the first attack (rolling) came after the entrance completed (${rolling - turnStart} ms after TurnStart)`);
 // Line: faded within the bound, not cut abruptly and not held behind the fight.
 const lineClosing = at((e) => (e.type === 'bubble~' || (e.type === 'attr' && e.name === 'data-line-state' && e.cls.includes('tv-dm'))) && e.value === 'closing' || e.state === 'closing');

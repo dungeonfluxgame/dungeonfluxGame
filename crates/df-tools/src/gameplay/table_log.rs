@@ -8,6 +8,7 @@
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
 };
 
 use df_protocol::common as rpc;
@@ -17,6 +18,18 @@ use tokio::sync::watch;
 pub(super) const RING_LINES: usize = 24;
 /// Longest text of one line, in characters.
 pub(super) const LINE_CHARACTERS: usize = 420;
+/// A speech-intent mark (typing or holding to talk) that is not refreshed this long is gone, so a
+/// closed tab never leaves a stuck bubble on the table. The phone refreshes about every 2 s.
+pub(super) const PRESENCE_EXPIRY: Duration = Duration::from_secs(5);
+/// Hero seats a presence mark can name.
+const PRESENCE_HEROES: u32 = 2;
+
+/// One hero's live speech intent. Ephemeral: never stored in the game, never a revision.
+struct Composing {
+    hero_index: u32,
+    kind: rpc::ComposeKind,
+    deadline: Instant,
+}
 
 struct Ring {
     next_sequence: u64,
@@ -24,13 +37,22 @@ struct Ring {
     /// Counts every change a view shows (a line appended, a reply starting or ending), so a
     /// view whose game revision did not move can still be told from the one before it.
     version: u64,
+    /// Counts speech-intent changes, which only the shared display shows: a phone's view (and
+    /// so its mounted controls) is never rebuilt because another player is typing.
+    presence_version: u64,
     /// The speakers whose reply to a hero's typed line is being written right now.
     replying: Vec<String>,
+    /// Heroes typing or holding to talk right now, until stopped or expired.
+    composing: Vec<Composing>,
+    /// A task is waiting to expire the earliest mark.
+    reaper_armed: bool,
 }
 
 pub(super) struct TableLog {
     /// A disabled log (qualification mode) records nothing and attaches nothing.
     enabled: bool,
+    /// How long a speech-intent mark lives without a refresh.
+    expiry: Duration,
     ring: Mutex<Ring>,
     /// Carries the latest sequence so a watcher rebuilds its view when a line is appended.
     wake: watch::Sender<u64>,
@@ -48,11 +70,15 @@ impl TableLog {
     fn with(enabled: bool) -> Self {
         Self {
             enabled,
+            expiry: PRESENCE_EXPIRY,
             ring: Mutex::new(Ring {
                 next_sequence: 1,
                 lines: VecDeque::new(),
                 version: 0,
+                presence_version: 0,
                 replying: Vec::new(),
+                composing: Vec::new(),
+                reaper_armed: false,
             }),
             wake: watch::channel(0).0,
         }
@@ -110,6 +136,10 @@ impl TableLog {
             while ring.lines.len() > RING_LINES {
                 ring.lines.pop_front();
             }
+            // The hero's line replaces the hero's loader in the same view.
+            if role == rpc::TableRole::Hero && kind == rpc::TableKind::Speech {
+                ring.composing.retain(|mark| mark.hero_index != hero_index);
+            }
             ring.version += 1;
             ring.version
         };
@@ -149,6 +179,107 @@ impl TableLog {
         self.wake.send_replace(version);
     }
 
+    /// Records what hero `hero_index` is doing in the dialogue box. Every refresh extends the
+    /// mark's life and republishes the view, so a display that stops hearing it expires it too.
+    /// Presentation only: nothing is committed and no game revision moves.
+    pub(super) fn set_composing(self: &Arc<Self>, hero_index: u32, kind: rpc::ComposeKind) {
+        let now = Instant::now();
+        if let Some(deadline) = self.set_composing_at(hero_index, kind, now) {
+            self.arm_reaper(deadline);
+        }
+    }
+
+    /// The deadline of the earliest mark, when one is waiting to expire.
+    fn set_composing_at(
+        &self,
+        hero_index: u32,
+        kind: rpc::ComposeKind,
+        now: Instant,
+    ) -> Option<Instant> {
+        if !self.enabled || hero_index >= PRESENCE_HEROES {
+            return None;
+        }
+        let (changed, version, earliest) = {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            let before = ring
+                .composing
+                .iter()
+                .find(|mark| mark.hero_index == hero_index)
+                .map(|mark| mark.kind);
+            ring.composing.retain(|mark| mark.hero_index != hero_index);
+            let shown = matches!(
+                kind,
+                rpc::ComposeKind::Typing | rpc::ComposeKind::Speaking | rpc::ComposeKind::Submitted
+            );
+            if shown {
+                ring.composing.push(Composing {
+                    hero_index,
+                    kind,
+                    deadline: now + self.expiry,
+                });
+            }
+            // A refresh republishes too: it is the heartbeat the display expires the mark by.
+            let changed = shown || before.is_some();
+            if changed {
+                ring.presence_version += 1;
+            }
+            let earliest = ring.composing.iter().map(|mark| mark.deadline).min();
+            (changed, ring.version + ring.presence_version, earliest)
+        };
+        if changed {
+            self.wake.send_replace(version);
+        }
+        earliest
+    }
+
+    /// Drops the marks whose time is up; republishes if any went. Returns the next deadline.
+    fn expire_at(&self, now: Instant) -> Option<Instant> {
+        let (removed, version, next) = {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            let before = ring.composing.len();
+            ring.composing.retain(|mark| mark.deadline > now);
+            let removed = ring.composing.len() != before;
+            if removed {
+                ring.presence_version += 1;
+            }
+            let next = ring.composing.iter().map(|mark| mark.deadline).min();
+            if next.is_none() {
+                ring.reaper_armed = false;
+            }
+            (removed, ring.version + ring.presence_version, next)
+        };
+        if removed {
+            self.wake.send_replace(version);
+        }
+        next
+    }
+
+    /// One task at a time waits for the earliest mark to expire, then for the next, so a closed
+    /// tab clears from every screen without any other event.
+    fn arm_reaper(self: &Arc<Self>, deadline: Instant) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            if ring.reaper_armed {
+                return;
+            }
+            ring.reaper_armed = true;
+        }
+        let log = self.clone();
+        runtime.spawn(async move {
+            let mut deadline = deadline;
+            loop {
+                tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+                match log.expire_at(Instant::now()) {
+                    Some(next) => deadline = next,
+                    None => break,
+                }
+            }
+        });
+    }
+
     #[cfg(test)]
     pub(super) fn lines(&self) -> Vec<rpc::TableLine> {
         self.ring
@@ -165,6 +296,7 @@ impl TableLog {
         if !self.enabled {
             return;
         }
+        let display = matches!(view.audience, Some(rpc::view_message::Audience::Display(_)));
         let journey = match view.audience.as_mut() {
             Some(rpc::view_message::Audience::Player(player)) => player.journey.as_mut(),
             Some(rpc::view_message::Audience::Display(display)) => display.journey.as_mut(),
@@ -175,6 +307,20 @@ impl TableLog {
             journey.table_log = ring.lines.iter().cloned().collect();
             journey.presentation_sequence = ring.version;
             journey.reply_speaker = ring.replying.first().cloned().unwrap_or_default();
+            if !display {
+                return;
+            }
+            journey.presentation_sequence += ring.presence_version;
+            let now = Instant::now();
+            journey.composing = ring
+                .composing
+                .iter()
+                .filter(|mark| mark.deadline > now)
+                .map(|mark| rpc::ComposingHero {
+                    hero_index: mark.hero_index,
+                    kind: mark.kind as i32,
+                })
+                .collect();
         }
     }
 }
@@ -310,6 +456,156 @@ mod tests {
             rpc::TableKind::Speech,
             text,
         );
+    }
+
+    fn composing(log: &TableLog) -> Vec<(u32, i32)> {
+        attached(log)
+            .composing
+            .iter()
+            .map(|mark| (mark.hero_index, mark.kind))
+            .collect()
+    }
+
+    #[test]
+    fn a_hero_typing_shows_for_everyone_and_stopping_clears_it() {
+        let log = TableLog::new();
+        let wake = log.subscribe();
+        let before = attached(&log).presentation_sequence;
+        let now = Instant::now();
+        log.set_composing_at(0, rpc::ComposeKind::Typing, now);
+        assert_eq!(composing(&log), [(0, rpc::ComposeKind::Typing as i32)]);
+        assert!(attached(&log).presentation_sequence > before);
+        assert!(wake.has_changed().unwrap());
+        log.set_composing_at(0, rpc::ComposeKind::Stopped, now);
+        assert!(composing(&log).is_empty());
+    }
+
+    #[test]
+    fn two_heroes_composing_at_once_each_have_their_own_mark() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        log.set_composing_at(0, rpc::ComposeKind::Typing, now);
+        log.set_composing_at(1, rpc::ComposeKind::Speaking, now);
+        let marks = composing(&log);
+        assert!(marks.contains(&(0, rpc::ComposeKind::Typing as i32)));
+        assert!(marks.contains(&(1, rpc::ComposeKind::Speaking as i32)));
+        log.set_composing_at(0, rpc::ComposeKind::Stopped, now);
+        assert_eq!(composing(&log), [(1, rpc::ComposeKind::Speaking as i32)]);
+    }
+
+    #[test]
+    fn a_refresh_republishes_as_the_displays_heartbeat_and_a_stop_of_nothing_does_not() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        log.set_composing_at(0, rpc::ComposeKind::Typing, now);
+        let first = attached(&log).presentation_sequence;
+        let mut wake = log.subscribe();
+        wake.borrow_and_update();
+        log.set_composing_at(0, rpc::ComposeKind::Typing, now + Duration::from_secs(2));
+        assert!(attached(&log).presentation_sequence > first);
+        assert!(wake.has_changed().unwrap());
+        log.set_composing_at(1, rpc::ComposeKind::Stopped, now);
+        let settled = attached(&log).presentation_sequence;
+        log.set_composing_at(1, rpc::ComposeKind::Stopped, now);
+        assert_eq!(attached(&log).presentation_sequence, settled);
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_mark_alive_and_a_missing_one_expires_it() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        let deadline = log
+            .set_composing_at(0, rpc::ComposeKind::Typing, now)
+            .expect("a deadline");
+        assert_eq!(deadline, now + PRESENCE_EXPIRY);
+        // Refreshed at 2 s: alive past the first deadline.
+        let refreshed = log
+            .set_composing_at(0, rpc::ComposeKind::Typing, now + Duration::from_secs(2))
+            .expect("a deadline");
+        assert_eq!(log.expire_at(deadline), Some(refreshed));
+        assert_eq!(composing(&log).len(), 1);
+        // Nothing more arrives: the next expiry clears it and republishes.
+        let before = attached(&log).presentation_sequence;
+        assert_eq!(log.expire_at(refreshed), None);
+        assert!(composing(&log).is_empty());
+        assert!(attached(&log).presentation_sequence > before);
+    }
+
+    #[test]
+    fn unknown_seats_and_a_disabled_log_record_no_presence() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        assert_eq!(log.set_composing_at(2, rpc::ComposeKind::Typing, now), None);
+        assert!(composing(&log).is_empty());
+        let disabled = TableLog::disabled();
+        disabled.set_composing_at(0, rpc::ComposeKind::Typing, now);
+        assert!(composing(&disabled).is_empty());
+        assert_eq!(attached(&disabled).presentation_sequence, 0);
+    }
+
+    #[test]
+    fn a_hero_line_clears_that_heros_mark_in_the_same_view() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        log.set_composing_at(0, rpc::ComposeKind::Submitted, now);
+        log.set_composing_at(1, rpc::ComposeKind::Typing, now);
+        speech(&log, "Who sent you?");
+        let view = attached(&log);
+        assert_eq!(view.table_log.len(), 1);
+        assert_eq!(composing(&log), [(1, rpc::ComposeKind::Typing as i32)]);
+    }
+
+    #[test]
+    fn a_phones_view_never_carries_or_moves_with_another_players_presence() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        let player = |log: &TableLog| {
+            let mut view = rpc::ViewMessage {
+                audience: Some(rpc::view_message::Audience::Player(
+                    rpc::PlayerGameplayView {
+                        journey: Some(rpc::JourneyView::default()),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            };
+            log.attach(&mut view);
+            match view.audience {
+                Some(rpc::view_message::Audience::Player(player)) => player.journey.unwrap(),
+                _ => unreachable!("the test builds a player view"),
+            }
+        };
+        let before = player(&log).presentation_sequence;
+        log.set_composing_at(0, rpc::ComposeKind::Typing, now);
+        log.set_composing_at(0, rpc::ComposeKind::Typing, now + Duration::from_secs(2));
+        let after = player(&log);
+        assert_eq!(after.presentation_sequence, before);
+        assert!(after.composing.is_empty());
+    }
+
+    #[test]
+    fn presence_never_adds_a_table_line_or_a_game_revision() {
+        let log = TableLog::new();
+        log.set_composing_at(0, rpc::ComposeKind::Typing, Instant::now());
+        assert!(log.lines().is_empty());
+        let journey = attached(&log);
+        assert!(journey.table_log.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_reaper_clears_a_mark_nobody_refreshes_and_wakes_the_watchers() {
+        let mut log = TableLog::with(true);
+        log.expiry = Duration::from_millis(60);
+        let log = Arc::new(log);
+        let mut wake = log.subscribe();
+        log.set_composing(0, rpc::ComposeKind::Typing);
+        wake.changed().await.unwrap();
+        assert_eq!(composing(&log).len(), 1);
+        tokio::time::timeout(Duration::from_secs(2), wake.changed())
+            .await
+            .expect("woken by the expiry")
+            .unwrap();
+        assert!(composing(&log).is_empty());
     }
 
     #[test]

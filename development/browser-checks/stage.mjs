@@ -32,7 +32,7 @@ const RECORDER = `
 (() => {
   const rec = (window.__rec = []);
   const push = (type, data) => rec.push({ t: Math.round(performance.timeOrigin + performance.now()), type, ...data });
-  const names = ['data-scene-state', 'data-line-state', 'data-line-id', 'data-stage-pending', 'data-stage', 'data-speaker', 'data-actor-state', 'data-battle-state', 'data-intent-state', 'data-thinking', 'data-present'];
+  const names = ['data-scene-state', 'data-line-state', 'data-line-id', 'data-stage-pending', 'data-stage', 'data-speaker', 'data-actor-state', 'data-battle-state', 'data-intent-state', 'data-intent', 'data-clip-state', 'data-thinking', 'data-present'];
   const describe = (target) => ({ cls: String(target.className || '').slice(0, 40), slot: target.getAttribute && target.getAttribute('data-slot') || undefined });
   const bubble = (b) => ({ kind: b.getAttribute('data-kind'), id: b.getAttribute('data-line-id'), state: b.getAttribute('data-line-state'),
     text: (b.querySelector('.tv-bubble-text') || b).textContent.trim().replace(/\\s+/g, ' ').slice(0, 160),
@@ -106,6 +106,7 @@ export async function states(page) {
       arrange: document.querySelector('.tv-figures')?.getAttribute('data-arrange') ?? null,
       actors: [...document.querySelectorAll('.tv-fig')].map((f) => `${f.getAttribute('data-slot')}:${f.getAttribute('data-actor-state')}`),
       bubbles: [...document.querySelectorAll('.tv-bubble')].map((b) => ({ kind: b.getAttribute('data-kind'), state: b.getAttribute('data-line-state'), text: (b.querySelector('.tv-bubble-text') || b).textContent.trim().slice(0, 80) })),
+      intents: [...document.querySelectorAll('.tv-intent')].map((i) => `${i.closest('[data-slot]')?.getAttribute('data-slot')}:${i.getAttribute('data-intent')}:${i.getAttribute('data-line-state')}`),
       chips: [...document.querySelectorAll('.tv-choice-label')].map((c) => c.textContent),
       chipsVisible: (() => { const c = document.querySelector('.tv-choices'); if (!c) return null; const cs = getComputedStyle(c); return cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0.5; })(),
     };
@@ -149,19 +150,20 @@ export async function startServer(extraEnv = {}) {
   return { db, runPack };
 }
 
-export async function launchGpu(gpu = false) {
-  const args = ['--autoplay-policy=no-user-gesture-required'];
+export async function launchGpu(gpu = false, extra = []) {
+  const args = ['--autoplay-policy=no-user-gesture-required', ...extra];
   if (gpu) args.push('--enable-unsafe-webgpu', '--use-angle=metal', '--enable-features=Vulkan,UseSkiaRenderer');
   return chromium.launch({ headless: true, executablePath: exe, args });
 }
 
 // Plays the room: TV, two phones, two heroes, up to the opening scene. Returns the pages.
-export async function playToOpening(s, browser, { base, sound = true, voice, tvViewport = { width: 1920, height: 1080 } } = {}) {
+export async function playToOpening(s, browser, { base, sound = true, voice, phoneSetup, tvViewport = { width: 1920, height: 1080 } } = {}) {
   const tv = await (await browser.newContext({ viewport: tvViewport })).newPage();
   const phone = () => browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
   const pa = await (await phone()).newPage();
   const pb = await (await phone()).newPage();
   await record(tv);
+  if (phoneSetup) for (const page of [pa, pb]) await phoneSetup(page);
   if (voice) await fakeVoice(tv, voice);
   for (const [n, p] of [['tv', tv], ['a', pa], ['b', pb]]) watch(s, p, n);
   await tv.goto(`${base}/gameplay/display`);

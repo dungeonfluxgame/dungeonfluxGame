@@ -583,6 +583,20 @@ field dungeonflux.public.v1.PlateLayout 2 head_x_permille type=13 label=1 presen
 field dungeonflux.public.v1.PlateLayout 3 head_y_permille type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PlateLayout 4 head_width_permille type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PlateLayout 5 head_height_permille type=13 label=1 presence=false target=- oneof=-
+enum dungeonflux.public.v1.ComposeKind
+enum-value dungeonflux.public.v1.ComposeKind 0 COMPOSE_KIND_UNSPECIFIED
+enum-value dungeonflux.public.v1.ComposeKind 1 COMPOSE_KIND_TYPING
+enum-value dungeonflux.public.v1.ComposeKind 2 COMPOSE_KIND_SPEAKING
+enum-value dungeonflux.public.v1.ComposeKind 3 COMPOSE_KIND_SUBMITTED
+enum-value dungeonflux.public.v1.ComposeKind 4 COMPOSE_KIND_STOPPED
+field dungeonflux.public.v1.ComposeRequest 1 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.ComposeKind oneof=-
+field dungeonflux.public.v1.ComposingHero 1 hero_index type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ComposingHero 2 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.ComposeKind oneof=-
+field dungeonflux.public.v1.JourneyView 17 composing type=11 label=3 presence=false target=.dungeonflux.public.v1.ComposingHero oneof=-
+message dungeonflux.public.v1.ComposeRequest
+message dungeonflux.public.v1.ComposeResponse
+message dungeonflux.public.v1.ComposingHero
+method dungeonflux.public.v1.DialogueService Compose .dungeonflux.public.v1.ComposeRequest .dungeonflux.public.v1.ComposeResponse client-stream=false server-stream=false
 field dungeonflux.public.v1.JourneyView 45 join_url type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 50 adventure_ended type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 51 adventure_title type=9 label=1 presence=false target=- oneof=-

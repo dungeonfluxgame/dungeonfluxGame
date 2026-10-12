@@ -96,6 +96,8 @@ pub(crate) struct ViewDiff<D> {
     /// The story begins with this view: the scene change shows the title card (the payload)
     /// after the wordmark and before the scene enters.
     pub(crate) title: Option<D>,
+    /// The server's active combatant changed in this view.
+    pub(crate) turn_changed: bool,
     pub(crate) roll: Option<D>,
     pub(crate) impact: Option<D>,
     /// The target of the roll dropped to zero hit points.
@@ -105,6 +107,9 @@ pub(crate) struct ViewDiff<D> {
     pub(crate) banner: Option<D>,
     /// The closing card that follows the banner of a fight that ended in this view.
     pub(crate) closing: Option<D>,
+    /// Only the blow of an earlier turn that the same view resolved: dice, impact and fall, with
+    /// no redraw of the view, which belongs to the newest turn.
+    pub(crate) blow_only: bool,
 }
 
 impl<D> ViewDiff<D> {
@@ -126,12 +131,14 @@ impl<D> Default for ViewDiff<D> {
             scene_changed: false,
             enters_combat: false,
             title: None,
+            turn_changed: false,
             roll: None,
             impact: None,
             defeat: None,
             heal: None,
             banner: None,
             closing: None,
+            blow_only: false,
         }
     }
 }
@@ -203,6 +210,9 @@ impl<D: Clone> StageDirector<D> {
 
     /// Queues the cues of a newly accepted view and returns what starts now.
     pub(crate) fn on_view(&mut self, now_ms: u64, diff: ViewDiff<D>) -> Vec<Command<D>> {
+        if diff.blow_only {
+            return self.on_blow(now_ms, diff);
+        }
         let finishing = diff.banner.is_some();
         let make = |kind, detail| Self::cue(kind, detail, now_ms, finishing);
         let mut cues = Vec::new();
@@ -220,19 +230,33 @@ impl<D: Clone> StageDirector<D> {
                 diff.heal
                     .map(|d| Self::cue(CueKind::Heal, Some(d), now_ms, false)),
             );
+            // A blow is an outcome: when the display is behind it is shortened, never dropped.
             cues.extend(
                 diff.roll
-                    .map(|d| Self::cue(CueKind::Roll, Some(d), now_ms, false)),
+                    .map(|d| Self::cue(CueKind::Roll, Some(d), now_ms, true)),
             );
             cues.extend(
                 diff.impact
-                    .map(|d| Self::cue(CueKind::Impact, Some(d), now_ms, false)),
+                    .map(|d| Self::cue(CueKind::Impact, Some(d), now_ms, true)),
             );
             cues.extend(
                 diff.defeat
-                    .map(|d| Self::cue(CueKind::Defeat, Some(d), now_ms, false)),
+                    .map(|d| Self::cue(CueKind::Defeat, Some(d), now_ms, true)),
             );
         }
+        self.queue.extend(cues);
+        self.collapse_if_behind(now_ms);
+        self.advance(now_ms)
+    }
+
+    /// Queues only the blow of a finishing view (dice, impact, fall): no redraw and no scene
+    /// change. The scene change follows when the conductor says the blow has been seen out.
+    pub(crate) fn on_blow(&mut self, now_ms: u64, diff: ViewDiff<D>) -> Vec<Command<D>> {
+        let make = |kind, detail| Self::cue(kind, Some(detail), now_ms, true);
+        let mut cues = Vec::new();
+        cues.extend(diff.roll.map(|d| make(CueKind::Roll, d)));
+        cues.extend(diff.impact.map(|d| make(CueKind::Impact, d)));
+        cues.extend(diff.defeat.map(|d| make(CueKind::Defeat, d)));
         self.queue.extend(cues);
         self.collapse_if_behind(now_ms);
         self.advance(now_ms)

@@ -22,12 +22,13 @@
 use crate::{
     stage_director::{Command as DirectorCommand, StageDirector, StageState, ViewDiff},
     stage_machines::{
-        ACTOR_ENTER_MS, ACTOR_EXIT_MS, ActorEvent, ActorState, BATTLE_ENTER_CAP_MS, BattleEvent,
-        BattleState, CATCH_UP_TEXT_MS, CLIP_END_GRACE_MS, CLIP_READY_WAIT_MS, CLIP_START_WAIT_MS,
-        ClipEvent, ClipState, FIGHT_LINE_FADE_MS, FINAL_LINGER_CAP_MS, HELD_OUTCOMES_CAP,
-        LINE_CLOSE_MS, LINE_LINGER_MS, LINE_OPEN_MS, LineEvent, LineState, SCENE_ENTER_CAP_MS,
-        SCENE_EXIT_CAP_MS, SCENE_WAIT_CAP_MS, SceneEvent, SceneState, actor_next, battle_next,
-        clip_next, line_next, scene_next,
+        ACTOR_ENTER_MS, ACTOR_EXIT_MS, ActorEvent, ActorState, BATTLE_ENTER_CAP_MS,
+        BATTLE_FINISH_CAP_MS, BattleEvent, BattleState, CATCH_UP_TEXT_MS, CLIP_END_GRACE_MS,
+        CLIP_READY_WAIT_MS, CLIP_START_WAIT_MS, ClipEvent, ClipState, FIGHT_LINE_FADE_MS,
+        FINAL_LINGER_CAP_MS, HELD_OUTCOMES_CAP, INTENT_EXPIRY_MS, LINE_CLOSE_MS, LINE_LINGER_MS,
+        LINE_OPEN_MS, LineEvent, LineState, SCENE_ENTER_CAP_MS, SCENE_EXIT_CAP_MS,
+        SCENE_WAIT_CAP_MS, SceneEvent, SceneState, actor_next, battle_next, clip_next, line_next,
+        scene_next,
     },
 };
 
@@ -47,6 +48,23 @@ pub(crate) struct ScriptLine<D> {
     /// Already on screen before the page was (reload, reconnect): it stands Lingering,
     /// silently, with no entrance.
     pub(crate) settled: bool,
+}
+
+/// What a hero is doing in the dialogue box.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IntentKind {
+    Typing,
+    Speaking,
+    Submitted,
+}
+
+/// One hero's live speech intent, from the view. The payload is opaque to the conductor.
+#[derive(Clone, Debug)]
+pub(crate) struct IntentMark<D> {
+    /// The hero's actor slot.
+    pub(crate) slot: usize,
+    pub(crate) kind: IntentKind,
+    pub(crate) detail: D,
 }
 
 /// What one accepted view contributes.
@@ -97,6 +115,12 @@ pub(crate) enum Command<D> {
         state: ActorState,
     },
     Battle(BattleState),
+    /// The state of a line's voice clip changed; a clip that failed or was skipped is reported
+    /// as such instead of looking spoken.
+    ClipState {
+        id: LineId,
+        state: ClipState,
+    },
 }
 
 /// How far the 3D battlefield is with a fight's entrance.
@@ -140,6 +164,12 @@ struct LineRun<D> {
     close_ms: u32,
     /// The line began with its clip playing.
     voiced: bool,
+    /// The clip state last reported to the display.
+    reported_clip: ClipState,
+    /// A speech-intent loader, not a line of text: it never takes a turn.
+    intent: Option<IntentKind>,
+    /// When the table last affirmed the loader (a view carrying it).
+    affirmed_ms: u64,
 }
 
 struct Pending<D> {
@@ -180,6 +210,13 @@ pub(crate) struct Conductor<D> {
     held: Vec<ViewDiff<D>>,
     /// The fight's last blow is on its way: the banner is queued behind it.
     finishing: bool,
+    /// The scene change that ends a fight, held until its finishing blow has been shown out:
+    /// the display never takes the victory scene while the battlefield is still playing.
+    held_exit: Option<ViewDiff<D>>,
+    /// The turn changed while a beat was playing: the next combatant's turn opens when it ends.
+    turn_pending: bool,
+    /// When the blow's cues finished and the exit began waiting for the battlefield.
+    exit_waiting_since_ms: Option<u64>,
 }
 
 impl<D: Clone> Default for Conductor<D> {
@@ -206,7 +243,15 @@ impl<D: Clone> Conductor<D> {
             battlefield: Battlefield::Pending,
             held: Vec::new(),
             finishing: false,
+            held_exit: None,
+            turn_pending: false,
+            exit_waiting_since_ms: None,
         }
+    }
+
+    /// Whether the adapter should read the battlefield: a fight's entrance or exit waits on it.
+    pub(crate) fn wants_battlefield(&self) -> bool {
+        self.battle == BattleState::Entering || self.held_exit.is_some()
     }
 
     pub(crate) fn battle_state(&self) -> BattleState {
@@ -247,7 +292,8 @@ impl<D: Clone> Conductor<D> {
             LineState::Opening | LineState::Speaking | LineState::Lingering => 0,
             LineState::Closing => 1,
             LineState::Queued => 2,
-            LineState::Done => 3,
+            LineState::Composing | LineState::Submitted | LineState::Cancelled => 3,
+            LineState::Done => 4,
         };
         self.lines
             .iter()
@@ -264,6 +310,31 @@ impl<D: Clone> Conductor<D> {
                 LineState::Queued | LineState::Opening | LineState::Speaking
             )
         })
+    }
+
+    /// The slot of the figure whose line is waiting for its voice clip (queued, its clip on the
+    /// way): the display keeps the thinking mark there until the clip starts.
+    pub(crate) fn awaiting_clip_slot(&self) -> Option<usize> {
+        self.lines
+            .iter()
+            .find(|run| {
+                run.state == LineState::Queued
+                    && matches!(run.clip, ClipState::Requested | ClipState::Ready)
+            })
+            .and_then(|run| run.line.slot)
+    }
+
+    /// Reports every clip whose state changed since the display last heard of it.
+    fn report_clips(&mut self, out: &mut Vec<Command<D>>) {
+        for run in &mut self.lines {
+            if run.clip != run.reported_clip && run.line.voiceable {
+                run.reported_clip = run.clip;
+                out.push(Command::ClipState {
+                    id: run.id,
+                    state: run.clip,
+                });
+            }
+        }
     }
 
     /// The slot of the figure the active line belongs to; `Some(None)` is the narrator's box.
@@ -298,6 +369,7 @@ impl<D: Clone> Conductor<D> {
             || matches!(self.scene, SceneState::Entering | SceneState::Exiting)
             || self.pending.is_some()
             || self.battle == BattleState::Entering
+            || self.held_exit.is_some()
             || lines
             || self
                 .actors
@@ -333,6 +405,7 @@ impl<D: Clone> Conductor<D> {
         self.pending = None;
         self.in_entrance = false;
         self.held.clear();
+        self.held_exit = None;
         self.finishing = false;
         self.move_battle(now_ms, BattleEvent::Abandon, &mut out);
         for command in self.director.restart() {
@@ -345,6 +418,12 @@ impl<D: Clone> Conductor<D> {
         out.push(Command::Scene(self.scene));
         self.restore_cast(&plan.cast, now_ms, &mut out);
         self.install_script(plan.script, now_ms, &mut out);
+        if plan.diff.enters_combat {
+            // The display came up (first view, reload, reconnect, a tab that was hidden) with a
+            // fight already under way: the battle machine still enters, so the flat combat screen
+            // stays hidden until the battlefield is live (or will not appear).
+            self.move_battle(now_ms, BattleEvent::Begin, &mut out);
+        }
         self.step(now_ms, &mut out);
         out
     }
@@ -356,25 +435,33 @@ impl<D: Clone> Conductor<D> {
         }
         let mut out = Vec::new();
         let outcome = plan.diff.is_outcome();
+        let mut plan = plan;
+        if outcome && plan.diff.enters_combat {
+            // The view that starts a fight may already carry the enemy's opening turn (it won
+            // initiative). That turn is not part of the entrance: it is held and staged as
+            // ordinary beats once the battlefield has revealed its banner, initiative roll and
+            // roll-call, so nothing of the fight happens behind the cover.
+            let opening = ViewDiff {
+                roll: plan.diff.roll.take(),
+                impact: plan.diff.impact.take(),
+                defeat: plan.diff.defeat.take(),
+                blow_only: true,
+                ..ViewDiff::default()
+            };
+            if opening.roll.is_some() || opening.impact.is_some() || opening.defeat.is_some() {
+                self.held.push(opening);
+            }
+        }
         if outcome {
             self.fade_lines_for_outcome(now_ms, &mut out);
             self.finishing |= plan.diff.banner.is_some();
             // The battlefield's entrance comes first: dice that arrive during it wait.
-            let holding = !plan.diff.scene_changed
+            let holding = !plan.diff.enters_combat
                 && (self.battle == BattleState::Entering
                     || self
                         .pending
                         .as_ref()
                         .is_some_and(|pending| pending.diff.enters_combat));
-            if holding {
-                self.install_more(plan.script, now_ms, &mut out);
-                if self.held.len() >= HELD_OUTCOMES_CAP {
-                    self.held.remove(0);
-                }
-                self.held.push(plan.diff);
-                self.step(now_ms, &mut out);
-                return out;
-            }
             if plan.diff.scene_changed {
                 self.pending = Some(Pending {
                     diff: plan.diff.clone(),
@@ -387,8 +474,15 @@ impl<D: Clone> Conductor<D> {
             } else {
                 self.install_more(plan.script, now_ms, &mut out);
             }
-            let commands = self.director.on_view(now_ms, plan.diff);
-            self.absorb(now_ms, commands, &mut out);
+            if holding {
+                if self.held.len() >= HELD_OUTCOMES_CAP {
+                    self.held.remove(0);
+                }
+                self.held.push(plan.diff);
+                self.step(now_ms, &mut out);
+                return out;
+            }
+            self.submit_outcome(now_ms, plan.diff, &mut out);
         } else if plan.diff.scene_changed {
             self.set_pending(now_ms, plan);
         } else if let Some(pending) = self.pending.as_mut() {
@@ -398,11 +492,26 @@ impl<D: Clone> Conductor<D> {
             pending.cast = plan.cast;
         } else {
             self.install_more(plan.script, now_ms, &mut out);
+            let turn_changed = plan.diff.turn_changed;
             let commands = self.director.on_view(now_ms, plan.diff);
             self.absorb(now_ms, commands, &mut out);
+            self.follow_turn(turn_changed, now_ms, &mut out);
         }
         self.step(now_ms, &mut out);
         out
+    }
+
+    /// The server's active combatant changed and the previous turn's beats are over: the battle
+    /// is waiting for the next combatant, not still in the one before.
+    fn follow_turn(&mut self, turn_changed: bool, now_ms: u64, out: &mut Vec<Command<D>>) {
+        if !turn_changed {
+            return;
+        }
+        if self.director.state() == StageState::Idle {
+            self.move_battle(now_ms, BattleEvent::TurnOpen, out);
+        } else {
+            self.turn_pending = true;
+        }
     }
 
     pub(crate) fn on_tick(&mut self, now_ms: u64) -> Vec<Command<D>> {
@@ -549,6 +658,54 @@ impl<D: Clone> Conductor<D> {
         }
         self.move_battle(now_ms, BattleEvent::EntranceDone, out);
         for diff in std::mem::take(&mut self.held) {
+            self.submit_outcome(now_ms, diff, out);
+        }
+    }
+
+    /// Hands an outcome to the cue sequencer. The view that ends a fight is queued behind its own
+    /// finishing blow: the dice, the impact and the fall play first, and the scene change (the
+    /// victory or defeat scene, its banner and closing card) is held in `held_exit` until the
+    /// battlefield has shown its finishing shot out (see [`Self::release_exit`]).
+    fn submit_outcome(&mut self, now_ms: u64, mut diff: ViewDiff<D>, out: &mut Vec<Command<D>>) {
+        if diff.banner.is_some() && diff.scene_changed {
+            let blow = ViewDiff {
+                roll: diff.roll.take(),
+                impact: diff.impact.take(),
+                defeat: diff.defeat.take(),
+                ..ViewDiff::default()
+            };
+            self.held_exit = Some(diff);
+            self.exit_waiting_since_ms = None;
+            let commands = self.director.on_blow(now_ms, blow);
+            self.absorb(now_ms, commands, out);
+        } else {
+            let turn_changed = diff.turn_changed;
+            let commands = self.director.on_view(now_ms, diff);
+            self.absorb(now_ms, commands, out);
+            self.follow_turn(turn_changed, now_ms, out);
+        }
+    }
+
+    /// Lets the held scene change go once the blow's cues are done and the battlefield is done
+    /// with its finishing shot (or will not show one, or [`BATTLE_FINISH_CAP_MS`] passed).
+    fn release_exit(&mut self, now_ms: u64, out: &mut Vec<Command<D>>) {
+        if self.held_exit.is_none() {
+            return;
+        }
+        if self.director.state() != StageState::Idle {
+            self.exit_waiting_since_ms = None;
+            return;
+        }
+        let since = *self.exit_waiting_since_ms.get_or_insert(now_ms);
+        let waiting = self.battlefield_expected
+            && self.battle != BattleState::Absent
+            && self.battlefield == Battlefield::Pending
+            && now_ms.saturating_sub(since) <= BATTLE_FINISH_CAP_MS;
+        if waiting {
+            return;
+        }
+        if let Some(diff) = self.held_exit.take() {
+            self.exit_waiting_since_ms = None;
             let commands = self.director.on_view(now_ms, diff);
             self.absorb(now_ms, commands, out);
         }
@@ -556,9 +713,11 @@ impl<D: Clone> Conductor<D> {
 
     /// Follows the cue sequencer's dice and blows through the battle machine.
     fn follow_battle(&mut self, state: StageState, now_ms: u64, out: &mut Vec<Command<D>>) {
-        if self.battle == BattleState::Resolving
-            && !matches!(state, StageState::Impact | StageState::Defeat)
-        {
+        let closing_blow = self.battle == BattleState::Resolving
+            && !matches!(state, StageState::Impact | StageState::Defeat);
+        // A roll whose impact was never queued still ends with the director at rest.
+        let unresolved_roll = self.battle == BattleState::Acting && state == StageState::Idle;
+        if closing_blow || unresolved_roll {
             self.move_battle(now_ms, BattleEvent::TurnClose, out);
         }
         match state {
@@ -596,6 +755,10 @@ impl<D: Clone> Conductor<D> {
                 DirectorCommand::Render => out.push(Command::Render),
                 DirectorCommand::Rest => {
                     self.follow_battle(StageState::Idle, now_ms, out);
+                    if self.turn_pending {
+                        self.turn_pending = false;
+                        self.move_battle(now_ms, BattleEvent::TurnOpen, out);
+                    }
                     if self.in_entrance {
                         self.entrance_done(now_ms, out);
                     }
@@ -648,6 +811,155 @@ impl<D: Clone> Conductor<D> {
             catch_up: false,
             close_ms: LINE_CLOSE_MS,
             voiced: false,
+            reported_clip: ClipState::Silent,
+            intent: None,
+            affirmed_ms: now_ms,
+        }
+    }
+
+    /// Takes the speech intents of the view being shown: a loader bubble on each hero who is
+    /// typing or holding to talk, kept while the table keeps affirming it, replaced by that
+    /// hero's line, closed through the normal exit when the hero stops, and gone after
+    /// [`INTENT_EXPIRY_MS`] without a refresh. A loader is not a line: it never delays speech.
+    pub(crate) fn on_intents(&mut self, now_ms: u64, marks: Vec<IntentMark<D>>) -> Vec<Command<D>> {
+        let mut out = Vec::new();
+        for mark in &marks {
+            let known = self.lines.iter().position(|run| {
+                run.intent.is_some()
+                    && run.line.slot == Some(mark.slot)
+                    && matches!(run.state, LineState::Composing | LineState::Submitted)
+            });
+            match known {
+                Some(index) => {
+                    let Some(run) = self.lines.get_mut(index) else {
+                        continue;
+                    };
+                    run.affirmed_ms = now_ms;
+                    let changed = run.intent != Some(mark.kind)
+                        && !(run.state == LineState::Submitted
+                            && mark.kind != IntentKind::Submitted);
+                    if changed {
+                        run.intent = Some(mark.kind);
+                        run.line.detail = mark.detail.clone();
+                        let snapshot = run.clone();
+                        self.emit_line(&snapshot, &mut out);
+                    }
+                    if mark.kind == IntentKind::Submitted {
+                        self.set_line(index, LineEvent::Submit, now_ms, &mut out);
+                    }
+                }
+                None => {
+                    let line = ScriptLine {
+                        detail: mark.detail.clone(),
+                        voiceable: false,
+                        read_ms: 0,
+                        slot: Some(mark.slot),
+                        settled: false,
+                    };
+                    let mut run = self.make_run(line, now_ms);
+                    run.state = LineState::Composing;
+                    run.intent = Some(mark.kind);
+                    self.emit_line(&run, &mut out);
+                    self.lines.push(run);
+                    if mark.kind == IntentKind::Submitted {
+                        let index = self.lines.len() - 1;
+                        self.set_line(index, LineEvent::Submit, now_ms, &mut out);
+                    }
+                }
+            }
+        }
+        // A loader the table no longer names: the hero stopped, or the line has taken its place.
+        for index in 0..self.lines.len() {
+            let Some(run) = self.lines.get(index) else {
+                continue;
+            };
+            let live = run.intent.is_some()
+                && matches!(run.state, LineState::Composing | LineState::Submitted);
+            let named = marks.iter().any(|mark| Some(mark.slot) == run.line.slot);
+            if live && !named {
+                self.retire_intent(index, now_ms, &mut out);
+            }
+        }
+        self.step(now_ms, &mut out);
+        out
+    }
+
+    /// Whether a line of text for `slot` is waiting its turn or being shown.
+    fn line_pending_for(&self, slot: Option<usize>) -> bool {
+        self.lines.iter().any(|other| {
+            other.intent.is_none()
+                && other.line.slot == slot
+                && matches!(
+                    other.state,
+                    LineState::Queued
+                        | LineState::Opening
+                        | LineState::Speaking
+                        | LineState::Lingering
+                )
+        })
+    }
+
+    /// The loader's hero stopped or submitted away: it stays while that hero's line is still
+    /// queued, is replaced at once by one already on screen, and otherwise closes normally.
+    fn retire_intent(&mut self, index: usize, now_ms: u64, out: &mut Vec<Command<D>>) {
+        let Some(run) = self.lines.get(index) else {
+            return;
+        };
+        let slot = run.line.slot;
+        let queued = self.lines.iter().any(|other| {
+            other.intent.is_none() && other.line.slot == slot && other.state == LineState::Queued
+        });
+        if queued {
+            if self
+                .lines
+                .get(index)
+                .is_some_and(|run| run.state == LineState::Composing)
+            {
+                self.set_line(index, LineEvent::Submit, now_ms, out);
+            }
+        } else if self.line_pending_for(slot) {
+            self.set_line(index, LineEvent::Replace, now_ms, out);
+        } else {
+            self.set_line(index, LineEvent::Cancel, now_ms, out);
+            self.set_line(index, LineEvent::Close, now_ms, out);
+        }
+    }
+
+    /// Ends the loaders of `slot`: its line took the place.
+    fn replace_intents(&mut self, slot: Option<usize>, now_ms: u64, out: &mut Vec<Command<D>>) {
+        for index in 0..self.lines.len() {
+            let Some(run) = self.lines.get(index) else {
+                continue;
+            };
+            if run.intent.is_some()
+                && run.line.slot == slot
+                && matches!(run.state, LineState::Composing | LineState::Submitted)
+            {
+                self.set_line(index, LineEvent::Replace, now_ms, out);
+            }
+        }
+    }
+
+    /// Loaders the table stopped affirming expire; a submitted one waits for its queued line.
+    fn expire_intents(&mut self, now_ms: u64, out: &mut Vec<Command<D>>) {
+        for index in 0..self.lines.len() {
+            let Some(run) = self.lines.get(index) else {
+                continue;
+            };
+            if run.intent.is_none()
+                || !matches!(run.state, LineState::Composing | LineState::Submitted)
+            {
+                continue;
+            }
+            let waiting_for_line = self.lines.iter().any(|other| {
+                other.intent.is_none()
+                    && other.line.slot == run.line.slot
+                    && other.state == LineState::Queued
+            });
+            let silent_for = now_ms.saturating_sub(run.affirmed_ms);
+            if !waiting_for_line && silent_for > INTENT_EXPIRY_MS {
+                self.retire_intent(index, now_ms, out);
+            }
         }
     }
 
@@ -766,6 +1078,7 @@ impl<D: Clone> Conductor<D> {
     fn step(&mut self, now_ms: u64, out: &mut Vec<Command<D>>) {
         self.watch_scene(now_ms, out);
         self.advance_actors(now_ms, out);
+        self.expire_intents(now_ms, out);
         // Several quick changes, or a wait past the cap, close the line in progress.
         let catching_up = self.catching_up(now_ms);
         let overdue = self
@@ -779,6 +1092,8 @@ impl<D: Clone> Conductor<D> {
         self.prefetch(out);
         self.settle_scene(now_ms, out);
         self.settle_battle_entrance(now_ms, out);
+        self.release_exit(now_ms, out);
+        self.report_clips(out);
         self.submit_pending(now_ms, out);
     }
 
@@ -1045,7 +1360,11 @@ impl<D: Clone> Conductor<D> {
                 run.clip = next;
             }
         }
-        self.set_line(index, LineEvent::Begin, now_ms, out);
+        let slot = self.lines.get(index).and_then(|run| run.line.slot);
+        if self.set_line(index, LineEvent::Begin, now_ms, out) {
+            // The hero's line takes the place of the hero's loader.
+            self.replace_intents(slot, now_ms, out);
+        }
     }
 
     /// Requests the clips of the next two queued voiceable lines so they are ready at their
@@ -1123,8 +1442,8 @@ impl<D: Clone> Conductor<D> {
 mod tests {
     use super::*;
     use crate::stage_machines::{
-        BATTLE_ENTER_CAP_MS, CATCH_UP_TEXT_MS, CLIP_READY_WAIT_MS, CLIP_START_WAIT_MS,
-        LINE_CLOSE_MS,
+        BATTLE_ENTER_CAP_MS, BATTLE_FINISH_CAP_MS, CATCH_UP_TEXT_MS, CLIP_READY_WAIT_MS,
+        CLIP_START_WAIT_MS, LINE_CLOSE_MS,
     };
 
     type TestConductor = Conductor<&'static str>;
@@ -1331,6 +1650,16 @@ mod tests {
                 .filter(|(_, command)| matches!(command, Command::Render))
                 .map(|(at, _)| *at)
                 .collect()
+        }
+
+        fn entered_after(&self, wanted: StageState, after_ms: u64) -> Option<u64> {
+            self.log
+                .iter()
+                .find(|(at, command)| {
+                    *at >= after_ms
+                        && matches!(command, Command::Enter { state, .. } if *state == wanted)
+                })
+                .map(|(at, _)| *at)
         }
 
         fn entered(&self, wanted: StageState) -> Option<u64> {
@@ -1543,7 +1872,7 @@ mod tests {
         };
         let mut harness = Harness::new(voice, true, Vec::new(), vec![0]);
         harness.view(scene(None, vec![line("narration", true, None)], vec![0]));
-        harness.run_to(15_000);
+        harness.run_to(u64::from(CLIP_READY_WAIT_MS) + 8_000);
         let opened = harness.opened("narration").expect("opens anyway");
         let requested = harness
             .first_time(|command| {
@@ -1558,6 +1887,81 @@ mod tests {
             .expect("requested");
         assert!(opened >= requested + u64::from(CLIP_READY_WAIT_MS));
         assert!(opened <= requested + u64::from(CLIP_READY_WAIT_MS) + 200);
+        // The line is reported as having no clip, not as spoken.
+        assert!(harness.log.iter().any(|(_, command)| matches!(
+            command,
+            Command::ClipState {
+                state: ClipState::Failed,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn a_slow_reply_clip_is_waited_for_and_the_reply_opens_when_it_starts() {
+        // The clip arrives 9 s after it was requested, longer than the old 5 s race.
+        let voice = Voice {
+            load_ms: Some(9_000),
+            ..Voice::working(3_000)
+        };
+        let mut harness = Harness::new(voice, true, Vec::new(), vec![0, 2]);
+        harness.view(plain(vec![line("npc reply", true, Some(2))], vec![0, 2]));
+        harness.run_to(5_000);
+        assert!(
+            harness.opened("npc reply").is_none(),
+            "not raced by a timer"
+        );
+        assert_eq!(harness.conductor.awaiting_clip_slot(), Some(2));
+        harness.run_to(20_000);
+        let opened = harness.opened("npc reply").expect("opens");
+        let played = harness.play_at("npc reply").expect("played");
+        assert_eq!(opened, played + 50);
+        assert!(harness.log.iter().any(|(_, command)| matches!(
+            command,
+            Command::ClipState {
+                state: ClipState::Ended,
+                ..
+            }
+        )));
+        assert_eq!(harness.conductor.awaiting_clip_slot(), None);
+    }
+
+    #[test]
+    fn five_consecutive_replies_each_reach_playing_and_ended() {
+        let mut harness = Harness::new(Voice::working(2_000), true, Vec::new(), vec![0, 2]);
+        let replies = ["reply 1", "reply 2", "reply 3", "reply 4", "reply 5"];
+        for reply in replies {
+            harness.view(plain(vec![line("hero", false, Some(0))], vec![0, 2]));
+            harness.view(plain(vec![line(reply, true, Some(2))], vec![0, 2]));
+            harness.run_to(harness.now + 19_000);
+        }
+        for reply in replies {
+            let id = harness
+                .log
+                .iter()
+                .find_map(|(_, command)| match command {
+                    Command::Clip {
+                        id,
+                        op: ClipOp::Play,
+                        detail,
+                    } if *detail == reply => Some(*id),
+                    _ => None,
+                })
+                .expect("each reply's clip was played");
+            let states: Vec<ClipState> = harness
+                .log
+                .iter()
+                .filter_map(|(_, command)| match command {
+                    Command::ClipState { id: other, state } if *other == id => Some(*state),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                states.contains(&ClipState::Playing) && states.contains(&ClipState::Ended),
+                "{reply}: {states:?}"
+            );
+            assert!(harness.opened(reply).is_some());
+        }
     }
 
     #[test]
@@ -1875,5 +2279,552 @@ mod tests {
             assert!(seen.contains(&expected), "{expected:?} in {seen:?}");
         }
         assert_eq!(harness.conductor.battle_state(), BattleState::Absent);
+    }
+
+    fn mark(slot: usize, kind: IntentKind) -> IntentMark<&'static str> {
+        IntentMark {
+            slot,
+            kind,
+            detail: match (slot, kind) {
+                (0, IntentKind::Typing) => "typing 0",
+                (0, IntentKind::Speaking) => "speaking 0",
+                (0, IntentKind::Submitted) => "submitted 0",
+                (_, IntentKind::Typing) => "typing 1",
+                (_, IntentKind::Speaking) => "speaking 1",
+                (_, IntentKind::Submitted) => "submitted 1",
+            },
+        }
+    }
+
+    impl Harness {
+        fn intents(&mut self, marks: Vec<IntentMark<&'static str>>) {
+            let commands = self.conductor.on_intents(self.now, marks);
+            self.record(commands);
+        }
+
+        /// The line states seen for a payload, in order.
+        fn line_trace(&self, detail: &'static str) -> Vec<LineState> {
+            self.log
+                .iter()
+                .filter_map(|(_, command)| match command {
+                    Command::Line {
+                        state, detail: d, ..
+                    } if *d == detail => Some(*state),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_loader_follows_typing_to_submitted_and_the_heros_line_takes_its_place_in_order() {
+        let mut harness = Harness::new(Voice::working(2_000), true, Vec::new(), vec![0, 1, 2]);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.run_to(500);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.intents(vec![mark(0, IntentKind::Submitted)]);
+        assert_eq!(harness.line_trace("typing 0"), [LineState::Composing]);
+        // The line is committed: the same view no longer carries the loader.
+        harness.view(plain(
+            vec![line("hero line", false, Some(0))],
+            vec![0, 1, 2],
+        ));
+        harness.intents(Vec::new());
+        harness.run_to(1_500);
+        let opened = harness.opened("hero line").expect("the line opens");
+        let replaced = harness
+            .line_at("submitted 0", LineState::Done)
+            .expect("the loader is replaced");
+        assert!(replaced >= opened);
+        assert!(harness.line_at("typing 0", LineState::Cancelled).is_none());
+        harness.view(plain(vec![line("npc reply", true, Some(2))], vec![0, 1, 2]));
+        harness.run_to(20_000);
+        assert!(harness.opened("npc reply").expect("reply") > opened);
+    }
+
+    #[test]
+    fn two_heroes_composing_at_once_each_get_their_own_loader_and_never_delay_speech() {
+        let mut harness = Harness::new(
+            Voice::working(3_000),
+            true,
+            vec![line("narration", true, None)],
+            vec![0, 1, 2],
+        );
+        harness.intents(vec![
+            mark(0, IntentKind::Typing),
+            mark(1, IntentKind::Speaking),
+        ]);
+        harness.run_to(1_000);
+        assert_eq!(harness.line_trace("typing 0"), [LineState::Composing]);
+        assert_eq!(harness.line_trace("speaking 1"), [LineState::Composing]);
+        let narration = harness
+            .opened("narration")
+            .expect("narration opens regardless");
+        // The narration's clip started at its own time, unaffected by the loaders (the harness
+        // also asserts that no two lines are ever active together).
+        assert!(narration <= 200, "{narration}");
+    }
+
+    #[test]
+    fn a_hero_who_stops_cancels_the_loader_through_the_normal_exit() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 1]);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.run_to(300);
+        harness.intents(Vec::new());
+        harness.run_to(1_000);
+        assert_eq!(
+            harness.line_trace("typing 0"),
+            [
+                LineState::Composing,
+                LineState::Cancelled,
+                LineState::Closing,
+                LineState::Done
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unrefreshed_loader_expires_and_a_refreshed_one_stays() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 1]);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        for _ in 0..4 {
+            harness.run_to(harness.now + 2_000);
+            harness.intents(vec![mark(0, IntentKind::Typing)]);
+        }
+        // Eight seconds of refreshes: still there.
+        assert_eq!(harness.line_trace("typing 0"), [LineState::Composing]);
+        let last = harness.now;
+        // The tab closes: no more refreshes.
+        harness.run_to(last + INTENT_EXPIRY_MS + 300);
+        let closing = harness
+            .line_at("typing 0", LineState::Closing)
+            .expect("expired");
+        assert!(closing >= last + INTENT_EXPIRY_MS);
+        assert!(closing <= last + INTENT_EXPIRY_MS + 200);
+        harness.run_to(last + INTENT_EXPIRY_MS + 1_000);
+        assert!(harness.line_at("typing 0", LineState::Done).is_some());
+    }
+
+    #[test]
+    fn a_submitted_loader_waits_for_its_line_queued_behind_speech() {
+        let mut harness = Harness::new(
+            Voice::working(6_000),
+            true,
+            vec![line("narration", true, None)],
+            vec![0, 1],
+        );
+        harness.run_to(500);
+        harness.intents(vec![mark(0, IntentKind::Submitted)]);
+        harness.view(plain(vec![line("hero line", false, Some(0))], vec![0, 1]));
+        harness.intents(Vec::new());
+        // Well past the loader's own expiry, the line is still behind the narration.
+        harness.run_to(5_900);
+        assert!(harness.opened("hero line").is_none());
+        assert!(harness.line_at("submitted 0", LineState::Done).is_none());
+        assert!(harness.line_at("submitted 0", LineState::Closing).is_none());
+        harness.run_to(15_000);
+        assert!(harness.opened("hero line").is_some());
+        assert!(harness.line_at("submitted 0", LineState::Done).is_some());
+    }
+
+    #[test]
+    fn a_loader_leaves_with_the_scene() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 1]);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.view(scene(None, Vec::new(), vec![0, 1]));
+        harness.run_to(4_000);
+        assert!(harness.line_at("typing 0", LineState::Closing).is_some());
+    }
+
+    fn killing_blow_plan() -> ViewPlan<&'static str> {
+        ViewPlan {
+            diff: ViewDiff {
+                scene_changed: true,
+                roll: Some("blow"),
+                impact: Some("blow"),
+                defeat: Some("blow"),
+                banner: Some("victory"),
+                closing: Some("card"),
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: vec![0],
+        }
+    }
+
+    /// A fight that ends on its very first action: the entrance completes, then the one view that
+    /// carries the kill arrives.
+    fn first_action_kill() -> Harness {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 2]);
+        harness.conductor.set_battlefield_expected(true);
+        harness.view(fight_start());
+        harness.run_to(2_000);
+        harness.now += 50;
+        let commands = harness
+            .conductor
+            .on_battlefield(harness.now, Battlefield::Ready);
+        harness.record(commands);
+        harness.run_to(harness.now + 200);
+        assert_eq!(harness.conductor.battle_state(), BattleState::TurnStart);
+        harness.view(killing_blow_plan());
+        harness
+    }
+
+    #[test]
+    fn a_fight_that_ends_on_its_first_action_plays_the_whole_finishing_sequence_before_the_victory_scene()
+     {
+        let mut harness = first_action_kill();
+        let kill_at = harness.now;
+        let rendered_before = harness.rendered().len();
+        // The blow's cues play; the battlefield is busy with its finishing shot.
+        let mut battlefield_busy_until = harness.now + 6_000;
+        while harness.now < harness.now.max(battlefield_busy_until) + 6_000 {
+            harness.run_to(harness.now + 50);
+            let state = if harness.now < battlefield_busy_until {
+                Battlefield::Pending
+            } else {
+                Battlefield::Ready
+            };
+            let commands = harness.conductor.on_battlefield(harness.now, state);
+            harness.record(commands);
+            if harness
+                .entered_after(StageState::Aftermath, kill_at)
+                .is_some()
+            {
+                break;
+            }
+        }
+        let rolling = harness
+            .entered_after(StageState::Rolling, kill_at)
+            .expect("dice");
+        let impact = harness
+            .entered_after(StageState::Impact, kill_at)
+            .expect("impact");
+        let defeat = harness
+            .entered_after(StageState::Defeat, kill_at)
+            .expect("fall");
+        let leaving = harness
+            .entered_after(StageState::LeavingScene, kill_at)
+            .expect("leaves");
+        let aftermath = harness
+            .entered_after(StageState::Aftermath, kill_at)
+            .expect("banner");
+        assert!(rolling < impact && impact < defeat && defeat < leaving && leaving < aftermath);
+        // The victory scene waits for the battlefield's own finishing shot.
+        assert!(
+            leaving >= battlefield_busy_until,
+            "{leaving} before {battlefield_busy_until}"
+        );
+        // No redraw (so no teardown of the battlefield) before the exit.
+        assert_eq!(
+            harness
+                .rendered()
+                .iter()
+                .filter(|at| **at < leaving)
+                .count(),
+            rendered_before
+        );
+        let seen = battle_states(&harness);
+        let order: Vec<BattleState> = seen
+            .iter()
+            .copied()
+            .skip_while(|state| *state != BattleState::Acting)
+            .collect();
+        assert_eq!(
+            order,
+            [
+                BattleState::Acting,
+                BattleState::Resolving,
+                BattleState::Finishing,
+                BattleState::Exiting,
+                BattleState::Absent,
+            ]
+        );
+        battlefield_busy_until = 0;
+        let _ = battlefield_busy_until;
+    }
+
+    #[test]
+    fn a_battlefield_that_never_finishes_its_shot_holds_the_exit_only_to_the_cap() {
+        let mut harness = first_action_kill();
+        let start = harness.now;
+        let kill_at = start;
+        while harness.now < start + 30_000 {
+            harness.run_to(harness.now + 50);
+            let commands = harness
+                .conductor
+                .on_battlefield(harness.now, Battlefield::Pending);
+            harness.record(commands);
+        }
+        let leaving = harness
+            .entered_after(StageState::LeavingScene, kill_at)
+            .expect("released at the cap");
+        // The blow's cues (about 4.3 s) plus the cap bound the wait.
+        assert!(
+            leaving <= start + 4_500 + BATTLE_FINISH_CAP_MS + 500,
+            "{}",
+            leaving - start
+        );
+        assert!(
+            leaving >= start + BATTLE_FINISH_CAP_MS,
+            "{} {}",
+            leaving,
+            start
+        );
+    }
+
+    #[test]
+    fn without_a_battlefield_the_victory_follows_the_blow_at_once() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 2]);
+        harness.view(fight_start());
+        harness.run_to(4_000);
+        harness.view(killing_blow_plan());
+        let kill_at = harness.now;
+        harness.run_to(harness.now + 9_000);
+        let defeat = harness
+            .entered_after(StageState::Defeat, kill_at)
+            .expect("fall");
+        let leaving = harness
+            .entered_after(StageState::LeavingScene, kill_at)
+            .expect("leaves");
+        assert!(leaving - defeat <= 3_000);
+    }
+
+    #[test]
+    fn an_enemy_that_won_initiative_has_its_opening_turn_staged_after_the_whole_entrance() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 2]);
+        harness.conductor.set_battlefield_expected(true);
+        // One view starts the fight and already carries the goblin's resolved first attack.
+        harness.view(ViewPlan {
+            diff: ViewDiff {
+                scene_changed: true,
+                enters_combat: true,
+                roll: Some("goblin attack"),
+                impact: Some("goblin attack"),
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: vec![0, 2],
+        });
+        harness.run_to(8_000);
+        assert!(harness.conductor.wants_battlefield());
+        // The scene changed behind the cover, the battlefield is still loading: no dice, no impact.
+        assert!(harness.entered(StageState::Rolling).is_none());
+        assert!(harness.entered(StageState::Impact).is_none());
+        assert_eq!(harness.conductor.battle_state(), BattleState::Entering);
+        // Exactly one transition into the fight.
+        let leavings = harness
+            .log
+            .iter()
+            .filter(|(_, command)| {
+                matches!(
+                    command,
+                    Command::Enter {
+                        state: StageState::LeavingScene,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(leavings, 1);
+        // The battlefield finishes its splat load, banner, initiative roll and roll-call.
+        harness.now += 50;
+        let ready_at = harness.now;
+        let commands = harness
+            .conductor
+            .on_battlefield(harness.now, Battlefield::Ready);
+        harness.record(commands);
+        harness.run_to(harness.now + 4_000);
+        let rolling = harness
+            .entered(StageState::Rolling)
+            .expect("the goblin's turn plays");
+        assert!(rolling >= ready_at);
+        assert!(harness.entered(StageState::Impact).is_some());
+    }
+
+    #[test]
+    fn a_display_that_comes_up_in_a_fight_still_enters_it_behind_the_battlefield() {
+        let mut conductor = TestConductor::new();
+        conductor.set_battlefield_expected(true);
+        let commands = conductor.restart(
+            0,
+            ViewPlan {
+                diff: ViewDiff {
+                    enters_combat: true,
+                    ..ViewDiff::default()
+                },
+                script: Vec::new(),
+                cast: vec![0, 2],
+            },
+        );
+        assert!(commands.contains(&Command::Battle(BattleState::Entering)));
+        assert_eq!(conductor.battle_state(), BattleState::Entering);
+        assert!(conductor.wants_battlefield());
+        let released = conductor.on_battlefield(100, Battlefield::Ready);
+        assert!(released.contains(&Command::Battle(BattleState::TurnStart)));
+    }
+
+    #[test]
+    fn several_outcomes_in_one_view_play_in_order_after_the_entrance() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 2]);
+        harness.conductor.set_battlefield_expected(true);
+        harness.view(fight_start());
+        for (index, turn) in ["first enemy", "second enemy", "third enemy"]
+            .into_iter()
+            .enumerate()
+        {
+            harness.view(ViewPlan {
+                diff: ViewDiff {
+                    roll: Some(turn),
+                    impact: Some(turn),
+                    ..ViewDiff::default()
+                },
+                script: Vec::new(),
+                cast: vec![0, 2],
+            });
+            assert_eq!(
+                harness.conductor.battle_state(),
+                BattleState::Entering,
+                "{index}"
+            );
+        }
+        harness.run_to(2_000);
+        assert!(harness.entered(StageState::Rolling).is_none());
+        harness.now += 50;
+        let commands = harness
+            .conductor
+            .on_battlefield(harness.now, Battlefield::Ready);
+        harness.record(commands);
+        harness.run_to(harness.now + 12_000);
+        let rolls: Vec<&str> = harness
+            .log
+            .iter()
+            .filter_map(|(_, command)| match command {
+                Command::Enter {
+                    state: StageState::Rolling,
+                    detail,
+                    ..
+                } => *detail,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rolls, ["first enemy", "second enemy", "third enemy"]);
+    }
+
+    #[test]
+    fn a_fight_lost_on_an_enemys_turn_shows_every_blow_then_exits_through_the_same_machine() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 2]);
+        harness.view(fight_start());
+        harness.run_to(5_000);
+        let rendered_before = harness.rendered().len();
+        let blow = |turn: &'static str| ViewPlan {
+            diff: ViewDiff {
+                roll: Some(turn),
+                impact: Some(turn),
+                blow_only: true,
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: vec![0, 2],
+        };
+        harness.view(blow("first enemy"));
+        harness.view(blow("second enemy"));
+        harness.view(ViewPlan {
+            diff: ViewDiff {
+                scene_changed: true,
+                roll: Some("last enemy"),
+                impact: Some("last enemy"),
+                defeat: Some("last enemy"),
+                banner: Some("defeat"),
+                closing: Some("closing"),
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: vec![0, 2],
+        });
+        let lost_at = harness.now;
+        harness.run_to(40_000);
+        let impacts: Vec<&str> = harness
+            .log
+            .iter()
+            .filter_map(|(_, command)| match command {
+                Command::Enter {
+                    state: StageState::Impact,
+                    detail,
+                    ..
+                } => *detail,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(impacts, ["first enemy", "second enemy", "last enemy"]);
+        let leaving = harness
+            .entered_after(StageState::LeavingScene, lost_at)
+            .expect("the scene leaves");
+        // The earlier blows never redrew the view, which would tear the battlefield down.
+        assert_eq!(
+            harness
+                .rendered()
+                .iter()
+                .filter(|at| **at < leaving)
+                .count(),
+            rendered_before
+        );
+        let order: Vec<BattleState> = battle_states(&harness)
+            .into_iter()
+            .filter(|state| {
+                matches!(
+                    state,
+                    BattleState::Finishing | BattleState::Exiting | BattleState::Absent
+                )
+            })
+            .collect();
+        assert_eq!(
+            order,
+            [
+                BattleState::Finishing,
+                BattleState::Exiting,
+                BattleState::Absent
+            ]
+        );
+        assert_eq!(harness.conductor.battle_state(), BattleState::Absent);
+    }
+
+    #[test]
+    fn three_enemy_turns_resolved_at_once_each_show_their_blow_and_the_turn_closes() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 2]);
+        harness.view(fight_start());
+        harness.run_to(6_000);
+        assert_eq!(harness.conductor.battle_state(), BattleState::TurnStart);
+        // The hero's blow and three enemy turns arrive in one burst; the display is slow.
+        for turn in ["hero", "first enemy", "second enemy", "third enemy"] {
+            harness.view(ViewPlan {
+                diff: ViewDiff {
+                    roll: Some(turn),
+                    impact: Some(turn),
+                    turn_changed: turn == "third enemy",
+                    ..ViewDiff::default()
+                },
+                script: Vec::new(),
+                cast: vec![0, 2],
+            });
+        }
+        harness.run_to(harness.now + 20_000);
+        let impacts: Vec<&str> = harness
+            .log
+            .iter()
+            .filter_map(|(_, command)| match command {
+                Command::Enter {
+                    state: StageState::Impact,
+                    detail,
+                    ..
+                } => *detail,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            impacts,
+            ["hero", "first enemy", "second enemy", "third enemy"]
+        );
+        assert_eq!(harness.conductor.battle_state(), BattleState::TurnStart);
     }
 }

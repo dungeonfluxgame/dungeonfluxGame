@@ -6,9 +6,12 @@
 //! the page's memory: a reload starts locked and unmuted again.
 //!
 //! One physical click fires several events (pointerdown, mousedown, pointerup, mouseup, click),
-//! and the page unlocks on the first of them. The press that follows within
-//! [`ONE_GESTURE_MS`] of the unlocking gesture belongs to the same click and changes nothing, so
-//! a single click on the locked control ends in `On`; only a later, separate click toggles mute.
+//! and the page unlocks on the first of them. When that unlocking gesture was a press ON the
+//! control, the click that completes it is the same click and changes nothing, however long the
+//! hand held the button: the rule follows the events, not a clock. A press within
+//! [`ONE_GESTURE_MS`] of the unlock is also ignored, for a harness that delivers a click twice.
+//! So a single click on the locked control always ends in `On`; only a later, separate click
+//! toggles mute.
 
 /// A press this soon after the gesture that unlocked sound is the same physical click.
 pub(crate) const ONE_GESTURE_MS: u64 = 500;
@@ -38,6 +41,8 @@ pub(crate) struct SoundSwitch {
     muted: bool,
     /// When the gesture that unlocked sound happened.
     unlocked_at_ms: u64,
+    /// The unlocking gesture was a press on the control: its click is not a separate press.
+    absorb_click: bool,
 }
 
 impl SoundSwitch {
@@ -46,6 +51,7 @@ impl SoundSwitch {
             unlocked: false,
             muted: false,
             unlocked_at_ms: 0,
+            absorb_click: false,
         }
     }
 
@@ -74,6 +80,10 @@ impl SoundSwitch {
                 self.unlocked_at_ms = now_ms;
                 Press::Unlocked
             }
+            Sound::On if self.absorb_click => {
+                self.absorb_click = false;
+                Press::SameGesture
+            }
             Sound::On if now_ms.saturating_sub(self.unlocked_at_ms) < ONE_GESTURE_MS => {
                 Press::SameGesture
             }
@@ -88,10 +98,12 @@ impl SoundSwitch {
         }
     }
 
-    /// A pointer or key press anywhere on the page, the control included. It unlocks audio but
-    /// changes no mute choice; returns whether it was the unlocking gesture.
-    pub(crate) fn gesture(&mut self, now_ms: u64) -> bool {
+    /// A pointer or key press anywhere on the page, the control included (`on_control`). It
+    /// unlocks audio but changes no mute choice; returns whether it was the unlocking gesture.
+    /// Any press ends the previous one's claim on its click.
+    pub(crate) fn gesture(&mut self, now_ms: u64, on_control: bool) -> bool {
         let first = !self.unlocked;
+        self.absorb_click = first && on_control;
         if first {
             self.unlocked = true;
             self.unlocked_at_ms = now_ms;
@@ -143,8 +155,8 @@ mod tests {
     fn one_real_click_on_the_locked_control_ends_in_on_and_a_later_click_mutes() {
         let mut switch = SoundSwitch::new();
         // pointerdown, mousedown: the page-level gesture listener (the control is no exception).
-        assert!(switch.gesture(1_000));
-        assert!(!switch.gesture(1_001));
+        assert!(switch.gesture(1_000, true));
+        assert!(!switch.gesture(1_001, true));
         // pointerup, mouseup: no handler. click, about 90 ms after the press:
         assert_eq!(switch.press(1_090), Press::SameGesture);
         assert_eq!(switch.sound(), Sound::On);
@@ -152,6 +164,31 @@ mod tests {
         assert_eq!(switch.press(1_090 + LATER_MS), Press::Muted);
         assert_eq!(switch.press(1_090 + 2 * LATER_MS), Press::Unmuted);
         assert_eq!(switch.sound(), Sound::On);
+    }
+
+    #[test]
+    fn a_slow_click_on_the_locked_control_still_ends_in_on_whatever_the_hold_time() {
+        for hold_ms in [0, 80, 700, 5_000] {
+            let mut switch = SoundSwitch::new();
+            assert!(switch.gesture(1_000, true));
+            assert_eq!(
+                switch.press(1_000 + hold_ms),
+                Press::SameGesture,
+                "{hold_ms}"
+            );
+            assert_eq!(switch.sound(), Sound::On);
+            // The next, separate click mutes.
+            assert_eq!(switch.press(1_000 + hold_ms + LATER_MS), Press::Muted);
+        }
+    }
+
+    #[test]
+    fn a_press_dragged_off_the_control_gives_the_next_real_click_its_own_effect() {
+        let mut switch = SoundSwitch::new();
+        assert!(switch.gesture(0, true));
+        // No click ever arrives (the pointer left); the next press anywhere ends the claim.
+        assert!(!switch.gesture(LATER_MS, true));
+        assert_eq!(switch.press(LATER_MS + 80), Press::Muted);
     }
 
     #[test]
@@ -166,7 +203,7 @@ mod tests {
     fn a_keyboard_press_on_the_focused_locked_control_ends_in_on() {
         let mut switch = SoundSwitch::new();
         // keydown unlocks, then the click the browser synthesises from Enter or Space.
-        assert!(switch.gesture(300));
+        assert!(switch.gesture(300, true));
         assert_eq!(switch.press(305), Press::SameGesture);
         assert_eq!(switch.sound(), Sound::On);
     }
@@ -198,12 +235,12 @@ mod tests {
     #[test]
     fn a_gesture_elsewhere_unlocks_without_changing_the_mute_choice() {
         let mut switch = SoundSwitch::new();
-        assert!(switch.gesture(0));
+        assert!(switch.gesture(0, false));
         assert_eq!(switch.sound(), Sound::On);
-        assert!(!switch.gesture(1));
+        assert!(!switch.gesture(1, false));
         assert_eq!(switch.press(LATER_MS), Press::Muted);
         assert_eq!(switch.sound(), Sound::Muted);
-        assert!(!switch.gesture(2 * LATER_MS));
+        assert!(!switch.gesture(2 * LATER_MS, false));
         assert_eq!(switch.sound(), Sound::Muted);
     }
 }

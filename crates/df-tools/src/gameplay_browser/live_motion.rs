@@ -19,9 +19,12 @@ use crate::{
         self, ActorSlot, Card, CombatSnapshot, CombatStage, StageActor, TableKind, TableLine,
         TableRole, Transitions,
     },
-    stage_conductor::{ClipOp, ClipSignal, Command, Conductor, LineId, ScriptLine, ViewPlan},
+    stage_conductor::{
+        ClipOp, ClipSignal, Command, Conductor, IntentKind, IntentMark, LineId, ScriptLine,
+        ViewPlan,
+    },
     stage_director::{StageState, ViewDiff},
-    stage_machines::{ActorState, BattleState, LineState, SceneState, reading_time_ms},
+    stage_machines::{ActorState, BattleState, ClipState, LineState, SceneState, reading_time_ms},
     voice_line::{VoiceLine, display_lines},
 };
 use std::{collections::VecDeque, rc::Weak, time::Duration};
@@ -48,6 +51,11 @@ enum Detail {
     /// The title card of the story's beginning or the closing card of a fight.
     Card(Box<Card>),
     Heal,
+    /// A hero typing or holding to talk: a loader on that hero.
+    Intent {
+        kind: IntentKind,
+        hero: String,
+    },
 }
 
 #[derive(Clone)]
@@ -103,6 +111,8 @@ struct Motion {
     thinking_for: Option<String>,
     previous: Option<CombatSnapshot>,
     scene_key: Option<String>,
+    /// The narration the scene last put on the stage, so only new narration is spoken again.
+    narration: String,
     party_hit_points: Vec<u32>,
     seen: VecDeque<u64>,
     generation: u64,
@@ -151,6 +161,7 @@ fn ensure_motion(client: &Rc<RefCell<Client>>) {
                 thinking_for: None,
                 previous: None,
                 scene_key: None,
+                narration: String::new(),
                 party_hit_points: Vec::new(),
                 seen: VecDeque::new(),
                 generation: 0,
@@ -177,12 +188,14 @@ fn remember(seen: &mut VecDeque<u64>, sequence: u64) -> bool {
     true
 }
 
+/// The most outcomes of one view that are staged one by one; older ones are history.
+const MAXIMUM_STAGED_OUTCOMES: usize = 6;
+
 fn roll_detail(
-    journey: &rpc::JourneyView,
+    outcome: &rpc::CombatOutcome,
     lines: &[TableLine],
     transitions: Transitions,
 ) -> Option<RollDetail> {
-    let outcome = journey.combat.as_ref()?.outcomes.last()?;
     let description = live_combat::describe(outcome).map(|description| RollDescriptionOwned {
         label: description.label,
         value: description.value,
@@ -212,6 +225,29 @@ fn roll_detail(
         action_line,
         description,
     })
+}
+
+/// The heroes the table says are typing or holding to talk (an ephemeral signal of the phones).
+fn intent_marks(journey: &rpc::JourneyView) -> Vec<IntentMark<Detail>> {
+    journey
+        .composing
+        .iter()
+        .filter_map(|mark| {
+            let hero = usize::try_from(mark.hero_index).ok()?;
+            let name = journey.party.get(hero)?.name.clone();
+            let kind = match rpc::ComposeKind::try_from(mark.kind).ok()? {
+                rpc::ComposeKind::Typing => IntentKind::Typing,
+                rpc::ComposeKind::Speaking => IntentKind::Speaking,
+                rpc::ComposeKind::Submitted => IntentKind::Submitted,
+                rpc::ComposeKind::Stopped | rpc::ComposeKind::Unspecified => return None,
+            };
+            Some(IntentMark {
+                slot: super::live_stage::slot_index(ActorSlot::Hero(hero))?,
+                kind,
+                detail: Detail::Intent { kind, hero: name },
+            })
+        })
+        .collect()
 }
 
 /// The stage slot indices of the cast the view shows.
@@ -259,6 +295,20 @@ fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> Scrip
             voice,
         }),
     }
+}
+
+/// The narration a view adds to the scene on stage: nothing when it is the narration already
+/// told, the appended part when the told text grew, otherwise the whole new text.
+fn added_narration(told: &str, now: &str) -> Option<String> {
+    let now = now.trim();
+    if now.is_empty() || now == told.trim() {
+        return None;
+    }
+    let appended = now
+        .strip_prefix(told.trim())
+        .map(str::trim)
+        .filter(|rest| !rest.is_empty() && !told.trim().is_empty());
+    Some(appended.unwrap_or(now).to_owned())
 }
 
 /// A table line as a line of the stage script, or `None` when no figure carries it.
@@ -327,6 +377,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         }
         _ => (String::new(), Vec::new()),
     };
+    let intents = intent_marks(journey);
     let sound_on = live_voice::effects_gate().is_some();
     let thinking = presentation::replying_speaker(&view);
     let now = now_ms();
@@ -380,6 +431,11 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 script.extend(script_line(line, &cast, &voices, false));
             }
         } else {
+            // What the story adds to a scene already on stage (a look's result) is narrated once;
+            // a reply to table talk never replays the narration already told.
+            if !in_fight && let Some(added) = added_narration(&motion.narration, &narration) {
+                script.push(narration_line(&added, &voices, false));
+            }
             script.extend(
                 fresh
                     .iter()
@@ -400,14 +456,35 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 .zip(&motion.party_hit_points)
                 .zip(&journey.party)
                 .any(|((now, before), member)| member.character_ready && now > before);
-        let roll = if transitions.new_roll {
-            roll_detail(journey, &lines, transitions)
+        // Every outcome the view adds is staged in order: a tactical fight resolves several turns
+        // between two views. At a fight's start the server's already-resolved opening turns are
+        // held and staged after the entrance; otherwise the newest is the view's own blow.
+        let mut staged: Vec<RollDetail> = if transitions.new_roll {
+            let fresh = presentation::new_outcomes(motion.previous.as_ref(), journey);
+            let from = fresh.len().saturating_sub(MAXIMUM_STAGED_OUTCOMES);
+            fresh
+                .into_iter()
+                .skip(from)
+                .filter_map(|outcome| roll_detail(outcome, &lines, transitions))
+                .collect()
         } else {
+            Vec::new()
+        };
+        let roll = if transitions.entered_combat {
             None
+        } else {
+            staged.pop()
+        };
+        let (before, after) = if transitions.entered_combat {
+            (Vec::new(), staged)
+        } else {
+            (staged, Vec::new())
         };
         let diff = ViewDiff {
             scene_changed,
-            enters_combat: transitions.entered_combat,
+            enters_combat: transitions.entered_combat
+                || (restart && snapshot.stage == CombatStage::Fighting),
+            turn_changed: transitions.turn_changed,
             roll: roll.clone().map(|roll| Detail::Roll(Box::new(roll))),
             impact: roll.clone().map(|roll| Detail::Roll(Box::new(roll))),
             defeat: roll
@@ -420,11 +497,18 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             banner: transitions
                 .finished
                 .map(|victory| Detail::Banner { victory }),
-            closing: transitions.finished.map(|victory| {
-                Detail::Card(Box::new(presentation::closing_card(
-                    journey, scene, &narration, victory,
-                )))
-            }),
+            // A won fight goes straight from the battlefield to the victory card: a closing card
+            // would name the next scene before the audience has read the victory. Only a defeat
+            // gets its closing card.
+            closing: transitions
+                .finished
+                .filter(|victory| !victory)
+                .map(|victory| {
+                    Detail::Card(Box::new(presentation::closing_card(
+                        journey, scene, &narration, victory,
+                    )))
+                }),
+            blow_only: false,
         };
         let plan = ViewPlan {
             diff,
@@ -434,6 +518,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         let chime = transitions.turn_changed && !transitions.new_roll;
         motion.previous = Some(snapshot.clone());
         motion.scene_key = Some(key.clone());
+        motion.narration.clone_from(&narration);
         motion.party_hit_points = hit_points.clone();
         motion.generation = generation;
         motion.thinking_for = thinking.clone();
@@ -442,11 +527,33 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         }
         motion.conductor.set_sound(sound_on);
         motion.conductor.set_battlefield_expected(gpu_expected());
-        let commands = if restart {
-            motion.conductor.restart(now, plan)
-        } else {
-            motion.conductor.on_view(now, plan)
+        let blow_plan = |roll: &RollDetail| ViewPlan {
+            diff: ViewDiff {
+                roll: Some(Detail::Roll(Box::new(roll.clone()))),
+                impact: Some(Detail::Roll(Box::new(roll.clone()))),
+                defeat: roll
+                    .target_down
+                    .then(|| Detail::Roll(Box::new(roll.clone()))),
+                blow_only: true,
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: plan.cast.clone(),
         };
+        let mut commands = Vec::new();
+        if restart {
+            commands.extend(motion.conductor.restart(now, plan));
+        } else {
+            for earlier in &before {
+                commands.extend(motion.conductor.on_view(now, blow_plan(earlier)));
+            }
+            let later: Vec<ViewPlan<Detail>> = after.iter().map(blow_plan).collect();
+            commands.extend(motion.conductor.on_view(now, plan));
+            for turn in later {
+                commands.extend(motion.conductor.on_view(now, turn));
+            }
+        }
+        commands.extend(motion.conductor.on_intents(now, intents));
         (commands, chime)
     });
     let Some((commands, chime)) = planned else {
@@ -463,24 +570,34 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
 
 /// Shows the thinking mark at the speaker the server says is writing a reply, once every line
 /// before the reply has been shown, if that speaker stands in this scene; removes it otherwise.
-fn show_thinking(client: &Rc<RefCell<Client>>, speaker: Option<&str>) -> Result<(), JsValue> {
+fn show_thinking(
+    client: &Rc<RefCell<Client>>,
+    speaker: Option<&str>,
+    awaiting: Option<usize>,
+) -> Result<(), JsValue> {
     let state = client.borrow();
     let Some(stage) = state.live.tv.as_ref() else {
         return Ok(());
     };
-    let slot = speaker.and_then(|name| {
-        stage
-            .figures()
-            .slot_named(name)
-            .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
-    });
+    // A reply waiting for its voice clip keeps the thinking mark until the clip starts.
+    let slot = awaiting
+        .map(super::live_stage::slot_of_index)
+        .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
+        .or_else(|| {
+            speaker.and_then(|name| {
+                stage
+                    .figures()
+                    .slot_named(name)
+                    .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
+            })
+        });
     stage.figures().set_thinking(slot)
 }
 
 /// Publishes the machines' states on the stage element, so a browser check asserts on states
 /// instead of sleeping, and shows the thinking mark when the lines before the reply are done.
 fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let Some((scene, line, pending, waiting_lines, thinking, speaker, battle)) =
+    let Some((scene, line, pending, waiting_lines, thinking, speaker, battle, awaiting)) =
         with_motion(|motion| {
             (
                 motion.conductor.scene_state(),
@@ -490,6 +607,7 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 motion.thinking_for.clone(),
                 motion.conductor.active_speaker(),
                 motion.conductor.battle_state(),
+                motion.conductor.awaiting_clip_slot(),
             )
         })
     else {
@@ -512,6 +630,10 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             }
             root.set_attribute("data-stage-pending", if pending { "true" } else { "false" })?;
             root.set_attribute("data-battle-state", battle.name())?;
+            root.set_attribute(
+                "data-battlefield-live",
+                if battlefield_live() { "true" } else { "false" },
+            )?;
             // Whose words the stage shows follows the line being heard, not the raw view.
             stage.set_speaker(match speaker {
                 None => "",
@@ -520,7 +642,11 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             })?;
         }
     }
-    show_thinking(client, thinking.as_deref().filter(|_| !waiting_lines))
+    show_thinking(
+        client,
+        thinking.as_deref().filter(|_| !waiting_lines),
+        awaiting,
+    )
 }
 
 fn redraw(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
@@ -558,6 +684,7 @@ fn apply(client: &Rc<RefCell<Client>>, commands: Vec<Command<Detail>>) -> Result
             }
             Command::Actor { slot, state } => actor_command(client, slot, state),
             Command::Battle(state) => set_battle_state(client, state),
+            Command::ClipState { id, state } => set_clip_state(client, id, state),
         };
         if let Err(error) = outcome {
             first_error.get_or_insert(error);
@@ -712,7 +839,7 @@ fn start_roll(client: &Rc<RefCell<Client>>, roll: &RollDetail, short: bool) -> R
             figures.fx(attacker, Fx::Lunge, LUNGE_AT, direction)?;
         }
     }
-    if short {
+    if short || battlefield_live() {
         return Ok(());
     }
     show_final_roll(client, roll)
@@ -816,7 +943,9 @@ fn impact(client: &Rc<RefCell<Client>>, roll: &RollDetail) -> Result<(), JsValue
             figures.float_text(target, "Miss", FloatKind::Miss, Duration::ZERO)?;
         }
     }
-    if let Some(attacker) = figures.slot_named(&roll.attacker) {
+    if !battlefield_live()
+        && let Some(attacker) = figures.slot_named(&roll.attacker)
+    {
         figures.say(
             attacker,
             BubbleKind::Action,
@@ -838,7 +967,39 @@ fn gpu_expected() -> bool {
     })
 }
 
+/// A line's voice clip changed state: a clip that failed or was skipped shows as such on the
+/// bubble or box, so a line read without its voice never looks spoken.
+fn set_clip_state(
+    client: &Rc<RefCell<Client>>,
+    id: LineId,
+    state: ClipState,
+) -> Result<(), JsValue> {
+    let root = client.borrow().root.clone();
+    if let Some(element) = root.query_selector(&format!("[data-line-id=\"{id}\"]"))? {
+        element.set_attribute("data-clip-state", state.name())?;
+    }
+    match client.borrow().live.tv.as_ref() {
+        Some(stage) => stage.root().set_attribute("data-clip-state", state.name()),
+        None => Ok(()),
+    }
+}
+
 fn set_battle_state(client: &Rc<RefCell<Client>>, state: BattleState) -> Result<(), JsValue> {
+    if matches!(state, BattleState::TurnEnd | BattleState::TurnStart) {
+        // The previous turn's beats are over: let the battlefield show the server's active
+        // combatant (its turn label and marker) now, not at the next roll.
+        super::live_battlefield::resync();
+    }
+    if matches!(state, BattleState::Exiting | BattleState::Absent) {
+        // Nothing from the battle survives its exit: the combat bubbles and call-outs close
+        // with it, and the battlefield fades out under the transition.
+        if state == BattleState::Exiting {
+            super::live_battlefield::fade_out();
+        }
+        if let Some(stage) = client.borrow().live.tv.as_ref() {
+            stage.figures().clear_bubbles()?;
+        }
+    }
     match client.borrow().live.tv.as_ref() {
         Some(stage) => stage
             .root()
@@ -847,9 +1008,21 @@ fn set_battle_state(client: &Rc<RefCell<Client>>, state: BattleState) -> Result<
     }
 }
 
+/// Whether the 3D battlefield is showing (or about to show) the fight, so the flat combat
+/// screen, its dice card and its call-out bubbles must not.
+fn battlefield_live() -> bool {
+    gpu_expected()
+        && super::live_battlefield::entrance() != crate::stage_conductor::Battlefield::Fallback
+}
+
 fn set_scene_state(client: &Rc<RefCell<Client>>, state: SceneState) -> Result<(), JsValue> {
     match client.borrow().live.tv.as_ref() {
-        Some(stage) => stage.root().set_attribute("data-scene-state", state.name()),
+        Some(stage) => {
+            if state == SceneState::Entering {
+                stage.clear_narration()?;
+            }
+            stage.root().set_attribute("data-scene-state", state.name())
+        }
         None => Ok(()),
     }
 }
@@ -863,6 +1036,12 @@ fn line_command(
     detail: &Detail,
     slot: Option<usize>,
 ) -> Result<(), JsValue> {
+    if let (Detail::Intent { kind, hero }, Some(position)) = (detail, slot) {
+        return match client.borrow().live.tv.as_ref() {
+            Some(stage) => stage.figures().set_intent(position, id, state, *kind, hero),
+            None => Ok(()),
+        };
+    }
     let Detail::Line(line) = detail else {
         return Ok(());
     };
@@ -872,7 +1051,7 @@ fn line_command(
             return Ok(());
         };
         match slot {
-            None => stage.narrator_line(state, &line.text)?,
+            None => stage.narrator_line(id, state, &line.text)?,
             Some(position) => {
                 let kind = match (line.kind, line.role) {
                     (TableKind::Action, _) => BubbleKind::Action,
@@ -1031,7 +1210,7 @@ fn tick(now: u64) {
     let commands = with_motion(|motion| {
         let mut commands = motion.conductor.on_tick(now);
         // A fight's entrance waits for the battlefield; ask how far it is.
-        if motion.conductor.battle_state() == BattleState::Entering {
+        if motion.conductor.wants_battlefield() {
             commands.extend(
                 motion
                     .conductor

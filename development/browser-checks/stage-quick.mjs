@@ -17,11 +17,11 @@ await clearEvents(tv);
 const start = Date.now();
 await click(s, pa, s.label('ask-courier'), { wait: 100 });
 await click(s, pa, s.label('defend-courier'), { wait: 100 });
-const attacked = (await click(s, pa, 'Greatsword strike', { optional: true, wait: 0 })) || (await click(s, pb, 'Greatsword strike', { optional: true, wait: 0 }));
+const attacked = (await click(s, pa, 'Attack', { optional: true, wait: 0 })) || (await click(s, pb, 'Attack', { optional: true, wait: 0 }));
 const lastAction = Date.now();
 s.note(`three actions in ${lastAction - start} ms (attack clicked: ${attacked})`);
 await tv.screenshot({ path: `${out}-1-just-after.png` });
-const converged = await until(tv, (now) => now.screen === 'combat' && now.pending === 'false' && now.scene !== 'exiting', CONVERGE_BOUND_MS + 30000).catch(() => null);
+const converged = await until(tv, (now) => now.screen === 'combat' && now.pending === 'false' && ['presenting', 'awaiting-choice'].includes(now.scene), CONVERGE_BOUND_MS + 30000).catch(() => null);
 const convergedAt = Date.now();
 await tv.screenshot({ path: `${out}-2-converged.png` });
 const log = await events(tv);
@@ -39,7 +39,7 @@ check(lingering.bubbles.every((b) => b.kind === 'action' || b.state === 'closing
 // Between the first action and the newest scene presenting, the old scene's clip is cut for the fight
 // (a pause without an end) and no other clip starts.
 const exitingAt = log.find((e) => e.type === 'attr' && e.name === 'data-scene-state' && e.value === 'exiting');
-const presentingAt = log.find((e) => e.type === 'attr' && e.name === 'data-scene-state' && e.value === 'presenting' && exitingAt && e.t > exitingAt.t);
+const presentingAt = log.find((e) => e.type === 'attr' && e.name === 'data-scene-state' && ['presenting', 'awaiting-choice'].includes(e.value) && exitingAt && e.t > exitingAt.t);
 const strayStarts = log.filter((e) => e.type === 'audio' && e.event === 'playing' && exitingAt && presentingAt && e.t > exitingAt.t - 100 && e.t < presentingAt.t);
 check(Boolean(exitingAt && presentingAt), 'the old scene exited and the newest scene is presenting');
 check(strayStarts.length === 0, `no clip of an older scene started while the display converged (${strayStarts.length})`);

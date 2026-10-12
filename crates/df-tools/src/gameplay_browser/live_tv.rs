@@ -540,7 +540,12 @@ impl TvStage {
 
     /// Applies one transition of the narrator line's machine to the Dungeon Master's box: the
     /// text is set as the line opens, never earlier. Returns whether the line opened.
-    pub(super) fn narrator_line(&self, state: LineState, text: &str) -> Result<bool, JsValue> {
+    pub(super) fn narrator_line(
+        &self,
+        id: u64,
+        state: LineState,
+        text: &str,
+    ) -> Result<bool, JsValue> {
         let opened = matches!(
             state,
             LineState::Opening | LineState::Speaking | LineState::Lingering
@@ -550,7 +555,13 @@ impl TvStage {
             self.narration.set_attribute("title", text)?;
         }
         if let Some(caption) = self.narration.parent_element() {
+            caption.set_attribute("data-line-id", &id.to_string())?;
             caption.set_attribute("data-line-state", state.name())?;
+        }
+        if state == LineState::Done {
+            // A finished line leaves nothing behind for the next scene's first frame to show.
+            self.narration.set_text_content(None);
+            self.narration.remove_attribute("title")?;
         }
         match state {
             LineState::Speaking => self.narration.class_list().add_1("speaking")?,
@@ -560,6 +571,13 @@ impl TvStage {
             _ => {}
         }
         Ok(opened)
+    }
+
+    /// Empties the Dungeon Master's box: a new scene starts with none of the old scene's words.
+    pub(super) fn clear_narration(&self) -> Result<(), JsValue> {
+        self.narration.set_text_content(None);
+        self.narration.remove_attribute("title")?;
+        self.narration.class_list().remove_1("speaking")
     }
 
     /// Restarts the staggered title, narration and figure entrance.
@@ -764,8 +782,11 @@ impl TvStage {
     pub(super) fn set_choices(&self, labels: &[String]) -> Result<(), JsValue> {
         let shown: Vec<&str> = labels.iter().map(String::as_str).collect();
         let signature = shown.join("\u{1f}");
-        self.root
-            .set_attribute("data-chips", &shown.len().to_string())?;
+        // `data-chips="off"` is the table's setting that hides the hints; the count never replaces it.
+        if self.root.get_attribute("data-chips").as_deref() != Some("off") {
+            self.root
+                .set_attribute("data-chips", &shown.len().to_string())?;
+        }
         if self.choices.get_attribute("data-labels").as_deref() == Some(signature.as_str()) {
             return Ok(());
         }

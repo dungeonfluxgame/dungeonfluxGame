@@ -24,8 +24,12 @@ pub(crate) const LINE_CLOSE_MS: u32 = 400;
 /// The last line of a scene stays on screen while the table decides; it still closes after
 /// this long so a forgotten room does not keep a bubble for ever.
 pub(crate) const FINAL_LINGER_CAP_MS: u32 = 45_000;
-/// A requested clip that is not ready by now has failed (the line then runs on reading time).
-pub(crate) const CLIP_READY_WAIT_MS: u32 = 5_000;
+/// A requested clip that is not ready by now has failed (the line then runs on reading time and
+/// reports `data-clip-state=failed`). A character's reply is voiced on demand and a real voice
+/// provider can take several seconds under load, so a clip that is known to be coming is waited
+/// for, not raced: the reply bubble opens when its clip starts, and the thinking mark stays until
+/// then.
+pub(crate) const CLIP_READY_WAIT_MS: u32 = 20_000;
 /// A ready clip told to play that has not started by now has failed (a blocked play).
 pub(crate) const CLIP_START_WAIT_MS: u32 = 2_500;
 /// Past the clip's own length (or, unknown, the line's reading time) a missing end signal
@@ -49,12 +53,22 @@ pub(crate) const FIGHT_LINE_FADE_MS: u32 = 500;
 /// An actor walking on, and off.
 pub(crate) const ACTOR_ENTER_MS: u32 = 800;
 pub(crate) const ACTOR_EXIT_MS: u32 = 350;
+/// A speech-intent loader (a hero typing or holding to talk) that the table has not affirmed
+/// for this long is gone from the display, so a closed tab never leaves a stuck bubble. The
+/// server's own expiry is the same length; the phone refreshes about every 2 s.
+pub(crate) const INTENT_EXPIRY_MS: u64 = 5_000;
 /// The scene transition's own bounds: leaving, and the wordmark, title card and entrance.
 pub(crate) const SCENE_EXIT_CAP_MS: u64 = 4_000;
 pub(crate) const SCENE_ENTER_CAP_MS: u64 = 8_000;
 /// A fight's entrance (the scene change, the 3D battlefield mounting, the initiative roll and
 /// roll-call) waits this long for the battlefield; then the flat combat view is the display.
 pub(crate) const BATTLE_ENTER_CAP_MS: u64 = 12_000;
+/// After a fight's finishing blow (dice, impact, fall) has been shown, the display waits this
+/// long for the battlefield to finish its own finishing shot and held victory or defeat beat
+/// (about 6 s) before it leaves for the victory or defeat scene. This is only the cap on a
+/// battlefield that never reports done, never the normal path. The whole exit is then at most:
+/// the blow's cues (about 4.3 s), this wait, and the scene transition (about 2 s).
+pub(crate) const BATTLE_FINISH_CAP_MS: u64 = 16_000;
 /// Outcome cues held back during a fight's entrance; beyond this the oldest are dropped (the
 /// newest view still draws the truth).
 pub(crate) const HELD_OUTCOMES_CAP: usize = 16;
@@ -126,6 +140,12 @@ pub(crate) fn scene_next(state: SceneState, event: SceneEvent) -> Option<SceneSt
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LineState {
+    /// A hero is typing or holding to talk: the loader bubble shows on that hero.
+    Composing,
+    /// The hero submitted; the loader stays while the line is cleaned and committed.
+    Submitted,
+    /// The hero stopped without submitting; the loader closes through the normal exit.
+    Cancelled,
     Queued,
     /// The bubble or box animates in as its clip starts.
     Opening,
@@ -139,6 +159,9 @@ pub(crate) enum LineState {
 impl LineState {
     pub(crate) fn name(self) -> &'static str {
         match self {
+            Self::Composing => "composing",
+            Self::Submitted => "submitted",
+            Self::Cancelled => "cancelled",
             Self::Queued => "queued",
             Self::Opening => "opening",
             Self::Speaking => "speaking",
@@ -156,6 +179,10 @@ impl LineState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LineEvent {
+    Submit,
+    Cancel,
+    /// The hero's own line took the loader's place (or the line was committed elsewhere).
+    Replace,
     /// The line's turn: its clip started, or it has no sound to wait for.
     Begin,
     OpenDone,
@@ -171,6 +198,10 @@ pub(crate) fn line_next(state: LineState, event: LineEvent) -> Option<LineState>
     use LineEvent::*;
     use LineState::*;
     match (state, event) {
+        (Composing, Submit) => Some(Submitted),
+        (Composing | Submitted, Cancel) => Some(Cancelled),
+        (Composing | Submitted | Cancelled, Replace) => Some(Done),
+        (Composing | Submitted | Cancelled, Close) => Some(Closing),
         (Queued, Begin) => Some(Opening),
         (Queued, Close) => Some(Done),
         (Opening, OpenDone) => Some(Speaking),
@@ -199,6 +230,18 @@ pub(crate) enum ClipState {
 }
 
 impl ClipState {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Silent => "silent",
+            Self::Requested => "requested",
+            Self::Ready => "ready",
+            Self::Playing => "playing",
+            Self::Ended => "ended",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        }
+    }
+
     pub(crate) fn is_over(self) -> bool {
         matches!(self, Self::Ended | Self::Failed | Self::Skipped)
     }
@@ -347,7 +390,7 @@ pub(crate) fn battle_next(state: BattleState, event: BattleEvent) -> Option<Batt
         (TurnEnd, TurnOpen) => Some(TurnStart),
         (TurnStart, ActBegin) => Some(Acting),
         (Acting, ResolveBegin) => Some(Resolving),
-        (Resolving, TurnClose) => Some(TurnEnd),
+        (Acting | Resolving, TurnClose) => Some(TurnEnd),
         (TurnStart | Acting | Resolving | TurnEnd, Finish) => Some(Finishing),
         (Finishing, FinishDone) => Some(Exiting),
         (Exiting, ExitDone) => Some(Absent),
@@ -375,7 +418,10 @@ mod tests {
         SceneEvent::ExitBegin,
         SceneEvent::ExitDone,
     ];
-    const LINE_STATES: [LineState; 6] = [
+    const LINE_STATES: [LineState; 9] = [
+        LineState::Composing,
+        LineState::Submitted,
+        LineState::Cancelled,
         LineState::Queued,
         LineState::Opening,
         LineState::Speaking,
@@ -383,7 +429,10 @@ mod tests {
         LineState::Closing,
         LineState::Done,
     ];
-    const LINE_EVENTS: [LineEvent; 6] = [
+    const LINE_EVENTS: [LineEvent; 9] = [
+        LineEvent::Submit,
+        LineEvent::Cancel,
+        LineEvent::Replace,
         LineEvent::Begin,
         LineEvent::OpenDone,
         LineEvent::SpeechDone,
@@ -483,6 +532,33 @@ mod tests {
             state = line_next(state, event).expect("legal");
             assert_eq!(state, expected);
         }
+    }
+
+    #[test]
+    fn a_composed_line_follows_submit_and_is_replaced_by_its_line_or_cancels_and_closes() {
+        assert_eq!(
+            line_next(LineState::Composing, LineEvent::Submit),
+            Some(LineState::Submitted)
+        );
+        assert_eq!(
+            line_next(LineState::Submitted, LineEvent::Replace),
+            Some(LineState::Done)
+        );
+        assert_eq!(
+            line_next(LineState::Composing, LineEvent::Cancel),
+            Some(LineState::Cancelled)
+        );
+        assert_eq!(
+            line_next(LineState::Cancelled, LineEvent::Close),
+            Some(LineState::Closing)
+        );
+        // A loader never speaks: it has no turn, speech or linger.
+        for event in [LineEvent::Begin, LineEvent::OpenDone, LineEvent::SpeechDone] {
+            assert_eq!(line_next(LineState::Composing, event), None);
+            assert_eq!(line_next(LineState::Submitted, event), None);
+            assert_eq!(line_next(LineState::Cancelled, event), None);
+        }
+        assert_eq!(line_next(LineState::Cancelled, LineEvent::Submit), None);
     }
 
     #[test]
@@ -612,7 +688,8 @@ mod tests {
         let scene: Vec<&str> = SCENE_STATES.iter().map(|state| state.name()).collect();
         let line: Vec<&str> = LINE_STATES.iter().map(|state| state.name()).collect();
         let actor: Vec<&str> = ACTOR_STATES.iter().map(|state| state.name()).collect();
-        for names in [scene, line, actor] {
+        let clip: Vec<&str> = CLIP_STATES.iter().map(|state| state.name()).collect();
+        for names in [scene, line, actor, clip] {
             let mut sorted = names.clone();
             sorted.sort_unstable();
             sorted.dedup();

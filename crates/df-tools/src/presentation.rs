@@ -111,6 +111,25 @@ pub(crate) fn snapshot(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -
     }
 }
 
+/// The outcomes a view carries that the previous view did not, oldest first. A tactical fight can
+/// resolve several turns (an enemy's move and attack, then another's) between two views, so more
+/// than the newest outcome may be new; the display stages each one, in order.
+pub(crate) fn new_outcomes<'a>(
+    previous: Option<&CombatSnapshot>,
+    journey: &'a rpc::JourneyView,
+) -> Vec<&'a rpc::CombatOutcome> {
+    let Some(combat) = journey.combat.as_ref() else {
+        return Vec::new();
+    };
+    combat
+        .outcomes
+        .iter()
+        .filter(|outcome| {
+            previous.is_none_or(|before| !before.rolls.contains(&fingerprint(outcome)))
+        })
+        .collect()
+}
+
 /// The changes the display should present. With no previous view (first view, reconnect,
 /// a tab that was hidden) nothing is presented: obsolete cues are skipped, not replayed.
 pub(crate) fn transitions(previous: Option<&CombatSnapshot>, next: &CombatSnapshot) -> Transitions {
@@ -876,6 +895,33 @@ mod tests {
             &scene(),
         );
         assert_eq!(transitions(None, &first), Transitions::default());
+    }
+
+    #[test]
+    fn every_outcome_a_view_adds_is_new_oldest_first() {
+        let before = snapshot(
+            &journey(
+                rpc::JourneyPhase::Combat,
+                false,
+                vec![outcome("Brakka", "Weasel 1", 13, true)],
+            ),
+            &scene(),
+        );
+        let after = journey(
+            rpc::JourneyPhase::Combat,
+            false,
+            vec![
+                outcome("Brakka", "Weasel 1", 13, true),
+                outcome("Weasel 1", "Brakka", 7, false),
+                outcome("Weasel 2", "Brakka", 11, true),
+            ],
+        );
+        let added: Vec<&str> = new_outcomes(Some(&before), &after)
+            .into_iter()
+            .map(|outcome| outcome.actor_name.as_str())
+            .collect();
+        assert_eq!(added, ["Weasel 1", "Weasel 2"]);
+        assert_eq!(new_outcomes(None, &after).len(), 3);
     }
 
     #[test]
