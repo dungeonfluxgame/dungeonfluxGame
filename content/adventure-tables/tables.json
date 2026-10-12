@@ -27,7 +27,8 @@
     "clocks.json",
     "twists.json",
     "clues.json",
-    "art-manifest.json"
+    "art-manifest.json",
+    "beat-scripts.json"
   ],
   "rng": {
     "algorithm": "splitmix64",

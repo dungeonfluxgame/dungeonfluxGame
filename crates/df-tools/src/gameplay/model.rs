@@ -40,7 +40,7 @@ pub(super) fn content(entry: &str) -> Result<ContentReference, RepositoryError> 
     })
 }
 pub(super) fn contents() -> Result<Vec<ContentReference>, RepositoryError> {
-    [
+    let mut contents = [
         "narrative-intervention-policy",
         "harbor",
         "mara-preconfigured",
@@ -64,7 +64,14 @@ pub(super) fn contents() -> Result<Vec<ContentReference>, RepositoryError> {
             .into_iter()
             .map(content),
     )
-    .collect()
+    .collect::<Result<Vec<_>, _>>()?;
+    for entry in super::beat_script_runtime::contents() {
+        let reference = content(&entry)?;
+        if !contents.contains(&reference) {
+            contents.push(reference);
+        }
+    }
+    Ok(contents)
 }
 pub(super) fn source_manifest() -> Vec<u8> {
     [SOURCE, df_rules::local_journey::SOURCE.as_bytes()].concat()
@@ -89,6 +96,9 @@ fn source_digests() -> &'static SourceDigests {
             include_bytes!("../../../df-rules/src/ability_check.rs").as_slice(),
             include_bytes!("../../../df-rules/src/local_journey.rs").as_slice(),
             include_bytes!("journey.rs").as_slice(),
+            include_bytes!("beat_script.rs").as_slice(),
+            include_bytes!("beat_script_runtime.rs").as_slice(),
+            include_bytes!("pack.rs").as_slice(),
             include_bytes!("journey/narrative_phase.rs").as_slice(),
             include_bytes!("journey/narrative_transition.rs").as_slice(),
             include_bytes!("../../../df-narrative/src/beat_selection.rs").as_slice(),
@@ -130,6 +140,23 @@ fn source_digests() -> &'static SourceDigests {
     })
 }
 
+// Compatibility profile captured from bc773d4 before the sequencing-only change.
+// Legacy checkpoints retain exact pins. Explicit scripts bind current handler source plus
+// the script's exact pack bytes; no stored pin comparison is relaxed.
+fn legacy_source_digests() -> SourceDigests {
+    SourceDigests {
+        manifest: source_digests().manifest,
+        handler: ContentDigest([
+            37, 222, 214, 38, 60, 123, 108, 79, 176, 101, 224, 124, 70, 12, 56, 33, 163, 113, 121,
+            181, 40, 122, 48, 126, 245, 151, 197, 6, 169, 179, 37, 149,
+        ]),
+        content: ContentDigest([
+            207, 33, 135, 10, 158, 140, 164, 157, 62, 47, 175, 66, 240, 194, 255, 162, 105, 244,
+            159, 146, 120, 123, 153, 68, 8, 215, 104, 155, 100, 246, 76, 224,
+        ]),
+    }
+}
+
 fn revision_digest(
     domain: &[u8],
     compiled: ContentDigest,
@@ -169,8 +196,16 @@ pub(super) fn validate_file_revisions(
 }
 
 pub(super) fn pins() -> Result<CheckpointPins, RepositoryError> {
-    let digests = source_digests();
     let loaded = super::pack::active();
+    let legacy = legacy_source_digests();
+    let digests = if loaded
+        .as_ref()
+        .is_some_and(|loaded| loaded.pack.beat_script.is_some())
+    {
+        source_digests()
+    } else {
+        &legacy
+    };
     let custom = loaded
         .as_ref()
         .is_some_and(|loaded| !loaded.departures.is_empty());

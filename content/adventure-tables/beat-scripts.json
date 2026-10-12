@@ -1,0 +1,5293 @@
+{
+  "schema": "df-adventure-tables/1",
+  "file": "beat-scripts",
+  "chapter_types": {
+    "courier": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "escort": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "warning": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "retrieval": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "mystery": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "peaceful-destination"
+        ],
+        "labels": {
+          "look-crates-label": "Look at the ground",
+          "look-desk-label": "Read the markings",
+          "leave-label": "Follow the trail",
+          "continue-label": "Carry the clue onward"
+        },
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "investigate",
+            "scene": "opening",
+            "state": {
+              "durable": "opening",
+              "chosen_offer": "begin-story"
+            },
+            "offers": [
+              {
+                "id": "look-crates",
+                "effect": "observe",
+                "label_slot": "look-crates-label"
+              },
+              {
+                "id": "look-desk",
+                "effect": "observe",
+                "label_slot": "look-desk-label"
+              },
+              {
+                "id": "ask-courier",
+                "effect": "ask-courier",
+                "label_slot": "ask-courier"
+              },
+              {
+                "id": "leave-investigation",
+                "effect": "continue",
+                "label_slot": "leave-label"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "look-crates"
+                },
+                "target": "observed-crates"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "look-desk"
+                },
+                "target": "observed-desk"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "leave-investigation"
+                },
+                "target": "peaceful-travel"
+              }
+            ],
+            "scene_variant": "opening"
+          },
+          {
+            "id": "observed-crates",
+            "kind": "investigate",
+            "scene": "opening",
+            "state": {
+              "durable": "opening",
+              "chosen_offer": "look-crates"
+            },
+            "offers": [
+              {
+                "id": "look-crates",
+                "effect": "observe",
+                "label_slot": "look-crates-label"
+              },
+              {
+                "id": "look-desk",
+                "effect": "observe",
+                "label_slot": "look-desk-label"
+              },
+              {
+                "id": "ask-courier",
+                "effect": "ask-courier",
+                "label_slot": "ask-courier"
+              },
+              {
+                "id": "leave-investigation",
+                "effect": "continue",
+                "label_slot": "leave-label"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "look-crates"
+                },
+                "target": "observed-crates"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "look-desk"
+                },
+                "target": "observed-desk"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "leave-investigation"
+                },
+                "target": "peaceful-travel"
+              }
+            ],
+            "scene_variant": "crates"
+          },
+          {
+            "id": "observed-desk",
+            "kind": "investigate",
+            "scene": "opening",
+            "state": {
+              "durable": "opening",
+              "chosen_offer": "look-desk"
+            },
+            "offers": [
+              {
+                "id": "look-crates",
+                "effect": "observe",
+                "label_slot": "look-crates-label"
+              },
+              {
+                "id": "look-desk",
+                "effect": "observe",
+                "label_slot": "look-desk-label"
+              },
+              {
+                "id": "ask-courier",
+                "effect": "ask-courier",
+                "label_slot": "ask-courier"
+              },
+              {
+                "id": "leave-investigation",
+                "effect": "continue",
+                "label_slot": "leave-label"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "look-crates"
+                },
+                "target": "observed-crates"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "look-desk"
+                },
+                "target": "observed-desk"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "leave-investigation"
+                },
+                "target": "peaceful-travel"
+              }
+            ],
+            "scene_variant": "desk"
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "continue-conversation",
+                "effect": "continue",
+                "label_slot": "continue-label"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "continue-conversation"
+                },
+                "target": "peaceful-travel"
+              }
+            ],
+            "scene_variant": "courier-answer-seal"
+          },
+          {
+            "id": "peaceful-travel",
+            "kind": "travel",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "peaceful-travel"
+            },
+            "offers": [
+              {
+                "id": "choose-harbor-scene",
+                "effect": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "peaceful-destination"
+              }
+            ],
+            "scene_variant": "peaceful-travel"
+          },
+          {
+            "id": "peaceful-destination",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "peaceful-destination"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "peaceful-destination"
+          }
+        ]
+      },
+      "scenes": {
+        "opening": {
+          "scene": "opening",
+          "title": "Traces to Follow",
+          "narration": "{patron.first} asks you to examine {place_short}. Traces around {stake.short} may explain the trouble.",
+          "line": "Look closely. Ask quietly if you need another clue."
+        },
+        "crates": {
+          "scene": "opening",
+          "title": "Marks on the Ground",
+          "narration": "At {place_short}, disturbed ground shows where someone paused beside {stake.short}.",
+          "line": ""
+        },
+        "desk": {
+          "scene": "opening",
+          "title": "A Repeated Mark",
+          "narration": "At {place_short}, the same small mark appears twice. Someone wanted the route remembered.",
+          "line": ""
+        },
+        "courier-answer-seal": {
+          "scene": "dialogue-seal",
+          "title": "A Quiet Answer",
+          "narration": "{patron.first} answers you quietly, then turns toward the way onward. The clue is yours to carry.",
+          "line": "There is more to learn along the way."
+        },
+        "peaceful-travel": {
+          "scene": "dialogue-escort",
+          "title": "The Way Onward",
+          "narration": "{patron.first} leaves the discussion behind. You can carry what you learned along the next stretch of the journey.",
+          "line": "Choose where we go next."
+        },
+        "peaceful-destination": {
+          "scene": "inn",
+          "title": "A Journey Settled",
+          "narration": "At {dest.name}, {contact.first} receives your news. This part of the journey ends with the agreement kept.",
+          "line": "You brought the answer we needed."
+        }
+      }
+    },
+    "delve": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "defence": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "heist": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "hunt": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "parley": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "peaceful-destination"
+        ],
+        "labels": {
+          "continue-label": "Continue our agreement"
+        },
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ],
+            "scene_variant": "opening"
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "continue-conversation",
+                "effect": "continue",
+                "label_slot": "continue-label"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "continue-conversation"
+                },
+                "target": "peaceful-travel"
+              }
+            ],
+            "scene_variant": "courier-answer-seal"
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "continue-conversation",
+                "effect": "continue",
+                "label_slot": "continue-label"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "continue-conversation"
+                },
+                "target": "peaceful-travel"
+              }
+            ],
+            "scene_variant": "courier-answer-escort"
+          },
+          {
+            "id": "peaceful-travel",
+            "kind": "travel",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "peaceful-travel"
+            },
+            "offers": [
+              {
+                "id": "choose-harbor-scene",
+                "effect": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "peaceful-destination"
+              }
+            ],
+            "scene_variant": "peaceful-travel"
+          },
+          {
+            "id": "peaceful-destination",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "peaceful-destination"
+            },
+            "offers": [],
+            "transitions": [],
+            "scene_variant": "peaceful-destination"
+          }
+        ]
+      },
+      "scenes": {
+        "opening": {
+          "scene": "opening",
+          "title": "Terms of Passage",
+          "narration": "{patron.first} needs help with {stake.short}. An agreement here can settle the journey.",
+          "line": "Will you hear the terms, or help me carry this onward?"
+        },
+        "courier-answer-seal": {
+          "scene": "dialogue-seal",
+          "title": "A Quiet Answer",
+          "narration": "{patron.first} answers you quietly, then turns toward the way onward. The clue is yours to carry.",
+          "line": "There is more to learn along the way."
+        },
+        "courier-answer-escort": {
+          "scene": "dialogue-escort",
+          "title": "An Agreement Made",
+          "narration": "{patron.first} accepts your help with {stake.short}. The agreement opens the way onward.",
+          "line": "Let us take the next step together."
+        },
+        "peaceful-travel": {
+          "scene": "dialogue-escort",
+          "title": "The Way Onward",
+          "narration": "{patron.first} leaves the discussion behind. You can carry what you learned along the next stretch of the journey.",
+          "line": "Choose where we go next."
+        },
+        "peaceful-destination": {
+          "scene": "inn",
+          "title": "A Journey Settled",
+          "narration": "At {dest.name}, {contact.first} receives your news. This part of the journey ends with the agreement kept.",
+          "line": "You brought the answer we needed."
+        }
+      }
+    },
+    "race-clock": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "rescue": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "escape": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "lieutenant": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "finale": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    },
+    "rest-interlude": {
+      "script": {
+        "entry": "room",
+        "terminal": [
+          "harbor-inn",
+          "defeat-rested"
+        ],
+        "beats": [
+          {
+            "id": "room",
+            "kind": "gather",
+            "scene": "room",
+            "state": {
+              "durable": "room"
+            },
+            "offers": [
+              {
+                "id": "create-character",
+                "label_slot": "create-character",
+                "effect": "create-character"
+              },
+              {
+                "id": "begin-story",
+                "label_slot": "begin-story",
+                "effect": "begin-story"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "create-character"
+                },
+                "target": "room"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "begin-story"
+                },
+                "target": "opening"
+              }
+            ]
+          },
+          {
+            "id": "opening",
+            "kind": "converse",
+            "scene": "opening",
+            "state": {
+              "durable": "opening"
+            },
+            "offers": [
+              {
+                "id": "ask-courier",
+                "label_slot": "ask-courier",
+                "effect": "ask-courier"
+              },
+              {
+                "id": "escort-courier",
+                "label_slot": "escort-courier",
+                "effect": "escort-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "ask-courier"
+                },
+                "target": "courier-answer-seal"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "escort-courier"
+                },
+                "target": "courier-answer-escort"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-seal",
+            "kind": "narrate",
+            "scene": "dialogue-seal",
+            "state": {
+              "durable": "courier-answer-seal"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "courier-answer-escort",
+            "kind": "narrate",
+            "scene": "dialogue-escort",
+            "state": {
+              "durable": "courier-answer-escort"
+            },
+            "offers": [
+              {
+                "id": "defend-courier",
+                "label_slot": "defend-courier",
+                "effect": "defend-courier"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "defend-courier"
+                },
+                "target": "combat"
+              }
+            ]
+          },
+          {
+            "id": "combat",
+            "kind": "fight",
+            "scene": "combat",
+            "state": {
+              "durable": "combat"
+            },
+            "offers": [
+              {
+                "id": "greatsword-attack",
+                "label_slot": "greatsword-attack",
+                "effect": "greatsword-attack"
+              },
+              {
+                "id": "second-wind",
+                "label_slot": "second-wind",
+                "effect": "second-wind"
+              },
+              {
+                "id": "end-turn",
+                "label_slot": "end-turn",
+                "effect": "end-turn"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "greatsword-attack"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "second-wind"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "end-turn"
+                },
+                "target": "combat"
+              },
+              {
+                "trigger": {
+                  "on": "fight-won"
+                },
+                "target": "victory"
+              },
+              {
+                "trigger": {
+                  "on": "fight-lost"
+                },
+                "target": "defeat"
+              }
+            ]
+          },
+          {
+            "id": "victory",
+            "kind": "rest",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "victory-rested",
+            "kind": "travel",
+            "scene": "victory",
+            "state": {
+              "durable": "complete",
+              "victory": true,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              },
+              {
+                "id": "choose-harbor-scene",
+                "label_slot": "choose-harbor-scene",
+                "effect": "choose-harbor-scene"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "victory-rested"
+              },
+              {
+                "trigger": {
+                  "on": "offer",
+                  "offer": "choose-harbor-scene"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          },
+          {
+            "id": "defeat",
+            "kind": "rest",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": false
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "defeat-rested",
+            "kind": "conclude",
+            "scene": "defeat",
+            "state": {
+              "durable": "complete",
+              "victory": false,
+              "rested": true
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "defeat-rested"
+              }
+            ]
+          },
+          {
+            "id": "harbor-inn",
+            "kind": "conclude",
+            "scene": "inn",
+            "state": {
+              "durable": "harbor-inn"
+            },
+            "offers": [
+              {
+                "id": "short-rest",
+                "label_slot": "short-rest",
+                "effect": "short-rest"
+              }
+            ],
+            "transitions": [
+              {
+                "trigger": {
+                  "on": "rest-complete"
+                },
+                "target": "harbor-inn"
+              }
+            ]
+          }
+        ]
+      },
+      "scenes": {}
+    }
+  }
+}

@@ -56,6 +56,7 @@ fn two_thousand_frames_have_playable_first_chapters_and_bounded_resolved_prose()
 #[test]
 fn two_hundred_campaigns_complete_with_clock_deadlines_and_act_invariants() {
     let t = tables();
+    let mut peaceful_types = std::collections::BTreeSet::new();
     for seed in 0..200 {
         let frame = generate_frame(&t, seed, GenerateOptions::default()).unwrap();
         let mut record = CampaignRecord::new(frame.clone()).unwrap();
@@ -127,7 +128,11 @@ fn two_hundred_campaigns_complete_with_clock_deadlines_and_act_invariants() {
                     .unwrap();
                 let first = room.narration.split('.').next().unwrap();
                 assert!(first.starts_with("Previously,"));
-                assert!(first.contains("won") || first.contains("lost"));
+                assert!(
+                    first.contains("won")
+                        || first.contains("lost")
+                        || first.contains("resolved the chapter")
+                );
             }
 
             for node in &t.acts.tables.nodes.entries {
@@ -202,6 +207,15 @@ fn two_hundred_campaigns_complete_with_clock_deadlines_and_act_invariants() {
                 );
             }
             let number = plan.number;
+            let peaceful = !generated
+                .pack
+                .beat_script
+                .as_ref()
+                .unwrap()
+                .uses_encounter();
+            if peaceful {
+                peaceful_types.insert(plan.chapter_type.clone());
+            }
             record
                 .begin(
                     plan,
@@ -209,8 +223,36 @@ fn two_hundred_campaigns_complete_with_clock_deadlines_and_act_invariants() {
                     digest(&generated.documents(true).unwrap().record),
                 )
                 .unwrap();
-            let outcome = synthetic(number, seed);
+            let mut outcome = synthetic(number, seed);
+            if peaceful {
+                outcome.result = ChapterResult::Completed;
+                outcome.rested = false;
+                outcome.antagonist_spared = false;
+                outcome.destination_reached = true;
+                outcome.campaign_time = 0;
+            }
             record.complete(number, outcome.clone()).unwrap();
+            if peaceful {
+                assert!(
+                    record
+                        .clock_history
+                        .iter()
+                        .all(|advance| advance.chapter != number || advance.reason != "defeat")
+                );
+                assert!(record.chapters.last().unwrap().lieutenant_fate.is_none());
+                for lead in &record.chapters.last().unwrap().plan.leads {
+                    if lead.vehicle == "victory" {
+                        assert!(
+                            !record
+                                .clues
+                                .iter()
+                                .find(|clue| clue.clue_id == lead.clue_id)
+                                .unwrap()
+                                .delivered
+                        );
+                    }
+                }
+            }
             assert!(!record.complete(number, outcome).unwrap());
             assert!(record.clock_position >= previous_clock && record.clock_position <= 7);
             previous_clock = record.clock_position;
@@ -255,6 +297,10 @@ fn two_hundred_campaigns_complete_with_clock_deadlines_and_act_invariants() {
             .collect();
         assert!(balanced(&actual));
     }
+    assert_eq!(
+        peaceful_types,
+        std::collections::BTreeSet::from(["mystery".into(), "parley".into()])
+    );
 }
 #[test]
 fn histories_diverge_and_private_facts_do_not_enter_public_recap() {

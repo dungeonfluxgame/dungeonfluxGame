@@ -668,7 +668,12 @@ impl Actor {
                             )
                     {
                         Some(rpc::RejectionCode::WrongTurn)
-                    } else if request.offer_id != super::journey::offer_id(checkpoint, kind)
+                    } else if !super::beat_script_runtime::matches_id(
+                        checkpoint,
+                        kind,
+                        &request.offer_id,
+                    )
+                    .map_err(unavailable)?
                         || !super::journey::offered(checkpoint, member)
                             .map_err(unavailable)?
                             .iter()
@@ -802,7 +807,10 @@ impl Actor {
         };
         let weapon = super::pack::hero_weapon_item().replace('-', " ");
         let destination = super::pack::destination_label();
-        let label = super::pack::offer_label(kind);
+        let label = match super::beat_script_runtime::action_label(&request.offer_id, kind) {
+            Ok(label) => label,
+            Err(_) => return,
+        };
         for line in super::table_log::action_lines(
             kind,
             &hero,

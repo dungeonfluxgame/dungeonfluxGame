@@ -30,7 +30,7 @@ impl fmt::Display for TablesError {
     }
 }
 impl std::error::Error for TablesError {}
-fn invalid(file: &str, path: &str, reason: impl Into<String>) -> TablesError {
+pub(super) fn invalid(file: &str, path: &str, reason: impl Into<String>) -> TablesError {
     TablesError::Invalid {
         file: file.into(),
         path: path.into(),
@@ -51,7 +51,7 @@ fn read(directory: &Path, file: &str) -> Result<Vec<u8>, TablesError> {
     }
     Ok(bytes)
 }
-fn parse<T: DeserializeOwned>(file: &str, bytes: &[u8]) -> Result<T, TablesError> {
+pub(super) fn parse<T: DeserializeOwned>(file: &str, bytes: &[u8]) -> Result<T, TablesError> {
     let mut parser = serde_json::Deserializer::from_slice(bytes);
     let result = serde_path_to_error::deserialize(&mut parser)
         .map_err(|e| invalid(file, &e.path().to_string(), e.inner().to_string()))?;
@@ -150,6 +150,7 @@ pub(crate) struct Tables {
     pub(super) art: BTreeMap<String, String>,
     pub(super) depicts: BTreeMap<String, Vec<super::setting::SettingKind>>,
     pub(super) places: super::setting::Places,
+    pub(super) beat_scripts: super::beat_tables::BeatScripts,
 }
 fn document<T: DeserializeOwned + Serialize>(
     bytes: &BTreeMap<String, Vec<u8>>,
@@ -248,6 +249,7 @@ impl Tables {
             "prose-patterns.json",
             "art-manifest.json",
             "places.json",
+            "beat-scripts.json",
         ] {
             if !files.contains(&file.to_owned()) {
                 return Err(invalid("tables.json", "files", format!("missing {file}")));
@@ -343,6 +345,17 @@ impl Tables {
             prose: document(&bytes, "prose-patterns.json")?.tables,
             art,
             depicts,
+            beat_scripts: super::beat_tables::BeatScripts::load(
+                bytes
+                    .get("beat-scripts.json")
+                    .ok_or_else(|| invalid("beat-scripts.json", ".", "not indexed"))?,
+                &parse(
+                    "chapter-types.json",
+                    bytes
+                        .get("chapter-types.json")
+                        .ok_or_else(|| invalid("chapter-types.json", ".", "not indexed"))?,
+                )?,
+            )?,
             places: parse(
                 "places.json",
                 bytes

@@ -283,5 +283,29 @@ pub(crate) fn substitute_missing_art(
             });
         }
     }
+    // A painting is presentation, not a new authored outcome. Keep script source
+    // scenes/receipts immutable when asset availability changes across a resume.
+    loaded.script_scene_assets.clear();
+    if let Some(script) = &loaded.pack.beat_script {
+        for (id, scene) in &script.scenes {
+            if scene.asset.starts_with("assets/ui/generated/")
+                && !painting_present(asset_root, &scene.asset)
+            {
+                let art_key = scene
+                    .setting
+                    .as_ref()
+                    .map(|setting| setting.art_key.clone())
+                    .unwrap_or_else(|| scene.asset.clone());
+                loaded
+                    .script_scene_assets
+                    .insert(id.clone(), fallback_asset.clone());
+                println!("ADVENTURE art missing {art_key} -> {fallback_key}");
+                substitutions.push(ArtSubstitution {
+                    art_key,
+                    fallback: fallback_key.clone(),
+                });
+            }
+        }
+    }
     substitutions
 }

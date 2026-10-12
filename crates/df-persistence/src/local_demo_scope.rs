@@ -690,6 +690,32 @@ pub fn encode_owned_demo_checkpoint(
     encode_checkpoint(checkpoint, limits).map_err(|_| RepositoryError::InvalidCandidate)
 }
 
+/// Decode an owned demo checkpoint for an offline recovery audit. The same bounded
+/// canonical decoder enforces the expected basis, every pin and the admitted inventory.
+/// This creates no database/session authority and performs no I/O.
+pub fn decode_owned_demo_checkpoint(
+    document: &[u8],
+    expected: df_model::checkpoint::Basis,
+    pins: &CheckpointPins,
+    recovery: &crate::NativeRecoverySource,
+    limits: NativeCodecLimits,
+) -> Result<Checkpoint, RepositoryError> {
+    crate::checkpoint_codec::decode_checkpoint(
+        document,
+        expected,
+        pins,
+        df_model::checkpoint::ReferenceInventory {
+            rules: &recovery.rules,
+            content: &recovery.content,
+            resources: &recovery.resources,
+            assets: &recovery.assets,
+        },
+        recovery.limits,
+        limits,
+    )
+    .map_err(|_| RepositoryError::InvalidCandidate)
+}
+
 /// Decode a stored receipt for the owned native gameplay qualification only.
 /// The canonical codec validates its version and expected session and operation.
 pub fn decode_owned_demo_receipt(

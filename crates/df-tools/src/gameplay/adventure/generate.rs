@@ -224,6 +224,14 @@ pub(crate) fn generate_with_prose(
         forced,
         used: BTreeSet::new(),
     };
+    let chapter_type = forced
+        .get(super::beat_tables::CHAPTER_TYPE)
+        .map(String::as_str)
+        .unwrap_or("courier");
+    let beat_template = tables.beat_scripts.chapter(chapter_type)?;
+    if forced.contains_key(super::beat_tables::CHAPTER_TYPE) {
+        roller.used.insert(super::beat_tables::CHAPTER_TYPE.into());
+    }
     let loc = roller.select(
         "location",
         tables.locations.die,
@@ -343,6 +351,7 @@ pub(crate) fn generate_with_prose(
         _ => return Err(GenerateError::Pattern("ant.name_form".into())),
     };
     let mut context = BTreeMap::new();
+    context.insert("chapter.type".into(), chapter_type.into());
     npc(
         &mut context,
         "patron",
@@ -569,7 +578,9 @@ pub(crate) fn generate_with_prose(
         } else {
             facts.remove("secret.fact");
             facts.remove("secret.id");
-            if beat != "resolution" {
+            if beat == "scene-flow" {
+                facts.retain(|key, _| !key.starts_with("secret."));
+            } else if beat != "resolution" {
                 facts.remove("secret.confirm");
             }
             vec![secret_fact.clone()]
@@ -872,6 +883,7 @@ pub(crate) fn generate_with_prose(
             )?);
         }
     }
+    pack.beat_script = Some(beat_template.assemble(&pack, &mut expression)?);
     for key in forced.keys() {
         if !roller.used.contains(key) {
             return Err(GenerateError::UnknownForced(key.clone()));

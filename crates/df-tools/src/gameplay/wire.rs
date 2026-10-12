@@ -65,6 +65,7 @@ pub(super) fn observation(code: rpc::RejectionCode) -> rpc::SubmitActionResponse
 }
 pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
     Some(match entry {
+        "script-choice" => rpc::GameplayActionKind::ExamineHarborSeal,
         "create-character" => rpc::GameplayActionKind::CreateCharacter,
         "begin-story" => rpc::GameplayActionKind::BeginStory,
         "ask-courier" => rpc::GameplayActionKind::AskCourier,
@@ -80,6 +81,7 @@ pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
 }
 pub(super) fn action_entry(kind: rpc::GameplayActionKind) -> Option<&'static str> {
     Some(match kind {
+        rpc::GameplayActionKind::ExamineHarborSeal => "script-choice",
         rpc::GameplayActionKind::CreateCharacter => "create-character",
         rpc::GameplayActionKind::BeginStory => "begin-story",
         rpc::GameplayActionKind::AskCourier => "ask-courier",
@@ -124,6 +126,12 @@ pub(super) fn journey_input(
         return Err(tonic::Status::invalid_argument("offer exceeds bound"));
     }
     let mut choices = Vec::new();
+    if let Some(id) = super::beat_script_runtime::submitted_id(&request.offer_id) {
+        choices.push((
+            model::label(super::beat_script_runtime::CHOICE_GROUP).map_err(|_| invalid())?,
+            model::label(id).map_err(|_| invalid())?,
+        ));
+    }
     if kind == rpc::GameplayActionKind::ChooseHarborScene {
         let selected = match rpc::HarborDestination::try_from(request.destination) {
             Ok(rpc::HarborDestination::HarborInn) => "harbor-inn",
@@ -572,9 +580,10 @@ pub(super) fn project_journey(
         } else {
             creation = Some(creation_offer());
         }
-        for (kind, label) in journey::offered(current, principal)? {
+        for (kind, label, offer_id) in super::beat_script_runtime::view_offers(current, principal)?
+        {
             offers.push(rpc::GameplayActionOffer {
-                offer_id: journey::offer_id(current, kind),
+                offer_id,
                 action_kind: kind as i32,
                 label: label.to_owned(),
                 destinations: if kind == rpc::GameplayActionKind::ChooseHarborScene {
@@ -659,26 +668,8 @@ pub(super) fn project_journey(
         });
     }
     use super::pack::{self, SceneKey};
-    let key = match phase {
-        rpc::JourneyPhase::Room => SceneKey::Room,
-        rpc::JourneyPhase::Opening => SceneKey::Opening,
-        rpc::JourneyPhase::Dialogue
-            if state.narrative.active_beats[0].entry.as_str() == "courier-answer-seal" =>
-        {
-            SceneKey::DialogueSeal
-        }
-        rpc::JourneyPhase::Dialogue => SceneKey::DialogueEscort,
-        rpc::JourneyPhase::Combat => SceneKey::Combat,
-        rpc::JourneyPhase::Complete
-            if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] =>
-        {
-            SceneKey::Inn
-        }
-        rpc::JourneyPhase::Complete if journey::combat_victory(state)? => SceneKey::Victory,
-        rpc::JourneyPhase::Complete => SceneKey::Defeat,
-        _ => return Err(RepositoryError::InvalidCandidate),
-    };
-    let authored = pack::scene(key);
+    let authored = super::beat_script_runtime::scene(state)?;
+    let key = authored.key;
     let rested = state
         .narrative
         .completed_beats
@@ -744,7 +735,7 @@ pub(super) fn project_journey(
         tempo: None,
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
-    let mut scene = if state.narrative.active_beats.as_slice() == [model::content("harbor-inn")?] {
+    let mut scene = if super::beat_script_runtime::native_inn(state)? {
         journey::inn_scene()
     } else {
         rpc::GameplayScene {

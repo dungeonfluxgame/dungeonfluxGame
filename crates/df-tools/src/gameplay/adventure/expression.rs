@@ -228,7 +228,25 @@ fn scene_name(key: SceneKey) -> &'static str {
 fn plan(baseline: &GeneratedAdventure) -> Result<Vec<Planned<'_>>, Declined> {
     let sheets = &baseline.fact_sheet;
     let scenes = &baseline.pack.scenes;
-    if sheets.len() != LEADING_SLOTS + SLOTS_PER_SCENE * scenes.len() {
+    let scene_slots = SLOTS_PER_SCENE * scenes.len();
+    // Register the appended plain-data script slots in generator order. The
+    // expression policy and accepted-text replay are shared with existing slots.
+    let mut script_slots = Vec::new();
+    if let Some(script) = &baseline.pack.beat_script {
+        for slot in script.labels.keys() {
+            script_slots.push((format!("beat_{slot}"), "beat_label", Group::Voices));
+        }
+        for id in script.scenes.keys() {
+            for (slot, group) in [
+                ("title", Group::Scenes),
+                ("narration", Group::Scenes),
+                ("line", Group::Voices),
+            ] {
+                script_slots.push((format!("beat_{id}_{slot}"), slot, group));
+            }
+        }
+    }
+    if sheets.len() != LEADING_SLOTS + scene_slots + script_slots.len() {
         return Err(Declined::Layout);
     }
     let mut planned = Vec::new();
@@ -238,6 +256,15 @@ fn plan(baseline: &GeneratedAdventure) -> Result<Vec<Planned<'_>>, Declined> {
         }
         let (name, group) = match sheet_index.checked_sub(LEADING_SLOTS) {
             None => (sheet.slot.clone(), Group::Voices),
+            Some(offset) if offset >= scene_slots => {
+                let (name, semantic, group) = script_slots
+                    .get(offset - scene_slots)
+                    .ok_or(Declined::Layout)?;
+                if sheet.slot != *semantic || sheet.beat != "scene-flow" {
+                    return Err(Declined::Layout);
+                }
+                (name.clone(), *group)
+            }
             Some(offset) => {
                 let scene = scenes
                     .get(offset / SLOTS_PER_SCENE)
