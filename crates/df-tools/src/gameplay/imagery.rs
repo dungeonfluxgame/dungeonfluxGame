@@ -42,9 +42,9 @@ use axum::{
 use bytes::Bytes;
 use df_observe::OperationContext;
 use df_providers::{
-    ImageBackground, ImageEdit, ImageEditConfig, ImageEditError, ImageEditModel, ImageFormat,
-    ImageModeration, ImageQuality, ImageUsage, NativeHttpRefusal, NativeImageEditProvider,
-    ReferenceImage as ProviderReference,
+    HeadBox, HeadLocateConfig, ImageBackground, ImageEdit, ImageEditConfig, ImageEditError,
+    ImageEditModel, ImageFormat, ImageModeration, ImageQuality, ImageUsage, NativeHeadLocator,
+    NativeHttpRefusal, NativeImageEditProvider, ReferenceImage as ProviderReference,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -65,7 +65,7 @@ pub(super) use prompt::{
 )]
 pub(super) use prompt::{PromptRefusal, VettedFact};
 // PLAY-V09: the scene plate's party sheet and prompts.
-pub(super) use party_sheet::party_sheet;
+pub(super) use party_sheet::{party_sheet, vision_picture};
 pub(super) use plate_prompt::{PlateReferences, plate_moment, scene_plate};
 pub(super) use references::{ReferenceImage, ReferenceStore};
 
@@ -81,6 +81,8 @@ const MAXIMUM_FAILED: usize = 256;
 const MAXIMUM_IMAGE_BYTES: u64 = 6 * 1024 * 1024;
 const MAXIMUM_IN_FLIGHT: usize = 2;
 const MAXIMUM_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+/// How long one head-location call may take.
+const HEAD_LOCATE_DEADLINE: Duration = Duration::from_secs(25);
 const CACHE_CONTROL: &str = "private, max-age=86400, immutable";
 
 /// What a result is for.
@@ -306,6 +308,9 @@ struct Engine {
     micro_dollars: AtomicU64,
     permits: Arc<Semaphore>,
     in_flight: Mutex<HashMap<String, watch::Receiver<Option<Outcome>>>>,
+    /// PLAY-V09: finds the speaker's head in a finished plate; absent in tests and when the
+    /// production provider could not be built.
+    locator: std::sync::OnceLock<NativeHeadLocator>,
 }
 
 enum Mode {
@@ -378,7 +383,61 @@ impl Imagery {
             configuration.deadline,
         )
         .map_err(|_| io::Error::other("imagery provider configuration refused"))?;
-        Self::new(configuration, provider, manifest_directory)
+        let locator = NativeHeadLocator::new(
+            HeadLocateConfig::live(),
+            configuration.credential.expose(),
+            configuration.deadline,
+        )
+        .ok();
+        let imagery = Self::new(configuration, provider, manifest_directory)?;
+        if let (Mode::On { engine, .. }, Some(locator)) = (&imagery.inner.mode, locator) {
+            // Set once, here; a second call cannot happen.
+            let _first = engine.locator.set(locator);
+        }
+        Ok(imagery)
+    }
+
+    /// PLAY-V09: where the head of the person `description` names is in the finished image `key`,
+    /// as fractions of the picture. The description is a fixed phrase of the closed vocabulary.
+    /// Costs a fraction of a cent, never charges the image budget, and every failure is
+    /// typed: the caller keeps the layout it predicted.
+    pub(super) async fn locate_head(
+        &self,
+        key: &ImageKey,
+        description: &str,
+    ) -> Result<HeadBox, ImageFailure> {
+        let Mode::On { engine, .. } = &self.inner.mode else {
+            return Err(ImageFailure::Off);
+        };
+        let Some(locator) = engine.locator.get() else {
+            return Err(ImageFailure::Off);
+        };
+        let registered = locked(&self.inner.registry)
+            .by_key
+            .get(key.as_str())
+            .copied();
+        let format = registered.ok_or(ImageFailure::InvalidRequest)?.format;
+        let (bytes, stored) = engine
+            .read_cached(key.as_str(), format)
+            .await
+            .ok_or(ImageFailure::InvalidRequest)?;
+        let picture = tokio::task::spawn_blocking(move || vision_picture(&bytes, stored))
+            .await
+            .map_err(|_| ImageFailure::Interrupted)?
+            .map_err(|_| ImageFailure::BadOutput)?;
+        locator
+            .locate(&picture, description, HEAD_LOCATE_DEADLINE)
+            .await
+            .map_err(|error| match error {
+                df_providers::HeadLocateError::InvalidRequest => ImageFailure::InvalidRequest,
+                df_providers::HeadLocateError::Output => ImageFailure::BadOutput,
+                df_providers::HeadLocateError::Transport(NativeHttpRefusal::Deadline) => {
+                    ImageFailure::DeadlineExceeded
+                }
+                df_providers::HeadLocateError::Unauthorized
+                | df_providers::HeadLocateError::Provider(_)
+                | df_providers::HeadLocateError::Transport(_) => ImageFailure::Provider,
+            })
     }
 
     /// Uses `provider`; tests pass one pointed at a loopback fake.
@@ -418,6 +477,7 @@ impl Imagery {
             micro_dollars: AtomicU64::new(0),
             permits: Arc::new(Semaphore::new(MAXIMUM_IN_FLIGHT)),
             in_flight: Mutex::new(HashMap::new()),
+            locator: std::sync::OnceLock::new(),
         };
         let mut registry = Registry::default();
         engine.register_from_manifest(&mut registry);

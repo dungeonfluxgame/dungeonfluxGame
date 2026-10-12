@@ -35,13 +35,16 @@ const MAXIMUM_LIGHTS: usize = 3;
 /// than asked: about nine percent of the frame height in PLAY-V03, about fourteen in the pulled-back
 /// plates of PLAY-V09 (asking for 46% down gave 30 to 33%), so the layout the display uses is
 /// raised by [`HEAD_RAISE_BIAS_PERMILLE`] from this.
-const SPEAKER_ASKED_Y_PERMILLE: u16 = 460;
-const HEAD_RAISE_BIAS_PERMILLE: u16 = 140;
-const SPEAKER_RIGHT_X_PERMILLE: u16 = 640;
-const SPEAKER_LEFT_X_PERMILLE: u16 = 360;
+const SPEAKER_ASKED_Y_PERMILLE: u16 = 560;
+const HEAD_RAISE_BIAS_PERMILLE: u16 = 180;
+const SPEAKER_RIGHT_X_PERMILLE: u16 = 700;
+const SPEAKER_LEFT_X_PERMILLE: u16 = 300;
+/// The model drifts the speaker toward the middle of the frame (asked 64% across, landed 60 to 62;
+/// asked 36, landed 42 to 50), so the layout is moved this far toward the middle from the asked x.
+const HEAD_DRIFT_PERMILLE: u16 = 60;
 /// The head box the display keeps clear: generous, because heads land within about five percent
 /// of the asked position horizontally.
-const HEAD_WIDTH_PERMILLE: u16 = 120;
+const HEAD_WIDTH_PERMILLE: u16 = 160;
 const HEAD_HEIGHT_PERMILLE: u16 = 180;
 /// How far toward the middle of the frame the calm space for the bubble reaches, as a multiple
 /// of the head box width, and how far above the head it reaches in permille of the frame height.
@@ -109,8 +112,8 @@ impl HeroSlot {
         match self {
             Self::LeftForeground => (140, 520),
             Self::RightForeground => (860, 520),
-            Self::LeftMid => (260, 470),
-            Self::RightMid => (740, 470),
+            Self::LeftMid => (200, 470),
+            Self::RightMid => (800, 470),
             Self::BackLeft => (110, 400),
             Self::BackRight => (890, 400),
         }
@@ -782,19 +785,50 @@ fn layout_for(slot: SpeakerSlot, camera: Camera) -> PlateLayout {
     };
     PlateLayout {
         bubble_side: slot.side().opposite(),
-        head_x_permille: asked_x,
+        head_x_permille: match slot {
+            SpeakerSlot::MidLeft => asked_x + HEAD_DRIFT_PERMILLE,
+            SpeakerSlot::MidRight => asked_x - HEAD_DRIFT_PERMILLE,
+        },
         head_y_permille: SPEAKER_ASKED_Y_PERMILLE - HEAD_RAISE_BIAS_PERMILLE,
         head_width_permille: width,
         head_height_permille: height,
     }
 }
 
+/// The layout for a head that was found in the finished plate (fractions of the picture): the
+/// head box a little larger than the measured one, and the bubble on the side of it that has the
+/// middle of the frame. Replaces the predicted layout, which the model does not obey closely.
+pub(in crate::gameplay) fn measured_layout(
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+) -> PlateLayout {
+    let permille = |fraction: f32| (fraction.clamp(0.0, 1.0) * 1000.0).round() as u16;
+    let centre_x = permille((left + right) / 2.0);
+    let centre_y = permille((top + bottom) / 2.0);
+    let grown = |size: f32, least: u16, most: u16| permille(size * 1.3).clamp(least, most);
+    PlateLayout {
+        bubble_side: if centre_x >= 500 {
+            Side::Left
+        } else {
+            Side::Right
+        },
+        head_x_permille: centre_x,
+        head_y_permille: centre_y,
+        head_width_permille: grown(right - left, 90, 240),
+        head_height_permille: grown(bottom - top, 120, 300),
+    }
+}
+
 /// The position the speaker's head is asked for in the prompt: the layout before the bias.
 pub(in crate::gameplay) fn asked_head(layout: &PlateLayout) -> (u16, u16) {
-    (
-        layout.head_x_permille,
-        layout.head_y_permille + HEAD_RAISE_BIAS_PERMILLE,
-    )
+    let x = match layout.bubble_side {
+        // The bubble is on the left of a speaker standing on the right.
+        Side::Left => layout.head_x_permille + HEAD_DRIFT_PERMILLE,
+        Side::Right => layout.head_x_permille - HEAD_DRIFT_PERMILLE,
+    };
+    (x, layout.head_y_permille + HEAD_RAISE_BIAS_PERMILLE)
 }
 
 /// Stages a scene. Pure and deterministic: the same input always gives the same spec.

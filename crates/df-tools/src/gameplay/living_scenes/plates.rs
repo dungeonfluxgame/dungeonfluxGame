@@ -777,7 +777,44 @@ impl Shared {
                 output: OutputSpec::PLATE,
             })
             .await?;
-        Ok((key, spec.speaker.as_ref().map(|speaker| speaker.layout)))
+        let layout = match &spec.speaker {
+            Some(speaker) => Some(self.measured_or_predicted(&key, speaker).await),
+            None => None,
+        };
+        Ok((key, layout))
+    }
+
+    /// The layout of the speaker's head found in the finished plate by the vision model; when it
+    /// cannot be found (no provider, a failure, an implausible answer) the layout the director
+    /// predicted stands. The image model does not place the speaker where it is asked.
+    async fn measured_or_predicted(
+        &self,
+        key: &ImageKey,
+        speaker: &shot::SpeakerShot,
+    ) -> PlateLayout {
+        let description = format!("{}, {}", speaker.look, speaker.task);
+        let started = tokio::time::Instant::now();
+        let found = self.inner.imagery.locate_head(key, &description).await;
+        record(
+            "gameplay.living_scene.head_located",
+            &[
+                (
+                    "scene.outcome",
+                    found
+                        .as_ref()
+                        .map_or_else(|failure| failure.label(), |_| "located")
+                        .to_owned(),
+                ),
+                (
+                    "scene.elapsed_ms",
+                    started.elapsed().as_millis().to_string(),
+                ),
+            ],
+        );
+        match found {
+            Ok(head) => shot::measured_layout(head.left, head.top, head.right, head.bottom),
+            Err(_) => speaker.layout,
+        }
     }
 
     async fn render_edit(
