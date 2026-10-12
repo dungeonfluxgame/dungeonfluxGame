@@ -38,9 +38,13 @@ mod presentation;
 mod speech_capture;
 mod stage_art;
 #[cfg(any(target_arch = "wasm32", test))]
+mod stage_conductor;
+#[cfg(any(target_arch = "wasm32", test))]
 mod stage_depth;
 #[cfg(any(target_arch = "wasm32", test))]
 mod stage_director;
+#[cfg(any(target_arch = "wasm32", test))]
+mod stage_machines;
 
 /// Source identity injected by the reproducible fixture build command.
 pub const BUILD_ID: &str = match option_env!("DF_FIXTURE_BUILD") {
