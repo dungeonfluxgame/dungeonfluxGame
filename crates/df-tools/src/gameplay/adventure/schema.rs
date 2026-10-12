@@ -146,6 +146,9 @@ pub(super) struct Antagonist {
     pub(super) stats: CreatureStats,
     pub(super) fidelity: String,
     pub(super) fidelity_note: String,
+    /// Explicit source encounter profile; absent only in archived legacy tables.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) tactical: Option<super::super::pack::TacticalEncounterTuning>,
     pub(super) klass: String,
     pub(super) speaks: bool,
     pub(super) gender: String,

@@ -97,9 +97,24 @@ pub(super) fn pending(
     };
     if encounter.objectives != [model::content("defend-courier")?]
         || *actor != player_entity(command.member, before)?
-        || !["greatsword-attack", "end-turn"].contains(&action.entry.as_str())
+        || !(if super::tactical::present(state) {
+            super::wire::action_kind(action.entry.as_str())
+                .is_some_and(super::tactical::combat_action)
+        } else {
+            ["greatsword-attack", "end-turn"].contains(&action.entry.as_str())
+        })
     {
         return invalid();
+    }
+    if super::tactical::present(state) {
+        return Ok(Some((
+            model::content(if super::tactical::victory(state)? {
+                "combat-victory"
+            } else {
+                "combat-defeat"
+            })?,
+            *actor,
+        )));
     }
     let party = actors(state)?;
     let party_down = party
@@ -143,13 +158,19 @@ fn terminal(
     };
     if encounter.id != RecordId::from_bytes(&ENCOUNTER).map_err(super::bad)?
         || encounter.definition != model::content("combat")?
-        || encounter.combat_policy != model::content("normal-nonlethal-melee")?
-        || encounter.participants
-            != party
-                .iter()
-                .copied()
-                .chain([entity(BANDIT)?])
-                .collect::<Vec<_>>()
+        || encounter.combat_policy
+            != model::content(if super::tactical::present(state) {
+                "tactical-srd521-cover-policy"
+            } else {
+                "normal-nonlethal-melee"
+            })?
+        || (!super::tactical::present(state)
+            && encounter.participants
+                != party
+                    .iter()
+                    .copied()
+                    .chain([entity(BANDIT)?])
+                    .collect::<Vec<_>>())
     {
         return invalid();
     }
@@ -341,7 +362,7 @@ impl ObjectivePolicyOwner for CurrentObjective<'_> {
                 || !offered(self.before, self.command.member)?
                     .iter()
                     .any(|(offered, _)| *offered == kind)
-                || !targets.is_empty()
+                || (!super::tactical::present(current.state()) && !targets.is_empty())
                 || *actor != player_entity(self.command.member, self.before)?
                 || cause.actor != *actor
                 || cause.cause.operation != self.command.operation
@@ -388,10 +409,14 @@ pub(super) fn stage(
         .decisions
         .last()
         .ok_or(RepositoryError::InvalidCandidate)?;
-    let victory = accepted(last)?
-        .combat
-        .iter()
-        .any(|outcome| outcome.knocked_out && outcome.target_id.as_slice() == BANDIT.as_slice());
+    let victory = if super::tactical::present(candidate.state()) {
+        super::tactical::victory(candidate.state())?
+    } else {
+        accepted(last)?
+            .combat
+            .iter()
+            .any(|outcome| outcome.knocked_out && outcome.target_id.as_slice() == BANDIT.as_slice())
+    };
     let cause = terminal(candidate.state(), victory, false)?;
     let expected = model::content("defend-courier")?;
     let replacement = model::content(if victory {

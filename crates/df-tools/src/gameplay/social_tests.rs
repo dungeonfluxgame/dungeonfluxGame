@@ -370,3 +370,81 @@ fn recent_conversation_is_bounded_to_six_lines_oldest_dropped() {
     assert_eq!(recent.first().unwrap(), &(true, "question 7".to_owned()));
     assert_eq!(recent.last().unwrap(), &(false, "answer 9".to_owned()));
 }
+
+#[test]
+fn what_an_npc_has_said_survives_a_reload_and_a_new_scene_starts_a_new_conversation() {
+    let dossier = patron(Attitude::Indifferent);
+    let directory = directory("conversation");
+    let ledger =
+        SocialLedger::open(vec![dossier.clone()], "0x01", Some(directory.clone())).unwrap();
+    let hero = member(9);
+    assert_eq!(ledger.conversation(hero, &dossier, "opening").exchange, 1);
+    ledger.remember_offered(
+        hero,
+        &dossier,
+        &["trait:want".to_owned(), "line:origin_line".to_owned()],
+    );
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        classify_keywords("Who are you?"),
+        "Who are you?",
+        "I don't know who else would ask.",
+    );
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        classify_keywords("Why?"),
+        "Why?",
+        "Because someone has to.",
+    );
+    ledger.save().unwrap();
+
+    let reloaded =
+        SocialLedger::open(vec![dossier.clone()], "0x01", Some(directory.clone())).unwrap();
+    let carried = reloaded.conversation(hero, &dossier, "opening");
+    assert_eq!(carried.exchange, 3, "the third reply in this scene");
+    assert!(
+        carried.admitted_ignorance,
+        "the 'I don't know' is remembered"
+    );
+    assert!(carried.voiced.contains(&"trait:want".to_owned()));
+    assert!(carried.voiced.contains(&"line:origin_line".to_owned()));
+    assert!(
+        !carried.last_asked,
+        "the last line did not end in a question"
+    );
+
+    let next_scene = reloaded.conversation(hero, &dossier, "dialogue-seal");
+    assert_eq!(
+        next_scene.exchange, 1,
+        "a new scene starts a new conversation"
+    );
+    assert!(
+        !next_scene.admitted_ignorance,
+        "the admission belongs to the old one"
+    );
+    assert!(
+        next_scene.voiced.contains(&"trait:want".to_owned()),
+        "what was said is not said again in a later scene"
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn a_question_at_the_end_of_a_reply_is_remembered_so_the_next_does_not_end_with_one() {
+    let dossier = patron(Attitude::Indifferent);
+    let ledger = SocialLedger::open(vec![dossier.clone()], "0x01", None).unwrap();
+    let hero = member(10);
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        classify_keywords("Who are you?"),
+        "Who are you?",
+        "Who wants to know?",
+    );
+    assert!(ledger.conversation(hero, &dossier, "opening").last_asked);
+}

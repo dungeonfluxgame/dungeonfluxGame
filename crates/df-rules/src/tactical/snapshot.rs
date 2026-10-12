@@ -1,0 +1,243 @@
+//! Complete versioned detached state. Decode requires the caller's admitted immutable map.
+//! This codec grants no source, actor or persistence authority.
+use super::{
+    Battle, BattleMap, RuleError,
+    state::{Combatant, PendingMove},
+};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+
+const VERSION: u16 = 1;
+const MAXIMUM_BYTES: usize = 1024 * 1024;
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Snapshot {
+    version: u16,
+    source: String,
+    layout: String,
+    actors: Vec<Combatant>,
+    order: Vec<u32>,
+    active: usize,
+    round: u32,
+    pending: Option<PendingMove>,
+    needs_death_save: bool,
+}
+
+impl Battle {
+    /// Preserve all health, equipment, expiries, budgets and optional movement/reaction state.
+    /// Map bytes/hash and actor-to-entity bindings remain the session owner's pinned records.
+    pub fn snapshot(&self) -> Result<Vec<u8>, RuleError> {
+        let bytes = serde_json::to_vec(&Snapshot {
+            version: VERSION,
+            source: super::SOURCE_REVISION.to_owned(),
+            layout: self.map.id().to_owned(),
+            actors: self.actors.clone(),
+            order: self.order.clone(),
+            active: self.active,
+            round: self.round,
+            pending: self.pending.clone(),
+            needs_death_save: self.needs_death_save,
+        })
+        .map_err(|_| RuleError::SnapshotData)?;
+        if bytes.len() > MAXIMUM_BYTES {
+            return Err(RuleError::Capacity);
+        }
+        Ok(bytes)
+    }
+
+    /// Refuse incompatible or structurally invalid state; never manufacture missing fields.
+    /// Caller must separately admit the immutable map revision and canonical actor bindings.
+    pub fn from_snapshot(map: BattleMap, bytes: &[u8]) -> Result<Self, RuleError> {
+        if bytes.len() > MAXIMUM_BYTES {
+            return Err(RuleError::Capacity);
+        }
+        let state: Snapshot = serde_json::from_slice(bytes).map_err(|_| RuleError::SnapshotData)?;
+        if state.version != VERSION
+            || state.source != super::SOURCE_REVISION
+            || state.layout != map.id()
+            || state.round == 0
+            || !(2..=64).contains(&state.actors.len())
+            || state.order.len() != state.actors.len()
+            || state.active >= state.order.len()
+        {
+            return Err(RuleError::SnapshotData);
+        }
+        let mut ids = BTreeSet::new();
+        let mut living_cells = BTreeSet::new();
+        for actor in &state.actors {
+            if actor.id() == 0
+                || !ids.insert(actor.id())
+                || !map.contains(actor.cell())
+                || map.is_blocked(actor.cell())
+                || actor.turn_count > state.round
+                || actor.health.maximum != actor.spec.hit_points
+                || actor.health.hit_points > actor.health.maximum
+                || actor.health.death_successes > 3
+                || actor.health.death_failures > 3
+                || actor.spec.second_wind_uses > 2
+                || actor.spec.arrows > 1000
+                || actor.spec.bolts > 1000
+                || actor.held.len() > 2
+                || actor.dropped.len() > 12
+                || actor.weapon_counts.len() > 12
+                || actor.extra_attacks > 1
+                || (!actor.health.dead && !living_cells.insert(actor.cell()))
+                || actor.budget.movement_spent_ft > 240
+                || (actor.budget.dash && !actor.budget.action_used)
+                || (actor.budget.dodging && !actor.budget.action_used)
+                || (actor.health.knocked_out
+                    && (actor.health.hit_points != 1
+                        || !actor.health.unconscious
+                        || actor.health.dead))
+                || actor.slow.len() > 64
+                || actor.sap.len() > 64
+                || actor.vex.len() > 64
+                || (actor.health.dead && actor.health.hit_points != 0)
+                || (actor.health.unconscious && !actor.health.prone)
+            {
+                return Err(RuleError::SnapshotData);
+            }
+            if (!actor.spec.shield && actor.shield_equipped)
+                || actor.held.iter().copied().collect::<BTreeSet<_>>().len() != actor.held.len()
+                || actor
+                    .dropped
+                    .iter()
+                    .map(|(weapon, _)| *weapon)
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != actor.dropped.len()
+                || actor.held.iter().any(|weapon| {
+                    actor.dropped.iter().any(|(dropped, _)| dropped == weapon)
+                        || actor.weapon_count(*weapon) == 0
+                })
+                || actor.weapon_counts.keys().copied().collect::<BTreeSet<_>>()
+                    != actor.spec.weapons.iter().copied().collect::<BTreeSet<_>>()
+                || actor.weapon_counts.iter().any(|(weapon, count)| {
+                    *count
+                        > if *weapon == super::Weapon::Javelin {
+                            8
+                        } else if actor.spec.kind == super::CreatureKind::Kobold
+                            && *weapon == super::Weapon::Dagger
+                        {
+                            3
+                        } else {
+                            1
+                        }
+                })
+            {
+                return Err(RuleError::SnapshotData);
+            }
+            let mut original = actor.spec.clone();
+            // Source creation is fixed; resources can only decrease/recover through resolve.
+            if original.kind == super::CreatureKind::Hero {
+                original.arrows = 20;
+                original.second_wind_uses = 2;
+            }
+            if actor.spec.shield && !actor.shield_equipped {
+                original.armor_class = original
+                    .armor_class
+                    .checked_add(2)
+                    .ok_or(RuleError::SnapshotData)?;
+            }
+            super::state::validate_source_profile(&original)?;
+            if actor
+                .held
+                .iter()
+                .chain(actor.dropped.iter().map(|(weapon, _)| weapon))
+                .any(|weapon| !actor.spec.weapons.contains(weapon))
+                || actor.dropped.iter().any(|(_, cell)| !map.contains(*cell))
+            {
+                return Err(RuleError::SnapshotData);
+            }
+        }
+        if state.order.iter().copied().collect::<BTreeSet<_>>() != ids {
+            return Err(RuleError::SnapshotData);
+        }
+        for actor in &state.actors {
+            if actor
+                .slow
+                .iter()
+                .chain(&actor.sap)
+                .any(|effect| !ids.contains(&effect.origin) || effect.expires_turn == 0)
+                || actor
+                    .vex
+                    .iter()
+                    .any(|(target, until)| !ids.contains(target) || *until == 0)
+            {
+                return Err(RuleError::SnapshotData);
+            }
+        }
+        if let Some(pending) = &state.pending
+            && (state.order.get(state.active) != Some(&pending.actor)
+                || pending.path.is_empty()
+                || pending.path.len() > 1024
+                || pending.next >= pending.path.len()
+                || pending.eligible.is_empty()
+                || pending.eligible.len() > 64
+                || pending
+                    .eligible
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != pending.eligible.len()
+                || pending
+                    .eligible
+                    .iter()
+                    .any(|id| !ids.contains(id) || *id == pending.actor)
+                || pending.path.iter().any(|cell| !map.contains(*cell)))
+        {
+            return Err(RuleError::SnapshotData);
+        }
+        let battle = Self {
+            map,
+            actors: state.actors,
+            order: state.order,
+            active: state.active,
+            round: state.round,
+            pending: state.pending,
+            needs_death_save: state.needs_death_save,
+        };
+        if let Some(pending) = &battle.pending {
+            let mover = battle.actor(pending.actor)?;
+            let destination = pending.path[pending.next];
+            if mover.health.incapacitated()
+                || mover.budget.disengaged
+                || mover.cell().distance(destination) != 5
+                || battle.map.is_blocked(destination)
+                || pending
+                    .path
+                    .windows(2)
+                    .any(|cells| cells[0].distance(cells[1]) != 5)
+                || pending.path.iter().any(|cell| battle.map.is_blocked(*cell))
+                || (pending.next > 0 && pending.path[pending.next - 1] != mover.cell())
+                || pending.eligible.iter().any(|id| {
+                    battle.actor(*id).is_ok_and(|reactor| {
+                        reactor.side() == mover.side()
+                            || reactor.health.incapacitated()
+                            || reactor.budget.reaction_used
+                            || reactor.cell().distance(mover.cell()) > 5
+                            || reactor.cell().distance(destination) <= 5
+                            || !battle.can_see(reactor.cell(), mover.cell())
+                    })
+                })
+            {
+                return Err(RuleError::SnapshotData);
+            }
+        }
+        if battle.needs_death_save
+            && battle.active_actor().is_none_or(|id| {
+                battle.actor(id).map_or(true, |actor| {
+                    actor.health.hit_points != 0
+                        || actor.health.dead
+                        || actor.health.stable
+                        || actor.health.knocked_out
+                })
+            })
+        {
+            return Err(RuleError::SnapshotData);
+        }
+        Ok(battle)
+    }
+}

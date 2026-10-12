@@ -667,6 +667,9 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                     place: String::new(),
                     location_id: String::new(),
                     live_backdrop: String::new(),
+                    live_plate: String::new(),
+                    plate_layout: None,
+                    plate_state: 0,
                 }),
                 journey: Some(rpc::JourneyView {
                     phase: if in_combat {
@@ -752,6 +755,7 @@ fn a_player_view_is_never_observed_or_changed() {
     let living = LivingScenes {
         inner: Some(inner),
         _worker: None,
+        plates: None,
     };
     let mut after = player.clone();
     living.apply(&mut after);
@@ -776,6 +780,7 @@ fn published_art_changes_only_the_art_fields_of_the_display_view() {
     let living = LivingScenes {
         inner: Some(inner),
         _worker: None,
+        plates: None,
     };
     let before = display_message(false);
     let mut after = before.clone();
@@ -814,6 +819,7 @@ fn a_sprite_overlay_applies_only_to_the_cutout_it_was_made_from() {
     let living = LivingScenes {
         inner: Some(inner),
         _worker: None,
+        plates: None,
     };
     let before = display_message(false);
     let mut after = before.clone();

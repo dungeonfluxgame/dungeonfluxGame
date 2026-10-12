@@ -1,19 +1,16 @@
 //! Adapter between the shared display and the 3D battlefield in `df-render`.
 //!
-//! The battlefield only draws staging. Positions are STAGING ONLY today: the rules engine has no
-//! positions, movement or range (one melee enemy, everyone in reach), so this module derives a
-//! stable formation from the combat view (party members by seat on the near side, the enemy
-//! opposite, on walkable cells of the scene's grid) and animates the step-beside and lunge
-//! cosmetically. Nothing here decides an outcome: every hit, miss, damage figure and downing is
-//! copied from the server's `CombatOutcome`. When the server later supplies cells, build the
-//! tokens with those cells instead of `derive_formation`; the renderer does not change.
+//! The live battlefield renders server cells, layout, attack styles and voice sets. Legacy views
+//! and the isolated renderer preview retain a cosmetic formation fallback. No client rule decides
+//! reachable cells, legal targets, cover, damage or outcomes.
 //!
 //! `#battle-preview[=<location-id>[:<layout-id>]][&splat][&restrained][&statuses][&sheet[=n]]`
 //! mounts the battlefield alone and loops a scripted fight (it opens with the initiative roll and
 //! roll-call) with no server calls, for looking at the renderer without playing a game.
 //! `&statuses` puts every status on a figure in turn; `&sheet=n` shows six figures at once.
 //!
-//! The four SWITCH POINTS the server's data later replaces, each one function: the layout choice
+//! Server tactical data supplies layout, cells, attack mode and voice. The retained legacy
+//! SWITCH POINT fallbacks cover old checkpoints and the standalone preview: the layout choice
 //! ([`chosen_layout_id`]), the attack style ([`attack_style_for`]), the voice set
 //! (`df_render::battle::voice_for`, called by the stage) and the content rating
 //! ([`content_rating`]).
@@ -90,6 +87,16 @@ struct PreviewRequest {
     free_camera: Option<battle::CameraPose>,
     /// `&fps=24|30`: the presentation rate (30 when absent or invalid).
     fps: battle::BattleFps,
+    /// `&beat=graze|heavy|critical|miss|finish`: stage one attack of that kind after the camera
+    /// has idled a moment, then hold (review frames of the feel).
+    demo: Option<String>,
+    /// `&slow=0.1`: the stage clock at that share of real time, for slow-motion review strips.
+    slow: Option<f32>,
+    /// `&feel=off`: battle feel (shake, hit-stop, sway, blur, particles) off, for measurements.
+    feel_off: bool,
+    /// `&tempo=0..1000`: the tempo intensity the camera sway follows (the live game reads the
+    /// server's tempo cue).
+    tempo: Option<u16>,
 }
 
 fn free_camera(text: &str) -> Option<battle::CameraPose> {
@@ -136,6 +143,10 @@ fn preview_request() -> Option<PreviewRequest> {
         shot: None,
         free_camera: None,
         fps: battle::BattleFps::DEFAULT,
+        feel_off: false,
+        tempo: None,
+        demo: None,
+        slow: None,
     };
     for part in rest.split('&') {
         match part.strip_prefix('=').unwrap_or(part) {
@@ -206,6 +217,12 @@ fn preview_request() -> Option<PreviewRequest> {
                 request.shot = battle::ShotName::from_key(&other[5..]);
             }
             other if other.starts_with("cam=") => request.free_camera = free_camera(&other[4..]),
+            "feel=off" => request.feel_off = true,
+            other if other.starts_with("beat=") && plain_name(&other[5..]) => {
+                request.demo = Some(other[5..].to_owned());
+            }
+            other if other.starts_with("slow=") => request.slow = other[5..].parse().ok(),
+            other if other.starts_with("tempo=") => request.tempo = other[6..].parse().ok(),
             other if other.starts_with("fps=") => {
                 request.fps = other[4..]
                     .parse::<u32>()
@@ -288,12 +305,11 @@ fn combatant(
         }),
         statuses: Vec::new(),
         attack: attack_style_for(figure),
+        voice: None,
     }
 }
 
-/// How a figure attacks on screen. SWITCH POINT: until the server reports each combatant's
-/// weapon, the archer is the figure whose art is the bow (`figure-hero-3`); the server's
-/// equipped weapon replaces this match.
+/// Legacy/preview attack style fallback; tactical figures use the server attack_style field.
 fn attack_style_for(figure: &str) -> AttackStyle {
     match figure {
         "figure-hero-3" => AttackStyle::Ranged,
@@ -496,6 +512,8 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             procedural_splats: request.procedural_splats,
             fixed_quality: request.fixed,
             fps: request.fps,
+            feel_off: request.feel_off,
+            slow: request.slow,
             ..StageOptions::default()
         },
     )
@@ -507,12 +525,24 @@ async fn run_preview(host: Element, request: PreviewRequest) {
     stage.set_sound_sink(Rc::new(|event| {
         live_sfx::play_event(&event, content_rating());
     }));
+    // A harness reads when each blow lands, from the same impact event the HUD work subscribes to.
+    let impact_host = host.clone();
+    stage.set_impact_sink(Rc::new(move |event| {
+        mark(
+            &impact_host,
+            "data-battlefield-impact",
+            &format!("{:?}:{:.2}", event.class, event.intensity),
+        );
+    }));
     PREVIEW.with(|slot| *slot.borrow_mut() = Some(stage));
     with_preview(|stage| {
         stage.set_restrained(
             request.restrained || content_rating() == battle::ContentRating::Restrained,
         )
     });
+    if let Some(tempo) = request.tempo {
+        with_preview(|stage| stage.set_tempo_intensity(tempo));
+    }
     live_sfx::set_battlefield_owns_combat(true);
     // The shared sound control lets a harness (or a viewer) unlock audio with one click.
     if let Some(document) = host.owner_document() {
@@ -567,6 +597,101 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                     show_unavailable(&host, reason.key());
                 }
                 return;
+            }
+        }
+        if let Some(kind) = request.demo.clone() {
+            // One attack of the asked kind on a camera that has idled a moment, then hold.
+            with_preview(|stage| stage.establish());
+            TimeoutFuture::new(2500).await;
+            if kind == "selfheal" {
+                // A self action (Second Wind): the actor alone, clear of everyone else.
+                with_preview(|stage| {
+                    let _ = stage.stage(Beat::Heal {
+                        source: TokenId::new("tobin"),
+                        target: TokenId::new("tobin"),
+                        amount: 5,
+                        target_hit_points_after: Some(12),
+                    });
+                });
+                mark(&host, "data-battlefield-demo", &kind);
+                loop {
+                    TimeoutFuture::new(1000).await;
+                    if PREVIEW.with(|slot| slot.borrow().is_none()) {
+                        return;
+                    }
+                }
+            }
+            if kind == "enemyhit" {
+                // The enemy's turn: the goblin hits the hero.
+                with_preview(|stage| {
+                    let _ = stage.stage(Beat::Attack {
+                        attacker: TokenId::new("goblin"),
+                        target: TokenId::new("tobin"),
+                        result: AttackResult::Hit {
+                            damage: 3,
+                            critical: false,
+                            downed: false,
+                        },
+                        target_hit_points_after: Some(9),
+                    });
+                });
+                mark(&host, "data-battlefield-demo", &kind);
+                loop {
+                    TimeoutFuture::new(1000).await;
+                    if PREVIEW.with(|slot| slot.borrow().is_none()) {
+                        return;
+                    }
+                }
+            }
+            let (result, after) = match kind.as_str() {
+                "graze" => (
+                    AttackResult::Hit {
+                        damage: 1,
+                        critical: false,
+                        downed: false,
+                    },
+                    Some(6),
+                ),
+                "heavy" => (
+                    AttackResult::Hit {
+                        damage: 7,
+                        critical: false,
+                        downed: false,
+                    },
+                    Some(2),
+                ),
+                "critical" => (
+                    AttackResult::Hit {
+                        damage: 5,
+                        critical: true,
+                        downed: false,
+                    },
+                    Some(3),
+                ),
+                "finish" => (
+                    AttackResult::Hit {
+                        damage: 9,
+                        critical: false,
+                        downed: true,
+                    },
+                    Some(0),
+                ),
+                _ => (AttackResult::Miss, None),
+            };
+            with_preview(|stage| {
+                let _ = stage.stage(Beat::Attack {
+                    attacker: TokenId::new("tobin"),
+                    target: TokenId::new("goblin"),
+                    result,
+                    target_hit_points_after: after,
+                });
+            });
+            mark(&host, "data-battlefield-demo", &kind);
+            loop {
+                TimeoutFuture::new(1000).await;
+                if PREVIEW.with(|slot| slot.borrow().is_none()) {
+                    return;
+                }
             }
         }
         if request.hold {
@@ -867,6 +992,8 @@ struct Live {
     latest: Option<CombatSnapshot>,
     /// The fight began in front of the display and its first feed has not run yet.
     begun_live: bool,
+    reachable: Vec<Cell>,
+    targets: Vec<Cell>,
 }
 
 thread_local! {
@@ -877,6 +1004,8 @@ thread_local! {
         feed: CombatFeed::new(FeedMode::HoldForCues),
         latest: None,
         begun_live: false,
+        reachable: Vec::new(),
+        targets: Vec::new(),
     });
 }
 
@@ -920,7 +1049,14 @@ fn enemy_height_m(creature: &str) -> f32 {
 /// `scene-place-*` or `scene-dest-*` picture and no longer names the place. The reason for any
 /// fallback is returned so it can be recorded on the page.
 fn scene_choice(view: &LiveView<'_>) -> battle::SceneChoice {
-    battle::resolve_scene(&view.scene.location_id)
+    battle::resolve_scene(
+        view.journey
+            .combat
+            .as_ref()
+            .map(|combat| combat.location_id.as_str())
+            .filter(|id| !id.is_empty())
+            .unwrap_or(&view.scene.location_id),
+    )
 }
 
 /// The fight's own painting, used as the backdrop behind the battlefield (the confrontation
@@ -931,10 +1067,7 @@ fn backdrop_stem(view: &LiveView<'_>) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// SWITCH POINT (layout). The layout for this fight, deterministic from data the view already
-/// carries (the location, the fight's participants; never the round), so a reload and the
-/// preview show the same layout for the same fight. The server's own layout id replaces this
-/// function's body.
+/// Legacy/preview layout fallback; mounted tactical fights use the server layout_id.
 fn chosen_layout_id(scene: &BattleScene, key: &str) -> Option<String> {
     battle::choose_layout(&scene.layouts, key).map(|layout| layout.id.clone())
 }
@@ -968,6 +1101,19 @@ thread_local! {
 }
 
 /// Copies the server's combat projection into plain data. No outcome is decided here.
+fn voice_set(key: &str) -> Option<battle::VoiceSet> {
+    use battle::VoiceSet as V;
+    match key {
+        "hero-male" => Some(V::HeroMale),
+        "hero-female" => Some(V::HeroFemale),
+        "small-creature" => Some(V::SmallCreature),
+        "beast" => Some(V::Beast),
+        "undead" => Some(V::Undead),
+        "humanoid" => Some(V::Humanoid),
+        _ => None,
+    }
+}
+
 fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
     let combat = view.journey.combat.as_ref()?;
     let party = view.journey.party.len();
@@ -986,11 +1132,25 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
         .iter()
         .enumerate()
         .map(|(index, member)| {
-            let hero = index < party;
+            let authoritative = member.cell.is_some();
+            let hero = if authoritative {
+                member.side == 1
+            } else {
+                index < party
+            };
             // Seats wear the hero art in this order: the dwarf fighter, then the archer (the
             // owner asked for a female long-range player in the party), then the second fighter.
             let hero_art = [1, 3, 2][index % 3];
-            let figure = if hero {
+            let portrait = if authoritative {
+                member.portrait.clone()
+            } else if hero {
+                format!("portrait-hero-{hero_art}")
+            } else {
+                format!("portrait-{creature}")
+            };
+            let figure = if authoritative {
+                portrait.replacen("portrait-", "figure-", 1)
+            } else if hero {
                 format!("figure-hero-{hero_art}")
             } else {
                 format!("figure-{creature}")
@@ -1001,23 +1161,45 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
                 side: if hero { Side::Hero } else { Side::Enemy },
                 hit_points: member.hit_points,
                 maximum_hit_points: member.maximum_hit_points,
-                height_m: if hero { 1.35 } else { enemy_height_m(creature) },
-                attack: attack_style_for(&figure),
+                height_m: if hero {
+                    1.35
+                } else {
+                    enemy_height_m(creature_of(&portrait))
+                },
+                attack: if authoritative {
+                    if member.attack_style == 2 {
+                        AttackStyle::Ranged
+                    } else {
+                        AttackStyle::Melee
+                    }
+                } else {
+                    attack_style_for(&figure)
+                },
+                voice: voice_set(&member.voice_set),
                 // Server-supplied cells replace the spawn cells here (none carried today).
-                cell: None,
+                cell: member.cell.as_ref().and_then(|cell| {
+                    Some(Cell::new(
+                        i32::try_from(cell.col).ok()?,
+                        i32::try_from(cell.row).ok()?,
+                    ))
+                }),
                 // Only what the view already says: bloodied from the hit points, unconscious
                 // from the server's own knockout flag. The conditions wait for the server.
-                statuses: battle::derived_from_view(
-                    member.hit_points,
-                    member.maximum_hit_points,
-                    member.unconscious,
-                ),
-                figure: Some(figure),
-                portrait: Some(if hero {
-                    format!("portrait-hero-{hero_art}")
+                statuses: if authoritative {
+                    member
+                        .conditions
+                        .iter()
+                        .filter_map(|condition| Status::from_id(condition))
+                        .collect()
                 } else {
-                    format!("portrait-{creature}")
-                }),
+                    battle::derived_from_view(
+                        member.hit_points,
+                        member.maximum_hit_points,
+                        member.unconscious,
+                    )
+                },
+                figure: Some(figure),
+                portrait: Some(portrait),
             }
         })
         .collect();
@@ -1101,6 +1283,36 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
     let key = layout_key(view, &snapshot);
     let phase_idle = LIVE.with(|live| {
         let mut live = live.borrow_mut();
+        if let Some(combat) = &view.journey.combat {
+            live.reachable = combat
+                .reachable_cells
+                .iter()
+                .filter_map(|cell| {
+                    Some(Cell::new(
+                        i32::try_from(cell.col).ok()?,
+                        i32::try_from(cell.row).ok()?,
+                    ))
+                })
+                .collect();
+            live.targets = combat
+                .legal_targets
+                .iter()
+                .filter_map(|target| {
+                    combat
+                        .participants
+                        .iter()
+                        .find(|member| member.participant_id == target.participant_id)?
+                        .cell
+                        .as_ref()
+                })
+                .filter_map(|cell| {
+                    Some(Cell::new(
+                        i32::try_from(cell.col).ok()?,
+                        i32::try_from(cell.row).ok()?,
+                    ))
+                })
+                .collect();
+        }
         live.latest = Some(snapshot);
         let idle = matches!(live.phase, Phase::Idle);
         if idle {
@@ -1110,7 +1322,17 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
         idle
     });
     if phase_idle {
-        start_mount(client, &choice, backdrop, &key);
+        start_mount(
+            client,
+            &choice,
+            backdrop,
+            &key,
+            view.journey
+                .combat
+                .as_ref()
+                .map(|combat| combat.layout_id.clone())
+                .filter(|id| !id.is_empty()),
+        );
     } else {
         sync();
     }
@@ -1121,6 +1343,7 @@ fn start_mount(
     choice: &battle::SceneChoice,
     backdrop: Option<String>,
     key: &str,
+    server_layout: Option<String>,
 ) {
     let (document, host) = {
         let state = client.borrow();
@@ -1141,6 +1364,9 @@ fn start_mount(
         .get_attribute("data-battle-scene")
         .and_then(|id| battle::load_embedded(&id))
         .and_then(Result::ok);
+    // The fight's title is the story place, never the scan's source name (that belongs in the
+    // credits with its attribution).
+    let place_title = location_scene.title.clone();
     let (mut scene, mut fallback_layers) = match forced {
         Some(forced) => (
             forced,
@@ -1148,6 +1374,7 @@ fn start_mount(
         ),
         None => (location_scene, None),
     };
+    scene.title = place_title;
     // Best-effort diagnostic attribute; a failure here changes nothing about the fight.
     let _ = host.set_attribute("data-battlefield-scene", &marker);
     if let Some(stem) = backdrop {
@@ -1163,7 +1390,7 @@ fn start_mount(
         .and_then(|value| value.parse::<u32>().ok())
         .and_then(battle::BattleFps::from_hz)
         .unwrap_or_default();
-    let layout = chosen_layout_id(&scene, key);
+    let layout = server_layout.or_else(|| chosen_layout_id(&scene, key));
     let _ = host.set_attribute(
         "data-battlefield-layout",
         layout.as_deref().unwrap_or("none"),
@@ -1187,6 +1414,8 @@ fn start_mount(
                 fallback_layers,
                 fixed_quality: None,
                 fps,
+                feel_off: false,
+                slow: None,
             },
         )
         .await;
@@ -1245,13 +1474,27 @@ fn sync() {
         let mut shown = snapshot.clone();
         shown.begun_live = live.begun_live;
         let fits = stage
-            .with_stage(|stage| feed.apply(stage, &shown))
+            .with_stage(|stage| {
+                stage.set_tactical_highlights(live.reachable.clone(), live.targets.clone());
+                feed.apply(stage, &shown)
+            })
             .flatten();
         live.begun_live = false;
         if fits.is_none() {
             // No room on the grid for this roster: leave the flat view.
             live.phase = Phase::Unavailable;
             live.stage = None;
+        }
+    });
+}
+
+/// The tempo cue's intensity (0 to 1000) for the camera's sway: calm is slow and small, peak
+/// quicker and tighter. Called with every accepted display view, from the same tempo the music
+/// follows, so there is one intensity signal.
+pub(super) fn set_tempo(intensity: u16) {
+    LIVE.with(|live| {
+        if let Some(stage) = &live.borrow().stage {
+            stage.set_tempo_intensity(intensity);
         }
     });
 }
@@ -1290,11 +1533,12 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
             };
             match state {
                 "rolling" => {
+                    // Dropped, not fatal: the queue is bounded and the view sync still lands.
+                    let _ = stage.stage(Beat::Approach { attacker, target });
+                    // The card waits for the camera to arrive on the two fighters.
                     if let Some(card) = roll.card.clone() {
                         stage.show_roll_card(card);
                     }
-                    // Dropped, not fatal: the queue is bounded and the view sync still lands.
-                    let _ = stage.stage(Beat::Approach { attacker, target });
                 }
                 "impact" => {
                     let result = if roll.hit || roll.grazed {

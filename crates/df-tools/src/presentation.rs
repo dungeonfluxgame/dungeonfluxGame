@@ -329,6 +329,87 @@ pub(crate) fn imagery_url(path: &str) -> Option<String> {
     plain.then(|| path.to_owned())
 }
 
+/// PLAY-V09: what the server says about the scene's plate (one composed picture of the scene).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum PlateState {
+    /// No plate is planned for this scene: it looks as it always did.
+    #[default]
+    None,
+    Pending,
+    Ready,
+    Failed,
+}
+
+impl PlateState {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Where the speaker's head is in the plate (permille of the plate) and which side of it is calm.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlateGeometry {
+    pub(crate) bubble_side: crate::plate_layout::Side,
+    pub(crate) head_x: u32,
+    pub(crate) head_y: u32,
+    pub(crate) head_width: u32,
+    pub(crate) head_height: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlateView {
+    pub(crate) state: PlateState,
+    /// A well-formed imagery path, present only when the plate is ready.
+    pub(crate) url: Option<String>,
+    pub(crate) layout: Option<PlateGeometry>,
+}
+
+/// The plate a scene carries. A ready plate without a well-formed path is a failed one: the
+/// scene keeps its cut-outs.
+pub(crate) fn plate_of(scene: &rpc::GameplayScene) -> PlateView {
+    let state = match rpc::PlateState::try_from(scene.plate_state) {
+        Ok(rpc::PlateState::Pending) => PlateState::Pending,
+        Ok(rpc::PlateState::Ready) => PlateState::Ready,
+        Ok(rpc::PlateState::Failed) => PlateState::Failed,
+        Ok(rpc::PlateState::Unspecified) | Err(_) => PlateState::None,
+    };
+    let url = imagery_url(&scene.live_plate);
+    let layout = scene.plate_layout.as_ref().and_then(|layout| {
+        let bubble_side = match rpc::PlateSide::try_from(layout.bubble_side) {
+            Ok(rpc::PlateSide::Left) => crate::plate_layout::Side::Left,
+            Ok(rpc::PlateSide::Right) => crate::plate_layout::Side::Right,
+            Ok(rpc::PlateSide::Unspecified) | Err(_) => return None,
+        };
+        Some(PlateGeometry {
+            bubble_side,
+            head_x: layout.head_x_permille,
+            head_y: layout.head_y_permille,
+            head_width: layout.head_width_permille,
+            head_height: layout.head_height_permille,
+        })
+    });
+    match (state, url) {
+        (PlateState::Ready, None) => PlateView {
+            state: PlateState::Failed,
+            ..PlateView::default()
+        },
+        (PlateState::Ready, Some(url)) => PlateView {
+            state,
+            url: Some(url),
+            layout,
+        },
+        (state, _) => PlateView {
+            state,
+            ..PlateView::default()
+        },
+    }
+}
+
 fn hit_points(member: &rpc::PartyMemberView) -> Option<(u32, u32)> {
     (member.maximum_hit_points > 0).then_some((member.hit_points, member.maximum_hit_points))
 }
@@ -592,6 +673,65 @@ fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> +
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plate_scene(state: rpc::PlateState, path: &str, side: rpc::PlateSide) -> rpc::GameplayScene {
+        rpc::GameplayScene {
+            live_plate: path.to_owned(),
+            plate_state: state as i32,
+            plate_layout: Some(rpc::PlateLayout {
+                bubble_side: side as i32,
+                head_x_permille: 640,
+                head_y_permille: 370,
+                head_width_permille: 120,
+                head_height_permille: 180,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_ready_plate_needs_a_well_formed_path_and_carries_its_layout() {
+        let path = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let ready = plate_of(&plate_scene(
+            rpc::PlateState::Ready,
+            &path,
+            rpc::PlateSide::Left,
+        ));
+        assert_eq!(ready.state, PlateState::Ready);
+        assert_eq!(ready.url.as_deref(), Some(path.as_str()));
+        let layout = ready.layout.unwrap();
+        assert_eq!(
+            (layout.bubble_side, layout.head_x, layout.head_y),
+            (crate::plate_layout::Side::Left, 640, 370)
+        );
+        let bad = plate_of(&plate_scene(
+            rpc::PlateState::Ready,
+            "https://elsewhere.example/a.png",
+            rpc::PlateSide::Left,
+        ));
+        assert_eq!(
+            (bad.state, bad.url, bad.layout),
+            (PlateState::Failed, None, None)
+        );
+        let pending = plate_of(&plate_scene(
+            rpc::PlateState::Pending,
+            "",
+            rpc::PlateSide::Right,
+        ));
+        assert_eq!((pending.state, pending.url), (PlateState::Pending, None));
+        assert_eq!(
+            plate_of(&rpc::GameplayScene::default()).state,
+            PlateState::None
+        );
+        for state in [
+            PlateState::None,
+            PlateState::Pending,
+            PlateState::Ready,
+            PlateState::Failed,
+        ] {
+            assert!(!state.name().is_empty());
+        }
+    }
 
     fn outcome(actor: &str, target: &str, die: u32, hit: bool) -> rpc::CombatOutcome {
         rpc::CombatOutcome {

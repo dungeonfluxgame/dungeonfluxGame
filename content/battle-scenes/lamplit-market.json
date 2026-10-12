@@ -23,7 +23,8 @@
     "origin": [-7.5, -5.625],
     "cell_m": 1.25,
     "cols": 12,
-    "rows": 9
+    "rows": 9,
+    "blocked": []
   },
   "cameras": {
     "tactical": {

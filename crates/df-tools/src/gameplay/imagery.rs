@@ -16,6 +16,8 @@
 //! model. Generated images are never written under `assets/` and never committed; each is
 //! recorded in a run-local manifest (`imagery.jsonl`) with its provenance.
 mod artifact;
+mod party_sheet;
+mod plate_prompt;
 mod prompt;
 mod references;
 
@@ -40,9 +42,9 @@ use axum::{
 use bytes::Bytes;
 use df_observe::OperationContext;
 use df_providers::{
-    ImageBackground, ImageEdit, ImageEditConfig, ImageEditError, ImageEditModel, ImageFormat,
-    ImageModeration, ImageQuality, ImageUsage, NativeHttpRefusal, NativeImageEditProvider,
-    ReferenceImage as ProviderReference,
+    HeadBox, HeadLocateConfig, ImageBackground, ImageEdit, ImageEditConfig, ImageEditError,
+    ImageEditModel, ImageFormat, ImageModeration, ImageQuality, ImageUsage, NativeHeadLocator,
+    NativeHttpRefusal, NativeImageEditProvider, ReferenceImage as ProviderReference,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -62,6 +64,9 @@ pub(super) use prompt::{
     reason = "the investigation task (a follow-up) is the first caller"
 )]
 pub(super) use prompt::{PromptRefusal, VettedFact};
+// PLAY-V09: the scene plate's party sheet and prompts.
+pub(super) use party_sheet::{party_sheet, vision_picture};
+pub(super) use plate_prompt::{PlateReferences, plate_moment, scene_plate};
 pub(super) use references::{ReferenceImage, ReferenceStore};
 
 use super::startup_configuration::{
@@ -76,6 +81,8 @@ const MAXIMUM_FAILED: usize = 256;
 const MAXIMUM_IMAGE_BYTES: u64 = 6 * 1024 * 1024;
 const MAXIMUM_IN_FLIGHT: usize = 2;
 const MAXIMUM_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+/// How long one head-location call may take.
+const HEAD_LOCATE_DEADLINE: Duration = Duration::from_secs(25);
 const CACHE_CONTROL: &str = "private, max-age=86400, immutable";
 
 /// What a result is for.
@@ -87,6 +94,10 @@ pub(super) enum ImageKind {
     CastExpression,
     /// A close-up illustration of one object in this place.
     ArtifactCloseUp,
+    /// PLAY-V09: one composed film still of a story scene, heroes and speaker in the place.
+    ScenePlate,
+    /// PLAY-V09: an existing plate edited for a lasting change of the speaker's face.
+    ScenePlateEdit,
 }
 
 impl ImageKind {
@@ -95,6 +106,8 @@ impl ImageKind {
             Self::SceneRefresh => "scene_refresh",
             Self::CastExpression => "cast_expression",
             Self::ArtifactCloseUp => "artifact_close_up",
+            Self::ScenePlate => "scene_plate",
+            Self::ScenePlateEdit => "scene_plate_edit",
         }
     }
 }
@@ -119,6 +132,12 @@ impl OutputSpec {
         width: 1024,
         height: 1536,
         transparent: true,
+    };
+    /// PLAY-V09: a 16:9 composed scene plate (heroes are small in it, so it is drawn large).
+    pub(super) const PLATE: Self = Self {
+        width: 2560,
+        height: 1440,
+        transparent: false,
     };
     /// A 4:3 close-up illustration.
     pub(super) const CLOSE_UP: Self = Self {
@@ -289,6 +308,9 @@ struct Engine {
     micro_dollars: AtomicU64,
     permits: Arc<Semaphore>,
     in_flight: Mutex<HashMap<String, watch::Receiver<Option<Outcome>>>>,
+    /// PLAY-V09: finds the speaker's head in a finished plate; absent in tests and when the
+    /// production provider could not be built.
+    locator: std::sync::OnceLock<NativeHeadLocator>,
 }
 
 enum Mode {
@@ -329,6 +351,9 @@ struct ManifestLine {
     height: u32,
     transparent: bool,
     micro_dollars: u64,
+    /// PLAY-V09: how long the provider call took, in milliseconds; absent in older manifests.
+    #[serde(default)]
+    elapsed_ms: u64,
 }
 
 impl Imagery {
@@ -358,7 +383,61 @@ impl Imagery {
             configuration.deadline,
         )
         .map_err(|_| io::Error::other("imagery provider configuration refused"))?;
-        Self::new(configuration, provider, manifest_directory)
+        let locator = NativeHeadLocator::new(
+            HeadLocateConfig::live(),
+            configuration.credential.expose(),
+            configuration.deadline,
+        )
+        .ok();
+        let imagery = Self::new(configuration, provider, manifest_directory)?;
+        if let (Mode::On { engine, .. }, Some(locator)) = (&imagery.inner.mode, locator) {
+            // Set once, here; a second call cannot happen.
+            let _first = engine.locator.set(locator);
+        }
+        Ok(imagery)
+    }
+
+    /// PLAY-V09: where the head of the person `description` names is in the finished image `key`,
+    /// as fractions of the picture. The description is a fixed phrase of the closed vocabulary.
+    /// Costs a fraction of a cent, never charges the image budget, and every failure is
+    /// typed: the caller keeps the layout it predicted.
+    pub(super) async fn locate_head(
+        &self,
+        key: &ImageKey,
+        description: &str,
+    ) -> Result<HeadBox, ImageFailure> {
+        let Mode::On { engine, .. } = &self.inner.mode else {
+            return Err(ImageFailure::Off);
+        };
+        let Some(locator) = engine.locator.get() else {
+            return Err(ImageFailure::Off);
+        };
+        let registered = locked(&self.inner.registry)
+            .by_key
+            .get(key.as_str())
+            .copied();
+        let format = registered.ok_or(ImageFailure::InvalidRequest)?.format;
+        let (bytes, stored) = engine
+            .read_cached(key.as_str(), format)
+            .await
+            .ok_or(ImageFailure::InvalidRequest)?;
+        let picture = tokio::task::spawn_blocking(move || vision_picture(&bytes, stored))
+            .await
+            .map_err(|_| ImageFailure::Interrupted)?
+            .map_err(|_| ImageFailure::BadOutput)?;
+        locator
+            .locate(&picture, description, HEAD_LOCATE_DEADLINE)
+            .await
+            .map_err(|error| match error {
+                df_providers::HeadLocateError::InvalidRequest => ImageFailure::InvalidRequest,
+                df_providers::HeadLocateError::Output => ImageFailure::BadOutput,
+                df_providers::HeadLocateError::Transport(NativeHttpRefusal::Deadline) => {
+                    ImageFailure::DeadlineExceeded
+                }
+                df_providers::HeadLocateError::Unauthorized
+                | df_providers::HeadLocateError::Provider(_)
+                | df_providers::HeadLocateError::Transport(_) => ImageFailure::Provider,
+            })
     }
 
     /// Uses `provider`; tests pass one pointed at a loopback fake.
@@ -398,6 +477,7 @@ impl Imagery {
             micro_dollars: AtomicU64::new(0),
             permits: Arc::new(Semaphore::new(MAXIMUM_IN_FLIGHT)),
             in_flight: Mutex::new(HashMap::new()),
+            locator: std::sync::OnceLock::new(),
         };
         let mut registry = Registry::default();
         engine.register_from_manifest(&mut registry);
@@ -635,11 +715,13 @@ impl Engine {
             .await
             .map_err(|_| ImageFailure::Interrupted)?;
         self.charge()?;
+        let started = std::time::Instant::now();
         let generated = self
             .provider
             .edit(&edit, self.deadline)
             .await
             .map_err(failure_of)?;
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if generated.bytes.is_empty() || generated.bytes.len() as u64 > MAXIMUM_IMAGE_BYTES {
             return Err(ImageFailure::BadOutput);
         }
@@ -649,7 +731,7 @@ impl Engine {
         let bytes = Bytes::from(generated.bytes);
         let stored = self.store(key, format, bytes.clone()).await.is_ok();
         if stored {
-            self.record(key, &request, bytes.len() as u64, micro_dollars)
+            self.record(key, &request, bytes.len() as u64, micro_dollars, elapsed_ms)
                 .await;
         }
         // A result that could not be cached is still served from memory for this key's first
@@ -729,7 +811,14 @@ impl Engine {
 
     /// Appends the provenance of one image to the run-local manifest. A failed append is
     /// reported to diagnostics and never fails the render.
-    async fn record(&self, key: &ImageKey, request: &ImageRequest, bytes: u64, micro_dollars: u64) {
+    async fn record(
+        &self,
+        key: &ImageKey,
+        request: &ImageRequest,
+        bytes: u64,
+        micro_dollars: u64,
+        elapsed_ms: u64,
+    ) {
         let Some(path) = self.manifest.clone() else {
             return;
         };
@@ -751,6 +840,7 @@ impl Engine {
             height: request.output.height,
             transparent: request.output.transparent,
             micro_dollars,
+            elapsed_ms,
         };
         let appended = tokio::task::spawn_blocking(move || append_manifest(&path, &line)).await;
         if !matches!(appended, Ok(Ok(()))) {

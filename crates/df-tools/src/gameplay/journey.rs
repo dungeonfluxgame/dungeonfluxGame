@@ -32,6 +32,7 @@ mod objective_outcome;
 mod objective_outcome_tests;
 #[cfg(test)]
 mod session_flow_tests;
+pub(super) mod tactical;
 #[cfg(test)]
 mod text_pack_tests;
 
@@ -57,6 +58,14 @@ const THREAD_EVENTS: &[(&str, &str)] = &[
     ("defend-courier", THREAT_THREAD),
     ("greatsword-attack", THREAT_THREAD),
     ("second-wind", THREAT_THREAD),
+    ("move", THREAT_THREAD),
+    ("dash", THREAT_THREAD),
+    ("dodge", THREAT_THREAD),
+    ("disengage", THREAT_THREAD),
+    ("opportunity-attack", THREAT_THREAD),
+    ("decline-reaction", THREAT_THREAD),
+    ("stand", THREAT_THREAD),
+    ("pick-up-weapon", THREAT_THREAD),
     ("end-turn", THREAT_THREAD),
 ];
 pub(super) const CONTENT_ENTRIES: &[&str] = &[
@@ -81,6 +90,14 @@ pub(super) const CONTENT_ENTRIES: &[&str] = &[
     "bandit",
     "greatsword-attack",
     "second-wind",
+    "move",
+    "dash",
+    "dodge",
+    "disengage",
+    "opportunity-attack",
+    "decline-reaction",
+    "stand",
+    "pick-up-weapon",
     "end-turn",
     "short-rest",
     "short-rest-start",
@@ -92,6 +109,7 @@ pub(super) const CONTENT_ENTRIES: &[&str] = &[
     "combat-defeat",
     "scimitar",
     "normal-nonlethal-melee",
+    "tactical-srd521-cover-policy",
     "fighter-a-soldier-a",
     "chain-mail",
     "greatsword",
@@ -106,6 +124,9 @@ pub(super) const CONTENT_ENTRIES: &[&str] = &[
     "quiver",
     "travelers-clothes",
     "gold-piece",
+    "studded-leather-armor",
+    "longbow",
+    "shortsword",
     PACKET_THREAD,
     THREAT_THREAD,
 ];
@@ -113,6 +134,14 @@ fn bad<T>(_: T) -> RepositoryError {
     RepositoryError::InvalidCandidate
 }
 pub(super) fn rule() -> Result<RuleReference, RepositoryError> {
+    if tactical::enabled() {
+        return Ok(RuleReference {
+            catalog: model::label("srd521-journey-subset-2")?,
+            source: model::label("srd521-creation-tactical-combat-rest")?,
+            entry: model::label("PLAY-T02")?,
+            clause: model::label("srd521-grid-actions-dying-cover-ruling")?,
+        });
+    }
     Ok(RuleReference {
         catalog: model::label("srd521-journey-subset-2")?,
         source: model::label("srd521-creation-combat-rest-selected")?,
@@ -205,29 +234,58 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
     let hero_ac = pack::with_creation(|rules| i64::from(rules.armor_class));
     let bandit = pack::bandit();
     let mut result = Vec::new();
-    for owner in ENTITIES.into_iter().chain([BANDIT]) {
+    let mut owners = ENTITIES
+        .into_iter()
+        .map(|bytes| Ok((bytes, None)))
+        .collect::<Result<Vec<_>, RepositoryError>>()?;
+    if tactical::enabled() {
+        for (who, source_id, ammunition) in tactical::enemies()? {
+            owners.push((
+                *who.as_bytes(),
+                Some(
+                    df_rules::tactical::CombatantSpec::creature(
+                        3,
+                        &source_id,
+                        df_rules::tactical::Cell(0, 0),
+                        ammunition,
+                    )
+                    .map_err(bad)?,
+                ),
+            ));
+        }
+    } else {
+        owners.push((BANDIT, None));
+    }
+    for (owner, tactical_enemy) in owners {
+        let enemy_hp = tactical_enemy
+            .as_ref()
+            .map_or(i64::from(bandit.hit_points), |spec| {
+                i64::from(spec.hit_points)
+            });
+        let enemy_ac = tactical_enemy
+            .as_ref()
+            .map_or(i64::from(bandit.armor_class), |spec| {
+                i64::from(spec.armor_class)
+            });
+        let enemy = owner == BANDIT || tactical_enemy.is_some();
         for (name, minimum, maximum) in [
             (
                 "hit-points",
-                1,
-                if owner == BANDIT {
-                    i64::from(bandit.hit_points)
-                } else {
-                    hero_hp
-                },
+                if tactical::enabled() { 0 } else { 1 },
+                if enemy { enemy_hp } else { hero_hp },
             ),
             (
                 "armor-class",
-                if owner == BANDIT {
-                    i64::from(bandit.armor_class)
+                if enemy {
+                    if tactical::enabled() {
+                        enemy_ac.saturating_sub(2)
+                    } else {
+                        enemy_ac
+                    }
                 } else {
-                    hero_ac
+                    if tactical::enabled() { 15 } else { hero_ac }
                 },
-                if owner == BANDIT {
-                    i64::from(bandit.armor_class)
-                } else {
-                    hero_ac
-                },
+                if enemy { enemy_ac } else { hero_ac },
             ),
             ("strength", 1, 20),
             ("dexterity", 1, 20),
@@ -299,6 +357,14 @@ fn set(
     Ok(())
 }
 pub(super) fn name(state: &GameState, who: EntityId) -> Result<String, RepositoryError> {
+    if tactical::enabled()
+        && let Some((index, (_, source_id, _))) = tactical::enemies()?
+            .iter()
+            .enumerate()
+            .find(|(_, (id, _, _))| *id == who)
+    {
+        return Ok(format!("{} {}", weapon_display_name(source_id), index + 1));
+    }
     if who == entity(BANDIT)? {
         return Ok(pack::with_content(|pack| pack.bandit.name.clone()));
     }
@@ -315,6 +381,22 @@ pub(super) fn name(state: &GameState, who: EntityId) -> Result<String, Repositor
         .ok_or(RepositoryError::InvalidCandidate)
 }
 pub(super) fn maximum_hit_points(state: &GameState, who: EntityId) -> Result<u32, RepositoryError> {
+    if tactical::present(state) {
+        let saved = tactical::snapshot(state)?;
+        let id = saved
+            .actors
+            .iter()
+            .find(|(_, entity)| *entity == who)
+            .map(|(id, _)| *id)
+            .ok_or(RepositoryError::InvalidCandidate)?;
+        return Ok(u32::from(
+            tactical::read(state)?
+                .actor(id)
+                .map_err(bad)?
+                .health()
+                .maximum,
+        ));
+    }
     let constitution = value(state, who, "constitution")?;
     let base = pack::with_creation(|rules| rules.base_hit_points);
     u32::try_from(i32::from(base) + rules::ability_modifier(constitution as u8)).map_err(bad)
@@ -339,6 +421,22 @@ pub(super) fn character_sheet(
     state: &GameState,
     who: EntityId,
 ) -> Result<rpc::CharacterSheet, RepositoryError> {
+    let character = state
+        .characters
+        .iter()
+        .find(|character| character.entity == who)
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    let selected = character
+        .choices
+        .iter()
+        .filter(|choice| choice.offer.as_str() != "name")
+        .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
+        .collect::<Vec<_>>();
+    let build = pack::validate_character(&name(state, who)?, &selected).map_err(bad)?;
+    let archer = build
+        .choices
+        .iter()
+        .any(|(key, value)| key == "array" && value == "dexterous");
     let mut facts = Vec::new();
     if pack::active().is_some_and(|loaded| !loaded.departures.is_empty()) {
         facts.push(rpc::SheetFact {
@@ -357,27 +455,59 @@ pub(super) fn character_sheet(
                 .ok_or(RepositoryError::InvalidCandidate)
         })
     };
-    let gold = pack::with_content(|pack| {
-        pack.equipment
+    let equipment = if archer {
+        pack::archer_equipment().map_err(bad)?
+    } else {
+        pack::with_content(|pack| pack.equipment.clone())
+    };
+    let gold = {
+        equipment
             .iter()
             .filter(|row| row.item == "gold-piece")
             .map(|row| u32::from(row.quantity))
             .sum::<u32>()
-    });
+    };
     for (label, value) in [
         ("Species", option_label("species")?),
         ("Class", option_label("class")?),
         ("Background", option_label("background")?),
-        ("Armor", "Chain Mail · Defense".to_owned()),
+        (
+            "Armor",
+            if archer {
+                "Studded Leather"
+            } else {
+                "Chain Mail · Defense"
+            }
+            .to_owned(),
+        ),
         (
             "Weapon",
-            format!("{} · Graze", weapon_display_name(&pack::hero_weapon_item())),
+            if archer {
+                "Longbow · Slow · +2 Archery".to_owned()
+            } else {
+                format!("{} · Graze", weapon_display_name(&pack::hero_weapon_item()))
+            },
         ),
         ("Origin feat", "Savage Attacker".to_owned()),
-        ("Masteries", "Greatsword, Flail, Javelin".to_owned()),
+        (
+            "Masteries",
+            if archer {
+                "Longbow, Scimitar, Shortsword"
+            } else {
+                "Greatsword, Flail, Javelin"
+            }
+            .to_owned(),
+        ),
         (
             "Starting equipment",
-            format!("{} · {gold} GP", option_label("equipment")?),
+            format!(
+                "{} · {gold} GP",
+                if archer {
+                    "Fighter B + Soldier B".to_owned()
+                } else {
+                    option_label("equipment")?
+                }
+            ),
         ),
     ] {
         facts.push(rpc::SheetFact {
@@ -426,6 +556,34 @@ pub(super) fn character_sheet(
             value: value(state, who, key)?.to_string(),
         });
     }
+    if archer {
+        let choices = build
+            .choices
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        let profile = df_rules::tactical::validate_archer(&build.name, &choices)
+            .map_err(bad)?
+            .combatant(1, df_rules::tactical::Cell(0, 0));
+        for weapon in &profile.weapons {
+            let (attack, damage) = profile
+                .hero_attack_modifiers(*weapon, weapon.ranged_weapon(), weapon.finesse())
+                .map_err(bad)?;
+            let (count, sides) = weapon.dice(weapon.two_handed());
+            let range = weapon
+                .range()
+                .map(|(normal, long)| format!(" · {normal}/{long} ft"))
+                .unwrap_or_default();
+            facts.push(rpc::SheetFact {
+                label: format!("{} attack", weapon_display_name(weapon.id())),
+                value: format!(
+                    "{attack:+} to hit · {count}d{sides}{damage:+} {:?}{range} · {:?}",
+                    weapon.damage_type(),
+                    weapon.mastery().ok_or(RepositoryError::InvalidCandidate)?
+                ),
+            });
+        }
+    }
     facts.push(rpc::SheetFact {
         label: "Condition".to_owned(),
         value: if value(state, who, "unconscious")? != 0 {
@@ -438,7 +596,11 @@ pub(super) fn character_sheet(
         .to_owned(),
     });
     facts.push(rpc::SheetFact {
-        label: weapon_display_name(&pack::hero_weapon_item()),
+        label: if archer {
+            weapon_display_name("longbow")
+        } else {
+            weapon_display_name(&pack::hero_weapon_item())
+        },
         value: if value(state, who, "held-weapon")? != 0 {
             "Held"
         } else {
@@ -464,6 +626,14 @@ fn beat(state: &mut GameState, next: &str) -> Result<(), RepositoryError> {
     Ok(())
 }
 pub(super) fn offer_id(current: &Checkpoint, kind: rpc::GameplayActionKind) -> String {
+    if tactical::present(current.state()) {
+        return format!(
+            "tactical-{}-{}-{}",
+            kind as i32,
+            current.basis().revision.epoch().get(),
+            current.basis().revision.sequence()
+        );
+    }
     if let Some(id) = super::beat_script_runtime::scripted_id(current, kind) {
         return id;
     }
@@ -504,6 +674,17 @@ pub(super) fn offered(
     current: &Checkpoint,
     member: MemberId,
 ) -> Result<Vec<(rpc::GameplayActionKind, String)>, RepositoryError> {
+    if tactical::present(current.state()) {
+        if phase(current)? == rpc::JourneyPhase::Combat {
+            return tactical::offered(current, member);
+        }
+        if tactical::dying(current.state())? {
+            return Ok(vec![(
+                rpc::GameplayActionKind::EndTurn,
+                "Advance 6 seconds · death saves".to_owned(),
+            )]);
+        }
+    }
     affordance::offered(current, member).map_err(bad)
 }
 
@@ -611,6 +792,18 @@ fn handler_offered(
             }
         }
         rpc::JourneyPhase::Complete => {
+            if tactical::present(current.state())
+                && !tactical::read(current.state())?
+                    .combatants()
+                    .iter()
+                    .any(|actor| {
+                        actor.side() == df_rules::tactical::Side::Heroes
+                            && actor.health().hit_points > 0
+                            && !actor.health().dead
+                    })
+            {
+                return Ok(Vec::new());
+            }
             prepare_short_rest(current)?;
             let mut result = vec![(
                 rpc::GameplayActionKind::ShortRest,
@@ -652,6 +845,10 @@ fn inn_source(current: &Checkpoint) -> Result<Option<FactId>, RepositoryError> {
         {
             return Ok(None);
         }
+    }
+    if tactical::present(state) {
+        let start = narrative_phase::source(state, "defend-courier", rpc::JourneyPhase::Combat)?;
+        return tactical::completion_source(state, start, true, true).map(|event| Some(event.id));
     }
     let bandit = entity(BANDIT)?;
     let unconscious = model::label("unconscious")?;
@@ -706,6 +903,9 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
         place: String::new(),
         location_id: String::new(),
         live_backdrop: String::new(),
+        live_plate: String::new(),
+        plate_layout: None,
+        plate_state: rpc::PlateState::Unspecified as i32,
     }
 }
 pub(super) fn accepted(
@@ -742,6 +942,9 @@ pub(super) fn initiative_rolls(
     current: &Checkpoint,
 ) -> Result<Vec<rpc::InitiativeRoll>, CombatRoundError> {
     use CombatRoundError as Error;
+    if tactical::present(current.state()) {
+        return tactical::initiative(current).map_err(|_| Error::Start);
+    }
     let state = current.state();
     let [encounter] = state.encounters.as_slice() else {
         return Err(Error::Encounter);
@@ -791,6 +994,10 @@ pub(super) fn combat_round(current: &Checkpoint) -> Result<u32, CombatRoundError
         .validate_resume(current.basis(), &pins)
         .map_err(|_| Error::Binding)?;
     let state = current.state();
+    if tactical::present(state) {
+        tactical::validate_encounter(current).map_err(|_| Error::Encounter)?;
+        return Ok(tactical::read(state).map_err(|_| Error::Encounter)?.round());
+    }
     if state.facts.len() > 512 || state.decisions.len() > 512 {
         return Err(Error::Capacity);
     }
@@ -1541,11 +1748,16 @@ fn stage_authored_threads(
     let bandit = entity(BANDIT)?;
     let unconscious = model::label("unconscious")?;
     let source_rule = rule()?;
-    let defeated = thread == model::content(THREAT_THREAD)? && candidate.state().facts.iter().any(|fact| {
+    let defeated = if tactical::present(candidate.state()) {
+        thread == model::content(THREAT_THREAD)?
+            && tactical::read(candidate.state())?.winner() == Some(df_rules::tactical::Side::Heroes)
+    } else {
+        thread == model::content(THREAT_THREAD)? && candidate.state().facts.iter().any(|fact| {
         fact.operation == source.operation && fact.revision == source.revision && fact.ordinal < source.ordinal
             && matches!(&fact.value, FactValue::ResourceChanged { entity, resource, before: 0, after: 1, source }
                 if *entity == bandit && *resource == unconscious && *source == source_rule)
-    });
+    })
+    };
     let selections = [ThreadConsequenceSelection {
         thread: &thread,
         event_definition: definition,
@@ -1649,6 +1861,7 @@ fn choice<'a>(
 type DiceSource<'a> = &'a mut dyn FnMut(u32) -> Result<u32, RepositoryError>;
 fn sample_face(sides: u32) -> Result<u32, RepositoryError> {
     if sides != 20
+        && !(tactical::enabled() && [4, 6, 8, 10, 12].contains(&sides))
         && ![
             u32::from(pack::hero_weapon().damage_sides),
             u32::from(pack::bandit().weapon.damage_sides),
@@ -1678,7 +1891,7 @@ fn draw(
     draws: &mut Vec<ActualDraw>,
     supplier: DiceSource<'_>,
 ) -> Result<u32, RepositoryError> {
-    if draws.len() >= 32 {
+    if draws.len() >= 128 {
         return Err(RepositoryError::Capacity);
     }
     let value = supplier(sides)?;
@@ -1779,6 +1992,9 @@ fn start_knockout_rest(
 }
 
 pub(super) fn combat_victory(state: &GameState) -> Result<bool, RepositoryError> {
+    if tactical::present(state) {
+        return tactical::victory(state);
+    }
     let [encounter] = state.encounters.as_slice() else {
         return Err(RepositoryError::InvalidCandidate);
     };
@@ -1929,6 +2145,12 @@ fn prepare_short_rest(current: &Checkpoint) -> Result<df_world::DueSelection<'_>
             return Err(RepositoryError::InvalidCandidate);
         }
     }
+    if tactical::present(current.state()) {
+        if tactical::dying(current.state())? {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        return Ok(selection);
+    }
     for who in current
         .state()
         .characters
@@ -1944,8 +2166,22 @@ fn prepare_short_rest(current: &Checkpoint) -> Result<df_world::DueSelection<'_>
     }
     Ok(selection)
 }
-fn complete_short_rest(current: &Checkpoint, state: &mut GameState) -> Result<(), RepositoryError> {
+fn complete_short_rest(
+    current: &Checkpoint,
+    state: &mut GameState,
+    operation: OperationId,
+) -> Result<(), RepositoryError> {
     let selection = prepare_short_rest(current)?;
+    if tactical::present(state) {
+        tactical::rest(state, operation)?;
+        state.logical_time = selection.proposed_time;
+        state.continuity.catch_up = Some(selection.cursor);
+        let completed = model::content("short-rest-complete")?;
+        if !state.narrative.completed_beats.contains(&completed) {
+            state.narrative.completed_beats.push(completed);
+        }
+        return Ok(());
+    }
     let fighters = state
         .characters
         .iter()
@@ -2083,6 +2319,8 @@ fn attack(
         source_revision: model::source_revision(),
         actor_id: who.as_bytes().to_vec(),
         target_id: target.as_bytes().to_vec(),
+
+        ..Default::default()
     })
 }
 fn finish_combat(state: &mut GameState) -> Result<bool, RepositoryError> {
@@ -2313,6 +2551,7 @@ fn start_combat(
         active_turn: Some(active),
         objectives: vec![model::content("defend-courier")?],
         combat_policy: model::content("normal-nonlethal-melee")?,
+        tactical: None,
     });
     beat(state, "combat")?;
     enemy_turn(current, state, operation, draws, outcomes, supplier)
@@ -2392,7 +2631,15 @@ fn accept_character(
         add_resource(state, who, key, i64::from(value))?;
     }
     // The source-selected bundles are inventory, not cosmetic rewards or generated loot.
-    let equipment = pack::with_content(|pack| pack.equipment.clone());
+    let equipment = if build
+        .choices
+        .iter()
+        .any(|(key, value)| key == "array" && value == "dexterous")
+    {
+        pack::archer_equipment().map_err(bad)?
+    } else {
+        pack::with_content(|pack| pack.equipment.clone())
+    };
     for row in equipment {
         let entry = row.item.as_str();
         let quantity = u64::from(row.quantity);
@@ -2444,7 +2691,8 @@ fn stage_using(
     )
     .map_err(bad)?;
     let command = command(input)?;
-    if !super::beat_script::with_script(|script| script.is_canonical())
+    if (tactical::present(current.state())
+        || !super::beat_script::with_script(|script| script.is_canonical()))
         && (command.basis != current.basis()
             || command.observed_revision != current.basis().revision)
     {
@@ -2487,7 +2735,9 @@ fn stage_using(
     else {
         return Err(RepositoryError::InvalidCandidate);
     };
-    targets.clear();
+    if !tactical::present(current.state()) {
+        targets.clear();
+    }
     choices.retain(|(group, _)| group.as_str() != super::beat_script_runtime::CHOICE_GROUP);
     if selected.effect == super::beat_script::BeatEffect::ThirdApproach {
         *source_action = model::content("escort-courier")?;
@@ -2510,6 +2760,17 @@ fn stage_using(
     let mut private = false;
     let pure_target = super::beat_script_runtime::pure_target(current, &selected)?;
     match kind {
+        kind if tactical::combat_action(kind) && tactical::present(&state) => {
+            tactical::stage(
+                current,
+                command,
+                kind,
+                &mut state,
+                &mut draws,
+                &mut outcomes,
+                supplier,
+            )?;
+        }
         _ if pure_target.is_some() => {
             let target = pure_target
                 .as_ref()
@@ -2561,14 +2822,27 @@ fn stage_using(
                 .narrative
                 .open_threads
                 .push(model::content(THREAT_THREAD)?);
-            start_combat(
-                current,
-                command,
-                &mut state,
-                &mut draws,
-                &mut outcomes,
-                supplier,
-            )?;
+            if tactical::enabled() {
+                let scene = super::beat_script_runtime::fight_scene(current, &selected)?;
+                tactical::start(
+                    current,
+                    command,
+                    &mut state,
+                    &mut draws,
+                    &mut outcomes,
+                    supplier,
+                    &scene,
+                )?;
+            } else {
+                start_combat(
+                    current,
+                    command,
+                    &mut state,
+                    &mut draws,
+                    &mut outcomes,
+                    supplier,
+                )?;
+            }
         }
         rpc::GameplayActionKind::GreatswordAttack => {
             combat_transition::stage(
@@ -2630,7 +2904,7 @@ fn stage_using(
             if !choices.is_empty() {
                 return Err(RepositoryError::InvalidCandidate);
             }
-            complete_short_rest(current, &mut state)?;
+            complete_short_rest(current, &mut state, command.operation)?;
         }
         rpc::GameplayActionKind::EndTurn => {
             if !choices.is_empty() {
@@ -3005,6 +3279,22 @@ mod tests {
         .collect()
     }
     pub(super) fn tuning_journey() -> Vec<Checkpoint> {
+        if tactical::enabled() {
+            let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let victory = tactical::tests::current_victory("escort-courier");
+            let rested = stage_with_supplier(
+                &victory,
+                &input(&victory, first, 201, "short-rest", vec![]),
+                &mut |_| panic!("rest dice"),
+            )
+            .unwrap();
+            let arrived =
+                stage_with_supplier(&rested, &inn_command(&rested, first, 202), &mut |_| {
+                    panic!("inn dice")
+                })
+                .unwrap();
+            return vec![victory, rested, arrived];
+        }
         let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
         let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
         let mut checkpoints = vec![opening_story()];
@@ -3087,7 +3377,7 @@ mod tests {
             } else {
                 "salt-quay"
             };
-            let generated = generate(
+            let mut generated = generate(
                 &tables,
                 42,
                 GenerateOptions {
@@ -3100,6 +3390,8 @@ mod tests {
                 ]),
             )
             .unwrap();
+            // This test retains the archived single-melee profile and its knockout/rest contract.
+            generated.tuning.tactical = None;
             let loaded = pack::load_from_bytes(
                 &serde_json::to_vec(&generated.pack).unwrap(),
                 &serde_json::to_vec(&generated.tuning).unwrap(),
@@ -3238,7 +3530,7 @@ mod tests {
         }
         let loaded = pack::load_from_bytes(
             &serde_json::to_vec(&authored).unwrap(),
-            include_bytes!("../../../../content/harbor-journey/tuning.json"),
+            include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
         )
         .unwrap();
         pack::with_test_pack(loaded, || {
@@ -3389,7 +3681,7 @@ mod tests {
         let original = observe(&opening, &dialogue);
         assert_eq!(original, observe(&opening, &changed));
         let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
-            "../../../../content/harbor-journey/tuning.json"
+            "fixtures/harbor-journey-tuning-baseline.json"
         ))
         .unwrap();
         tuning["bandit"]["attack_bonus"] = serde_json::json!(19);
@@ -3418,7 +3710,7 @@ mod tests {
         let baseline = tuning_journey();
         let loaded = pack::load_from_bytes(
             include_bytes!("../../../../content/harbor-journey/pack.json"),
-            include_bytes!("../../../../content/harbor-journey/tuning.json"),
+            include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
         )
         .unwrap();
         pack::with_test_pack(loaded, || {
@@ -3432,7 +3724,7 @@ mod tests {
     #[test]
     fn tuned_journey_changes_creation_attack_healing_rest_and_completes() {
         let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
-            "../../../../content/harbor-journey/tuning.json"
+            "fixtures/harbor-journey-tuning-baseline.json"
         ))
         .unwrap();
         tuning["hero"]["armor_class"] = 15.into();
@@ -3481,6 +3773,7 @@ mod tests {
             );
             assert!(
                 wire::creation_offer()
+                    .unwrap()
                     .groups
                     .iter()
                     .find(|group| group.group_id == "array")
@@ -4413,6 +4706,9 @@ mod tests {
     }
 
     pub(super) fn inn_victory() -> Checkpoint {
+        if tactical::enabled() {
+            return tactical::tests::current_victory("ask-courier");
+        }
         let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
         let opening = opening_story();
         let private = stage_with_supplier(
@@ -5639,38 +5935,24 @@ mod tests {
                     );
                 }
                 for approach in ["ask-courier", "escort-courier"] {
-                    let opening = opening_story();
-                    let dialogue = stage_with_supplier(
-                        &opening,
-                        &input(&opening, first, 6, approach, vec![]),
-                        &mut |_| panic!("dialogue dice"),
-                    )
-                    .unwrap();
-                    let mut initiative = 0;
-                    let combat = stage_with_supplier(
-                        &dialogue,
-                        &input(&dialogue, first, 7, "defend-courier", vec![]),
-                        &mut |sides| {
-                            if sides == 20 {
-                                initiative += 1;
-                                Ok(if initiative <= 2 { 1 } else { 20 })
-                            } else {
-                                Ok(sides)
-                            }
-                        },
-                    )
-                    .unwrap();
-                    let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
-                    let defeated = stage_with_supplier(
-                        &combat,
-                        &input(&combat, second, 8, "end-turn", vec![]),
-                        &mut |sides| Ok(if sides == 20 { 20 } else { sides }),
-                    )
-                    .unwrap();
+                    let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+                    let defeated = tactical::tests::current_defeat(approach);
                     assert!(!combat_victory(defeated.state()).unwrap());
+                    let mut settled = defeated.clone();
+                    for operation in 110..115 {
+                        if !tactical::dying(settled.state()).unwrap() {
+                            break;
+                        }
+                        settled = stage_with_supplier(
+                            &settled,
+                            &input(&settled, first, operation, "end-turn", vec![]),
+                            &mut |_| Ok(20),
+                        )
+                        .unwrap();
+                    }
                     let rested = stage_with_supplier(
-                        &defeated,
-                        &input(&defeated, first, 9, "short-rest", vec![]),
+                        &settled,
+                        &input(&settled, first, 120, "short-rest", vec![]),
                         &mut |_| panic!("rest dice"),
                     )
                     .unwrap();

@@ -9,6 +9,7 @@ use df_types::{
 // Version 3 preserves persistent NPC identity, independent social axes, and obligation lineage.
 // Versions 1 and 2 refuse rather than synthesizing missing canonical state.
 const CODEC_VERSION: u16 = 3;
+const TACTICAL_CODEC_VERSION: u16 = 4;
 pub(crate) const STORAGE_CODEC_VERSION: i32 = CODEC_VERSION as i32;
 const MAGIC: &[u8; 4] = b"DFCP";
 
@@ -20,9 +21,11 @@ pub(crate) fn validate_storage_format(
     document: &[u8],
 ) -> Result<(), CodecError> {
     let header = document.get(..6).ok_or(CodecError::Truncated)?;
-    if version != STORAGE_CODEC_VERSION
+    let encoded = i32::from(u16::from_be_bytes([header[4], header[5]]));
+    if version != encoded
         || header.get(..4) != Some(magic.as_slice())
-        || header.get(4..6) != Some(CODEC_VERSION.to_be_bytes().as_slice())
+        || !(encoded == STORAGE_CODEC_VERSION
+            || (magic == b"DFCP" && encoded == i32::from(TACTICAL_CODEC_VERSION)))
     {
         return Err(CodecError::UnsupportedCodec);
     }
@@ -447,11 +450,30 @@ pub(crate) fn encode_checkpoint(
         maximum_text_bytes: limits.maximum_text_bytes,
     };
     output.put(MAGIC)?;
-    CODEC_VERSION.write(&mut output)?;
+    let tactical = checkpoint
+        .state()
+        .encounters
+        .iter()
+        .any(|encounter| encounter.tactical.is_some());
+    (if tactical {
+        TACTICAL_CODEC_VERSION
+    } else {
+        CODEC_VERSION
+    })
+    .write(&mut output)?;
     checkpoint.schema().write(&mut output)?;
     checkpoint.basis().write(&mut output)?;
     checkpoint.pins().write(&mut output)?;
     checkpoint.state().write(&mut output)?;
+    if tactical {
+        let snapshots = checkpoint
+            .state()
+            .encounters
+            .iter()
+            .map(|encounter| encounter.tactical.clone())
+            .collect::<Vec<_>>();
+        snapshots.write(&mut output)?;
+    }
     Ok(output.bytes)
 }
 
@@ -478,7 +500,8 @@ pub(crate) fn decode_checkpoint(
     if input.take(MAGIC.len())? != MAGIC {
         return Err(CodecError::UnsupportedCodec);
     }
-    if u16::read(&mut input)? != CODEC_VERSION {
+    let version = u16::read(&mut input)?;
+    if ![CODEC_VERSION, TACTICAL_CODEC_VERSION].contains(&version) {
         return Err(CodecError::UnsupportedCodec);
     }
     let schema = u16::read(&mut input)?;
@@ -487,7 +510,16 @@ pub(crate) fn decode_checkpoint(
     }
     let basis = Basis::read(&mut input)?;
     let decoded_pins = CheckpointPins::read(&mut input)?;
-    let state = GameState::read(&mut input)?;
+    let mut state = GameState::read(&mut input)?;
+    if version == TACTICAL_CODEC_VERSION {
+        let snapshots = Vec::<Option<TacticalSnapshot>>::read(&mut input)?;
+        if snapshots.len() != state.encounters.len() || snapshots.iter().all(Option::is_none) {
+            return Err(CodecError::InvalidValue);
+        }
+        for (encounter, snapshot) in state.encounters.iter_mut().zip(snapshots) {
+            encounter.tactical = snapshot;
+        }
+    }
     if input.offset != bytes.len() {
         return Err(CodecError::TrailingBytes);
     }
@@ -523,7 +555,9 @@ pub(crate) fn decode_checkpoint_configuration(
         items_remaining: limits.maximum_collection_items,
         maximum_text_bytes: limits.maximum_text_bytes,
     };
-    if input.take(MAGIC.len())? != MAGIC || u16::read(&mut input)? != CODEC_VERSION {
+    if input.take(MAGIC.len())? != MAGIC
+        || ![CODEC_VERSION, TACTICAL_CODEC_VERSION].contains(&u16::read(&mut input)?)
+    {
         return Err(CodecError::UnsupportedCodec);
     }
     if u16::read(&mut input)? != CHECKPOINT_SCHEMA {
@@ -1043,15 +1077,91 @@ impl Wire for EffectKind {
         }
     }
 }
-record_wire!(EncounterState {
-    id,
-    definition,
-    participants,
-    turn_order,
-    active_turn,
-    objectives,
-    combat_policy
-});
+// Legacy fields remain byte-identical. Version 4 carries the complete optional tactical
+// snapshots once at the checkpoint boundary, after the legacy state document.
+impl Wire for EncounterState {
+    fn write(&self, output: &mut Encoder) -> Result<(), CodecError> {
+        self.id.write(output)?;
+        self.definition.write(output)?;
+        self.participants.write(output)?;
+        self.turn_order.write(output)?;
+        self.active_turn.write(output)?;
+        self.objectives.write(output)?;
+        self.combat_policy.write(output)
+    }
+    fn read(input: &mut Decoder<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            id: RecordId::read(input)?,
+            definition: ContentReference::read(input)?,
+            participants: Vec::read(input)?,
+            turn_order: Vec::read(input)?,
+            active_turn: Option::read(input)?,
+            objectives: Vec::read(input)?,
+            combat_policy: ContentReference::read(input)?,
+            tactical: None,
+        })
+    }
+}
+// Opaque byte payloads consume the byte/allocation budget, not the record-item budget.
+fn write_tactical_bytes(bytes: &[u8], output: &mut Encoder) -> Result<(), CodecError> {
+    if bytes.len() > 1024 * 1024 {
+        return Err(CodecError::Capacity);
+    }
+    output.allocate(bytes.len())?;
+    u32::try_from(bytes.len())
+        .map_err(|_| CodecError::Capacity)?
+        .write(output)?;
+    output.put(bytes)
+}
+fn read_tactical_bytes(input: &mut Decoder<'_>) -> Result<Vec<u8>, CodecError> {
+    let count = usize::try_from(u32::read(input)?).map_err(|_| CodecError::Capacity)?;
+    if count > 1024 * 1024 {
+        return Err(CodecError::Capacity);
+    }
+    input.allocate(count)?;
+    let bytes = input.take(count)?;
+    let mut owned = Vec::new();
+    owned
+        .try_reserve_exact(count)
+        .map_err(|_| CodecError::Capacity)?;
+    input.allocate(
+        owned
+            .capacity()
+            .checked_sub(count)
+            .ok_or(CodecError::Capacity)?,
+    )?;
+    owned.extend_from_slice(bytes);
+    Ok(owned)
+}
+impl Wire for TacticalSnapshot {
+    fn write(&self, output: &mut Encoder) -> Result<(), CodecError> {
+        self.schema.write(output)?;
+        self.source_revision.write(output)?;
+        self.scene_digest.write(output)?;
+        write_tactical_bytes(&self.scene, output)?;
+        self.layout.write(output)?;
+        self.actors.write(output)?;
+        write_tactical_bytes(&self.state, output)
+    }
+    fn read(input: &mut Decoder<'_>) -> Result<Self, CodecError> {
+        Ok(Self {
+            schema: Wire::read(input)?,
+            source_revision: Wire::read(input)?,
+            scene_digest: Wire::read(input)?,
+            scene: read_tactical_bytes(input)?,
+            layout: Wire::read(input)?,
+            actors: Wire::read(input)?,
+            state: read_tactical_bytes(input)?,
+        })
+    }
+}
+
+pub(crate) fn checkpoint_storage_version(document: &[u8]) -> Result<i32, CodecError> {
+    let header = document.get(..6).ok_or(CodecError::Truncated)?;
+    let version = i32::from(u16::from_be_bytes([header[4], header[5]]));
+    validate_storage_format(version, MAGIC, document)?;
+    Ok(version)
+}
 record_wire!(CharacterAppearance {
     features,
     outfit,

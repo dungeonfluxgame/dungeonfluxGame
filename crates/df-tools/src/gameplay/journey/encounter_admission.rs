@@ -139,7 +139,23 @@ impl ParticipantOwner for CurrentJourney<'_> {
         let monster = entity(BANDIT)?;
         // Existing joined character identities are already exposed by the shared party view.
         // The only new disclosed identity here is the pinned authored Defend Courier Bandit.
-        if *actor == monster {
+        if super::tactical::enabled()
+            && super::tactical::enemies()?
+                .iter()
+                .any(|(id, _, _)| id == actor)
+        {
+            if candidate.definition != model::content("bandit")?
+                || candidate.identity_revision != model::label("tactical-srd521-1")?
+                || self
+                    .current
+                    .state()
+                    .entities
+                    .iter()
+                    .any(|entity| entity.id == *actor)
+            {
+                return Ok(ParticipantStatus::Undisclosed);
+            }
+        } else if *actor == monster {
             if self
                 .current
                 .state()
@@ -224,8 +240,8 @@ pub(super) fn admission<'a>(
         &command.basis,
         actors,
         ParticipantLimits {
-            max_participants: 3,
-            max_identity_comparisons: 3,
+            max_participants: if super::tactical::enabled() { 6 } else { 3 },
+            max_identity_comparisons: if super::tactical::enabled() { 15 } else { 3 },
         },
     )?;
     let expected = participants(current)
@@ -234,9 +250,20 @@ pub(super) fn admission<'a>(
             link.character
                 .ok_or(ParticipantError::Owner(RepositoryError::InvalidCandidate))
         })
-        .chain([entity(BANDIT).map_err(ParticipantError::Owner)])
+        .chain(if super::tactical::enabled() {
+            super::tactical::enemies()
+                .map_err(ParticipantError::Owner)?
+                .into_iter()
+                .map(|(id, _, _)| Ok(id))
+                .collect::<Vec<_>>()
+        } else {
+            vec![entity(BANDIT).map_err(ParticipantError::Owner)]
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    if expected.len() != 3 || admitted.actors() != expected.as_slice() {
+    if expected.len() < 3
+        || (!super::tactical::enabled() && expected.len() != 3)
+        || admitted.actors() != expected.as_slice()
+    {
         return Err(ParticipantError::Owner(RepositoryError::InvalidCandidate));
     }
     Ok(admitted)

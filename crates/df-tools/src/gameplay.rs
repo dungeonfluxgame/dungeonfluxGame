@@ -19,6 +19,9 @@ mod dialogue;
 #[cfg(test)]
 mod dialogue_tests;
 mod health_faces;
+mod home_theme;
+#[cfg(test)]
+mod home_theme_tests;
 mod imagery;
 mod inn_qualification;
 mod join_link;
@@ -45,6 +48,7 @@ mod room;
 mod room_code;
 mod scene_mood;
 mod session_recovery;
+mod shot;
 mod social;
 mod speech_input;
 mod splat_assets;
@@ -512,6 +516,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&web_root),
         std::path::Path::new(&asset_root),
     )?;
+    home_theme::install(std::path::Path::new(&asset_root))?;
     let splat_directory = startup_configuration::splat_directory(
         std::env::var("DF_GAMEPLAY_SPLAT_DIR"),
         &std::path::Path::new(&asset_root).join("../splat"),
@@ -1134,6 +1139,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         social.clone(),
         rating,
         living_scenes::Timing::from_interval(living_interval),
+        startup_configuration::plates_enabled(std::env::var("DF_GAMEPLAY_PLATES"))?,
     );
     let tempo = if std::env::args().nth(4).is_some() {
         None

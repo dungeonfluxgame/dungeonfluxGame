@@ -1322,7 +1322,7 @@ fn knowledge_tiers(
 fn own_statements(context: &Context<'_>) -> Vec<(Topic, &'static str, String)> {
     let member = context.member;
     let mut statements = Vec::new();
-    if let Some(identity) = identity_line(context) {
+    for identity in identity_lines(context) {
         statements.push((Topic::WhoAreYou, "identity_line", identity));
     }
     for line in context
@@ -1343,14 +1343,23 @@ fn own_statements(context: &Context<'_>) -> Vec<(Topic, &'static str, String)> {
     statements
 }
 
-/// Who the contact is and where the errand leads, as the patron and the contact each know it.
-fn identity_line(context: &Context<'_>) -> Option<String> {
+/// Who each speaker is and what the errand asks of them, as that speaker knows it. The patron
+/// knows who the contact is; the contact knows who sent the party and where they stand; the
+/// antagonist knows where it stands and that it blocks the way.
+fn identity_lines(context: &Context<'_>) -> Vec<String> {
     let facts = context.facts;
-    match context.member.role {
+    let member = context.member;
+    let patron = || {
+        facts
+            .cast
+            .iter()
+            .find(|cast| matches!(cast.role, NpcRole::Patron))
+    };
+    match member.role {
         NpcRole::Patron => facts
             .cast
             .iter()
-            .find(|member| matches!(member.role, NpcRole::Contact))
+            .find(|cast| matches!(cast.role, NpcRole::Contact))
             .map(|contact| {
                 format!(
                     "{} is {} at {}.",
@@ -1358,13 +1367,29 @@ fn identity_line(context: &Context<'_>) -> Option<String> {
                     with_article(&contact.role_label),
                     facts.destination
                 )
-            }),
-        NpcRole::Contact => Some(format!(
-            "I am {} at {}.",
-            with_article(&context.member.role_label),
-            facts.destination
-        )),
-        _ => None,
+            })
+            .into_iter()
+            .collect(),
+        NpcRole::Contact => {
+            let mut lines = vec![format!(
+                "I am {} at {}.",
+                with_article(&member.role_label),
+                facts.destination
+            )];
+            if let Some(patron) = patron() {
+                lines.push(format!(
+                    "{} sent word that you would come for {}.",
+                    patron.name, facts.stake.short
+                ));
+            }
+            lines
+        }
+        NpcRole::Antagonist => vec![format!(
+            "I am {} at {}, and I stand in your way.",
+            with_article(&member.role_label),
+            facts.location
+        )],
+        _ => Vec::new(),
     }
 }
 

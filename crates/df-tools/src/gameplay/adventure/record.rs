@@ -291,7 +291,10 @@ pub(crate) fn reload(
         .as_deref()
         .ok_or(RecordError::Invalid("missing antagonist identity"))?;
     if record.entry("antagonist")? != antagonist
-        || record.rules_mode == RulesMode::Standard && !loaded.departures.is_empty()
+        || record.rules_mode == RulesMode::Standard
+            && loaded.departures.iter().any(|departure| {
+                departure != "tactical.cover-centre-line" || loaded.tuning.tactical.is_none()
+            })
     {
         return Err(RecordError::Invalid("antagonist or standard rules binding"));
     }

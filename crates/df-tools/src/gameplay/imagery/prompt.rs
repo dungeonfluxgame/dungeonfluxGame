@@ -357,7 +357,7 @@ fn lighting_phrase(lighting: Lighting) -> &'static str {
     }
 }
 
-fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static str {
+pub(super) fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static str {
     let mature = rating == ContentRating::Mature;
     match expression {
         Expression::Neutral => "a calm, neutral expression",
@@ -389,7 +389,7 @@ fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static 
 
 /// What a hurt character's face shows. Closed vocabulary, the same under both ratings: pain and
 /// fear are shown as they are.
-fn health_face_phrase(tier: HealthTier) -> Option<&'static str> {
+pub(super) fn health_face_phrase(tier: HealthTier) -> Option<&'static str> {
     match tier {
         HealthTier::Healthy => None,
         HealthTier::Hurt => {
@@ -404,7 +404,7 @@ fn health_face_phrase(tier: HealthTier) -> Option<&'static str> {
 }
 
 /// How a hurt character's body and gear look; this is where the two ratings part.
-fn health_look_phrase(tier: HealthTier, rating: ContentRating) -> Option<&'static str> {
+pub(super) fn health_look_phrase(tier: HealthTier, rating: ContentRating) -> Option<&'static str> {
     let mature = rating == ContentRating::Mature;
     match tier {
         HealthTier::Healthy => None,

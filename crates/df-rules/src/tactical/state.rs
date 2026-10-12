@@ -1,19 +1,20 @@
 use super::{BattleMap, Cell, RuleError, Weapon};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Side {
     Heroes,
     Enemies,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Size {
     Small,
     Medium,
     Large,
 }
 /// Source stat blocks; departures in the old adjacent journey are not imported here.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CreatureKind {
     Hero,
     Bandit,
@@ -31,7 +32,8 @@ pub enum CreatureKind {
 }
 
 /// Caller-owned combatant data. Construction validates the bounded supported subset.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct CombatantSpec {
     pub id: u32,
     pub side: Side,
@@ -53,6 +55,36 @@ pub struct CombatantSpec {
     pub shield: bool,
 }
 impl CombatantSpec {
+    /// Source-derived hero attack and damage modifiers for a supported carried weapon.
+    pub fn hero_attack_modifiers(
+        &self,
+        weapon: Weapon,
+        ranged: bool,
+        finesse_dexterity: bool,
+    ) -> Result<(i16, i16), RuleError> {
+        if self.kind != CreatureKind::Hero
+            || (weapon != Weapon::UnarmedStrike && !self.weapons.contains(&weapon))
+            || (finesse_dexterity && !weapon.finesse())
+        {
+            return Err(RuleError::InvalidWeapon);
+        }
+        let ability = if (ranged && weapon.ranged_weapon()) || finesse_dexterity {
+            1
+        } else {
+            0
+        };
+        let damage = crate::local_journey::ability_modifier(self.abilities[ability]) as i16;
+        Ok((
+            damage
+                + 2
+                + if ranged && weapon.ranged_weapon() && self.archery {
+                    2
+                } else {
+                    0
+                },
+            damage,
+        ))
+    }
     /// Revalidate the existing journey creation receipt and expose all carried weapons.
     pub fn melee_hero(
         character: &crate::local_journey::LegalCharacter,
@@ -214,7 +246,8 @@ impl CombatantSpec {
         })
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Budget {
     pub action_used: bool,
     pub bonus_action_used: bool,
@@ -225,7 +258,8 @@ pub struct Budget {
     pub disengaged: bool,
     pub dodging: bool,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Health {
     pub hit_points: u16,
     pub maximum: u16,
@@ -242,12 +276,14 @@ impl Health {
         self.unconscious || self.dead
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Effect {
     pub origin: u32,
     pub expires_turn: u32,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Combatant {
     pub(crate) spec: CombatantSpec,
     pub(crate) health: Health,
@@ -280,6 +316,25 @@ impl Combatant {
     }
     pub fn spec(&self) -> &CombatantSpec {
         &self.spec
+    }
+    /// Public conditions, without equipment or private combat statistics.
+    pub fn conditions(&self) -> Vec<&'static str> {
+        let mut result = Vec::new();
+        for (present, name) in [
+            (self.health.prone, "prone"),
+            (self.health.unconscious, "unconscious"),
+            (self.health.dead, "dead"),
+            (self.health.stable, "stable"),
+            (self.budget.dodging, "dodging"),
+            (self.budget.disengaged, "disengaged"),
+            (!self.slow.is_empty(), "slowed"),
+            (!self.sap.is_empty(), "sapped"),
+        ] {
+            if present {
+                result.push(name);
+            }
+        }
+        result
     }
     pub fn health(&self) -> Health {
         self.health
@@ -317,11 +372,15 @@ impl Combatant {
     pub fn weapon_count(&self, weapon: Weapon) -> u16 {
         self.weapon_counts.get(&weapon).copied().unwrap_or(0)
     }
+    pub fn held_weapons(&self) -> &[Weapon] {
+        &self.held
+    }
     pub fn shield_equipped(&self) -> bool {
         self.shield_equipped
     }
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PendingMove {
     pub actor: u32,
     pub path: Vec<Cell>,
@@ -340,6 +399,62 @@ pub struct Battle {
     pub(crate) needs_death_save: bool,
 }
 impl Battle {
+    /// Carry admitted canonical resources into a fresh encounter without restoring them.
+    /// Source profiles retain maximum HP and starting equipment; this only spends resources.
+    pub fn with_hero_resources(
+        mut self,
+        id: u32,
+        hit_points: u16,
+        arrows: u16,
+        second_wind: u8,
+    ) -> Result<Self, RuleError> {
+        let actor = self.actor_mut(id)?;
+        if actor.spec.kind != CreatureKind::Hero
+            || hit_points == 0
+            || hit_points > actor.health.maximum
+            || arrows > actor.spec.arrows
+            || second_wind > actor.spec.second_wind_uses
+        {
+            return Err(RuleError::InvalidCombatant);
+        }
+        actor.health.hit_points = hit_points;
+        actor.spec.arrows = arrows;
+        actor.spec.second_wind_uses = second_wind;
+        Ok(self)
+    }
+    /// Carry the admitted canonical inventory into a fresh hero encounter.
+    pub fn with_hero_weapons(
+        mut self,
+        id: u32,
+        quantities: &[(Weapon, u16)],
+    ) -> Result<Self, RuleError> {
+        let actor = self.actor_mut(id)?;
+        if actor.spec.kind != CreatureKind::Hero
+            || quantities.len() != actor.weapon_counts.len()
+            || quantities
+                .iter()
+                .map(|(weapon, _)| *weapon)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != quantities.len()
+            || quantities.iter().any(|(weapon, count)| {
+                actor
+                    .weapon_counts
+                    .get(weapon)
+                    .is_none_or(|maximum| count > maximum)
+            })
+        {
+            return Err(RuleError::InvalidCombatant);
+        }
+        actor.weapon_counts = quantities.iter().copied().collect();
+        actor.held.retain(|weapon| {
+            actor
+                .weapon_counts
+                .get(weapon)
+                .is_some_and(|count| *count > 0)
+        });
+        Ok(self)
+    }
     pub fn map(&self) -> &BattleMap {
         &self.map
     }
@@ -759,7 +874,7 @@ pub fn begin(
     })
 }
 
-fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleError> {
+pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleError> {
     if spec.kind == CreatureKind::Hero {
         let standard_melee = matches!(
             spec.abilities,

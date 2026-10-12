@@ -4,7 +4,7 @@ use df_persistence::local_demo_scope::LocalDemoRole;
 use pack::SceneKey;
 
 const PREVIOUS_PACK: &[u8] = include_bytes!("../fixtures/harbor-journey-pack-baseline.json");
-const TUNING: &[u8] = include_bytes!("../../../../../content/harbor-journey/tuning.json");
+const TUNING: &[u8] = include_bytes!("../fixtures/harbor-journey-tuning-baseline.json");
 
 fn player(current: &Checkpoint) -> rpc::PlayerGameplayView {
     let principal = if participants(current).is_empty() {
@@ -103,7 +103,9 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
                 .find(|scene| scene.key == *key)
                 .unwrap();
             let split = !shipped_scene.rules_note.is_empty() && !*rested;
-            if !split {
+            let tactical_text_changed =
+                matches!(key, SceneKey::Combat | SceneKey::Victory | SceneKey::Defeat);
+            if !split && !tactical_text_changed {
                 assert_eq!(&actual, expected_view, "complete view parity for {key:?}");
             }
             let fixture = previous
@@ -140,6 +142,30 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
             } else {
                 text.clone()
             };
+            if tactical_text_changed {
+                let expected_text = if *rested {
+                    shipped_scene.narration_rested.as_ref().unwrap()
+                } else {
+                    &shipped_scene.narration
+                };
+                assert!(actual.narration.starts_with(expected_text));
+                if *key == SceneKey::Combat && tactical::present(checkpoint.state()) {
+                    assert!(scene.rules_note.starts_with(&shipped_scene.rules_note));
+                    assert!(scene.rules_note.contains("tactical.cover-centre-line"));
+                    assert!(!actual.narration.contains("tactical.cover-centre-line"));
+                } else {
+                    assert!(!scene.rules_note.contains("tactical.cover-centre-line"));
+                    assert_eq!(
+                        scene.rules_note,
+                        if *rested {
+                            ""
+                        } else {
+                            &shipped_scene.rules_note
+                        }
+                    );
+                }
+                continue;
+            }
             if split {
                 // The harbor pack keeps its rules sentences in `rules_note`, apart from the
                 // story text; every one of them was already part of the previous narration.
@@ -197,7 +223,7 @@ fn edited_text_options_equipment_and_room_drive_complete_journey() {
     content["equipment"].as_array_mut().unwrap().reverse();
     let loaded = pack::load_from_bytes(&serde_json::to_vec(&content).unwrap(), TUNING).unwrap();
     pack::with_test_pack(loaded, || {
-        let offer = wire::creation_offer();
+        let offer = wire::creation_offer().unwrap();
         assert_eq!(offer.description, "Create a harbor guardian.");
         assert_eq!(offer.groups[0].options[0].description, "A trusted dwarf.");
         assert_eq!(
