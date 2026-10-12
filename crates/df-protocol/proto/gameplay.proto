@@ -3,11 +3,11 @@ package dungeonflux.public.v1;
 import "common.proto";
 service ActionService { rpc Submit(SubmitActionRequest) returns (SubmitActionResponse); }
 service SessionService { rpc Watch(WatchViewRequest) returns (stream ViewMessage); }
-enum GameplayActionKind { GAMEPLAY_ACTION_KIND_UNSPECIFIED = 0; EXAMINE_HARBOR_SEAL = 1; CHOOSE_HARBOR_SCENE = 2; CREATE_CHARACTER = 3; BEGIN_STORY = 4; ASK_COURIER = 5; ESCORT_COURIER = 6; DEFEND_COURIER = 7; GREATSWORD_ATTACK = 8; SECOND_WIND = 9; END_TURN = 10; SHORT_REST = 11; }
+enum GameplayActionKind { GAMEPLAY_ACTION_KIND_UNSPECIFIED = 0; EXAMINE_HARBOR_SEAL = 1; CHOOSE_HARBOR_SCENE = 2; CREATE_CHARACTER = 3; BEGIN_STORY = 4; ASK_COURIER = 5; ESCORT_COURIER = 6; DEFEND_COURIER = 7; GREATSWORD_ATTACK = 8; SECOND_WIND = 9; END_TURN = 10; SHORT_REST = 11; MOVE = 12; DASH = 13; DODGE = 14; DISENGAGE = 15; OPPORTUNITY_ATTACK = 16; DECLINE_REACTION = 17; STAND = 18; PICK_UP_WEAPON = 19; }
 enum RejectionCode { REJECTION_CODE_UNSPECIFIED = 0; STALE_OFFER = 1; WRONG_TURN = 2; INVALID_SELECTION = 3; PAUSED = 4; RESOURCE_MISSING = 5; CAPABILITY_UNAVAILABLE = 6; RECOVERY_REQUIRED = 7; REVISION_CONFLICT = 8; OPERATION_CONFLICT = 9; OPERATION_EXPIRED = 10; }
 message Rejection { RejectionCode code = 1; }
 message AcceptedAction { AbilityCheckResult check = 1; GameplayScene scene = 2; CharacterSheet character = 3; repeated CombatOutcome combat = 4; JourneyPhase phase = 5; }
-message SubmitActionRequest { SessionId session_id = 1; RunId run_id = 2; SessionRevision observed_revision = 3; OperationId operation_id = 4; string offer_id = 5; GameplayActionKind action_kind = 6; HarborDestination destination = 7; CharacterSelection character = 8; bool savage_attacker = 9; bool graze = 10; }
+message SubmitActionRequest { SessionId session_id = 1; RunId run_id = 2; SessionRevision observed_revision = 3; OperationId operation_id = 4; string offer_id = 5; GameplayActionKind action_kind = 6; HarborDestination destination = 7; CharacterSelection character = 8; bool savage_attacker = 9; bool graze = 10; repeated JourneyChoice action_choices = 11; }
 message AbilityCheckResult { uint32 die = 1; sint32 ability_modifier = 2; uint32 proficiency_bonus = 3; sint32 total = 4; uint32 difficulty_class = 5; bool succeeded = 6; string source_revision = 7; }
 message DecisionReceipt { OperationId operation_id = 1; SessionRevision revision = 2; SessionId session_id = 3; RunId run_id = 4; bool replayed = 5; oneof outcome { AcceptedAction accepted = 6; Rejection rejected = 7; } }
 message WatchViewRequest { SessionId session_id = 1; RunId run_id = 2; ClientBindingId client_binding_id = 3; SessionRevision after_revision = 4; }
@@ -39,9 +39,9 @@ message JourneyGroup { string group_id = 1; string label = 2; repeated JourneyOp
 message CharacterCreationOffer { string description = 1; repeated JourneyGroup groups = 2; string source_revision = 3; }
 message CharacterSheet { string name = 1; repeated SheetFact facts = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; uint32 armor_class = 5; string source_revision = 6; }
 message SheetFact { string label = 1; string value = 2; }
-message PartyMemberView { string name = 1; bool character_ready = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; bool active_turn = 5; bool unconscious = 6; bytes participant_id = 7; }
-message CombatOutcome { string actor_name = 1; string target_name = 2; uint32 attack_die = 3; sint32 attack_modifier = 4; sint32 attack_total = 5; uint32 target_armor_class = 6; bool hit = 7; bool critical = 8; repeated uint32 damage_dice = 9; uint32 damage = 10; uint32 target_hit_points = 11; bool knocked_out = 12; bool grazed = 13; string source_revision = 14; bytes actor_id = 15; bytes target_id = 16; }
-message CombatView { repeated PartyMemberView participants = 1; string active_actor = 2; uint32 round = 3; repeated CombatOutcome outcomes = 4; bool finished = 5; string source_revision = 6; bytes active_participant_id = 7; repeated InitiativeRoll initiative = 8; }
+message PartyMemberView { string name = 1; bool character_ready = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; bool active_turn = 5; bool unconscious = 6; bytes participant_id = 7; GridCell cell = 8; uint32 side = 9; repeated string conditions = 10; uint32 attack_style = 11; string voice_set = 12; string portrait = 13; }
+message CombatOutcome { string actor_name = 1; string target_name = 2; uint32 attack_die = 3; sint32 attack_modifier = 4; sint32 attack_total = 5; uint32 target_armor_class = 6; bool hit = 7; bool critical = 8; repeated uint32 damage_dice = 9; uint32 damage = 10; uint32 target_hit_points = 11; bool knocked_out = 12; bool grazed = 13; string source_revision = 14; bytes actor_id = 15; bytes target_id = 16; string weapon = 17; uint32 attack_style = 18; }
+message CombatView { repeated PartyMemberView participants = 1; string active_actor = 2; uint32 round = 3; repeated CombatOutcome outcomes = 4; bool finished = 5; string source_revision = 6; bytes active_participant_id = 7; repeated InitiativeRoll initiative = 8; string layout_id = 9; repeated GridCell reachable_cells = 10; repeated LegalCombatTarget legal_targets = 11; TurnBudget own_budget = 12; CombatAmmunition own_ammunition = 13; bytes reaction_participant_id = 14; string location_id = 15; }
 message InitiativeRoll { bytes participant_id = 1; string name = 2; uint32 die = 3; sint32 modifier = 4; sint32 total = 5; uint32 order = 6; }
 message JourneyView { JourneyPhase phase = 1; string room_code = 2; string join_path = 3; repeated PartyMemberView party = 4; CharacterCreationOffer creation = 5; CharacterSheet own_character = 6; CombatView combat = 7; string speaker = 8; string dialogue = 9; repeated TableLine table_log = 10; TempoCue tempo = 11; repeated string table_choices = 12; repeated NpcStanding standing = 13; repeated LiveFace live_faces = 14; uint64 presentation_sequence = 15; string reply_speaker = 16; string join_url = 45; }
 // A server-generated health variant of a hero's cut-out (`/gameplay/imagery/<key>`), by the party member's name; presentation only.
@@ -68,3 +68,10 @@ message DialogueResponse { OperationId input_id = 1; DialogueDisposition disposi
 // Public presentation only. Sequence is monotonic within the native owner lifetime; reset on authenticated watch reconnect.
 enum TempoPhase { TEMPO_PHASE_UNSPECIFIED = 0; TEMPO_PHASE_CALM = 1; TEMPO_PHASE_BUILD = 2; TEMPO_PHASE_ANTICIPATION = 3; TEMPO_PHASE_PEAK = 4; TEMPO_PHASE_RELEASE = 5; }
 message TempoCue { uint32 intensity_permille = 1; TempoPhase phase = 2; uint64 sequence = 3; uint32 hold_millis = 4; }
+
+// Tactical public presentation: side 1 heroes/2 enemies, attack_style 1 melee/2 ranged.
+// Resource details below are projected only to their owning player; never to display.
+message GridCell { uint32 col = 1; uint32 row = 2; }
+message TurnBudget { uint32 movement_ft = 1; bool action = 2; bool bonus_action = 3; bool reaction = 4; }
+message CombatAmmunition { uint32 arrows = 1; uint32 bolts = 2; }
+message LegalCombatTarget { bytes participant_id = 1; string weapon = 2; string cover = 3; string range_reason = 4; bool disadvantage = 5; repeated string reasons = 6; string option_id = 7; }

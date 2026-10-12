@@ -673,6 +673,7 @@ pub(crate) fn generate_with_prose(
     pack.id = format!("adv-{seed:016x}");
     tuning.pack = pack.id.clone();
     tuning.tempo = pack::TempoTuning::default();
+    tuning.tactical = ant.tactical.clone();
     pack.bandit.name = render::capitalize(ant_name.strip_prefix("the ").unwrap_or(&ant_name));
     pack.bandit.srd_id = Some(ant.id.clone());
     pack.destination_label = Some(dest.name.clone());

@@ -331,27 +331,19 @@ fn every_compiled_creature_has_table_parity_and_loader_disclosure() {
             &serde_json::to_vec(&generated.tuning).unwrap(),
         )
         .unwrap();
-        if creature.exact {
-            assert!(
-                loaded.departures.is_empty(),
-                "{}: {:?}",
-                creature.id,
-                loaded.departures
-            );
-        } else {
-            assert_eq!(
-                loaded.departures,
-                vec![format!("antagonist.simplified:{}", creature.id)]
-            );
-        }
+        // Tactical source profiles implement the complete T01 stat blocks; legacy
+        // one-weapon fidelity flags no longer describe their mechanical authority.
+        assert!(loaded.tuning.tactical.is_some());
+        assert_eq!(loaded.departures, ["tactical.cover-centre-line"]);
         let mut tampered = generated.tuning.clone();
-        tampered.bandit.hit_points += 1;
-        let loaded = super::super::pack::load_from_bytes(
-            &serde_json::to_vec(&generated.pack).unwrap(),
-            &serde_json::to_vec(&tampered).unwrap(),
-        )
-        .unwrap();
-        assert!(loaded.departures.iter().any(|d| d == "bandit.hit_points"));
+        tampered.hero.armor_class += 1;
+        assert!(
+            super::super::pack::load_from_bytes(
+                &serde_json::to_vec(&generated.pack).unwrap(),
+                &serde_json::to_vec(&tampered).unwrap(),
+            )
+            .is_err()
+        );
     }
 }
 
@@ -1140,39 +1132,40 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// The SHA-256 of pack, tuning and record of three fixed seeds as the generator wrote them
-/// before the content rating existed (with `GenerateOptions::default()`).
-/// Pack and record were re-pinned when every pack gained its `beat_script`: with that one key
-/// removed, each pack was byte-identical to the earlier pin.
+/// Current tactical pack, encounter tuning, and disclosed-cover record pins.
+/// PLAY-T02 intentionally changes fight/rest text and activates source encounters.
+/// The record pins were taken again when PLAY-T02 met PLAY-N05 (the record embeds the NPC
+/// dossiers, which now carry each speaker's errand knowledge); pack and tuning matched PLAY-T02's
+/// pins unchanged.
 const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
-            "072519d1e82c29c030e6788b77af55483ff477e1290f8ffbe9e5952692cf70cb",
-            "fd318025d2d7b016708169b59777687fe1f7b630a3b70eb2715dad37af962933",
-            "59d52d16a87d02c42a9f564fd536ba6bab2a652ad1fed3d6fa4813e9e1e51567",
+            "6c712a452151cd563087b25b4f4db8c6b12aa4a22faab8334de7e054781cc65f",
+            "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
+            "057e96f54349f70cc514ec02d83f3ae24f941b65be2961acb724f70b10732a67",
         ],
     ),
     (
         0xdaa66d325ccc5aac,
         [
-            "80a4f6aa32d5b1ecbe68ab33a5e2e43ecb6697e5c62a499df1b91001e6c01e44",
-            "6e122920b8921cd08441ec5c13360ac3898742e2d143a16e0c8a8d678d367ace",
-            "3e8ee5cea2515032c701e3d0d510d29328fe96c4599355fb1df04333a8a85157",
+            "3439dfadef74fc3e1dae7feda47a4abe782e8cba02a7ed5d2cd043522b754fb0",
+            "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
+            "b6033d9f40639c08b9e0a9108d9d124fb623a7b3fa657d778ca1febe0261b7a6",
         ],
     ),
     (
         0x11a25cdccc7d808f,
         [
-            "2c75bec4abecef0694322db9b71f6bf826b7161641ed6c520f9377008eebb705",
-            "d29e661273c6de6896f5723c824099989ad0b023d8f9085a5f9bc73cbb5450d7",
-            "14394ebc68dffb3a3cba2ee7212e6c993d9298d69266726e8b5b70b67ee86032",
+            "701d607820e81326cec219c8f7f5da8b9849e4bcd2dcde7f3a34f607e7398968",
+            "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
+            "4118eed983e2d248d3948fac3d134b0b6b6cf88124bb12a0c6ab391a5fec9c1b",
         ],
     ),
 ];
 
 #[test]
-fn restrained_generation_is_byte_identical_to_the_tables_before_the_content_rating() {
+fn restrained_generation_matches_current_tactical_document_pins() {
     let tables = tables();
     for (seed, [pack, tuning, record]) in RESTRAINED_GOLDEN {
         let documents = generate(
@@ -1187,6 +1180,7 @@ fn restrained_generation_is_byte_identical_to_the_tables_before_the_content_rati
         assert_eq!(sha256(&documents.pack), pack, "{seed:#x} pack");
         assert_eq!(sha256(&documents.tuning), tuning, "{seed:#x} tuning");
         assert_eq!(sha256(&documents.record), record, "{seed:#x} record");
+        assert!(super::record::reload(&documents).is_ok());
     }
 }
 

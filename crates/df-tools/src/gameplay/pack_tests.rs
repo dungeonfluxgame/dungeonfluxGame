@@ -26,7 +26,7 @@ fn shipped_pack() -> String {
 }
 
 fn shipped_tuning() -> String {
-    shipped_text(TUNING_FILE_NAME)
+    include_str!("fixtures/harbor-journey-tuning-baseline.json").to_owned()
 }
 
 fn refusal(pack: &str, tuning: &str) -> PackError {
@@ -147,11 +147,11 @@ impl Drop for Scratch {
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn shipped_files_load_with_no_departures() {
+fn shipped_files_load_with_only_disclosed_tactical_cover_policy() {
     let loaded = load(&shipped_directory()).expect("shipped files must load");
 
     assert!(
-        loaded.departures.is_empty(),
+        loaded.departures == ["tactical.cover-centre-line"],
         "departures: {:?}",
         loaded.departures
     );
@@ -1210,7 +1210,7 @@ fn shipped_courier_clue_equals_the_prepared_recording() {
 #[test]
 fn shipped_creation_content_equals_the_wire_creation_offer() {
     let loaded = load(&shipped_directory()).expect("shipped files must load");
-    let offer = wire::creation_offer();
+    let offer = wire::creation_offer().unwrap();
 
     assert_eq!(loaded.pack.creation.description, offer.description);
     for group in &loaded.pack.creation.groups {

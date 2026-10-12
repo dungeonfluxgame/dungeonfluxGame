@@ -8,7 +8,7 @@ use df_protocol::common as rpc;
 use df_types::MemberId;
 use prost::Message;
 const PACK: &[u8] = include_bytes!("../../../../content/harbor-journey/pack.json");
-const TUNING: &[u8] = include_bytes!("../../../../content/harbor-journey/tuning.json");
+const TUNING: &[u8] = include_bytes!("fixtures/harbor-journey-tuning-baseline.json");
 pub(super) fn first() -> MemberId {
     MemberId::from_bytes(&[0x61; 16]).unwrap()
 }
@@ -172,6 +172,7 @@ fn request(
         },
         savage_attacker: false,
         graze: false,
+        action_choices: Vec::new(),
     }
 }
 pub(super) fn act(current: &Checkpoint, member: MemberId, operation: u8, id: &str) -> Checkpoint {

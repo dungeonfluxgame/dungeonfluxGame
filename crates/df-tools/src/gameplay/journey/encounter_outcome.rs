@@ -92,6 +92,9 @@ pub(super) fn validate(
     ) {
         return Ok(());
     }
+    if super::tactical::present(current.state()) {
+        return super::tactical::validate_encounter(current);
+    }
     // The checkpoint supplies source-qualified resource bounds. The accepted initiative
     // draws and time facts supply the order and elapsed rounds.
     combat_round(current).map_err(|_| RepositoryError::InvalidCandidate)?;

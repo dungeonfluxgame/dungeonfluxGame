@@ -494,6 +494,7 @@ mod noncombat_tests {
             active_turn: None,
             objectives: vec![fixture::content()],
             combat_policy: fixture::content(),
+            tactical: None,
         });
         fixture::accepted_from(state)
     }

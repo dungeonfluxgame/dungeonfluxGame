@@ -1,5 +1,6 @@
+use serde::{Deserialize, Serialize};
 /// SRD Weapons table (p91); only carried weapons and the admitted stat block actions.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Weapon {
     Greatsword,
     Flail,
@@ -16,7 +17,7 @@ pub enum Weapon {
     Slam,
     UnarmedStrike,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mastery {
     Graze,
     Sap,
@@ -24,7 +25,7 @@ pub enum Mastery {
     Vex,
     Nick,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DamageType {
     Slashing,
     Piercing,
@@ -94,7 +95,8 @@ impl Weapon {
             Self::Scimitar | Self::Shortsword | Self::Dagger | Self::Sickle
         )
     }
-    pub(crate) fn dice(self, two_hands: bool) -> (usize, u32) {
+    /// Source weapon damage dice, including a selected Versatile grip.
+    pub fn dice(self, two_hands: bool) -> (usize, u32) {
         match self {
             Self::UnarmedStrike => (0, 6),
             Self::Greatsword => (2, 6),

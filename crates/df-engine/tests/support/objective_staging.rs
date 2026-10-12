@@ -96,6 +96,7 @@ impl Fixture {
                 active_turn: Some(fixture::entity(4)),
                 objectives: self.expected.to_vec(),
                 combat_policy: fixture::content(),
+                tactical: None,
             })
             .collect();
         state.facts = [30, 31]

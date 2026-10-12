@@ -50,6 +50,11 @@ pub(in crate::gameplay) fn current(
     checkpoint: &Checkpoint,
     member: MemberId,
 ) -> Result<Vec<CurrentOffer<'_>>, NativeTargetError> {
+    if super::tactical::present(checkpoint.state())
+        && super::phase(checkpoint).map_err(NativeTargetError::State)? == rpc::JourneyPhase::Combat
+    {
+        return Err(NativeTargetError::UnsupportedAction);
+    }
     let actor = player_entity(member, checkpoint).map_err(NativeTargetError::State)?;
     let rules = [
         model::rule().map_err(NativeTargetError::State)?,
@@ -157,6 +162,21 @@ pub(in crate::gameplay) fn validate(
     action: &ContentReference,
     targets: &[EntityId],
 ) -> Result<(), NativeTargetError> {
+    if super::tactical::present(checkpoint.state())
+        && (super::phase(checkpoint).map_err(NativeTargetError::State)?
+            == rpc::JourneyPhase::Combat
+            || super::tactical::dying(checkpoint.state()).map_err(NativeTargetError::State)?)
+    {
+        if super::phase(checkpoint).map_err(NativeTargetError::State)?
+            == rpc::JourneyPhase::Complete
+            && targets.is_empty()
+            && action.entry.as_str() == "end-turn"
+        {
+            return Ok(());
+        }
+        return super::tactical::validate_input(checkpoint, member, action, targets)
+            .map_err(NativeTargetError::State);
+    }
     let selection = match targets {
         [] => TargetSelection::Unspecified,
         [target] => TargetSelection::Explicit(*target),

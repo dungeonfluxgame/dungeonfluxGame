@@ -33,6 +33,7 @@
     "damage_modifier": 1,
     "weapon": { "item": "scimitar", "damage_dice": 1, "damage_sides": 6 }
   },
+  "tactical": {"enemies": [{"srd_id": "bandit", "count": 3, "ammunition": 20}]},
   "combat": { "round_ticks": 6, "critical_threshold": 20, "combat_log_entries": 6 },
   "rest": { "short_rest_seconds": 3600 },
   "narrative": { "intervention_budget": 8 },

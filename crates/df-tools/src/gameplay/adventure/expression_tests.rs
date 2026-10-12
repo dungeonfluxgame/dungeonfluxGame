@@ -476,9 +476,9 @@ fn narration_and_rules_notes_are_separate_end_to_end() {
             .rules_note
             .clone()
     };
-    assert!(note(super::super::super::pack::SceneKey::Combat).contains("5 feet"));
-    assert!(note(super::super::super::pack::SceneKey::Victory).contains("Short Rest"));
-    assert!(note(super::super::super::pack::SceneKey::Defeat).contains("unconscious"));
+    assert!(note(super::super::super::pack::SceneKey::Combat).contains("cover"));
+    assert!(note(super::super::super::pack::SceneKey::Victory).contains("death saves"));
+    assert!(note(super::super::super::pack::SceneKey::Defeat).contains("death saves"));
     assert!(note(super::super::super::pack::SceneKey::Room).is_empty());
     for sheet in &baseline.fact_sheet {
         assert!(!sheet.baseline.contains("5 feet"));

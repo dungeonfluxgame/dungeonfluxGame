@@ -82,7 +82,7 @@ pub(super) fn source<'a>(
     Ok(fact)
 }
 
-fn validate_terminal_cause(
+pub(super) fn validate_terminal_cause(
     state: &GameState,
     fact: &GameFact,
     decision: &AcceptedDecision,
@@ -226,8 +226,13 @@ fn validate_thread_progress(
             validate_terminal_cause(state, fact, decision)?;
         }
         let resolved = thread == &threat
-            && receipt.combat.iter().any(|outcome| {
-                outcome.knocked_out && outcome.target_id.as_slice() == BANDIT.as_slice()
+            && (if super::tactical::present(state) {
+                state.facts.iter().any(|source| source.operation == fact.operation && source.revision == fact.revision
+                    && matches!(&source.value, FactValue::ContentEvent {definition, ..} if definition.entry.as_str() == "combat-victory"))
+            } else {
+                receipt.combat.iter().any(|outcome| {
+                    outcome.knocked_out && outcome.target_id.as_slice() == BANDIT.as_slice()
+                })
             });
         sources.push(fact.id);
         last = definition.map(|definition| ThreadConsequenceSelection {
@@ -388,16 +393,25 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
     let [encounter] = state.encounters.as_slice() else {
         return invalid();
     };
+    if super::tactical::present(state) {
+        super::tactical::validate_encounter(current)?;
+        if phase == rpc::JourneyPhase::Combat {
+            super::tactical::validate_phase(current, phase, &completed, start, dialogue)?;
+            return Ok(phase);
+        }
+    }
     let monster = entity(BANDIT)?;
     let expected = actors.iter().copied().chain([monster]).collect::<Vec<_>>();
-    if !shared_empty(start)
-        || start.revision <= dialogue.revision
-        || encounter.id
-            != RecordId::from_bytes(&ENCOUNTER).map_err(|_| RepositoryError::InvalidCandidate)?
-        || encounter.definition != model::content("combat")?
-        || encounter.combat_policy != model::content("normal-nonlethal-melee")?
-        || encounter.participants != expected
-        || !objective_outcome::defend_history(state)?
+    if !super::tactical::present(state)
+        && (!shared_empty(start)
+            || start.revision <= dialogue.revision
+            || encounter.id
+                != RecordId::from_bytes(&ENCOUNTER)
+                    .map_err(|_| RepositoryError::InvalidCandidate)?
+            || encounter.definition != model::content("combat")?
+            || encounter.combat_policy != model::content("normal-nonlethal-melee")?
+            || encounter.participants != expected
+            || !objective_outcome::defend_history(state)?)
     {
         return invalid();
     }
@@ -532,6 +546,9 @@ pub(super) fn completion_source<'a>(
     victory: bool,
     require_narrative: bool,
 ) -> Result<&'a GameFact, RepositoryError> {
+    if super::tactical::present(state) {
+        return super::tactical::completion_source(state, start, victory, require_narrative);
+    }
     let monster = entity(BANDIT)?;
     let source_rule = rule()?;
     for decision in &state.decisions {

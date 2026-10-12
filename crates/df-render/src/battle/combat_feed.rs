@@ -41,6 +41,7 @@ pub struct Member {
     /// How the figure attacks on screen. Switch point: the server's weapon replaces the adapter's
     /// figure-based guess.
     pub attack: AttackStyle,
+    pub voice: Option<super::sound::VoiceSet>,
     /// The cell the server placed the combatant on. `None` stages it on the layout's spawn
     /// cells (or the derived formation); when the server supplies cells the renderer is unchanged.
     pub cell: Option<super::grid::Cell>,
@@ -115,6 +116,7 @@ fn token_for(member: &Member, cell: super::grid::Cell) -> Token {
         }),
         statuses: member.statuses.clone(),
         attack: member.attack,
+        voice: member.voice,
     }
 }
 
@@ -299,6 +301,7 @@ mod tests {
             figure: None,
             portrait: None,
             attack: AttackStyle::Melee,
+            voice: None,
             cell: None,
             statuses: Vec::new(),
         }
@@ -454,6 +457,7 @@ mod hold_tests {
             figure: None,
             portrait: None,
             attack: AttackStyle::Melee,
+            voice: None,
             cell: None,
             statuses: Vec::new(),
         };

@@ -942,6 +942,7 @@ fn prepare(
         character,
         savage_attacker: savage,
         graze,
+        action_choices: Vec::new(),
     })
 }
 fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: bool) {
@@ -1203,11 +1204,11 @@ fn action_button(
 ) -> Result<(), JsValue> {
     let document = client.borrow().document.clone();
     let mut inputs = Vec::new();
-    if offer.input_groups.len() > 2 {
+    if offer.input_groups.len() > 3 {
         return Err(JsValue::from_str("offered inputs exceed bound"));
     }
     for group in &offer.input_groups {
-        if group.options.len() != 2 {
+        if group.options.is_empty() || group.options.len() > 256 {
             return Err(JsValue::from_str("unsupported offered input shape"));
         }
         let label = node(&document, parent, "label", "attack-option", &group.label)?;
@@ -1237,8 +1238,23 @@ fn action_button(
     let button = button(client, parent, &offer.label, move |client| {
         let mut savage = false;
         let mut graze = false;
+        let mut action_choices = Vec::new();
         for (key, input) in &inputs {
             let value = input.value();
+            if key == "tactical-choice" {
+                if !offered.input_groups.iter().any(|group| {
+                    group.group_id == *key
+                        && group.options.iter().any(|option| option.option_id == value)
+                }) {
+                    feedback(&client.borrow(), "Choose an offered option.");
+                    return;
+                }
+                action_choices.push(rpc::JourneyChoice {
+                    group_id: key.clone(),
+                    option_id: value,
+                });
+                continue;
+            }
             if !matches!(value.as_str(), "yes" | "no") {
                 feedback(&client.borrow(), "Choose an offered attack approach.");
                 return;
@@ -1273,7 +1289,10 @@ fn action_button(
             rpc::HarborDestination::Unspecified as i32
         };
         match prepare(&client, &offered, None, savage, graze, selected) {
-            Ok(body) => send(client, body, false),
+            Ok(mut body) => {
+                body.action_choices = action_choices;
+                send(client, body, false);
+            }
             Err(error) => feedback(&client.borrow(), &error),
         }
     })?;
@@ -1352,12 +1371,12 @@ fn redraw_current(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         .views
         .as_ref()
         .and_then(|views| views.current().cloned());
-    if let Some(view) = view {
-        if let Err(error) = render(client, view) {
-            // A view that cannot be drawn must never fail silently into a blank screen.
-            web_sys::console::error_2(&JsValue::from_str("gameplay view not drawn:"), &error);
-            return Err(error);
-        }
+    if let Some(view) = view
+        && let Err(error) = render(client, view)
+    {
+        // A view that cannot be drawn must never fail silently into a blank screen.
+        web_sys::console::error_2(&JsValue::from_str("gameplay view not drawn:"), &error);
+        return Err(error);
     }
     Ok(())
 }
@@ -1389,7 +1408,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         _ => return Err(JsValue::from_str("server audience mismatch")),
     };
     let journey = journey.ok_or_else(|| JsValue::from_str("server journey missing"))?;
-    if journey.party.len() > 2 || offers.len() > 4 {
+    if journey.party.len() > 2 || offers.len() > 12 {
         return Err(JsValue::from_str("server view exceeds bound"));
     }
     let surface = root
@@ -1596,6 +1615,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
     if let Some(sheet) = journey.own_character.as_ref() {
         live_combat::sheet::summary(client, &body, sheet)?;
     }
+
     dialogue_recovery::mount(client, &body, &offers)?;
     let actions = node(&document, &body, "div", "scene-actions", "")?;
     for offer in offers {

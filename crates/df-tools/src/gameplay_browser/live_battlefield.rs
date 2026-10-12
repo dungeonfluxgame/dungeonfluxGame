@@ -1,19 +1,16 @@
 //! Adapter between the shared display and the 3D battlefield in `df-render`.
 //!
-//! The battlefield only draws staging. Positions are STAGING ONLY today: the rules engine has no
-//! positions, movement or range (one melee enemy, everyone in reach), so this module derives a
-//! stable formation from the combat view (party members by seat on the near side, the enemy
-//! opposite, on walkable cells of the scene's grid) and animates the step-beside and lunge
-//! cosmetically. Nothing here decides an outcome: every hit, miss, damage figure and downing is
-//! copied from the server's `CombatOutcome`. When the server later supplies cells, build the
-//! tokens with those cells instead of `derive_formation`; the renderer does not change.
+//! The live battlefield renders server cells, layout, attack styles and voice sets. Legacy views
+//! and the isolated renderer preview retain a cosmetic formation fallback. No client rule decides
+//! reachable cells, legal targets, cover, damage or outcomes.
 //!
 //! `#battle-preview[=<location-id>[:<layout-id>]][&splat][&restrained][&statuses][&sheet[=n]]`
 //! mounts the battlefield alone and loops a scripted fight (it opens with the initiative roll and
 //! roll-call) with no server calls, for looking at the renderer without playing a game.
 //! `&statuses` puts every status on a figure in turn; `&sheet=n` shows six figures at once.
 //!
-//! The four SWITCH POINTS the server's data later replaces, each one function: the layout choice
+//! Server tactical data supplies layout, cells, attack mode and voice. The retained legacy
+//! SWITCH POINT fallbacks cover old checkpoints and the standalone preview: the layout choice
 //! ([`chosen_layout_id`]), the attack style ([`attack_style_for`]), the voice set
 //! (`df_render::battle::voice_for`, called by the stage) and the content rating
 //! ([`content_rating`]).
@@ -288,12 +285,11 @@ fn combatant(
         }),
         statuses: Vec::new(),
         attack: attack_style_for(figure),
+        voice: None,
     }
 }
 
-/// How a figure attacks on screen. SWITCH POINT: until the server reports each combatant's
-/// weapon, the archer is the figure whose art is the bow (`figure-hero-3`); the server's
-/// equipped weapon replaces this match.
+/// Legacy/preview attack style fallback; tactical figures use the server attack_style field.
 fn attack_style_for(figure: &str) -> AttackStyle {
     match figure {
         "figure-hero-3" => AttackStyle::Ranged,
@@ -867,6 +863,8 @@ struct Live {
     latest: Option<CombatSnapshot>,
     /// The fight began in front of the display and its first feed has not run yet.
     begun_live: bool,
+    reachable: Vec<Cell>,
+    targets: Vec<Cell>,
 }
 
 thread_local! {
@@ -877,6 +875,8 @@ thread_local! {
         feed: CombatFeed::new(FeedMode::HoldForCues),
         latest: None,
         begun_live: false,
+        reachable: Vec::new(),
+        targets: Vec::new(),
     });
 }
 
@@ -920,7 +920,14 @@ fn enemy_height_m(creature: &str) -> f32 {
 /// `scene-place-*` or `scene-dest-*` picture and no longer names the place. The reason for any
 /// fallback is returned so it can be recorded on the page.
 fn scene_choice(view: &LiveView<'_>) -> battle::SceneChoice {
-    battle::resolve_scene(&view.scene.location_id)
+    battle::resolve_scene(
+        view.journey
+            .combat
+            .as_ref()
+            .map(|combat| combat.location_id.as_str())
+            .filter(|id| !id.is_empty())
+            .unwrap_or(&view.scene.location_id),
+    )
 }
 
 /// The fight's own painting, used as the backdrop behind the battlefield (the confrontation
@@ -931,10 +938,7 @@ fn backdrop_stem(view: &LiveView<'_>) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// SWITCH POINT (layout). The layout for this fight, deterministic from data the view already
-/// carries (the location, the fight's participants; never the round), so a reload and the
-/// preview show the same layout for the same fight. The server's own layout id replaces this
-/// function's body.
+/// Legacy/preview layout fallback; mounted tactical fights use the server layout_id.
 fn chosen_layout_id(scene: &BattleScene, key: &str) -> Option<String> {
     battle::choose_layout(&scene.layouts, key).map(|layout| layout.id.clone())
 }
@@ -968,6 +972,19 @@ thread_local! {
 }
 
 /// Copies the server's combat projection into plain data. No outcome is decided here.
+fn voice_set(key: &str) -> Option<battle::VoiceSet> {
+    use battle::VoiceSet as V;
+    match key {
+        "hero-male" => Some(V::HeroMale),
+        "hero-female" => Some(V::HeroFemale),
+        "small-creature" => Some(V::SmallCreature),
+        "beast" => Some(V::Beast),
+        "undead" => Some(V::Undead),
+        "humanoid" => Some(V::Humanoid),
+        _ => None,
+    }
+}
+
 fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
     let combat = view.journey.combat.as_ref()?;
     let party = view.journey.party.len();
@@ -986,11 +1003,25 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
         .iter()
         .enumerate()
         .map(|(index, member)| {
-            let hero = index < party;
+            let authoritative = member.cell.is_some();
+            let hero = if authoritative {
+                member.side == 1
+            } else {
+                index < party
+            };
             // Seats wear the hero art in this order: the dwarf fighter, then the archer (the
             // owner asked for a female long-range player in the party), then the second fighter.
             let hero_art = [1, 3, 2][index % 3];
-            let figure = if hero {
+            let portrait = if authoritative {
+                member.portrait.clone()
+            } else if hero {
+                format!("portrait-hero-{hero_art}")
+            } else {
+                format!("portrait-{creature}")
+            };
+            let figure = if authoritative {
+                portrait.replacen("portrait-", "figure-", 1)
+            } else if hero {
                 format!("figure-hero-{hero_art}")
             } else {
                 format!("figure-{creature}")
@@ -1001,23 +1032,45 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
                 side: if hero { Side::Hero } else { Side::Enemy },
                 hit_points: member.hit_points,
                 maximum_hit_points: member.maximum_hit_points,
-                height_m: if hero { 1.35 } else { enemy_height_m(creature) },
-                attack: attack_style_for(&figure),
+                height_m: if hero {
+                    1.35
+                } else {
+                    enemy_height_m(creature_of(&portrait))
+                },
+                attack: if authoritative {
+                    if member.attack_style == 2 {
+                        AttackStyle::Ranged
+                    } else {
+                        AttackStyle::Melee
+                    }
+                } else {
+                    attack_style_for(&figure)
+                },
+                voice: voice_set(&member.voice_set),
                 // Server-supplied cells replace the spawn cells here (none carried today).
-                cell: None,
+                cell: member.cell.as_ref().and_then(|cell| {
+                    Some(Cell::new(
+                        i32::try_from(cell.col).ok()?,
+                        i32::try_from(cell.row).ok()?,
+                    ))
+                }),
                 // Only what the view already says: bloodied from the hit points, unconscious
                 // from the server's own knockout flag. The conditions wait for the server.
-                statuses: battle::derived_from_view(
-                    member.hit_points,
-                    member.maximum_hit_points,
-                    member.unconscious,
-                ),
-                figure: Some(figure),
-                portrait: Some(if hero {
-                    format!("portrait-hero-{hero_art}")
+                statuses: if authoritative {
+                    member
+                        .conditions
+                        .iter()
+                        .filter_map(|condition| Status::from_id(condition))
+                        .collect()
                 } else {
-                    format!("portrait-{creature}")
-                }),
+                    battle::derived_from_view(
+                        member.hit_points,
+                        member.maximum_hit_points,
+                        member.unconscious,
+                    )
+                },
+                figure: Some(figure),
+                portrait: Some(portrait),
             }
         })
         .collect();
@@ -1101,6 +1154,36 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
     let key = layout_key(view, &snapshot);
     let phase_idle = LIVE.with(|live| {
         let mut live = live.borrow_mut();
+        if let Some(combat) = &view.journey.combat {
+            live.reachable = combat
+                .reachable_cells
+                .iter()
+                .filter_map(|cell| {
+                    Some(Cell::new(
+                        i32::try_from(cell.col).ok()?,
+                        i32::try_from(cell.row).ok()?,
+                    ))
+                })
+                .collect();
+            live.targets = combat
+                .legal_targets
+                .iter()
+                .filter_map(|target| {
+                    combat
+                        .participants
+                        .iter()
+                        .find(|member| member.participant_id == target.participant_id)?
+                        .cell
+                        .as_ref()
+                })
+                .filter_map(|cell| {
+                    Some(Cell::new(
+                        i32::try_from(cell.col).ok()?,
+                        i32::try_from(cell.row).ok()?,
+                    ))
+                })
+                .collect();
+        }
         live.latest = Some(snapshot);
         let idle = matches!(live.phase, Phase::Idle);
         if idle {
@@ -1110,7 +1193,17 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
         idle
     });
     if phase_idle {
-        start_mount(client, &choice, backdrop, &key);
+        start_mount(
+            client,
+            &choice,
+            backdrop,
+            &key,
+            view.journey
+                .combat
+                .as_ref()
+                .map(|combat| combat.layout_id.clone())
+                .filter(|id| !id.is_empty()),
+        );
     } else {
         sync();
     }
@@ -1121,6 +1214,7 @@ fn start_mount(
     choice: &battle::SceneChoice,
     backdrop: Option<String>,
     key: &str,
+    server_layout: Option<String>,
 ) {
     let (document, host) = {
         let state = client.borrow();
@@ -1163,7 +1257,7 @@ fn start_mount(
         .and_then(|value| value.parse::<u32>().ok())
         .and_then(battle::BattleFps::from_hz)
         .unwrap_or_default();
-    let layout = chosen_layout_id(&scene, key);
+    let layout = server_layout.or_else(|| chosen_layout_id(&scene, key));
     let _ = host.set_attribute(
         "data-battlefield-layout",
         layout.as_deref().unwrap_or("none"),
@@ -1245,7 +1339,10 @@ fn sync() {
         let mut shown = snapshot.clone();
         shown.begun_live = live.begun_live;
         let fits = stage
-            .with_stage(|stage| feed.apply(stage, &shown))
+            .with_stage(|stage| {
+                stage.set_tactical_highlights(live.reachable.clone(), live.targets.clone());
+                feed.apply(stage, &shown)
+            })
             .flatten();
         live.begun_live = false;
         if fits.is_none() {

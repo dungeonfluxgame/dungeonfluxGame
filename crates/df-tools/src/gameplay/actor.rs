@@ -900,6 +900,8 @@ impl Actor {
                     let rejection = if command.basis.run != current.run
                         || command.basis.revision.epoch() != current.revision.epoch()
                         || command.observed_revision > current.revision
+                        || (super::journey::tactical::present(checkpoint.state())
+                            && command.observed_revision != current.revision)
                     {
                         Some(rpc::RejectionCode::StaleOffer)
                     } else if wire::unrelated_payload(&request, kind)
@@ -917,33 +919,15 @@ impl Actor {
                             }))
                     {
                         Some(rpc::RejectionCode::InvalidSelection)
-                    } else if super::journey::phase(checkpoint).map_err(unavailable)?
-                        == rpc::JourneyPhase::Combat
-                        && checkpoint
-                            .state()
-                            .encounters
-                            .first()
-                            .and_then(|encounter| encounter.active_turn)
-                            != Some(
-                                super::journey::player_entity(member, checkpoint)
-                                    .map_err(unavailable)?,
-                            )
-                    {
-                        Some(rpc::RejectionCode::WrongTurn)
-                    } else if !super::beat_script_runtime::matches_id(
-                        checkpoint,
-                        kind,
-                        &request.offer_id,
-                    )
-                    .map_err(unavailable)?
-                        || !super::journey::offered(checkpoint, member)
-                            .map_err(unavailable)?
-                            .iter()
-                            .any(|(offered, _)| *offered == kind)
-                    {
-                        Some(rpc::RejectionCode::StaleOffer)
                     } else {
-                        None
+                        wire::action_offer_rejection(
+                            checkpoint,
+                            member,
+                            kind,
+                            &request.offer_id,
+                            &request.action_choices,
+                        )
+                        .map_err(unavailable)?
                     };
                     if let Some(code) = rejection {
                         let receipt = wire::rejected(current, operation, code);

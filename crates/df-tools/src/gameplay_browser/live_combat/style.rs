@@ -46,7 +46,28 @@ pub(super) fn stylesheet() -> String {
     for (property, stem) in ART_SLOTS {
         variables.push_str(&format!("{property}:url('{}');", generated_asset_url(stem)));
     }
-    format!(":root{{{variables}}}\n{COMMON}\n{PLAYER}\n{DISPLAY}\n{REST}\n{SHEET}")
+    let mut portraits = String::new();
+    for stem in [
+        "hero-1",
+        "hero-2",
+        "hero-3",
+        "ant-bandit",
+        "ant-cultist",
+        "ant-guard",
+        "ant-goblin-warrior",
+        "ant-kobold-warrior",
+        "ant-skeleton",
+        "ant-zombie",
+        "ant-wolf",
+        "ant-giant-rat",
+        "ant-giant-weasel",
+        "ant-mastiff",
+        "ant-scout",
+    ] {
+        let url = generated_asset_url(&format!("portrait-{stem}"));
+        portraits.push_str(&format!("@S .combat-actor[data-portrait={stem}] .combat-initiative-value::before,@S .aftermath-member[data-portrait={stem}] .aftermath-portrait::before,.live-portrait[data-portrait={stem}]::before{{background-image:url('{url}')}}@S[data-role=display] .live-keyart[data-portrait={stem}]{{background-image:url('{url}')}}"));
+    }
+    format!(":root{{{variables}}}\n{COMMON}\n{PLAYER}\n{DISPLAY}\n{REST}\n{SHEET}\n{portraits}")
         .replace("@S", ".live-screen[data-role]")
         .replace("@COMBAT_ART", COMBAT_ART_URL)
 }

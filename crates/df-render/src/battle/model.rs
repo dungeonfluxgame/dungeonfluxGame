@@ -60,6 +60,7 @@ pub struct Token {
     pub hit_points: Option<HitPoints>,
     pub statuses: Vec<Status>,
     pub attack: AttackStyle,
+    pub voice: Option<super::sound::VoiceSet>,
 }
 
 pub const MIN_HEIGHT_M: f32 = 0.6;
