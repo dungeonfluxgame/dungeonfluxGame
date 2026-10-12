@@ -329,7 +329,10 @@ pub(super) fn cast_speakers(
             .min_by_key(|voice| {
                 (
                     uses.get(voice.voice_id.as_str()).copied().unwrap_or(0),
-                    Reverse(speaker.age == Some(voice.age)),
+                    // No voice of the speaker's age: the nearest age, never the far end.
+                    speaker
+                        .age
+                        .map_or(0, |age| (age as i8 - voice.age as i8).unsigned_abs()),
                     Reverse(
                         voice
                             .tones
@@ -484,6 +487,27 @@ mod tests {
             );
 
             assert_eq!(cast["Ila"], expected);
+        }
+    }
+
+    #[test]
+    fn the_nearest_age_is_used_when_no_voice_has_the_speakers_age() {
+        // The shipped roster has no elder woman: an elder woman gets an adult voice, not a
+        // young one, whatever the run and whatever her tone.
+        let roster = Roster::parse(SHIPPED.as_bytes()).unwrap();
+        for run in ["seed-a", "seed-b", "seed-c", "seed-d"] {
+            let cast = cast_speakers(
+                &roster,
+                "narr",
+                &[speaker("Gwenna", Gender::She, Some(Age::Elder), "warm")],
+                run,
+            );
+            let voice = roster
+                .voices
+                .iter()
+                .find(|voice| voice.voice_id == cast["Gwenna"])
+                .unwrap();
+            assert_eq!(voice.age, Age::Adult, "{run}");
         }
     }
 
