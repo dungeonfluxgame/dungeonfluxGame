@@ -1,3 +1,6 @@
+#[path = "tempo.rs"]
+pub(super) mod tempo;
+
 use df_model::checkpoint::{Checkpoint, EffectId, GameInput};
 use df_observe::OperationContext;
 use df_persistence::local_demo_scope::{
@@ -274,6 +277,7 @@ impl CompletionRetry {
 pub(super) struct Actor {
     pub owner: Owner,
     pub dialogue: super::dialogue::DialogueState,
+    pub tempo: Option<tempo::TempoOwner>,
     pub bootstrap_credential: [u8; 32],
     pub issuer: LocalDemoScopeIssuer,
     pub codec: NativeCodecLimits,
@@ -693,6 +697,17 @@ impl Actor {
                 }
                 let accepted =
                     super::journey::accepted(committed.decision()).map_err(unavailable)?;
+                if committed.basis().revision > prior_revision
+                    && self.owner.is_current()
+                    && let Some(tempo) = self.tempo.as_mut()
+                {
+                    tempo::observe(tempo.accepted(
+                        self.owner.checkpoint(),
+                        &accepted,
+                        request.action_kind,
+                        Instant::now(),
+                    ));
+                }
                 if let Some(inputs) = self.qualification_inputs.as_mut() {
                     retain_qualification_input(inputs, credential, &request);
                 }
@@ -765,10 +780,11 @@ impl Actor {
         }
         let member = df_types::MemberId::from_bytes(&principal)
             .map_err(|_| tonic::Status::permission_denied("binding invalid"))?;
-        Ok((
-            role,
-            wire::journey_view(current, role, member).map_err(unavailable)?,
-        ))
+        let mut view = wire::journey_view(current, role, member).map_err(unavailable)?;
+        if let Some(tempo) = self.tempo.as_mut() {
+            tempo::observe(tempo.decorate(&mut view, current, Instant::now()));
+        }
+        Ok((role, view))
     }
 }
 impl Reducer<Call> for Actor {

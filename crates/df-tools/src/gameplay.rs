@@ -859,7 +859,25 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .or(restart_budget)
         .or(rest_budget)
         .or(settings.call_budget);
+    let tempo = if std::env::args().nth(4).is_some() {
+        None
+    } else {
+        let loaded =
+            pack::active().ok_or_else(|| io::Error::other("tempo requires loaded tuning"))?;
+        let tempo = actor::tempo::TempoOwner::start(
+            owner.checkpoint(),
+            loaded.tuning.tempo,
+            std::time::Instant::now(),
+        )
+        .map_err(|error| io::Error::other(format!("tempo startup refused: {error:?}")))?;
+        println!(
+            "TEMPO on profile={} thresholds={:?}",
+            loaded.tuning_revision, loaded.tuning.tempo.phase_thresholds_permille
+        );
+        Some(tempo)
+    };
     let actor = actor::Actor {
+        tempo,
         owner,
         dialogue: dialogue::DialogueState::default(),
         bootstrap_credential: player_credential,

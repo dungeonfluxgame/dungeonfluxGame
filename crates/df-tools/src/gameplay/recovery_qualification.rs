@@ -157,6 +157,7 @@ impl RunningActor {
         };
         let (sender, inbox) = bounded_inbox::<actor::Call>();
         let actor = actor::Actor {
+            tempo: None,
             dialogue: super::dialogue::DialogueState::default(),
             owner,
             bootstrap_credential: [0x81; 32],

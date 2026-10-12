@@ -4,7 +4,8 @@
 //! scenario content and `tuning.json` holds gameplay numbers. [`load`] reads each file once under
 //! a size cap, hashes the exact bytes it parsed, refuses unknown or duplicate keys and wrong types,
 //! enforces the bounds table, checks the cross-file references and reports the values that differ
-//! from the compiled SRD 5.2.1 baseline. Nothing here falls back to a default: a missing
+//! from the compiled SRD 5.2.1 baseline. Only an absent optional tempo section selects the
+//! explicitly shipped presentation profile. For required gameplay files and fields, a missing
 //! directory, missing file or any violation is a typed [`PackError`] naming the file and the JSON
 //! location.
 //!
@@ -355,6 +356,9 @@ pub(super) struct TuningFile {
     pub(super) combat: CombatTuning,
     pub(super) rest: RestTuning,
     pub(super) narrative: NarrativeTuning,
+    /// Missing section explicitly selects the shipped presentation profile.
+    #[serde(default)]
+    pub(super) tempo: TempoTuning,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -455,6 +459,107 @@ pub(super) struct RestTuning {
 #[serde(deny_unknown_fields)]
 pub(super) struct NarrativeTuning {
     pub(super) intervention_budget: u8,
+}
+
+/// Presentation-only tuning; deliberately excluded from standard-rules departures.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TempoTuning {
+    /// Room, opening, dialogue, combat, victory, defeat, rested, destination.
+    pub(super) base_intensity_permille: TempoBases,
+    /// Story, scene, reveal, combat, miss, hit, critical, graze, hero-low, drop,
+    /// victory, defeat, rest, arrival. Positive attack impulses apply to either side.
+    pub(super) impulses_permille: TempoImpulses,
+    pub(super) inertia_half_life_millis: u32,
+    pub(super) decay_half_life_millis: u32,
+    pub(super) fatigue_half_life_millis: u32,
+    pub(super) fatigue_charge_permille: u16,
+    pub(super) fatigue_attenuation_permille: u16,
+    pub(super) phase_thresholds_permille: [u16; 3],
+    pub(super) hysteresis_permille: u16,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TempoBases {
+    pub(super) room: u16,
+    pub(super) opening: u16,
+    pub(super) dialogue: u16,
+    pub(super) combat: u16,
+    pub(super) victory: u16,
+    pub(super) defeat: u16,
+    pub(super) rest: u16,
+    pub(super) arrival: u16,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TempoImpulses {
+    pub(super) story_begun: i16,
+    pub(super) scene_changed: i16,
+    pub(super) antagonist_revealed: i16,
+    pub(super) combat_begun: i16,
+    pub(super) miss: i16,
+    pub(super) hit: i16,
+    pub(super) critical: i16,
+    pub(super) graze: i16,
+    pub(super) hero_low: i16,
+    pub(super) combatant_dropped: i16,
+    pub(super) victory: i16,
+    pub(super) defeat: i16,
+    pub(super) short_rest: i16,
+    pub(super) arrival: i16,
+}
+
+impl Default for TempoTuning {
+    fn default() -> Self {
+        Self {
+            base_intensity_permille: TempoBases {
+                room: 60,
+                opening: 260,
+                dialogue: 480,
+                combat: 720,
+                victory: 200,
+                defeat: 300,
+                rest: 80,
+                arrival: 60,
+            },
+            impulses_permille: TempoImpulses {
+                story_begun: 180,
+                scene_changed: 30,
+                antagonist_revealed: 180,
+                combat_begun: 220,
+                miss: 20,
+                hit: 65,
+                critical: 150,
+                graze: 40,
+                hero_low: 180,
+                combatant_dropped: 100,
+                victory: -200,
+                defeat: -80,
+                short_rest: -140,
+                arrival: -80,
+            },
+            inertia_half_life_millis: 2000,
+            decay_half_life_millis: 6000,
+            fatigue_half_life_millis: 20000,
+            fatigue_charge_permille: 60,
+            fatigue_attenuation_permille: 500,
+            phase_thresholds_permille: [200, 450, 650],
+            hysteresis_permille: 20,
+        }
+    }
+}
+impl TempoTuning {
+    pub(super) fn policy(self) -> df_tempo::presentation::PresentationPolicy {
+        df_tempo::presentation::PresentationPolicy {
+            inertia_half_life_millis: self.inertia_half_life_millis,
+            decay_half_life_millis: self.decay_half_life_millis,
+            fatigue_half_life_millis: self.fatigue_half_life_millis,
+            fatigue_charge_permille: self.fatigue_charge_permille,
+            fatigue_attenuation_permille: self.fatigue_attenuation_permille,
+            thresholds: self.phase_thresholds_permille,
+            hysteresis_permille: self.hysteresis_permille,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -889,6 +994,7 @@ fn placeholders_are_defined(text: &str, allowed: &[&str]) -> bool {
 fn validate_tuning(tuning: &TuningFile) -> Result<(), PackError> {
     const FILE: SourceFile = SourceFile::Tuning;
     identifier(FILE, "pack", &tuning.pack)?;
+    validate_tempo(tuning.tempo)?;
     let hero = &tuning.hero;
     range(
         FILE,
@@ -1989,5 +2095,75 @@ pub(super) fn offer_label(kind: df_protocol::common::GameplayActionKind) -> Stri
             _ => unreachable!("only compiled authored offers have labels"),
         }
         .clone()
+    })
+}
+
+fn validate_tempo(tempo: TempoTuning) -> Result<(), PackError> {
+    let file = SourceFile::Tuning;
+    for (index, value) in [
+        ("room", tempo.base_intensity_permille.room),
+        ("opening", tempo.base_intensity_permille.opening),
+        ("dialogue", tempo.base_intensity_permille.dialogue),
+        ("combat", tempo.base_intensity_permille.combat),
+        ("victory", tempo.base_intensity_permille.victory),
+        ("defeat", tempo.base_intensity_permille.defeat),
+        ("rest", tempo.base_intensity_permille.rest),
+        ("arrival", tempo.base_intensity_permille.arrival),
+    ]
+    .iter()
+    {
+        range(
+            file,
+            &format!("tempo.base_intensity_permille.{index}"),
+            i64::from(*value),
+            0,
+            1000,
+        )?;
+    }
+    for (index, value) in [
+        ("story_begun", tempo.impulses_permille.story_begun),
+        ("scene_changed", tempo.impulses_permille.scene_changed),
+        (
+            "antagonist_revealed",
+            tempo.impulses_permille.antagonist_revealed,
+        ),
+        ("combat_begun", tempo.impulses_permille.combat_begun),
+        ("miss", tempo.impulses_permille.miss),
+        ("hit", tempo.impulses_permille.hit),
+        ("critical", tempo.impulses_permille.critical),
+        ("graze", tempo.impulses_permille.graze),
+        ("hero_low", tempo.impulses_permille.hero_low),
+        (
+            "combatant_dropped",
+            tempo.impulses_permille.combatant_dropped,
+        ),
+        ("victory", tempo.impulses_permille.victory),
+        ("defeat", tempo.impulses_permille.defeat),
+        ("short_rest", tempo.impulses_permille.short_rest),
+        ("arrival", tempo.impulses_permille.arrival),
+    ]
+    .iter()
+    {
+        range(
+            file,
+            &format!("tempo.impulses_permille.{index}"),
+            i64::from(*value),
+            -1000,
+            1000,
+        )?;
+    }
+    for (name, value) in [
+        ("inertia_half_life_millis", tempo.inertia_half_life_millis),
+        ("decay_half_life_millis", tempo.decay_half_life_millis),
+        ("fatigue_half_life_millis", tempo.fatigue_half_life_millis),
+    ] {
+        range(file, &format!("tempo.{name}"), i64::from(value), 1, 300000)?;
+    }
+    tempo.policy().validate().map_err(|_| {
+        malformed(
+            file,
+            "tempo",
+            "ordered thresholds and bounded fatigue/hysteresis",
+        )
     })
 }
