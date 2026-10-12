@@ -11,10 +11,14 @@ use std::{
 };
 
 use df_protocol::common as rpc;
+use prost::Message;
 use tokio::sync::watch;
 
 /// How many of the latest lines a view carries.
 pub(super) const RING_LINES: usize = 24;
+/// The most a whole view may encode to once the log is attached: the transport carries 8192
+/// bytes per message, and the rest of the view (character sheet, combat) comes first.
+pub(super) const VIEW_BYTE_BUDGET: usize = 8000;
 /// Longest text of one line, in characters.
 pub(super) const LINE_CHARACTERS: usize = 420;
 
@@ -165,17 +169,33 @@ impl TableLog {
         if !self.enabled {
             return;
         }
-        let journey = match view.audience.as_mut() {
-            Some(rpc::view_message::Audience::Player(player)) => player.journey.as_mut(),
-            Some(rpc::view_message::Audience::Display(display)) => display.journey.as_mut(),
-            None => None,
-        };
-        if let Some(journey) = journey {
+        {
+            let Some(journey) = journey_of(view) else {
+                return;
+            };
             let ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
             journey.table_log = ring.lines.iter().cloned().collect();
             journey.presentation_sequence = ring.version;
             journey.reply_speaker = ring.replying.first().cloned().unwrap_or_default();
         }
+        // A view over the transport's message size would end the watch stream, so the oldest
+        // lines are left out until the whole view fits.
+        while view.encoded_len() > VIEW_BYTE_BUDGET {
+            match journey_of(view) {
+                Some(journey) if !journey.table_log.is_empty() => {
+                    journey.table_log.remove(0);
+                }
+                _ => return,
+            }
+        }
+    }
+}
+
+fn journey_of(view: &mut rpc::ViewMessage) -> Option<&mut rpc::JourneyView> {
+    match view.audience.as_mut() {
+        Some(rpc::view_message::Audience::Player(player)) => player.journey.as_mut(),
+        Some(rpc::view_message::Audience::Display(display)) => display.journey.as_mut(),
+        None => None,
     }
 }
 
@@ -305,6 +325,30 @@ mod tests {
                 .all(|pair| pair[0].sequence < pair[1].sequence)
         );
         assert_eq!(lines[RING_LINES - 1].sequence, 30);
+    }
+
+    #[test]
+    fn a_long_log_is_trimmed_from_the_oldest_so_the_view_fits_the_transport_message() {
+        let log = TableLog::new();
+        for number in 0..RING_LINES {
+            speech(&log, &format!("{number} {}", "word ".repeat(80)));
+        }
+        let mut view = display_view();
+        log.attach(&mut view);
+        assert!(
+            view.encoded_len() <= VIEW_BYTE_BUDGET,
+            "{}",
+            view.encoded_len()
+        );
+        let Some(rpc::view_message::Audience::Display(display)) = view.audience else {
+            panic!("a display view");
+        };
+        let kept = display.journey.unwrap().table_log;
+        assert!(!kept.is_empty() && kept.len() < RING_LINES);
+        assert!(
+            kept.last().unwrap().text.starts_with("23 "),
+            "the newest line stays"
+        );
     }
 
     fn display_view() -> rpc::ViewMessage {
