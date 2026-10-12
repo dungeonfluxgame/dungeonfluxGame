@@ -1,7 +1,7 @@
 {
   "generator": "ElevenLabs sound generation (POST /v1/sound-generation), prompt_influence 0.5, generated once",
   "post_processing": "ffmpeg: leading silence below -42 dB trimmed, loudnorm two-pass to -16 LUFS / -1.5 dBTP, limiter at -3 dBFS before encoding (encoded peaks measured at or below -0.5 dB), 44.1 kHz mono mp3 128 kbps",
-  "generation_calls": 12,
+  "generation_calls": 13,
   "effects": [
     {
       "file": "dice-rattle.mp3",
@@ -110,6 +110,15 @@
       "mean_volume_db": -23.9,
       "peak_volume_db": -0.7,
       "sha256": "4667ca91059e3294a52f8279d1c9d64343a28f4544a598b7f5840f6e92fafab7"
+    },
+    {
+      "file": "heal-chime.mp3",
+      "prompt": "A soft warm restoring chime, two gentle rising bell notes with a faint shimmer, fantasy healing magic, quiet and short",
+      "requested_duration_seconds": 1.2,
+      "duration_seconds": 1.23,
+      "mean_volume_db": -19.0,
+      "peak_volume_db": -2.5,
+      "sha256": "17b9109537ef2c510fab742b51018583f2787cd0a051564b1f50d7c82b9949cc"
     }
   ]
 }
