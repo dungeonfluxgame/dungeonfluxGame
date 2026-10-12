@@ -16,6 +16,7 @@ mod courier_process_qualification;
 mod dialogue;
 #[cfg(test)]
 mod dialogue_tests;
+mod health_faces;
 mod imagery;
 mod inn_qualification;
 mod journey;
@@ -203,11 +204,9 @@ impl rpc::session_service_server::SessionService for Service {
         if let Some(art) = art.as_mut() {
             art.borrow_and_update();
         }
-        let (role, first) = self.view(credential, request.clone()).await?;
-        // Only the shared display shows generated art: a phone's stream is never rebuilt for it.
-        if !matches!(role, LocalDemoRole::Display) {
-            art = None;
-        }
+        let (_, first) = self.view(credential, request.clone()).await?;
+        // The display shows the generated scene art and every screen shows the heroes' health
+        // faces, so every stream wakes when published art changes.
         let service = self.clone();
         let stream = futures::stream::unfold(
             (

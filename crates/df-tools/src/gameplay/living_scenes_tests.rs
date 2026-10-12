@@ -40,7 +40,8 @@ fn stage(revision: u64) -> Stage {
             id: "merchant".to_owned(),
             sprite: "sprite-patron-merchant".to_owned(),
         }],
-        hurt: Vec::new(),
+        vitals: Vec::new(),
+        heroes: Vec::new(),
     }
 }
 
@@ -110,11 +111,19 @@ fn flirt(ledger: &SocialLedger, dossier: &Dossier) {
     );
 }
 
+/// The jobs that paint or spend: everything but the cache look-ups, which are free and allowed
+/// everywhere.
+fn paint_jobs(jobs: Vec<Job>) -> Vec<Job> {
+    jobs.into_iter()
+        .filter(|job| !matches!(job, Job::Peek { .. }))
+        .collect()
+}
+
 fn refresh_jobs(jobs: &[Job]) -> Vec<(Look, RefreshReason)> {
     jobs.iter()
         .filter_map(|job| match job {
             Job::Refresh { look, reason, .. } => Some((*look, *reason)),
-            Job::Expression { .. } => None,
+            Job::Expression { .. } | Job::Warm { .. } | Job::Peek { .. } => None,
         })
         .collect()
 }
@@ -123,7 +132,7 @@ fn face_jobs(jobs: &[Job]) -> Vec<Face> {
     jobs.iter()
         .filter_map(|job| match job {
             Job::Expression { face, .. } => Some(*face),
-            Job::Refresh { .. } => None,
+            Job::Refresh { .. } | Job::Warm { .. } | Job::Peek { .. } => None,
         })
         .collect()
 }
@@ -222,7 +231,7 @@ fn an_exchange_asks_for_the_face_at_once_and_the_backdrop_only_when_the_interval
     let dossier = dossier();
     let (inner, ledger) = director(&dossier);
     assert!(
-        inner.evaluate_at(seconds(10)).is_empty(),
+        paint_jobs(inner.evaluate_at(seconds(10))).is_empty(),
         "no exchange, nothing to repaint"
     );
 
@@ -309,6 +318,163 @@ fn a_finished_backdrop_waits_for_a_quiet_moment_and_then_wakes_the_watchers() {
     assert_eq!(locked(&inner.state).tracker.shown_look(), look);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Health faces.
+
+const HERO_ONE_ART: &str = "assets/ui/generated/sprite-hero-1";
+
+fn hurt_stage(revision: u64, in_combat: bool, hero_hp: u32, foe_hp: u32) -> Stage {
+    Stage {
+        in_combat,
+        heroes: vec![StageHero {
+            index: 0,
+            name: "Rowan".to_owned(),
+            vitals: Vitals::new(hero_hp, 13),
+        }],
+        vitals: vec![("Brakka".to_owned(), Vitals::new(foe_hp, 13))],
+        ..stage(revision)
+    }
+}
+
+fn job_labels(jobs: &[Job]) -> Vec<String> {
+    jobs.iter()
+        .map(|job| match job {
+            Job::Warm { character, tier } => format!("warm {} {}", character.art, tier.label()),
+            Job::Peek { character } => format!("peek {}", character.art),
+            Job::Expression { .. } => "expression".to_owned(),
+            Job::Refresh { .. } => "refresh".to_owned(),
+        })
+        .collect()
+}
+
+fn learn(inner: &Inner, art: &str, tier: HealthTier, byte: char) {
+    let mut state = locked(&inner.state);
+    state.book.learn(art, tier, key(byte));
+    refresh_health(&mut state);
+}
+
+#[test]
+fn a_fight_only_looks_in_the_cache_and_never_asks_the_provider() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    // Both are badly hurt, and nothing is cached.
+    inner.observe_at(hurt_stage(2, true, 4, 2), seconds(20));
+    let jobs = inner.evaluate_at(seconds(60));
+    let labels = job_labels(&jobs);
+    assert_eq!(
+        labels,
+        [
+            format!("peek {HERO_ONE_ART}"),
+            "peek sprite-patron-merchant".to_owned()
+        ]
+    );
+    // Later passes in the fight do nothing at all, whatever the tiers do.
+    inner.observe_at(hurt_stage(3, true, 1, 0), seconds(70));
+    assert!(inner.evaluate_at(seconds(90)).is_empty());
+    let mut message = display_message(true);
+    inner.apply(stage_of(&message).as_ref(), &mut message);
+    let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
+        panic!("display view");
+    };
+    assert!(display.journey.as_ref().unwrap().live_faces.is_empty());
+    assert_eq!(display.scene.as_ref().unwrap().cast[0].live_sprite, "");
+}
+
+#[test]
+fn a_fight_shows_the_nearest_cached_variant_and_nothing_further() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    inner.observe_at(hurt_stage(2, true, 4, 1), seconds(20));
+    // Only Bloodied is cached for both: the hero (Bloodied) shows it exactly, and the foe at
+    // Critical (one tier away, against three from the authored art) shows it too.
+    learn(&inner, HERO_ONE_ART, HealthTier::Bloodied, 'b');
+    learn(&inner, "sprite-patron-merchant", HealthTier::Bloodied, 'c');
+    let mut message = display_message(true);
+    inner.apply(stage_of(&message).as_ref(), &mut message);
+    let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
+        panic!("display view");
+    };
+    assert_eq!(
+        display.journey.as_ref().unwrap().live_faces,
+        [rpc::LiveFace {
+            name: "Rowan".to_owned(),
+            sprite: key('b').path()
+        }]
+    );
+    assert_eq!(
+        display.scene.as_ref().unwrap().cast[0].live_sprite,
+        key('c').path()
+    );
+    // The phone gets the hero's face as well.
+    let mut phone = rpc::ViewMessage {
+        revision: None,
+        audience: Some(rpc::view_message::Audience::Player(
+            rpc::PlayerGameplayView {
+                journey: Some(rpc::JourneyView::default()),
+                ..Default::default()
+            },
+        )),
+    };
+    inner.apply(None, &mut phone);
+    let Some(rpc::view_message::Audience::Player(player)) = &phone.audience else {
+        panic!("player view");
+    };
+    assert_eq!(player.journey.as_ref().unwrap().live_faces.len(), 1);
+    // The hero heals above the Hurt line: the authored art returns on every screen.
+    inner.observe_at(hurt_stage(3, true, 12, 1), seconds(30));
+    let mut after = display_message(true);
+    inner.apply(stage_of(&after).as_ref(), &mut after);
+    let Some(rpc::view_message::Audience::Display(display)) = &after.audience else {
+        panic!("display view");
+    };
+    assert!(display.journey.as_ref().unwrap().live_faces.is_empty());
+}
+
+#[test]
+fn outside_a_fight_what_the_party_looks_like_now_is_made_first_and_only_once() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    inner.observe_at(hurt_stage(2, false, 3, 13), seconds(20));
+    let labels = job_labels(&inner.evaluate_at(seconds(25)));
+    assert_eq!(
+        labels,
+        [
+            format!("peek {HERO_ONE_ART}"),
+            "peek sprite-patron-merchant".to_owned(),
+            format!("warm {HERO_ONE_ART} critical"),
+        ]
+    );
+    assert!(
+        job_labels(&inner.evaluate_at(seconds(26))).is_empty(),
+        "asked for once while it is being made"
+    );
+}
+
+#[test]
+fn bloodied_or_worse_outranks_a_mood_face_and_hurt_only_fills_in_where_there_is_none() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    inner.observe_at(stage(2), seconds(20));
+    locked(&inner.state).sprites.insert(
+        "merchant".to_owned(),
+        SpriteOverlay {
+            source_sprite: "sprite-patron-merchant".to_owned(),
+            key: key('a'),
+        },
+    );
+    learn(&inner, "sprite-patron-merchant", HealthTier::Hurt, 'e');
+    learn(&inner, "sprite-patron-merchant", HealthTier::Bloodied, 'b');
+    // Hurt: the angry face stays.
+    inner.observe_at(hurt_stage(3, false, 13, 8), seconds(30));
+    assert!(locked(&inner.state).health_sprites.is_empty());
+    assert!(locked(&inner.state).sprites.contains_key("merchant"));
+    // Bloodied: the health face takes over and the mood face is dropped.
+    inner.observe_at(hurt_stage(4, false, 13, 5), seconds(40));
+    let state = locked(&inner.state);
+    assert_eq!(state.health_sprites["merchant"].key, key('b'));
+    assert!(state.sprites.is_empty());
+}
+
 #[test]
 fn a_combat_view_neither_triggers_nor_shows_generated_art() {
     let dossier = dossier();
@@ -317,10 +483,10 @@ fn a_combat_view_neither_triggers_nor_shows_generated_art() {
     let mut fighting = stage(2);
     fighting.in_combat = true;
     inner.observe_at(fighting, seconds(20));
-    assert!(inner.evaluate_at(seconds(60)).is_empty());
+    assert!(paint_jobs(inner.evaluate_at(seconds(60))).is_empty());
     locked(&inner.state).backdrop = Some(BackdropOverlay { key: key('d') });
     let mut message = display_message(true);
-    inner.apply(&stage_of(&message).unwrap(), &mut message);
+    inner.apply(stage_of(&message).as_ref(), &mut message);
     let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
         panic!("display view");
     };

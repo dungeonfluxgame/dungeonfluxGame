@@ -245,15 +245,18 @@ pub(in crate::gameplay) enum CharacterRole {
     Antagonist,
     Contact,
     Bystander,
+    /// One of the party's heroes.
+    Hero,
 }
 
 impl CharacterRole {
     #[cfg(test)]
-    pub(in crate::gameplay) const ALL: [Self; 4] = [
+    pub(in crate::gameplay) const ALL: [Self; 5] = [
         Self::Patron,
         Self::Antagonist,
         Self::Contact,
         Self::Bystander,
+        Self::Hero,
     ];
 
     fn phrase(self) -> &'static str {
@@ -262,6 +265,7 @@ impl CharacterRole {
             Self::Antagonist => "an antagonist, an enemy of the heroes.",
             Self::Contact => "a helpful contact the heroes have met.",
             Self::Bystander => "a bystander at the scene.",
+            Self::Hero => "one of the heroes of the party.",
         }
     }
 }
@@ -378,7 +382,6 @@ fn expression_phrase(expression: Expression, rating: ContentRating) -> &'static 
         Expression::Afraid => "fear: wide frightened eyes, raised brows and a tense, open mouth",
         Expression::Pained => "pain: a wince, eyes squeezed shut and teeth bared",
         Expression::Sorrowful => "deep sorrow: downcast, glistening eyes and a trembling mouth",
-        Expression::Determined => "grim determination: a set jaw and a steady, unblinking stare",
     }
 }
 

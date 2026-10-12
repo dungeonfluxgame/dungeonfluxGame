@@ -31,19 +31,12 @@ pub(super) const PREWARM_ORDER: [HealthTier; 4] = [
 /// Image-service calls kept back for mood art; pre-warming stops when no more than this remain.
 pub(super) const PREWARM_RESERVE: u32 = 10;
 
-/// Whether a character is a hero of the party or a named member of the scene's cast.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Kind {
-    Hero,
-    Npc,
-}
-
-/// One character whose art has health variants.
+/// One character whose art has health variants: a hero of the party or a named member of the
+/// scene's cast.
 #[derive(Clone, Debug)]
 pub(super) struct Character {
     /// Stable within the run: the hero's name or the cast member's id.
     pub(super) id: String,
-    pub(super) kind: Kind,
     /// The served art the stage shows for this character; the variants are made from it.
     pub(super) art: String,
     pub(super) facts: CharacterFacts,
@@ -70,16 +63,25 @@ impl Book {
         self.failed.insert((id.to_owned(), tier));
     }
 
+    /// Gives up an attempt without remembering it as a failure (the budget ran out).
+    pub(super) fn release(&mut self, id: &str, tier: HealthTier) {
+        self.in_flight.remove(&(id.to_owned(), tier));
+    }
+
+    /// Whether this variant is neither known, failed nor already being made.
+    pub(super) fn is_open(&self, id: &str, tier: HealthTier) -> bool {
+        let key = (id.to_owned(), tier);
+        !self.known.contains_key(&key)
+            && !self.failed.contains(&key)
+            && !self.in_flight.contains(&key)
+    }
+
     pub(super) fn mark_peeked(&mut self, id: &str) {
         self.peeked.insert(id.to_owned());
     }
 
     pub(super) fn needs_peek(&self, id: &str) -> bool {
         !self.peeked.contains(id)
-    }
-
-    pub(super) fn knows(&self, id: &str, tier: HealthTier) -> bool {
-        self.known.contains_key(&(id.to_owned(), tier))
     }
 
     pub(super) fn is_warming(&self) -> bool {
@@ -144,10 +146,9 @@ mod tests {
         ImageKey::parse(&byte.to_string().repeat(64)).unwrap()
     }
 
-    fn character(id: &str, kind: Kind) -> Character {
+    fn character(id: &str) -> Character {
         Character {
             id: id.to_owned(),
-            kind,
             art: format!("assets/ui/generated/sprite-{id}"),
             facts: CharacterFacts {
                 role: CharacterRole::Contact,
@@ -158,9 +159,9 @@ mod tests {
 
     fn cast() -> Vec<Character> {
         vec![
-            character("hero-1", Kind::Hero),
-            character("hero-2", Kind::Hero),
-            character("innkeeper", Kind::Npc),
+            character("hero-1"),
+            character("hero-2"),
+            character("innkeeper"),
         ]
     }
 
@@ -202,7 +203,7 @@ mod tests {
 
     #[test]
     fn a_failed_variant_is_not_asked_for_again_and_a_known_one_is_skipped() {
-        let characters = vec![character("hero-1", Kind::Hero)];
+        let characters = vec![character("hero-1")];
         let mut book = Book::default();
         book.learn("hero-1", HealthTier::Bloodied, key('a'));
         book.start_warming("hero-1", HealthTier::Critical);
@@ -254,6 +255,5 @@ mod tests {
         assert!(book.needs_peek("innkeeper"));
         book.mark_peeked("innkeeper");
         assert!(!book.needs_peek("innkeeper"));
-        assert!(!book.knows("innkeeper", HealthTier::Bloodied));
     }
 }

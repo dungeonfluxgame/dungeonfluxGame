@@ -158,12 +158,11 @@ pub(super) enum Expression {
     Afraid,
     Pained,
     Sorrowful,
-    Determined,
 }
 
 impl Expression {
     #[cfg(test)]
-    pub(super) const ALL: [Self; 11] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::Neutral,
         Self::Smiling,
         Self::Amused,
@@ -174,7 +173,6 @@ impl Expression {
         Self::Afraid,
         Self::Pained,
         Self::Sorrowful,
-        Self::Determined,
     ];
 
     pub(super) fn label(self) -> &'static str {
@@ -189,7 +187,6 @@ impl Expression {
             Self::Afraid => "afraid",
             Self::Pained => "pained",
             Self::Sorrowful => "sorrowful",
-            Self::Determined => "determined",
         }
     }
 }

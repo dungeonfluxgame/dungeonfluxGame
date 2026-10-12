@@ -787,6 +787,7 @@ pub(super) fn project_journey(
         table_log: Vec::new(),
         tempo: None,
         standing: Vec::new(),
+        live_faces: Vec::new(),
         table_choices,
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.

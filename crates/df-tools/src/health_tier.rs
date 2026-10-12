@@ -50,6 +50,7 @@ impl HealthTier {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn from_label(label: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|tier| tier.label() == label)
     }
@@ -88,6 +89,7 @@ pub(crate) struct Vitals {
 }
 
 impl Vitals {
+    #[cfg(test)]
     pub(crate) const fn new(current: u32, maximum: u32) -> Self {
         Self {
             current,

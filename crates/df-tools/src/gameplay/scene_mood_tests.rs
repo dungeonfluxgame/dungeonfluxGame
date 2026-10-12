@@ -494,31 +494,56 @@ fn a_peak_with_an_enemy_speaking_is_menacing_and_the_story_beats_set_the_end_moo
 }
 
 #[test]
-fn hit_points_decide_how_hurt_a_character_looks() {
-    assert_eq!(HealthTier::from_hit_points(10, 10), HealthTier::Healthy);
-    assert_eq!(HealthTier::from_hit_points(6, 10), HealthTier::Healthy);
-    assert_eq!(HealthTier::from_hit_points(5, 10), HealthTier::Hurt);
-    assert_eq!(HealthTier::from_hit_points(3, 10), HealthTier::Hurt);
-    assert_eq!(HealthTier::from_hit_points(2, 10), HealthTier::Bloodied);
-    assert_eq!(HealthTier::from_hit_points(0, 10), HealthTier::Bloodied);
-    assert_eq!(HealthTier::from_hit_points(0, 0), HealthTier::Healthy);
+fn bloodied_or_worse_shows_the_health_face_and_above_it_the_mood_face_wins() {
+    for tier in [HealthTier::Bloodied, HealthTier::Critical, HealthTier::Down] {
+        // Priority, not multiplication: the mood does not combine with the health face.
+        for mood in Expression::ALL {
+            assert_eq!(
+                Face::resolve(mood, tier),
+                Face {
+                    expression: Expression::Neutral,
+                    tier
+                },
+                "{tier:?} {mood:?}"
+            );
+        }
+    }
+    assert_eq!(
+        Face::resolve(Expression::Angry, HealthTier::Hurt),
+        Face {
+            expression: Expression::Angry,
+            tier: HealthTier::Healthy
+        }
+    );
+    assert_eq!(
+        Face::resolve(Expression::Neutral, HealthTier::Hurt).tier,
+        HealthTier::Hurt
+    );
+    assert_eq!(
+        Face::resolve(Expression::Angry, HealthTier::Healthy).expression,
+        Expression::Angry
+    );
+    assert_eq!(
+        Face::resolve(Expression::Neutral, HealthTier::Healthy),
+        Face::AUTHORED
+    );
 }
 
 #[test]
-fn a_hurt_character_shows_pain_or_resolve_and_the_end_beats_show_relief_or_grief() {
+fn a_hurt_character_shows_the_health_face_and_the_end_beats_show_relief_or_grief() {
     let mut tracker = MoodTracker::new(Hysteresis::default());
     let bloodied = [member(true, true, HealthTier::Bloodied)];
     let verdict = tracker.update(seconds(0), &inputs(&bloodied, None, None, &[]));
     assert_eq!(
         verdict.face_changes[0].1,
         Face {
-            expression: Expression::Pained,
+            expression: Expression::Neutral,
             tier: HealthTier::Bloodied
         }
     );
     let wounded = [member(true, true, HealthTier::Hurt)];
     let verdict = tracker.update(seconds(1), &inputs(&wounded, None, None, &[]));
-    assert_eq!(verdict.face_changes[0].1.expression, Expression::Determined);
+    assert_eq!(verdict.face_changes[0].1.tier, HealthTier::Hurt);
 
     let patron = [member(true, false, HealthTier::Healthy)];
     let mut sorrow = MoodTracker::new(Hysteresis::default());
