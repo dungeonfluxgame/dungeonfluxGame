@@ -174,8 +174,9 @@ fn cell_code(col: i32, row: i32) -> f32 {
 }
 
 fn code_colour(code: f32) -> vec3<f32> {
-    // 1 neutral gold, 2 enemy red, 3 hero blue, 4 reachable (hero blue), 5 target (enemy red).
-    if (code > 4.5 || (code > 1.5 && code < 2.5)) {
+    // 1 neutral gold, 2 enemy red, 3 hero blue; on the outline of a reachable (4) or target (5)
+    // region and inside one (6 and 7).
+    if ((code > 4.5 && code < 5.5) || code > 6.5 || (code > 1.5 && code < 2.5)) {
         return vec3<f32>(grid[28], grid[29], grid[30]);
     }
     if (code > 2.5) {
@@ -184,8 +185,20 @@ fn code_colour(code: f32) -> vec3<f32> {
     return vec3<f32>(grid[20], grid[21], grid[22]);
 }
 
+// Only the outline of a highlighted region is emphasised; the lines inside it (codes 6 and 7)
+// keep the base grid's strength, tinted.
 fn code_boost(code: f32) -> f32 {
-    return select(1.0, grid[14], code > 3.5);
+    return select(1.0, grid[14], code > 3.5 && code < 5.5);
+}
+
+// The code of the line between two cells: the higher of the two, except that a line between two
+// cells of the same highlighted region lies inside it.
+fn line_code(a: f32, b: f32) -> f32 {
+    let high = max(a, b);
+    if (min(a, b) > 3.5 && abs(a - b) < 0.5) {
+        return high + 2.0;
+    }
+    return high;
 }
 
 fn shade(in: VOut) -> vec4<f32> {
@@ -216,8 +229,8 @@ fn shade(in: VOut) -> vec4<f32> {
     let line_z = i32(round(p.y));
     let row = i32(floor(p.y));
     let col = i32(floor(p.x));
-    let code_x = max(cell_code(line_x - 1, row), cell_code(line_x, row));
-    let code_z = max(cell_code(col, line_z - 1), cell_code(col, line_z));
+    let code_x = line_code(cell_code(line_x - 1, row), cell_code(line_x, row));
+    let code_z = line_code(cell_code(col, line_z - 1), cell_code(col, line_z));
     // A blocked cell (0.5) keeps its lines, fainter, so the lattice reads as one continuous grid.
     let faint = vec2<f32>(select(1.0, grid[31], code_x < 0.75), select(1.0, grid[31], code_z < 0.75));
     let alive = vec2<f32>(step(0.25, code_x), step(0.25, code_z)) * spacing * faint;
@@ -244,7 +257,8 @@ fn shade(in: VOut) -> vec4<f32> {
     // their strength so they stay clearly above the base grid.
     let edge_cells = min(min(p.x, grid[3] - p.x), min(p.y, grid[4] - p.y));
     let edge_fade = mix(grid[33], 1.0, smoothstep(0.0, grid[32], edge_cells));
-    let lit = step(3.5, max(code_x, code_z));
+    let lit_code = max(code_x, code_z);
+    let lit = step(3.5, lit_code) * step(lit_code, 5.5);
     var strength = mix(centre_fade * edge_fade, mix(centre_fade * edge_fade, 1.0, 0.75), lit);
     if (in.behind > 0.5) {
         strength = strength * grid[13];
@@ -317,11 +331,18 @@ fn shade(in: VOut) -> vec4<f32> {
     // Derivatives are taken once, outside the branches, to stay in uniform control flow.
     let aa = max(fwidth(edge), 0.002);
     let aa_inner = max(fwidth(square_edge(in.c / 0.74)), 0.002);
-    if (kind == 1 || kind == 2) {
-        let l = line(edge, aa, 0.05);
-        let fill = 0.16 + 0.1 * pulse;
-        let a = max(l, fill) * in.col.a;
-        return vec4<f32>(in.col.rgb * a, a);
+    if (kind == 1) {
+        // The reachable region: a faint wash over each cell. The grid pass draws one thin outline
+        // around the region's edge; nothing here draws a border or hides the ground.
+        let a = (0.05 + 0.02 * pulse) * in.col.a;
+        return vec4<f32>(in.col.rgb * a, a * 0.5);
+    }
+    if (kind == 2) {
+        // A legal target: a thin ring inside the cell and a slightly stronger wash. With the
+        // figure's own ring, the only strong marks on the field.
+        let ring = line(square_edge(in.c / 0.86), aa, 0.045) * step(0.0, square_edge(in.c / 0.86));
+        let a = max(ring * 0.8, 0.09 + 0.03 * pulse) * in.col.a;
+        return vec4<f32>(in.col.rgb * a, a * 0.7);
     }
     if (kind == 3) {
         let d = length(in.c);
@@ -403,9 +424,9 @@ fn shade(in: VOut) -> vec4<f32> {
     let d = length(in.c);
     let glow = exp(-d * d * 2.6) * (0.42 + 0.5 * in.params.z * (0.7 + 0.3 * pulse));
     let inner = square_edge(in.c / 0.74);
-    let outline = line(inner, aa_inner, 0.07) * step(0.0, inner);
+    let outline = line(inner, aa_inner, 0.035) * step(0.0, inner);
     let warm = vec3<f32>(1.0, 0.72, 0.36);
-    let rgb = warm * glow * 0.6 + in.col.rgb * outline * (0.75 + 0.5 * in.params.z);
+    let rgb = warm * glow * 0.22 + in.col.rgb * outline * (0.6 + 0.3 * in.params.z);
     let a = outline * in.col.a * 0.9;
     return vec4<f32>(rgb, a);
 }

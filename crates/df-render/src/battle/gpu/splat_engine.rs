@@ -31,7 +31,7 @@ use crate::battle::{
 
 const BINS: usize = 1 << 16;
 const WORKGROUP: u32 = 256;
-const UNIFORM_BYTES: usize = 320;
+const UNIFORM_BYTES: usize = 320 + 512;
 const CHUNK_PARAM_BYTES: usize = 64;
 pub const ACCUM_FORMAT: &str = "rg16float";
 
@@ -128,6 +128,10 @@ pub struct FrameParams {
     pub clip: [f32; 4],
     /// The full-resolution scene target the scan is composited into.
     pub full_size: (f32, f32),
+    /// Where each figure stands on the screen: `[left, top, right, bottom]` in normalised device
+    /// coordinates, then `[view depth in metres, 1, 0, 0]`. Scan splats beside or behind a figure
+    /// may not hide it (see `figure_clear`).
+    pub figures: Vec<[f32; 8]>,
 }
 
 struct Layouts {
@@ -745,6 +749,9 @@ impl SplatEngine {
         ]);
         data.extend_from_slice(&[frame.sky[0], frame.sky[1], frame.sky[2], 0.0]);
         data.extend_from_slice(&frame.clip);
+        for index in 0..crate::battle::figure_clear::MAX_FIGURES {
+            data.extend_from_slice(&frame.figures.get(index).copied().unwrap_or([0.0; 8]));
+        }
         self.core
             .queue
             .write_buffer(&self.uniform, 0.0, &float_array(&data));
