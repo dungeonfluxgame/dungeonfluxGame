@@ -142,6 +142,13 @@ codec/microphone support, frame-time tails, memory and input-to-render budgets r
 actual measurement. See [client architecture](planning/client-architecture.md) and
 [client presentation](planning/client-presentation.md).
 
+The shared display plays an adaptive score from `assets/music` (served at
+`/assets/music/<track>`): four sample-aligned 84 BPM D-minor loops (bed, motif,
+tension, combat) whose gains follow the story's tempo, a location ambience, and
+beat-quantised stingers. Music shares the voice unlock/mute state, ducks under
+narration and never starts before the first gesture; `assets/music/source-manifest.json`
+records how each file was generated.
+
 ## RPC, durability and observability
 
 The planned transport ports the GoGRPCBridge idea: established HTTP/2 gRPC over a

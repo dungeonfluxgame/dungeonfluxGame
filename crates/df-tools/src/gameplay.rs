@@ -11,6 +11,7 @@ mod dialogue_tests;
 mod inn_qualification;
 mod journey;
 mod model;
+mod music_assets;
 mod npc_reply;
 mod pack;
 #[cfg(test)]
@@ -1029,6 +1030,9 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .merge(public_assets::extra_router(
             startup_configuration::load_extra_assets(std::path::Path::new(&asset_root))?,
         ))
+        .merge(music_assets::router(
+            &std::path::Path::new(&asset_root).join("../music"),
+        )?)
         .merge(voice::router(voice.clone()));
     let npc = npc_phase.map(|phase| {
         tokio::spawn(courier_npc_qualification::run(

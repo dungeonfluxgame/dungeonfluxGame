@@ -4,6 +4,7 @@ mod live_chrome;
 mod live_combat;
 mod live_exploration;
 mod live_lobby;
+mod live_music;
 mod live_screens;
 mod live_theme;
 mod live_tv;
@@ -1057,6 +1058,7 @@ fn receive_view(
         feedback(&client.borrow(), "");
         redraw_current(client)?;
         live_voice::observe(client);
+        live_music::observe(client);
     }
     Ok(())
 }
