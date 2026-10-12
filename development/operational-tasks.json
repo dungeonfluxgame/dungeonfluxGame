@@ -4532,6 +4532,99 @@
       "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
       "created_at": "2026-10-12T05:20:43+00:00",
       "updated_at": "2026-10-12T05:20:43+00:00"
+    },
+    {
+      "id": "PLAY-V07",
+      "feature_id": "F04",
+      "title": "Let a table choose its graphic style: realistic, painted, anime, cartoon",
+      "objective": "A table picks a graphic style and the whole art pipeline follows it. A style is a named, versioned profile: fixed positive and negative phrase blocks for rendering, materials, line, palette and grade, a few anchor images, and per-asset-kind adjustments. Every generated asset (casting sheets, portraits, figures, locations, composed scene plates, health and expression variants, home-screen stills and loops, battlefield figures and props) is requested with the profile and cached under its id and version. Staging and camera phrases stay separate from style phrases so one shot specification renders in any style.",
+      "stage": "design",
+      "edit_areas_json": [
+        "planning/asset-engine.md",
+        "crates/df-tools/src/gameplay/",
+        "crates/df-providers/src/",
+        "assets/ui/generated/"
+      ],
+      "acceptance_json": [
+        "The style is one validated setting chosen before an adventure starts; unknown values are refused at startup with a clear message.",
+        "A closed set of presets ships first (cinematic realism as default, painted, anime, cartoon, storybook); each has a reviewed style board and a version.",
+        "No screen ever mixes two styles: a scene shows only assets of the chosen style, and while a style's assets are being generated the table sees a neutral holding card, not another style.",
+        "A character stays recognisably the same person across styles, from a style-neutral structured description plus that style's own casting sheet.",
+        "Free-text styles are not passed to the image model raw: a later step maps the text onto the closed style fields, and names of artists, studios, franchises or real people are refused.",
+        "Every style keeps characters unmistakably adult; the content rating applies unchanged.",
+        "First-session cost and time to prepare a style are measured and shown before the table commits.",
+        "Battlefield compatibility is stated per style (photographic splat scenes only pair with the realistic style; other styles use painted grounds in their own look).",
+        "The named outcome has actual source/build-bound evidence; unsupported, pending, failed and unperformed checks remain explicit."
+      ],
+      "verification_json": [
+        "A style board per preset reviewed by the coordinator and the owner.",
+        "One adventure played end to end in two different styles with no mixed-style frame."
+      ],
+      "brief_json": {
+        "track": "PLAYABLE-TUNABLE-20261011",
+        "milestone": "M12",
+        "milestone_goal": "Composed scenes: story scenes and the home screen read as film stills, not layouts.",
+        "record_role": "atomic",
+        "scope_status": "planned",
+        "dispatch_ready": false,
+        "why": "Owner request 2026-10-12: allow the user to enter the graphic style as a config passed into the art pipeline, so users can request cartoon, anime, realistic, painting and so on; analyse now, backlog for later. The default remains the cinematic realism the owner asked for the same day.",
+        "objective": "A table picks a graphic style and the whole art pipeline follows it. A style is a named, versioned profile: fixed positive and negative phrase blocks for rendering, materials, line, palette and grade, a few anchor images, and per-asset-kind adjustments. Every generated asset (casting sheets, portraits, figures, locations, composed scene plates, health and expression variants, home-screen stills and loops, battlefield figures and props) is requested with the profile and cached under its id and version. Staging and camera phrases stay separate from style phrases so one shot specification renders in any style.",
+        "owners": [
+          "df-tools",
+          "df-providers"
+        ],
+        "integration_hooks": [
+          {
+            "hook": "Let a table choose its graphic style: realistic, painted, anime, cartoon",
+            "owner": "df-tools"
+          },
+          {
+            "hook": "Let a table choose its graphic style: realistic, painted, anime, cartoon",
+            "owner": "df-providers"
+          }
+        ],
+        "canonical_task_refs": [
+          "PLAY-C02"
+        ],
+        "canonical_implementation_policy": "This track task is the frozen-scope delivery of the listed blueprint tasks for the playable path. Do not implement those blueprints a second time; close them through the normal reviewed lifecycle from this task's evidence, or record the precise remainder.",
+        "governing_sources": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "c73f4a3b220d01e1ee50aaeb723288fcf7f05003b9e9c3c6edc9fa50a2608266"
+          },
+          {
+            "path": "planning/asset-engine.md",
+            "sha256": "9bdc95af889745782335e18c6da26a739fd0d688a47762ba2a074a9e5c8129f6"
+          },
+          {
+            "path": "planning/client-architecture.md",
+            "sha256": "d629add05e38bcdb4b224053ab40174dc96d219abc2f6e924119d1fa67be8f89"
+          },
+          {
+            "path": "planning/generated-content.md",
+            "sha256": "0b252a24a8911108660f3276d8359d9df825a3398c7c7a4033c62e2279007ac0"
+          }
+        ],
+        "input_revision": "d99960b6b4dff807ee34a2ba2edefd5bff062eaf",
+        "required_capabilities": {
+          "audio": false,
+          "computer_use": false,
+          "vision": false
+        },
+        "known_pitfalls": [
+          "Anime and cartoon styles drift young: adult appearance must be enforced and checked.",
+          "A cache keyed without the style id and version will silently mix styles."
+        ],
+        "out_of_scope": [],
+        "completion_policy": "Existing task/attempt independent review and integrated revision triggers."
+      },
+      "status": "blocked",
+      "blocking_reason": "Backlogged by the owner on 2026-10-12: analysed, to be built later. Build the realistic re-shoot and the composed-plate pipeline through a single style profile first so this becomes mostly data.",
+      "originating_task_id": null,
+      "priority": 40,
+      "source_fingerprint": "3676e59e6316d9e4d77eab1f9dd812776041c2c9eb70f5dc2e396a13e50bf6b0",
+      "created_at": "2026-10-12T05:25:36+00:00",
+      "updated_at": "2026-10-12T05:25:36+00:00"
     }
   ],
   "dependencies": [
@@ -4698,6 +4791,10 @@
     {
       "task_id": "PLAY-C10",
       "prerequisite_task_id": "PLAY-C08"
+    },
+    {
+      "task_id": "PLAY-V07",
+      "prerequisite_task_id": "PLAY-V03"
     }
   ]
 }
