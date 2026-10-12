@@ -277,3 +277,5 @@ bkeyframes df-phone-in-b{from{opacity:0;transform:translateY(8px)}to{opacity:1;t
 .tv-stage[data-tv-mode=scene]>.tv-scrim{background:radial-gradient(ellipse at 50% 42%,transparent 40%,#02040ad9 125%),linear-gradient(0deg,#03060ef5 0%,#03060edb 26%,#03060e00 58%),linear-gradient(180deg,#03060eb3 0%,#03060e00 28%)}
 .tv-stage[data-tv-mode=scene] .tv-fig[data-slot=npc]{--fig-h:calc(var(--u)*37);left:calc(var(--u)*53)}
 .tv-stage[data-tv-mode=scene] .tv-fig[data-slot=npc] .tv-fig-bubbles{right:60%}
+.tv-final-panel{min-height:calc(var(--u)*19.4)}
+.tv-figures[data-mode=aftermath] .tv-fig[data-slot=npc] .tv-fig-plate{visibility:hidden}
