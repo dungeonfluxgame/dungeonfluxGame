@@ -18,6 +18,9 @@ mod courier_process_qualification;
 mod dialogue;
 #[cfg(test)]
 mod dialogue_tests;
+mod home_theme;
+#[cfg(test)]
+mod home_theme_tests;
 mod imagery;
 mod inn_qualification;
 mod journey;
@@ -493,6 +496,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&web_root),
         std::path::Path::new(&asset_root),
     )?;
+    home_theme::install(std::path::Path::new(&asset_root))?;
     if interactive {
         timing::install(timing::Timing::from_environment()?);
         let timing = timing::active();

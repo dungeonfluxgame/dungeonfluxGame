@@ -18,7 +18,10 @@ use std::{cell::Cell, time::Duration};
 use web_sys::Event;
 
 pub(super) const GENERATED: &str = "/assets/ui/generated";
+/// The party cards a scene shows, and the least the lobby shows (an open seat each).
 const PARTY_SLOTS: usize = 2;
+/// The most party cards the lobby draws: two rows of three.
+const PARTY_MAX: usize = 6;
 const TAGLINE: &str = "AI dungeon master for fifth-edition fantasy";
 const DM_AVATAR: &str = "/assets/concept-art/dm-avatar.webp";
 const GATHERED_SOUND_DELAY: Duration = Duration::from_millis(700);
@@ -64,6 +67,8 @@ pub(super) struct TvModel {
     pub(super) family: SceneFamily,
     /// Names the scene for the figures: a non-player character stays until it changes.
     pub(super) scene_key: String,
+    /// The lobby's home screen from the server; absent outside the lobby and for a fallback.
+    pub(super) home: Option<rpc::HomeTheme>,
 }
 
 struct WordmarkSlot {
@@ -104,6 +109,8 @@ pub(super) struct TvStage {
     title: Element,
     place: Element,
     lede: Element,
+    title_block: Element,
+    atmosphere: Element,
     lobby_row: Element,
     stagebox: Element,
     narration: Element,
@@ -190,10 +197,13 @@ impl TvStage {
         }
         let art_previous = node(document, &root, "div", "tv-art tv-art-previous", "")?;
         let art = node(document, &root, "div", "tv-art", "")?;
+        let atmosphere = node(document, &root, "div", "tv-atmosphere", "")?;
         node(document, &root, "div", "tv-scrim", "")?;
         let figures = Figures::mount(document, &root)?;
         let safe = node(document, &root, "div", "tv-safe", "")?;
-        let top = node(document, &safe, "header", "tv-top", "")?;
+        // The logo and title travel together as one block a themed lobby can place.
+        let title_block = node(document, &safe, "div", "tv-title-block", "")?;
+        let top = node(document, &title_block, "header", "tv-top", "")?;
         let brand = node(document, &top, "div", "tv-brand", "")?;
         let image = node(document, &brand, "img", "tv-wordmark", "")?;
         image.set_attribute("alt", "DungeonFlux")?;
@@ -211,7 +221,7 @@ impl TvStage {
         image.add_event_listener_with_callback("load", load.as_ref().unchecked_ref())?;
         image.set_attribute("src", &format!("{GENERATED}/wordmark"))?;
 
-        let headline = node(document, &safe, "section", "tv-headline", "")?;
+        let headline = node(document, &title_block, "section", "tv-headline", "")?;
         let title = node(document, &headline, "h1", "tv-title", "")?;
         node(document, &headline, "div", "tv-divider", "")?;
         let place = node(document, &headline, "p", "tv-place", "")?;
@@ -280,7 +290,7 @@ impl TvStage {
         let party_bar = node(document, &safe, "section", "tv-partybar", "")?;
         let party = node(document, &roster_slot, "div", "tv-party party", "")?;
         let mut cards = Vec::with_capacity(PARTY_SLOTS);
-        for _ in 0..PARTY_SLOTS {
+        for _ in 0..PARTY_MAX {
             let card = node(document, &party, "article", "tv-card", "")?;
             let (_, glyph, image) = portrait(document, &card, "tv-portrait")?;
             let words = node(document, &card, "div", "tv-card-words", "")?;
@@ -312,6 +322,8 @@ impl TvStage {
             title,
             place,
             lede,
+            title_block,
+            atmosphere,
             lobby_row,
             stagebox,
             narration,
@@ -442,6 +454,7 @@ impl TvStage {
         self.root
             .set_attribute("data-tv-mode", if lobby { "lobby" } else { "scene" })?;
         self.set_art(&image_layers(&model.art, model.art_fallback))?;
+        live_home::apply(&self.root, &self.atmosphere, model.home.as_ref())?;
         let known_place = self.place.text_content().unwrap_or_default();
         self.same_place
             .set(!model.place.is_empty() && known_place == model.place);
@@ -491,18 +504,22 @@ impl TvStage {
             _ => set_hidden(&self.speaker, true)?,
         }
         let announce = self.drawn.get() && lobby;
-        let mut ready_now = 0;
+        // The lobby shows an open seat for each place up to six; a scene keeps its two cards.
+        let shown = if lobby {
+            model.party.len().clamp(PARTY_SLOTS, PARTY_MAX)
+        } else {
+            PARTY_SLOTS
+        };
+        self.roster.set_attribute("data-count", &shown.to_string())?;
         let mut newly_ready = false;
         for (index, card) in self.cards.iter().enumerate() {
+            set_hidden(&card.root, index >= shown)?;
             let before = card.root.get_attribute("data-state");
             let state = match model.party.get(index) {
                 None => "empty",
                 Some(member) if member.ready => "ready",
                 Some(_) => "creating",
             };
-            if state == "ready" {
-                ready_now += 1;
-            }
             card.root.set_attribute("data-state", state)?;
             // The one-shot reveal belongs to the lobby, not to a card that moves to a new place.
             if moved || !lobby {
@@ -550,7 +567,9 @@ impl TvStage {
                 }
             }
         }
-        let gathered = lobby && ready_now == PARTY_SLOTS;
+        let seats = model.party.len();
+        let ready_seats = model.party.iter().filter(|member| member.ready).count();
+        let gathered = lobby && seats >= PARTY_SLOTS && ready_seats == seats;
         let was_gathered = self.roster.has_attribute("data-gathered");
         if gathered {
             self.roster.set_attribute("data-gathered", "")?;

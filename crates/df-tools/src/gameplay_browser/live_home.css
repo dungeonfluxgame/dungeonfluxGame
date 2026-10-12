@@ -1,0 +1,23 @@
+/* PLAY-V05 home screen. The server's theme places the title, room-code panel and party panel
+   (custom properties in percent of the viewport), sets the location's mood and draws its
+   atmosphere. Without a theme the default lobby rules above apply unchanged. */
+.tv-title-block{display:contents}
+.tv-atmosphere{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.tv-stage[data-home]{--home-accent:#e8cb94;--home-tint:#0b1623;--home-vignette:.55;--home-brightness:1;--home-contrast:1;--home-saturation:1}
+.tv-stage[data-home] .tv-art,.tv-stage[data-home] .tv-art-previous{filter:brightness(var(--home-brightness)) contrast(var(--home-contrast)) saturate(var(--home-saturation))}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-scrim{background:radial-gradient(ellipse at 50% 46%,rgb(2 4 10/0) 46%,rgb(2 4 10/var(--home-vignette)) 100%),linear-gradient(0deg,#03060ef2 0%,#03060e99 34%,#03060e00 66%)}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-title-block{display:block;position:absolute;left:var(--home-title-x);top:var(--home-title-y);width:var(--home-title-w);height:var(--home-title-h);z-index:2}
+.tv-stage[data-home] .tv-headline{max-width:100%;margin-top:calc(var(--u)*.6)}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-place{display:block;margin-top:calc(var(--u)*.5);color:var(--home-accent)}
+.tv-stage[data-home] .tv-title{color:#f3d59d}
+.tv-stage[data-home] .tv-label{color:var(--home-accent)}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-lobby-row{display:contents}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-join{position:absolute;left:var(--home-code-x);top:var(--home-code-y);width:var(--home-code-w);height:var(--home-code-h);z-index:2}
+.tv-stage[data-home][data-tv-mode=lobby] .tv-roster{position:absolute;left:var(--home-party-x);top:var(--home-party-y);width:var(--home-party-w);height:var(--home-party-h);z-index:2}
+.tv-stage[data-home] .tv-panel{border-color:color-mix(in srgb,var(--home-accent) 55%,transparent);background:linear-gradient(160deg,color-mix(in srgb,var(--home-tint) 92%,transparent),color-mix(in srgb,var(--home-tint) 74%,#03060e))}
+.tv-stage[data-home] .tv-roster[data-count="6"] .tv-party{grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u)*.7)}
+.tv-stage[data-home] .tv-roster[data-count="6"] .tv-card{gap:calc(var(--u)*.6);padding:calc(var(--u)*.3) calc(var(--u)*.6)}
+.tv-stage[data-home] .tv-roster[data-count="6"] .tv-portrait{width:calc(var(--u)*4.6)}
+.tv-stage[data-home] .tv-roster[data-count="6"] .tv-member-name{font-size:calc(var(--u)*1.5)}
+.tv-stage[data-home] .tv-roster[data-count="6"] .tv-member-status{font-size:calc(var(--u)*1.1)}
+.tv-stage[data-home] .tv-roster[data-count="6"] .tv-member-role{display:none}

@@ -4,6 +4,7 @@ mod live_battlefield;
 mod live_chrome;
 mod live_combat;
 mod live_exploration;
+mod live_home;
 mod live_lobby;
 mod live_motion;
 mod live_music;
