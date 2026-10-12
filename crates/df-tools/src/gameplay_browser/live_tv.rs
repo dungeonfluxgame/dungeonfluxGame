@@ -14,7 +14,10 @@ use super::live_sfx::{self, Cue};
 use super::live_stage::{Figures, StageMode};
 use super::*;
 use crate::{
-    presentation::{Card, CardKind, HERO_ROLE, PlateState, PlateView, SceneFamily, StageActor},
+    presentation::{
+        Card, CardKind, HERO_ROLE, PlateState, PlateView, SceneFamily, StageActor, asset_url,
+        shot_of,
+    },
     stage_machines::LineState,
 };
 use std::{cell::Cell, time::Duration};
@@ -80,6 +83,10 @@ pub(super) struct TvModel {
     pub(super) home_video: Option<String>,
     /// PLAY-V09: the scene's composed plate, which replaces the painting and the cut-outs.
     pub(super) plate: PlateView,
+    /// PLAY-V12: the adventure's own title, for the establishing shot's title card.
+    pub(super) adventure_name: String,
+    /// PLAY-V12: the scene has narration, which plays over its establishing shot.
+    pub(super) narrated: bool,
     /// The adventure's end card, shown over the scene and kept up until the next step.
     pub(super) end: Option<crate::presentation::Card>,
 }
@@ -131,11 +138,31 @@ struct PlateLayer {
 /// How many plate pictures are kept fetched ahead.
 const MAXIMUM_PRELOADS: usize = 6;
 
+/// PLAY-V12: the speaker's portrait, name and line in a lower third, drawn over the establishing
+/// shot while a character talks and the plate is not here yet.
+struct LowerThird {
+    root: Element,
+    glyph: Element,
+    portrait: Element,
+    name: Element,
+    text: Element,
+}
+
 pub(super) struct TvStage {
     root: Element,
     art: Element,
     art_previous: Element,
     plate: PlateLayer,
+    /// PLAY-V12: the establishing shot's title card: the adventure and the place.
+    establish_title: Element,
+    establish_place: Element,
+    lower: LowerThird,
+    /// The portraits of the characters on stage, by name, for the lower third.
+    portraits: RefCell<Vec<(String, String)>>,
+    /// The newest narrator line the stage has heard of, and the one the current scene's entry
+    /// began after: only a later line is this scene's narration.
+    last_narrator_line: Cell<u64>,
+    narration_floor: Cell<u64>,
     figures: Figures,
     roster: Element,
     gathered: Element,
@@ -232,6 +259,39 @@ fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue>
     })
 }
 
+/// PLAY-V12: sets `data-shot` (which picture a story scene shows) from the flags the plate layer
+/// and the narration keep on the stage root: the plate's state, whether its picture has loaded and
+/// whether the narration of the scene's entry is over. Outside a story scene the stage keeps its
+/// own picture.
+fn sync_shot(stage: &Element) -> Result<(), JsValue> {
+    let shot = if stage.get_attribute("data-tv-mode").as_deref() == Some("scene") {
+        shot_of(
+            PlateState::from_name(&stage.get_attribute("data-plate-state").unwrap_or_default()),
+            stage.has_attribute("data-plate-loaded"),
+            stage.has_attribute("data-narration-over"),
+        )
+    } else {
+        crate::presentation::Shot::Stage
+    };
+    stage.set_attribute("data-shot", shot.name())
+}
+
+fn mount_lower_third(document: &Document, parent: &Element) -> Result<LowerThird, JsValue> {
+    let root = node(document, parent, "div", "tv-lower", "")?;
+    root.set_attribute("aria-hidden", "true")?;
+    let (_, glyph, portrait) = portrait(document, &root, "tv-portrait")?;
+    let words = node(document, &root, "div", "tv-lower-words", "")?;
+    let name = node(document, &words, "h2", "tv-lower-name", "")?;
+    let text = node(document, &words, "p", "tv-lower-text", "")?;
+    Ok(LowerThird {
+        root,
+        glyph,
+        portrait,
+        name,
+        text,
+    })
+}
+
 /// PLAY-V09: builds the plate layer between the painting and the scrim.
 fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsValue> {
     let root = node(document, stage, "div", "tv-plate", "")?;
@@ -266,7 +326,7 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
                     &image.get_attribute("data-i").unwrap_or_default(),
                 );
                 let _set = stage.set_attribute("data-plate-loaded", "");
-                let _removed = stage.remove_attribute("data-plate-hold");
+                let _synced = sync_shot(&stage);
             }) as Box<dyn FnMut(Event)>)
         };
         let error = {
@@ -282,7 +342,7 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
                 );
                 let _set = stage.set_attribute("data-plate-state", "failed");
                 let _removed = stage.remove_attribute("data-plate-loaded");
-                let _removed = stage.remove_attribute("data-plate-hold");
+                let _synced = sync_shot(&stage);
             }) as Box<dyn FnMut(Event)>)
         };
         image.add_event_listener_with_callback("load", load.as_ref().unchecked_ref())?;
@@ -422,6 +482,12 @@ impl TvStage {
         let choices = node(document, &root, "ol", "tv-choices", "")?;
         choices.set_attribute("aria-label", "What the table can do")?;
         let card = mount_card(document, &root)?;
+        let establish = node(document, &root, "div", "tv-establish", "")?;
+        establish.set_attribute("aria-hidden", "true")?;
+        let establish_title = node(document, &establish, "h2", "tv-establish-title", "")?;
+        node(document, &establish, "div", "tv-establish-rule", "")?;
+        let establish_place = node(document, &establish, "p", "tv-establish-place", "")?;
+        let lower = mount_lower_third(document, &root)?;
         let dock = node(document, &root, "div", "tv-dock", "")?;
         node(document, &root, "div", "tv-peek", "")?;
         Ok(Self {
@@ -429,6 +495,12 @@ impl TvStage {
             art,
             art_previous,
             plate,
+            establish_title,
+            establish_place,
+            lower,
+            portraits: RefCell::new(Vec::new()),
+            last_narrator_line: Cell::new(0),
+            narration_floor: Cell::new(0),
             figures,
             roster,
             gathered,
@@ -549,6 +621,18 @@ impl TvStage {
         state: LineState,
         text: &str,
     ) -> Result<bool, JsValue> {
+        self.last_narrator_line
+            .set(self.last_narrator_line.get().max(id));
+        // PLAY-V12: the plate may be cut to once the narrator of this scene has spoken; the words
+        // of the scene before, closing while this one is drawn, do not count.
+        if id > self.narration_floor.get()
+            && matches!(
+                state,
+                LineState::Lingering | LineState::Closing | LineState::Done
+            )
+        {
+            self.narration_over()?;
+        }
         let opened = matches!(
             state,
             LineState::Opening | LineState::Speaking | LineState::Lingering
@@ -769,7 +853,20 @@ impl TvStage {
         if announce && gathered && !was_gathered {
             live_sfx::play(Cue::PartyGathered, GATHERED_SOUND_DELAY);
         }
-        self.set_plate(&model.plate, &model.scene_key)?;
+        self.establish_title
+            .set_text_content(Some(if model.adventure_name.is_empty() {
+                &model.title
+            } else {
+                &model.adventure_name
+            }));
+        self.establish_place.set_text_content(Some(&model.place));
+        set_hidden(&self.establish_place, model.place.is_empty())?;
+        *self.portraits.borrow_mut() = model
+            .cast
+            .iter()
+            .map(|actor| (actor.name.clone(), actor.portrait.clone()))
+            .collect();
+        self.set_plate(&model.plate, &model.scene_key, model.narrated)?;
         if lobby {
             self.figures.update(
                 &[],
@@ -841,28 +938,82 @@ impl TvStage {
         Ok(())
     }
 
-    /// Whether the plate picture at `url` has been fetched and decoded already.
-    fn preloaded(&self, url: &str) -> bool {
-        self.plate
-            .preloads
-            .borrow()
-            .iter()
-            .find(|(known, _)| known == url)
-            .and_then(|(_, image)| js_sys::Reflect::get(image, &JsValue::from_str("complete")).ok())
-            .and_then(|complete| complete.as_bool())
-            .unwrap_or(false)
+    /// PLAY-V12: the narration of the scene's entry is over (or the scene has none): a ready plate
+    /// may be cut to now. It stays over for the rest of the scene, so the narration of a look's
+    /// result never puts the establishing shot back.
+    pub(super) fn narration_over(&self) -> Result<(), JsValue> {
+        self.root.set_attribute("data-narration-over", "")?;
+        sync_shot(&self.root)
+    }
+
+    /// PLAY-V12: a new scene opens on its establishing shot: the place picture alone, pushed in
+    /// slowly. Its entry narration is over at once only when it has none, or when the page has just
+    /// come up on it (a reload tells nothing again).
+    fn begin_entry(&self, narration_over: bool) -> Result<(), JsValue> {
+        self.narration_floor.set(self.last_narrator_line.get());
+        if narration_over {
+            self.root.set_attribute("data-narration-over", "")?;
+        } else {
+            self.root.remove_attribute("data-narration-over")?;
+        }
+        let tick = if self.root.get_attribute("data-shot-tick").as_deref() == Some("a") {
+            "b"
+        } else {
+            "a"
+        };
+        self.root.set_attribute("data-shot-tick", tick)
+    }
+
+    /// PLAY-V12: shows what a character says in the lower third, with the speaker's portrait and
+    /// name, so the establishing shot always says who is talking. The stylesheet draws it only
+    /// over an establishing shot and only while the line is the one being heard.
+    pub(super) fn lower_third(
+        &self,
+        speaker: &str,
+        text: &str,
+        state: LineState,
+    ) -> Result<(), JsValue> {
+        let lower = &self.lower;
+        if lower.text.text_content().as_deref() != Some(text)
+            || lower.name.text_content().as_deref() != Some(speaker)
+        {
+            lower.name.set_text_content(Some(speaker));
+            lower.text.set_text_content(Some(text));
+            lower.glyph.set_text_content(Some(&initial(speaker)));
+            let portrait = self
+                .portraits
+                .borrow()
+                .iter()
+                .find(|(name, _)| name == speaker)
+                .and_then(|(_, path)| asset_url(path));
+            lower.portrait.set_attribute(
+                "style",
+                &portrait
+                    .map(|url| format!("background-image:url({url})"))
+                    .unwrap_or_default(),
+            )?;
+        }
+        lower.root.set_attribute("data-line-state", state.name())
     }
 
     /// PLAY-V09: shows the scene plate the server made, or leaves the scene as it was.
     ///
     /// `data-plate-state` is the server's word (none, pending, ready, failed; failed also when the
-    /// picture does not load) and `data-plate-key` names the plate. The cut-outs go once the
-    /// picture has loaded and faded in (`data-plate-loaded`; they fade out after it is opaque, so
-    /// there is never a frame with neither), or not at all when a new scene arrives with its plate
-    /// already ready and already fetched (`data-plate-hold`): then the plate is shown at once and
-    /// the cut-out stage is never drawn. A new picture for the scene already on screen (a mood
-    /// edit) comes in as a focus pull.
-    fn set_plate(&self, plate: &PlateView, scene_key: &str) -> Result<(), JsValue> {
+    /// picture does not load) and `data-plate-key` names the plate. `data-plate-loaded` says the
+    /// picture has loaded; `data-shot` (see [`sync_shot`]) says which picture the scene shows: its
+    /// cut-outs are never drawn while a plate is pending or ready, and a ready plate is cut to
+    /// only once the narration of the scene's entry is over. A new picture for the scene already
+    /// on screen (a mood edit) comes in as a focus pull.
+    fn set_plate(&self, plate: &PlateView, scene_key: &str, narrated: bool) -> Result<(), JsValue> {
+        if self.plate.seen.borrow().as_str() != scene_key {
+            self.begin_entry(!narrated || !self.drawn.get())?;
+        }
+        let shown = self.apply_plate(plate, scene_key);
+        sync_shot(&self.root)?;
+        shown
+    }
+
+    fn apply_plate(&self, plate: &PlateView, scene_key: &str) -> Result<(), JsValue> {
         let layer = &self.plate;
         let failed = layer.root.get_attribute("data-failed");
         let usable = match (&plate.state, &plate.url) {
@@ -877,11 +1028,9 @@ impl TvStage {
         let Some(url) = usable else {
             self.root.remove_attribute("data-plate-key")?;
             self.root.remove_attribute("data-plate-loaded")?;
-            self.root.remove_attribute("data-plate-hold")?;
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-push")?;
             layer.root.remove_attribute("data-pull")?;
-            layer.root.remove_attribute("data-instant")?;
             layer.scene.borrow_mut().clear();
             *layer.seen.borrow_mut() = scene_key.to_owned();
             self.figures.set_plate(None)?;
@@ -917,15 +1066,6 @@ impl TvStage {
         } else {
             layer.root.remove_attribute("data-pull")?;
             self.root.remove_attribute("data-plate-loaded")?;
-            // Only a new scene whose plate is already here skips the cut-out stage; a plate that
-            // arrives for the scene on screen leaves the cut-outs drawn until it is opaque.
-            let new_scene = layer.seen.borrow().as_str() != scene_key;
-            if new_scene && self.preloaded(url) {
-                self.root.set_attribute("data-plate-hold", "")?;
-                layer.root.set_attribute("data-instant", "")?;
-            } else {
-                layer.root.remove_attribute("data-instant")?;
-            }
             *layer.scene.borrow_mut() = scene_key.to_owned();
         }
         *layer.seen.borrow_mut() = scene_key.to_owned();

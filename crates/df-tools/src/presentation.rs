@@ -386,6 +386,9 @@ pub(crate) enum PlateState {
     Pending,
     Ready,
     Failed,
+    /// PLAY-V12: imagery is on but this story scene will not get a plate: it holds its
+    /// establishing picture.
+    Unavailable,
 }
 
 impl PlateState {
@@ -395,7 +398,55 @@ impl PlateState {
             Self::Pending => "pending",
             Self::Ready => "ready",
             Self::Failed => "failed",
+            Self::Unavailable => "unavailable",
         }
+    }
+}
+
+impl PlateState {
+    /// The state a stage flag names (the inverse of [`Self::name`]); anything else is none.
+    pub(crate) fn from_name(name: &str) -> Self {
+        match name {
+            "pending" => Self::Pending,
+            "ready" => Self::Ready,
+            "failed" => Self::Failed,
+            "unavailable" => Self::Unavailable,
+            _ => Self::None,
+        }
+    }
+}
+
+/// PLAY-V12: which picture a story scene shows on the shared display.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Shot {
+    /// The scene's cut-out figures stand in the painting: imagery is off, no plate is planned
+    /// for the scene, or its plate failed for good.
+    Stage,
+    /// The place picture alone, with the narrator over it, until the plate can be cut to. A
+    /// scene never shows its cut-outs while its plate is on its way.
+    Establishing,
+    /// The composed plate.
+    Plate,
+}
+
+impl Shot {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Stage => "stage",
+            Self::Establishing => "establishing",
+            Self::Plate => "plate",
+        }
+    }
+}
+
+/// The picture a story scene shows: the plate only once its picture has loaded and the
+/// narration of the scene's entry is over; the establishing shot until then.
+pub(crate) fn shot_of(plate: PlateState, picture_loaded: bool, narration_over: bool) -> Shot {
+    match plate {
+        PlateState::None | PlateState::Failed => Shot::Stage,
+        PlateState::Pending | PlateState::Unavailable => Shot::Establishing,
+        PlateState::Ready if picture_loaded && narration_over => Shot::Plate,
+        PlateState::Ready => Shot::Establishing,
     }
 }
 
@@ -439,6 +490,7 @@ pub(crate) fn plate_of(scene: &rpc::GameplayScene) -> PlateView {
         Ok(rpc::PlateState::Pending) => PlateState::Pending,
         Ok(rpc::PlateState::Ready) => PlateState::Ready,
         Ok(rpc::PlateState::Failed) => PlateState::Failed,
+        Ok(rpc::PlateState::Unavailable) => PlateState::Unavailable,
         Ok(rpc::PlateState::Unspecified) | Err(_) => PlateState::None,
     };
     let url = imagery_url(&scene.live_plate);
@@ -827,6 +879,56 @@ mod tests {
             PlateState::Failed,
         ] {
             assert!(!state.name().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_scene_shows_its_cut_outs_only_when_no_plate_will_come() {
+        for narration_over in [false, true] {
+            for loaded in [false, true] {
+                assert_eq!(
+                    shot_of(PlateState::None, loaded, narration_over),
+                    Shot::Stage
+                );
+                assert_eq!(
+                    shot_of(PlateState::Failed, loaded, narration_over),
+                    Shot::Stage
+                );
+                assert_eq!(
+                    shot_of(PlateState::Pending, loaded, narration_over),
+                    Shot::Establishing,
+                    "a plate that is on its way is never drawn as cut-outs"
+                );
+                assert_eq!(
+                    shot_of(PlateState::Unavailable, loaded, narration_over),
+                    Shot::Establishing,
+                    "a scene with no plate holds its establishing picture"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_ready_plate_is_cut_to_only_after_it_has_loaded_and_the_narration_is_over() {
+        assert_eq!(shot_of(PlateState::Ready, false, false), Shot::Establishing);
+        assert_eq!(shot_of(PlateState::Ready, true, false), Shot::Establishing);
+        assert_eq!(shot_of(PlateState::Ready, false, true), Shot::Establishing);
+        assert_eq!(shot_of(PlateState::Ready, true, true), Shot::Plate);
+        for (shot, name) in [
+            (Shot::Stage, "stage"),
+            (Shot::Establishing, "establishing"),
+            (Shot::Plate, "plate"),
+        ] {
+            assert_eq!(shot.name(), name);
+        }
+        for state in [
+            PlateState::None,
+            PlateState::Pending,
+            PlateState::Ready,
+            PlateState::Failed,
+            PlateState::Unavailable,
+        ] {
+            assert_eq!(PlateState::from_name(state.name()), state);
         }
     }
 

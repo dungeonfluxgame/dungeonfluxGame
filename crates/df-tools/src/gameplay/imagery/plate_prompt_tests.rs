@@ -45,6 +45,7 @@ fn spec_for(
         scene_key: key,
         place_id: "place-x",
         place_kind: kind,
+        exterior: false,
         title,
         story_text: "A night of lamplight.",
         speaker: speaker.map(|sprite| SpeakerInput {
