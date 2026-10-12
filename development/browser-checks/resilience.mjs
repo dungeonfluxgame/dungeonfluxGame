@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { launch, settle } from './lib.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
-const logDir = process.env.DF_CHECK_OUT || path.join(here, '..', '..', 'artifacts', 'tmp', 'browser-checks');
+const logDir = process.env.DF_CHECK_OUT || path.join(process.env.DUNGEONFLUX_ARTIFACT_ROOT || path.join(here, '..', '..', 'artifacts'), 'tmp', 'browser-checks');
 const [base, out] = process.argv.slice(2);
 fs.mkdirSync(out, { recursive: true });
 const log = [];

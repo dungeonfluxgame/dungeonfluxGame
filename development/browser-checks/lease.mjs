@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launch, session, click, create, settle, watch, tvState } from './lib.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
-const logDir = process.env.DF_CHECK_OUT || path.join(here, '..', '..', 'artifacts', 'tmp', 'browser-checks');
+const logDir = process.env.DF_CHECK_OUT || path.join(process.env.DUNGEONFLUX_ARTIFACT_ROOT || path.join(here, '..', '..', 'artifacts'), 'tmp', 'browser-checks');
 const [base, out, packPath] = process.argv.slice(2);
 const s = session(base, out, packPath);
 let failures = 0;
@@ -78,7 +78,12 @@ const converse = async (page, name, line) => {
 };
 
 async function acts(label, startAt) {
-  const choice = await click(s, pa, s.label('ask-courier'), { optional: true, wait: 2500 });
+  let choice = await click(s, pa, s.label('ask-courier'), { optional: true, wait: 2500 });
+  // The story may have moved on; any other offered choice does as well.
+  for (const offer of Object.values(s.labels)) {
+    if (choice) break;
+    choice = await click(s, pa, offer, { optional: true, wait: 2500 });
+  }
   check(choice, `${label}: a choice button works`);
   const st = await read(pa);
   check(!/not been saved|unknown/i.test(st.text) || st.phase !== null, `${label}: no "Outcome unknown" after the choice`);

@@ -24,8 +24,8 @@ await tv.addInitScript(() => {
     try {
       const m = JSON.parse(raw);
       const last = window.__music[window.__music.length - 1];
-      const row = { t: Math.round(performance.now()), sound: m.sound, phase: m.phase, intensity: m.intensity, cue: m.cue, master: m.master };
-      if (!last || last.sound !== row.sound || last.phase !== row.phase || last.cue !== row.cue) window.__music.push(row);
+      const row = { t: Math.round(performance.now()), sound: m.sound, phase: m.phase, intensity: m.intensity, cue: m.cue, master: m.master, gains: JSON.stringify(m.gains) };
+      if (!last || last.sound !== row.sound || last.phase !== row.phase || last.cue !== row.cue || last.gains !== row.gains) window.__music.push(row);
     } catch { /* not ready */ }
   };
   setInterval(record, 100);
@@ -86,16 +86,18 @@ s.note(`victory reached: ${won} at t=${wonAt}`);
 await settle(24000);
 const log = await tv.evaluate(() => window.__music);
 fs.writeFileSync(`${out}/music-log.json`, JSON.stringify(log, null, 1));
-for (const row of log) s.note(`music t=${row.t} sound=${row.sound} phase=${row.phase} intensity=${row.intensity} cue=${row.cue}`);
-const release = log.filter((row) => row.phase === 'release');
-if (release.length) {
-  const start = release[0].t;
-  const after = log.find((row) => row.t > start && row.phase !== 'release');
-  const held = after ? after.t - start : null;
-  s.note(`release began t=${start}; next phase ${after?.phase} at ${held} ms later`);
+for (const row of log) s.note(`music t=${row.t} sound=${row.sound} phase=${row.phase} intensity=${row.intensity} cue=${row.cue} gains=${row.gains}`);
+// The cue's phase is the server's; the mix settles to the calm bed when the release hold has passed.
+const release = log.find((row) => row.phase === 'release');
+const calmGains = log.find((row) => row.sound === 'on' && row.phase === 'calm')?.gains;
+if (release && calmGains) {
+  const settled = log.find((row) => row.t > release.t && row.gains === calmGains);
+  const held = settled ? settled.t - release.t : null;
+  s.note(`release began t=${release.t}; the mix is back at the calm bed ${held === null ? 'not within the window' : `${held} ms later`}`);
   check(held === null || held >= 12000, `the release is held about 14 s before the calm bed (${held} ms)`);
+  check(held !== null, 'the mix did settle to the calm bed after the hold');
 } else {
-  check(false, 'no release phase was logged');
+  check(false, 'no release phase or calm bed was logged');
 }
 await tv.screenshot({ path: `${out}/victory-tv.png` });
 fs.writeFileSync(`${out}/victory-log.txt`, s.log.join('\n') + '\n');

@@ -479,11 +479,19 @@ pub(super) struct TempoTuning {
     pub(super) hysteresis_permille: u16,
     /// How long the display's music holds a release (the win or the rest after a fight)
     /// before it settles to the calm bed. Sent in a Release cue's `hold_millis`.
-    #[serde(default = "default_release_hold_millis")]
+    #[serde(
+        default = "default_release_hold_millis",
+        skip_serializing_if = "is_default_release_hold"
+    )]
     pub(super) release_hold_millis: u32,
 }
 const fn default_release_hold_millis() -> u32 {
     14_000
+}
+/// The default is left out when a tuning is written, so tunings and generated adventures that
+/// never mention the hold keep their exact bytes (and revisions).
+const fn is_default_release_hold(millis: &u32) -> bool {
+    *millis == default_release_hold_millis()
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]

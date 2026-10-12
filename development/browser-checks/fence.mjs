@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launch, session, click, create, settle, watch } from './lib.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
-const logDir = process.env.DF_CHECK_OUT || path.join(here, '..', '..', 'artifacts', 'tmp', 'browser-checks');
+const logDir = process.env.DF_CHECK_OUT || path.join(process.env.DUNGEONFLUX_ARTIFACT_ROOT || path.join(here, '..', '..', 'artifacts'), 'tmp', 'browser-checks');
 const [base, out, packPath] = process.argv.slice(2);
 const s = session(base, out, packPath);
 let failures = 0;

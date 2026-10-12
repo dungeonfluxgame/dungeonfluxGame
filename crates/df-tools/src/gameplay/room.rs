@@ -156,7 +156,7 @@ impl actor::Actor {
             self.session.attempt = Some(actor::Attempt::Input {
                 credential: self.bootstrap_credential,
                 fingerprint,
-                input: input.clone(),
+                input: Box::new(input.clone()),
             });
         }
         let recovering = self.fenced;

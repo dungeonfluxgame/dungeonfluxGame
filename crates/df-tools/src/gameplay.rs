@@ -1484,20 +1484,26 @@ async fn join_grant_driver(
 /// The local demonstration database. `DF_GAMEPLAY_DATABASE_PORT` (1024 to 65535) selects another
 /// PostgreSQL instance than the launcher's, so tests and harness runs use their own.
 fn database_config() -> Result<tokio_postgres::Config, io::Error> {
-    let mut configuration =
+    let launcher =
         startup_configuration::database_config(std::env::var("DF_GAMEPLAY_DEMO_DATABASE"))?;
-    match std::env::var("DF_GAMEPLAY_DATABASE_PORT") {
-        Ok(port) => {
-            let port = port
-                .trim()
-                .parse::<u16>()
-                .ok()
-                .filter(|port| *port >= 1024)
-                .ok_or_else(|| io::Error::other("DF_GAMEPLAY_DATABASE_PORT refused"))?;
-            configuration.port(port);
-        }
-        Err(std::env::VarError::NotPresent) => {}
+    let port = match std::env::var("DF_GAMEPLAY_DATABASE_PORT") {
+        Ok(port) => port
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port >= 1024)
+            .ok_or_else(|| io::Error::other("DF_GAMEPLAY_DATABASE_PORT refused"))?,
+        Err(std::env::VarError::NotPresent) => return Ok(launcher),
         Err(_) => return Err(io::Error::other("DF_GAMEPLAY_DATABASE_PORT refused")),
+    };
+    // A configuration's port list only grows, so the instance's own is built afresh.
+    let mut configuration = tokio_postgres::Config::new();
+    configuration.host("127.0.0.1").port(port);
+    if let Some(user) = launcher.get_user() {
+        configuration.user(user);
+    }
+    if let Some(name) = launcher.get_dbname() {
+        configuration.dbname(name);
     }
     Ok(configuration)
 }

@@ -304,7 +304,7 @@ pub(super) enum Attempt {
     Input {
         credential: [u8; 32],
         fingerprint: [u8; 32],
-        input: GameInput,
+        input: Box<GameInput>,
     },
     /// The committed courier job's completion, which rebuilds its own scope.
     Completion,
@@ -587,7 +587,7 @@ impl Actor {
                 let scope = match model::random().and_then(|random| {
                     model::pins().and_then(|pins| {
                         self.issuer
-                            .issue(&credential, random, fingerprint, input.clone(), pins)
+                            .issue(&credential, random, fingerprint, (*input).clone(), pins)
                     })
                 }) {
                     Ok(scope) => scope,
@@ -843,7 +843,7 @@ impl Actor {
             self.session.attempt = Some(Attempt::Input {
                 credential,
                 fingerprint,
-                input: input.clone(),
+                input: Box::new(input.clone()),
             });
         }
         let recovering = self.fenced;
