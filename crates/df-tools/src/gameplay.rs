@@ -276,6 +276,31 @@ async fn socket(
             drop(permit);
         })
 }
+/// Who speaks in the installed pack, for voice casting. A speaker whose pack entry carries no
+/// gender is left out, so it is voiced by the roster's neutral fallback and never guessed.
+fn speaker_castings() -> Vec<voice::SpeakerCasting> {
+    pack::speakers()
+        .into_iter()
+        .filter_map(|speaker| {
+            Some(voice::SpeakerCasting {
+                name: speaker.name,
+                gender: match speaker.gender? {
+                    pack::Gender::He => voice::Gender::He,
+                    pack::Gender::She => voice::Gender::She,
+                    pack::Gender::They => voice::Gender::They,
+                    pack::Gender::It => voice::Gender::It,
+                },
+                age: speaker.age.map(|age| match age {
+                    pack::Age::Young => voice::Age::Young,
+                    pack::Age::Adult => voice::Age::Adult,
+                    pack::Age::Elder => voice::Age::Elder,
+                }),
+                tone: speaker.voice,
+            })
+        })
+        .collect()
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -542,13 +567,21 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         span.finish_unmeasured("loaded");
         pack::install(loaded)?;
     }
-    let voice = voice::Voice::start(if interactive {
-        startup_configuration::voice_settings(
-            startup_configuration::VoiceInputs::from_environment(),
-        )?
-    } else {
-        startup_configuration::VoiceSettings::Off(startup_configuration::VoiceOff::Qualification)
-    })?;
+    let voice = voice::Voice::start(
+        if interactive {
+            startup_configuration::voice_settings(
+                startup_configuration::VoiceInputs::from_environment(),
+            )?
+        } else {
+            startup_configuration::VoiceSettings::Off(
+                startup_configuration::VoiceOff::Qualification,
+            )
+        },
+        &speaker_castings(),
+        generated_adventure
+            .as_ref()
+            .map_or("harbor", |prepared| prepared.record.seed.as_str()),
+    )?;
     let npc_phase = courier_npc_qualification::phase();
     let npc_budget = npc_phase
         .map(courier_npc_qualification::call_budget)

@@ -5071,7 +5071,9 @@ mod tests {
                             .as_str()
                             .unwrap();
                         let mut expected = if key == "defeat_mech" {
-                            mandatory.replace("{story}", &ending.defeat)
+                            let rules = mandatory.replace("{story}", "");
+                            let rules = rules.split_whitespace().collect::<Vec<_>>().join(" ");
+                            format!("{} {rules}", ending.defeat)
                         } else {
                             format!("{} {mandatory}", ending.defeat)
                         };

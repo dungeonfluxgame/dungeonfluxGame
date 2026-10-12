@@ -464,7 +464,8 @@ pub(crate) fn generate_chapter(
                     if rested {
                         scene.narration_rested = Some(format!("{} {text}", victory.text));
                     } else {
-                        scene.narration = text;
+                        // The rules sentences are the scene's own `rules_note`; display joins them.
+                        scene.narration = victory.text.clone();
                     }
                 }
             }
@@ -486,7 +487,7 @@ pub(crate) fn generate_chapter(
                     if rested {
                         scene.narration_rested = Some(format!("{ending} {text}"));
                     } else {
-                        scene.narration = text;
+                        scene.narration = ending.clone();
                     }
                 }
             }

@@ -1,0 +1,361 @@
+{
+  "schema": "df-voice-casting/1",
+  "narrator": {
+    "voice_id": "JBFqnCBsd6RMkjVDRZzb",
+    "name": "George",
+    "provider_gender": "male",
+    "provider_age": "middle_aged",
+    "verified_on": "2026-10-11"
+  },
+  "fallback_voice": "SAz9YHcvj6GT2YYXdXww",
+  "npc_voices": [
+    {
+      "voice_id": "EXAVITQu4vr4xnSDxMaL",
+      "name": "Sarah",
+      "gender": "she",
+      "age": "young",
+      "tones": [
+        "warm",
+        "confident",
+        "reassuring",
+        "mature",
+        "professional",
+        "earnest"
+      ],
+      "provider_gender": "female",
+      "provider_age": "young",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "FGY2WhTYpPnrIDTdsKH5",
+      "name": "Laura",
+      "gender": "she",
+      "age": "young",
+      "tones": [
+        "cheerful",
+        "enthusiastic",
+        "quirky",
+        "sassy",
+        "brisk",
+        "sharp"
+      ],
+      "provider_gender": "female",
+      "provider_age": "young",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "cgSgspJ2msm6clMCkdW9",
+      "name": "Jessica",
+      "gender": "she",
+      "age": "young",
+      "tones": [
+        "playful",
+        "bright",
+        "warm",
+        "cheerful",
+        "light"
+      ],
+      "provider_gender": "female",
+      "provider_age": "young",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "Xb7hH8MSUJpSbSDYk0k2",
+      "name": "Alice",
+      "gender": "she",
+      "age": "adult",
+      "tones": [
+        "clear",
+        "friendly",
+        "engaging",
+        "professional",
+        "precise",
+        "brisk",
+        "polite"
+      ],
+      "provider_gender": "female",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "XrExE9yKIg1WjnnlVkGX",
+      "name": "Matilda",
+      "gender": "she",
+      "age": "adult",
+      "tones": [
+        "knowledgeable",
+        "professional",
+        "upbeat",
+        "low",
+        "measured"
+      ],
+      "provider_gender": "female",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "hpp4J3VqNfWAUOO0d1Us",
+      "name": "Bella",
+      "gender": "she",
+      "age": "adult",
+      "tones": [
+        "warm",
+        "bright",
+        "professional",
+        "polished",
+        "crisp",
+        "deliberate",
+        "measured",
+        "precise",
+        "clipped"
+      ],
+      "provider_gender": "female",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "pFZP5JQG7iQjIQuC4Bku",
+      "name": "Lily",
+      "gender": "she",
+      "age": "adult",
+      "tones": [
+        "velvety",
+        "warm",
+        "clear",
+        "confident",
+        "smooth",
+        "soft",
+        "polite"
+      ],
+      "provider_gender": "female",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "pqHfZKP75CvOlQylNhV4",
+      "name": "Bill",
+      "gender": "he",
+      "age": "elder",
+      "tones": [
+        "wise",
+        "mature",
+        "balanced",
+        "friendly",
+        "comforting",
+        "crisp",
+        "calm",
+        "gentle",
+        "soft"
+      ],
+      "provider_gender": "male",
+      "provider_age": "old",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "nPczCjzI2devNBz1zQrb",
+      "name": "Brian",
+      "gender": "he",
+      "age": "adult",
+      "tones": [
+        "deep",
+        "resonant",
+        "comforting",
+        "warm",
+        "classy",
+        "calm"
+      ],
+      "provider_gender": "male",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "cjVigY5qzO86Huf0OWal",
+      "name": "Eric",
+      "gender": "he",
+      "age": "adult",
+      "tones": [
+        "smooth",
+        "trustworthy",
+        "classy",
+        "charming",
+        "courteous",
+        "polite"
+      ],
+      "provider_gender": "male",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "onwK4e9ZLuTAKqWW03F9",
+      "name": "Daniel",
+      "gender": "he",
+      "age": "adult",
+      "tones": [
+        "steady",
+        "formal",
+        "strong",
+        "stern",
+        "clipped",
+        "precise",
+        "measured"
+      ],
+      "provider_gender": "male",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "pNInz6obpgDQGcFmaJgB",
+      "name": "Adam",
+      "gender": "he",
+      "age": "adult",
+      "tones": [
+        "dominant",
+        "firm",
+        "brash",
+        "confident",
+        "blunt",
+        "commanding",
+        "aggressive"
+      ],
+      "provider_gender": "male",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "CwhRBWXzGAHq8TQ4Fs17",
+      "name": "Roger",
+      "gender": "he",
+      "age": "adult",
+      "tones": [
+        "relaxed",
+        "casual",
+        "resonant",
+        "easygoing",
+        "friendly",
+        "hearty"
+      ],
+      "provider_gender": "male",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "iP95p4xoKVk53GoZ742B",
+      "name": "Chris",
+      "gender": "he",
+      "age": "adult",
+      "tones": [
+        "charming",
+        "natural",
+        "casual",
+        "friendly",
+        "cheerful"
+      ],
+      "provider_gender": "male",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "IKne3meq5aSn9XLyUdCD",
+      "name": "Charlie",
+      "gender": "he",
+      "age": "young",
+      "tones": [
+        "deep",
+        "confident",
+        "energetic",
+        "hyped",
+        "cheerful",
+        "brisk"
+      ],
+      "provider_gender": "male",
+      "provider_age": "young",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "bIHbv24MWmeRgasZH58o",
+      "name": "Will",
+      "gender": "he",
+      "age": "young",
+      "tones": [
+        "relaxed",
+        "optimistic",
+        "chill",
+        "casual",
+        "light"
+      ],
+      "provider_gender": "male",
+      "provider_age": "young",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "TX3LPaxmHKxFdv7VOQHJ",
+      "name": "Liam",
+      "gender": "he",
+      "age": "young",
+      "tones": [
+        "energetic",
+        "warm",
+        "confident",
+        "bright"
+      ],
+      "provider_gender": "male",
+      "provider_age": "young",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "SAz9YHcvj6GT2YYXdXww",
+      "name": "River",
+      "gender": "they",
+      "age": "adult",
+      "tones": [
+        "relaxed",
+        "neutral",
+        "calm",
+        "informative",
+        "measured",
+        "quiet",
+        "patient"
+      ],
+      "provider_gender": "neutral",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "N2lVS1w4EtoT3dr4eOWO",
+      "name": "Callum",
+      "gender": "it",
+      "age": "adult",
+      "tones": [
+        "husky",
+        "gravelly",
+        "raspy",
+        "unsettling",
+        "sly",
+        "rough",
+        "gruff",
+        "low",
+        "dangerous"
+      ],
+      "provider_gender": "male",
+      "provider_age": "middle_aged",
+      "verified_on": "2026-10-11"
+    },
+    {
+      "voice_id": "SOYHLrjzK2X1ezoPC6cr",
+      "name": "Harry",
+      "gender": "it",
+      "age": "young",
+      "tones": [
+        "fierce",
+        "rough",
+        "animated",
+        "sharp",
+        "rapid",
+        "brash"
+      ],
+      "provider_gender": "male",
+      "provider_age": "young",
+      "verified_on": "2026-10-11"
+    }
+  ]
+}

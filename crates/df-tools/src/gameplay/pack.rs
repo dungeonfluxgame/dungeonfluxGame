@@ -2112,13 +2112,6 @@ pub(super) fn bandit() -> df_rules::local_journey::BanditRules {
 }
 /// Every speaking character of the active pack, for voice casting: name, gender, age and the
 /// free-text voice phrase.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "voice casting at startup is the caller; it reads the pack's speakers here"
-    )
-)]
 pub(super) fn speakers() -> Vec<SpeakerProfile> {
     with_content(|pack| pack.speakers.clone())
 }

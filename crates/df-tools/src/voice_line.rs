@@ -35,7 +35,12 @@ impl VoiceLine {
 
     /// Whether the line belongs to a named speaker rather than the narrator.
     pub(crate) fn is_npc(&self) -> bool {
-        self.role.starts_with(NPC_ROLE_PREFIX)
+        self.speaker().is_some()
+    }
+
+    /// The speaker name of a named-speaker line; `None` for the narrator.
+    pub(crate) fn speaker(&self) -> Option<&str> {
+        self.role.strip_prefix(NPC_ROLE_PREFIX)
     }
 }
 

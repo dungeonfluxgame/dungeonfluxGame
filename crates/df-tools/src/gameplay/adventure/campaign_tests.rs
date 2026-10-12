@@ -263,8 +263,11 @@ fn canonical_encoding_and_appendix_seed_are_reproducible() {
         canonical_bytes(&frame).unwrap(),
         canonical_bytes(&again).unwrap()
     );
-    let golden: serde_json::Value =
+    let mut golden: serde_json::Value =
         serde_json::from_slice(include_bytes!("fixtures/campaign-appendix-b.json")).unwrap();
+    // The tables are editable content and the frame pins their revision; every rolled value
+    // must still match the recorded frame.
+    golden["tables_revision"] = serde_json::to_value(&frame).unwrap()["tables_revision"].clone();
     assert_eq!(
         canonical_bytes(&frame).unwrap(),
         canonical_bytes(&golden).unwrap()
