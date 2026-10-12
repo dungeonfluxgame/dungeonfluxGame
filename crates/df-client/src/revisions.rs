@@ -57,6 +57,26 @@ impl<T> ViewStore<T> {
         ViewAcceptance::Applied
     }
 
+    // PLAY-L01: lets the caller amend presentation-only parts (server-generated art) of the
+    // current view when `revision` is exactly its revision. The revision, the binding and every
+    // game-content field stay as accepted: equal revisions otherwise remain `Duplicate`, and
+    // `amend` must touch presentation alone. This is the narrow stand-in for the planned
+    // presentation cursor. Returns whether `amend` reported a change.
+    pub fn amend_presentation(
+        &mut self,
+        binding_id: ClientBindingId,
+        revision: SessionRevision,
+        amend: impl FnOnce(&mut T) -> bool,
+    ) -> bool {
+        if binding_id != self.binding_id {
+            return false;
+        }
+        match &mut self.current {
+            Some((current, view)) if *current == revision => amend(view),
+            _ => false,
+        }
+    }
+
     /// Borrows the current complete view and its exact accepted revision.
     pub fn current(&self) -> Option<(SessionRevision, &T)> {
         self.current

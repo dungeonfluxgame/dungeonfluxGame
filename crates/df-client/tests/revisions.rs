@@ -189,3 +189,39 @@ fn repeated_same_phase_updates_keep_one_view_and_dispose_each_rejected_or_replac
     drop(store);
     assert_eq!(disposals.get(), 131);
 }
+
+#[test]
+fn a_presentation_amendment_needs_the_same_binding_and_the_exact_revision() {
+    let mut store = ViewStore::new(binding(1));
+    store.accept(binding(1), revision(3, 4), String::from("plain"));
+    let paint = |view: &mut String| {
+        view.push_str(" painted");
+        true
+    };
+    assert!(!store.amend_presentation(binding(2), revision(3, 4), paint));
+    assert!(!store.amend_presentation(binding(1), revision(3, 5), paint));
+    assert!(!store.amend_presentation(binding(1), revision(2, 4), paint));
+    assert_eq!(
+        store.current(),
+        Some((revision(3, 4), &String::from("plain")))
+    );
+    assert!(store.amend_presentation(binding(1), revision(3, 4), paint));
+    assert_eq!(
+        store.current(),
+        Some((revision(3, 4), &String::from("plain painted")))
+    );
+    // The revision watermark is untouched: an older snapshot is still stale.
+    assert_eq!(
+        store.accept(binding(1), revision(3, 3), String::from("old")),
+        ViewAcceptance::Stale {
+            current: revision(3, 4)
+        }
+    );
+    // And an equal revision still cannot replace through the ordinary path.
+    assert_eq!(
+        store.accept(binding(1), revision(3, 4), String::from("other")),
+        ViewAcceptance::Duplicate {
+            current: revision(3, 4)
+        }
+    );
+}

@@ -162,10 +162,15 @@ impl Drop for ServerImage {
 
 fn art(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> (String, &'static str) {
     let (stem, fallback) = fallback_art(phase, scene);
-    (
-        asset_url(&scene.scene_asset).unwrap_or_else(|| format!("/assets/ui/generated/{stem}")),
-        fallback,
-    )
+    let painting =
+        asset_url(&scene.scene_asset).unwrap_or_else(|| format!("/assets/ui/generated/{stem}"));
+    // PLAY-L01: a server-generated re-render of the painting leads when the view carries one; the
+    // authored painting stays beneath it in the CSS layers should the image fail to load.
+    let painting = match crate::presentation::imagery_url(&scene.live_backdrop) {
+        Some(live) => format!("{live}),url({painting}"),
+        None => painting,
+    };
+    (painting, fallback)
 }
 
 fn speaker_portrait_stem(name: &str) -> Option<&'static str> {

@@ -51,6 +51,19 @@ impl<View> ConnectionViews<View> {
         ConnectionViewAcceptance::View(self.views.accept(binding, revision, view))
     }
 
+    // PLAY-L01: see `ViewStore::amend_presentation`; only the active connection may do this.
+    pub fn amend_presentation(
+        &mut self,
+        generation: &ConnectionGeneration,
+        binding: ClientBindingId,
+        revision: SessionRevision,
+        amend: impl FnOnce(&mut View) -> bool,
+    ) -> bool {
+        self.generation.same_scope(generation)
+            && generation.is_active()
+            && self.views.amend_presentation(binding, revision, amend)
+    }
+
     pub fn generation(&self) -> &ConnectionGeneration {
         &self.generation
     }

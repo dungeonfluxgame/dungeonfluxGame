@@ -14,6 +14,8 @@ const PLAYER: &str = include_str!("live_player.css");
 const TV: &str = include_str!("live_tv.css");
 const MOTION: &str = include_str!("live_fx.css");
 const STAGE: &str = include_str!("live_stage.css");
+// PLAY-L01: the previous cut-out fading out above a character's new expression.
+const IMAGERY: &str = include_str!("live_imagery.css");
 
 /// Adds the live screen rules once; a second call on the same page is a no-op.
 pub(super) fn install(document: &Document) -> Result<(), JsValue> {
@@ -23,7 +25,7 @@ pub(super) fn install(document: &Document) -> Result<(), JsValue> {
     let style = document.create_element("style")?;
     style.set_attribute("data-live-theme", "")?;
     style.set_text_content(Some(&format!(
-        "{LEGACY}\n{PLAYER}\n{TV}\n{MOTION}\n{STAGE}"
+        "{LEGACY}\n{PLAYER}\n{TV}\n{MOTION}\n{STAGE}\n{IMAGERY}"
     )));
     let host = match document.query_selector("head")? {
         Some(head) => head,

@@ -306,6 +306,9 @@ pub(crate) struct StageActor {
     /// Speaking now, or acting on this turn.
     pub(crate) speaking: bool,
     pub(crate) down: bool,
+    // PLAY-L01: a server-generated expression variant of this character's cut-out, loaded from
+    // `/gameplay/imagery/<key>`; `None` shows the authored cut-out.
+    pub(crate) live_sprite: Option<String>,
 }
 
 /// A local served asset path, or `None` for anything else. Only these reach CSS or `src`.
@@ -316,6 +319,14 @@ pub(crate) fn asset_url(path: &str) -> Option<String> {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'.' | b'_')))
     .then(|| format!("/{path}"))
+}
+
+// PLAY-L01: a server-generated image path: `/gameplay/imagery/` and a 64-digit lowercase
+// hexadecimal key, nothing else. Only these reach CSS or `src` besides local assets.
+pub(crate) fn imagery_url(path: &str) -> Option<String> {
+    let key = path.strip_prefix("/gameplay/imagery/")?;
+    let plain = key.len() == 64 && key.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'));
+    plain.then(|| path.to_owned())
 }
 
 fn hit_points(member: &rpc::PartyMemberView) -> Option<(u32, u32)> {
@@ -374,6 +385,7 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
             hit_points: hit_points(member),
             speaking: fighting && member.active_turn,
             down: is_down(member),
+            live_sprite: None,
         })
         .collect();
     let participants = journey
@@ -407,6 +419,8 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
                     down: participant.is_some_and(|participant| {
                         participant.maximum_hit_points > 0 && participant.hit_points == 0
                     }),
+                    // PLAY-L01: the server's generated expression variant of this cut-out.
+                    live_sprite: imagery_url(&actor.live_sprite),
                 }
             }),
     );
@@ -831,6 +845,7 @@ mod tests {
             sprite: format!("assets/ui/generated/sprite-{id}"),
             portrait: format!("assets/ui/generated/portrait-{id}"),
             speaking,
+            live_sprite: String::new(),
         }
     }
 

@@ -50,6 +50,8 @@ const TYPED_HOLD_MS: u64 = 12_000;
 const FADE_OUT_MS: u64 = 500;
 const BUBBLE_OUT_ANIMATION: &str = "df-bubble-out";
 const FLOAT_ANIMATION: &str = "df-float-up";
+// PLAY-L01: the animation that fades a replaced cut-out away (see `live_imagery.css`).
+const GHOST_ANIMATION: &str = "df-sprite-ghost";
 
 /// Which part of the display the figures are standing in.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -360,7 +362,11 @@ impl Figures {
             let finished = js_sys::Reflect::get(&event, &JsValue::from_str("animationName"))
                 .ok()
                 .and_then(|name| name.as_string())
-                .is_some_and(|name| name == BUBBLE_OUT_ANIMATION || name == FLOAT_ANIMATION);
+                .is_some_and(|name| {
+                    name == BUBBLE_OUT_ANIMATION
+                        || name == FLOAT_ANIMATION
+                        || name == GHOST_ANIMATION
+                });
             if finished
                 && let Some(element) = event.target().and_then(|t| t.dyn_into::<Element>().ok())
             {
@@ -603,14 +609,35 @@ impl Figures {
         Ok(())
     }
 
-    /// Restarts the art chain only when the character or the depth's art changed.
+    /// Restarts the art chain only when the character, the depth's art or the generated
+    /// expression changed.
     fn choose_art(&self, figure: &Figure, actor: &StageActor, depth: Depth) -> Result<(), JsValue> {
         let key = format!("{}|{}|{}", actor.sprite, actor.portrait, depth.shows_feet());
-        if figure.root.get_attribute("data-portrait").as_deref() == Some(key.as_str()) {
+        // PLAY-L01: a generated expression variant of the cut-out leads the art chain, in the
+        // same slot and with the same framing as the art it replaces.
+        let live = actor.live_sprite.as_deref().unwrap_or_default();
+        let same_art = figure.root.get_attribute("data-portrait").as_deref() == Some(key.as_str());
+        let same_live = figure.root.get_attribute("data-live").unwrap_or_default() == live;
+        if same_art && same_live {
             return Ok(());
         }
+        if same_art {
+            self.fade_out_previous(figure)?;
+        }
         figure.root.set_attribute("data-portrait", &key)?;
+        if live.is_empty() {
+            figure.root.remove_attribute("data-live")?;
+        } else {
+            figure.root.set_attribute("data-live", live)?;
+        }
         let mut candidates = art_candidates(&actor.sprite, &actor.portrait, depth.shows_feet());
+        if !live.is_empty() {
+            let kind = match candidates.first() {
+                Some((kind @ ("figure" | "sprite"), _)) => *kind,
+                _ => "sprite",
+            };
+            candidates.insert(0, (kind, live.to_owned()));
+        }
         if candidates.is_empty() {
             return figure.root.set_attribute("data-art", "none");
         }
@@ -621,6 +648,24 @@ impl Figures {
             state.next = 0;
         }
         use_candidate(&figure.root, &figure.image, kind, &url)
+    }
+
+    /// PLAY-L01: leaves a copy of the figure's current picture above it, to fade out while the new
+    /// expression shows beneath. One copy at most; it removes itself when its animation ends.
+    fn fade_out_previous(&self, figure: &Figure) -> Result<(), JsValue> {
+        let Some(body) = figure.image.parent_element() else {
+            return Ok(());
+        };
+        while let Some(old) = body.query_selector(".tv-fig-ghost")? {
+            old.remove();
+        }
+        let ghost = figure
+            .image
+            .clone_node_with_deep(false)?
+            .dyn_into::<Element>()?;
+        ghost.set_attribute("class", "tv-fig-sprite tv-fig-ghost")?;
+        body.insert_before(&ghost, figure.image.next_sibling().as_ref())?;
+        Ok(())
     }
 
     fn heal(

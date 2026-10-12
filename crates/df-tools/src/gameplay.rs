@@ -16,8 +16,10 @@ mod courier_process_qualification;
 mod dialogue;
 #[cfg(test)]
 mod dialogue_tests;
+mod imagery;
 mod inn_qualification;
 mod journey;
+mod living_scenes;
 mod model;
 mod music_assets;
 mod npc_dossier;
@@ -36,6 +38,7 @@ mod recovery_qualification;
 mod rest_qualification;
 mod restart_qualification;
 mod room;
+mod scene_mood;
 mod social;
 mod speech_input;
 mod splat_assets;
@@ -82,6 +85,8 @@ struct Service {
     npc_voice: Arc<npc_reply::NpcVoice>,
     /// The public feed of who said and did what; a new line publishes a fresh view.
     table_log: Arc<table_log::TableLog>,
+    /// Follows the story's mood with generated scene art; presentation only.
+    living: living_scenes::LivingScenes,
 }
 fn credential<T>(request: &Request<T>) -> Result<[u8; 32], Status> {
     let value = request
@@ -130,7 +135,13 @@ impl Service {
         if let Ok((_, message)) = &viewed {
             self.voice.register_view(message);
         }
-        viewed
+        // Living scenes watch the display's view and then add their published art to it; the
+        // art is presentation only and nothing else in the view changes.
+        viewed.map(|(role, mut message)| {
+            self.living.observe(&message);
+            self.living.apply(&mut message);
+            (role, message)
+        })
     }
 }
 #[tonic::async_trait]
@@ -187,26 +198,47 @@ impl rpc::session_service_server::SessionService for Service {
         updates.borrow_and_update();
         let mut table_lines = self.table_log.subscribe();
         table_lines.borrow_and_update();
-        let (_, first) = self.view(credential, request.clone()).await?;
+        // A published scene image wakes a watcher the way a new table line does.
+        let mut art = self.living.subscribe();
+        if let Some(art) = art.as_mut() {
+            art.borrow_and_update();
+        }
+        let (role, first) = self.view(credential, request.clone()).await?;
+        // Only the shared display shows generated art: a phone's stream is never rebuilt for it.
+        if !matches!(role, LocalDemoRole::Display) {
+            art = None;
+        }
         let service = self.clone();
         let stream = futures::stream::unfold(
             (
                 Some(first),
                 updates,
                 table_lines,
+                art,
                 service,
                 request,
                 credential,
                 permit,
             ),
-            |(first, mut updates, mut table_lines, service, request, credential, permit)| async move {
+            |(
+                first,
+                mut updates,
+                mut table_lines,
+                mut art,
+                service,
+                request,
+                credential,
+                permit,
+            )| async move {
                 let next = if let Some(first) = first {
                     Ok(first)
                 } else {
-                    // A checkpoint change or a new table line each publish a fresh view.
+                    // A checkpoint change, a new table line or a newly published scene image each
+                    // publish a fresh view.
                     let ended = tokio::select! {
                         changed = updates.changed() => changed.is_err(),
                         changed = table_lines.changed() => changed.is_err(),
+                        () = scene_art_changed(&mut art) => false,
                     };
                     if ended {
                         return None;
@@ -228,6 +260,7 @@ impl rpc::session_service_server::SessionService for Service {
                             updates
                         },
                         table_lines,
+                        art,
                         service,
                         request,
                         credential,
@@ -238,6 +271,16 @@ impl rpc::session_service_server::SessionService for Service {
         );
         Ok(Response::new(Box::pin(stream)))
     }
+}
+/// Completes when the published scene art changes; a service without living scenes (or whose
+/// channel has closed) never completes.
+async fn scene_art_changed(art: &mut Option<watch::Receiver<u64>>) {
+    if let Some(receiver) = art
+        && receiver.changed().await.is_ok()
+    {
+        return;
+    }
+    std::future::pending::<()>().await
 }
 #[derive(Clone)]
 struct PageState {
@@ -1001,6 +1044,37 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => social::SocialLedger::none(),
     };
+    // Living scenes: server-generated scene art that follows the story's mood, under the
+    // server's one content rating.
+    let rating = startup_configuration::content_rating();
+    let imagery_settings = if interactive {
+        startup_configuration::imagery_settings(
+            startup_configuration::ImageryInputs::from_environment(),
+            &std::env::current_dir()?,
+            rating,
+        )?
+    } else {
+        startup_configuration::ImagerySettings::Off(
+            startup_configuration::ImageryOff::Qualification,
+        )
+    };
+    let living_interval = match &imagery_settings {
+        startup_configuration::ImagerySettings::On(configuration) => configuration.interval,
+        startup_configuration::ImagerySettings::Off(_) => Duration::from_secs(30),
+    };
+    let imagery = imagery::Imagery::start(
+        imagery_settings,
+        generated_adventure
+            .as_ref()
+            .map(|prepared| prepared.directory.as_path()),
+    )?;
+    let living = living_scenes::LivingScenes::start(
+        imagery.clone(),
+        imagery::ReferenceStore::new(std::path::Path::new(&asset_root).join("generated")),
+        social.clone(),
+        rating,
+        living_scenes::Timing::from_interval(living_interval),
+    );
     let tempo = if std::env::args().nth(4).is_some() {
         None
     } else {
@@ -1136,6 +1210,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         voice: voice.clone(),
         npc_voice: Arc::new(npc_reply::NpcVoice::new(storyteller)),
         table_log,
+        living,
     };
     let (incoming_sender, incoming) =
         NativeIncoming::bounded(NonZeroUsize::new(4).ok_or("invalid native incoming bound")?)?;
@@ -1200,6 +1275,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             &std::path::Path::new(&asset_root).join("../splat"),
         )?)
         .merge(voice::router(voice.clone()))
+        .merge(imagery::router(imagery.clone()))
         .merge(speech_input::router(
             speech.clone(),
             speech_input::actor_identity(sender.clone()),
@@ -1272,6 +1348,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if interactive {
         let origin = &settings.allowed_origins[0];
         println!("{}", voice.startup_line());
+        println!("{}", imagery.startup_line());
         println!("{}", speech.startup_line());
         println!("READY display={origin}/gameplay/display player={origin}/gameplay/player");
     }
