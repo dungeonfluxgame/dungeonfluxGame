@@ -1,5 +1,6 @@
 //! Player-owned presentation of the native dialogue ticket and exact confirmation.
 use super::*;
+use crate::speech_capture::Interruption;
 use web_sys::HtmlTextAreaElement;
 
 #[derive(Default)]
@@ -18,7 +19,7 @@ pub(super) struct DialogueRecovery {
     exchange: Option<Exchange>,
     /// What this player just sent while the speaker's reply is still being written.
     awaiting: Option<String>,
-    /// Hold-to-talk speech input for this text box.
+    /// Tap-to-talk speech input for this text box.
     pub(super) talk: super::talk_control::Talk,
     /// The editor's and the context control's listeners for the speech-intent signal.
     intent_listeners: Vec<Closure<dyn FnMut(web_sys::Event)>>,
@@ -109,6 +110,7 @@ impl DialogueRecovery {
     }
 
     pub(super) fn retire_transport(&mut self) {
+        self.talk.interrupt_now(Interruption::ConnectionLost);
         if let Some((_, abort)) = self.active.take() {
             abort.abort();
         }
@@ -122,6 +124,7 @@ impl DialogueRecovery {
     }
 
     pub(super) fn clear_scope(&mut self) {
+        self.talk.interrupt_now(Interruption::SceneChanged);
         self.retire_transport();
         self.confirmation = None;
         self.message =

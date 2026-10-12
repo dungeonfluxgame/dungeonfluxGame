@@ -1,53 +1,61 @@
-/* PLAY-V05 home screen. The server's theme places the title, the join block and the party panel
-   (custom properties in percent of the viewport), sets the location's mood and draws its
-   atmosphere. Without a theme the default lobby rules above apply unchanged. The effects are always
-   on: no rule here checks the device's motion setting. */
+/* PLAY-V11: the home screen is one composed layout, the same for every place. A 12-column grid
+   inside the 5% TV-safe area holds three blocks: the mark and place title at the left (columns 1 to
+   5), the join card at the right (9 to 12) and the party row across the bottom. The server's theme
+   only supplies the place's mood (colours, grade, vignette) and atmosphere; it never places a
+   block. Sizes are in --u, so the same composition holds at 720p, 1080p and 4K. The effects are
+   always on: no rule here checks the device's motion setting. */
 .tv-title-block{display:contents}
 .tv-atmosphere{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1}
-.tv-stage[data-home]{--home-accent:#e8cb94;--home-tint:#0b1623;--home-vignette:.55;--home-brightness:1;--home-contrast:1;--home-saturation:1;--home-glass:.94}
-.tv-stage[data-home] .tv-art,.tv-stage[data-home] .tv-art-previous{filter:brightness(var(--home-brightness)) contrast(var(--home-contrast)) saturate(var(--home-saturation))}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-scrim{background:radial-gradient(ellipse at 50% 46%,rgb(2 4 10/0) 46%,rgb(2 4 10/var(--home-vignette)) 100%),linear-gradient(0deg,#03060ef2 0%,#03060e99 34%,#03060e00 66%)}
-.tv-stage[data-home] .tv-safe{inset:0}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-title-block{display:block;position:absolute;left:var(--home-title-x);top:var(--home-title-y);width:var(--home-title-w);z-index:2}
-/* A soft scrim under the title keeps the gold and the place name legible over lit windows. */
-.tv-stage[data-home][data-tv-mode=lobby] .tv-title-block::before{content:"";position:absolute;inset:calc(var(--u)*-1.6);z-index:-1;pointer-events:none;border-radius:calc(var(--u)*2);background:rgb(3 6 14/.66);filter:blur(calc(var(--u)*1.1))}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-wordmark{height:calc(var(--u)*6.5)}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-wordmark-text{font-size:calc(var(--u)*4.5)}
-.tv-stage[data-home] .tv-headline{max-width:100%;margin-top:calc(var(--u)*.6)}
-.tv-stage[data-home] .tv-lede{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-tagline{display:none}
-/* Smaller panes (the desktop app's) need smaller names and labels than the TV's floors allow. */
-.tv-stage[data-home]{--fs-name:max(16px,calc(var(--u)*1.7));--fs-label:max(14px,calc(var(--u)*1.3))}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-place{display:block;margin-top:calc(var(--u)*.5);color:color-mix(in srgb,var(--home-accent) 55%,#f7efdc)}
-.tv-stage[data-home] .tv-title{color:#f3d59d}
-.tv-stage[data-home] .tv-label{color:var(--home-accent)}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-lobby-row{display:contents}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-join{position:absolute;left:var(--home-code-x);top:var(--home-code-y);width:var(--home-code-w);height:var(--home-code-h);z-index:2;padding:calc(var(--u)*.5) calc(var(--u)*.8);gap:calc(var(--u)*.3)}
-.tv-stage[data-home][data-tv-mode=lobby] .tv-roster{position:absolute;left:var(--home-party-x);top:var(--home-party-y);width:var(--home-party-w);height:var(--home-party-h);z-index:2}
-/* The join row (QR beside the room code) and its sizes come from live_join.css; the home layer
-   only gives the join block its box, so the row takes the space the block leaves for it. */
-.tv-stage[data-home][data-tv-mode=lobby] .tv-join-row{flex:1 1 auto;min-height:0}
-/* Panels take the place: an accent edge and glow, and glass as dark as the painting's light needs. */
-.tv-stage[data-home] .tv-panel{border-color:color-mix(in srgb,var(--home-accent) 60%,transparent);background:linear-gradient(160deg,color-mix(in srgb,var(--home-tint) calc(var(--home-glass)*100%),#03060e),color-mix(in srgb,var(--home-tint) calc((var(--home-glass) - .08)*100%),#03060e));box-shadow:inset 0 0 calc(var(--u)*2.4) color-mix(in srgb,var(--home-accent) 22%,transparent),0 calc(var(--u)*1) calc(var(--u)*3) #000a}
-.tv-stage[data-home] .tv-roster[data-count="6"] .tv-party{grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u)*.7)}
-.tv-stage[data-home] .tv-roster[data-count="6"] .tv-card{gap:calc(var(--u)*.6);padding:calc(var(--u)*.3) calc(var(--u)*.6)}
-.tv-stage[data-home] .tv-roster[data-count="6"] .tv-portrait{width:calc(var(--u)*4.6)}
-.tv-stage[data-home] .tv-roster[data-count="6"] .tv-member-name{font-size:calc(var(--u)*1.5)}
-.tv-stage[data-home] .tv-roster[data-count="6"] .tv-member-status{font-size:calc(var(--u)*1.1)}
-.tv-stage[data-home] .tv-roster[data-count="6"] .tv-member-role{display:none}
+.tv-stage{--home-accent:#e8cb94;--home-tint:#0b1623;--home-vignette:.55;--home-brightness:1;--home-contrast:1;--home-saturation:1;--home-glass:.9}
+.tv-stage[data-tv-mode=lobby] .tv-art,.tv-stage[data-tv-mode=lobby] .tv-art-previous{filter:brightness(var(--home-brightness)) contrast(var(--home-contrast)) saturate(var(--home-saturation))}
+/* Soft scrims, not boxes: the vignette, a left wash behind the title, a lift under the party row. */
+.tv-stage[data-tv-mode=lobby] .tv-scrim{background:radial-gradient(ellipse at 50% 46%,rgb(2 4 10/0) 46%,rgb(2 4 10/var(--home-vignette)) 100%),linear-gradient(90deg,rgb(3 6 14/.74) 0%,rgb(3 6 14/.46) 26%,rgb(3 6 14/0) 46%),linear-gradient(0deg,rgb(3 6 14/.9) 0%,rgb(3 6 14/.62) 16%,rgb(3 6 14/0) 38%),linear-gradient(180deg,rgb(3 6 14/.45) 0%,rgb(3 6 14/0) 14%)}
+.tv-stage[data-tv-mode=lobby]{--gap:calc(var(--u)*1.6);--fs-name:max(13px,calc(var(--u)*1.7));--fs-label:max(11px,calc(var(--u)*1.2))}
+.tv-stage[data-tv-mode=lobby] .tv-safe{inset:5vh 5vw;z-index:2;grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(0,1fr) auto;column-gap:var(--gap);row-gap:calc(var(--u)*2)}
+.tv-stage[data-tv-mode=lobby] .tv-label{font-size:var(--fs-label);color:var(--home-accent)}
+.tv-stage[data-tv-mode=lobby] .tv-lobby-row{display:contents}
 
-/* The atmosphere is masked out where the three blocks are, so no effect crosses a block's text. The
-   masks are the blocks' own rectangles from the server's theme, in viewport lengths. */
-.tv-stage[data-home][data-tv-mode=lobby] .tv-atmosphere{
-  -webkit-mask-image:linear-gradient(#000,#000),linear-gradient(#000,#000),linear-gradient(#000,#000),linear-gradient(#000,#000);
-  mask-image:linear-gradient(#000,#000),linear-gradient(#000,#000),linear-gradient(#000,#000),linear-gradient(#000,#000);
-  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
-  -webkit-mask-size:100% 100%,calc(var(--home-title-wp)*1vw/10) calc(var(--home-title-hp)*1vh/10),calc(var(--home-code-wp)*1vw/10) calc(var(--home-code-hp)*1vh/10),calc(var(--home-party-wp)*1vw/10) calc(var(--home-party-hp)*1vh/10);
-  mask-size:100% 100%,calc(var(--home-title-wp)*1vw/10) calc(var(--home-title-hp)*1vh/10),calc(var(--home-code-wp)*1vw/10) calc(var(--home-code-hp)*1vh/10),calc(var(--home-party-wp)*1vw/10) calc(var(--home-party-hp)*1vh/10);
-  -webkit-mask-position:0 0,calc(var(--home-title-xp)*1vw/10) calc(var(--home-title-yp)*1vh/10),calc(var(--home-code-xp)*1vw/10) calc(var(--home-code-yp)*1vh/10),calc(var(--home-party-xp)*1vw/10) calc(var(--home-party-yp)*1vh/10);
-  mask-position:0 0,calc(var(--home-title-xp)*1vw/10) calc(var(--home-title-yp)*1vh/10),calc(var(--home-code-xp)*1vw/10) calc(var(--home-code-yp)*1vh/10),calc(var(--home-party-xp)*1vw/10) calc(var(--home-party-yp)*1vh/10);
-  -webkit-mask-composite:source-over,xor,xor,xor;mask-composite:add,exclude,exclude,exclude;
-}
+/* Left column: the mark, then the place. The title may take three lines and the mood line wraps
+   whole; nothing here clamps or truncates. */
+.tv-stage[data-tv-mode=lobby] .tv-title-block{display:block;grid-column:1/6;grid-row:1;align-self:start;animation:df-home-in 1.4s ease .1s backwards}
+.tv-stage[data-tv-mode=lobby] .tv-top{margin:0}
+.tv-stage[data-tv-mode=lobby] .tv-wordmark{height:calc(var(--u)*7)}
+.tv-stage[data-tv-mode=lobby] .tv-wordmark-text{font-size:calc(var(--u)*5)}
+.tv-stage[data-tv-mode=lobby] .tv-headline{max-width:none;margin-top:calc(var(--u)*1.4)}
+.tv-stage[data-tv-mode=lobby] .tv-title{font-size:calc(var(--u)*4.4);line-height:1.06;color:#f3d59d;text-wrap:balance}
+.tv-stage[data-tv-mode=lobby] .tv-divider{height:calc(var(--u)*1.6);margin:calc(var(--u)*.8) 0;max-width:calc(var(--u)*24)}
+.tv-stage[data-tv-mode=lobby] .tv-place{display:block;margin:0 0 calc(var(--u)*.5);font-size:var(--fs-label);line-height:1.35;color:color-mix(in srgb,var(--home-accent) 62%,#f7efdc)}
+.tv-stage[data-tv-mode=lobby] .tv-lede{max-width:none;font-size:calc(var(--u)*1.85);line-height:1.3;text-wrap:balance}
+
+/* Right column: one glass card. Its contents are sized from the card's own width (container
+   units), so the QR, the room code and the padding keep their proportions at any size. */
+.tv-stage[data-tv-mode=lobby] .tv-join{grid-column:9/13;grid-row:1;align-self:start;display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*1.1);padding:calc(var(--u)*1.7);text-align:center;border:1px solid color-mix(in srgb,var(--home-accent) 45%,transparent);border-radius:calc(var(--u)*.7);background:linear-gradient(160deg,color-mix(in srgb,var(--home-tint) calc(var(--home-glass)*75%),transparent),color-mix(in srgb,var(--home-tint) calc(var(--home-glass)*60%),transparent));-webkit-backdrop-filter:blur(calc(var(--u)*.8));backdrop-filter:blur(calc(var(--u)*.8));box-shadow:0 calc(var(--u)*1) calc(var(--u)*3) #0009;animation:df-home-in 1.4s ease .45s backwards}
+.tv-stage[data-tv-mode=lobby] .tv-join-row{flex-direction:column;gap:calc(var(--u)*1.1);width:100%}
+.tv-stage[data-tv-mode=lobby] .tv-qr{padding:calc(var(--u)*.6);border-radius:calc(var(--u)*.4)}
+.tv-stage[data-tv-mode=lobby] .tv-qr-image{width:calc(var(--u)*12.4);height:calc(var(--u)*12.4)}
+.tv-stage[data-tv-mode=lobby] .tv-join-row .tv-code-box{width:100%;margin:0;padding:calc(var(--u)*1) 0 calc(var(--u)*.5);border:0;border-top:1px solid color-mix(in srgb,var(--home-accent) 38%,transparent);background:none}
+.tv-stage[data-tv-mode=lobby] .tv-code{margin:0;padding:0;font-size:min(calc(var(--u)*6),calc(90cqi / var(--chars,6) / .9))}
+.tv-stage[data-tv-mode=lobby] .tv-hint{font-size:max(11px,calc(var(--u)*1.1))}
+
+/* Bottom: the party row, as wide as the page grid. Heroes fill seats from the left; open seats are
+   quiet outlines; five or six heroes make the seats narrower, never a second row. */
+.tv-stage[data-tv-mode=lobby] .tv-roster{position:relative;grid-column:1/-1;grid-row:2;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;row-gap:calc(var(--u)*.8);padding:0;border:0;border-image:none;background:none;box-shadow:none}
+.tv-stage[data-tv-mode=lobby] .tv-roster-slot{grid-column:1/-1;display:block;container-type:inline-size;animation:df-home-in 1.4s ease .8s backwards}
+.tv-stage[data-tv-mode=lobby] .tv-party{--seats:4;--seat:calc((100cqi - var(--gap)*(var(--seats) - 1)) / var(--seats));grid-template-columns:repeat(var(--seats),minmax(0,1fr));gap:var(--gap)}
+.tv-stage[data-tv-mode=lobby] .tv-roster[data-count="5"] .tv-party{--seats:5}
+.tv-stage[data-tv-mode=lobby] .tv-roster[data-count="6"] .tv-party{--seats:6}
+.tv-stage[data-tv-mode=lobby] .tv-card,.tv-stage[data-tv-mode=lobby] .tv-roster .tv-card{grid-template-columns:auto minmax(0,1fr);gap:calc(var(--seat)*.06);align-items:center;padding:calc(var(--seat)*.05) calc(var(--seat)*.07);border:1px solid color-mix(in srgb,var(--home-accent) 45%,transparent);border-image:none;border-radius:calc(var(--u)*.6);background:linear-gradient(160deg,color-mix(in srgb,var(--home-tint) calc(var(--home-glass)*75%),transparent),color-mix(in srgb,var(--home-tint) calc(var(--home-glass)*60%),transparent));-webkit-backdrop-filter:blur(calc(var(--u)*.8));backdrop-filter:blur(calc(var(--u)*.8));box-shadow:0 calc(var(--u)*.6) calc(var(--u)*2) #0008}
+.tv-stage[data-tv-mode=lobby] .tv-card[data-empty]{border-style:dashed;border-color:color-mix(in srgb,var(--home-accent) 30%,transparent);background:rgb(3 6 14/.28);box-shadow:none}
+.tv-stage[data-tv-mode=lobby] .tv-card[data-empty] .tv-member-status{display:none}
+.tv-stage[data-tv-mode=lobby] .tv-roster .tv-portrait,.tv-stage[data-tv-mode=lobby] .tv-portrait{width:calc(var(--seat)*.27);border-radius:12%}
+.tv-stage[data-tv-mode=lobby] .tv-member-name{font-size:clamp(calc(var(--u)*1.1),calc(var(--seat)*.08),calc(var(--u)*1.8));line-height:1.2}
+.tv-stage[data-tv-mode=lobby] .tv-member-role,.tv-stage[data-tv-mode=lobby] .tv-member-status{font-size:clamp(calc(var(--u)*.9),calc(var(--seat)*.058),calc(var(--u)*1.25))}
+.tv-stage[data-tv-mode=lobby] .tv-card[data-empty] .tv-member-name{color:#c9bb9b;font-size:clamp(calc(var(--u)*1),calc(var(--seat)*.07),calc(var(--u)*1.4))}
+.tv-stage[data-tv-mode=lobby] .tv-gathered{font-size:var(--fs-label)}
+@keyframes df-home-in{from{opacity:0;transform:translateY(calc(var(--u)*1))}to{opacity:1;transform:none}}
+
+/* The sound control is small and sits in the top right corner, above the join card. */
+body:has(.tv-stage[data-tv-mode=lobby]) .tv-voice-control{right:5vw!important;top:calc(min(1vw,1.7778vh)*.3)!important;font-size:max(12px,calc(min(1vw,1.7778vh)*.95))!important;padding:.3em .8em!important;min-height:0!important}
 
 /* The nine effects. Each is one slow, light layer; none is a sprite or a script. */
 .tv-fx{position:absolute;inset:0;display:block;pointer-events:none;will-change:transform,opacity}
@@ -70,8 +78,6 @@
 .tv-fx-cloud-shadow{background:linear-gradient(100deg,rgb(3 6 14/0) 0%,rgb(3 6 14/.38) 30%,rgb(3 6 14/0) 60%);background-size:160% 100%;animation:tv-fx-cloud 36s linear infinite}
 @keyframes tv-fx-cloud{from{background-position:0% 0}to{background-position:100% 0}}
 
-/* The sound control is fixed to the top right, where a title on the right would sit. In a small
-   pane it becomes a small icon in the corner, clear of the logo; the TV keeps its label. */
 /* PLAY-V10: the looping video over the still. Two stacked clips cross-fade; the still beneath stays
    visible until a clip is on, and nothing here depends on the device's motion setting. */
 .tv-loop{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0}
@@ -79,7 +85,7 @@
 .tv-loop-clip[data-on]{opacity:1}
 .tv-loop-clip[data-first]{transition-duration:900ms}
 
+/* In a small pane the sound control is only its icon; the TV keeps its label. */
 @media (max-width: 1000px) {
-  body:has(.tv-stage[data-home][data-tv-mode=lobby]) .tv-voice-control{font-size:14px!important;min-height:0!important;padding:.4em!important;right:.8vw!important;top:.8vh!important}
-  body:has(.tv-stage[data-home][data-tv-mode=lobby]) .tv-voice-label{display:none}
+  body:has(.tv-stage[data-tv-mode=lobby]) .tv-voice-label{display:none}
 }

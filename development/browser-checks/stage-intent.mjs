@@ -1,5 +1,5 @@
 // PLAY-N04 acceptance (6): the speech-intent bubble. Typing on phone A shows the typing loader on hero 1 of the
-// display within about a second; hold-to-talk on phone B (fake microphone) shows the speaking variant on hero 2;
+// display within about a second; tap-to-talk on phone B (fake microphone) shows the speaking variant on hero 2;
 // both at once each have their own loader; closing a tab clears its loader within the expiry; "About the game"
 // and "Plan only" show nothing; and none of it commits anything or moves the game revision (checked in
 // PostgreSQL). usage: node stage-intent.mjs [frames-dir]
@@ -18,7 +18,7 @@ const sql = (text) => execFileSync(path.join(pgBin, 'psql'), ['-h', '127.0.0.1',
 const revision = () => sql('SELECT recovery_epoch, in_epoch_sequence, owner_fence, (SELECT count(*) FROM df_game.operations), (SELECT count(*) FROM df_game.checkpoints), (SELECT count(*) FROM df_game.facts) FROM df_game.sessions');
 
 const browser = await launchGpu(false, ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']);
-// A fake speech service and a fake microphone (see the launch flags): the control appears and a hold records.
+// A fake speech service and a fake microphone (see the launch flags): the control appears and a tap records.
 const phoneSetup = async (page) => {
   await page.route('**/gameplay/speech/status', (route) => route.fulfill({ status: 200, headers: { 'x-df-speech': 'available' }, body: '' }));
   await page.route('**/gameplay/speech', (route) => route.fulfill({ status: 200, headers: { 'x-df-speech': 'nothing_heard' }, body: '' }));
@@ -57,12 +57,12 @@ check(shownIn !== null && shownIn <= DISPLAY_BOUND_MS, `typing on phone A shows 
 await typing;
 await tv.screenshot({ path: `${out}-1-typing.png` });
 
-// ---- hold to talk on phone B while A is still typing
+// ---- tap to talk on phone B while A is still typing
 const hold = pb.locator('[data-talk=hold]');
 await hold.waitFor({ state: 'visible', timeout: 15000 });
-// A real key held on the focused control (Space), the control's keyboard form of hold-to-talk.
+// A real Space tap on the focused control, the control's keyboard form of tap-to-talk: the first tap starts.
 await hold.focus();
-await pb.keyboard.down(' ');
+await pb.keyboard.press(' ');
 await settle(600);
 s.note(`debug env: ${JSON.stringify(await pb.evaluate(() => ({ secure: window.isSecureContext, recorder: typeof MediaRecorder, devices: Boolean(navigator.mediaDevices), status: document.querySelector('.talk-status')?.textContent })))}`);
 s.note(`debug: talk state ${await pb.locator('.talk-row').getAttribute('data-state')}; presence A ${await pa.locator('#player').getAttribute('data-presence')} B ${await pb.locator('#player').getAttribute('data-presence')}; tv ${JSON.stringify((await states(tv)).intents)}`);
@@ -71,9 +71,10 @@ check(bothIn !== null, `two players composing at once each show their own loader
 await tv.screenshot({ path: `${out}-2-both.png` });
 const mid = await states(tv);
 s.note(`both: ${JSON.stringify(mid.intents)}`);
-await pb.keyboard.up(' ');
+// The second tap stops talking.
+await pb.keyboard.press(' ');
 const clearedB = await waitIntent((list) => !list.some((i) => i.startsWith('hero-2')), 3000);
-check(clearedB !== null, `releasing hold-to-talk clears the speaking loader (${clearedB} ms)`);
+check(clearedB !== null, `a second tap stops talking and clears the speaking loader (${clearedB} ms)`);
 
 // ---- game state untouched
 const after = revision();

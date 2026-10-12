@@ -118,6 +118,29 @@ pub fn project_body(pose: &CameraPose, aspect: f32, body: &Body) -> Option<(f32,
     View::new(pose, aspect).project(body)
 }
 
+/// Where a world point lands on the screen as `(x, y)` shares (y down), or `None` when it is behind
+/// the camera.
+pub fn project_point(pose: &CameraPose, aspect: f32, point: Vec3) -> Option<(f32, f32)> {
+    let (x, y, _) = View::new(pose, aspect).matrix.project(point)?;
+    Some((x * 0.5 + 0.5, 0.5 - y * 0.5))
+}
+
+/// How many pairs of bodies hide more than `share` of the smaller one from `pose`.
+pub fn hidden_pairs(pose: &CameraPose, aspect: f32, bodies: &[Body], share: f32) -> usize {
+    let view = View::new(pose, aspect);
+    let boxes: Vec<_> = bodies
+        .iter()
+        .filter_map(|body| view.project(body))
+        .collect();
+    let mut count = 0;
+    for (index, first) in boxes.iter().enumerate() {
+        for second in &boxes[index + 1..] {
+            count += usize::from(covered_share(*first, *second) > share);
+        }
+    }
+    count
+}
+
 /// Whether the body's box is inside the safe area.
 pub fn in_safe_area(pose: &CameraPose, aspect: f32, body: &Body) -> bool {
     View::new(pose, aspect).contains(body)

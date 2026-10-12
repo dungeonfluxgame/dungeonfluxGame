@@ -823,7 +823,7 @@ impl<D: Clone> Conductor<D> {
     }
 
     /// Takes the speech intents of the view being shown: a loader bubble on each hero who is
-    /// typing or holding to talk, kept while the table keeps affirming it, replaced by that
+    /// typing or talking, kept while the table keeps affirming it, replaced by that
     /// hero's line, closed through the normal exit when the hero stops, and gone after
     /// [`INTENT_EXPIRY_MS`] without a refresh. A loader is not a line: it never delays speech.
     pub(crate) fn on_intents(&mut self, now_ms: u64, marks: Vec<IntentMark<D>>) -> Vec<Command<D>> {

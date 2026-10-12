@@ -29,6 +29,9 @@ struct U {
     depth: vec4<f32>,     // projection m10, m14, depth bias metres, resolve alpha threshold
     sky: vec4<f32>,       // sky colour behind the scan (rgb)
     clip: vec4<f32>,      // cut height, cut radius squared, centre x, centre z (radius 0: no cut)
+    // Figures on the field, two vectors each: the screen box (left, bottom, right, top in device
+    // coordinates), then view depth in metres and 1 when the slot is used.
+    figs: array<vec4<f32>, 32>,
 }
 "#;
 
@@ -149,6 +152,28 @@ fn project_splat(i: u32, out: ptr<function, array<u32, 8>>, key: ptr<function, u
     col = max(col * lit, vec3<f32>(0.0));
 
     let depth = -vc.z;
+    // Which splats may hide a figure (see `figure_clear.rs`): one in front of a figure by 0.35 m
+    // that is centred over its box hides it; any other splat whose footprint touches a figure's box
+    // is beside it or behind it, and is drawn without adding to the depth the figure is tested
+    // against. A negative falloff marks it for the draw pass.
+    var touching = false;
+    var between = false;
+    let reach = max(e1, e2) * 2.0 / u.viewport.xy;
+    for (var f = 0u; f < 16u; f = f + 1u) {
+        let spot = u.figs[f * 2u + 1u];
+        if (spot.y < 0.5) {
+            continue;
+        }
+        let rect = u.figs[f * 2u];
+        let inside = ndc.x >= rect.x && ndc.x <= rect.z && ndc.y >= rect.y && ndc.y <= rect.w;
+        if (inside && depth < spot.x - 0.35) {
+            between = true;
+        }
+        if (ndc.x + reach.x > rect.x && ndc.x - reach.x < rect.z && ndc.y + reach.y > rect.y && ndc.y - reach.y < rect.w) {
+            touching = true;
+        }
+    }
+    let exempt = touching && !between;
     (*out)[0] = bitcast<u32>(ndc.x);
     (*out)[1] = bitcast<u32>(ndc.y);
     (*out)[2] = bitcast<u32>(depth);
@@ -156,7 +181,7 @@ fn project_splat(i: u32, out: ptr<function, array<u32, 8>>, key: ptr<function, u
     (*out)[4] = pack2x16float(v2);
     (*out)[5] = pack2x16float(col.rg);
     (*out)[6] = pack2x16float(vec2<f32>(col.b, opacity * aa));
-    (*out)[7] = bitcast<u32>(0.5 * k * k);
+    (*out)[7] = bitcast<u32>(select(0.5, -0.5, exempt) * k * k);
     // Far splats get small keys, so ascending key order is back to front. The square root gives
     // the finest steps near the camera (PlayCanvas weights its sort bins the same way).
     let t = clamp(depth / u.eye.w, 0.0, 1.0);
@@ -284,8 +309,9 @@ fn fs(in: VOut) -> FOut {
     }
     // Falloff that reaches exactly zero at the quad's edge (PlayCanvas normExp, with this splat's
     // own cutoff in place of their fixed one).
-    let edge = exp(-in.falloff);
-    let alpha = (exp(-in.falloff * a) - edge) / (1.0 - edge) * in.colour.a;
+    let falloff = abs(in.falloff);
+    let edge = exp(-falloff);
+    let alpha = (exp(-falloff * a) - edge) / (1.0 - edge) * in.colour.a;
     if (alpha < 0.0039) {
         discard;
     }
@@ -296,7 +322,7 @@ fn fs(in: VOut) -> FOut {
     // it): without it the accumulation would add up instead of compositing front over back.
     // Only the solid core of a splat counts toward depth: its edges and the faint haze of floaters
     // are far from the depth the splat's centre gives, and would put surfaces in mid air.
-    let solid = smoothstep(0.25, 0.7, alpha);
+    let solid = select(smoothstep(0.25, 0.7, alpha), 0.0, in.falloff < 0.0);
     out.depth = vec4<f32>(in.depth * solid, solid, 0.0, solid);
     return out;
 }

@@ -35,6 +35,7 @@ fn input<'a>(
         scene_key: key,
         place_id: "place-test",
         place_kind: kind,
+        exterior: false,
         title: "A Test Scene",
         story_text: text,
         speaker: speaker.map(|sprite| SpeakerInput {
@@ -95,6 +96,56 @@ fn the_same_scene_always_gets_the_same_spec_and_other_scenes_can_differ() {
         seen.len() > 3,
         "staging varies between scenes: {}",
         seen.len()
+    );
+}
+
+#[test]
+fn every_plate_of_a_place_keeps_its_camera_sides_props_light_and_hour_and_no_hero_holds_another_weapon()
+ {
+    let heroes = [1, 2];
+    let reference = direct(&ShotInput {
+        title: "First",
+        ..input(
+            "lamp-room",
+            SceneKey::Opening,
+            Some(SPEAKER_STEMS[1]),
+            &heroes,
+            "x",
+        )
+    })
+    .unwrap();
+    for title in ["Second", "Third", "Fourth", "Fifth", "Sixth"] {
+        let spec = direct(&ShotInput {
+            title,
+            ..input(
+                "lamp-room",
+                SceneKey::Opening,
+                Some(SPEAKER_STEMS[1]),
+                &heroes,
+                "x",
+            )
+        })
+        .unwrap();
+        assert_eq!(spec.camera, reference.camera, "{title}");
+        assert_eq!(spec.time_of_day, reference.time_of_day, "{title}");
+        assert_eq!(spec.lights, reference.lights, "{title}");
+        assert_eq!(spec.extras, reference.extras, "{title}");
+        assert_eq!(spec.dressing, reference.dressing, "{title}");
+        let sides: Vec<(u8, HeroSlot)> = spec.heroes.iter().map(|h| (h.art, h.slot)).collect();
+        let before: Vec<(u8, HeroSlot)> =
+            reference.heroes.iter().map(|h| (h.art, h.slot)).collect();
+        assert_eq!(sides, before, "the heroes keep their sides: {title}");
+        for hero in &spec.heroes {
+            assert!(
+                !handles_a_weapon(hero.activity),
+                "{title}: {}",
+                hero.activity
+            );
+        }
+    }
+    assert!(
+        !reference.heroes[0].slot.is_right() && reference.heroes[1].slot.is_right(),
+        "the first hero stands on the left and the second on the right"
     );
 }
 
@@ -293,6 +344,7 @@ fn every_scene_of_every_saved_adventure_is_staged_validly_for_every_party() {
                     scene_key: key,
                     place_id: scene["setting"]["place_id"].as_str().unwrap(),
                     place_kind: kind,
+                    exterior: scene["setting"]["exterior"].as_bool().unwrap_or(false),
                     title: scene["title"].as_str().unwrap(),
                     story_text: &story,
                     speaker: speaker.map(|member| SpeakerInput {

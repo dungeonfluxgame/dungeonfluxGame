@@ -58,7 +58,7 @@ enum Detail {
     /// The title card of the story's beginning or the closing card of a fight.
     Card(Box<Card>),
     Heal,
-    /// A hero typing or holding to talk: a loader on that hero.
+    /// A hero typing or talking: a loader on that hero.
     Intent {
         kind: IntentKind,
         hero: String,
@@ -262,7 +262,7 @@ fn roll_detail(
     })
 }
 
-/// The heroes the table says are typing or holding to talk (an ephemeral signal of the phones).
+/// The heroes the table says are typing or talking (an ephemeral signal of the phones).
 fn intent_marks(journey: &rpc::JourneyView) -> Vec<IntentMark<Detail>> {
     journey
         .composing
@@ -1105,6 +1105,11 @@ fn set_scene_state(client: &Rc<RefCell<Client>>, state: SceneState) -> Result<()
             if state == SceneState::Entering {
                 stage.clear_narration()?;
             }
+            // PLAY-V12: every line of the scene has been told, so whatever the narration did, the
+            // plate may be cut to.
+            if state == SceneState::AwaitingChoice {
+                stage.narration_over()?;
+            }
             stage.root().set_attribute("data-scene-state", state.name())
         }
         None => Ok(()),
@@ -1140,6 +1145,7 @@ fn line_command(
         match slot {
             None => stage.narrator_line(id, state, &line.text)?,
             Some(position) => {
+                stage.lower_third(&line.speaker, &line.text, state)?;
                 let kind = match (line.kind, line.role) {
                     (TableKind::Action, _) => BubbleKind::Action,
                     (TableKind::Speech, TableRole::Hero(_)) => BubbleKind::Typed,
