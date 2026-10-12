@@ -199,9 +199,6 @@
 .tv-bigcard-role{font:italic var(--fs-label)/1.2 var(--serif);color:#c9bb9b}
 .tv-bigcard[data-kind=defeat] .tv-bigcard-kicker{color:#d9a9a0}
 .tv-bigcard :is([hidden]){display:none}
-@media (prefers-reduced-motion:reduce){
-.tv-bigcard{transition:opacity .3s ease,visibility 0s}
-}
 
 /* ---------- the rules note under the narration of the phone and of the combat screens ---------- */
 .rules-note{display:block;margin:10px 0 0;max-width:580px;font:italic 13px/1.5 var(--serif,Georgia,serif);color:#a9b3bd}

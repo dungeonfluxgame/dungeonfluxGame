@@ -48,5 +48,4 @@ pub(crate) const STYLES: &str = r#"
 .df-character{--gold:#e8cb94;font-family:var(--serif,Georgia,serif);overflow:clip;padding-bottom:calc(150px + env(safe-area-inset-bottom));background:#05090f}
 .df-character:before{background:linear-gradient(180deg,#05090f66,#05090fb3 260px,#05090f 420px)}
 .df-character:before{background:linear-gradient(180deg,#14131070,#14131040 120px,#141310dd 320px,#141310 500px)}}
-@media(prefers-reduced-motion:reduce){.df-character *,.df-character *:before,.df-character *:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 "#;

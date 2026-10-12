@@ -64,6 +64,4 @@ pub use status::{
 pub use theme::{ColorGrade, Theme};
 
 #[cfg(target_arch = "wasm32")]
-pub use host::{
-    Availability, BattleStage, StageOptions, UnavailableReason, prefers_reduced_motion,
-};
+pub use host::{Availability, BattleStage, StageOptions, UnavailableReason};

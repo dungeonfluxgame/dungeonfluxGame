@@ -41,5 +41,4 @@ pub(crate) const STYLES: &str = r#"
 .df-campaign[data-join-phase] .narration>div{min-width:0}.df-campaign[data-join-phase] .narration blockquote{overflow-wrap:anywhere}
 @media(max-width:1050px){.df-campaign[data-join-phase] .stage{grid-template-columns:minmax(0,1fr) 360px;gap:28px}.df-campaign[data-join-phase] .join-panel{padding:26px}.df-campaign[data-join-phase] h1{font-size:66px}}
 @media(max-width:760px){.df-campaign[data-join-phase] .stage{display:flex;flex-direction:column;align-items:stretch;width:90vw;padding:76px 0 32px;min-height:0;gap:35px}.df-campaign[data-join-phase] h1{font-size:clamp(44px,11vw,74px);letter-spacing:-1px}.df-campaign[data-join-phase] .description{font-size:17px}.df-campaign[data-join-phase] .join-panel{padding:27px 22px}.df-campaign[data-join-phase] .lower{width:90vw}.df-campaign[data-join-phase] .scene-art{height:780px}.df-campaign[data-join-phase] .join-heading{font-size:29px}.df-campaign[data-join-phase] .topbar{gap:14px}}
-@media(prefers-reduced-motion:reduce){.df-campaign[data-join-phase] *{scroll-behavior:auto}}
 "#;

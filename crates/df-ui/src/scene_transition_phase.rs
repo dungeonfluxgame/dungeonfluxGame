@@ -111,7 +111,6 @@ mod browser {
 .df-scene-transition .transition-continue:hover:enabled{background:#edcea0}.df-scene-transition .transition-continue:disabled{background:#27231deb;color:var(--df-secondary);border-color:#bda16855;cursor:default;box-shadow:none}.df-scene-transition .transition-continue[aria-busy=true]{border-style:dashed}.df-scene-transition :focus-visible{outline:3px solid var(--df-story);outline-offset:5px}
 @container(max-width:600px){.df-scene-transition .transition-stage{min-height:min(92svh,820px);padding:260px 24px 32px;gap:14px}.df-scene-transition .transition-art{object-position:58% center}.df-scene-transition .transition-title{font-size:38px;letter-spacing:-.7px}.df-scene-transition .transition-location{font-size:10px;letter-spacing:1.6px}.df-scene-transition .transition-narration{font-size:17px;line-height:1.6}.df-scene-transition .transition-continue{width:100%;margin-top:10px}.df-scene-transition .transition-stage{background:linear-gradient(180deg,transparent 20%,#14131026 40%,#141310d9 100%)}}
 @container(max-width:360px){.df-scene-transition .transition-stage{padding:210px 18px 26px}.df-scene-transition .transition-title{font-size:33px}.df-scene-transition .transition-narration{font-size:16px}}
-@media(prefers-reduced-motion:reduce){.df-scene-transition *{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 "#;
 
     #[derive(Debug)]
