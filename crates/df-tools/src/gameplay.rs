@@ -19,6 +19,9 @@ mod dialogue;
 #[cfg(test)]
 mod dialogue_tests;
 mod health_faces;
+mod home_theme;
+#[cfg(test)]
+mod home_theme_tests;
 mod imagery;
 mod inn_qualification;
 mod join_link;
@@ -512,6 +515,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&web_root),
         std::path::Path::new(&asset_root),
     )?;
+    home_theme::install(std::path::Path::new(&asset_root))?;
     let splat_directory = startup_configuration::splat_directory(
         std::env::var("DF_GAMEPLAY_SPLAT_DIR"),
         &std::path::Path::new(&asset_root).join("../splat"),

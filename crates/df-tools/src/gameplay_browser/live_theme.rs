@@ -18,6 +18,8 @@ const MOTION: &str = include_str!("live_fx.css");
 const STAGE: &str = include_str!("live_stage.css");
 // PLAY-L01: the previous cut-out fading out above a character's new expression.
 const IMAGERY: &str = include_str!("live_imagery.css");
+// PLAY-V05: the home screen's themed lobby, placed and moodied from the server's view.
+const HOME: &str = include_str!("live_home.css");
 // PLAY-H01: tier colours, bar notches and labels, the chip, the phone vignette.
 const HEALTH: &str = include_str!("live_health.css");
 
@@ -29,7 +31,7 @@ pub(super) fn install(document: &Document) -> Result<(), JsValue> {
     let style = document.create_element("style")?;
     style.set_attribute("data-live-theme", "")?;
     style.set_text_content(Some(&format!(
-        "{LEGACY}\n{PLAYER}\n{TV}\n{JOIN}\n{MOTION}\n{STAGE}\n{IMAGERY}\n{HEALTH}"
+        "{LEGACY}\n{PLAYER}\n{TV}\n{JOIN}\n{MOTION}\n{STAGE}\n{IMAGERY}\n{HEALTH}\n{HOME}"
     )));
     let host = match document.query_selector("head")? {
         Some(head) => head,
