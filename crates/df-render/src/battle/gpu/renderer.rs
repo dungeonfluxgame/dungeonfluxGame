@@ -172,7 +172,8 @@ pub struct Renderer {
     fast_frames: u32,
     floor_frames: u32,
     ladder_frozen: bool,
-    /// TEMPORARY profiling switches: 1 no resolve, 2 no splat draw, 4 no post, 8 no accum.
+    /// Diagnostic switches for benchmarks and evidence (preview `&dbg=N`): 1 the scan writes no
+    /// depth (shows what occlusion hides), 2 skip the splat draw, 4 skip the post pass.
     pub debug_switches: u32,
     spot: (f32, f32, f32),
     last_clock_s: f32,
@@ -1173,7 +1174,7 @@ impl Renderer {
             post.draw(3, 1, 0, 0);
         }
         post.end();
-        self.submit_frame(compute_encoder, encoder, drawing, measuring);
+        self.submit_frame(compute_encoder, encoder, measuring);
         self.stats.scale = self.quality.render_scale;
         self.stats.budget = self.quality.splat_budget;
         self.stats.min_contribution = self.quality.min_contribution;
@@ -1356,7 +1357,6 @@ impl Renderer {
         &mut self,
         compute: super::sys::GpuCommandEncoder,
         render: super::sys::GpuCommandEncoder,
-        drawing: bool,
         measuring: bool,
     ) {
         let (Some(timing), true) = (&self.timing, measuring) else {
@@ -1372,7 +1372,6 @@ impl Renderer {
         }
         render.resolve_query_set(&timing.set, 0, 8, &timing.resolve, 0.0);
         render.copy_buffer_to_buffer(&timing.resolve, 0.0, &timing.read, 0.0, 64.0);
-        let _ = drawing;
         self.core
             .queue
             .submit(&array([compute.finish().into(), render.finish().into()]));

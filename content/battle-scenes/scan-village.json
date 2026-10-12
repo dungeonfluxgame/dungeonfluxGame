@@ -240,12 +240,12 @@
     },
     "impact": {
       "target": [
-        0.0,
+        0,
         1.0,
-        0.0
+        0
       ],
-      "distance": 7.0,
-      "yaw_deg": -48,
+      "distance": 7.5,
+      "yaw_deg": -20,
       "pitch_deg": 11,
       "fov_deg": 36
     },
@@ -262,12 +262,12 @@
     },
     "victory": {
       "target": [
-        0.0,
+        0,
         1.1,
-        0.0
+        0
       ],
       "distance": 6.5,
-      "yaw_deg": -30,
+      "yaw_deg": 10,
       "pitch_deg": 8,
       "fov_deg": 34
     }

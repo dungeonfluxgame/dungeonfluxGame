@@ -187,24 +187,24 @@
   "cameras": {
     "tactical": {
       "target": [
-        0.0,
+        0,
         0.8,
-        0.0
+        0
       ],
       "distance": 22.0,
       "yaw_deg": 0,
-      "pitch_deg": 30,
+      "pitch_deg": 48,
       "fov_deg": 40
     },
     "combat_est": {
       "target": [
-        0.0,
+        0,
         0.9,
-        0.0
+        0.5
       ],
-      "distance": 13.0,
+      "distance": 14.0,
       "yaw_deg": 0,
-      "pitch_deg": 17,
+      "pitch_deg": 30,
       "fov_deg": 40
     },
     "turn_focus": {
