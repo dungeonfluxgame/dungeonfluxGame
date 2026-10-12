@@ -835,10 +835,12 @@ impl Renderer {
                 };
                 push(
                     [
-                        at.x + pip.toward[0] * half * 0.7,
-                        at.z + pip.toward[1] * half * 0.7,
-                        0.21,
-                        0.21,
+                        // Toward the cover, nudged sideways so the figure's own body does not
+                        // stand over it.
+                        at.x + pip.toward[0] * half * 0.7 - pip.toward[1] * half * 0.55,
+                        at.z + pip.toward[1] * half * 0.7 + pip.toward[0] * half * 0.55,
+                        0.26,
+                        0.26,
                     ],
                     [1.0, 1.0, 1.0, 1.0],
                     [7.0, level, 0.0],
@@ -1030,7 +1032,7 @@ impl Renderer {
         let mut out = Vec::new();
         for arrow in frame.projectiles.iter().take(MAX_BOLTS) {
             out.extend_from_slice(&[arrow.head.x, arrow.head.y, arrow.head.z, arrow.alpha]);
-            out.extend_from_slice(&[arrow.tail.x, arrow.tail.y, arrow.tail.z, 3.2]);
+            out.extend_from_slice(&[arrow.tail.x, arrow.tail.y, arrow.tail.z, 4.6]);
             out.extend_from_slice(&[arrow.trail.x, arrow.trail.y, arrow.trail.z, 0.0]);
         }
         out

@@ -184,7 +184,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let dy = max(-0.8 - q.y, q.y - 0.95);
         let d = max(dx, dy);
         let fill = 1.0 - smoothstep(-0.02, 0.06, d);
-        let rim = (1.0 - smoothstep(-0.28, -0.14, d)) * fill;
+        let rim = (1.0 - smoothstep(-0.2, -0.1, d)) * fill;
         let level = in.params.y;
         var tone = vec3<f32>(0.62, 0.75, 0.92);
         if (level > 1.5) { tone = vec3<f32>(0.95, 0.78, 0.38); }

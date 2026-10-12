@@ -1285,7 +1285,7 @@ fn projectile_view(projectile: &Projectile, reduced_motion: bool) -> ProjectileV
     } else {
         tangent
     };
-    let tail = head - tangent * 0.6;
+    let tail = head - tangent * 0.85;
     let trail = if reduced_motion {
         tail
     } else {
