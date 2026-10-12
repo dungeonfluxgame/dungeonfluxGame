@@ -461,7 +461,7 @@ impl Renderer {
         if !self.frames_seen.is_multiple_of(40) || self.frame_ms_average < 26.0 {
             return;
         }
-        if self.quality.splat_cap > 80_000 {
+        if self.splat.is_some() && self.quality.splat_cap > 80_000 {
             self.quality.splat_cap = (self.quality.splat_cap as f32 * 0.65) as usize;
             self.sorter.invalidate();
         } else if self.quality.render_scale > 0.55 {

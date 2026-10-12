@@ -7,12 +7,12 @@
   },
   "ground": {
     "stem": "ground-lamplit-market",
-    "size_m": 30.0,
+    "size_m": 24.0,
     "centre": [
       0.0,
-      -1.0
+      0.0
     ],
-    "falloff_m": 9.0
+    "falloff_m": 6.0
   },
   "backdrop": {
     "stem": "scene-lamplit-market-arrival",
