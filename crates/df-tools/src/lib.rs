@@ -20,6 +20,8 @@ mod qualification;
 #[cfg(target_arch = "wasm32")]
 mod qualification_verdict;
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod music_score;
 mod voice_line;
 
 /// Source identity injected by the reproducible fixture build command.

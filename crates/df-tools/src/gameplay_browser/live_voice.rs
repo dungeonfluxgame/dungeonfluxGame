@@ -149,6 +149,33 @@ impl Director {
     }
 }
 
+/// What the music mix reads from the one shared sound state: the unlock gesture and mute
+/// choice live here, and music follows them.
+#[derive(Clone, Copy)]
+pub(super) struct SoundState {
+    /// Unlocked by a gesture and not muted.
+    pub(super) enabled: bool,
+    /// A voice clip is audibly playing right now.
+    pub(super) speaking: bool,
+}
+
+/// `None` when the voice director does not exist yet or is mid-update; callers keep what
+/// they last read.
+pub(super) fn sound_state() -> Option<SoundState> {
+    let shared = DIRECTOR.with(|slot| slot.borrow().clone())?;
+    let state = shared.try_borrow().ok()?;
+    let clip_playing = state
+        .current
+        .as_ref()
+        .is_some_and(|current| current.object_url.is_some())
+        && !state.audio.paused()
+        && !state.audio.ended();
+    Some(SoundState {
+        enabled: state.sound() == Sound::On,
+        speaking: clip_playing,
+    })
+}
+
 /// Called once per newly applied view. Voice is best effort: a failure here marks the
 /// display root and never affects rendering.
 pub(super) fn observe(client: &Rc<RefCell<Client>>) {
