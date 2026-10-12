@@ -283,6 +283,31 @@ downloaded) and point the server at it.
   tier never goes past the scene's coarsest one. Any other value
   refuses startup. The `#battle-preview` address takes `&lod=<0-3>`.
 
+### Test fights against 1 to n enemies
+
+A development setting, off by default (a normal game is unchanged): the adventure's first choice
+leads straight to a tactical fight against `n` enemies.
+
+- `DF_GAMEPLAY_TEST_FIGHT=<n>` (or `development/run-gameplay.sh --test-fight <n>`): `n` from 1 to
+  4. Any other value refuses startup. After the opening's first choice (ask or escort) the server
+  submits the courier defence for the same player at once, so the fight begins without the
+  dialogue step; every rule, check and revision is the ordinary one.
+- `DF_GAMEPLAY_TEST_FOE=<creature id>` (or `--test-foe <id>`): the creature, from the compiled
+  rules table (`bandit`, `cultist`, `guard`, `goblin-warrior`, `kobold-warrior`, `skeleton`,
+  `zombie`, `wolf`, `giant-rat`, `giant-weasel`, `mastiff`, `scout`). Default: the adventure's
+  own creature. Needs `DF_GAMEPLAY_TEST_FIGHT`; an unknown id refuses startup. A creature that is
+  not the adventure's own carries 20 arrows or bolts when it has a bow or crossbow.
+- The startup line `TEST FIGHT enemies=<n> foe=<id>` confirms it. It applies to databases created
+  while it is set; a stored game keeps the enemies it started with.
+- The limit of 4 is the number of enemy entities the server holds and of enemy spawn cells on
+  every layout of every battle scene (13 scenes, including the four scans); a native test starts
+  a fight against 1, 2, 3 and 4 on every scene. At six heroes against six enemies several things
+  break and none is changed here: the server numbers heroes 1 and 2 and enemies from 3, there are
+  four enemy entities, four spawn cells per side on every layout, the participant admission allows
+  six combatants (and 15 identity comparisons), the pack and adventure tables allow at most four
+  enemies, and the flat display fallback holds two heroes and three non-player figures. A larger
+  fight needs all of these raised together, and new spawn cells authored on all 36 layouts.
+
 Run a real fight on a scan (the scans listed in `artifacts/tmp/splat-dl/README.txt`):
 
 ```sh

@@ -90,6 +90,10 @@ pub(in crate::gameplay) fn force_scene(id: Option<&str>) -> Result<(), String> {
 
 /// The scene a fight at the story's `place` is staged on.
 fn staged_location(place: String) -> String {
+    #[cfg(test)]
+    if let Some(own) = TEST_SCENE_OVERRIDE.with(std::cell::Cell::get) {
+        return own.to_owned();
+    }
     FORCED_SCENE
         .get()
         .copied()
@@ -121,6 +125,73 @@ pub(in crate::gameplay) fn present(state: &GameState) -> bool {
         .iter()
         .any(|encounter| encounter.tactical.is_some())
 }
+/// The development setting that starts every fight against a chosen number of enemies
+/// (`DF_GAMEPLAY_TEST_FIGHT`), optionally of a chosen creature (`DF_GAMEPLAY_TEST_FOE`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct TestFight {
+    pub(in crate::gameplay) enemies: usize,
+    pub(in crate::gameplay) foe: Option<String>,
+}
+
+/// The most enemies a fight holds: one entity per enemy, and four spawn cells on every layout
+/// of every battle scene. Six heroes against six enemies needs both raised (see
+/// `development/README.md`).
+pub(in crate::gameplay) const MAXIMUM_ENEMIES: usize = ENEMY_ENTITIES.len();
+/// Arrows and bolts a test fight's enemy carries when the creature is not the adventure's own.
+const TEST_FOE_AMMUNITION: u16 = 20;
+
+static TEST_FIGHT: std::sync::OnceLock<Option<TestFight>> = std::sync::OnceLock::new();
+
+/// Records the test fight at startup; unset leaves every fight as the adventure made it.
+pub(in crate::gameplay) fn force_test_fight(setting: Option<TestFight>) -> Result<(), String> {
+    TEST_FIGHT
+        .set(setting)
+        .map_err(|_| "the test fight was already set".to_owned())
+}
+
+/// Whether this server runs the test fight setting.
+pub(in crate::gameplay) fn test_fight_enabled() -> bool {
+    test_fight().is_some()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's own setting and battle scene, so tests of one process do not share the global.
+    static TEST_FIGHT_OVERRIDE: std::cell::RefCell<Option<TestFight>> = const { std::cell::RefCell::new(None) };
+    static TEST_SCENE_OVERRIDE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+fn test_fight() -> Option<TestFight> {
+    #[cfg(test)]
+    if let Some(own) = TEST_FIGHT_OVERRIDE.with(|own| own.borrow().clone()) {
+        return Some(own);
+    }
+    TEST_FIGHT.get().cloned().flatten()
+}
+
+/// The enemies of a fight, in the order they take the entities and spawn cells: the adventure's
+/// own groups, or `count` of the creature a test fight names (the adventure's first creature when
+/// it names none).
+fn roster(
+    groups: &[pack::TacticalEnemy],
+    test: Option<&TestFight>,
+) -> Result<Vec<(String, u16)>, RepositoryError> {
+    let Some(test) = test else {
+        return Ok(groups
+            .iter()
+            .flat_map(|group| {
+                std::iter::repeat_n((group.srd_id.clone(), group.ammunition), group.count.into())
+            })
+            .collect());
+    };
+    let own = groups.first().ok_or(RepositoryError::InvalidCandidate)?;
+    let (srd_id, ammunition) = match &test.foe {
+        Some(foe) => (foe.clone(), TEST_FOE_AMMUNITION),
+        None => (own.srd_id.clone(), own.ammunition),
+    };
+    Ok(vec![(srd_id, ammunition); test.enemies])
+}
+
 pub(super) fn enemies() -> Result<Vec<(EntityId, String, u16)>, RepositoryError> {
     let loaded = pack::active().ok_or(RepositoryError::InvalidCandidate)?;
     let tuning = loaded
@@ -128,16 +199,14 @@ pub(super) fn enemies() -> Result<Vec<(EntityId, String, u16)>, RepositoryError>
         .tactical
         .as_ref()
         .ok_or(RepositoryError::InvalidCandidate)?;
-    let mut result = Vec::new();
-    for group in &tuning.enemies {
-        for _ in 0..group.count {
-            let bytes = ENEMY_ENTITIES
-                .get(result.len())
-                .ok_or(RepositoryError::Capacity)?;
-            result.push((entity(*bytes)?, group.srd_id.clone(), group.ammunition));
-        }
-    }
-    Ok(result)
+    roster(&tuning.enemies, test_fight().as_ref())?
+        .into_iter()
+        .enumerate()
+        .map(|(index, (srd_id, ammunition))| {
+            let bytes = ENEMY_ENTITIES.get(index).ok_or(RepositoryError::Capacity)?;
+            Ok((entity(*bytes)?, srd_id, ammunition))
+        })
+        .collect()
 }
 pub(super) fn snapshot(state: &GameState) -> Result<&TacticalSnapshot, RepositoryError> {
     let [encounter] = state.encounters.as_slice() else {
@@ -352,6 +421,7 @@ fn record_attacks(
             target_id: target.as_bytes().to_vec(),
             weapon: attack.weapon.id().to_owned(),
             attack_style: if attack.ranged { 2 } else { 1 },
+            damage_type: attack.damage_type.id().to_owned(),
         });
     }
     Ok(())
@@ -921,6 +991,7 @@ pub(in crate::gameplay) fn groups(
             option_id,
             label,
             description: String::new(),
+            ..Default::default()
         })
         .collect();
     Ok(vec![rpc::JourneyGroup {
@@ -1824,6 +1895,61 @@ pub(super) mod tests {
         )
         .unwrap()
     }
+    /// A test fight against one to the most enemies starts on every battle scene the server
+    /// holds (the two painted-story scenes, the others and the four scans): each enemy of the
+    /// roster stands on its own enemy spawn cell of the chosen layout, and the heroes on theirs.
+    #[test]
+    fn a_test_fight_of_one_to_the_most_enemies_places_everyone_on_every_battle_scene() {
+        with_live(|| {
+            for id in scene_ids() {
+                let bytes = scene_bytes(id).unwrap();
+                let data: tactical_rules::BattleSceneData = serde_json::from_slice(bytes).unwrap();
+                for layout in &data.layouts {
+                    let map = BattleMap::from_json(bytes, &layout.id).unwrap();
+                    assert!(
+                        map.enemy_spawns().len() >= MAXIMUM_ENEMIES && map.hero_spawns().len() >= 2,
+                        "{id}/{}: room for {MAXIMUM_ENEMIES} enemies and two heroes",
+                        layout.id
+                    );
+                }
+                TEST_SCENE_OVERRIDE.with(|own| own.set(scene_ids().find(|known| *known == id)));
+                for count in [1, 2, 3, MAXIMUM_ENEMIES] {
+                    TEST_FIGHT_OVERRIDE.with(|own| {
+                        *own.borrow_mut() = Some(TestFight {
+                            enemies: count,
+                            foe: Some("kobold-warrior".to_owned()),
+                        });
+                    });
+                    let current = fight(false);
+                    let battle = read(current.state()).unwrap();
+                    let saved = snapshot(current.state()).unwrap();
+                    let map = BattleMap::from_json(&saved.scene, saved.layout.as_str()).unwrap();
+                    let enemy_cells: Vec<_> = battle
+                        .combatants()
+                        .iter()
+                        .filter(|actor| actor.side() == Side::Enemies)
+                        .map(|actor| actor.cell())
+                        .collect();
+                    assert_eq!(enemy_cells.len(), count, "{id}: {count} enemies");
+                    assert_eq!(
+                        enemy_cells,
+                        map.enemy_spawns()[..count].to_vec(),
+                        "{id}: enemies stand on their spawn cells"
+                    );
+                    let hero_cells: Vec<_> = battle
+                        .combatants()
+                        .iter()
+                        .filter(|actor| actor.side() == Side::Heroes)
+                        .map(|actor| actor.cell())
+                        .collect();
+                    assert_eq!(hero_cells, map.hero_spawns()[..2].to_vec(), "{id}: heroes");
+                }
+            }
+            TEST_SCENE_OVERRIDE.with(|own| own.set(None));
+            TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
+        });
+    }
+
     fn play_fight(
         mut current: Checkpoint,
         first_operation: u8,
@@ -3478,6 +3604,53 @@ mod shared_scene_tests {
             }
         }
         assert_eq!(scans, 4, "the four scan scenes are authored for the server");
+    }
+
+    fn kobolds(count: u8) -> Vec<pack::TacticalEnemy> {
+        vec![pack::TacticalEnemy {
+            srd_id: "kobold-warrior".to_owned(),
+            count,
+            ammunition: 0,
+        }]
+    }
+
+    #[test]
+    fn a_test_fight_replaces_the_adventures_enemies_and_without_one_they_are_unchanged() {
+        let own = vec![
+            pack::TacticalEnemy {
+                srd_id: "scout".to_owned(),
+                count: 1,
+                ammunition: 20,
+            },
+            pack::TacticalEnemy {
+                srd_id: "bandit".to_owned(),
+                count: 2,
+                ammunition: 7,
+            },
+        ];
+        let ids =
+            |roster: Vec<(String, u16)>| roster.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+
+        assert_eq!(
+            ids(roster(&own, None).unwrap()),
+            ["scout", "bandit", "bandit"]
+        );
+        let of_own = TestFight {
+            enemies: 4,
+            foe: None,
+        };
+        assert_eq!(
+            roster(&own, Some(&of_own)).unwrap(),
+            vec![("scout".to_owned(), 20); 4]
+        );
+        let wolves = TestFight {
+            enemies: 1,
+            foe: Some("wolf".to_owned()),
+        };
+        assert_eq!(
+            roster(&kobolds(3), Some(&wolves)).unwrap(),
+            vec![("wolf".to_owned(), TEST_FOE_AMMUNITION)]
+        );
     }
 
     #[test]

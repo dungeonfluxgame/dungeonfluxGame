@@ -16,8 +16,9 @@ use super::{
     layout::{Cover, Layout},
     math::{Vec3, ease_in_out},
     model::{
-        AttackResult, BadgeView, Beat, CameraCommand, CameraFocus, DieView, FinishingBlow,
-        FloatingText, Highlight, HitPoints, HudState, InitiativeShow, Side, Token, TokenId,
+        AttackResult, AttackStyle, BadgeView, Beat, CameraCommand, CameraFocus, DieView,
+        FinishingBlow, FloatingText, Highlight, HitPoints, HudState, InitiativeShow, Side, Token,
+        TokenId,
     },
     particles::Particles,
     scene_file::BattleScene,
@@ -321,8 +322,13 @@ pub struct Stage {
     speech: Option<Speech>,
     celebration: Option<Celebration>,
     /// The attack names waiting for their blow's result: who struck, and with what.
-    attack_labels: Vec<(TokenId, String)>,
+    attack_labels: Vec<(TokenId, String, String)>,
     hud: HudState,
+    /// The server's active combatant, which the label and marker show once no beat is playing.
+    server_active: Option<TokenId>,
+    /// While set, the label and marker follow the beats being played, not the server's active
+    /// combatant: its enemies' turns are still waiting to be shown.
+    active_held: bool,
     floats: Vec<FloatingText>,
     flash: Option<Flash>,
     clock_s: f32,
@@ -380,6 +386,8 @@ impl Stage {
             speech: None,
             celebration: None,
             attack_labels: Vec::new(),
+            server_active: None,
+            active_held: false,
             hud: HudState::default(),
             floats: Vec::new(),
             flash: None,
@@ -576,9 +584,9 @@ impl Stage {
     /// shown at its target reads "Name - result". Call it before staging the blow; one attacker's
     /// blows take their names in the order they were given. A name a blow never used is dropped
     /// after a number more arrive, so it cannot attach to a much later blow.
-    pub fn set_attack_label(&mut self, attacker: &TokenId, label: &str) {
+    pub fn set_attack_label(&mut self, attacker: &TokenId, label: &str, damage_type: &str) {
         self.attack_labels
-            .push((attacker.clone(), label.to_owned()));
+            .push((attacker.clone(), label.to_owned(), damage_type.to_owned()));
         if self.attack_labels.len() > MAX_PENDING_LABELS {
             self.attack_labels.remove(0);
         }
@@ -588,8 +596,55 @@ impl Stage {
         self.hud.initiative = order;
     }
 
+    /// The server's active combatant. The label and marker take it at once when nothing is
+    /// being shown, and otherwise when the beats being shown are over (until then they name the
+    /// combatant whose beat is playing).
     pub fn set_active(&mut self, active: Option<TokenId>) {
-        self.hud.active = active;
+        self.server_active = active;
+        if !self.is_showing_beats() {
+            self.hud.active.clone_from(&self.server_active);
+        }
+    }
+
+    /// A question the server is waiting on, shown where the turn label is; `None` clears it.
+    pub fn set_prompt(&mut self, prompt: Option<String>) {
+        self.hud.prompt = prompt;
+    }
+
+    /// Keeps the label and marker on the combatant whose beat is playing, even between beats,
+    /// while later beats of the same server view are still to come.
+    pub fn hold_active(&mut self, held: bool) {
+        self.active_held = held;
+    }
+
+    fn is_showing_beats(&self) -> bool {
+        self.active_held || self.playing.is_some() || !self.queue.is_empty()
+    }
+
+    /// Stages the server's move of `actor` to `to`: its cell is the new one from now on, and it
+    /// walks there when the beat plays. Unlike a token update, nothing else about the figure
+    /// changes, so it can be placed in the middle of a view's beats.
+    pub fn stage_move(&mut self, actor: &TokenId, to: Cell) -> Result<(), StageError> {
+        let Some(index) = self.token_index(actor) else {
+            return Err(StageError::UnknownToken(actor.clone()));
+        };
+        let from = self.tokens[index].token.cell;
+        self.tokens[index].token.cell = to;
+        if from == to {
+            return Ok(());
+        }
+        self.stage(Beat::Move {
+            actor: actor.clone(),
+            from,
+            to,
+        })
+    }
+
+    /// How `actor` attacks in the blow about to be staged, from the attack the server resolved.
+    pub fn set_attack_style(&mut self, actor: &TokenId, style: AttackStyle) {
+        if let Some(index) = self.token_index(actor) {
+            self.tokens[index].token.attack = style;
+        }
     }
 
     /// Whether the start-of-fight initiative sequence is playing.
@@ -707,6 +762,22 @@ impl Stage {
             },
         ];
     }
+    /// The highlights to draw: on an enemy's turn the reachable cells (drawn in hero blue) are
+    /// left out; the attack highlight, which comes first, stays.
+    fn shown_tactical_highlights(&self) -> &[Highlight] {
+        let enemy_turn = self.hud.active.as_ref().is_some_and(|active| {
+            self.tokens
+                .iter()
+                .any(|runtime| &runtime.token.id == active && runtime.token.side == Side::Enemy)
+        });
+        if enemy_turn {
+            let attack_only = self.tactical_highlights.len().min(1);
+            &self.tactical_highlights[..attack_only]
+        } else {
+            &self.tactical_highlights
+        }
+    }
+
     pub fn set_tokens(&mut self, tokens: Vec<Token>) {
         if self.is_busy() {
             self.pending_tokens = Some(tokens);
@@ -876,6 +947,9 @@ impl Stage {
             self.start_next();
         }
         self.advance_playback(sim);
+        if !self.is_showing_beats() && self.hud.active != self.server_active {
+            self.hud.active.clone_from(&self.server_active);
+        }
         self.advance_celebration(real_dt);
         let mut footfalls = Vec::new();
         for runtime in &mut self.tokens {
@@ -1304,13 +1378,21 @@ impl Stage {
                     let at = self
                         .attack_labels
                         .iter()
-                        .position(|(id, _)| *id == attacker)?;
-                    Some(self.attack_labels.remove(at).1)
+                        .position(|(id, ..)| *id == attacker)?;
+                    let (_, name, damage_type) = self.attack_labels.remove(at);
+                    Some((name, damage_type))
                 });
                 self.floats.push(FloatingText {
                     id: self.next_float_id,
                     token,
-                    text: float_text::compose(attack.as_deref(), &text, tone, downed),
+                    text: float_text::compose(
+                        attack
+                            .as_ref()
+                            .map(|(name, kind)| (name.as_str(), kind.as_str())),
+                        &text,
+                        tone,
+                        downed,
+                    ),
                     tone,
                     age_s: 0.0,
                     hold_s: float_text::hold_for(tone, downed),
@@ -1743,7 +1825,7 @@ impl Stage {
             shake_px: (rig_shake.0 + view.shake_px.0, rig_shake.1 + view.shake_px.1),
             figures,
             highlight: self.highlight.as_ref(),
-            tactical_highlights: &self.tactical_highlights,
+            tactical_highlights: self.shown_tactical_highlights(),
             speech: self.speech.as_ref().map(|speech| SpeechView {
                 token: &speech.token,
                 name: &speech.name,
@@ -3019,6 +3101,8 @@ mod tests {
     #[test]
     fn the_roll_call_fills_the_tracker_in_the_servers_order_with_badges_1st_2nd_3rd() {
         let mut stage = stage();
+        // The server's active combatant is the first to act.
+        stage.set_active(Some(TokenId::new("enemy")));
         stage
             .stage(Beat::Initiative {
                 rolls: rolls_for(&["enemy", "hero", "ally"]),
@@ -3182,6 +3266,7 @@ mod tests {
                     downed: false,
                     weapon: String::new(),
                     grazed: false,
+                    damage_type: String::new(),
                 })
                 .collect(),
             initiative: ["e", "a", "b"]
@@ -4291,12 +4376,231 @@ mod tests {
         );
     }
 
+    /// A view carrying three enemy turns, each a walk then a melee attack on the same hero, is
+    /// staged cue by cue the way the display does it. Strictly in order: the label names the
+    /// creature whose beats are playing (never a later one, never the server's active hero until
+    /// the queue is drained), each creature stands where it started until its own walk, and no
+    /// result is shown before its attacker stands beside its target.
+    #[test]
+    fn three_enemy_turns_play_one_after_another_each_walking_before_it_attacks() {
+        let mut stage = stage();
+        let kobolds = [
+            ("kobold-1", Cell::new(2, 1), Cell::new(2, 3)),
+            ("kobold-2", Cell::new(4, 1), Cell::new(4, 3)),
+            ("kobold-3", Cell::new(6, 1), Cell::new(3, 3)),
+        ];
+        stage.set_tokens(
+            [token("hero", Side::Hero, Cell::new(3, 4), 12)]
+                .into_iter()
+                .chain(kobolds.map(|(id, from, _)| token(id, Side::Enemy, from, 7)))
+                .collect(),
+        );
+        stage.set_active(Some(TokenId::new("hero")));
+        let hero = TokenId::new("hero");
+        let centre = |cell: Cell, stage: &Stage| stage.grid().cell_centre(cell);
+        let beside = stage.grid().cell_m() * 1.6;
+        let mut labels: Vec<String> = Vec::new();
+        let mut cues = kobolds.iter().peekable();
+        let mut waiting = kobolds.len();
+        let mut next_cue_at = 0.0_f32;
+        let mut clock = 0.0_f32;
+        let mut shown_results = 0;
+        let mut result_ids: Vec<u64> = Vec::new();
+        for _ in 0..4000 {
+            // The next outcome's cue arrives once the stage has nothing queued, as the roll's
+            // dice finish; the stage is told the server's final active hero all along.
+            stage.hold_active(waiting > 0);
+            stage.set_active(Some(hero.clone()));
+            if clock >= next_cue_at
+                && stage.queue.is_empty()
+                && stage.playing.is_none()
+                && let Some((id, _, to)) = cues.next()
+            {
+                let kobold = TokenId::new(*id);
+                stage
+                    .stage(Beat::TurnStart {
+                        actor: kobold.clone(),
+                    })
+                    .unwrap();
+                stage.stage_move(&kobold, *to).unwrap();
+                stage.set_attack_label(&kobold, "Dagger", "piercing");
+                stage
+                    .stage(Beat::Approach {
+                        attacker: kobold.clone(),
+                        target: hero.clone(),
+                    })
+                    .unwrap();
+                stage
+                    .stage(Beat::Strike {
+                        attacker: kobold,
+                        target: hero.clone(),
+                        result: AttackResult::Hit {
+                            damage: 3,
+                            critical: false,
+                            downed: false,
+                        },
+                        target_hit_points_after: Some(9),
+                    })
+                    .unwrap();
+                waiting -= 1;
+                next_cue_at = clock + 1.0;
+            }
+            stage.update(Duration::from_millis(50));
+            clock += 0.05;
+            let frame = stage.frame();
+            let label = frame
+                .hud
+                .active
+                .as_ref()
+                .map(|id| id.0.clone())
+                .unwrap_or_default();
+            if labels.last() != Some(&label) {
+                labels.push(label.clone());
+            }
+            for (id, from, to) in &kobolds {
+                let at = frame
+                    .figures
+                    .iter()
+                    .find(|f| f.id.0 == *id)
+                    .unwrap()
+                    .position;
+                if label != *id {
+                    // Not its turn yet: it stands on its starting cell; its turn is over: it
+                    // stands beside the hero.
+                    let started = (at - centre(*from, &stage)).length() < 0.05;
+                    let arrived = (at - centre(*to, &stage)).length() < 0.05;
+                    assert!(
+                        started || arrived,
+                        "{id} stands between cells outside its turn"
+                    );
+                }
+            }
+            for float in frame.floats.iter().filter(|float| float.age_s < 0.06) {
+                if result_ids.contains(&float.id) {
+                    continue;
+                }
+                result_ids.push(float.id);
+                shown_results += 1;
+                let attacker = labels.last().unwrap();
+                let at = frame
+                    .figures
+                    .iter()
+                    .find(|f| f.id.0 == *attacker)
+                    .unwrap()
+                    .position;
+                let target = frame
+                    .figures
+                    .iter()
+                    .find(|f| f.id.0 == "hero")
+                    .unwrap()
+                    .position;
+                assert!(
+                    (at - target).length() <= beside,
+                    "{attacker}'s result shows while it stands {:.1} m from its target",
+                    (at - target).length()
+                );
+                assert_eq!(float.text, "Dagger \u{b7} 3 piercing");
+            }
+        }
+        assert_eq!(shown_results, 3, "one result for each attack");
+        assert_eq!(
+            labels,
+            ["kobold-1", "kobold-2", "kobold-3", "hero"],
+            "the label follows each creature's turn and returns to the server's active hero"
+        );
+    }
+
+    /// A suspended turn: creature A moved and attacked, creature B moved part of its path and the
+    /// server waits on a reaction. B stays where it stood until A's attack is over, then walks to
+    /// where the server stopped it, and only then does the prompt name who decides. Graze on a
+    /// miss is a named result too.
+    #[test]
+    fn a_suspended_turn_shows_after_the_attack_before_it_and_names_who_decides() {
+        let mut stage = stage();
+        let (a, b, hero) = (
+            TokenId::new("kobold-1"),
+            TokenId::new("kobold-2"),
+            TokenId::new("hero"),
+        );
+        let (a_from, a_to) = (Cell::new(2, 1), Cell::new(2, 3));
+        let (b_from, b_stop) = (Cell::new(6, 1), Cell::new(6, 2));
+        let tokens = |a_cell: Cell, b_cell: Cell| {
+            vec![
+                token("hero", Side::Hero, Cell::new(3, 4), 12),
+                token("kobold-1", Side::Enemy, a_cell, 7),
+                token("kobold-2", Side::Enemy, b_cell, 7),
+            ]
+        };
+        stage.set_tokens(tokens(a_from, b_from));
+        stage.set_active(Some(hero.clone()));
+        // The view arrives: A's turn is cued, B is held where it stood, the label stays with A.
+        stage.hold_active(true);
+        stage.stage(Beat::TurnStart { actor: a.clone() }).unwrap();
+        stage.stage_move(&a, a_to).unwrap();
+        stage.set_attack_label(&a, "Dagger", "piercing, graze");
+        stage
+            .stage(Beat::Strike {
+                attacker: a.clone(),
+                target: hero.clone(),
+                result: AttackResult::Hit {
+                    damage: 3,
+                    critical: false,
+                    downed: false,
+                },
+                target_hit_points_after: Some(9),
+            })
+            .unwrap();
+        let mut seen_float = None;
+        let mut released = false;
+        let position = |stage: &Stage, id: &TokenId| {
+            stage
+                .frame()
+                .figures
+                .iter()
+                .find(|f| f.id == *id)
+                .unwrap()
+                .position
+        };
+        let b_start = stage.grid().cell_centre(b_from);
+        let b_end = stage.grid().cell_centre(b_stop);
+        for _ in 0..4000 {
+            stage.update(Duration::from_millis(50));
+            if let Some(text) = stage.frame().floats.first() {
+                seen_float.get_or_insert_with(|| text.text.clone());
+            }
+            if !released && stage.queue.is_empty() && stage.playing.is_none() {
+                // A's beats are over: the attacks are drained, B's move and the prompt follow.
+                assert!(
+                    (position(&stage, &b) - b_start).length() < 0.05,
+                    "B moved before A's attack was over"
+                );
+                released = true;
+                stage.hold_active(false);
+                stage.set_prompt(Some("HERO: Opportunity Attack?".to_owned()));
+                stage.set_tokens(tokens(a_to, b_stop));
+            }
+        }
+        assert!(released);
+        assert_eq!(
+            seen_float.as_deref(),
+            Some("Dagger \u{b7} 3 piercing, graze")
+        );
+        assert!(
+            (position(&stage, &b) - b_end).length() < 0.05,
+            "B stands where the server stopped it"
+        );
+        assert_eq!(
+            stage.hud().prompt.as_deref(),
+            Some("HERO: Opportunity Attack?")
+        );
+    }
+
     /// The floating result names the attack and its result, stays up for its whole hold after
     /// rising, and without a name reads as it always did.
     #[test]
     fn the_floating_result_names_the_attack_and_stays_up_long_enough_to_read() {
         let mut stage = stage();
-        stage.set_attack_label(&TokenId::new("hero"), "Greatsword");
+        stage.set_attack_label(&TokenId::new("hero"), "Greatsword", "slashing");
         stage.stage(ordinary_hit("hero", "enemy", 9)).unwrap();
         let mut born_at = None;
         let mut seen_for = 0.0f32;
@@ -4304,7 +4608,7 @@ mod tests {
             stage.update(Duration::from_millis(20));
             let frame = stage.frame();
             if let Some(text) = frame.floats.first() {
-                assert_eq!(text.text, "Greatsword - 9");
+                assert_eq!(text.text, "Greatsword \u{b7} 9 slashing");
                 born_at.get_or_insert(stage.clock_s);
                 if text.age_s >= float_text::RISE_S {
                     seen_for = text.age_s - float_text::RISE_S;
@@ -4330,7 +4634,7 @@ mod tests {
     #[test]
     fn a_miss_and_a_critical_knockout_are_named_and_a_knockout_stays_longer() {
         let mut stage = stage();
-        stage.set_attack_label(&TokenId::new("hero"), "Longbow");
+        stage.set_attack_label(&TokenId::new("hero"), "Longbow", "");
         stage
             .stage(Beat::Attack {
                 attacker: TokenId::new("hero"),
@@ -4348,9 +4652,9 @@ mod tests {
                 }
             }
         }
-        assert_eq!(texts, vec!["Longbow - miss".to_owned()]);
+        assert_eq!(texts, vec!["Longbow \u{b7} miss".to_owned()]);
         let mut stage = self::stage();
-        stage.set_attack_label(&TokenId::new("hero"), "Bite");
+        stage.set_attack_label(&TokenId::new("hero"), "Bite", "");
         stage
             .stage(Beat::Attack {
                 attacker: TokenId::new("hero"),
@@ -4372,7 +4676,7 @@ mod tests {
                 text = first.text.clone();
             }
         }
-        assert_eq!(text, "Bite - 7, critical, down");
+        assert_eq!(text, "Bite \u{b7} 7, critical, down");
         assert_eq!(hold, float_text::HOLD_EMPHASIS_S);
     }
 }

@@ -33,6 +33,18 @@ pub enum DamageType {
     Necrotic,
 }
 
+impl DamageType {
+    /// The 2024 rules' name of the type, lower case.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Slashing => "slashing",
+            Self::Piercing => "piercing",
+            Self::Bludgeoning => "bludgeoning",
+            Self::Necrotic => "necrotic",
+        }
+    }
+}
+
 impl Weapon {
     pub fn id(self) -> &'static str {
         match self {

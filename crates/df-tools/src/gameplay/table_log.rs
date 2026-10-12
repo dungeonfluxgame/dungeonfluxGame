@@ -370,7 +370,7 @@ pub(super) fn action_lines(
             Some(outcome) if outcome.hit => format!(
                 "strikes with the {used} \u{2014} {}hit, {} damage",
                 if outcome.critical { "critical " } else { "" },
-                outcome.damage
+                damage_words(outcome)
             ),
             Some(_) => format!("swings the {used} \u{2014} miss"),
             None => format!("strikes with the {used}"),
@@ -390,7 +390,7 @@ pub(super) fn action_lines(
             format!(
                 "strikes {} \u{2014} hit, {} damage{}",
                 outcome.target_name,
-                outcome.damage,
+                damage_words(outcome),
                 if outcome.knocked_out {
                     format!(", {} falls unconscious", outcome.target_name)
                 } else {
@@ -406,6 +406,15 @@ pub(super) fn action_lines(
         });
     }
     lines
+}
+
+/// The damage dealt with its type when the rules named one: "9 slashing".
+fn damage_words(outcome: &rpc::CombatOutcome) -> String {
+    if outcome.damage_type.is_empty() {
+        outcome.damage.to_string()
+    } else {
+        format!("{} {}", outcome.damage, outcome.damage_type)
+    }
 }
 
 /// The third-person phrase for an offer label: its imperative verb takes an `s`
@@ -753,6 +762,37 @@ mod tests {
             "",
         );
         assert_eq!(miss[0].text, "swings the greatsword \u{2014} miss");
+    }
+
+    #[test]
+    fn a_hit_names_the_damage_type_the_rules_gave_it() {
+        let own = rpc::CombatOutcome {
+            damage_type: "slashing".to_owned(),
+            critical: true,
+            ..outcome("Brakka", "Snag", true, 9)
+        };
+        let answer = rpc::CombatOutcome {
+            damage_type: "piercing".to_owned(),
+            ..outcome("Snag", "Brakka", true, 4)
+        };
+
+        let lines = action_lines(
+            rpc::GameplayActionKind::GreatswordAttack,
+            "Brakka",
+            &[own, answer],
+            "greatsword",
+            "",
+            "",
+        );
+
+        assert_eq!(
+            lines[0].text,
+            "strikes with the greatsword \u{2014} critical hit, 9 slashing damage"
+        );
+        assert_eq!(
+            lines[1].text,
+            "strikes Brakka \u{2014} hit, 4 piercing damage"
+        );
     }
 
     #[test]

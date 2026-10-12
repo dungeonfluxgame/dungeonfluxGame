@@ -219,6 +219,8 @@ pub struct HudState {
     /// The roll panel the table reads while a blow resolves; clears itself after a few seconds.
     pub roll_card: Option<RollCard>,
     pub active: Option<TokenId>,
+    /// A question the table is waiting on (a reaction), shown in place of the turn label.
+    pub prompt: Option<String>,
     pub round: u32,
     /// Turn order, first to act first. Empty means the order tokens were supplied in.
     pub initiative: Vec<TokenId>,

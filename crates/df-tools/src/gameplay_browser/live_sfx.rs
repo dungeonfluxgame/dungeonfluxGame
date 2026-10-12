@@ -112,6 +112,9 @@ thread_local! {
     static UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The 3D battlefield is staging the blows, so the flat view's hit and miss sounds stay quiet.
     static BATTLEFIELD_OWNS_COMBAT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The battlefield's own victory or defeat sting has played for this fight, so the flat
+    /// view's banner sting for the same ending stays quiet: one ending, one sting.
+    static ENDING_STING_PLAYED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static PICKER: RefCell<VariationPicker> = RefCell::new(VariationPicker::new(0x9e37_79b9));
 }
 
@@ -282,6 +285,9 @@ pub(super) fn play(cue: Cue, delay: Duration) {
 
 /// As [`play`] with a level and a playback speed (above 1 raises the pitch).
 fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32) {
+    if matches!(cue, Cue::VictoryFanfare | Cue::DefeatToll) && ENDING_STING_PLAYED.take() {
+        return;
+    }
     if matches!(cue, Cue::Hit | Cue::Miss) && BATTLEFIELD_OWNS_COMBAT.with(std::cell::Cell::get) {
         return;
     }
@@ -304,6 +310,12 @@ fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32) {
 /// the last, at the event's level and pitch. Gated exactly like every other effect (silent
 /// before the unlock, when muted or hidden, and quieter under narration).
 pub(super) fn play_event(event: &SoundEvent, rating: ContentRating) {
+    if matches!(
+        event.kind,
+        df_render::battle::SoundKind::VictorySting | df_render::battle::SoundKind::DefeatSting
+    ) {
+        ENDING_STING_PLAYED.set(true);
+    }
     let Some(clip) = PICKER.with(|picker| picker.borrow_mut().pick(event.clips(rating))) else {
         return;
     };
@@ -318,6 +330,9 @@ pub(super) fn play_event(event: &SoundEvent, rating: ContentRating) {
 /// While the 3D battlefield stages blows, the flat view's own hit and miss sounds are left out
 /// (the battlefield plays the weapon and voice sounds at the moment of each blow).
 pub(super) fn set_battlefield_owns_combat(owns: bool) {
+    if owns {
+        ENDING_STING_PLAYED.set(false);
+    }
     BATTLEFIELD_OWNS_COMBAT.with(|flag| flag.set(owns));
 }
 

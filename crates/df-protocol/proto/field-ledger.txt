@@ -157,6 +157,7 @@ field dungeonflux.public.v1.CombatOutcome 15 actor_id type=12 label=1 presence=f
 field dungeonflux.public.v1.CombatOutcome 16 target_id type=12 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 17 weapon type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 18 attack_style type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 19 damage_type type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 2 target_name type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 3 attack_die type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 4 attack_modifier type=17 label=1 presence=false target=- oneof=-
@@ -243,6 +244,8 @@ field dungeonflux.public.v1.JourneyGroup 3 options type=11 label=3 presence=fals
 field dungeonflux.public.v1.JourneyOption 1 option_id type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyOption 2 label type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyOption 3 description type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyOption 4 requires_group type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyOption 5 requires_options type=9 label=3 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 1 phase type=14 label=1 presence=false target=.dungeonflux.public.v1.JourneyPhase oneof=-
 field dungeonflux.public.v1.JourneyView 10 table_log type=11 label=3 presence=false target=.dungeonflux.public.v1.TableLine oneof=-
 field dungeonflux.public.v1.JourneyView 11 tempo type=11 label=1 presence=false target=.dungeonflux.public.v1.TempoCue oneof=-

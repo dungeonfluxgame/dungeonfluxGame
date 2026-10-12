@@ -390,6 +390,38 @@ fn appearance_must_match_the_combat_package_on_the_server() {
     });
 }
 #[test]
+fn the_offer_lists_each_appearance_only_with_the_packages_the_server_accepts_it_with() {
+    live_pack(|| {
+        let offer = wire::creation_offer().expect("creation offer");
+        let appearances = offer
+            .groups
+            .iter()
+            .find(|group| group.group_id == "portrait")
+            .expect("appearance group");
+        let packages = offer
+            .groups
+            .iter()
+            .find(|group| group.group_id == "build-package")
+            .expect("package group");
+        assert!(!appearances.options.is_empty() && !packages.options.is_empty());
+        for appearance in &appearances.options {
+            assert_eq!(appearance.requires_group, "build-package");
+            for package in &packages.options {
+                let mut choices = PHONE_SHARED.to_vec();
+                choices.push(("build-package", package.option_id.as_str()));
+                choices.push(("portrait", appearance.option_id.as_str()));
+                assert_eq!(
+                    appearance.requires_options.contains(&package.option_id),
+                    pack::validate_character("Sylvie", &choices).is_ok(),
+                    "{} with {}",
+                    appearance.option_id,
+                    package.option_id
+                );
+            }
+        }
+    });
+}
+#[test]
 fn archer_creation_sheet_states_the_longbow_attack_and_its_ammunition() {
     live_pack(|| {
         let current = seat_hero(

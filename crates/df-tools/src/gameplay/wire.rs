@@ -249,11 +249,13 @@ fn attack_group(id: &str, label: &str, description: &str) -> rpc::JourneyGroup {
                 option_id: "no".to_owned(),
                 label: "Do not use".to_owned(),
                 description: String::new(),
+                ..Default::default()
             },
             rpc::JourneyOption {
                 option_id: "yes".to_owned(),
                 label: "Use".to_owned(),
                 description: description.to_owned(),
+                ..Default::default()
             },
         ],
     }
@@ -291,6 +293,7 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
                         }),
                         None => option.description.clone().unwrap_or_default(),
                     },
+                    ..Default::default()
                 })
                 .collect();
             if !tactical || !["array", "equipment", "style-masteries"].contains(&group.id.as_str())
@@ -320,6 +323,7 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
                                 option_id: value.clone(),
                                 label: value.clone(),
                                 description: String::new(),
+                                ..Default::default()
                             })
                             .collect(),
                     });
@@ -328,8 +332,10 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
         }
         if tactical {
             let packages = pack::build_packages().map_err(|_| RepositoryError::InvalidCandidate)?;
+            let package_ids: Vec<String> =
+                packages.iter().map(|package| package.id.clone()).collect();
             {
-                groups.push(rpc::JourneyGroup {group_id:"build-package".to_owned(),label:"Combat training and starting package".to_owned(),options:packages.into_iter().map(|package| rpc::JourneyOption {option_id:package.id,label:package.label,description:"Equipment, ability training, fighting style and masteries are coupled in this supported package. Other lawful SRD combinations remain unsupported.".to_owned()}).collect()});
+                groups.push(rpc::JourneyGroup {group_id:"build-package".to_owned(),label:"Combat training and starting package".to_owned(),options:packages.into_iter().map(|package| rpc::JourneyOption {option_id:package.id,label:package.label,description:"Equipment, ability training, fighting style and masteries are coupled in this supported package. Other lawful SRD combinations remain unsupported.".to_owned(),..Default::default()}).collect()});
             }
             groups.push(rpc::JourneyGroup {
                 group_id: "portrait".to_owned(),
@@ -344,6 +350,13 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
                     option_id: id.to_owned(),
                     label: label.to_owned(),
                     description: "Art only; this changes no character rules.".to_owned(),
+                    // An appearance is offered only with the packages it may be chosen with.
+                    requires_group: "build-package".to_owned(),
+                    requires_options: package_ids
+                        .iter()
+                        .filter(|package| pack::appearance_fits_package(id, package))
+                        .cloned()
+                        .collect(),
                 })
                 .collect(),
             });
