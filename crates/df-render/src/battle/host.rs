@@ -22,6 +22,7 @@ use super::{
     pacing::{BattleFps, FramePacer, Pace},
     scene_file::{BackdropLayer, BattleScene, GroundLayer, SplatFormat, SplatGrade, SplatLayer},
     sound::SoundEvent,
+    speech_bubble::SpeechBubble,
     splash::{self, Gate, Phase, Readiness},
     splat::{
         ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, SplatFileLoader, SplatLoader,
@@ -83,6 +84,7 @@ struct Inner {
     container: Option<Element>,
     canvas: Option<HtmlCanvasElement>,
     hud: Option<Hud>,
+    speech: Option<SpeechBubble>,
     stage: Stage,
     renderer: Option<Renderer>,
     availability: Availability,
@@ -188,6 +190,7 @@ impl BattleStage {
                 container: None,
                 canvas: None,
                 hud: None,
+                speech: None,
                 stage: Stage::new(scene),
                 renderer: None,
                 availability: Availability::Unavailable(reason),
@@ -309,11 +312,13 @@ impl BattleStage {
             stage.set_feel_enabled(false);
         }
         let splash = SplashDom::mount(&document, host, &stage.scene().title).ok();
+        let speech = SpeechBubble::mount(&document, &container).ok();
         let inner = Rc::new(RefCell::new(Inner {
             host: host.clone(),
             container: Some(container),
             canvas: Some(canvas),
             hud: Some(hud),
+            speech,
             stage,
             renderer: Some(renderer),
             availability: Availability::Available,
@@ -413,6 +418,9 @@ fn teardown(inner: &mut Inner) {
     }
     if let Some(hud) = inner.hud.take() {
         hud.dispose();
+    }
+    if let Some(bubble) = inner.speech.take() {
+        bubble.dispose();
     }
     if let Some(splash) = inner.splash.take() {
         splash.root.remove();
@@ -591,6 +599,11 @@ fn tick(inner: &Rc<RefCell<Inner>>, timestamp: f64) {
             fail(state, UnavailableReason::NotMounted);
             return;
         }
+    }
+    if let (Some(bubble), Some(container)) = (&mut state.speech, &state.container) {
+        let aspect = width as f32 / height.max(1) as f32;
+        // A bubble that cannot be drawn is cosmetic; the fight carries on without it.
+        let _ = bubble.update(container, &state.stage, &frame, aspect);
     }
     if !state.fallback_applied
         && let Some((ground, backdrop)) = state.fallback.clone()

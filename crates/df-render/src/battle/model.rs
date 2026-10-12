@@ -259,11 +259,11 @@ pub struct FloatingText {
     pub token: TokenId,
     pub text: String,
     pub tone: FloatTone,
-    /// Seconds since it appeared; it fades out by [`FLOAT_LIFETIME_S`].
+    /// Seconds since it appeared; see [`super::float_text`] for how long it lives.
     pub age_s: f32,
+    /// How long it stays fully shown after it has risen, in seconds.
+    pub hold_s: f32,
 }
-
-pub const FLOAT_LIFETIME_S: f32 = 1.4;
 
 /// What a camera shot is centred on.
 #[derive(Clone, Debug, PartialEq)]

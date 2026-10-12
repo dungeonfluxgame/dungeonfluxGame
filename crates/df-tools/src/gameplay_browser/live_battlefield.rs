@@ -1262,6 +1262,8 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
                 damage: outcome.damage,
                 target_hit_points_after: outcome.target_hit_points,
                 downed: outcome.knocked_out || outcome.target_hit_points == 0,
+                weapon: outcome.weapon.clone(),
+                grazed: outcome.grazed,
             })
         })
         .collect();
@@ -1592,6 +1594,20 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                     }
                 }
                 "impact" => {
+                    // The view's latest outcome for this pair names the attack.
+                    let label = guard.latest.as_ref().and_then(|snapshot| {
+                        snapshot
+                            .outcomes
+                            .iter()
+                            .rev()
+                            .find(|outcome| {
+                                outcome.actor == attacker.0 && outcome.target == target.0
+                            })
+                            .and_then(Outcome::attack_label)
+                    });
+                    if let Some(label) = label {
+                        stage.set_attack_label(&attacker, &label);
+                    }
                     let result = if roll.hit || roll.grazed {
                         AttackResult::Hit {
                             damage: roll.damage,
@@ -1653,6 +1669,35 @@ pub(super) fn scene_resolved() -> bool {
         matches!(live.phase, Phase::Active)
             && live.stage.as_ref().is_some_and(|stage| stage.is_resolved())
     })
+}
+
+/// A line is spoken by the figure called `speaker_name`: a speech bubble opens over it, its tail to
+/// the speaker's head, and the camera eases in on it. Call it when the line's voice starts, and
+/// [`end_speech`] when it ends. Returns false (and shows nothing) when that speaker is not on the
+/// field, so the caller can fall back to its own presentation.
+// Called by the display's line sequencer (the stage-machines work), which lands separately.
+#[allow(dead_code)]
+pub(super) fn speak(speaker_name: &str, text: &str, line_id: u64) -> bool {
+    LIVE.with(|live| {
+        let live = live.borrow();
+        live.stage
+            .as_ref()
+            .filter(|_| matches!(live.phase, Phase::Active))
+            .and_then(|stage| stage.with_stage(|stage| stage.speak(speaker_name, text, line_id)))
+            .unwrap_or(false)
+    })
+}
+
+/// The line `line_id` ended: its bubble closes and the camera eases back. Any other line's end
+/// is ignored.
+// Called by the display's line sequencer (the stage-machines work), which lands separately.
+#[allow(dead_code)]
+pub(super) fn end_speech(line_id: u64) {
+    LIVE.with(|live| {
+        if let Some(stage) = &live.borrow().stage {
+            stage.with_stage(|stage| stage.end_speech(line_id));
+        }
+    });
 }
 
 fn reset_fight(live: &mut Live) {

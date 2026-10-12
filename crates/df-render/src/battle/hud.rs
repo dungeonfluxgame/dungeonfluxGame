@@ -9,8 +9,10 @@ use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
 use super::{
+    float_text,
     math::Vec3,
     model::{FloatTone, Side, TokenId, ordinal},
+    speech::Rect,
     stage::{FigureView, FrameView, Stage},
     status::{Status, icon_statuses},
 };
@@ -411,18 +413,40 @@ impl Hud {
             }
             keep
         });
+        // Results already placed this frame, oldest first: a newer one that would sit on an older
+        // one is stacked clear of it (enemies acting in a row), never drawn over it.
+        let mut placed: Vec<Rect> = Vec::new();
         for text in frame.floats {
             let Some(figure) = frame.figures.iter().find(|figure| figure.id == text.token) else {
                 continue;
             };
-            let rise = 0.25 + text.age_s * 0.6;
-            let anchor = figure.position + Vec3::new(0.0, figure.height_m * 0.95 + rise, 0.0);
+            let anchor = figure.position
+                + Vec3::new(
+                    0.0,
+                    figure.height_m * 0.95 + float_text::rise_m(text.age_s),
+                    0.0,
+                );
             let Some((x, y)) = stage.project(anchor, aspect) else {
                 continue;
             };
             // Kept under the round strip and clear of the side cards, however high the figure
             // stands in the picture.
             let (x, y) = (x.clamp(0.14, 0.86), y.clamp(FLOAT_TOP_LIMIT, 0.92));
+            let (width, height) = float_text::estimate_size(&text.text, aspect);
+            let wanted = Rect {
+                left: x - width * 0.5,
+                top: y - height * 0.5,
+                right: x + width * 0.5,
+                bottom: y + height * 0.5,
+            };
+            let shift =
+                float_text::clear_shift(&placed, wanted, height * 1.1, FLOAT_TOP_LIMIT, 0.92);
+            let y = y + shift;
+            placed.push(Rect {
+                top: wanted.top + shift,
+                bottom: wanted.bottom + shift,
+                ..wanted
+            });
             if !self.float_elements.contains_key(&text.id) {
                 let tone = match text.tone {
                     FloatTone::Damage => "damage",
@@ -435,8 +459,7 @@ impl Hud {
                 self.float_elements.insert(text.id, node);
             }
             if let Some(node) = self.float_elements.get(&text.id) {
-                let fade = (1.0 - (text.age_s / super::model::FLOAT_LIFETIME_S - 0.55) / 0.45)
-                    .clamp(0.0, 1.0);
+                let fade = float_text::opacity(text.age_s, text.hold_s);
                 node.set_attribute(
                     "style",
                     &format!(

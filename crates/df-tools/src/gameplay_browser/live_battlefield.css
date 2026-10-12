@@ -37,9 +37,9 @@
 .bf-party .bf-hp-fill{background:linear-gradient(90deg,#3f9d58,#7fd68a)}
 
 .bf-floats{position:absolute;inset:0}
-.bf-float{position:absolute;transform:translate(-50%,-50%);font-size:calc(var(--u)*3.6);font-weight:700;color:#ff6b5e;text-shadow:0 3px 14px #000,0 0 calc(var(--u)*1) #000}
-.bf-float[data-tone=critical]{font-size:calc(var(--u)*5);color:#ffd24a}
-.bf-float[data-tone=miss]{font-size:calc(var(--u)*2.8);font-style:italic;font-weight:400;color:#c9d3df}
+.bf-float{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;font-size:calc(var(--u)*2.6);font-weight:700;color:#ff6b5e;text-shadow:0 3px 14px #000,0 0 calc(var(--u)*1) #000}
+.bf-float[data-tone=critical]{font-size:calc(var(--u)*3.2);color:#ffd24a}
+.bf-float[data-tone=miss]{font-size:calc(var(--u)*2.4);font-style:italic;font-weight:400;color:#c9d3df}
 .bf-float[data-tone=heal]{color:#7ee8a0}
 
 .bf-roll{position:absolute;left:50%;bottom:calc(var(--u)*3);transform:translate(-50%,calc(var(--u)*1.5));display:flex;align-items:center;gap:calc(var(--u)*1.6);max-width:calc(var(--u)*58);padding:calc(var(--u)*.8) calc(var(--u)*1.6);background:linear-gradient(135deg,#0b1623ee,#050b13f2);border:1px solid #c9a35fa6;border-radius:calc(var(--u)*.7);opacity:0;transition:opacity .35s ease,transform .35s ease}
@@ -105,3 +105,15 @@
 .bf-splash-track{width:calc(30*var(--u,1vw));height:calc(.38*var(--u,1vw));min-height:2px;background:#e8cb9426;border-radius:9px;overflow:hidden}
 .bf-splash-bar{display:block;height:100%;width:100%;background:linear-gradient(90deg,#b98b4a,#f2d9a0);transform-origin:0 50%;transform:scaleX(0);transition:transform .25s ease-out;box-shadow:0 0 10px #e8cb9488}
 .bf-splash-note{font-size:calc(1.35*var(--u,1vw));letter-spacing:.2em;text-transform:uppercase;opacity:.72;min-height:1.4em}
+
+/* Speech bubble: who is speaking, anchored to the figure with a tail to its head. */
+.bf-speech{position:absolute;inset:0;z-index:6;pointer-events:none;opacity:0;transition:opacity .25s ease}
+.bf-speech[data-open]{opacity:1}
+.bf-speech-tail{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.bf-speech-tail polygon{fill:#f5ecd6;stroke:#c9a35a;stroke-width:1.2px;vector-effect:non-scaling-stroke;stroke-linejoin:round}
+.bf-speech[data-side=enemy] .bf-speech-tail polygon{fill:#f1dcd2;stroke:#b4543f}
+.bf-speech-bubble{position:absolute;box-sizing:border-box;padding:calc(var(--u)*.8) calc(var(--u)*1.2);background:#f5ecd6;color:#1d150c;border:max(1.5px,calc(var(--u)*.12)) solid #c9a35a;border-radius:calc(var(--u)*1.2);box-shadow:0 calc(var(--u)*.4) calc(var(--u)*1.6) #0009;text-shadow:none;font-size:calc(var(--u)*1.55);line-height:1.28}
+.bf-speech[data-side=enemy] .bf-speech-bubble{background:#f1dcd2;border-color:#b4543f}
+.bf-speech-name{display:block;margin-bottom:calc(var(--u)*.25);font-size:calc(var(--u)*1.15);font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#7a5a24}
+.bf-speech[data-side=enemy] .bf-speech-name{color:#8a2f1f}
+.bf-speech-text{display:block}

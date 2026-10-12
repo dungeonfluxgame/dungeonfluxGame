@@ -9,17 +9,19 @@ use super::{
     camera::{CameraPose, CameraRig, ShotName},
     director::{self, Anim, FALL_LANDS, FlashTone, PlanError, ReadyStyle, Step, Timeline},
     feel::{self, FeelState, FeelView, ImpactClass, ImpactEffect},
+    float_text,
     framing::{self, Body},
     grid::{Cell, Grid},
     layout::{Cover, Layout},
     math::{Vec3, ease_in_out},
     model::{
-        BadgeView, Beat, CameraCommand, CameraFocus, DieView, FLOAT_LIFETIME_S, FinishingBlow,
-        FloatingText, Highlight, HitPoints, HudState, InitiativeShow, Side, Token, TokenId,
+        BadgeView, Beat, CameraCommand, CameraFocus, DieView, FinishingBlow, FloatingText,
+        Highlight, HitPoints, HudState, InitiativeShow, Side, Token, TokenId,
     },
     particles::Particles,
     scene_file::BattleScene,
     sound::{SoundEvent, SoundKind, voice_for},
+    speech,
     status::{self, Status, StatusPose, StatusSet},
 };
 
@@ -196,6 +198,27 @@ pub struct ImpactEvent {
 /// Camera distance above which a shot counts as a wide shot (it gets the slow orbit drift).
 const WIDE_DISTANCE_M: f32 = 9.0;
 
+/// The line being spoken now, for the bubble over the speaker.
+pub struct SpeechView<'a> {
+    pub token: &'a TokenId,
+    pub name: &'a str,
+    pub text: &'a str,
+    pub line_id: u64,
+    pub age_s: f32,
+}
+
+/// A spoken line on the stage: who says it and how the camera was before it came in.
+struct Speech {
+    token: TokenId,
+    name: String,
+    text: String,
+    line_id: u64,
+    age_s: f32,
+    /// Where the camera was when the line began, to ease back to; `None` when the camera was
+    /// busy with a beat and was left alone.
+    return_pose: Option<CameraPose>,
+}
+
 pub struct FrameView<'a> {
     pub camera: CameraPose,
     pub shake_px: (f32, f32),
@@ -209,6 +232,7 @@ pub struct FrameView<'a> {
     pub figures: Vec<FigureView>,
     pub highlight: Option<&'a Highlight>,
     pub tactical_highlights: &'a [Highlight],
+    pub speech: Option<SpeechView<'a>>,
     pub projectiles: Vec<ProjectileView>,
     /// The layout in play and the grid with its obstacles applied.
     pub layout: Option<&'a Layout>,
@@ -240,6 +264,9 @@ pub struct Stage {
     pending_tokens: Option<Vec<Token>>,
     highlight: Option<Highlight>,
     tactical_highlights: Vec<Highlight>,
+    speech: Option<Speech>,
+    /// The attack names waiting for their blow's result: who struck, and with what.
+    attack_labels: Vec<(TokenId, String)>,
     hud: HudState,
     floats: Vec<FloatingText>,
     flash: Option<Flash>,
@@ -295,6 +322,8 @@ impl Stage {
             pending_tokens: None,
             highlight: None,
             tactical_highlights: Vec::new(),
+            speech: None,
+            attack_labels: Vec::new(),
             hud: HudState::default(),
             floats: Vec::new(),
             flash: None,
@@ -412,6 +441,90 @@ impl Stage {
             self.pending_roll_card = None;
             self.hud.roll_card = Some(card);
             self.roll_card_left_s = ROLL_CARD_SECONDS;
+        }
+    }
+
+    /// A line is spoken by the figure called `speaker_name`: a bubble opens over it and the camera
+    /// eases in on it. Returns false (and shows nothing) when nobody of that name is on the field.
+    /// A second line while one is up replaces it. The camera is left alone while a beat plays.
+    pub fn speak(&mut self, speaker_name: &str, text: &str, line_id: u64) -> bool {
+        let wanted = speaker_name.trim().to_lowercase();
+        let Some(runtime) = self
+            .tokens
+            .iter()
+            .find(|runtime| runtime.token.name.trim().to_lowercase() == wanted)
+        else {
+            return false;
+        };
+        let token = runtime.token.id.clone();
+        let name = runtime.token.name.clone();
+        // A replaced line keeps the pose the camera first left.
+        let return_pose = match self.speech.take() {
+            Some(previous) => previous.return_pose,
+            None if self.playing.is_none() && self.queue.is_empty() => Some(self.rig.pose()),
+            None => None,
+        };
+        if return_pose.is_some() {
+            let command = CameraCommand {
+                shot: ShotName::TurnFocus,
+                focus: CameraFocus::Action {
+                    actor: token.clone(),
+                    target: None,
+                    stand: None,
+                },
+                dolly: speech::CAMERA_DOLLY,
+            };
+            if let Some((pose, _)) = self.camera_pose_for(&command) {
+                self.rig
+                    .pan_to(pose, Duration::from_secs_f32(speech::CAMERA_EASE_S));
+            }
+        }
+        self.speech = Some(Speech {
+            token,
+            name,
+            text: text.to_owned(),
+            line_id,
+            age_s: 0.0,
+            return_pose,
+        });
+        true
+    }
+
+    /// The line `line_id` ended (its voice finished): the bubble closes and the camera eases back.
+    /// A call for any other line is ignored.
+    pub fn end_speech(&mut self, line_id: u64) {
+        if self
+            .speech
+            .as_ref()
+            .is_none_or(|speech| speech.line_id != line_id)
+        {
+            return;
+        }
+        self.close_speech();
+    }
+
+    fn close_speech(&mut self) {
+        let Some(speech) = self.speech.take() else {
+            return;
+        };
+        if let Some(pose) = speech.return_pose
+            && self.playing.is_none()
+            && self.queue.is_empty()
+        {
+            self.rig
+                .pan_to(pose, Duration::from_secs_f32(speech::CAMERA_EASE_S));
+        }
+    }
+
+    /// Names the attack `attacker` is about to make ("Greatsword", "Bite", "Graze"): the result
+    /// shown at its target reads "Name - result". Call it before staging the blow. A name a blow
+    /// never used is dropped after a few more arrive, so an unused one cannot attach to a later blow.
+    pub fn set_attack_label(&mut self, attacker: &TokenId, label: &str) {
+        self.attack_labels.retain(|(id, _)| id != attacker);
+        self.attack_labels
+            .push((attacker.clone(), label.to_owned()));
+        if self.attack_labels.len() > 8 {
+            self.attack_labels.remove(0);
         }
     }
 
@@ -685,6 +798,12 @@ impl Stage {
         let dt = sim.as_secs_f32().min(0.25);
         self.rig.update(elapsed);
         self.observe_camera_speed(real_dt);
+        if let Some(speech) = &mut self.speech {
+            speech.age_s += real_dt;
+            if speech.age_s >= speech::MAX_LINE_S {
+                self.close_speech();
+            }
+        }
         if self.playing.is_none() {
             self.start_next();
         }
@@ -767,7 +886,8 @@ impl Stage {
         for text in &mut self.floats {
             text.age_s += dt;
         }
-        self.floats.retain(|text| text.age_s < FLOAT_LIFETIME_S);
+        self.floats
+            .retain(|text| text.age_s < float_text::lifetime(text.hold_s));
         if let Some(flash) = &mut self.flash {
             flash.age_s += real_dt;
             let life = if flash.tone == FlashTone::Heal {
@@ -1089,14 +1209,29 @@ impl Stage {
                     age_s: 0.0,
                 });
             }
-            Step::Float { token, text, tone } => {
+            Step::Float {
+                token,
+                text,
+                tone,
+                attacker,
+                downed,
+            } => {
                 self.next_float_id += 1;
+                // The attack's name, when the view gave one for this attacker's blow.
+                let attack = attacker.and_then(|attacker| {
+                    let at = self
+                        .attack_labels
+                        .iter()
+                        .position(|(id, _)| *id == attacker)?;
+                    Some(self.attack_labels.remove(at).1)
+                });
                 self.floats.push(FloatingText {
                     id: self.next_float_id,
                     token,
-                    text,
+                    text: float_text::compose(attack.as_deref(), &text, tone, downed),
                     tone,
                     age_s: 0.0,
+                    hold_s: float_text::hold_for(tone, downed),
                 })
             }
             Step::ShowHitPoints { token, current } => {
@@ -1375,6 +1510,13 @@ impl Stage {
             figures,
             highlight: self.highlight.as_ref(),
             tactical_highlights: &self.tactical_highlights,
+            speech: self.speech.as_ref().map(|speech| SpeechView {
+                token: &speech.token,
+                name: &speech.name,
+                text: &speech.text,
+                line_id: speech.line_id,
+                age_s: speech.age_s,
+            }),
             projectiles: self.projectiles.iter().map(projectile_view).collect(),
             layout: self.layout(),
             grid: &self.grid,
@@ -2548,6 +2690,8 @@ mod tests {
                     damage: 0,
                     target_hit_points_after: 12,
                     downed: false,
+                    weapon: String::new(),
+                    grazed: false,
                 })
                 .collect(),
             initiative: ["e", "a", "b"]
@@ -3377,5 +3521,152 @@ mod tests {
         }
         let arrived = figure(&stage, "brakka").position;
         assert!((arrived - stage.grid().cell_centre(Cell::new(1, 3))).length() < 0.02);
+    }
+
+    /// A spoken line: the bubble belongs to the figure named, the camera eases in on it and the
+    /// speaker is in frame; ending the line eases back; the stage is never busy for it.
+    #[test]
+    fn a_spoken_line_opens_over_its_speaker_with_the_camera_easing_in_and_back() {
+        let mut stage = stage();
+        run(&mut stage, 1.0);
+        let before = stage.camera_pose();
+        assert!(!stage.speak("Nobody", "Hello.", 1), "not on the field");
+        assert!(stage.frame().speech.is_none());
+        let name = figure(&stage, "enemy").name.clone();
+        assert!(stage.speak(&name, "Hand over the packet.", 7));
+        assert!(!stage.is_busy(), "a line does not hold the fight");
+        run(&mut stage, 1.5);
+        let speech = stage
+            .frame()
+            .speech
+            .map(|s| (s.name.to_owned(), s.text.to_owned(), s.line_id));
+        assert_eq!(
+            speech,
+            Some((name.clone(), "Hand over the packet.".to_owned(), 7))
+        );
+        let closer = stage.camera_pose();
+        assert!(
+            closer.distance < before.distance,
+            "{} vs {}",
+            closer.distance,
+            before.distance
+        );
+        assert!(projected_inside_safe(&stage, "enemy"));
+        stage.end_speech(99);
+        assert!(
+            stage.frame().speech.is_some(),
+            "another line's end is ignored"
+        );
+        stage.end_speech(7);
+        assert!(stage.frame().speech.is_none());
+        run(&mut stage, 1.5);
+        let back = stage.camera_pose();
+        assert!((back.distance - before.distance).abs() < 0.05);
+        assert!((back.target - before.target).length() < 0.05);
+    }
+
+    #[test]
+    fn a_line_that_is_never_ended_closes_itself_and_a_new_line_replaces_the_old() {
+        let mut stage = stage();
+        run(&mut stage, 1.0);
+        let before = stage.camera_pose();
+        let first = figure(&stage, "enemy").name.clone();
+        let second = figure(&stage, "hero").name.clone();
+        assert!(stage.speak(&first, "One.", 1));
+        run(&mut stage, 0.5);
+        assert!(stage.speak(&second, "Two.", 2));
+        assert_eq!(stage.frame().speech.map(|s| s.line_id), Some(2));
+        run(&mut stage, speech::MAX_LINE_S + 3.0);
+        assert!(stage.frame().speech.is_none());
+        let back = stage.camera_pose();
+        assert!(
+            (back.distance - before.distance).abs() < 0.05,
+            "the camera returns to where it was before the first line"
+        );
+    }
+
+    /// The floating result names the attack and its result, stays up for its whole hold after
+    /// rising, and without a name reads as it always did.
+    #[test]
+    fn the_floating_result_names_the_attack_and_stays_up_long_enough_to_read() {
+        let mut stage = stage();
+        stage.set_attack_label(&TokenId::new("hero"), "Greatsword");
+        stage.stage(ordinary_hit("hero", "enemy", 9)).unwrap();
+        let mut born_at = None;
+        let mut seen_for = 0.0f32;
+        for _ in 0..1200 {
+            stage.update(Duration::from_millis(20));
+            let frame = stage.frame();
+            if let Some(text) = frame.floats.first() {
+                assert_eq!(text.text, "Greatsword - 9");
+                born_at.get_or_insert(stage.clock_s);
+                if text.age_s >= float_text::RISE_S {
+                    seen_for = text.age_s - float_text::RISE_S;
+                }
+            }
+        }
+        assert!(born_at.is_some(), "the result appeared");
+        assert!(seen_for >= 2.5, "stayed up {seen_for} s after rising");
+        let mut plain = self::stage();
+        plain.stage(ordinary_hit("hero", "enemy", 4)).unwrap();
+        run(&mut plain, 3.0);
+        let mut shown = Vec::new();
+        for _ in 0..200 {
+            plain.update(Duration::from_millis(20));
+            shown.extend(plain.frame().floats.iter().map(|text| text.text.clone()));
+        }
+        assert!(
+            shown.is_empty() || shown.iter().all(|text| text == "4"),
+            "{shown:?}"
+        );
+    }
+
+    #[test]
+    fn a_miss_and_a_critical_knockout_are_named_and_a_knockout_stays_longer() {
+        let mut stage = stage();
+        stage.set_attack_label(&TokenId::new("hero"), "Longbow");
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Miss,
+                target_hit_points_after: None,
+            })
+            .unwrap();
+        let mut texts = Vec::new();
+        for _ in 0..600 {
+            stage.update(Duration::from_millis(20));
+            for text in stage.frame().floats {
+                if !texts.contains(&text.text) {
+                    texts.push(text.text.clone());
+                }
+            }
+        }
+        assert_eq!(texts, vec!["Longbow - miss".to_owned()]);
+        let mut stage = self::stage();
+        stage.set_attack_label(&TokenId::new("hero"), "Bite");
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Hit {
+                    damage: 7,
+                    critical: true,
+                    downed: true,
+                },
+                target_hit_points_after: Some(0),
+            })
+            .unwrap();
+        let mut hold = 0.0;
+        let mut text = String::new();
+        for _ in 0..1500 {
+            stage.update(Duration::from_millis(20));
+            if let Some(first) = stage.frame().floats.first() {
+                hold = first.hold_s;
+                text = first.text.clone();
+            }
+        }
+        assert_eq!(text, "Bite - 7, critical, down");
+        assert_eq!(hold, float_text::HOLD_EMPHASIS_S);
     }
 }

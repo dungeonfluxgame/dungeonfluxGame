@@ -148,6 +148,10 @@ pub enum Step {
         token: TokenId,
         text: String,
         tone: FloatTone,
+        /// Who struck, so the result can name their attack (see `Stage::set_attack_label`).
+        attacker: Option<TokenId>,
+        /// The blow put the target down: the result stays longer.
+        downed: bool,
     },
     /// Shows the server-reported hit points on the token at the moment of impact.
     ShowHitPoints {
@@ -766,6 +770,8 @@ fn strike(
                     token: target.id.clone(),
                     text: "Miss".to_owned(),
                     tone: FloatTone::Miss,
+                    attacker: Some(attacker.id.clone()),
+                    downed: false,
                 },
             );
             let miss_sound = if ranged {
@@ -802,6 +808,8 @@ fn strike(
                     } else {
                         FloatTone::Damage
                     },
+                    attacker: Some(attacker.id.clone()),
+                    downed,
                 },
             );
             builder.at(
@@ -958,6 +966,8 @@ fn plan_heal(
             token: target_id.clone(),
             text: format!("+{amount}"),
             tone: FloatTone::Heal,
+            attacker: None,
+            downed: false,
         },
     );
     if let Some(current) = hit_points_after {

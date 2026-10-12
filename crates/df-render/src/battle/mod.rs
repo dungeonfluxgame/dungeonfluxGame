@@ -12,12 +12,15 @@ mod gpu;
 mod host;
 #[cfg(target_arch = "wasm32")]
 mod hud;
+#[cfg(target_arch = "wasm32")]
+mod speech_bubble;
 
 mod camera;
 mod combat_feed;
 mod director;
 pub mod feel;
 mod figure_art;
+pub mod float_text;
 mod formation;
 pub mod framing;
 mod grid;
@@ -30,7 +33,8 @@ mod pacing;
 pub mod particles;
 mod scene_file;
 mod sound;
-mod splash;
+pub mod speech;
+pub mod splash;
 mod splat;
 mod stage;
 mod status;

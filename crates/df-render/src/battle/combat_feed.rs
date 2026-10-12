@@ -59,6 +59,22 @@ pub struct Outcome {
     pub damage: u32,
     pub target_hit_points_after: u32,
     pub downed: bool,
+    /// The weapon the server says was used (its id, as sent); empty when it did not say.
+    pub weapon: String,
+    /// A graze: the blow missed but its mastery still dealt `damage`.
+    pub grazed: bool,
+}
+
+impl Outcome {
+    /// The attack's name for the result shown at the target: "Graze" for a graze, else the
+    /// weapon named by the server; `None` when the view carries neither.
+    pub fn attack_label(&self) -> Option<String> {
+        if self.grazed && !self.hit {
+            return Some("Graze".to_owned());
+        }
+        let name = super::float_text::attack_name(&self.weapon);
+        (!name.is_empty()).then_some(name)
+    }
 }
 
 /// One recorded initiative roll as the server reports it.
@@ -207,6 +223,9 @@ impl CombatFeed {
             stage.set_tokens(tokens);
             if self.mode == FeedMode::StageOutcomes {
                 for outcome in &fresh {
+                    if let Some(label) = outcome.attack_label() {
+                        stage.set_attack_label(&TokenId::new(outcome.actor.clone()), &label);
+                    }
                     match stage.stage(beat_for(outcome)) {
                         Ok(()) => report.staged += 1,
                         Err(_) => report.dropped += 1,
@@ -335,6 +354,8 @@ mod tests {
             damage,
             target_hit_points_after: after,
             downed,
+            weapon: String::new(),
+            grazed: false,
         }
     }
 
@@ -478,6 +499,8 @@ mod hold_tests {
             damage: 5,
             target_hit_points_after: 7,
             downed: false,
+            weapon: String::new(),
+            grazed: false,
         };
         let report = feed.apply(&mut stage, &snapshot(7, vec![hit])).unwrap();
         assert_eq!(report.staged, 0);
