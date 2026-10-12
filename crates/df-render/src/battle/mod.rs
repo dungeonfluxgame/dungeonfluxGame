@@ -19,14 +19,18 @@ mod director;
 mod figure_art;
 mod formation;
 mod grid;
+pub mod grid_lines;
 mod layout;
+mod lod;
 mod math;
 mod model;
+mod pacing;
 mod scene_file;
 mod sound;
 mod splat;
 mod stage;
 mod status;
+mod terrain;
 mod theme;
 
 pub use camera::{CameraPose, CameraRig, PoseError, ShotName};
@@ -40,28 +44,39 @@ pub use figure_art::{VisibleBounds, visible_bounds};
 pub use formation::{Formation, FormationError, derive as derive_formation, from_layout};
 pub use grid::{Cell, Grid, GridError};
 pub use layout::{Cover, Layout, LayoutError, Obstacle, choose as choose_layout};
+pub use lod::{
+    ChunkFile, DecodeJob, DecodePlan, Focus, Limits, LodError, LodIndex, MAX_RANGES, Pick, Range,
+    Selection,
+};
 pub use math::{Mat4, Quat, Vec3};
 pub use model::{
     AttackResult, AttackStyle, BadgeView, Beat, CameraCommand, CameraFocus, DieView, FinishingBlow,
     FloatTone, FloatingText, Highlight, HighlightKind, HitPoints, HudState, InitiativeRoll,
     InitiativeShow, RollCard, Side, Token, TokenId, initiative_line, ordinal,
 };
+pub use pacing::{BattleFps, FramePacer, Pace};
 pub use scene_file::{
-    BackdropLayer, BattleScene, DEFAULT_SCENE_ID, GroundLayer, SceneChoice, SceneFileError,
-    SplatFormat, SplatLayer, embedded_ids, load_embedded, parse as parse_scene, resolve_scene,
+    Attribution, BackdropLayer, BattleScene, DEFAULT_SCENE_ID, Distribution, GroundLayer,
+    SceneChoice, SceneFileError, SplatFormat, SplatGrade, SplatLayer, embedded_ids, load_embedded,
+    parse as parse_scene, resolve_scene,
 };
 pub use sound::{
     ALL_CLIPS, ContentRating, SoundEvent, SoundKind, Surface, VariationPicker, VoiceSet, voice_for,
 };
 pub use splat::{
-    ProceduralGround, RawSplat, SogLoader, SogMeta, SogPlanes, Splat, SplatCloud, SplatError,
-    SplatFileLoader, SplatLoader, SplatSorter, SplatTransform, encode_splat_file,
+    ProceduralGround, RECORD_WORDS, RawSplat, SogLoader, SogMeta, SogPlanes, Splat, SplatCloud,
+    SplatError, SplatFileLoader, SplatLoader, SplatSorter, SplatTransform, counting_order,
+    depth_sort_key, encode_splat_file, orientation_from_euler_deg, pack_record, pack_records,
 };
 pub use stage::{CoverPip, FigureView, FlashView, FrameView, ProjectileView, Stage, StageError};
 pub use status::{
     Resolved, Status, StatusPose, StatusSet, derived_from_view, icon_statuses, pose_for, resolve,
 };
+pub use terrain::{
+    GroundPoint, GroundSettings, HeightField, TerrainError, WalkSettings, blocked_cells,
+    blocker_density, estimate_height_field, estimate_height_field_covered,
+};
 pub use theme::{ColorGrade, Theme};
 
 #[cfg(target_arch = "wasm32")]
-pub use host::{Availability, BattleStage, StageOptions, UnavailableReason};
+pub use host::{Availability, BattleStage, FixedQuality, StageOptions, UnavailableReason};

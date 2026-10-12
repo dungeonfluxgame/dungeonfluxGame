@@ -1,0 +1,2366 @@
+{
+  "schema": "df-hero-catalog/1",
+  "file": "catalog-srd",
+  "source": "srd-5.2.1",
+  "description": "Reference lists transcribed from the System Reference Document 5.2.1 (development/rules-sources/srd-5.2.1-en.pdf; printed page equals PDF page). Used only to check that the hero tables name things the SRD contains. It is not a rules implementation. Costs are copper pieces (100 per GP).",
+  "pages": {
+    "creation_steps": "19-22",
+    "class_core_traits_and_subclasses": "28-82",
+    "backgrounds": "83",
+    "species": "83-86",
+    "feats": "87-88",
+    "weapons_and_properties": "89-91",
+    "armor": "92",
+    "tools": "93-95",
+    "adventuring_gear_and_packs": "95-98",
+    "skills_table": "9",
+    "standard_languages": "20",
+    "rare_languages": "20"
+  },
+  "abilities": [
+    "str",
+    "dex",
+    "con",
+    "int",
+    "wis",
+    "cha"
+  ],
+  "alignments": [
+    {
+      "id": "lawful-good",
+      "name": "Lawful Good",
+      "evil": false
+    },
+    {
+      "id": "neutral-good",
+      "name": "Neutral Good",
+      "evil": false
+    },
+    {
+      "id": "chaotic-good",
+      "name": "Chaotic Good",
+      "evil": false
+    },
+    {
+      "id": "lawful-neutral",
+      "name": "Lawful Neutral",
+      "evil": false
+    },
+    {
+      "id": "neutral",
+      "name": "Neutral",
+      "evil": false
+    },
+    {
+      "id": "chaotic-neutral",
+      "name": "Chaotic Neutral",
+      "evil": false
+    },
+    {
+      "id": "lawful-evil",
+      "name": "Lawful Evil",
+      "evil": true
+    },
+    {
+      "id": "neutral-evil",
+      "name": "Neutral Evil",
+      "evil": true
+    },
+    {
+      "id": "chaotic-evil",
+      "name": "Chaotic Evil",
+      "evil": true
+    }
+  ],
+  "skills": [
+    {
+      "id": "acrobatics",
+      "name": "Acrobatics",
+      "ability": "dex",
+      "page": 9
+    },
+    {
+      "id": "animal-handling",
+      "name": "Animal Handling",
+      "ability": "wis",
+      "page": 9
+    },
+    {
+      "id": "arcana",
+      "name": "Arcana",
+      "ability": "int",
+      "page": 9
+    },
+    {
+      "id": "athletics",
+      "name": "Athletics",
+      "ability": "str",
+      "page": 9
+    },
+    {
+      "id": "deception",
+      "name": "Deception",
+      "ability": "cha",
+      "page": 9
+    },
+    {
+      "id": "history",
+      "name": "History",
+      "ability": "int",
+      "page": 9
+    },
+    {
+      "id": "insight",
+      "name": "Insight",
+      "ability": "wis",
+      "page": 9
+    },
+    {
+      "id": "intimidation",
+      "name": "Intimidation",
+      "ability": "cha",
+      "page": 9
+    },
+    {
+      "id": "investigation",
+      "name": "Investigation",
+      "ability": "int",
+      "page": 9
+    },
+    {
+      "id": "medicine",
+      "name": "Medicine",
+      "ability": "wis",
+      "page": 9
+    },
+    {
+      "id": "nature",
+      "name": "Nature",
+      "ability": "int",
+      "page": 9
+    },
+    {
+      "id": "perception",
+      "name": "Perception",
+      "ability": "wis",
+      "page": 9
+    },
+    {
+      "id": "performance",
+      "name": "Performance",
+      "ability": "cha",
+      "page": 9
+    },
+    {
+      "id": "persuasion",
+      "name": "Persuasion",
+      "ability": "cha",
+      "page": 9
+    },
+    {
+      "id": "religion",
+      "name": "Religion",
+      "ability": "int",
+      "page": 9
+    },
+    {
+      "id": "sleight-of-hand",
+      "name": "Sleight of Hand",
+      "ability": "dex",
+      "page": 9
+    },
+    {
+      "id": "stealth",
+      "name": "Stealth",
+      "ability": "dex",
+      "page": 9
+    },
+    {
+      "id": "survival",
+      "name": "Survival",
+      "ability": "wis",
+      "page": 9
+    }
+  ],
+  "classes": [
+    {
+      "id": "barbarian",
+      "name": "Barbarian",
+      "page": 28,
+      "hit_die": 12,
+      "skill_choose": 2,
+      "skill_list": [
+        "animal-handling",
+        "athletics",
+        "intimidation",
+        "nature",
+        "perception",
+        "survival"
+      ],
+      "subclass": "path-of-the-berserker"
+    },
+    {
+      "id": "bard",
+      "name": "Bard",
+      "page": 31,
+      "hit_die": 8,
+      "skill_choose": 3,
+      "skill_list": [
+        "acrobatics",
+        "animal-handling",
+        "arcana",
+        "athletics",
+        "deception",
+        "history",
+        "insight",
+        "intimidation",
+        "investigation",
+        "medicine",
+        "nature",
+        "perception",
+        "performance",
+        "persuasion",
+        "religion",
+        "sleight-of-hand",
+        "stealth",
+        "survival"
+      ],
+      "subclass": "college-of-lore"
+    },
+    {
+      "id": "cleric",
+      "name": "Cleric",
+      "page": 36,
+      "hit_die": 8,
+      "skill_choose": 2,
+      "skill_list": [
+        "history",
+        "insight",
+        "medicine",
+        "persuasion",
+        "religion"
+      ],
+      "subclass": "life-domain"
+    },
+    {
+      "id": "druid",
+      "name": "Druid",
+      "page": 41,
+      "hit_die": 8,
+      "skill_choose": 2,
+      "skill_list": [
+        "animal-handling",
+        "arcana",
+        "insight",
+        "medicine",
+        "nature",
+        "perception",
+        "religion",
+        "survival"
+      ],
+      "subclass": "circle-of-the-land"
+    },
+    {
+      "id": "fighter",
+      "name": "Fighter",
+      "page": 47,
+      "hit_die": 10,
+      "skill_choose": 2,
+      "skill_list": [
+        "acrobatics",
+        "animal-handling",
+        "athletics",
+        "history",
+        "insight",
+        "intimidation",
+        "persuasion",
+        "perception",
+        "survival"
+      ],
+      "subclass": "champion"
+    },
+    {
+      "id": "monk",
+      "name": "Monk",
+      "page": 49,
+      "hit_die": 8,
+      "skill_choose": 2,
+      "skill_list": [
+        "acrobatics",
+        "athletics",
+        "history",
+        "insight",
+        "religion",
+        "stealth"
+      ],
+      "subclass": "warrior-of-the-open-hand"
+    },
+    {
+      "id": "paladin",
+      "name": "Paladin",
+      "page": 53,
+      "hit_die": 10,
+      "skill_choose": 2,
+      "skill_list": [
+        "athletics",
+        "insight",
+        "intimidation",
+        "medicine",
+        "persuasion",
+        "religion"
+      ],
+      "subclass": "oath-of-devotion"
+    },
+    {
+      "id": "ranger",
+      "name": "Ranger",
+      "page": 57,
+      "hit_die": 10,
+      "skill_choose": 3,
+      "skill_list": [
+        "animal-handling",
+        "athletics",
+        "insight",
+        "investigation",
+        "nature",
+        "perception",
+        "stealth",
+        "survival"
+      ],
+      "subclass": "hunter"
+    },
+    {
+      "id": "rogue",
+      "name": "Rogue",
+      "page": 61,
+      "hit_die": 8,
+      "skill_choose": 4,
+      "skill_list": [
+        "acrobatics",
+        "athletics",
+        "deception",
+        "insight",
+        "intimidation",
+        "investigation",
+        "perception",
+        "persuasion",
+        "sleight-of-hand",
+        "stealth"
+      ],
+      "subclass": "thief"
+    },
+    {
+      "id": "sorcerer",
+      "name": "Sorcerer",
+      "page": 64,
+      "hit_die": 6,
+      "skill_choose": 2,
+      "skill_list": [
+        "arcana",
+        "deception",
+        "insight",
+        "intimidation",
+        "persuasion",
+        "religion"
+      ],
+      "subclass": "draconic-sorcery"
+    },
+    {
+      "id": "warlock",
+      "name": "Warlock",
+      "page": 70,
+      "hit_die": 8,
+      "skill_choose": 2,
+      "skill_list": [
+        "arcana",
+        "deception",
+        "history",
+        "intimidation",
+        "investigation",
+        "nature",
+        "religion"
+      ],
+      "subclass": "fiend-patron"
+    },
+    {
+      "id": "wizard",
+      "name": "Wizard",
+      "page": 77,
+      "hit_die": 6,
+      "skill_choose": 2,
+      "skill_list": [
+        "arcana",
+        "history",
+        "insight",
+        "investigation",
+        "medicine",
+        "nature",
+        "religion"
+      ],
+      "subclass": "evoker"
+    }
+  ],
+  "subclasses": [
+    {
+      "id": "path-of-the-berserker",
+      "name": "Path of the Berserker",
+      "class": "barbarian",
+      "level": 3,
+      "page": 30
+    },
+    {
+      "id": "college-of-lore",
+      "name": "College of Lore",
+      "class": "bard",
+      "level": 3,
+      "page": 35
+    },
+    {
+      "id": "life-domain",
+      "name": "Life Domain",
+      "class": "cleric",
+      "level": 3,
+      "page": 40
+    },
+    {
+      "id": "circle-of-the-land",
+      "name": "Circle of the Land",
+      "class": "druid",
+      "level": 3,
+      "page": 46
+    },
+    {
+      "id": "champion",
+      "name": "Champion",
+      "class": "fighter",
+      "level": 3,
+      "page": 49
+    },
+    {
+      "id": "warrior-of-the-open-hand",
+      "name": "Warrior of the Open Hand",
+      "class": "monk",
+      "level": 3,
+      "page": 52
+    },
+    {
+      "id": "oath-of-devotion",
+      "name": "Oath of Devotion",
+      "class": "paladin",
+      "level": 3,
+      "page": 56
+    },
+    {
+      "id": "hunter",
+      "name": "Hunter",
+      "class": "ranger",
+      "level": 3,
+      "page": 61
+    },
+    {
+      "id": "thief",
+      "name": "Thief",
+      "class": "rogue",
+      "level": 3,
+      "page": 64
+    },
+    {
+      "id": "draconic-sorcery",
+      "name": "Draconic Sorcery",
+      "class": "sorcerer",
+      "level": 3,
+      "page": 69
+    },
+    {
+      "id": "fiend-patron",
+      "name": "Fiend Patron",
+      "class": "warlock",
+      "level": 3,
+      "page": 76
+    },
+    {
+      "id": "evoker",
+      "name": "Evoker",
+      "class": "wizard",
+      "level": 3,
+      "page": 82
+    }
+  ],
+  "species": [
+    {
+      "id": "dragonborn",
+      "name": "Dragonborn",
+      "page": 84
+    },
+    {
+      "id": "dwarf",
+      "name": "Dwarf",
+      "page": 84
+    },
+    {
+      "id": "elf",
+      "name": "Elf",
+      "page": 84
+    },
+    {
+      "id": "gnome",
+      "name": "Gnome",
+      "page": 85
+    },
+    {
+      "id": "goliath",
+      "name": "Goliath",
+      "page": 85
+    },
+    {
+      "id": "halfling",
+      "name": "Halfling",
+      "page": 86
+    },
+    {
+      "id": "human",
+      "name": "Human",
+      "page": 86
+    },
+    {
+      "id": "orc",
+      "name": "Orc",
+      "page": 86
+    },
+    {
+      "id": "tiefling",
+      "name": "Tiefling",
+      "page": 86
+    }
+  ],
+  "backgrounds": [
+    {
+      "id": "acolyte",
+      "name": "Acolyte",
+      "ability_scores": [
+        "int",
+        "wis",
+        "cha"
+      ],
+      "origin_feat": {
+        "id": "magic-initiate",
+        "list": "cleric"
+      },
+      "skill_proficiencies": [
+        "insight",
+        "religion"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "calligraphers-supplies"
+      },
+      "equipment_a": {
+        "items": [
+          {
+            "item": "calligraphers-supplies",
+            "qty": 1
+          },
+          {
+            "item": "book",
+            "qty": 1
+          },
+          {
+            "item": "holy-symbol",
+            "qty": 1
+          },
+          {
+            "item": "parchment",
+            "qty": 10
+          },
+          {
+            "item": "robe",
+            "qty": 1
+          }
+        ],
+        "gp": 8
+      },
+      "equipment_b_gp": 50,
+      "source": "srd-5.2.1",
+      "page": 83
+    },
+    {
+      "id": "criminal",
+      "name": "Criminal",
+      "ability_scores": [
+        "dex",
+        "con",
+        "int"
+      ],
+      "origin_feat": {
+        "id": "alert"
+      },
+      "skill_proficiencies": [
+        "sleight-of-hand",
+        "stealth"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "thieves-tools"
+      },
+      "equipment_a": {
+        "items": [
+          {
+            "item": "dagger",
+            "qty": 2
+          },
+          {
+            "item": "thieves-tools",
+            "qty": 1
+          },
+          {
+            "item": "crowbar",
+            "qty": 1
+          },
+          {
+            "item": "pouch",
+            "qty": 2
+          },
+          {
+            "item": "clothes-travelers",
+            "qty": 1
+          }
+        ],
+        "gp": 16
+      },
+      "equipment_b_gp": 50,
+      "source": "srd-5.2.1",
+      "page": 83
+    },
+    {
+      "id": "sage",
+      "name": "Sage",
+      "ability_scores": [
+        "con",
+        "int",
+        "wis"
+      ],
+      "origin_feat": {
+        "id": "magic-initiate",
+        "list": "wizard"
+      },
+      "skill_proficiencies": [
+        "arcana",
+        "history"
+      ],
+      "tool_proficiency": {
+        "kind": "specific",
+        "id": "calligraphers-supplies"
+      },
+      "equipment_a": {
+        "items": [
+          {
+            "item": "quarterstaff",
+            "qty": 1
+          },
+          {
+            "item": "calligraphers-supplies",
+            "qty": 1
+          },
+          {
+            "item": "book",
+            "qty": 1
+          },
+          {
+            "item": "parchment",
+            "qty": 8
+          },
+          {
+            "item": "robe",
+            "qty": 1
+          }
+        ],
+        "gp": 8
+      },
+      "equipment_b_gp": 50,
+      "source": "srd-5.2.1",
+      "page": 83
+    },
+    {
+      "id": "soldier",
+      "name": "Soldier",
+      "ability_scores": [
+        "str",
+        "dex",
+        "con"
+      ],
+      "origin_feat": {
+        "id": "savage-attacker"
+      },
+      "skill_proficiencies": [
+        "athletics",
+        "intimidation"
+      ],
+      "tool_proficiency": {
+        "kind": "choice",
+        "category": "gaming-set"
+      },
+      "equipment_a": {
+        "items": [
+          {
+            "item": "spear",
+            "qty": 1
+          },
+          {
+            "item": "shortbow",
+            "qty": 1
+          },
+          {
+            "item": "arrows",
+            "qty": 20
+          },
+          {
+            "item": "dice-set",
+            "qty": 1
+          },
+          {
+            "item": "healers-kit",
+            "qty": 1
+          },
+          {
+            "item": "quiver",
+            "qty": 1
+          },
+          {
+            "item": "clothes-travelers",
+            "qty": 1
+          }
+        ],
+        "gp": 14
+      },
+      "equipment_b_gp": 50,
+      "source": "srd-5.2.1",
+      "page": 83
+    }
+  ],
+  "origin_feats": [
+    {
+      "id": "alert",
+      "name": "Alert",
+      "page": 87
+    },
+    {
+      "id": "magic-initiate",
+      "name": "Magic Initiate",
+      "page": 87,
+      "lists": [
+        "cleric",
+        "druid",
+        "wizard"
+      ]
+    },
+    {
+      "id": "savage-attacker",
+      "name": "Savage Attacker",
+      "page": 87
+    },
+    {
+      "id": "skilled",
+      "name": "Skilled",
+      "page": 87
+    }
+  ],
+  "fighting_style_feats": [
+    {
+      "id": "archery",
+      "name": "Archery",
+      "page": 87
+    },
+    {
+      "id": "defense",
+      "name": "Defense",
+      "page": 88
+    },
+    {
+      "id": "great-weapon-fighting",
+      "name": "Great Weapon Fighting",
+      "page": 88
+    },
+    {
+      "id": "two-weapon-fighting",
+      "name": "Two-Weapon Fighting",
+      "page": 88
+    }
+  ],
+  "class_choices": {
+    "divine_order": {
+      "class": "cleric",
+      "page": 37,
+      "options": [
+        "protector",
+        "thaumaturge"
+      ]
+    },
+    "primal_order": {
+      "class": "druid",
+      "page": 42,
+      "options": [
+        "magician",
+        "warden"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "id": "alchemists-supplies",
+      "name": "Alchemist's Supplies",
+      "category": "artisan-tools",
+      "cost_cp": 5000,
+      "page": 93
+    },
+    {
+      "id": "brewers-supplies",
+      "name": "Brewer's Supplies",
+      "category": "artisan-tools",
+      "cost_cp": 2000,
+      "page": 93
+    },
+    {
+      "id": "calligraphers-supplies",
+      "name": "Calligrapher's Supplies",
+      "category": "artisan-tools",
+      "cost_cp": 1000,
+      "page": 93
+    },
+    {
+      "id": "carpenters-tools",
+      "name": "Carpenter's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 800,
+      "page": 93
+    },
+    {
+      "id": "cartographers-tools",
+      "name": "Cartographer's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 1500,
+      "page": 93
+    },
+    {
+      "id": "cobblers-tools",
+      "name": "Cobbler's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 500,
+      "page": 93
+    },
+    {
+      "id": "cooks-utensils",
+      "name": "Cook's Utensils",
+      "category": "artisan-tools",
+      "cost_cp": 100,
+      "page": 93
+    },
+    {
+      "id": "glassblowers-tools",
+      "name": "Glassblower's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 3000,
+      "page": 93
+    },
+    {
+      "id": "jewelers-tools",
+      "name": "Jeweler's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 2500,
+      "page": 93
+    },
+    {
+      "id": "leatherworkers-tools",
+      "name": "Leatherworker's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 500,
+      "page": 93
+    },
+    {
+      "id": "masons-tools",
+      "name": "Mason's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 1000,
+      "page": 93
+    },
+    {
+      "id": "painters-supplies",
+      "name": "Painter's Supplies",
+      "category": "artisan-tools",
+      "cost_cp": 1000,
+      "page": 93
+    },
+    {
+      "id": "potters-tools",
+      "name": "Potter's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 1000,
+      "page": 93
+    },
+    {
+      "id": "smiths-tools",
+      "name": "Smith's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 2000,
+      "page": 93
+    },
+    {
+      "id": "tinkers-tools",
+      "name": "Tinker's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 5000,
+      "page": 94
+    },
+    {
+      "id": "weavers-tools",
+      "name": "Weaver's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 100,
+      "page": 94
+    },
+    {
+      "id": "woodcarvers-tools",
+      "name": "Woodcarver's Tools",
+      "category": "artisan-tools",
+      "cost_cp": 100,
+      "page": 94
+    },
+    {
+      "id": "disguise-kit",
+      "name": "Disguise Kit",
+      "category": "other-tools",
+      "cost_cp": 2500,
+      "page": 94
+    },
+    {
+      "id": "forgery-kit",
+      "name": "Forgery Kit",
+      "category": "other-tools",
+      "cost_cp": 1500,
+      "page": 94
+    },
+    {
+      "id": "herbalism-kit",
+      "name": "Herbalism Kit",
+      "category": "other-tools",
+      "cost_cp": 500,
+      "page": 94
+    },
+    {
+      "id": "navigators-tools",
+      "name": "Navigator's Tools",
+      "category": "other-tools",
+      "cost_cp": 2500,
+      "page": 94
+    },
+    {
+      "id": "poisoners-kit",
+      "name": "Poisoner's Kit",
+      "category": "other-tools",
+      "cost_cp": 5000,
+      "page": 94
+    },
+    {
+      "id": "thieves-tools",
+      "name": "Thieves' Tools",
+      "category": "other-tools",
+      "cost_cp": 2500,
+      "page": 94
+    },
+    {
+      "id": "gaming-set",
+      "name": "Gaming Set",
+      "category": "other-tools",
+      "cost_cp": null,
+      "page": 94
+    },
+    {
+      "id": "musical-instrument",
+      "name": "Musical Instrument",
+      "category": "other-tools",
+      "cost_cp": null,
+      "page": 94
+    }
+  ],
+  "tool_variants": {
+    "gaming-set": [
+      "dice-set",
+      "dragonchess",
+      "playing-cards",
+      "three-dragon-ante"
+    ],
+    "musical-instrument": [
+      "bagpipes",
+      "drum",
+      "dulcimer",
+      "flute",
+      "horn",
+      "lute",
+      "lyre",
+      "pan-flute",
+      "shawm",
+      "viol"
+    ]
+  },
+  "languages": {
+    "always": "common",
+    "standard": [
+      {
+        "id": "common-sign-language",
+        "name": "Common Sign Language",
+        "d12": [
+          1,
+          1
+        ]
+      },
+      {
+        "id": "draconic",
+        "name": "Draconic",
+        "d12": [
+          2,
+          2
+        ]
+      },
+      {
+        "id": "dwarvish",
+        "name": "Dwarvish",
+        "d12": [
+          3,
+          4
+        ]
+      },
+      {
+        "id": "elvish",
+        "name": "Elvish",
+        "d12": [
+          5,
+          6
+        ]
+      },
+      {
+        "id": "giant",
+        "name": "Giant",
+        "d12": [
+          7,
+          7
+        ]
+      },
+      {
+        "id": "gnomish",
+        "name": "Gnomish",
+        "d12": [
+          8,
+          8
+        ]
+      },
+      {
+        "id": "goblin",
+        "name": "Goblin",
+        "d12": [
+          9,
+          9
+        ]
+      },
+      {
+        "id": "halfling",
+        "name": "Halfling",
+        "d12": [
+          10,
+          11
+        ]
+      },
+      {
+        "id": "orc",
+        "name": "Orc",
+        "d12": [
+          12,
+          12
+        ]
+      }
+    ],
+    "rare": [
+      "abyssal",
+      "celestial",
+      "deep-speech",
+      "druidic",
+      "infernal",
+      "primordial",
+      "sylvan",
+      "thieves-cant",
+      "undercommon"
+    ]
+  },
+  "free_choices": [
+    "background",
+    "class",
+    "ability-order",
+    "background-ability-increase",
+    "skills",
+    "languages",
+    "alignment",
+    "kit",
+    "fighting-style",
+    "weapon-masteries",
+    "tool-variant",
+    "species-lineage"
+  ],
+  "items": [
+    {
+      "id": "acid",
+      "name": "Acid",
+      "kind": "gear",
+      "cost_cp": 2500,
+      "page": 95
+    },
+    {
+      "id": "alchemists-fire",
+      "name": "Alchemist’s Fire",
+      "kind": "gear",
+      "cost_cp": 5000,
+      "page": 95
+    },
+    {
+      "id": "antitoxin",
+      "name": "Antitoxin",
+      "kind": "gear",
+      "cost_cp": 5000,
+      "page": 95
+    },
+    {
+      "id": "backpack",
+      "name": "Backpack",
+      "kind": "gear",
+      "cost_cp": 200,
+      "page": 95
+    },
+    {
+      "id": "ball-bearings",
+      "name": "Ball Bearings",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "barrel",
+      "name": "Barrel",
+      "kind": "gear",
+      "cost_cp": 200,
+      "page": 95
+    },
+    {
+      "id": "basket",
+      "name": "Basket",
+      "kind": "gear",
+      "cost_cp": 40,
+      "page": 95
+    },
+    {
+      "id": "bedroll",
+      "name": "Bedroll",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "bell",
+      "name": "Bell",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "blanket",
+      "name": "Blanket",
+      "kind": "gear",
+      "cost_cp": 50,
+      "page": 95
+    },
+    {
+      "id": "block-and-tackle",
+      "name": "Block and Tackle",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "book",
+      "name": "Book",
+      "kind": "gear",
+      "cost_cp": 2500,
+      "page": 95
+    },
+    {
+      "id": "bottle-glass",
+      "name": "Bottle, Glass",
+      "kind": "gear",
+      "cost_cp": 200,
+      "page": 95
+    },
+    {
+      "id": "bucket",
+      "name": "Bucket",
+      "kind": "gear",
+      "cost_cp": 5,
+      "page": 95
+    },
+    {
+      "id": "burglars-pack",
+      "name": "Burglar’s Pack",
+      "kind": "pack",
+      "cost_cp": 1600,
+      "page": 95
+    },
+    {
+      "id": "caltrops",
+      "name": "Caltrops",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "candle",
+      "name": "Candle",
+      "kind": "gear",
+      "cost_cp": 1,
+      "page": 95
+    },
+    {
+      "id": "case-crossbow-bolt",
+      "name": "Case, Crossbow Bolt",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "case-map-or-scroll",
+      "name": "Case, Map or Scroll",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "chain",
+      "name": "Chain",
+      "kind": "gear",
+      "cost_cp": 500,
+      "page": 95
+    },
+    {
+      "id": "chest",
+      "name": "Chest",
+      "kind": "gear",
+      "cost_cp": 500,
+      "page": 95
+    },
+    {
+      "id": "climbers-kit",
+      "name": "Climber’s Kit",
+      "kind": "gear",
+      "cost_cp": 2500,
+      "page": 95
+    },
+    {
+      "id": "clothes-fine",
+      "name": "Clothes, Fine",
+      "kind": "gear",
+      "cost_cp": 1500,
+      "page": 95
+    },
+    {
+      "id": "clothes-travelers",
+      "name": "Clothes, Traveler’s",
+      "kind": "gear",
+      "cost_cp": 200,
+      "page": 95
+    },
+    {
+      "id": "component-pouch",
+      "name": "Component Pouch",
+      "kind": "gear",
+      "cost_cp": 2500,
+      "page": 95
+    },
+    {
+      "id": "costume",
+      "name": "Costume",
+      "kind": "gear",
+      "cost_cp": 500,
+      "page": 95
+    },
+    {
+      "id": "crowbar",
+      "name": "Crowbar",
+      "kind": "gear",
+      "cost_cp": 200,
+      "page": 95
+    },
+    {
+      "id": "diplomats-pack",
+      "name": "Diplomat’s Pack",
+      "kind": "pack",
+      "cost_cp": 3900,
+      "page": 95
+    },
+    {
+      "id": "dungeoneers-pack",
+      "name": "Dungeoneer’s Pack",
+      "kind": "pack",
+      "cost_cp": 1200,
+      "page": 95
+    },
+    {
+      "id": "entertainers-pack",
+      "name": "Entertainer’s Pack",
+      "kind": "pack",
+      "cost_cp": 4000,
+      "page": 95
+    },
+    {
+      "id": "explorers-pack",
+      "name": "Explorer’s Pack",
+      "kind": "pack",
+      "cost_cp": 1000,
+      "page": 95
+    },
+    {
+      "id": "flask",
+      "name": "Flask",
+      "kind": "gear",
+      "cost_cp": 2,
+      "page": 95
+    },
+    {
+      "id": "grappling-hook",
+      "name": "Grappling Hook",
+      "kind": "gear",
+      "cost_cp": 200,
+      "page": 95
+    },
+    {
+      "id": "healers-kit",
+      "name": "Healer’s Kit",
+      "kind": "gear",
+      "cost_cp": 500,
+      "page": 95
+    },
+    {
+      "id": "holy-water",
+      "name": "Holy Water",
+      "kind": "gear",
+      "cost_cp": 2500,
+      "page": 95
+    },
+    {
+      "id": "hunting-trap",
+      "name": "Hunting Trap",
+      "kind": "gear",
+      "cost_cp": 500,
+      "page": 95
+    },
+    {
+      "id": "ink",
+      "name": "Ink",
+      "kind": "gear",
+      "cost_cp": 1000,
+      "page": 95
+    },
+    {
+      "id": "ink-pen",
+      "name": "Ink Pen",
+      "kind": "gear",
+      "cost_cp": 2,
+      "page": 95
+    },
+    {
+      "id": "jug",
+      "name": "Jug",
+      "kind": "gear",
+      "cost_cp": 2,
+      "page": 95
+    },
+    {
+      "id": "ladder",
+      "name": "Ladder",
+      "kind": "gear",
+      "cost_cp": 10,
+      "page": 95
+    },
+    {
+      "id": "lamp",
+      "name": "Lamp",
+      "kind": "gear",
+      "cost_cp": 50,
+      "page": 95
+    },
+    {
+      "id": "lantern-bullseye",
+      "name": "Lantern, Bullseye",
+      "kind": "gear",
+      "cost_cp": 1000,
+      "page": 95
+    },
+    {
+      "id": "lantern-hooded",
+      "name": "Lantern, Hooded",
+      "kind": "gear",
+      "cost_cp": 500,
+      "page": 95
+    },
+    {
+      "id": "lock",
+      "name": "Lock",
+      "kind": "gear",
+      "cost_cp": 1000,
+      "page": 95
+    },
+    {
+      "id": "magnifying-glass",
+      "name": "Magnifying Glass",
+      "kind": "gear",
+      "cost_cp": 10000,
+      "page": 95
+    },
+    {
+      "id": "manacles",
+      "name": "Manacles",
+      "kind": "gear",
+      "cost_cp": 200,
+      "page": 95
+    },
+    {
+      "id": "map",
+      "name": "Map",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "mirror",
+      "name": "Mirror",
+      "kind": "gear",
+      "cost_cp": 500,
+      "page": 95
+    },
+    {
+      "id": "net",
+      "name": "Net",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "oil",
+      "name": "Oil",
+      "kind": "gear",
+      "cost_cp": 10,
+      "page": 95
+    },
+    {
+      "id": "paper",
+      "name": "Paper",
+      "kind": "gear",
+      "cost_cp": 20,
+      "page": 95
+    },
+    {
+      "id": "parchment",
+      "name": "Parchment",
+      "kind": "gear",
+      "cost_cp": 10,
+      "page": 95
+    },
+    {
+      "id": "perfume",
+      "name": "Perfume",
+      "kind": "gear",
+      "cost_cp": 500,
+      "page": 95
+    },
+    {
+      "id": "poison-basic",
+      "name": "Poison, Basic",
+      "kind": "gear",
+      "cost_cp": 10000,
+      "page": 95
+    },
+    {
+      "id": "pole",
+      "name": "Pole",
+      "kind": "gear",
+      "cost_cp": 5,
+      "page": 95
+    },
+    {
+      "id": "pot-iron",
+      "name": "Pot, Iron",
+      "kind": "gear",
+      "cost_cp": 200,
+      "page": 95
+    },
+    {
+      "id": "potion-of-healing",
+      "name": "Potion of Healing",
+      "kind": "gear",
+      "cost_cp": 5000,
+      "page": 95
+    },
+    {
+      "id": "pouch",
+      "name": "Pouch",
+      "kind": "gear",
+      "cost_cp": 50,
+      "page": 95
+    },
+    {
+      "id": "priests-pack",
+      "name": "Priest’s Pack",
+      "kind": "pack",
+      "cost_cp": 3300,
+      "page": 95
+    },
+    {
+      "id": "quiver",
+      "name": "Quiver",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "ram-portable",
+      "name": "Ram, Portable",
+      "kind": "gear",
+      "cost_cp": 400,
+      "page": 95
+    },
+    {
+      "id": "rations",
+      "name": "Rations",
+      "kind": "gear",
+      "cost_cp": 50,
+      "page": 95
+    },
+    {
+      "id": "robe",
+      "name": "Robe",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "rope",
+      "name": "Rope",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "sack",
+      "name": "Sack",
+      "kind": "gear",
+      "cost_cp": 1,
+      "page": 95
+    },
+    {
+      "id": "scholars-pack",
+      "name": "Scholar’s Pack",
+      "kind": "pack",
+      "cost_cp": 4000,
+      "page": 95
+    },
+    {
+      "id": "shovel",
+      "name": "Shovel",
+      "kind": "gear",
+      "cost_cp": 200,
+      "page": 95
+    },
+    {
+      "id": "signal-whistle",
+      "name": "Signal Whistle",
+      "kind": "gear",
+      "cost_cp": 5,
+      "page": 95
+    },
+    {
+      "id": "spell-scroll-cantrip",
+      "name": "Spell Scroll (Cantrip)",
+      "kind": "gear",
+      "cost_cp": 3000,
+      "page": 95
+    },
+    {
+      "id": "spell-scroll-level-1",
+      "name": "Spell Scroll (Level 1)",
+      "kind": "gear",
+      "cost_cp": 5000,
+      "page": 95
+    },
+    {
+      "id": "spikes-iron",
+      "name": "Spikes, Iron",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "spyglass",
+      "name": "Spyglass",
+      "kind": "gear",
+      "cost_cp": 100000,
+      "page": 95
+    },
+    {
+      "id": "string",
+      "name": "String",
+      "kind": "gear",
+      "cost_cp": 10,
+      "page": 95
+    },
+    {
+      "id": "tent",
+      "name": "Tent",
+      "kind": "gear",
+      "cost_cp": 200,
+      "page": 95
+    },
+    {
+      "id": "tinderbox",
+      "name": "Tinderbox",
+      "kind": "gear",
+      "cost_cp": 50,
+      "page": 95
+    },
+    {
+      "id": "torch",
+      "name": "Torch",
+      "kind": "gear",
+      "cost_cp": 1,
+      "page": 95
+    },
+    {
+      "id": "vial",
+      "name": "Vial",
+      "kind": "gear",
+      "cost_cp": 100,
+      "page": 95
+    },
+    {
+      "id": "waterskin",
+      "name": "Waterskin",
+      "kind": "gear",
+      "cost_cp": 20,
+      "page": 95
+    },
+    {
+      "id": "holy-symbol",
+      "name": "Holy Symbol",
+      "kind": "gear",
+      "cost_cp": 500,
+      "page": 97
+    },
+    {
+      "id": "arrows",
+      "name": "Arrows",
+      "kind": "ammunition",
+      "cost_cp": 5,
+      "page": 96,
+      "note": "20 for 1 GP"
+    },
+    {
+      "id": "bolts",
+      "name": "Bolts",
+      "kind": "ammunition",
+      "cost_cp": 5,
+      "page": 96,
+      "note": "20 for 1 GP"
+    },
+    {
+      "id": "needles",
+      "name": "Needles",
+      "kind": "ammunition",
+      "cost_cp": 2,
+      "page": 96,
+      "note": "50 for 1 GP"
+    },
+    {
+      "id": "club",
+      "name": "Club",
+      "kind": "weapon",
+      "category": "simple-melee",
+      "cost_cp": 10,
+      "page": 91
+    },
+    {
+      "id": "dagger",
+      "name": "Dagger",
+      "kind": "weapon",
+      "category": "simple-melee",
+      "cost_cp": 200,
+      "page": 91
+    },
+    {
+      "id": "greatclub",
+      "name": "Greatclub",
+      "kind": "weapon",
+      "category": "simple-melee",
+      "cost_cp": 20,
+      "page": 91
+    },
+    {
+      "id": "handaxe",
+      "name": "Handaxe",
+      "kind": "weapon",
+      "category": "simple-melee",
+      "cost_cp": 500,
+      "page": 91
+    },
+    {
+      "id": "javelin",
+      "name": "Javelin",
+      "kind": "weapon",
+      "category": "simple-melee",
+      "cost_cp": 50,
+      "page": 91
+    },
+    {
+      "id": "light-hammer",
+      "name": "Light Hammer",
+      "kind": "weapon",
+      "category": "simple-melee",
+      "cost_cp": 200,
+      "page": 91
+    },
+    {
+      "id": "mace",
+      "name": "Mace",
+      "kind": "weapon",
+      "category": "simple-melee",
+      "cost_cp": 500,
+      "page": 91
+    },
+    {
+      "id": "quarterstaff",
+      "name": "Quarterstaff",
+      "kind": "weapon",
+      "category": "simple-melee",
+      "cost_cp": 20,
+      "page": 91
+    },
+    {
+      "id": "sickle",
+      "name": "Sickle",
+      "kind": "weapon",
+      "category": "simple-melee",
+      "cost_cp": 100,
+      "page": 91
+    },
+    {
+      "id": "spear",
+      "name": "Spear",
+      "kind": "weapon",
+      "category": "simple-melee",
+      "cost_cp": 100,
+      "page": 91
+    },
+    {
+      "id": "dart",
+      "name": "Dart",
+      "kind": "weapon",
+      "category": "simple-ranged",
+      "cost_cp": 5,
+      "page": 91
+    },
+    {
+      "id": "light-crossbow",
+      "name": "Light Crossbow",
+      "kind": "weapon",
+      "category": "simple-ranged",
+      "cost_cp": 2500,
+      "page": 91
+    },
+    {
+      "id": "shortbow",
+      "name": "Shortbow",
+      "kind": "weapon",
+      "category": "simple-ranged",
+      "cost_cp": 2500,
+      "page": 91
+    },
+    {
+      "id": "sling",
+      "name": "Sling",
+      "kind": "weapon",
+      "category": "simple-ranged",
+      "cost_cp": 10,
+      "page": 91
+    },
+    {
+      "id": "battleaxe",
+      "name": "Battleaxe",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 1000,
+      "page": 91
+    },
+    {
+      "id": "flail",
+      "name": "Flail",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 1000,
+      "page": 91
+    },
+    {
+      "id": "glaive",
+      "name": "Glaive",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 2000,
+      "page": 91
+    },
+    {
+      "id": "greataxe",
+      "name": "Greataxe",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 3000,
+      "page": 91
+    },
+    {
+      "id": "greatsword",
+      "name": "Greatsword",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 5000,
+      "page": 91
+    },
+    {
+      "id": "halberd",
+      "name": "Halberd",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 2000,
+      "page": 91
+    },
+    {
+      "id": "lance",
+      "name": "Lance",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 1000,
+      "page": 91
+    },
+    {
+      "id": "longsword",
+      "name": "Longsword",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 1500,
+      "page": 91
+    },
+    {
+      "id": "maul",
+      "name": "Maul",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 1000,
+      "page": 91
+    },
+    {
+      "id": "morningstar",
+      "name": "Morningstar",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 1500,
+      "page": 91
+    },
+    {
+      "id": "pike",
+      "name": "Pike",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 500,
+      "page": 91
+    },
+    {
+      "id": "rapier",
+      "name": "Rapier",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 2500,
+      "page": 91
+    },
+    {
+      "id": "scimitar",
+      "name": "Scimitar",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 2500,
+      "page": 91
+    },
+    {
+      "id": "shortsword",
+      "name": "Shortsword",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 1000,
+      "page": 91
+    },
+    {
+      "id": "trident",
+      "name": "Trident",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 500,
+      "page": 91
+    },
+    {
+      "id": "warhammer",
+      "name": "Warhammer",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 1500,
+      "page": 91
+    },
+    {
+      "id": "war-pick",
+      "name": "War Pick",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 500,
+      "page": 91
+    },
+    {
+      "id": "whip",
+      "name": "Whip",
+      "kind": "weapon",
+      "category": "martial-melee",
+      "cost_cp": 200,
+      "page": 91
+    },
+    {
+      "id": "blowgun",
+      "name": "Blowgun",
+      "kind": "weapon",
+      "category": "martial-ranged",
+      "cost_cp": 1000,
+      "page": 91
+    },
+    {
+      "id": "hand-crossbow",
+      "name": "Hand Crossbow",
+      "kind": "weapon",
+      "category": "martial-ranged",
+      "cost_cp": 7500,
+      "page": 91
+    },
+    {
+      "id": "heavy-crossbow",
+      "name": "Heavy Crossbow",
+      "kind": "weapon",
+      "category": "martial-ranged",
+      "cost_cp": 5000,
+      "page": 91
+    },
+    {
+      "id": "longbow",
+      "name": "Longbow",
+      "kind": "weapon",
+      "category": "martial-ranged",
+      "cost_cp": 5000,
+      "page": 91
+    },
+    {
+      "id": "musket",
+      "name": "Musket",
+      "kind": "weapon",
+      "category": "martial-ranged",
+      "cost_cp": 50000,
+      "page": 91
+    },
+    {
+      "id": "pistol",
+      "name": "Pistol",
+      "kind": "weapon",
+      "category": "martial-ranged",
+      "cost_cp": 25000,
+      "page": 91
+    },
+    {
+      "id": "padded-armor",
+      "name": "Padded Armor",
+      "kind": "armor",
+      "category": "light",
+      "cost_cp": 500,
+      "page": 92
+    },
+    {
+      "id": "leather-armor",
+      "name": "Leather Armor",
+      "kind": "armor",
+      "category": "light",
+      "cost_cp": 1000,
+      "page": 92
+    },
+    {
+      "id": "studded-leather-armor",
+      "name": "Studded Leather Armor",
+      "kind": "armor",
+      "category": "light",
+      "cost_cp": 4500,
+      "page": 92
+    },
+    {
+      "id": "hide-armor",
+      "name": "Hide Armor",
+      "kind": "armor",
+      "category": "medium",
+      "cost_cp": 1000,
+      "page": 92
+    },
+    {
+      "id": "chain-shirt",
+      "name": "Chain Shirt",
+      "kind": "armor",
+      "category": "medium",
+      "cost_cp": 5000,
+      "page": 92
+    },
+    {
+      "id": "scale-mail",
+      "name": "Scale Mail",
+      "kind": "armor",
+      "category": "medium",
+      "cost_cp": 5000,
+      "page": 92
+    },
+    {
+      "id": "breastplate",
+      "name": "Breastplate",
+      "kind": "armor",
+      "category": "medium",
+      "cost_cp": 40000,
+      "page": 92
+    },
+    {
+      "id": "half-plate-armor",
+      "name": "Half Plate Armor",
+      "kind": "armor",
+      "category": "medium",
+      "cost_cp": 75000,
+      "page": 92
+    },
+    {
+      "id": "ring-mail",
+      "name": "Ring Mail",
+      "kind": "armor",
+      "category": "heavy",
+      "cost_cp": 3000,
+      "page": 92
+    },
+    {
+      "id": "chain-mail",
+      "name": "Chain Mail",
+      "kind": "armor",
+      "category": "heavy",
+      "cost_cp": 7500,
+      "page": 92
+    },
+    {
+      "id": "splint-armor",
+      "name": "Splint Armor",
+      "kind": "armor",
+      "category": "heavy",
+      "cost_cp": 20000,
+      "page": 92
+    },
+    {
+      "id": "plate-armor",
+      "name": "Plate Armor",
+      "kind": "armor",
+      "category": "heavy",
+      "cost_cp": 150000,
+      "page": 92
+    },
+    {
+      "id": "shield",
+      "name": "Shield",
+      "kind": "armor",
+      "category": "shield",
+      "cost_cp": 1000,
+      "page": 92
+    },
+    {
+      "id": "alchemists-supplies",
+      "name": "Alchemist's Supplies",
+      "kind": "tool",
+      "cost_cp": 5000,
+      "page": 93
+    },
+    {
+      "id": "brewers-supplies",
+      "name": "Brewer's Supplies",
+      "kind": "tool",
+      "cost_cp": 2000,
+      "page": 93
+    },
+    {
+      "id": "calligraphers-supplies",
+      "name": "Calligrapher's Supplies",
+      "kind": "tool",
+      "cost_cp": 1000,
+      "page": 93
+    },
+    {
+      "id": "carpenters-tools",
+      "name": "Carpenter's Tools",
+      "kind": "tool",
+      "cost_cp": 800,
+      "page": 93
+    },
+    {
+      "id": "cartographers-tools",
+      "name": "Cartographer's Tools",
+      "kind": "tool",
+      "cost_cp": 1500,
+      "page": 93
+    },
+    {
+      "id": "cobblers-tools",
+      "name": "Cobbler's Tools",
+      "kind": "tool",
+      "cost_cp": 500,
+      "page": 93
+    },
+    {
+      "id": "cooks-utensils",
+      "name": "Cook's Utensils",
+      "kind": "tool",
+      "cost_cp": 100,
+      "page": 93
+    },
+    {
+      "id": "glassblowers-tools",
+      "name": "Glassblower's Tools",
+      "kind": "tool",
+      "cost_cp": 3000,
+      "page": 93
+    },
+    {
+      "id": "jewelers-tools",
+      "name": "Jeweler's Tools",
+      "kind": "tool",
+      "cost_cp": 2500,
+      "page": 93
+    },
+    {
+      "id": "leatherworkers-tools",
+      "name": "Leatherworker's Tools",
+      "kind": "tool",
+      "cost_cp": 500,
+      "page": 93
+    },
+    {
+      "id": "masons-tools",
+      "name": "Mason's Tools",
+      "kind": "tool",
+      "cost_cp": 1000,
+      "page": 93
+    },
+    {
+      "id": "painters-supplies",
+      "name": "Painter's Supplies",
+      "kind": "tool",
+      "cost_cp": 1000,
+      "page": 93
+    },
+    {
+      "id": "potters-tools",
+      "name": "Potter's Tools",
+      "kind": "tool",
+      "cost_cp": 1000,
+      "page": 93
+    },
+    {
+      "id": "smiths-tools",
+      "name": "Smith's Tools",
+      "kind": "tool",
+      "cost_cp": 2000,
+      "page": 93
+    },
+    {
+      "id": "tinkers-tools",
+      "name": "Tinker's Tools",
+      "kind": "tool",
+      "cost_cp": 5000,
+      "page": 94
+    },
+    {
+      "id": "weavers-tools",
+      "name": "Weaver's Tools",
+      "kind": "tool",
+      "cost_cp": 100,
+      "page": 94
+    },
+    {
+      "id": "woodcarvers-tools",
+      "name": "Woodcarver's Tools",
+      "kind": "tool",
+      "cost_cp": 100,
+      "page": 94
+    },
+    {
+      "id": "disguise-kit",
+      "name": "Disguise Kit",
+      "kind": "tool",
+      "cost_cp": 2500,
+      "page": 94
+    },
+    {
+      "id": "forgery-kit",
+      "name": "Forgery Kit",
+      "kind": "tool",
+      "cost_cp": 1500,
+      "page": 94
+    },
+    {
+      "id": "herbalism-kit",
+      "name": "Herbalism Kit",
+      "kind": "tool",
+      "cost_cp": 500,
+      "page": 94
+    },
+    {
+      "id": "navigators-tools",
+      "name": "Navigator's Tools",
+      "kind": "tool",
+      "cost_cp": 2500,
+      "page": 94
+    },
+    {
+      "id": "poisoners-kit",
+      "name": "Poisoner's Kit",
+      "kind": "tool",
+      "cost_cp": 5000,
+      "page": 94
+    },
+    {
+      "id": "thieves-tools",
+      "name": "Thieves' Tools",
+      "kind": "tool",
+      "cost_cp": 2500,
+      "page": 94
+    },
+    {
+      "id": "dice-set",
+      "name": "Dice (gaming set)",
+      "kind": "tool",
+      "variant_of": "gaming-set",
+      "cost_cp": 10,
+      "page": 94
+    },
+    {
+      "id": "dragonchess",
+      "name": "Dragonchess (gaming set)",
+      "kind": "tool",
+      "variant_of": "gaming-set",
+      "cost_cp": 100,
+      "page": 94
+    },
+    {
+      "id": "playing-cards",
+      "name": "Playing cards (gaming set)",
+      "kind": "tool",
+      "variant_of": "gaming-set",
+      "cost_cp": 50,
+      "page": 94
+    },
+    {
+      "id": "three-dragon-ante",
+      "name": "Three-dragon ante (gaming set)",
+      "kind": "tool",
+      "variant_of": "gaming-set",
+      "cost_cp": 100,
+      "page": 94
+    },
+    {
+      "id": "bagpipes",
+      "name": "Bagpipes (musical instrument)",
+      "kind": "tool",
+      "variant_of": "musical-instrument",
+      "cost_cp": 3000,
+      "page": 94
+    },
+    {
+      "id": "drum",
+      "name": "Drum (musical instrument)",
+      "kind": "tool",
+      "variant_of": "musical-instrument",
+      "cost_cp": 600,
+      "page": 94
+    },
+    {
+      "id": "dulcimer",
+      "name": "Dulcimer (musical instrument)",
+      "kind": "tool",
+      "variant_of": "musical-instrument",
+      "cost_cp": 2500,
+      "page": 94
+    },
+    {
+      "id": "flute",
+      "name": "Flute (musical instrument)",
+      "kind": "tool",
+      "variant_of": "musical-instrument",
+      "cost_cp": 200,
+      "page": 94
+    },
+    {
+      "id": "horn",
+      "name": "Horn (musical instrument)",
+      "kind": "tool",
+      "variant_of": "musical-instrument",
+      "cost_cp": 300,
+      "page": 94
+    },
+    {
+      "id": "lute",
+      "name": "Lute (musical instrument)",
+      "kind": "tool",
+      "variant_of": "musical-instrument",
+      "cost_cp": 3500,
+      "page": 94
+    },
+    {
+      "id": "lyre",
+      "name": "Lyre (musical instrument)",
+      "kind": "tool",
+      "variant_of": "musical-instrument",
+      "cost_cp": 3000,
+      "page": 94
+    },
+    {
+      "id": "pan-flute",
+      "name": "Pan flute (musical instrument)",
+      "kind": "tool",
+      "variant_of": "musical-instrument",
+      "cost_cp": 1200,
+      "page": 94
+    },
+    {
+      "id": "shawm",
+      "name": "Shawm (musical instrument)",
+      "kind": "tool",
+      "variant_of": "musical-instrument",
+      "cost_cp": 200,
+      "page": 94
+    },
+    {
+      "id": "viol",
+      "name": "Viol (musical instrument)",
+      "kind": "tool",
+      "variant_of": "musical-instrument",
+      "cost_cp": 3000,
+      "page": 94
+    }
+  ]
+}
