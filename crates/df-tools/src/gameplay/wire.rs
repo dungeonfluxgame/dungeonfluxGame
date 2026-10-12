@@ -778,6 +778,7 @@ pub(super) fn project_journey(
         },
         room_code: journey::room_code(),
         join_path: format!("/gameplay/player?room={}", journey::room_code()),
+        join_url: super::join_link::join_url(&journey::room_code()),
         party,
         creation,
         own_character: own,
