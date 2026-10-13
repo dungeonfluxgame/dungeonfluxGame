@@ -28,7 +28,7 @@ order is stated in live_tv.css. */
 .bf-chip[data-down]{filter:grayscale(1);opacity:.45}
 .bf-chip-initial{font-size:calc(var(--u)*1.3);color:var(--gold);text-shadow:0 1px 4px #000}
 
-.bf-party,.bf-enemies{position:absolute;top:calc(var(--u)*2.4);display:flex;flex-direction:column;gap:calc(var(--u)*.8);transition:opacity .6s ease}
+.bf-party,.bf-enemies{position:absolute;top:calc(var(--u)*2.4);z-index:3;display:flex;flex-direction:column;gap:calc(var(--u)*.8);transition:opacity .6s ease}
 .bf-party{left:calc(var(--u)*2.4)}
 .bf-enemies{right:calc(var(--u)*2.4);top:calc(var(--u)*6.6)}
 .bf-plate{display:grid;grid-template-columns:auto minmax(0,1fr);gap:calc(var(--u)*.9);align-items:center;width:calc(var(--u)*19.5);padding:calc(var(--u)*.6) calc(var(--u)*.9);background:linear-gradient(135deg,#0b1623e6,#050b13ed);border:1px solid #c9a35f88;border-radius:calc(var(--u)*.5);transition:border-color .3s ease,box-shadow .3s ease}
@@ -72,9 +72,9 @@ order is stated in live_tv.css. */
 
 /* Status icons, the target tag and the initiative moment. Everything here is anchored to a figure
    by the HUD's own projection; sizes are in --u so they stay readable from across the room. */
-.bf-overlays{position:absolute;inset:0;overflow:hidden}
-.bf-target-tag{position:absolute;transform:translate(-50%,-100%);padding:calc(var(--u)*.35) calc(var(--u)*1.1);font-size:calc(var(--u)*1.5);letter-spacing:.08em;color:#ffd9d2;background:#2a0d0cdd;border:1px solid #ff6a5ccc;border-radius:calc(var(--u)*.5);white-space:nowrap;opacity:0;transition:opacity .25s ease}
-.bf-pips{position:absolute;transform:translate(-50%,-100%);display:flex;gap:calc(var(--u)*.3);align-items:center}
+.bf-overlays{position:absolute;inset:0;z-index:2;overflow:hidden}
+.bf-target-tag{position:absolute;z-index:1;transform:translate(-50%,-100%);padding:calc(var(--u)*.35) calc(var(--u)*1.1);font-size:calc(var(--u)*1.5);letter-spacing:.08em;color:#ffd9d2;background:#2a0d0cdd;border:1px solid #ff6a5ccc;border-radius:calc(var(--u)*.5);white-space:nowrap;opacity:0;transition:opacity .25s ease}
+.bf-pips{position:absolute;z-index:0;transform:translate(-50%,-100%);display:flex;gap:calc(var(--u)*.3);align-items:center}
 .bf-pip{display:grid;place-items:center;width:calc(var(--u)*2.6);height:calc(var(--u)*2.6);border-radius:50%;border:max(2px,calc(var(--u)*.14)) solid var(--chip,#5d6470);background:#0b1018d9;overflow:hidden;font-size:calc(var(--u)*1.1);line-height:1;color:#fff;text-shadow:none;box-shadow:0 2px 8px #000a}
 .bf-pip img{width:100%;height:100%;object-fit:contain;display:block}
 .bf-pip-more{font-size:calc(var(--u)*1.4);color:var(--gold)}

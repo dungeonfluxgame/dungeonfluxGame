@@ -114,6 +114,54 @@ const PLATE_EDGE: f32 = 0.23;
 /// A floating number never rises above this share of the picture height (the round strip is above).
 const FLOAT_TOP_LIMIT: f32 = 0.27;
 
+fn marker_overlaps_figure(marker: Rect, figure: Rect) -> bool {
+    marker.overlap(&figure) > 0.0
+}
+
+fn projected_figure_rect(stage: &Stage, figure: &FigureView, aspect: f32) -> Option<Rect> {
+    let half_width = if figure.downed {
+        0.72
+    } else {
+        figure.height_m * 0.34
+    };
+    let top = if figure.downed { 0.55 } else { figure.height_m };
+    let points = [
+        Vec3::new(-half_width, 0.05, -half_width),
+        Vec3::new(-half_width, 0.05, half_width),
+        Vec3::new(half_width, 0.05, -half_width),
+        Vec3::new(half_width, 0.05, half_width),
+        Vec3::new(-half_width, top, -half_width),
+        Vec3::new(-half_width, top, half_width),
+        Vec3::new(half_width, top, -half_width),
+        Vec3::new(half_width, top, half_width),
+    ];
+    let projected: Vec<(f32, f32)> = points
+        .iter()
+        .filter_map(|point| stage.project(figure.position + *point, aspect))
+        .collect();
+    if projected.is_empty() {
+        return None;
+    }
+    Some(Rect {
+        left: projected
+            .iter()
+            .map(|point| point.0)
+            .fold(f32::INFINITY, f32::min),
+        top: projected
+            .iter()
+            .map(|point| point.1)
+            .fold(f32::INFINITY, f32::min),
+        right: projected
+            .iter()
+            .map(|point| point.0)
+            .fold(f32::NEG_INFINITY, f32::max),
+        bottom: projected
+            .iter()
+            .map(|point| point.1)
+            .fold(f32::NEG_INFINITY, f32::max),
+    })
+}
+
 pub struct Hud {
     document: Document,
     root: Element,
@@ -653,10 +701,29 @@ impl Hud {
                 row.signature = signature;
             }
             match anchor(figure, 0.12) {
-                Some((x, y)) => row.root.set_attribute(
-                    "style",
-                    &format!("left:{:.2}%;top:{:.2}%", x * 100.0, y * 100.0),
-                )?,
+                Some((x, y)) => {
+                    let unit = 0.01_f32.min(0.017_778 * aspect);
+                    let width = (icons.len() as f32 * 2.6
+                        + icons.len().saturating_sub(1) as f32 * 0.3)
+                        * unit;
+                    let marker = Rect {
+                        left: x - width * 0.5,
+                        top: y - 2.6 * unit,
+                        right: x + width * 0.5,
+                        bottom: y,
+                    };
+                    let overlaps_figure = frame.figures.iter().any(|other| {
+                        other.id != figure.id
+                            && projected_figure_rect(stage, other, aspect)
+                                .is_some_and(|bounds| marker_overlaps_figure(marker, bounds))
+                    });
+                    let style = if overlaps_figure {
+                        "display:none".to_owned()
+                    } else {
+                        format!("left:{:.2}%;top:{:.2}%", x * 100.0, y * 100.0)
+                    };
+                    row.root.set_attribute("style", &style)?;
+                }
                 None => row.root.set_attribute("style", "display:none")?,
             }
         }
@@ -819,5 +886,35 @@ impl Hud {
 
     pub fn dispose(self) {
         self.root.remove();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_markers_are_hidden_when_another_figure_overlaps_them() {
+        let marker = Rect {
+            left: 0.45,
+            top: 0.35,
+            right: 0.55,
+            bottom: 0.4,
+        };
+        let overlapping_figure = Rect {
+            left: 0.5,
+            top: 0.2,
+            right: 0.7,
+            bottom: 0.55,
+        };
+        let clear_figure = Rect {
+            left: 0.7,
+            top: 0.2,
+            right: 0.9,
+            bottom: 0.55,
+        };
+
+        assert!(marker_overlaps_figure(marker, overlapping_figure));
+        assert!(!marker_overlaps_figure(marker, clear_figure));
     }
 }

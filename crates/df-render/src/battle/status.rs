@@ -423,6 +423,9 @@ pub fn derived_from_view(hit_points: u32, maximum: u32, knocked_out: bool) -> Ve
 
 /// Statuses worth an icon: everything except the ones that read better as a tile marker.
 pub fn icon_statuses(set: StatusSet) -> Vec<Status> {
+    if set.contains(Status::Unconscious) {
+        return vec![Status::Unconscious];
+    }
     set.iter()
         .filter(|status| *status != Status::Cover)
         .collect()
@@ -611,5 +614,15 @@ mod tests {
     fn cover_is_a_tile_marker_not_an_icon() {
         let icons = icon_statuses(StatusSet::of(&[Status::Cover, Status::Marked]));
         assert_eq!(icons, vec![Status::Marked]);
+    }
+
+    #[test]
+    fn an_unconscious_figure_keeps_only_its_skull_icon() {
+        let icons = icon_statuses(StatusSet::of(&[
+            Status::Unconscious,
+            Status::Bloodied,
+            Status::Poisoned,
+        ]));
+        assert_eq!(icons, vec![Status::Unconscious]);
     }
 }
