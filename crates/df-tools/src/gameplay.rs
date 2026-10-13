@@ -1201,7 +1201,17 @@ pub async fn serve(
         .as_ref()
         .and_then(|prepared| prepared.campaign.clone())
     {
-        let (observer, worker) = adventure::campaign_completion::worker(run)?;
+        let (observer, worker) = match adventure::campaign_completion::worker(run) {
+            Ok(started) => started,
+            Err(error) => {
+                return startup_failure_after_admission(
+                    error.into(),
+                    close_admitted_startup(&mut repository, &mut issuer, "campaign worker"),
+                )
+                .await
+                .map_err(Into::into);
+            }
+        };
         observer.observe(&initial);
         (Some(observer), Some(worker))
     } else {
@@ -1221,12 +1231,21 @@ pub async fn serve(
                 prepared.record.dossiers.len(),
                 prepared.directory.display()
             );
-            social::SocialLedger::open(
+            match social::SocialLedger::open(
                 prepared.record.dossiers.clone(),
                 &prepared.record.seed,
                 Some(prepared.directory.clone()),
-            )
-            .map_err(|error| io::Error::other(error.to_string()))?
+            ) {
+                Ok(social) => social,
+                Err(error) => {
+                    return startup_failure_after_admission(
+                        io::Error::other(error.to_string()),
+                        close_admitted_startup(&mut repository, &mut issuer, "social ledger"),
+                    )
+                    .await
+                    .map_err(Into::into);
+                }
+            }
         }
         _ => social::SocialLedger::none(),
     };
@@ -1882,6 +1901,47 @@ async fn close_unstarted_actor(mut actor: actor::Actor) -> Result<(), io::Error>
     released.map_err(|_| io::Error::other("unstarted actor exact-fence release failed"))?;
     closed.map_err(|_| io::Error::other("unstarted actor repository close failed"))?;
     joined.map_err(|_| io::Error::other("unstarted actor grant close failed"))
+}
+
+async fn startup_failure_after_admission<T>(
+    error: io::Error,
+    cleanup: impl std::future::Future<Output = Result<(), io::Error>>,
+) -> Result<T, io::Error> {
+    cleanup.await?;
+    Err(error)
+}
+
+async fn close_admitted_startup(
+    repository: &mut PostgresRepository<LocalDemoAuthority>,
+    issuer: &mut LocalDemoScopeIssuer,
+    step: &str,
+) -> Result<(), io::Error> {
+    let released = issuer.release_owner_owned().await;
+    let closed = repository.close_owned().await;
+    let grants = issuer.close_owned().await;
+    released.map_err(|_| io::Error::other(format!("{step} exact-fence release failed")))?;
+    closed.map_err(|_| io::Error::other(format!("{step} repository close failed")))?;
+    grants.map_err(|_| io::Error::other(format!("{step} grant close failed")))
+}
+
+#[cfg(test)]
+mod startup_cleanup_tests {
+    use super::startup_failure_after_admission;
+    use std::io;
+
+    #[tokio::test]
+    async fn post_admission_failure_awaits_cleanup_before_returning_the_startup_error() {
+        let mut cleaned = false;
+        let result: Result<(), io::Error> =
+            startup_failure_after_admission(io::Error::other("worker creation failed"), async {
+                cleaned = true;
+                Ok(())
+            })
+            .await;
+
+        assert_eq!(result.unwrap_err().to_string(), "worker creation failed");
+        assert!(cleaned);
+    }
 }
 
 async fn join_grant_driver(
