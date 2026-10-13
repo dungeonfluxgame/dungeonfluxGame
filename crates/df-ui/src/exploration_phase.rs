@@ -963,8 +963,10 @@ mod browser {
                 },
             )?;
             if view.draft_offer_id.is_some() {
+                self.field.root().remove_attribute("hidden")?;
                 self.submit.element().remove_attribute("hidden")?;
             } else {
+                self.field.root().set_attribute("hidden", "")?;
                 self.submit.element().set_attribute("hidden", "")?;
             }
             erase_text(self.field.root());

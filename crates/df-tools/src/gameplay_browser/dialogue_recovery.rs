@@ -31,6 +31,7 @@ struct Exchange {
     revision: Option<rpc::SessionRevision>,
     you: String,
     speaker: String,
+    portrait: String,
     reply: String,
 }
 
@@ -67,6 +68,30 @@ fn current_speaker(client: &Client) -> String {
             .unwrap_or_default(),
         _ => String::new(),
     }
+}
+
+fn current_speaker_portrait(client: &Client, speaker: &str) -> String {
+    let scene = client
+        .views
+        .as_ref()
+        .and_then(|views| views.current())
+        .and_then(|view| match view.audience.as_ref()? {
+            rpc::view_message::Audience::Player(player) => player.scene.as_ref(),
+            _ => None,
+        });
+    speaker_portrait_url(scene, speaker)
+}
+
+fn scene_portrait_url(scene: Option<&rpc::GameplayScene>) -> Option<String> {
+    scene.and_then(|scene| super::live_screens::asset_url(&scene.speaker_portrait))
+}
+
+fn speaker_portrait_url(scene: Option<&rpc::GameplayScene>, speaker: &str) -> String {
+    scene_portrait_url(scene).unwrap_or_else(|| portrait_url(speaker).to_owned())
+}
+
+fn composer_available(journey: Option<&rpc::JourneyView>) -> bool {
+    journey.is_some_and(|journey| !journey.adventure_ended && journey.own_character.is_some())
 }
 
 impl DialogueRecovery {
@@ -163,6 +188,23 @@ pub(super) fn mount(
     if client.borrow().role != "player" {
         return Ok(());
     }
+    let can_show_composer = client
+        .borrow()
+        .views
+        .as_ref()
+        .and_then(|views| views.current())
+        .and_then(|view| view.audience.as_ref())
+        .and_then(|audience| match audience {
+            rpc::view_message::Audience::Player(player) => player.journey.as_ref(),
+            _ => None,
+        })
+        .is_some_and(|journey| composer_available(Some(journey)));
+    if !can_show_composer {
+        if let Some(previous) = parent.query_selector(".dialogue-recovery")? {
+            previous.remove();
+        }
+        return Ok(());
+    }
     let (document, editor, context, selector, focused, selection) = {
         let mut state = client.borrow_mut();
         let document = state.document.clone();
@@ -234,7 +276,7 @@ pub(super) fn mount(
         &panel,
         "p",
         "scope",
-        "Type what you want to say or do. Nothing happens until you confirm a choice.",
+        "Say it sends your words right away. Offered actions still need confirmation.",
     )?;
     let revision = client.borrow().revision;
     {
@@ -250,7 +292,7 @@ pub(super) fn mount(
             node(&document, &thread, "p", "npc-you", &format!("You: {you}"))?;
             let bubble = node(&document, &thread, "div", "npc-bubble", "")?;
             let portrait = node(&document, &bubble, "img", "npc-bubble-portrait", "")?;
-            portrait.set_attribute("src", portrait_url(&exchange.speaker))?;
+            portrait.set_attribute("src", &exchange.portrait)?;
             portrait.set_attribute("alt", "")?;
             let body = node(&document, &bubble, "div", "npc-bubble-body", "")?;
             let name = if exchange.speaker.is_empty() {
@@ -325,8 +367,13 @@ pub(super) fn mount(
     }
     let controls = node(&document, &panel, "div", "dialogue-controls", "")?;
     let raw = button(client, &controls, "Say it", submit)?;
-    let cancel = button(client, &controls, "Decline this choice", decline)?;
-    let confirm = button(client, &controls, "Confirm offered choice", confirm)?;
+    let has_ticket = client.borrow().dialogue.ticket.is_some();
+    let cancel = has_ticket
+        .then(|| button(client, &controls, "Decline this choice", decline))
+        .transpose()?;
+    let confirm = has_ticket
+        .then(|| button(client, &controls, "Confirm offered choice", confirm))
+        .transpose()?;
     // Retry is a lost-response recovery path: it exists only while a confirmation's outcome
     // is unknown. Otherwise the main view's "Connection trouble?" section covers recovery.
     let retry = if client.borrow().dialogue.has_confirmation() {
@@ -342,32 +389,31 @@ pub(super) fn mount(
     let state = client.borrow();
     let recovery = &state.dialogue;
     raw.set_attribute("data-dialogue", "submit")?;
-    cancel.set_attribute("data-dialogue", "cancel")?;
-    confirm.set_attribute("data-dialogue", "confirm")?;
+    if let Some(cancel) = &cancel {
+        cancel.set_attribute("data-dialogue", "cancel")?;
+    }
+    if let Some(confirm) = &confirm {
+        confirm.set_attribute("data-dialogue", "confirm")?;
+    }
     if let Some(retry) = &retry {
         retry.set_attribute("data-dialogue", "retry")?;
     }
-    for (element, disabled) in [
+    for (element, disabled) in std::iter::once((
+        &raw,
+        state.busy || recovery.channel.is_none() || recovery.confirmation.is_some(),
+    ))
+    .chain(cancel.iter().map(|element| {
         (
-            &raw,
+            element,
             state.busy || recovery.channel.is_none() || recovery.confirmation.is_some(),
-        ),
+        )
+    }))
+    .chain(confirm.iter().map(|element| {
         (
-            &cancel,
-            state.busy
-                || recovery.channel.is_none()
-                || recovery.ticket.is_none()
-                || recovery.confirmation.is_some(),
-        ),
-        (
-            &confirm,
-            state.busy
-                || recovery.channel.is_none()
-                || recovery.ticket.is_none()
-                || recovery.confirmation.is_some(),
-        ),
-    ]
-    .into_iter()
+            element,
+            state.busy || recovery.channel.is_none() || recovery.confirmation.is_some(),
+        )
+    }))
     .chain(
         retry
             .as_ref()
@@ -487,7 +533,16 @@ fn listen_for_intent(
             listeners.push(callback);
             Ok(())
         };
-    attach(editor.as_ref(), "input", |client, _| {
+    attach(editor.as_ref(), "input", |client, event| {
+        client.borrow_mut().dialogue.message.clear();
+        if let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+            && let Ok(Some(panel)) = target.closest(".dialogue-recovery")
+            && let Ok(Some(message)) = panel.query_selector(".dialogue-feedback")
+        {
+            message.set_text_content(Some(""));
+        }
         Some(draft_intent(client))
     })?;
     attach(editor.as_ref(), "blur", |client, event| {
@@ -802,10 +857,13 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                                 if !reply.npc_reply.is_empty()
                                     && reply.npc_reply.len() <= MAXIMUM_REPLY_BYTES
                                 {
+                                    let speaker = current_speaker(&state);
+                                    let portrait = current_speaker_portrait(&state, &speaker);
                                     state.dialogue.exchange = Some(Exchange {
                                         revision: input.observed_revision,
                                         you: input.text.clone(),
-                                        speaker: current_speaker(&state),
+                                        speaker,
+                                        portrait,
                                         reply: reply.npc_reply.clone(),
                                     });
                                     if let Some(editor) = &state.dialogue.editor {
@@ -888,4 +946,42 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
             );
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{composer_available, speaker_portrait_url};
+
+    #[test]
+    fn composer_is_hidden_during_creation_and_after_the_journey_ends() {
+        let mut journey = super::rpc::JourneyView {
+            own_character: Some(Default::default()),
+            ..Default::default()
+        };
+
+        assert!(!composer_available(None));
+        journey.own_character = None;
+        assert!(!composer_available(Some(&journey)));
+        journey.own_character = Some(Default::default());
+        assert!(composer_available(Some(&journey)));
+        journey.adventure_ended = true;
+        assert!(!composer_available(Some(&journey)));
+    }
+
+    #[test]
+    fn reply_portrait_prefers_the_current_scene_and_keeps_named_fallback() {
+        let scene = super::rpc::GameplayScene {
+            speaker_portrait: "assets/ui/generated/patron.webp".to_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            speaker_portrait_url(Some(&scene), "Unlisted patron"),
+            "/assets/ui/generated/patron.webp"
+        );
+        assert_eq!(
+            speaker_portrait_url(None, "Courier"),
+            "/assets/ui/generated/portrait-courier"
+        );
+    }
 }
