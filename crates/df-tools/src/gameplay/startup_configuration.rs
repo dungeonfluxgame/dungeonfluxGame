@@ -836,7 +836,7 @@ pub(super) fn load_extra_assets(
             Err(error) => return Err(error),
         }
     }
-    for asset in load_dice_assets(&dice_dir(asset_root))? {
+    for asset in load_dice_assets(&dice_dir(std::env::var(DICE_DIR_ENVIRONMENT), asset_root)?)? {
         if loaded
             .iter()
             .any(|existing: &super::public_assets::ExtraAsset| existing.url == asset.url)
@@ -876,12 +876,12 @@ const DICE_EXTENSIONS: [(&str, &str); 4] = [
     ("json", "application/json"),
 ];
 
-fn dice_dir(asset_root: &Path) -> PathBuf {
-    std::env::var(DICE_DIR_ENVIRONMENT)
-        .ok()
-        .filter(|dir| !dir.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| asset_root.join("generated/dice"))
+fn dice_dir(input: Result<String, VarError>, asset_root: &Path) -> Result<PathBuf, io::Error> {
+    match input {
+        Ok(dir) if !dir.trim().is_empty() => Ok(PathBuf::from(dir)),
+        Ok(_) | Err(VarError::NotPresent) => Ok(asset_root.join("generated/dice")),
+        Err(_) => Err(refused(DICE_DIR_ENVIRONMENT)),
+    }
 }
 
 pub(super) fn load_dice_assets(
@@ -1529,6 +1529,20 @@ mod tests {
         std::fs::write(missing.join("dice-rolls.json"), b"{nope").unwrap();
         assert!(load_dice_assets(&missing).is_err());
         std::fs::remove_dir_all(&missing).unwrap();
+    }
+
+    #[test]
+    fn dice_directory_defaults_when_unset_and_refuses_non_unicode_values() {
+        let root = Path::new("/srv/assets");
+        assert_eq!(
+            dice_dir(Err(VarError::NotPresent), root).unwrap(),
+            root.join("generated/dice")
+        );
+        let invalid = VarError::NotUnicode(std::ffi::OsString::from("invalid"));
+        assert_eq!(
+            dice_dir(Err(invalid), root).unwrap_err().to_string(),
+            "DF_GAMEPLAY_DICE_DIR invalid"
+        );
     }
 
     #[test]
