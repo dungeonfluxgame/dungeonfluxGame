@@ -242,8 +242,16 @@ fn remember(seen: &mut VecDeque<u64>, sequence: u64) -> bool {
     true
 }
 
-/// The most outcomes of one view that are staged one by one; older ones are history.
-const MAXIMUM_STAGED_OUTCOMES: usize = 6;
+/// The outcomes the view adds, identified by the server's monotonic beat sequence.
+fn fresh_outcomes(
+    outcomes: &[rpc::CombatOutcome],
+    after_sequence: u64,
+) -> Vec<&rpc::CombatOutcome> {
+    outcomes
+        .iter()
+        .filter(|outcome| outcome.sequence > after_sequence)
+        .collect()
+}
 
 fn roll_detail(
     outcome: &rpc::CombatOutcome,
@@ -622,9 +630,9 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             }
         }
         let mut staged: Vec<RollDetail> = if transitions.new_roll {
-            let fresh = presentation::new_outcomes(motion.previous.as_ref(), journey);
-            let from = fresh.len().saturating_sub(MAXIMUM_STAGED_OUTCOMES);
-            let shown: Vec<&rpc::CombatOutcome> = fresh.into_iter().skip(from).collect();
+            let shown = journey.combat.as_ref().map_or_else(Vec::new, |combat| {
+                fresh_outcomes(&combat.outcomes, motion.latest_seq)
+            });
             let marks = presentation::turn_marks(&shown, &before_cells, &standing);
             shown
                 .into_iter()
@@ -1274,9 +1282,9 @@ fn start_roll(client: &Rc<RefCell<Client>>, roll: &RollDetail, short: bool) -> R
     })
     .unwrap_or(false);
     mark_roll(client, tick, verdict_name(roll))?;
-    // The clip plays now and the server's number lands on the die at the clip's own rest
-    // time; a shortened catch-up beat shows the resting frame at once. A roll whose clip
-    // is not ready shows the card and never waits.
+    // The clip plays now and the server's number lands at its manifest rest time; catch-up
+    // shortens the stage, not the die animation. If clips are unavailable, show_roll uses
+    // a shipped resting image and never waits.
     let rest_ms = if let Some(play) =
         crate::dice_roll::play_of(roll.attack_die, &roll.faces, roll.roll_mode)
     {
@@ -1952,4 +1960,30 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
     }
     parent.insert_before(&strip, Some(&anchor))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fresh_outcomes;
+
+    #[test]
+    fn fresh_outcomes_uses_sequence_and_keeps_every_new_beat_in_order() {
+        let outcomes: Vec<_> = (1..=7)
+            .map(|sequence| crate::rpc::CombatOutcome {
+                sequence,
+                ..Default::default()
+            })
+            .collect();
+
+        let fresh = fresh_outcomes(&outcomes, 0);
+
+        assert_eq!(
+            fresh
+                .iter()
+                .map(|outcome| outcome.sequence)
+                .collect::<Vec<_>>(),
+            (1..=7).collect::<Vec<_>>()
+        );
+        assert_eq!(fresh_outcomes(&outcomes, 6)[0].sequence, 7);
+    }
 }
