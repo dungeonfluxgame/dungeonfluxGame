@@ -417,7 +417,7 @@ fn tactical_simulator_four_complete_source_fights_with_recorded_dice() {
     for (layout, enemies, seed) in [
         ("open-court", vec!["goblin-warrior"], 31),
         ("broken-yard", vec!["goblin-warrior"; 3], 13),
-        ("wolf-trail", vec!["wolf"; 2], 23),
+        ("wolf-trail", vec!["wolf"; 2], 26),
         ("open-court", vec!["skeleton"], 0),
     ] {
         let (rounds, log) = simulate(layout, &enemies, seed);
@@ -923,7 +923,7 @@ fn tactical_ammunition_collection_requires_a_living_capable_actor_after_combat()
             .collect();
         let result = resolve(state, actor, action, dice.binding(&src), &records).unwrap();
         dice.ordinal += records.len() as u32;
-        result.battle
+        result
     };
     let bow = AttackUse {
         weapon: Weapon::Longbow,
@@ -943,9 +943,10 @@ fn tactical_ammunition_collection_requires_a_living_capable_actor_after_combat()
             spend: AttackSpend::Action,
         },
         &[(20, 1), (20, 2)],
-    );
+    )
+    .battle;
     assert_eq!(state.actor(3).unwrap().arrows(), 19);
-    state = fixed_step(&state, 3, &Action::EndTurn, &[]);
+    state = fixed_step(&state, 3, &Action::EndTurn, &[]).battle;
     let bite = AttackUse {
         weapon: Weapon::Bite,
         ranged: false,
@@ -955,7 +956,7 @@ fn tactical_ammunition_collection_requires_a_living_capable_actor_after_combat()
         savage_attacker: false,
         use_mastery: false,
     };
-    state = fixed_step(
+    let bite_result = fixed_step(
         &state,
         10,
         &Action::Attack {
@@ -963,9 +964,16 @@ fn tactical_ammunition_collection_requires_a_living_capable_actor_after_combat()
             weapon: bite,
             spend: AttackSpend::Action,
         },
-        &[(20, 20), (6, 6), (6, 6)],
+        &[(20, 20), (6, 6), (6, 6), (20, 20)],
     );
-    state = fixed_step(&state, 10, &Action::EndTurn, &[]);
+    assert!(
+        bite_result.attacks[0]
+            .strength_save
+            .expect("wolf bite records the target's save")
+            .succeeded
+    );
+    state = bite_result.battle;
+    state = fixed_step(&state, 10, &Action::EndTurn, &[]).battle;
     let sword = AttackUse {
         weapon: Weapon::Greatsword,
         ranged: false,
@@ -984,7 +992,8 @@ fn tactical_ammunition_collection_requires_a_living_capable_actor_after_combat()
             spend: AttackSpend::Action,
         },
         &[(20, 20), (6, 6), (6, 6), (6, 6), (6, 6)],
-    );
+    )
+    .battle;
     assert!(state.finished());
     assert!(state.actor(3).unwrap().health().unconscious);
     let before = state.clone();
@@ -1044,9 +1053,14 @@ fn tactical_natural_attacks_need_no_hands_and_are_never_dropped_items() {
         savage_attacker: false,
         use_mastery: false,
     };
-    let mut rolls = vec![dice.record(20, &src, 2), dice.record(6, &src, 3)];
+    let mut rolls = vec![
+        dice.record(20, &src, 2),
+        dice.record(6, &src, 3),
+        dice.record(20, &src, 4),
+    ];
     rolls[0].value = 15;
     rolls[1].value = 1;
+    rolls[2].value = 1;
     let state = resolve(
         &state,
         10,
@@ -1060,7 +1074,8 @@ fn tactical_natural_attacks_need_no_hands_and_are_never_dropped_items() {
     )
     .unwrap()
     .battle;
-    dice.ordinal = 4;
+    assert!(state.actor(1).unwrap().health().prone);
+    dice.ordinal = 5;
     let state = dice.step(&state, 10, &Action::EndTurn).battle;
     let sword = AttackUse {
         weapon: Weapon::Greatsword,
@@ -1072,10 +1087,10 @@ fn tactical_natural_attacks_need_no_hands_and_are_never_dropped_items() {
         use_mastery: true,
     };
     let mut rolls = vec![
-        dice.record(20, &src, 4),
         dice.record(20, &src, 5),
-        dice.record(6, &src, 6),
+        dice.record(20, &src, 6),
         dice.record(6, &src, 7),
+        dice.record(6, &src, 8),
     ];
     rolls[0].value = 15;
     rolls[1].value = 16;
