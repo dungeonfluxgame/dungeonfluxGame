@@ -725,7 +725,7 @@ fn publish_tactical_controls(
     root: &Element,
     view: &LiveView<'_>,
 ) -> Result<(), JsValue> {
-    use crate::gameplay_browser::{action_button, node};
+    use crate::gameplay_browser::{action_button, action_identity, node};
     let existing = root.query_selector(":scope > .tactical-controls")?;
     let Some(combat) = view
         .journey
@@ -806,7 +806,7 @@ fn publish_tactical_controls(
         )?;
         return Ok(());
     }
-    let mut active_offer_ids = Vec::new();
+    let mut active_action_ids = Vec::new();
     for offer in view.offers {
         let mut offer = offer.clone();
         for group in &mut offer.input_groups {
@@ -820,7 +820,7 @@ fn publish_tactical_controls(
                 }
             }
         }
-        active_offer_ids.push(offer.offer_id.clone());
+        active_action_ids.push(action_identity(&offer));
         action_button(client, &controls, offer)?;
     }
     let offers = controls.query_selector_all(":scope > .offered-action")?;
@@ -828,8 +828,8 @@ fn publish_tactical_controls(
         if let Some(element) = offers.item(index) {
             let element = element.unchecked_into::<Element>();
             if element
-                .get_attribute("data-offer-id")
-                .is_some_and(|offer_id| !active_offer_ids.contains(&offer_id))
+                .get_attribute("data-action-identity")
+                .map_or(true, |identity| !active_action_ids.contains(&identity))
             {
                 element.remove();
             }

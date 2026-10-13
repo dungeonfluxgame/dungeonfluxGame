@@ -317,9 +317,17 @@ fn button(
     client: &Rc<RefCell<Client>>,
     parent: &Element,
     label: &str,
-    mut activate: impl FnMut(Rc<RefCell<Client>>) + 'static,
+    activate: impl FnMut(Rc<RefCell<Client>>) + 'static,
 ) -> Result<Element, JsValue> {
     let element = node(&client.borrow().document, parent, "button", "", label)?;
+    bind_click(client, &element, activate)?;
+    Ok(element)
+}
+fn bind_click(
+    client: &Rc<RefCell<Client>>,
+    element: &Element,
+    mut activate: impl FnMut(Rc<RefCell<Client>>) + 'static,
+) -> Result<(), JsValue> {
     let weak = Rc::downgrade(client);
     let callback = Closure::wrap(Box::new(move |_: web_sys::Event| {
         if let Some(client) = weak.upgrade() {
@@ -331,7 +339,7 @@ fn button(
         .borrow_mut()
         .callbacks
         .push((element.clone(), callback));
-    Ok(element)
+    Ok(())
 }
 fn random<const N: usize>() -> Result<Vec<u8>, String> {
     let window = web_sys::window().ok_or("Browser unavailable")?;
@@ -1371,6 +1379,21 @@ fn apply_option_requirements(
     }
     Ok(())
 }
+pub(super) fn action_identity(offer: &rpc::GameplayActionOffer) -> String {
+    let mut groups = offer
+        .input_groups
+        .iter()
+        .map(|group| group.group_id.as_str())
+        .collect::<Vec<_>>();
+    groups.sort_unstable();
+    let groups = groups
+        .into_iter()
+        .map(|group_id| format!("{}:{group_id}", group_id.len()))
+        .collect::<String>();
+    // The label keeps two offers of one kind in the same view (two places to go) apart.
+    format!("{}:{groups}:{}", offer.action_kind, offer.label)
+}
+
 fn action_button(
     client: &Rc<RefCell<Client>>,
     parent: &Element,
@@ -1383,12 +1406,17 @@ fn action_button(
     if offer.destinations.len() > 4 {
         return Err(JsValue::from_str("offered destinations exceed bound"));
     }
+    let identity = action_identity(&offer);
     let children = parent.query_selector_all(":scope > .offered-action")?;
     let existing = (0..children.length())
         .filter_map(|index| children.item(index))
         .map(|element| element.unchecked_into::<Element>())
-        .find(|element| element.get_attribute("data-offer-id").as_deref() == Some(&offer.offer_id));
+        .find(|element| {
+            element.get_attribute("data-action-identity").as_deref() == Some(&identity)
+        });
     if let Some(wrapper) = existing {
+        wrapper.set_attribute("data-offer-id", &offer.offer_id)?;
+        let mut inputs = Vec::new();
         for group in &offer.input_groups {
             let labels = wrapper.query_selector_all(":scope > label[data-group-id]")?;
             let label = (0..labels.length())
@@ -1416,6 +1444,7 @@ fn action_button(
                     {
                         select.set_value(&old_value);
                     }
+                    inputs.push((group.group_id.clone(), select));
                 }
             }
         }
@@ -1449,12 +1478,17 @@ fn action_button(
             } else {
                 button.remove_attribute("disabled")?;
             }
+            let destination = wrapper
+                .query_selector(":scope > label[data-destination] > select")?
+                .and_then(|select| select.dyn_into::<HtmlSelectElement>().ok());
+            bind_action_offer(client, &button, offer, inputs, destination)?;
         }
         return Ok(());
     }
 
     let wrapper = node(&document, parent, "div", "offered-action", "")?;
     wrapper.set_attribute("data-offer-id", &offer.offer_id)?;
+    wrapper.set_attribute("data-action-identity", &identity)?;
     let mut inputs = Vec::new();
     for group in &offer.input_groups {
         if group.options.is_empty() || group.options.len() > 256 {
@@ -1485,68 +1519,8 @@ fn action_button(
         }
         Some(select)
     };
-    let offered = offer.clone();
-    let button = button(client, &wrapper, &offer.label, move |client| {
-        let mut savage = false;
-        let mut graze = false;
-        let mut action_choices = Vec::new();
-        for (key, input) in &inputs {
-            let value = input.value();
-            if key == "tactical-choice" {
-                if !offered.input_groups.iter().any(|group| {
-                    group.group_id == *key
-                        && group.options.iter().any(|option| option.option_id == value)
-                }) {
-                    feedback(&client.borrow(), "Choose an offered option.");
-                    return;
-                }
-                action_choices.push(rpc::JourneyChoice {
-                    group_id: key.clone(),
-                    option_id: value,
-                });
-                continue;
-            }
-            if !matches!(value.as_str(), "yes" | "no") {
-                feedback(&client.borrow(), "Choose an offered attack approach.");
-                return;
-            }
-            match key.as_str() {
-                "savage-attacker" => savage = value == "yes",
-                "graze" => graze = value == "yes",
-                _ => {
-                    feedback(
-                        &client.borrow(),
-                        "The server offered an unsupported required input.",
-                    );
-                    return;
-                }
-            }
-        }
-        let selected = if let Some(select) = &destination {
-            let Ok(selected) = select.value().parse::<i32>() else {
-                feedback(&client.borrow(), "Choose an offered destination.");
-                return;
-            };
-            if !offered
-                .destinations
-                .iter()
-                .any(|option| option.destination == selected)
-            {
-                feedback(&client.borrow(), "Choose an offered destination.");
-                return;
-            }
-            selected
-        } else {
-            rpc::HarborDestination::Unspecified as i32
-        };
-        match prepare(&client, &offered, None, savage, graze, selected) {
-            Ok(mut body) => {
-                body.action_choices = action_choices;
-                send(client, body, false);
-            }
-            Err(error) => feedback(&client.borrow(), &error),
-        }
-    })?;
+    let button = node(&document, &wrapper, "button", "", &offer.label)?;
+    bind_action_offer(client, &button, offer.clone(), inputs, destination)?;
     button.set_class_name("offered");
     button.set_attribute("data-action-kind", &offer.action_kind.to_string())?;
     if client.borrow().busy
@@ -1557,6 +1531,86 @@ fn action_button(
         button.remove_attribute("disabled")?;
     }
     Ok(())
+}
+
+fn bind_action_offer(
+    client: &Rc<RefCell<Client>>,
+    button: &Element,
+    offer: rpc::GameplayActionOffer,
+    inputs: Vec<(String, HtmlSelectElement)>,
+    destination: Option<HtmlSelectElement>,
+) -> Result<(), JsValue> {
+    // `render` retires every listener first, so a kept control is bound exactly once here.
+    bind_click(client, button, move |client| {
+        activate_action_offer(client, &offer, &inputs, &destination);
+    })
+}
+
+fn activate_action_offer(
+    client: Rc<RefCell<Client>>,
+    offered: &rpc::GameplayActionOffer,
+    inputs: &[(String, HtmlSelectElement)],
+    destination: &Option<HtmlSelectElement>,
+) {
+    let mut savage = false;
+    let mut graze = false;
+    let mut action_choices = Vec::new();
+    for (key, input) in inputs {
+        let value = input.value();
+        if key == "tactical-choice" {
+            if !offered.input_groups.iter().any(|group| {
+                group.group_id == *key
+                    && group.options.iter().any(|option| option.option_id == value)
+            }) {
+                feedback(&client.borrow(), "Choose an offered option.");
+                return;
+            }
+            action_choices.push(rpc::JourneyChoice {
+                group_id: key.clone(),
+                option_id: value,
+            });
+            continue;
+        }
+        if !matches!(value.as_str(), "yes" | "no") {
+            feedback(&client.borrow(), "Choose an offered attack approach.");
+            return;
+        }
+        match key.as_str() {
+            "savage-attacker" => savage = value == "yes",
+            "graze" => graze = value == "yes",
+            _ => {
+                feedback(
+                    &client.borrow(),
+                    "The server offered an unsupported required input.",
+                );
+                return;
+            }
+        }
+    }
+    let selected = if let Some(select) = destination {
+        let Ok(selected) = select.value().parse::<i32>() else {
+            feedback(&client.borrow(), "Choose an offered destination.");
+            return;
+        };
+        if !offered
+            .destinations
+            .iter()
+            .any(|option| option.destination == selected)
+        {
+            feedback(&client.borrow(), "Choose an offered destination.");
+            return;
+        }
+        selected
+    } else {
+        rpc::HarborDestination::Unspecified as i32
+    };
+    match prepare(&client, offered, None, savage, graze, selected) {
+        Ok(mut body) => {
+            body.action_choices = action_choices;
+            send(client, body, false);
+        }
+        Err(error) => feedback(&client.borrow(), &error),
+    }
 }
 fn receive_view(
     client: &Rc<RefCell<Client>>,
@@ -2295,8 +2349,8 @@ pub mod fixture {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTION_REFUSAL_FEEDBACK, ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, record_join_retry,
-        should_replace_feedback,
+        ACTION_REFUSAL_FEEDBACK, ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, action_identity,
+        record_join_retry, should_replace_feedback,
     };
 
     #[test]
@@ -2329,5 +2383,42 @@ mod tests {
         let mut retries = 0;
         assert!(!record_join_retry(SERVER_LOST, &mut retries));
         assert_eq!(retries, 0);
+    }
+
+    #[test]
+    fn action_identity_survives_offer_revision_but_tracks_action_and_inputs() {
+        let first = df_protocol::common::GameplayActionOffer {
+            offer_id: "checkpoint-1".to_owned(),
+            action_kind: 13,
+            input_groups: vec![df_protocol::common::JourneyGroup {
+                group_id: "target".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let refreshed = df_protocol::common::GameplayActionOffer {
+            offer_id: "checkpoint-2".to_owned(),
+            ..first.clone()
+        };
+        let other_action = df_protocol::common::GameplayActionOffer {
+            action_kind: 14,
+            ..refreshed.clone()
+        };
+        let other_inputs = df_protocol::common::GameplayActionOffer {
+            input_groups: vec![df_protocol::common::JourneyGroup {
+                group_id: "destination".to_owned(),
+                ..Default::default()
+            }],
+            ..refreshed.clone()
+        };
+
+        assert_eq!(action_identity(&first), action_identity(&refreshed));
+        assert_ne!(action_identity(&first), action_identity(&other_action));
+        assert_ne!(action_identity(&first), action_identity(&other_inputs));
+        let other_label = df_protocol::common::GameplayActionOffer {
+            label: "Go to the harbor".to_owned(),
+            ..refreshed.clone()
+        };
+        assert_ne!(action_identity(&refreshed), action_identity(&other_label));
     }
 }
