@@ -520,7 +520,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let fighting = snapshot.stage == CombatStage::Fighting;
     let lines = presentation::table_lines(&view);
     let cast = presentation::scene_cast(&view);
-    let key = format!("{}|{}|{}", journey.phase, scene.title, scene.scene_asset);
+    let key = format!("{}|{}", journey.phase, scene.title);
     let hit_points: Vec<u32> = journey
         .party
         .iter()

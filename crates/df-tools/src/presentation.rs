@@ -307,14 +307,13 @@ pub(crate) struct Card {
     pub(crate) heroes: Vec<CardHero>,
 }
 
-/// The card shown when the story begins: the opening scene's title, one evocative line and
-/// the place.
-pub(crate) fn title_card(scene: &rpc::GameplayScene, narration: &str) -> Card {
+/// The card shown when the story begins: the opening scene's title and place.
+pub(crate) fn title_card(scene: &rpc::GameplayScene, _narration: &str) -> Card {
     Card {
         kind: CardKind::Title,
         kicker: "A tale begins".to_owned(),
         headline: scene.title.clone(),
-        subline: first_sentence(narration),
+        subline: String::new(),
         place: scene.place.clone(),
         heroes: Vec::new(),
     }
@@ -1706,22 +1705,17 @@ mod tests {
     }
 
     #[test]
-    fn the_title_card_uses_only_what_the_view_carries() {
+    fn the_title_card_omits_the_sentence_that_is_narrated_in_full() {
         let opening = rpc::GameplayScene {
             title: "A Parcel for Nolan".to_owned(),
             place: "The Salt Quay".to_owned(),
             ..Default::default()
         };
-        let card = title_card(
-            &opening,
-            "Gulls mutter in the rigging of sleeping boats. A merchant hurries out.",
-        );
+        let narration = "Gulls mutter in the rigging of sleeping boats. A merchant hurries out.";
+        let card = title_card(&opening, narration);
         assert_eq!(card.kind, CardKind::Title);
         assert_eq!(card.headline, "A Parcel for Nolan");
-        assert_eq!(
-            card.subline,
-            "Gulls mutter in the rigging of sleeping boats."
-        );
+        assert!(card.subline.is_empty());
         assert_eq!(card.place, "The Salt Quay");
         assert!(card.heroes.is_empty());
     }
