@@ -184,7 +184,8 @@ impl WebSocketIo {
             read_wakeup: None,
             metrics,
         };
-        poll_fn(|context| {
+        const CONNECTION_TIMEOUT_MS: u32 = 10_000;
+        let wait_for_open = poll_fn(|context| {
             let mut state = io.state.borrow_mut();
             if state.failed || state.closed {
                 return Poll::Ready(Err(io::Error::other("WebSocket admission failed")));
@@ -195,7 +196,18 @@ impl WebSocketIo {
             state.waker = Some(context.waker().clone());
             Poll::Pending
         })
-        .await?;
+        .boxed_local();
+        let deadline = gloo_timers::future::TimeoutFuture::new(CONNECTION_TIMEOUT_MS).boxed_local();
+        match futures::future::select(wait_for_open, deadline).await {
+            futures::future::Either::Left((result, _)) => result?,
+            futures::future::Either::Right(((), _)) => {
+                let _ = io.socket.close();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "WebSocket connection timed out",
+                ));
+            }
+        }
         Ok(io)
     }
     fn wait_for_write(&mut self, context: &Context<'_>) {
