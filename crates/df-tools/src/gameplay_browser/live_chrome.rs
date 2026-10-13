@@ -222,7 +222,7 @@ fn choice_hints_hidden(state: &Client) -> bool {
 
 /// Rebuilds the player's menu items for the current state; the display has no menu.
 pub(super) fn fill_menu(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let (document, needs, dialogue_retry, last_request, first_attack, body, hero, hidden) = {
+    let (document, needs, dialogue_retry, last_request, confirm_strike, body, hero, hidden) = {
         let state = client.borrow();
         let Some(mounted) = state.chrome.mounted.as_ref() else {
             return Ok(());
@@ -232,7 +232,10 @@ pub(super) fn fill_menu(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             recovery_needs(&state),
             state.dialogue.has_confirmation(),
             state.last_request.is_some(),
-            state.first_attack.is_some(),
+            state.first_attack.is_some() && {
+                let needs = recovery_needs(&state);
+                needs.lost_connection || needs.unknown_choice
+            },
             mounted.body.clone(),
             mounted.hero.clone(),
             choice_hints_hidden(&state),
@@ -249,11 +252,16 @@ pub(super) fn fill_menu(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             replay(client, false);
         })?;
     }
-    if first_attack {
-        button(client, &body, "Confirm original strike", |client| {
-            close_menu(&client);
-            replay(client, true);
-        })?;
+    if confirm_strike {
+        button(
+            client,
+            &body,
+            "Check that your last attack was received",
+            |client| {
+                close_menu(&client);
+                replay(client, true);
+            },
+        )?;
     }
     button(client, &body, LEAVE_LABEL, |client| {
         close_menu(&client);
