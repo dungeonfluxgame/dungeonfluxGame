@@ -152,6 +152,10 @@ fn slot_at(position: usize) -> ActorSlot {
     }
 }
 
+fn should_close_typed_strip(kind: BubbleKind, strip_active: bool) -> bool {
+    kind == BubbleKind::Speech && strip_active
+}
+
 fn typed_line_anchor(speaker: &str, heroes: &[Option<String>]) -> Option<usize> {
     heroes
         .iter()
@@ -1324,9 +1328,11 @@ impl Figures {
         if state == LineState::Done {
             if already_shown {
                 stage.remove_attribute("data-typed-strip")?;
+                stage.remove_attribute("data-typed-strip-closing")?;
             }
         } else if state != LineState::Closing {
             stage.set_attribute("data-typed-strip", &line_id)?;
+            stage.remove_attribute("data-typed-strip-closing")?;
         }
         Ok(!already_shown && state != LineState::Closing && state != LineState::Done)
     }
@@ -1348,6 +1354,12 @@ impl Figures {
                     typed.set_attribute("data-line-state", LineState::Closing.name())?;
                     replaced = true;
                 }
+            }
+            if let Some(stage) = self.root.parent_element()
+                && should_close_typed_strip(bubble.kind, stage.has_attribute("data-typed-strip"))
+            {
+                stage.set_attribute("data-typed-strip-closing", "")?;
+                replaced = true;
             }
             replaced
         } else {
@@ -1431,6 +1443,22 @@ fn flag(element: &Element, name: &str, on: bool) -> Result<(), JsValue> {
 #[cfg(test)]
 mod tests {
     use super::typed_line_anchor;
+
+    #[test]
+    fn speech_replaces_an_active_typed_strip() {
+        assert!(super::should_close_typed_strip(
+            super::BubbleKind::Speech,
+            true,
+        ));
+        assert!(!super::should_close_typed_strip(
+            super::BubbleKind::Speech,
+            false,
+        ));
+        assert!(!super::should_close_typed_strip(
+            super::BubbleKind::Typed,
+            true,
+        ));
+    }
 
     #[test]
     fn typed_line_anchor_matches_the_speaking_hero() {
