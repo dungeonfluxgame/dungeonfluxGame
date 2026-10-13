@@ -681,9 +681,9 @@ impl<D: Clone> Conductor<D> {
         }
     }
 
-    /// The fight's entrance is done once the scene has entered and the battlefield has shown
-    /// its banner, initiative roll and roll-call (or will not appear, or took too long).
-    /// The dice held back then play, in order.
+    /// The fight's entrance is done once the scene and its narration have entered and the
+    /// battlefield has shown its banner, initiative roll and roll-call (or will not appear, or
+    /// took too long). The dice held back then play, in order.
     fn settle_battle_entrance(&mut self, now_ms: u64, out: &mut Vec<Command<D>>) {
         if self.battle != BattleState::Entering
             || !matches!(
@@ -694,9 +694,10 @@ impl<D: Clone> Conductor<D> {
             return;
         }
         let waited = now_ms.saturating_sub(self.battle_progress_ms);
-        let done = !self.battlefield_expected
-            || self.battlefield != Battlefield::Pending
-            || waited > BATTLE_ENTER_CAP_MS;
+        let done = !self.lines_waiting()
+            && (!self.battlefield_expected
+                || self.battlefield != Battlefield::Pending
+                || waited > BATTLE_ENTER_CAP_MS);
         if !done {
             return;
         }
@@ -2333,6 +2334,42 @@ mod tests {
                 BattleState::TurnEnd,
             ]
         );
+    }
+
+    #[test]
+    fn fight_introduction_is_voiced_during_the_entrance_before_the_first_held_attack() {
+        let mut harness = Harness::new(Voice::working(1_000), true, Vec::new(), vec![0]);
+        harness.conductor.set_battlefield_expected(true);
+        let mut start = fight_start();
+        start.script = vec![line("fight introduction", true, None)];
+        harness.view(start);
+        harness.view(first_attack());
+
+        harness.run_to(6_000);
+
+        let intro_opened = harness.opened("fight introduction").expect("intro opens");
+        let intro_voiced = harness
+            .play_at("fight introduction")
+            .expect("intro voice starts");
+        assert_eq!(harness.conductor.battle_state(), BattleState::Entering);
+        assert!(harness.entered(StageState::Rolling).is_none());
+
+        harness.now += 50;
+        let commands = harness
+            .conductor
+            .on_battlefield(harness.now, Battlefield::Ready);
+        harness.record(commands);
+        harness.run_to(harness.now + 5_000);
+
+        let first_attack = harness
+            .entered(StageState::Rolling)
+            .expect("held attack releases");
+        let intro_finished = harness
+            .line_at("fight introduction", LineState::Lingering)
+            .expect("intro voice finishes");
+        assert!(intro_opened < first_attack);
+        assert!(intro_voiced < first_attack);
+        assert!(intro_finished < first_attack);
     }
 
     #[test]
