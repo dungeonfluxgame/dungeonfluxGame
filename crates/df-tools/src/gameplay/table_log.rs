@@ -862,6 +862,7 @@ pub(super) fn action_lines(
         Kind::EndTurn => "ends the turn".to_owned(),
         Kind::ShortRest => "takes a short rest".to_owned(),
         Kind::ChooseHarborScene => format!("leads on to {destination}"),
+        Kind::ResolveErrand => format!("chose \"{label}\""),
         _ => third_person(label),
     };
     let mut lines = vec![ActionLine {
@@ -1489,6 +1490,29 @@ mod tests {
 
         assert_eq!((feed(&for_player), feed(&for_display)), (1, 1));
         assert_eq!(feed(&untouched), 0);
+    }
+
+    #[test]
+    fn ending_labels_are_quoted_and_imperative_labels_are_conjugated() {
+        let phrase = |label: &str| {
+            action_lines(
+                rpc::GameplayActionKind::ResolveErrand,
+                "Brakka",
+                &[],
+                "greatsword",
+                "",
+                label,
+            )[0]
+            .text
+            .clone()
+        };
+        assert_eq!(
+            phrase("The Road Takes Its Toll"),
+            "chose \"The Road Takes Its Toll\""
+        );
+        assert_eq!(phrase("Calla's Thanks"), "chose \"Calla's Thanks\"");
+        assert_eq!(third_person("Ask Halden plainly"), "asks Halden plainly");
+        assert_eq!(third_person("Bar the thief's way"), "bars the thief's way");
     }
 
     #[test]
