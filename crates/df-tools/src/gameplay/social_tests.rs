@@ -95,6 +95,30 @@ fn the_keyword_reader_names_the_social_approach_of_a_line() {
 }
 
 #[test]
+fn the_keyword_reader_recognizes_plain_threats_without_mistaking_unrelated_death_words() {
+    for line in [
+        "Hand over the coin you owe us or I will break your arm.",
+        "I said hand it over, old man, or you die here.",
+        "Kill you if you touch that again.",
+        "I will cut you if you refuse.",
+        "I will gut you if you lie.",
+        "I will break your arm.",
+        "I will hurt you.",
+        "I will burn it down if you make me.",
+        "I will draw my sword.",
+        "Put that blade to your throat.",
+        "Last warning: give it to me.",
+        "Or else, you will regret this.",
+        "Hand it over now.",
+    ] {
+        assert_eq!(classify_keywords(line), Approach::Intimidation, "{line}");
+    }
+    for line in ["I WOULD KILL FOR A HOT MEAL.", "She nearly died laughing."] {
+        assert_ne!(classify_keywords(line), Approach::Intimidation, "{line}");
+    }
+}
+
+#[test]
 fn the_models_one_word_approach_is_parsed_and_anything_else_is_not_an_approach() {
     assert_eq!(Approach::parse(" Flirting. "), Some(Approach::Flirting));
     assert_eq!(Approach::parse("deception"), Some(Approach::Deception));

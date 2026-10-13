@@ -112,25 +112,17 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
     let lowered = typed.to_lowercase();
     let has = |phrases: &[&str]| mentions_any(&lowered, phrases);
     if has(&[
-        "bribe",
-        "gold",
-        "coin",
-        "coins",
-        "silver",
-        "pay you",
-        "paid",
-        "how much",
-        "reward you",
-    ]) {
-        Approach::Bribe
-    } else if has(&[
         "or else",
+        "or you die",
         "i will hurt",
         "i'll hurt",
+        "hurt you",
         "kill you",
         "i will kill",
         "i'll kill",
+        "cut you",
         "break your",
+        "burn it down",
         "you will regret",
         "you'll regret",
         "make you talk",
@@ -142,8 +134,24 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "threaten",
         "talk or",
         "i will end you",
+        "draw my sword",
+        "blade to your throat",
+        "last warning",
+        "hand it over",
     ]) {
         Approach::Intimidation
+    } else if has(&[
+        "bribe",
+        "gold",
+        "coin",
+        "coins",
+        "silver",
+        "pay you",
+        "paid",
+        "how much",
+        "reward you",
+    ]) {
+        Approach::Bribe
     } else if has(&[
         "idiot",
         "fool",

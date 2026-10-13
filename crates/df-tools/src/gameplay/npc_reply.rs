@@ -1269,6 +1269,64 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn a_threat_to_a_contact_lowers_standing_before_the_model_generates_its_reply() {
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
+            "reply": "Keep your voice down. Dangerous people are listening.",
+            "approach": "question"
+        }))]);
+        let (voice, cache) = voice(&endpoint, "voice-contact-threat-attitude");
+        let mut adventure = super::super::npc_dossier_tests::adventure(1);
+        let contact = adventure
+            .dossiers
+            .iter_mut()
+            .find(|dossier| dossier.role == NpcRole::Contact)
+            .unwrap();
+        contact.starting_attitude = Attitude::Indifferent;
+        let contact = contact.clone();
+        let social = SocialLedger::open(adventure.dossiers, "contact-threat", None).unwrap();
+        let mut projected = view("", "Perrin");
+        let Some(rpc::view_message::Audience::Player(player)) = projected.audience.as_mut() else {
+            unreachable!();
+        };
+        player.scene.as_mut().unwrap().cast = vec![rpc::SceneActor {
+            id: contact.npc_id.strip_prefix("contact:").unwrap().to_owned(),
+            name: contact.name.clone(),
+            role: rpc::SceneRole::Contact as i32,
+            speaking: true,
+            ..Default::default()
+        }];
+        let context = NpcReplyContext::for_cast(
+            &projected,
+            member(1),
+            "Hand over the coin you owe us or I will break your arm.",
+            &story(),
+            &social,
+            "Opening",
+        )
+        .unwrap();
+        let log = TableLog::new();
+
+        voice.converse(context, &log).await;
+
+        assert_eq!(
+            social.standing(member(1), &contact).attitude,
+            Attitude::Hostile
+        );
+        assert!(
+            endpoint.bodies()[0]["input"]
+                .as_str()
+                .unwrap()
+                .contains("\"attitude_toward_hero\":\"hostile\"")
+        );
+        assert!(
+            log.lines()
+                .iter()
+                .any(|line| line.text == "cools toward Brannoch")
+        );
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn a_paraphrased_private_clue_reply_is_returned_to_hero_but_not_the_table() {
         const PARAPHRASE: &str = "It is meant for the person waiting at the waterfront lodging house. Keep its destination between us.";
         let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({

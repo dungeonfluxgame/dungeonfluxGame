@@ -527,6 +527,18 @@ pub(super) const FALLBACK_REDIRECTS: [&str; 2] = [
     "No more to say on that. ... Nothing new.",
 ];
 
+const INDIFFERENT_THREAT_REPLIES: [&str; 3] = [
+    "Keep your voice down and your hands where I can see them.",
+    "Do not threaten me. Tell me what you want.",
+    "I hear you. Put the blade away and we can talk.",
+];
+
+const HOSTILE_THREAT_REPLIES: [&str; 3] = [
+    "No. I will not give in to threats. Put the weapon away.",
+    "No. I will not be bullied, and I will remember this.",
+    "Threaten me again and I will end this conversation.",
+];
+
 /// Openers that start mid-thought ("If they do, our steady lantern is at risk ..."): a
 /// fallback line is a whole sentence that fits being spoken to, never a line starting here.
 const MID_THOUGHT_OPENERS: [&str; 10] = [
@@ -607,6 +619,26 @@ pub(super) fn fallback(
             && !said.iter().any(|line| line == text)
             && !repeats(text)
     };
+    if approach == Approach::Intimidation {
+        let (kind, lines) = match standing.attitude {
+            Attitude::Hostile => ("hostile", &HOSTILE_THREAT_REPLIES),
+            Attitude::Friendly | Attitude::Indifferent => {
+                ("indifferent", &INDIFFERENT_THREAT_REPLIES)
+            }
+        };
+        let order: Vec<(String, &str)> = lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| (format!("fallback:threat:{kind}:{index}"), *line))
+            .collect();
+        let picked = order
+            .iter()
+            .find(|(key, line)| !voiced(key) && fresh(line))
+            .or_else(|| order.iter().find(|(_, line)| fresh(line)));
+        if let Some((key, answer)) = picked {
+            return (answer.to_string(), Some(key.clone()));
+        }
+    }
     if standing.attitude == Attitude::Hostile || approach == Approach::Insult {
         let (answer, key) = curt_answer(dossier, topic, withheld, &voiced);
         if fresh(&answer) {

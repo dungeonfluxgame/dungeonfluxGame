@@ -1618,6 +1618,83 @@ fn with_the_text_model_off_the_chosen_lines_answer_and_none_repeats() {
 }
 
 #[test]
+fn an_intimidated_npc_uses_attitude_specific_threat_replies_without_repeating_them() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let dossier = adventure.dossiers[0].clone();
+    let withheld = withheld_of(&adventure, &dossier);
+    let offered = vec![npc_facts::Offered {
+        key: "line:errand".to_owned(),
+        text: "I would not ask this of you if there were anyone else I could trust with it."
+            .to_owned(),
+    }];
+    let typed = "I said hand it over, old man, or you die here.";
+    let mut voiced = Vec::new();
+    let mut said = Vec::new();
+    let mut indifferent_answers = Vec::new();
+
+    for exchange in 1..=2 {
+        let conversation = Conversation {
+            exchange,
+            voiced: voiced.clone(),
+            ..Conversation::default()
+        };
+        let (answer, key) = fallback(
+            &dossier,
+            Standing {
+                attitude: Attitude::Indifferent,
+                trust: 0,
+            },
+            typed,
+            Approach::Intimidation,
+            &withheld,
+            &npc_dossier::Memory {
+                conversation: &conversation,
+                said: &said,
+                offered: &offered,
+            },
+        );
+        assert_ne!(answer, offered[0].text);
+        indifferent_answers.push(answer.clone());
+        said.push(answer);
+        voiced.extend(key);
+    }
+    assert_ne!(indifferent_answers[0], indifferent_answers[1]);
+    assert_eq!(
+        indifferent_answers[0],
+        "Keep your voice down and your hands where I can see them."
+    );
+    assert_eq!(
+        indifferent_answers[1],
+        "Do not threaten me. Tell me what you want."
+    );
+
+    let conversation = Conversation {
+        exchange: 3,
+        ..Conversation::default()
+    };
+    let (hostile, _) = fallback(
+        &dossier,
+        Standing {
+            attitude: Attitude::Hostile,
+            trust: 0,
+        },
+        typed,
+        Approach::Intimidation,
+        &withheld,
+        &npc_dossier::Memory {
+            conversation: &conversation,
+            said: &[],
+            offered: &offered,
+        },
+    );
+    assert_ne!(hostile, offered[0].text);
+    assert_eq!(
+        hostile,
+        "No. I will not give in to threats. Put the weapon away."
+    );
+}
+
+#[test]
 fn with_the_text_model_off_a_pressed_topic_is_never_answered_twice() {
     let adventure = adventure(0x3c6e_f378_dd81_de97);
     let dossier = adventure.dossiers[0].clone();
