@@ -946,10 +946,8 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                 })
                 .unwrap_or_default();
                 for (round, beat) in script {
-                    let queued = with_preview(|stage| {
-                        stage.set_round(round);
-                        stage.stage(beat.clone()).is_ok()
-                    });
+                    let queued =
+                        with_preview(|stage| stage.stage_in_round(beat.clone(), round).is_ok());
                     if queued != Some(true) {
                         return;
                     }
@@ -1374,6 +1372,8 @@ struct Live {
     /// The last beat sequence the display finished presenting: the feed is truncated to it,
     /// so health cards and downed poses never show a blow that has not landed on screen.
     presented_seq: u64,
+    /// The newest beat sequence in the latest accepted view.
+    latest_seq: u64,
     /// Per HP change `(sequence, target name, before, after)`, oldest first: the values used to
     /// project the newest view's hit points to the last presented beat.
     beat_hp: Vec<(u64, String, u32, u32)>,
@@ -1400,6 +1400,7 @@ thread_local! {
         pending_at: 0.0,
         pending_caption: None,
         presented_seq: 0,
+        latest_seq: 0,
         beat_hp: Vec::new(),
     });
 }
@@ -1682,6 +1683,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
     let phase_idle = LIVE.with(|live| {
         let mut live = live.borrow_mut();
         if let Some(combat) = &view.journey.combat {
+            live.latest_seq = combat.latest_sequence;
             live.reaction = (!combat.reaction_participant_id.is_empty())
                 .then(|| {
                     let reactor = combat
@@ -2056,7 +2058,11 @@ fn sync() {
         }
         let fits = stage
             .with_stage(|stage| {
-                stage.hold_active(live.pending_cues > 0);
+                stage.hold_active(battle::hold_server_turn(
+                    live.pending_cues > 0,
+                    live.latest_seq,
+                    live.presented_seq,
+                ));
                 // A suspended turn is shown once the attacks before it have been: who decides and
                 // what, with the camera on the two figures.
                 let prompt = live
@@ -2166,7 +2172,11 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
             else {
                 return;
             };
-            stage.hold_active(guard.pending_cues > 0);
+            stage.hold_active(battle::hold_server_turn(
+                guard.pending_cues > 0,
+                guard.latest_seq,
+                guard.presented_seq,
+            ));
             match state {
                 "rolling" => {
                     // This attacker's turn, strictly in order: its label, the walk the server
@@ -2493,6 +2503,7 @@ fn reset_fight(live: &mut Live) {
     live.latest = None;
     live.host = None;
     live.presented_seq = 0;
+    live.latest_seq = 0;
     live.beat_hp.clear();
     live.feed = CombatFeed::new(FeedMode::HoldForCues);
 }

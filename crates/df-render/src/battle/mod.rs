@@ -63,7 +63,7 @@ pub use model::{
     AttackResult, AttackStyle, BadgeView, Beat, CameraCommand, CameraFocus, DieView, FinishingBlow,
     FloatTone, FloatingText, Highlight, HighlightKind, HitPointChange, HitPoints, HudState,
     InitiativeRoll, InitiativeShow, RollCard, Side, Token, TokenId, advance_presented_sequence,
-    hit_points_at_sequence, initiative_line, ordinal,
+    hit_points_at_sequence, hold_server_turn, initiative_line, ordinal,
 };
 pub use occupancy::{Occupancy, OccupancyError};
 pub use pacing::{BattleFps, FramePacer, Pace};

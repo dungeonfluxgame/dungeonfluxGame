@@ -220,17 +220,31 @@ impl CombatFeed {
             let beat_rounds =
                 rounds_for_outcomes(&snapshot.outcomes, &snapshot.initiative, &snapshot.members);
             self.seen_outcomes = snapshot.outcomes.len();
-            let healed_members: Vec<&Member> = snapshot
+            // What a member's hit points are compared with to notice a heal. A cue-driven display
+            // is given hit points as of the beat it has reached, so a fresh outcome's figure can
+            // be lower than what is shown without anyone having been healed: there only the last
+            // value this feed was given counts. (Comparing with the fresh outcome staged a heal
+            // back to the old number whenever the display was behind: "heals, then resets".)
+            let cue_driven = self.mode == FeedMode::HoldForCues;
+            let heal_basis = |member: &Member| {
+                let shown = self.last_hit_points.get(&member.id).copied();
+                if cue_driven {
+                    return shown;
+                }
+                fresh
+                    .iter()
+                    .rev()
+                    .find(|outcome| outcome.target == member.id)
+                    .map(|outcome| outcome.target_hit_points_after)
+                    .or(shown)
+            };
+            let healed_members: Vec<(&Member, u32)> = snapshot
                 .members
                 .iter()
-                .filter(|member| {
-                    fresh
-                        .iter()
-                        .rev()
-                        .find(|outcome| outcome.target == member.id)
-                        .map(|outcome| outcome.target_hit_points_after)
-                        .or_else(|| self.last_hit_points.get(&member.id).copied())
-                        .is_some_and(|before| member.hit_points > before)
+                .filter_map(|member| {
+                    heal_basis(member)
+                        .filter(|before| member.hit_points > *before)
+                        .map(|before| (member, before))
                 })
                 .collect();
             let mut targets: Vec<TokenId> = fresh
@@ -240,7 +254,7 @@ impl CombatFeed {
             targets.extend(
                 healed_members
                     .iter()
-                    .map(|member| TokenId::new(member.id.clone())),
+                    .map(|(member, _)| TokenId::new(member.id.clone())),
             );
             stage.hold_hit_points(&targets);
             stage.set_tokens(tokens);
@@ -260,16 +274,10 @@ impl CombatFeed {
                 }
             }
             for member in &snapshot.members {
-                let before = self.last_hit_points.get(&member.id).copied();
-                let healed = healed_members.iter().any(|healed| healed.id == member.id);
-                if healed {
-                    let heal_from = fresh
-                        .iter()
-                        .rev()
-                        .find(|outcome| outcome.target == member.id)
-                        .map(|outcome| outcome.target_hit_points_after)
-                        .or(before)
-                        .unwrap_or(0);
+                let healed = healed_members
+                    .iter()
+                    .find(|(healed, _)| healed.id == member.id);
+                if let Some((_, heal_from)) = healed {
                     let amount = member.hit_points - heal_from;
                     let beat = Beat::Heal {
                         source: TokenId::new(member.id.clone()),
@@ -286,6 +294,7 @@ impl CombatFeed {
                     .insert(member.id.clone(), member.hit_points);
             }
             if report.staged == 0
+                && self.mode == FeedMode::StageOutcomes
                 && fresh.is_empty()
                 && snapshot.active != self.last_active
                 && let Some(active) = &snapshot.active
@@ -564,6 +573,20 @@ mod tests {
     }
 
     #[test]
+    fn cue_owned_feed_does_not_replay_the_server_turn_during_enemy_beats() {
+        let mut stage = stage();
+        let mut feed = CombatFeed::new(FeedMode::HoldForCues);
+        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 12]))
+            .unwrap();
+
+        let mut redraw = snapshot(vec![], [12, 12, 12]);
+        redraw.active = Some("b".to_owned());
+        feed.apply(&mut stage, &redraw).unwrap();
+
+        assert!(!stage.is_busy());
+    }
+
+    #[test]
     fn a_changed_roster_resets_without_replay() {
         let mut stage = stage();
         let mut feed = CombatFeed::default();
@@ -801,5 +824,74 @@ mod hold_tests {
             stage.update(std::time::Duration::from_millis(50));
         }
         assert_eq!(shown(&stage), Some(7));
+    }
+
+    #[test]
+    fn in_cue_mode_a_display_behind_the_server_stages_no_heal_and_a_real_heal_still_shows() {
+        let mut stage = Stage::new(load_embedded("salt-quay").unwrap().unwrap());
+        let mut feed = CombatFeed {
+            mode: FeedMode::HoldForCues,
+            ..CombatFeed::default()
+        };
+        let member = |id: &str, side, hp| Member {
+            id: id.to_owned(),
+            name: id.to_uppercase(),
+            side,
+            hit_points: hp,
+            maximum_hit_points: 13,
+            height_m: 1.5,
+            figure: None,
+            portrait: None,
+            attack: AttackStyle::Melee,
+            voice: None,
+            cell: None,
+            statuses: Vec::new(),
+        };
+        let bite = |after| Outcome {
+            actor: "e".to_owned(),
+            target: "a".to_owned(),
+            hit: true,
+            critical: false,
+            damage: 6,
+            target_hit_points_after: after,
+            downed: false,
+            weapon: String::new(),
+            grazed: false,
+            damage_type: String::new(),
+        };
+        // The hero's hit points as the display may show them at each moment, with every outcome
+        // the server has resolved so far.
+        let snapshot = |shown, outcomes| CombatSnapshot {
+            members: vec![member("a", Side::Hero, shown), member("e", Side::Enemy, 9)],
+            active: Some("a".to_owned()),
+            round: 2,
+            outcomes,
+            initiative: vec![],
+            begun_live: false,
+        };
+        feed.apply(&mut stage, &snapshot(13, vec![])).unwrap();
+        // Two bites arrive together (13 -> 7 -> 1) while the display has presented neither: it
+        // is still given 13. That is not a heal from 1 to 13.
+        let both = || vec![bite(7), bite(1)];
+        assert_eq!(
+            feed.apply(&mut stage, &snapshot(13, both()))
+                .unwrap()
+                .staged,
+            0
+        );
+        // The display reaches the first bite, then the second: still no heal.
+        assert_eq!(
+            feed.apply(&mut stage, &snapshot(7, both())).unwrap().staged,
+            0
+        );
+        assert_eq!(
+            feed.apply(&mut stage, &snapshot(1, both())).unwrap().staged,
+            0
+        );
+        // Second Wind: the shown figure really rises, and that is staged as one heal.
+        assert_eq!(
+            feed.apply(&mut stage, &snapshot(8, both())).unwrap().staged,
+            1
+        );
     }
 }

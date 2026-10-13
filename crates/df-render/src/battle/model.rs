@@ -344,6 +344,15 @@ pub const fn advance_presented_sequence(current: u64, reported: u64) -> u64 {
     }
 }
 
+/// Keeps the view's active combatant from replacing the beat being presented.
+pub const fn hold_server_turn(
+    pending_cues: bool,
+    latest_sequence: u64,
+    presented_sequence: u64,
+) -> bool {
+    pending_cues || latest_sequence > presented_sequence
+}
+
 /// Projects hit points to the last change at or before the presented sequence.
 pub fn hit_points_at_sequence(
     current: u32,
@@ -440,6 +449,29 @@ mod tests {
         }];
         assert_eq!(hit_points_at_sequence(11, 5, &heal), 8);
         assert_eq!(hit_points_at_sequence(11, 6, &heal), 11);
+    }
+
+    #[test]
+    fn round_two_enemy_beats_keep_health_and_turn_during_redraw_between_impacts() {
+        let brakka = [
+            HitPointChange {
+                sequence: 9,
+                before: 13,
+                after: 7,
+            },
+            HitPointChange {
+                sequence: 10,
+                before: 7,
+                after: 1,
+            },
+        ];
+
+        assert_eq!(hit_points_at_sequence(1, 9, &brakka), 7);
+        assert!(hold_server_turn(false, 11, 9));
+        assert_eq!(hit_points_at_sequence(1, 10, &brakka), 1);
+        assert!(hold_server_turn(false, 11, 10));
+        assert_eq!(hit_points_at_sequence(1, 11, &brakka), 1);
+        assert!(!hold_server_turn(false, 11, 11));
     }
 
     #[test]
