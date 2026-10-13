@@ -201,14 +201,13 @@ body:has(.tv-stage[data-tv-mode=combat])>main{min-height:0}
 .tv-stage:not([data-tv-mode=combat])>.live-screen{display:none}
 @S[data-role=display]{position:absolute;inset:0;z-index:1;overflow:hidden;background:#05080a;--u:min(1vw,1.7778vh);--frame-w:calc(var(--u)*.7)}
 @S[data-role=display] .live-extras{position:absolute;z-index:5;top:1.2vh;right:2vw;max-width:34vw;font-size:calc(var(--u)*1.25)}
-@S[data-role=display] .df-combat{display:grid;width:100%;height:100%;min-height:0;overflow:hidden;font-size:calc(var(--u)*1.3);grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);grid-template-rows:auto auto auto auto minmax(0,1fr) auto;grid-template-areas:"banner banner" "title roll" "narr roll" "rules roll" "key roll" "cast cast";gap:calc(var(--u)*1.2) calc(var(--u)*2.4);padding:4.5vh 4.5vw}
+@S[data-role=display] .df-combat{display:grid;width:100%;height:100%;min-height:0;overflow:hidden;font-size:calc(var(--u)*1.3);grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);grid-template-rows:auto auto auto minmax(0,1fr) auto;grid-template-areas:"banner banner" "title roll" "narr roll" "key roll" "cast cast";gap:calc(var(--u)*1.2) calc(var(--u)*2.4);padding:4.5vh 4.5vw}
 @S[data-role=display] .df-combat:before{background:linear-gradient(180deg,#05080ae0 0,#05080a40 20%,#05080a33 40%,#05080aeb 78%,#05080a),linear-gradient(90deg,#05080acc,transparent 55%)}
 @S[data-role=display] .combat-stage,@S[data-role=display] .combat-lower,@S[data-role=display] .combat-story{display:contents}
 @S[data-role=display] .combat-action-rail{display:none}
 @S[data-role=display] .combat-turn-badge{grid-area:banner;justify-self:center;display:block;margin:0;padding:.1em 1.6em;font:600 calc(var(--u)*3.3)/1.2 Georgia,serif;letter-spacing:.14em;text-transform:uppercase;color:#f0cf8e;text-align:center;border:0;border-top:1px solid #d9b77a99;border-bottom:1px solid #d9b77a99;border-radius:0;background:linear-gradient(90deg,transparent,#120d05d9 18%,#120d05d9 82%,transparent);text-shadow:0 3px 18px #000}
 @S[data-role=display] .df-combat h1{grid-area:title;align-self:end;margin:0 0 calc(var(--u)*.6);max-width:none;font-size:calc(var(--u)*2.5);letter-spacing:-.01em;line-height:1.1}
 @S[data-role=display] .combat-narration{grid-area:narr;align-self:start;max-width:none;font-size:calc(var(--u)*1.4);line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical}
-@S[data-role=display] .rules-disclosure{grid-area:rules;align-self:start;margin:0}
 @S[data-role=display] .combat-roll-panel{grid-area:roll;min-height:0;overflow:hidden;padding:calc(var(--u)*1) calc(var(--u)*1.6);align-self:stretch;display:flex;flex-direction:column;justify-content:center}
 @S[data-role=display] .combat-roll-panel h2{margin:0 0 calc(var(--u)*.4);font-size:calc(var(--u)*1.3);letter-spacing:.2em;text-transform:uppercase;color:#e0b877}
 @S[data-role=display] .combat-roll-panel .combat-muted{font-size:calc(var(--u)*1.3)}

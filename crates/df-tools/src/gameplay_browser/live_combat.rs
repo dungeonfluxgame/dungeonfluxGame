@@ -104,18 +104,51 @@ fn split_rules_marker(text: &str) -> (&str, bool) {
 
 /// Rewords the server's internal combat disclosures for players reading the fight note.
 fn player_facing_rules_note(note: &str) -> String {
-    note.replace(
+    let note = note.replace(
         "Combat uses the server-selected grid layout, source movement, range, cover and optional opportunity reactions. Heroes at 0 HP follow dying and death-save rules; enemies may die.",
         "Fights use a grid: movement, range and cover follow the 2024 rules. A hero at 0 hit points makes death saves.",
-    )
-    .replace(
-        "Disclosed custom rule tactical.cover-centre-line: cover is adjudicated along the segment between cell centres.",
-        "House rule: cover is judged along the line between the centres of the two squares.",
-    )
-    .replace(
-        "Disclosed gap giant-weasel: Climb Speed 30 ft is not modelled (the grid has no vertical movement).",
-        "Not used here: the giant weasel's climbing speed, because the map is flat.",
-    )
+    );
+    let mut player_note = String::new();
+    for (index, disclosure) in note.split(" Disclosed ").enumerate() {
+        if index == 0 {
+            player_note.push_str(disclosure);
+            continue;
+        }
+        let (kind, prefix) = if let Some(disclosure) = disclosure.strip_prefix("custom rule ") {
+            ("House rule:", disclosure)
+        } else if let Some(disclosure) = disclosure.strip_prefix("gap ") {
+            ("Not used here:", disclosure)
+        } else {
+            player_note.push_str(" Disclosed ");
+            player_note.push_str(disclosure);
+            continue;
+        };
+        if let Some((_, sentence)) = prefix.split_once(": ") {
+            player_note.push(' ');
+            player_note.push_str(kind);
+            player_note.push(' ');
+            player_note.push_str(sentence);
+        } else {
+            player_note.push_str(" Disclosed ");
+            player_note.push_str(disclosure);
+        }
+    }
+    player_note
+}
+
+#[cfg(test)]
+mod rules_note_tests {
+    use super::player_facing_rules_note;
+
+    #[test]
+    fn rewords_every_disclosed_gap_and_custom_rule_without_ids() {
+        let note = "Combat uses the server-selected grid layout, source movement, range, cover and optional opportunity reactions. Heroes at 0 HP follow dying and death-save rules; enemies may die. Disclosed gap giant-rat: Keen Smell is not modelled (no scent tracking). Disclosed gap goblin-warrior: Nimble Escape is not modelled (no bonus actions). Disclosed custom rule tactical.cover-centre-line: cover is adjudicated along the segment between cell centres. Disclosed custom rule potion-weight: healing potions weigh less.";
+
+        assert_eq!(
+            player_facing_rules_note(note),
+            "Fights use a grid: movement, range and cover follow the 2024 rules. A hero at 0 hit points makes death saves. Not used here: Keen Smell is not modelled (no scent tracking). Not used here: Nimble Escape is not modelled (no bonus actions). House rule: cover is adjudicated along the segment between cell centres. House rule: healing potions weigh less."
+        );
+    }
 }
 
 /// The accepted view parts a live screen presents.
@@ -451,15 +484,17 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     }
     mount_chrome(client, &host, view, screen == Screen::Combat)?;
     mount_rules_badge(client, &host, custom_rules)?;
-    // PLAY-F03: keep the fight's rules note available behind a collapsed disclosure.
-    let rules_note = player_facing_rules_note(&view.scene.rules_note);
-    mount_rules_note(
-        &client.borrow().document,
-        &host,
-        &rules_note,
-        screen == Screen::Combat,
-        player,
-    )?;
+    // The display has no pointer for a disclosure; the phones carry the rules note.
+    if player {
+        let rules_note = player_facing_rules_note(&view.scene.rules_note);
+        mount_rules_note(
+            &client.borrow().document,
+            &host,
+            &rules_note,
+            screen == Screen::Combat,
+            true,
+        )?;
+    }
     // PLAY-F02 dispatch point: on the shared display the 3D battlefield overlays this flat view
     // when it can run; otherwise today's view above is what the table sees.
     if !player {
