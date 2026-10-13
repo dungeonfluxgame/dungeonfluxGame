@@ -180,8 +180,9 @@
 /* ---------- the end card: one title, no scene chrome beneath it ----------
  * The scene's opening title (.tv-establish) never shows behind the end card's
  * own title; the thinking mark (.tv-intent), the scene title (.tv-headline)
- * and the party strip (.tv-partybar) stay hidden under it. */
-.tv-stage[data-ended] :is(.tv-headline, .tv-establish, .tv-partybar, .tv-intent) {
+ * the party strip (.tv-partybar) and the plate's health strip (.tv-hud) stay
+ * hidden under it. */
+.tv-stage[data-ended] :is(.tv-headline, .tv-establish, .tv-partybar, .tv-intent, .tv-hud) {
   display: none;
 }
 
