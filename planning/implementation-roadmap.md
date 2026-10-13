@@ -424,17 +424,17 @@ Start-up and lobby:
 
 Character creation (phone):
 
-- [ ] **Bug** — The field "A detail that makes you memorable" is in the page but collapsed to zero size; it cannot be seen or used. **REOPENED**: the fix in `edece58` is not effective; still zero size when played by hand on 2026-10-13.
+- [x] **Bug** — The field "A detail that makes you memorable" is in the page but collapsed to zero size; it cannot be seen or used. **NOT A FAULT AS BUILT**: the field is hidden on purpose because the server's character contract does not take it; offering it would be a feature.
 - [ ] **Bug** — The form is about 7,100 px tall with twelve groups; four of them offer a single option under "Choose one offered option". Only Dwarf, Fighter and Soldier exist, so every party is the same. **PART FIXED in `e8a800f`**: single options are pre-selected; the heading text and the range of classes are not done.
 - [ ] **Bug** — Developer wording is shown to players: "every submitted build is validated on the server", "Fighter B + Soldier B", "Other lawful SRD combinations remain unsupported", "Initiative tie agreement".
-- [ ] **Bug** — The sticky "Confirm your hero" bar covers the form text beneath it. **REOPENED**: the fix in `edece58` is not effective; it still covered the Class card on 2026-10-13.
+- [x] **Bug** — The sticky "Confirm your hero" bar covers the form text beneath it. **FIXED in `16819357`** (a gap under the bar and a translucent tab bar); seen on a 375 px page.
 
 Story scenes:
 
 - [ ] **Bug** — The title card's sentence is repeated word for word in the Dungeon Master box straight after it.
 - [x] **Bug** — On every scene change the TV shows the adventure's title again instead of the new scene's, and during the crossfade it sits over the new picture and the health cards. **FIXED in `3720b36`**; the scene titles were seen right by hand on 2026-10-13.
 - [ ] **Bug** — The heroes in the scene pictures are tall red-haired humans seen from behind; they are dwarves with different portraits. The patron is a different-looking woman in the second picture. Characters are not consistent between pictures, or with their portraits.
-- [ ] **Bug** — The adventure title and place stay printed large over the picture for the whole scene. **REOPENED**: the fix in `3720b36` is not effective in story scenes; seen all scene on 2026-10-13.
+- [x] **Bug** — The adventure title and place stay printed large over the picture for the whole scene. **FIXED in `98ba2bf2`**: the title greets the scene for about seven seconds, then is hidden; sampled in a browser.
 - [ ] **Bug** — The whole story is five screens: opening, one follow-up, the fight, the aftermath, the epilogue. Three of the four choices had a single option. There is no journey, no investigation and no use for the private clue.
 - [ ] **Bug** — The only choice before the fight is "Face the giant weasel", naming an enemy nobody has seen or mentioned.
 - [ ] **Bug** — The loading card says one "Wary Giant Weasel" springs out; the fight has three.
@@ -586,7 +586,7 @@ Played by the coordinator in a browser, one TV page and two phones, from the lob
 
 - [ ] **Bug** — Between enemy beats the TV falls back to an older state of the fight: an enemy that has just walked up and bitten is back on its old square, the bitten hero's health card returns to its old number, and the heading reads the previous hero's turn before the next enemy's. Every enemy phase, both rounds. (OBS-31)
 - [ ] **Bug** — Second Wind never reaches the TV: no beat is shown and the health card keeps the old number until the hero is next hit, or until the fight ends. The server log has no line for it. (OBS-32)
-- [ ] **Bug** — The last blow of the fight is never shown; the victory card comes up over the fight's heading and the unshown attack's card. (OBS-33)
+- [x] **Bug** — The last blow of the fight is never shown; the victory card comes up over the fight's heading and the unshown attack's card. (OBS-33) **FIXED in `283a76d6`** (director tests pass; browser check pending).
 - [ ] **Bug** — The phone shows enemy results ahead of the TV, and on a hero's own turn his phone also says "Waiting for Brakka…". (OBS-34, OBS-35)
 - [ ] **Bug** — The contact does not know the adventure: she says the heroes have come to collect the ledger they are delivering and that she has no word of the patron who has just thanked them at her door. A threat with drawn steel gets no reaction from the patron. (OBS-25, OBS-22)
 - [ ] **Bug** — The short rest is a story choice that heals nobody, can be taken without limit to refill Second Wind, and replaces the victory text on the TV with rules prose. (OBS-48)
