@@ -139,6 +139,19 @@ fn acting_token(beat: &Beat) -> Option<&TokenId> {
     }
 }
 
+fn heading_token(beat: &Beat) -> Option<&TokenId> {
+    match beat {
+        Beat::TurnStart { actor } | Beat::Move { actor, .. } => Some(actor),
+        Beat::Attack { attacker, .. }
+        | Beat::FightEndingAttack { attacker, .. }
+        | Beat::Approach { attacker, .. }
+        | Beat::Strike { attacker, .. }
+        | Beat::FightEndingStrike { attacker, .. } => Some(attacker),
+        Beat::Heal { source, .. } => Some(source),
+        Beat::Initiative { .. } => None,
+    }
+}
+
 struct Walk {
     points: Vec<Vec3>,
     cells: Vec<Cell>,
@@ -1111,7 +1124,15 @@ impl Stage {
         {
             self.tokens[index].pending_revival = true;
         }
+        let was_idle = self.playing.is_none() && self.queue.is_empty();
+        let heading = heading_token(&beat).cloned();
         self.queue.push_back(QueuedBeat { beat, round });
+        if was_idle {
+            if heading.is_some() {
+                self.hud.active = heading;
+            }
+            self.hud.round = round;
+        }
         Ok(())
     }
 
@@ -1139,6 +1160,9 @@ impl Stage {
             self.hud.round = round;
             match director::plan(&self.grid, &self.resting_tokens(), &beat) {
                 Ok(timeline) => {
+                    if let Some(active) = heading_token(&beat) {
+                        self.hud.active = Some(active.clone());
+                    }
                     self.initiative_playing = matches!(beat, Beat::Initiative { .. });
                     self.playing_move = matches!(beat, Beat::Move { .. });
                     self.playing = Some(Playback {
@@ -5200,6 +5224,64 @@ mod tests {
             labels,
             ["kobold-1", "kobold-2", "kobold-3", "hero"],
             "the label follows each creature's turn and returns to the server's active hero"
+        );
+    }
+
+    #[test]
+    fn queued_move_only_enemy_beats_keep_the_next_enemy_heading_between_beats() {
+        let mut stage = stage();
+        let enemies = [
+            ("kobold-1", Cell::new(2, 1), Cell::new(2, 2)),
+            ("kobold-2", Cell::new(4, 1), Cell::new(4, 2)),
+            ("kobold-3", Cell::new(6, 1), Cell::new(6, 2)),
+        ];
+        stage.set_tokens(
+            [token("hero", Side::Hero, Cell::new(3, 4), 12)]
+                .into_iter()
+                .chain(enemies.map(|(id, from, _)| token(id, Side::Enemy, from, 7)))
+                .collect(),
+        );
+        stage.set_active(Some(TokenId::new("hero")));
+        stage.hold_active(true);
+        for (id, from, to) in enemies {
+            stage
+                .stage_in_round(
+                    Beat::Move {
+                        actor: TokenId::new(id),
+                        from,
+                        to,
+                    },
+                    1,
+                )
+                .unwrap();
+        }
+
+        let mut headings = Vec::new();
+        for _ in 0..4000 {
+            if !stage.is_busy() {
+                break;
+            }
+            let active = stage.hud().active.as_ref().map(|id| id.0.as_str());
+            assert_ne!(
+                active,
+                Some("hero"),
+                "a queued enemy beat must own the heading"
+            );
+            if let Some(active) = active
+                && headings.last() != Some(&active.to_owned())
+            {
+                headings.push(active.to_owned());
+            }
+            stage.update(Duration::from_millis(50));
+        }
+
+        assert_eq!(headings, ["kobold-1", "kobold-2", "kobold-3"]);
+        assert_eq!(stage.hud().round, 1);
+        stage.hold_active(false);
+        stage.set_active(Some(TokenId::new("hero")));
+        assert_eq!(
+            stage.hud().active.as_ref().map(|id| id.0.as_str()),
+            Some("hero")
         );
     }
 
