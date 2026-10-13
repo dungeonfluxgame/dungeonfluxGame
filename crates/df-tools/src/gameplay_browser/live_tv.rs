@@ -21,8 +21,9 @@ use crate::{
     stage_machines::LineState,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     net::{IpAddr, SocketAddr},
+    rc::{Rc, Weak},
     time::Duration,
 };
 use web_sys::Event;
@@ -137,6 +138,8 @@ struct PlateLayer {
     seen: RefCell<String>,
     /// Plate pictures fetched ahead, by path, so a scene change can show its plate at once.
     preloads: RefCell<Vec<(String, Element)>>,
+    /// Layout to apply only when its matching picture becomes active.
+    pending_layout: Rc<RefCell<Option<crate::presentation::PlateGeometry>>>,
 }
 
 /// How many plate pictures are kept fetched ahead.
@@ -167,7 +170,7 @@ pub(super) struct TvStage {
     /// began after: only a later line is this scene's narration.
     last_narrator_line: Cell<u64>,
     narration_floor: Cell<u64>,
-    figures: Figures,
+    figures: Rc<Figures>,
     roster: Element,
     gathered: Element,
     /// Whether a view has been drawn yet: the first one plays no seat sounds.
@@ -323,17 +326,38 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
     root.set_attribute("aria-hidden", "true")?;
     let zoom = node(document, &root, "div", "tv-plate-zoom", "")?;
     let mut images = Vec::with_capacity(2);
-    let mut listeners = Vec::with_capacity(2);
     for index in 0..2 {
         let image = node(document, &zoom, "img", "tv-plate-img", "")?;
         image.set_attribute("alt", "")?;
         image.set_attribute("decoding", "async")?;
         image.set_attribute("data-i", &index.to_string())?;
+        images.push(image);
+    }
+    node(document, &root, "div", "tv-plate-dust", "")?;
+    node(document, &root, "div", "tv-plate-vignette", "")?;
+    Ok(PlateLayer {
+        root,
+        images,
+        listeners: Vec::with_capacity(2),
+        scene: RefCell::new(String::new()),
+        next: Cell::new(0),
+        seen: RefCell::new(String::new()),
+        preloads: RefCell::new(Vec::new()),
+        pending_layout: Rc::new(RefCell::new(None)),
+    })
+}
+
+fn bind_plate_events(
+    layer: &mut PlateLayer,
+    stage: &Element,
+    figures: Weak<Figures>,
+) -> Result<(), JsValue> {
+    for image in &layer.images {
         let load = {
-            let (stage, root, image) = (stage.clone(), root.clone(), image.clone());
+            let (stage, root, image) = (stage.clone(), layer.root.clone(), image.clone());
+            let figures = figures.clone();
+            let pending_layout = Rc::clone(&layer.pending_layout);
             Closure::wrap(Box::new(move |_: Event| {
-                // A picture that is no longer the one wanted (a newer plate replaced it while it
-                // loaded) changes nothing.
                 if root.get_attribute("data-want") != image.get_attribute("data-src") {
                     return;
                 }
@@ -342,7 +366,6 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
                 } else {
                     "a"
                 };
-                // The slow push-in restarts only for a new scene's plate, not for an edit of it.
                 if root.get_attribute("data-pull").as_deref() != Some("focus") {
                     let _set = root.set_attribute("data-push", tick);
                 }
@@ -350,42 +373,53 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
                     "data-active",
                     &image.get_attribute("data-i").unwrap_or_default(),
                 );
+                if let Some(figures) = figures.upgrade() {
+                    let layout = pending_layout.borrow().clone();
+                    if let Some(layout) = &layout {
+                        let _set = root.set_attribute(
+                            "style",
+                            &format!(
+                                "--head-x:{}%;--head-y:{}%",
+                                layout.head_x / 10,
+                                layout.head_y / 10
+                            ),
+                        );
+                    } else {
+                        let _removed = root.remove_attribute("style");
+                    }
+                    let _applied = figures.set_plate(layout);
+                }
                 let _set = stage.set_attribute("data-plate-loaded", "");
                 let _synced = sync_shot(&stage);
             }) as Box<dyn FnMut(Event)>)
         };
         let error = {
-            let (stage, root, image) = (stage.clone(), root.clone(), image.clone());
+            let (stage, root, image) = (stage.clone(), layer.root.clone(), image.clone());
+            let figures = figures.clone();
+            let pending_layout = Rc::clone(&layer.pending_layout);
             Closure::wrap(Box::new(move |_: Event| {
                 if root.get_attribute("data-want") != image.get_attribute("data-src") {
                     return;
                 }
-                // The plate never loaded: the scene keeps its cut-outs.
                 let _set = root.set_attribute(
                     "data-failed",
                     &image.get_attribute("data-src").unwrap_or_default(),
                 );
                 let _set = stage.set_attribute("data-plate-state", "failed");
                 let _removed = stage.remove_attribute("data-plate-loaded");
+                *pending_layout.borrow_mut() = None;
+                let _removed = root.remove_attribute("style");
+                if let Some(figures) = figures.upgrade() {
+                    let _applied = figures.set_plate(None);
+                }
                 let _synced = sync_shot(&stage);
             }) as Box<dyn FnMut(Event)>)
         };
         image.add_event_listener_with_callback("load", load.as_ref().unchecked_ref())?;
         image.add_event_listener_with_callback("error", error.as_ref().unchecked_ref())?;
-        images.push(image);
-        listeners.push((load, error));
+        layer.listeners.push((load, error));
     }
-    node(document, &root, "div", "tv-plate-dust", "")?;
-    node(document, &root, "div", "tv-plate-vignette", "")?;
-    Ok(PlateLayer {
-        root,
-        images,
-        listeners,
-        scene: RefCell::new(String::new()),
-        next: Cell::new(0),
-        seen: RefCell::new(String::new()),
-        preloads: RefCell::new(Vec::new()),
-    })
+    Ok(())
 }
 
 impl TvStage {
@@ -399,9 +433,10 @@ impl TvStage {
         let loop_layer = node(document, &root, "div", "tv-loop", "")?;
         let home_loop = live_home_video::HomeLoop::new(document, loop_layer)?;
         let atmosphere = node(document, &root, "div", "tv-atmosphere", "")?;
-        let plate = mount_plate(document, &root)?;
+        let mut plate = mount_plate(document, &root)?;
         node(document, &root, "div", "tv-scrim", "")?;
-        let figures = Figures::mount(document, &root)?;
+        let figures = Rc::new(Figures::mount(document, &root)?);
+        bind_plate_events(&mut plate, &root, Rc::downgrade(&figures))?;
         let safe = node(document, &root, "div", "tv-safe", "")?;
         // The logo and title travel together as one block a themed lobby can place.
         let title_block = node(document, &safe, "div", "tv-title-block", "")?;
@@ -1090,25 +1125,19 @@ impl TvStage {
             layer.root.remove_attribute("data-pull")?;
             layer.scene.borrow_mut().clear();
             *layer.seen.borrow_mut() = scene_key.to_owned();
+            *layer.pending_layout.borrow_mut() = None;
             self.figures.set_plate(None)?;
             return Ok(());
         };
-        self.figures.set_plate(plate.layout.clone())?;
-        if let Some(layout) = &plate.layout {
-            layer.root.set_attribute(
-                "style",
-                &format!(
-                    "--head-x:{}%;--head-y:{}%",
-                    layout.head_x / 10,
-                    layout.head_y / 10
-                ),
-            )?;
-        }
         if layer.root.get_attribute("data-want").as_deref() == Some(url.as_str()) {
             return Ok(());
         }
         let same_scene =
             layer.scene.borrow().as_str() == scene_key && layer.root.has_attribute("data-want");
+        *layer.pending_layout.borrow_mut() = plate.layout.clone();
+        if !same_scene {
+            self.figures.set_plate(None)?;
+        }
         let next = layer.next.get();
         let Some(image) = layer.images.get(next) else {
             return Ok(());

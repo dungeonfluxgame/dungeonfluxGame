@@ -952,6 +952,14 @@ impl Figures {
             .unwrap_or(1080.0);
         let screen = (0.0, 0.0, width, height);
         let mut avoid: Vec<(f64, f64, f64, f64)> = Vec::new();
+        let (left, top, right, bottom) = rectangle(&speaker.body);
+        let (span, tall) = (right - left, bottom - top);
+        avoid.push((
+            left + span * 0.2,
+            top,
+            right - span * 0.2,
+            top + tall * 0.36,
+        ));
         for other in &self.figures {
             if other.root.is_same_node(Some(speaker.root.as_ref())) || !Self::present(other) {
                 continue;
