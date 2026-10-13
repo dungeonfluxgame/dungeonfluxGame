@@ -1097,12 +1097,11 @@ pub(super) fn battle_fps(input: Result<String, VarError>) -> Result<u32, io::Err
 
 /// The largest `DF_GAMEPLAY_SPLAT_LOD` accepted.
 const MAXIMUM_SPLAT_LOD: u32 = 3;
-/// The default tier of a streamed scan: 0, the largest the scene authors (SPLAT-002 owner
-/// decision: battle scans draw at level 0 because coarser tiers read as muddy).
-const DEFAULT_SPLAT_LOD: u32 = 0;
+/// The default tier of a streamed scan: 1, the next tier down from the largest scene-authored tier.
+const DEFAULT_SPLAT_LOD: u32 = 1;
 
 /// `DF_GAMEPLAY_SPLAT_LOD`: which tier of a streamed scan the battlefield draws as its finest, 0 to
-/// 3 (default 0). 0 is the largest tier the scene authors for the scan, 1 the next one down. Anything
+/// 3 (default 1). 0 is the largest tier the scene authors for the scan, 1 the next one down. Anything
 /// else is refused at startup rather than silently replaced.
 pub(super) fn splat_lod(input: Result<String, VarError>) -> Result<u32, io::Error> {
     let Some(value) = optional(input)? else {
@@ -1113,7 +1112,7 @@ pub(super) fn splat_lod(input: Result<String, VarError>) -> Result<u32, io::Erro
         .ok()
         .filter(|level| *level <= MAXIMUM_SPLAT_LOD && value == level.to_string())
         .ok_or_else(|| {
-            io::Error::other("DF_GAMEPLAY_SPLAT_LOD invalid: use 0, 1, 2 or 3 (default 0)")
+            io::Error::other("DF_GAMEPLAY_SPLAT_LOD invalid: use 0, 1, 2 or 3 (default 1)")
         })
 }
 
@@ -2303,9 +2302,9 @@ mod adventure_settings_tests {
     }
 
     #[test]
-    fn the_splat_lod_is_0_by_default_and_only_0_to_3_are_accepted() {
+    fn the_splat_lod_is_1_by_default_and_only_0_to_3_are_accepted() {
         let set = |value: &str| Ok::<_, VarError>(value.to_owned());
-        assert_eq!(splat_lod(Err(VarError::NotPresent)).unwrap(), 0);
+        assert_eq!(splat_lod(Err(VarError::NotPresent)).unwrap(), 1);
         for (text, level) in [("0", 0), ("1", 1), ("2", 2), ("3", 3)] {
             assert_eq!(splat_lod(set(text)).unwrap(), level);
         }
