@@ -4374,10 +4374,18 @@ pub(super) mod tests {
                         outcome.kind == rpc::OutcomeKind::DeathSave as i32
                             || outcome.kind == rpc::OutcomeKind::Recovery as i32
                     }) {
-                        assert!(
-                            view.death_save_outcomes.contains(outcome),
-                            "the view must carry every recorded roll"
-                        );
+                        let mut expected = outcome.clone();
+                        expected.sequence = 0;
+                        let view_outcome = view
+                            .death_save_outcomes
+                            .iter()
+                            .find(|view_outcome| {
+                                let mut view_outcome = (*view_outcome).clone();
+                                view_outcome.sequence = 0;
+                                view_outcome == expected
+                            })
+                            .expect("the view must carry every recorded roll");
+                        assert!(view_outcome.sequence > 0);
                     }
                     rolls.extend(
                         recorded
@@ -4397,6 +4405,11 @@ pub(super) mod tests {
                         .map(|outcome| outcome.recovery_hours)
                         .max()
                         .unwrap_or(0);
+                    assert!(
+                        view.death_save_outcomes
+                            .windows(2)
+                            .all(|pair| pair[0].sequence < pair[1].sequence)
+                    );
                     assert!(view.outcomes.iter().all(|outcome| {
                         outcome.kind != rpc::OutcomeKind::Move as i32
                             && outcome.kind != rpc::OutcomeKind::DeathSave as i32

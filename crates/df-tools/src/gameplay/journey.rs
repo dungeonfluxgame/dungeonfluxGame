@@ -3923,7 +3923,16 @@ mod tests {
                 panic!("player");
             };
             let outcomes = player.journey.unwrap().combat.unwrap().outcomes;
-            assert_eq!(outcomes, vec![outcome]);
+            assert_eq!(outcomes.len(), 1);
+            let mut actual = outcomes[0].clone();
+            actual.sequence = 0;
+            assert_eq!(actual, outcome);
+            assert!(outcomes[0].sequence > 0);
+            assert!(
+                outcomes
+                    .windows(2)
+                    .all(|pair| pair[0].sequence < pair[1].sequence)
+            );
             assert_eq!(
                 phase(checkpoints.last().unwrap()).unwrap(),
                 rpc::JourneyPhase::Complete
