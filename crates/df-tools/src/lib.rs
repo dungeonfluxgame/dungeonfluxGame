@@ -52,6 +52,8 @@ pub(crate) mod health_tier;
 // PLAY-H01: shake sizes and timings (pure), used by the browser's health cues.
 #[cfg(any(target_arch = "wasm32", test))]
 mod health_cues;
+#[cfg(any(target_arch = "wasm32", test))]
+mod player_sheet;
 mod stage_art;
 #[cfg(any(target_arch = "wasm32", test))]
 mod stage_conductor;

@@ -1324,6 +1324,14 @@ fn creation_option_label(group_id: &str, label: &str) -> String {
     if group_id == "allied-ties" {
         return live_combat::display_label(&label.replace("the Bandit", "the enemy"));
     }
+    if group_id == "portrait" {
+        // The pack names the looks by slot; the form names them by what the picture shows.
+        return match label {
+            "Greatsword hero" => "Red beard, greatsword".to_owned(),
+            "Second hero" => "Braided hair, greatsword".to_owned(),
+            other => live_combat::display_label(other),
+        };
+    }
     live_combat::display_label(label)
 }
 
@@ -1336,43 +1344,6 @@ fn creation_option_description(group_id: &str, description: &str) -> String {
     } else {
         description.to_owned()
     }
-}
-
-fn player_sheet_fact_value(label: &str, value: &str) -> Option<String> {
-    match label {
-        "Supported rules" => None,
-        "Starting equipment" => {
-            let Some((equipment, coins)) = value.rsplit_once(" · ") else {
-                return Some(value.to_owned());
-            };
-            let Some(amount) = coins.strip_suffix(" GP") else {
-                return Some(value.to_owned());
-            };
-            if matches!(equipment, "Fighter A + Soldier A" | "Fighter B + Soldier B") {
-                Some(format!("{amount} gp"))
-            } else {
-                Some(format!("{equipment} · {amount} gp"))
-            }
-        }
-        "First language" | "Second language" | "Base language" | "First class skill"
-        | "Second class skill" | "Alignment" => Some(live_combat::display_label(value)),
-        _ if value == "Held" => Some("(in hand)".to_owned()),
-        _ if value.starts_with("Dropped") => Some("(dropped)".to_owned()),
-        _ => Some(value.to_owned()),
-    }
-}
-
-fn player_sheet_view(sheet: &rpc::CharacterSheet) -> rpc::CharacterSheet {
-    let mut view = sheet.clone();
-    view.facts.retain_mut(|fact| {
-        if let Some(value) = player_sheet_fact_value(&fact.label, &fact.value) {
-            fact.value = value;
-            true
-        } else {
-            false
-        }
-    });
-    view
 }
 
 /// Lists an option only with the choices the server says it goes with (an appearance only with
@@ -1909,7 +1880,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         node(&document, &body, "p", "clue", &clue)?;
     }
     if let Some(sheet) = journey.own_character.as_ref() {
-        let sheet = player_sheet_view(sheet);
+        let sheet = crate::player_sheet::player_sheet_view(sheet);
         live_combat::sheet::summary(client, &body, &sheet)?;
     }
 

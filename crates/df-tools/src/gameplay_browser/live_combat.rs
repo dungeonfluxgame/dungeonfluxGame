@@ -87,20 +87,7 @@ impl Live {
 /// An option label for people: ids such as `common-sign` read as "Common Sign". Labels that
 /// already carry capitals are left alone. Presentation only; submitted values stay the ids.
 pub(super) fn display_label(label: &str) -> String {
-    if label.chars().any(char::is_uppercase) {
-        return label.to_owned();
-    }
-    label
-        .split(['-', ' '])
-        .filter(|word| !word.is_empty())
-        .map(|word| {
-            let mut letters = word.chars();
-            letters.next().map_or_else(String::new, |first| {
-                first.to_uppercase().chain(letters).collect()
-            })
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    crate::player_sheet::display_label(label)
 }
 
 /// The marker the server appends to narration when the rules are customised.

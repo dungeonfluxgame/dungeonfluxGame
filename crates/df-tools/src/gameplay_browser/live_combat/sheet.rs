@@ -344,7 +344,11 @@ fn current(client: &Client) -> Option<(rpc::CharacterSheet, u64, u64)> {
         return None;
     };
     let sheet = player.journey.as_ref()?.own_character.clone()?;
-    Some((sheet, revision.epoch().get(), revision.sequence()))
+    Some((
+        crate::player_sheet::player_sheet_view(&sheet),
+        revision.epoch().get(),
+        revision.sequence(),
+    ))
 }
 
 fn hit_point_bar(
@@ -524,6 +528,8 @@ pub(in crate::gameplay_browser) fn mount_inline(
     sheet: &rpc::CharacterSheet,
     token: &str,
 ) -> Result<(), JsValue> {
+    let view = crate::player_sheet::player_sheet_view(sheet);
+    let sheet = &view;
     let document = client.borrow().document.clone();
     super::ensure_style(&document)?;
     if let Some(previous) = parent.query_selector("#hero-sheet")? {
