@@ -14,6 +14,7 @@
 //!
 //! Pure geometry: tested natively for every attacker and target cell on every scene and layout.
 
+use super::occupancy::Occupancy;
 use super::{camera::CameraPose, math::Vec3};
 
 /// The part of the picture figures are kept inside, as `(left, top, right, bottom)` shares of the
@@ -271,6 +272,51 @@ pub fn action_shot_from(
     aspect: f32,
     home_yaw: Option<f32>,
 ) -> ActionShot {
+    action_shot_from_inner(
+        style, current, actor, target, also, bystanders, aspect, home_yaw, None,
+    )
+    .expect("unfiltered action candidates always include a pose")
+}
+
+/// As [`action_shot_from`], rejecting poses whose view of either fighter crosses occupied scene
+/// geometry. Returns `None` when no framed, clear pose can be found.
+#[allow(clippy::too_many_arguments)]
+pub fn action_shot_from_occupancy(
+    style: &CameraPose,
+    current: &CameraPose,
+    actor: &Body,
+    target: Option<&Body>,
+    also: &[Body],
+    bystanders: &[Body],
+    aspect: f32,
+    home_yaw: Option<f32>,
+    occupancy: &Occupancy,
+) -> Option<ActionShot> {
+    action_shot_from_inner(
+        style,
+        current,
+        actor,
+        target,
+        also,
+        bystanders,
+        aspect,
+        home_yaw,
+        Some(occupancy),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn action_shot_from_inner(
+    style: &CameraPose,
+    current: &CameraPose,
+    actor: &Body,
+    target: Option<&Body>,
+    also: &[Body],
+    bystanders: &[Body],
+    aspect: f32,
+    home_yaw: Option<f32>,
+    occupancy: Option<&Occupancy>,
+) -> Option<ActionShot> {
     let chest = |body: &Body| body.feet + Vec3::new(0.0, body.height_m * 0.5, 0.0);
     let other = target.copied().unwrap_or(*actor);
     // A little toward the target, so the frame leans over its shoulder.
@@ -320,15 +366,19 @@ pub fn action_shot_from(
         })
         .collect();
     slack_bodies.extend_from_slice(&bodies);
-    let fit = |swing: f32| {
+    // The party close-up applies the tightest dolly after this fit.
+    let fit_dolly = if occupancy.is_some() { 0.85 } else { 1.0 };
+    let fit = |swing: f32, pitch_raise: f32, distance_factor: f32| {
         let mut pose = CameraPose {
             target: focus,
-            distance: MIN_DISTANCE_M.max(style.distance * 0.6),
+            distance: MIN_DISTANCE_M.max(style.distance * 0.6 * distance_factor),
             yaw_deg: current.yaw_deg + swing,
-            pitch_deg: style.pitch_deg,
+            pitch_deg: (style.pitch_deg + pitch_raise).min(89.0),
             fov_deg: style.fov_deg,
         };
-        while pose.distance < MAX_DISTANCE_M && !all_in_safe_area(&pose, aspect, &slack_bodies) {
+        while pose.distance < MAX_DISTANCE_M
+            && !all_in_safe_area(&pose.dollied(fit_dolly), aspect, &slack_bodies)
+        {
             pose.distance *= 1.05;
         }
         pose.distance = pose.distance.min(MAX_DISTANCE_M);
@@ -337,28 +387,57 @@ pub fn action_shot_from(
     let involved = [*actor, other];
     let mut chosen: Option<(usize, f32, CameraPose)> = None;
     for (swing, _) in &candidates {
-        let pose = fit(*swing);
-        let mut blocked = if bystanders.is_empty() {
-            0
+        let pitch_raises = if occupancy.is_some() {
+            &[0.0, 8.0, 16.0, 24.0, 32.0][..]
         } else {
-            blocked_by_bystanders(&pose, aspect, &involved, bystanders)
+            &[0.0][..]
         };
-        if has_line && pair_hidden(&pose, aspect, actor, &other) {
-            blocked += 1;
-        }
-        if chosen.is_none_or(|(least, _, _)| blocked < least) {
-            chosen = Some((blocked, *swing, pose));
-        }
-        if blocked == 0 {
-            break;
+        let distance_factors = if occupancy.is_some() {
+            &[1.0, 0.85, 0.7, 0.55][..]
+        } else {
+            &[1.0][..]
+        };
+        for pitch_raise in pitch_raises {
+            for distance_factor in distance_factors {
+                let pose = fit(*swing, *pitch_raise, *distance_factor);
+                let eye = pose.eye();
+                let occupancy_blocked = occupancy.is_some_and(|occupancy| {
+                    involved.iter().any(|body| {
+                        let chest = body.feet + Vec3::new(0.0, body.height_m * 0.7, 0.0);
+                        let ignore_end = ((chest - eye).length() * 0.4).max(1.3);
+                        !occupancy.segment_clear(eye, chest, ignore_end, 1.0)
+                    })
+                });
+                if occupancy_blocked {
+                    continue;
+                }
+                let mut blocked = if bystanders.is_empty() {
+                    0
+                } else {
+                    blocked_by_bystanders(&pose, aspect, &involved, bystanders)
+                };
+                if has_line && pair_hidden(&pose, aspect, actor, &other) {
+                    blocked += 1;
+                }
+                if chosen.is_none_or(|(least, _, _)| blocked < least) {
+                    chosen = Some((blocked, *swing, pose));
+                }
+                if blocked == 0 {
+                    let (_, swing, pose) = chosen.unwrap_or((blocked, *swing, pose));
+                    return Some(ActionShot {
+                        pose,
+                        cut: swing.abs() > MAX_SWING_DEG,
+                        swing_deg: swing.abs(),
+                    });
+                }
+            }
         }
     }
-    let (_, swing, pose) = chosen.unwrap_or_else(|| (0, 0.0, fit(0.0)));
-    ActionShot {
+    chosen.map(|(_, swing, pose)| ActionShot {
         pose,
         cut: swing.abs() > MAX_SWING_DEG,
         swing_deg: swing.abs(),
-    }
+    })
 }
 
 /// Whether any bystander stands in front of an involved fighter on the screen from `pose`.
@@ -863,6 +942,76 @@ mod tests {
             assert!(
                 heading.abs() <= MAX_HOME_DEVIATION_DEG + 1e-3,
                 "from {current_yaw}: {heading}"
+            );
+        }
+    }
+
+    #[test]
+    fn action_pose_rejects_occupied_line_and_tries_a_clear_angle() {
+        let actor = body(-1.0, 0.0);
+        let target = body(1.0, 0.0);
+        let unfiltered = action_shot(
+            &style(),
+            &current(0.0),
+            &actor,
+            Some(&target),
+            &[],
+            &[],
+            FRAMED_ASPECT,
+        );
+        let mut occupancy =
+            Occupancy::empty(Vec3::new(-15.0, 0.0, -15.0), 1.0, [30, 20, 30]).unwrap();
+        let eye_cell = occupancy.cell_of(unfiltered.pose.eye()).unwrap();
+        occupancy.set(eye_cell.0, eye_cell.1, eye_cell.2);
+        let eye = unfiltered.pose.eye();
+        let chest = actor.feet + Vec3::new(0.0, actor.height_m * 0.7, 0.0);
+        assert!(!occupancy.segment_clear(eye, chest, 1.3, 1.0));
+
+        let shot = action_shot_from_occupancy(
+            &style(),
+            &current(0.0),
+            &actor,
+            Some(&target),
+            &[],
+            &[],
+            FRAMED_ASPECT,
+            None,
+            &occupancy,
+        )
+        .expect("another action angle has a clear view");
+        let eye = shot.pose.eye();
+        for fighter in [actor, target] {
+            let chest = fighter.feet + Vec3::new(0.0, fighter.height_m * 0.7, 0.0);
+            let ignore_end = ((chest - eye).length() * 0.4).max(1.3);
+            assert!(occupancy.segment_clear(eye, chest, ignore_end, 1.0));
+        }
+    }
+
+    #[test]
+    fn occupancy_aware_action_fit_keeps_both_fighters_framed_after_the_push_in() {
+        let actor = body(-4.9, 3.5);
+        let target = body(4.9, -3.5);
+        let occupancy =
+            Occupancy::empty(Vec3::new(-40.0, -40.0, -40.0), 1.0, [80, 80, 80]).unwrap();
+
+        let shot = action_shot_from_occupancy(
+            &style(),
+            &current(0.0),
+            &actor,
+            Some(&target),
+            &[],
+            &[],
+            FRAMED_ASPECT,
+            None,
+            &occupancy,
+        )
+        .expect("clear occupancy admits an action shot");
+        let pushed_in = shot.pose.dollied(0.85);
+
+        for fighter in [actor, target] {
+            assert!(
+                in_safe_area(&pushed_in, FRAMED_ASPECT, &fighter),
+                "push-in lost {fighter:?} from {shot:?}"
             );
         }
     }

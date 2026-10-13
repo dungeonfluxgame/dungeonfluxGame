@@ -1539,16 +1539,36 @@ impl Stage {
                 .cameras
                 .get(&ShotName::Tactical)
                 .map(|pose| pose.yaw_deg);
-            let shot = framing::action_shot_from(
-                &base,
-                &self.rig.pose(),
-                &actor_body,
-                target_body.as_ref(),
-                &also,
-                &bystanders,
-                framing::FRAMED_ASPECT,
-                home_yaw,
+            let shot = self.scene.occupancy.as_ref().map_or_else(
+                || {
+                    Some(framing::action_shot_from(
+                        &base,
+                        &self.rig.pose(),
+                        &actor_body,
+                        target_body.as_ref(),
+                        &also,
+                        &bystanders,
+                        framing::FRAMED_ASPECT,
+                        home_yaw,
+                    ))
+                },
+                |occupancy| {
+                    framing::action_shot_from_occupancy(
+                        &base,
+                        &self.rig.pose(),
+                        &actor_body,
+                        target_body.as_ref(),
+                        &also,
+                        &bystanders,
+                        framing::FRAMED_ASPECT,
+                        home_yaw,
+                        occupancy,
+                    )
+                },
             );
+            let Some(shot) = shot else {
+                return Some((*self.scene.cameras.get(&ShotName::Tactical)?, false));
+            };
             return Some((shot.pose.dollied(command.dolly), shot.cut));
         }
         let aimed = match self.focus_point(&command.focus) {
@@ -2041,16 +2061,36 @@ impl Stage {
             .get(&ShotName::Tactical)
             .map(|pose| pose.yaw_deg);
         let _ = ending;
-        let shot = framing::action_shot_from(
-            &base,
-            &self.rig.pose(),
-            first,
-            None,
-            rest,
-            &[],
-            framing::FRAMED_ASPECT,
-            home_yaw,
+        let shot = self.scene.occupancy.as_ref().map_or_else(
+            || {
+                Some(framing::action_shot_from(
+                    &base,
+                    &self.rig.pose(),
+                    first,
+                    None,
+                    rest,
+                    &[],
+                    framing::FRAMED_ASPECT,
+                    home_yaw,
+                ))
+            },
+            |occupancy| {
+                framing::action_shot_from_occupancy(
+                    &base,
+                    &self.rig.pose(),
+                    first,
+                    None,
+                    rest,
+                    &[],
+                    framing::FRAMED_ASPECT,
+                    home_yaw,
+                    occupancy,
+                )
+            },
         );
+        let Some(shot) = shot else {
+            return self.scene.cameras.get(&ShotName::Tactical).copied();
+        };
         Some(shot.pose.dollied(PARTY_DOLLY))
     }
 
@@ -2625,6 +2665,34 @@ mod tests {
             },
             target_hit_points_after: Some(0),
         }
+    }
+
+    #[test]
+    fn occupied_action_and_party_closeups_fall_back_to_the_tactical_pose() {
+        let mut stage = stage();
+        let blocked_volume = "ff".repeat(80 * 80 * 80 / 8);
+        stage.scene.occupancy = Some(
+            super::super::occupancy::Occupancy::from_hex(
+                Vec3::new(-40.0, -40.0, -40.0),
+                1.0,
+                [80, 80, 80],
+                &blocked_volume,
+            )
+            .unwrap(),
+        );
+        let tactical = stage.scene.cameras[&ShotName::Tactical];
+        let command = CameraCommand {
+            shot: ShotName::TurnFocus,
+            focus: CameraFocus::Action {
+                actor: TokenId::new("hero"),
+                target: Some(TokenId::new("enemy")),
+                stand: None,
+            },
+            dolly: 0.5,
+        };
+
+        assert_eq!(stage.camera_pose_for(&command), Some((tactical, false)));
+        assert_eq!(stage.party_pose(Ending::Victory), Some(tactical));
     }
 
     #[test]
