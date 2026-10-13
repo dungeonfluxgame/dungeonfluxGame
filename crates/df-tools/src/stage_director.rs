@@ -466,7 +466,13 @@ impl<D: Clone> StageDirector<D> {
         cues.extend(diff.impact.map(|d| make(CueKind::Impact, d)));
         cues.extend(diff.defeat.map(|d| make(CueKind::Defeat, d)));
         Self::mark_unskippable(&mut cues, memorable);
+        let redraw_queued = self.queue.iter().any(|cue| cue.kind == CueKind::Render);
+        self.queue.retain(|cue| cue.kind != CueKind::Render);
         self.queue.extend(cues);
+        if redraw_queued {
+            self.queue
+                .push_back(Self::cue(CueKind::Render, None, now_ms, false, 0));
+        }
         self.collapse_if_behind(now_ms);
         self.advance(now_ms)
     }
@@ -1333,5 +1339,50 @@ mod tests {
         run(&mut director, 50, 2_500);
         assert!(director.is_idle());
         assert_eq!(director.presented_sequence(), 1);
+    }
+
+    #[test]
+    fn a_new_blow_drops_an_older_queued_redraw_until_the_blow_is_shown() {
+        let mut director = Director::new();
+        let first = ViewDiff {
+            roll: Some("first"),
+            impact: Some("first"),
+            sequence: 1,
+            ..ViewDiff::default()
+        };
+        let finishing = ViewDiff {
+            roll: Some("finishing"),
+            impact: Some("finishing"),
+            defeat: Some("finishing"),
+            sequence: 2,
+            ..ViewDiff::default()
+        };
+
+        let mut commands = director.on_view(0, first);
+        commands.extend(director.on_blow(0, finishing));
+        commands.extend(run(&mut director, 50, 10_000));
+
+        let finishing_defeat = commands.iter().position(|command| {
+            matches!(
+                command,
+                Command::Enter {
+                    state: StageState::Defeat,
+                    detail: Some("finishing"),
+                    ..
+                }
+            )
+        });
+        assert!(
+            finishing_defeat.is_some(),
+            "finishing defeat was not played"
+        );
+        let finishing_defeat = finishing_defeat.expect("finishing defeat was played");
+        let redraw = commands
+            .iter()
+            .position(|command| matches!(command, Command::Render));
+        assert!(
+            redraw.is_some_and(|redraw| redraw > finishing_defeat),
+            "the newest view was not redrawn after the finishing blow"
+        );
     }
 }
