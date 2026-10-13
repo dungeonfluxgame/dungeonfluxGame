@@ -373,17 +373,22 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         .ok_or_else(|| JsValue::from_str("scene binding absent"))?;
     let (_, members) = party_members(input.journey);
     let unconfirmed = !client.busy && !client.last_confirmed && client.last_request.is_some();
-    let choices: Vec<ExplorationChoiceModel> = input
-        .offers
-        .iter()
-        .filter(|offer| is_simple_offer(offer))
-        .map(|offer| ExplorationChoiceModel {
-            id: offer.offer_id.clone(),
-            label: offer.label.clone(),
-            icon: choice_icon(offer.action_kind),
-            disabled_reason: unconfirmed.then_some("Confirm your last choice first."),
-        })
-        .collect();
+    let ended = input.journey.adventure_ended;
+    let choices: Vec<ExplorationChoiceModel> = if ended {
+        Vec::new()
+    } else {
+        input
+            .offers
+            .iter()
+            .filter(|offer| is_simple_offer(offer))
+            .map(|offer| ExplorationChoiceModel {
+                id: offer.offer_id.clone(),
+                label: offer.label.clone(),
+                icon: choice_icon(offer.action_kind),
+                disabled_reason: unconfirmed.then_some("Confirm your last choice first."),
+            })
+            .collect()
+    };
     let has_offers = !input.offers.is_empty();
     let whisper = if input.clue.is_empty() {
         if has_offers {
@@ -401,7 +406,7 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         "scene-whisper-in-the-rain" => ConceptScene::WhisperInTheRain,
         _ => ConceptScene::CourierRoad,
     };
-    let speaker = (!input.journey.dialogue.is_empty()).then(|| ExplorationSpeaker {
+    let speaker = (!ended && !input.journey.dialogue.is_empty()).then(|| ExplorationSpeaker {
         name: if input.journey.speaker.is_empty() {
             "Narrator".to_owned()
         } else {
@@ -427,8 +432,20 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         rules_note: input.scene.rules_note.clone(),
         binding,
         scene: art_scene,
-        title: input.scene.title.clone(),
-        description: input.narration.to_owned(),
+        title: if ended {
+            if input.journey.adventure_title.is_empty() {
+                input.scene.title.clone()
+            } else {
+                input.journey.adventure_title.clone()
+            }
+        } else {
+            input.scene.title.clone()
+        },
+        description: if ended {
+            "The adventure is over. A new game is started from the TV.".to_owned()
+        } else {
+            input.narration.to_owned()
+        },
         whisper,
         location: format!("Room {}", input.journey.room_code),
         scene_label: match input.phase {
@@ -438,7 +455,7 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         },
         members,
         speaker,
-        heading: if input.journey.adventure_ended {
+        heading: if ended {
             "The End"
         } else if choices.is_empty() {
             "The story waits"
@@ -652,8 +669,8 @@ pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     prepare_mount(client, &view)?;
     let model = LobbyModel {
         stage: JoinStage::Invitation,
-        title: "Gather at the Lantern Wharf".to_owned(),
-        narration: "Connect to the shared room, create your own hero, and decide what happens at the Lantern Wharf.".to_owned(),
+        title: "Join the table".to_owned(),
+        narration: "Connect to the shared room and create your own hero.".to_owned(),
         code,
         join_url: String::new(),
         join_label: if uncertain {
