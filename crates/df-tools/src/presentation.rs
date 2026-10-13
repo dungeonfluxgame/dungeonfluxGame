@@ -900,19 +900,61 @@ pub(crate) fn table_lines(view: &rpc::ViewMessage) -> Vec<TableLine> {
     } else {
         None
     };
+    let scene_start = player_card
+        .then(|| {
+            journey.table_log.iter().rev().find(|line| {
+                rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Hero)
+                    && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Action)
+            })
+        })
+        .flatten();
+    let fight_ending = scene_start
+        .filter(|_| {
+            journey
+                .combat
+                .as_ref()
+                .is_some_and(|combat| combat.finished)
+        })
+        .and_then(|start| {
+            journey.table_log.iter().rev().find(|line| {
+                line.sequence < start.sequence
+                    && rpc::TableRole::try_from(line.role)
+                        .is_ok_and(|role| role != rpc::TableRole::Unspecified)
+                    && rpc::TableKind::try_from(line.kind)
+                        .is_ok_and(|kind| kind != rpc::TableKind::Unspecified)
+            })
+        });
     let authored_line = if player_card {
         None
     } else {
         scene_line(journey, scene)
     };
-    authored_line
+    let mut lines: Vec<_> = authored_line
         .into_iter()
-        .chain(
-            logged_lines(journey).filter(|line| {
-                !newest_reply.is_some_and(|(sequence, _, _)| line.sequence == sequence)
-            }),
-        )
-        .collect()
+        .chain(logged_lines(journey).filter(|line| {
+            (!player_card
+                || scene_start.is_none_or(|start| {
+                    line.sequence >= start.sequence
+                        || fight_ending.is_some_and(|ending| line.sequence == ending.sequence)
+                }))
+                && !newest_reply.is_some_and(|(sequence, _, _)| line.sequence == sequence)
+        }))
+        .collect();
+    if let Some(ending) = fight_ending
+        && let Some(line) = lines
+            .iter_mut()
+            .find(|line| line.sequence == ending.sequence)
+    {
+        line.speaker.clear();
+        line.role = TableRole::Narrator;
+        line.kind = TableKind::Action;
+        line.text = if is_victory(journey) {
+            "The fight is won.".to_owned()
+        } else {
+            "The party fell.".to_owned()
+        };
+    }
+    lines
 }
 
 fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> + '_ {
@@ -1616,6 +1658,98 @@ mod tests {
         let lines = table_lines(&player);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "Hold the gate!");
+    }
+
+    #[test]
+    fn player_story_log_starts_at_the_action_that_opened_the_scene() {
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.combat.as_mut().unwrap().finished = true;
+        shown.combat.as_mut().unwrap().participants = vec![rpc::PartyMemberView {
+            side: 2,
+            hit_points: 0,
+            ..Default::default()
+        }];
+        shown.table_log = vec![
+            server_line(
+                1,
+                "Brakka",
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Action,
+                "swings at the weasel",
+            ),
+            server_line(
+                2,
+                "",
+                rpc::TableRole::Narrator,
+                0,
+                rpc::TableKind::Action,
+                "Brakka strikes the weasel",
+            ),
+            server_line(
+                3,
+                "Brakka",
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Action,
+                "leads on to the bothy",
+            ),
+            server_line(
+                4,
+                "Calla",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "Welcome, friends.",
+            ),
+        ];
+        let fight_lines = shown.table_log.clone();
+        let player = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    journey: Some(shown),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+
+        let lines = table_lines(&player);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].text, "The fight is won.");
+        assert_eq!(lines[1].text, "leads on to the bothy");
+        assert_eq!(lines[2].text, "Welcome, friends.");
+
+        let mut fighting = journey(rpc::JourneyPhase::Combat, false, vec![]);
+        fighting.table_log = fight_lines.clone();
+        let player_in_fight = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    journey: Some(fighting),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert_eq!(table_lines(&player_in_fight).len(), 4);
+
+        let mut defeated = journey(rpc::JourneyPhase::Dialogue, true, vec![]);
+        defeated.combat.as_mut().unwrap().participants = vec![rpc::PartyMemberView {
+            side: 2,
+            hit_points: 1,
+            ..Default::default()
+        }];
+        defeated.table_log = fight_lines;
+        let player_after_defeat = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    journey: Some(defeated),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert_eq!(table_lines(&player_after_defeat)[0].text, "The party fell.");
     }
 
     #[test]
