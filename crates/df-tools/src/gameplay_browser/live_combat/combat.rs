@@ -124,6 +124,60 @@ fn death_save_for<'a>(
     })
 }
 
+fn conditions_resource(member: &rpc::PartyMemberView) -> Option<String> {
+    if member
+        .conditions
+        .iter()
+        .any(|condition| condition == "dead")
+    {
+        Some("dead".to_owned())
+    } else if member.conditions.is_empty() {
+        None
+    } else {
+        Some(member.conditions.join(", "))
+    }
+}
+
+fn tactical_option_label(label: &str, target: &rpc::LegalCombatTarget) -> String {
+    let cover = if target.cover == "none" {
+        "no cover".to_owned()
+    } else {
+        format!("{} cover", target.cover)
+    };
+    let mut label = format!("{label} · {cover} · {}", target.range_reason);
+    if target.disadvantage {
+        let reasons = target
+            .reasons
+            .iter()
+            .filter_map(|reason| reason.strip_prefix("disadvantage: "))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if reasons.is_empty() {
+            label.push_str(" · disadvantage");
+        } else {
+            label.push_str(&format!(" · disadvantage: {reasons}"));
+        }
+    }
+    label
+}
+
+fn action_empty(
+    player: bool,
+    own_turn: bool,
+    active_name: Option<&str>,
+    waiting_for_view: bool,
+    resolving: bool,
+) -> String {
+    match (player, active_name) {
+        (true, _) if waiting_for_view => "Waiting for the current fight view.".to_owned(),
+        (true, _) if resolving => "Watch the TV: the last action is playing out.".to_owned(),
+        (false, _) => "Actions appear on each player's device.".to_owned(),
+        (true, _) if own_turn => "Your turn.".to_owned(),
+        (true, Some(name)) => format!("Waiting for {name}…"),
+        (true, None) => "The encounter is resolved.".to_owned(),
+    }
+}
+
 fn waiting_for_current_view(
     role: &str,
     last_confirmed: bool,
@@ -183,8 +237,8 @@ fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Opt
                 format!("Column {}, row {}", cell.col + 1, cell.row + 1),
             ));
         }
-        if !member.conditions.is_empty() {
-            resources.push(("Conditions", member.conditions.join(", ")));
+        if let Some(conditions) = conditions_resource(member) {
+            resources.push(("Conditions", conditions));
         }
         if let Some(save) = death_save_for(member, &combat.death_saves) {
             resources.push(("Death saves", death_save_summary(save)));
@@ -498,13 +552,7 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
             (false, Some(name)) => format!("Round {} · {name}'s turn", combat.round),
         },
         active,
-        action_empty: match (player, active_name) {
-            (true, _) if waiting_for_view => "Waiting for the current fight view.".to_owned(),
-            (true, _) if resolving => "Watch the TV: the last action is playing out.".to_owned(),
-            (false, _) => "Actions appear on each player's device.".to_owned(),
-            (true, Some(name)) => format!("Waiting for {name}…"),
-            (true, None) => "The encounter is resolved.".to_owned(),
-        },
+        action_empty: action_empty(player, own_turn, active_name, waiting_for_view, resolving),
         busy: state.busy,
         actors,
         offers: offers(state, view, blocked || waiting_for_view)?,
@@ -761,17 +809,7 @@ fn publish_tactical_controls(
                     .iter()
                     .find(|target| target.option_id == option.option_id)
                 {
-                    option.label = format!(
-                        "{} · {} cover · {}{}",
-                        option.label,
-                        target.cover,
-                        target.range_reason,
-                        if target.disadvantage {
-                            " · disadvantage"
-                        } else {
-                            ""
-                        }
-                    );
+                    option.label = tactical_option_label(&option.label, target);
                 }
             }
         }
@@ -911,7 +949,10 @@ fn handle_intent(client: &Rc<RefCell<Client>>, intent: CombatIntent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{death_save_for, death_save_summary, waiting_for_current_view};
+    use super::{
+        action_empty, conditions_resource, death_save_for, death_save_summary,
+        tactical_option_label, waiting_for_current_view,
+    };
     use df_protocol::common as rpc;
 
     #[test]
@@ -1016,6 +1057,67 @@ mod tests {
         assert_eq!(
             death_save_for(&member, &saves).map(|save| save.failures),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn dead_participant_conditions_show_only_dead() {
+        let dead = rpc::PartyMemberView {
+            conditions: vec![
+                "prone".to_owned(),
+                "unconscious".to_owned(),
+                "dead".to_owned(),
+            ],
+            ..Default::default()
+        };
+        let living = rpc::PartyMemberView {
+            conditions: vec!["prone".to_owned()],
+            ..Default::default()
+        };
+
+        assert_eq!(conditions_resource(&dead).as_deref(), Some("dead"));
+        assert_eq!(conditions_resource(&living).as_deref(), Some("prone"));
+    }
+
+    #[test]
+    fn own_turn_empty_actions_does_not_wait_for_own_name() {
+        let message = action_empty(true, true, Some("Brakka"), false, false);
+
+        assert_eq!(message, "Your turn.");
+        assert!(!message.contains("Waiting for Brakka"));
+    }
+
+    #[test]
+    fn other_hero_turn_empty_actions_names_active_hero() {
+        assert_eq!(
+            action_empty(true, false, Some("Sigrun"), false, false),
+            "Waiting for Sigrun…"
+        );
+    }
+
+    #[test]
+    fn tactical_option_label_explains_cover_and_disadvantage() {
+        let target = rpc::LegalCombatTarget {
+            cover: "none".to_owned(),
+            range_reason: "normal range: 30 ft".to_owned(),
+            disadvantage: true,
+            reasons: vec!["disadvantage: hostile within 5 ft".to_owned()],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            tactical_option_label("Longbow at Weasel", &target),
+            "Longbow at Weasel · no cover · normal range: 30 ft · disadvantage: hostile within 5 ft"
+        );
+        let covered = rpc::LegalCombatTarget {
+            cover: "half (+2 AC)".to_owned(),
+            range_reason: "normal range: 10 ft".to_owned(),
+            disadvantage: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            tactical_option_label("Longbow at Weasel", &covered),
+            "Longbow at Weasel · half (+2 AC) cover · normal range: 10 ft · disadvantage"
         );
     }
 }
