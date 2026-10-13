@@ -1214,6 +1214,20 @@ impl Renderer {
                 [0.0, 0.0, 0.0, alpha],
                 [3.0, 0.0, 0.0],
             );
+            if !figure.downed {
+                // Whose side it is on, read from the ground: cool for a hero, warm for an enemy.
+                let tone = match figure.side {
+                    Side::Hero => [0.5, 0.8, 1.0],
+                    Side::Enemy => [1.0, 0.3, 0.2],
+                };
+                // Never smaller than a person's: a low creature is the one that needs finding.
+                let ring = (0.42 + figure.height_m * 0.1).max(0.6);
+                push(
+                    [figure.position.x, figure.position.z, ring, ring],
+                    [tone[0], tone[1], tone[2], 0.8 * figure.alpha],
+                    [12.0, 0.0, 0.0],
+                );
+            }
             if figure.downed {
                 let (tone, cross) = if frame.restrained {
                     ([0.12, 0.12, 0.14, 0.6], 1.0)

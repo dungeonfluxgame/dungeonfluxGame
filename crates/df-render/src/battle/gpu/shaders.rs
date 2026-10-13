@@ -420,6 +420,15 @@ fn shade(in: VOut) -> vec4<f32> {
         let a = max(pool, cross_m * in.params.y);
         return vec4<f32>(in.col.rgb * a, a);
     }
+    if (kind == 12) {
+        // Whose side a standing figure is on: a thin ring on the ground around its feet, with a
+        // faint wash inside so a small creature on busy ground can be found at a glance.
+        let d = length(in.c);
+        let ring = 1.0 - smoothstep(0.0, 0.09, abs(d - 0.84));
+        let wash = (1.0 - smoothstep(0.2, 0.84, d)) * 0.16;
+        let a = max(ring, wash) * in.col.a;
+        return vec4<f32>(in.col.rgb * a, a);
+    }
     // Markers under figures: a warm glow disc, an inner outlined tile and, when acting, a pulse.
     let d = length(in.c);
     let glow = exp(-d * d * 2.6) * (0.42 + 0.5 * in.params.z * (0.7 + 0.3 * pulse));
