@@ -262,6 +262,10 @@ pub(super) fn stage(
     let GameCommand::ProposeAction { actor, choices, .. } = &command.command else {
         return Err(RepositoryError::InvalidCandidate);
     };
+    if command.basis != current.basis() || command.observed_revision != current.basis().revision {
+        crate::gameplay::refusal_detail::note("combat-stale-basis");
+        return Err(RepositoryError::InvalidCandidate);
+    }
     // The registered journey binds member, command and current offer before this call.
     // Re-admit against the current working copy before any action spend or actual draw.
     let candidate = admit(current, state, *actor)?.ok_or(RepositoryError::InvalidCandidate)?;

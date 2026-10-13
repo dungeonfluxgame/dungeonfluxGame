@@ -238,6 +238,39 @@ fn registered_player_greatsword_uses_existing_source_outcomes_and_action_economy
     }
 }
 
+#[test]
+fn combat_command_from_older_revision_is_refused_before_drawing() {
+    let current = combat();
+    let before = current.state().clone();
+    let GameInput::Game(mut command) = attack_input(&current, 8, false, false) else {
+        panic!("player command")
+    };
+    let stale_revision = df_types::SessionRevision::new(
+        command.basis.revision.epoch(),
+        command.basis.revision.sequence() - 1,
+    );
+    command.basis.revision = stale_revision;
+    command.observed_revision = stale_revision;
+    let mut state = current.state().clone();
+    let mut draws = vec![];
+    let mut outcomes = vec![];
+
+    assert_eq!(
+        combat_transition::stage(
+            &current,
+            &command,
+            &mut state,
+            &mut draws,
+            &mut outcomes,
+            &mut |_| panic!("stale attack cannot draw")
+        ),
+        Err(RepositoryError::InvalidCandidate)
+    );
+    assert_eq!(state, before);
+    assert!(draws.is_empty());
+    assert!(outcomes.is_empty());
+}
+
 fn unavailable(current: &Checkpoint, case: usize) -> Checkpoint {
     let mut state = current.state().clone();
     let actor = entity(ENTITIES[0]).unwrap();
