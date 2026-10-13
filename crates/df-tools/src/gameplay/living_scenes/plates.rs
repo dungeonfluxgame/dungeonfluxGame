@@ -6,9 +6,8 @@
 //! when a plate has failed or none is planned; until the plate is ready the scene shows its
 //! establishing shot, PLAY-V12).
 //!
-//! The director here watches the display's view. The moment a hero is confirmed in the lobby it
-//! requests the opening scene's plate; the moment a scene becomes current it requests that
-//! scene's plate, and the plates of the scenes that can follow it (the beat script knows the
+//! The director here watches the display's view. The moment a scene becomes current it requests
+//! that scene's plate, and the plates of the scenes that can follow it (the beat script knows the
 //! successors, a won fight included), so a successor is usually ready when the party arrives.
 //! Nothing in the game waits for a plate or changes with it, and a
 //! request that cannot be queued is dropped and made again by a later view. When the mood tracker
@@ -720,16 +719,12 @@ impl Shared {
                 unplated,
                 in_combat: view.in_combat,
             });
-            // The lobby has no plate of its own, but the opening scene is known once the adventure
-            // is rolled and a hero is confirmed: it is asked for now, and again for each change of
-            // party (a plate shows the party, so at most one per party size), and is normally
-            // ready before the story starts.
-            let lobby = scene.is_none() && !view.heroes.is_empty();
+            // The lobby has no plate; the opening plate is requested when that scene becomes current.
             if !view.in_combat {
                 if let Some(scene) = &scene {
                     self.ensure(&mut book, scene, &view.heroes, &faces, false);
                 }
-                if scene.is_some() || lobby {
+                if scene.is_some() {
                     for next in next
                         .iter()
                         .take(MAXIMUM_SUCCESSORS)

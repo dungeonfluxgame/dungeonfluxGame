@@ -592,54 +592,69 @@ async fn a_party_that_changes_in_a_scene_gets_a_plate_for_the_new_party() {
 }
 
 #[tokio::test]
-async fn the_opening_plate_is_asked_for_in_the_lobby_once_a_hero_is_confirmed_and_again_for_a_new_party()
- {
-    let (shared, mut queue) = shared(16);
+async fn three_lobby_rosters_request_one_opening_plate_for_the_confirmed_party() {
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/campaign/luna2/R10/plate-cache-{}",
+        std::process::id(),
+    ));
+    let fixture = DirectionFixture::new(&cache);
+    let timing = Timing::from_interval(Duration::from_secs(30));
+    let inner = Arc::new(Inner {
+        imagery: fixture.imagery.clone(),
+        references: super::super::ReferenceStore::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        ),
+        social: SocialLedger::none(),
+        rating: ContentRating::Restrained,
+        timing,
+        state: Mutex::new(State::new(timing)),
+        wake: tokio::sync::watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    let (jobs, mut queue) = mpsc::channel(16);
+    let shared = Shared {
+        inner,
+        book: Mutex::new(Book::new()),
+        jobs,
+    };
     let lobby = scene(SceneKey::Room, "The Gathering", None);
     let opening = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
-    observe(&shared, &lobby, std::slice::from_ref(&opening), &[]);
-    assert!(
-        drain(&mut queue).is_empty(),
-        "no hero is confirmed yet, so there is no party to show"
+    for heroes in [&[][..], &[1][..], &[1, 2][..]] {
+        shared.observe_with(&view(&lobby, heroes, false), None, vec![opening.clone()]);
+        assert!(drain(&mut queue).is_empty(), "the lobby requests no plates");
+    }
+    shared.observe_with(
+        &view(&opening, &[1, 2, 3], false),
+        Some(opening),
+        Vec::new(),
     );
-    observe(&shared, &lobby, std::slice::from_ref(&opening), &[1]);
-    let first = drain(&mut queue);
+    let jobs = drain(&mut queue);
     assert!(
-        matches!(&first[..], [Job::Fresh { scene, heroes, ahead: false, .. }]
-            if scene.title == "Word Before Dawn" && heroes == &[1]),
-        "the first confirmed hero starts the opening plate at once"
+        matches!(&jobs[..], [Job::Fresh { heroes, .. }] if heroes == &[1, 2, 3]),
+        "the opening scene requests one plate for the confirmed party"
     );
-    observe(&shared, &lobby, std::slice::from_ref(&opening), &[1]);
-    assert!(
-        drain(&mut queue).is_empty(),
-        "the same party asks for nothing more"
-    );
-    observe(&shared, &lobby, std::slice::from_ref(&opening), &[1, 2]);
-    let second = drain(&mut queue);
-    assert!(
-        matches!(&second[..], [Job::Fresh { heroes, .. }] if heroes == &[1, 2]),
-        "a later hero makes the plate for the gathered party, once"
-    );
-    let mut lobby_message = display_message(&lobby);
-    apply(&shared, &mut lobby_message);
+    let [
+        Job::Fresh {
+            scene,
+            heroes,
+            faces,
+            ..
+        },
+    ] = jobs.as_slice()
+    else {
+        panic!("one fresh opening plate");
+    };
+    let spec = scene.stage(heroes).unwrap();
+    let (request, _) = shared
+        .fresh_request(&scene, &spec, heroes, faces, None)
+        .await
+        .unwrap();
+    fixture.imagery.render(request).await.unwrap();
     assert_eq!(
-        shown_scene(&lobby_message).plate_state,
-        rpc::PlateState::Unspecified as i32,
-        "the lobby itself has no plate"
-    );
-    // The party's plate lands before the story starts: the opening scene shows it at once.
-    let ids = fresh_ids(&second);
-    ready(&shared, &ids[0], 'a');
-    observe(&shared, &opening, &[], &[1, 2]);
-    assert!(
-        drain(&mut queue).is_empty(),
-        "the opening plate is not asked for twice"
-    );
-    let mut message = display_message(&opening);
-    apply(&shared, &mut message);
-    assert_eq!(
-        shown_scene(&message).plate_state,
-        rpc::PlateState::Ready as i32
+        fixture.calls(),
+        1,
+        "one provider call for the opening plate",
     );
 }
 
