@@ -223,6 +223,7 @@ fn seat_clock_uses_controlled_monotonic_elapsed_time() {
         origin,
         unix_millis: Ok(1000),
         next_poll: origin,
+        activity: Default::default(),
     };
     assert_eq!(
         clock
@@ -236,6 +237,24 @@ fn seat_clock_uses_controlled_monotonic_elapsed_time() {
             .unwrap(),
         31_000
     );
+}
+
+#[test]
+fn seat_activity_is_debounced_per_credential_and_reactivation_is_immediate() {
+    let origin = Instant::now();
+    let mut clock = SeatClock {
+        origin,
+        unix_millis: Ok(1000),
+        next_poll: origin,
+        activity: Default::default(),
+    };
+
+    assert!(clock.activity_write_due(&[1; 32], origin));
+    assert!(!clock.activity_write_due(&[1; 32], origin + std::time::Duration::from_secs(4)));
+    assert!(clock.activity_write_due(&[2; 32], origin + std::time::Duration::from_secs(4)));
+    assert!(clock.activity_write_due(&[1; 32], origin + std::time::Duration::from_secs(5)));
+    assert!(clock.activity_write_due(&[1; 32], origin + std::time::Duration::from_secs(35)));
+    assert!(!clock.activity_write_due(&[1; 32], origin + std::time::Duration::from_secs(36)));
 }
 
 #[path = "pg_tests.rs"]

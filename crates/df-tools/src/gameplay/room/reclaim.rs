@@ -1,9 +1,11 @@
 //! Couch-room credential transfer. All calls run on the existing session owner.
 use super::*;
 use df_persistence::local_demo_scope::{
-    LocalDemoScopeIssuer, LocalReclaimedSeat, LocalRoomSeat, LocalSeatReclaim, SeatReclaimRefusal,
+    LocalDemoScopeIssuer, LocalReclaimedSeat, LocalRoomSeat, LocalSeatReclaim, SEAT_AWAY_MILLIS,
+    SeatReclaimRefusal,
 };
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Anchor durable activity timestamps once, then use the owner's monotonic elapsed clock.
 /// Tests supply an explicit Instant and timestamp; gameplay/logical time is never advanced.
@@ -11,6 +13,12 @@ pub(in crate::gameplay) struct SeatClock {
     origin: Instant,
     unix_millis: Result<i64, RepositoryError>,
     pub(in crate::gameplay) next_poll: Instant,
+    activity: HashMap<[u8; 32], SeatActivity>,
+}
+
+struct SeatActivity {
+    last_seen: Instant,
+    last_write: Instant,
 }
 impl Default for SeatClock {
     fn default() -> Self {
@@ -24,10 +32,35 @@ impl Default for SeatClock {
                     i64::try_from(time.as_millis()).map_err(|_| RepositoryError::Capacity)
                 }),
             next_poll: origin,
+            activity: HashMap::new(),
         }
     }
 }
 impl SeatClock {
+    fn activity_write_due(&mut self, credential: &[u8; 32], now: Instant) -> bool {
+        let Some(activity) = self.activity.get_mut(credential) else {
+            self.activity.insert(
+                *credential,
+                SeatActivity {
+                    last_seen: now,
+                    last_write: now,
+                },
+            );
+            return true;
+        };
+        let reactivated = now.saturating_duration_since(activity.last_seen)
+            >= Duration::from_millis(SEAT_AWAY_MILLIS as u64);
+        let debounce_elapsed =
+            now.saturating_duration_since(activity.last_write) >= Duration::from_secs(5);
+        activity.last_seen = now;
+        if reactivated || debounce_elapsed {
+            activity.last_write = now;
+            true
+        } else {
+            false
+        }
+    }
+
     pub(in crate::gameplay) fn millis(&self, now: Instant) -> Result<i64, RepositoryError> {
         let elapsed = now
             .checked_duration_since(self.origin)
@@ -171,14 +204,26 @@ impl actor::Actor {
         &mut self,
         credential: &[u8; 32],
     ) -> Result<(), Status> {
+        let instant = Instant::now();
+        if !self
+            .session
+            .seat_clock
+            .activity_write_due(credential, instant)
+        {
+            return Ok(());
+        }
         let now = self
             .session
             .seat_clock
-            .millis(Instant::now())
+            .millis(instant)
             .map_err(actor::unavailable)?;
-        self.issuer
-            .touch_room_seat(credential, now)
-            .map_err(actor::unavailable)
+        if let Err(error) = self.issuer.touch_room_seat(credential, now) {
+            seat_event(
+                &format!("SEAT activity write failed reason={error:?}"),
+                "seat.activity_write_failed",
+            );
+        }
+        Ok(())
     }
 
     fn collect_away(&mut self, now: i64) -> Result<Vec<AwayHero>, Status> {
@@ -220,7 +265,7 @@ impl actor::Actor {
         if now < self.session.seat_clock.next_poll {
             return;
         }
-        self.session.seat_clock.next_poll = now + std::time::Duration::from_secs(1);
+        self.session.seat_clock.next_poll = now + Duration::from_secs(5);
         if self.fenced || self.session_lost() {
             return;
         }
