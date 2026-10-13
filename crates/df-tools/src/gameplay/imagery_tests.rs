@@ -560,6 +560,23 @@ async fn a_cache_hit_costs_nothing_and_survives_a_restart() {
 }
 
 #[tokio::test]
+async fn an_oversized_cached_image_is_replaced_before_its_key_is_served() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (service, dir) = imagery(&fake, "oversized-cache", 5);
+    let request = refresh(Mood::Calm);
+    let key = service.key_for(&request);
+    let path = dir.join("cache").join(format!("{}.jpg", key.as_str()));
+    std::fs::write(&path, vec![0; (MAXIMUM_IMAGE_BYTES + 1) as usize]).unwrap();
+
+    let rendered = service.render(request).await.unwrap();
+    let mut router = super::router(service);
+
+    assert_eq!(rendered, key);
+    assert_eq!(fake.calls(), 1, "an unusable cache file is regenerated");
+    assert_eq!(get(&mut router, key.as_str(), None).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn a_peek_finds_cached_images_and_never_calls_the_provider_or_spends() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
     let (service, dir) = imagery(&fake, "peek", 5);

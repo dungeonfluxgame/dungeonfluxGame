@@ -817,7 +817,9 @@ impl Engine {
         tokio::task::spawn_blocking(move || {
             paths.into_iter().find_map(|(found, path)| {
                 std::fs::symlink_metadata(&path)
-                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+                    .is_ok_and(|metadata| {
+                        metadata.is_file() && (1..=MAXIMUM_IMAGE_BYTES).contains(&metadata.len())
+                    })
                     .then_some(found)
             })
         })
