@@ -849,11 +849,7 @@ impl NpcVoice {
         let from_model = fallback.is_none();
         // What was whispered to this hero alone is answered to this hero alone: the table sees
         // that the speaker murmured, not the words.
-        let private = turn
-            .withheld
-            .released()
-            .iter()
-            .any(|term| mentions_term(&text, term));
+        let private = !turn.withheld.released().is_empty();
         if private {
             log.push(
                 &context.speaker,
@@ -1179,6 +1175,75 @@ mod tests {
             context.facts["now"]["characters_present"][0]["role"],
             "Patron"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_paraphrased_private_clue_reply_is_returned_to_hero_but_not_the_table() {
+        const PARAPHRASE: &str = "It is meant for the person waiting at the waterfront lodging house. Keep its destination between us.";
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
+            "reply": PARAPHRASE,
+            "approach": "question"
+        }))]);
+        let (voice, cache) = voice(&endpoint, "voice-private-clue-paraphrase");
+        let adventure = super::super::npc_dossier_tests::adventure(1);
+        let patron = adventure
+            .dossiers
+            .iter()
+            .find(|dossier| dossier.role == NpcRole::Patron)
+            .unwrap();
+        let social = SocialLedger::open(adventure.dossiers.clone(), "private-clue", None).unwrap();
+        let mut projected = view(
+            "The sealed packet is addressed to Vell at the Harbor Inn. Keep its destination between you.",
+            "Perrin",
+        );
+        let Some(rpc::view_message::Audience::Player(player)) = projected.audience.as_mut() else {
+            unreachable!();
+        };
+        player.scene.as_mut().unwrap().cast = vec![rpc::SceneActor {
+            id: patron.npc_id.strip_prefix("patron:").unwrap().to_owned(),
+            name: patron.name.clone(),
+            role: rpc::SceneRole::Patron as i32,
+            speaking: true,
+            ..Default::default()
+        }];
+        let mut story = listed_story();
+        story.clue = format!(
+            "{} tells you the sealed packet is addressed to Vell at the Harbor Inn. Keep its destination between you.",
+            patron.name
+        );
+        let context = NpcReplyContext::for_cast(
+            &projected,
+            member(1),
+            "Where is the packet going?",
+            &story,
+            &social,
+            "Opening",
+        )
+        .unwrap();
+        assert!(
+            !context
+                .turn
+                .as_ref()
+                .unwrap()
+                .withheld
+                .released()
+                .is_empty()
+        );
+        let log = TableLog::new();
+
+        let response = voice.converse(context, &log).await;
+
+        assert_eq!(response.as_deref(), Some(PARAPHRASE));
+        let lines = log.lines();
+        assert!(lines.iter().any(|line| {
+            line.kind == rpc::TableKind::Action as i32 && line.text == "murmurs to Brannoch"
+        }));
+        assert!(
+            !lines.iter().any(|line| {
+                line.kind == rpc::TableKind::Speech as i32 && line.text == PARAPHRASE
+            })
+        );
+        std::fs::remove_dir_all(cache).unwrap();
     }
 
     #[test]
