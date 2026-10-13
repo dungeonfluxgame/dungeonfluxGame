@@ -174,6 +174,7 @@ struct Motion {
     /// The sequence last reported to the server as presented, and when (performance ms).
     reported_seq: u64,
     reported_at_ms: u64,
+    battlefield_progress: Option<(Option<u32>, Option<(u32, u32, bool)>, bool)>,
 }
 
 thread_local! {static MOTION:RefCell<Option<Motion>>=const{RefCell::new(None)};}
@@ -226,6 +227,7 @@ fn ensure_motion(client: &Rc<RefCell<Client>>) {
                 latest_seq: 0,
                 reported_seq: 0,
                 reported_at_ms: 0,
+                battlefield_progress: None,
             });
         }
     });
@@ -1778,11 +1780,22 @@ fn tick(now: u64) {
         let mut commands = motion.conductor.on_tick(now);
         // A fight's entrance waits for the battlefield; ask how far it is.
         if motion.conductor.wants_battlefield() {
-            commands.extend(
-                motion
-                    .conductor
-                    .on_battlefield(now, super::live_battlefield::entrance()),
-            );
+            let entrance = super::live_battlefield::entrance();
+            if motion.conductor.battle_state() == BattleState::Entering {
+                let progress = super::live_battlefield::entrance_progress();
+                if motion.battlefield_progress != Some(progress) {
+                    motion.conductor.on_battlefield_progress(now);
+                    motion.battlefield_progress = Some(progress);
+                }
+            }
+            commands.extend(motion.conductor.on_battlefield(now, entrance));
+            if entrance == crate::stage_conductor::Battlefield::Pending
+                && motion.conductor.battlefield_failed()
+            {
+                super::live_battlefield::fail_entrance();
+            }
+        } else {
+            motion.battlefield_progress = None;
         }
         (motion.client.upgrade(), commands)
     });
@@ -1857,7 +1870,12 @@ pub(super) fn on_player_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue
                 if motion.log.len() >= LOG_LINES {
                     motion.log.pop_front();
                 }
-                motion.log.push_back(line.clone());
+                // The server may number an action before the lines that followed it and
+                // deliver it after them: the log keeps the server's order.
+                let position = motion
+                    .log
+                    .partition_point(|shown| shown.sequence < line.sequence);
+                motion.log.insert(position, line.clone());
             }
         }
         if transitions.new_roll && !hidden {

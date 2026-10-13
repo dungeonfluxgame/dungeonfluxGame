@@ -145,6 +145,11 @@ pub(super) struct TableLog {
     runtime: Mutex<Option<tokio::runtime::Handle>>,
 }
 
+/// A sequence reserved for an accepted action line. Dropping it leaves an empty sequence gap.
+pub(super) struct TableLogReservation {
+    sequence: Option<u64>,
+}
+
 impl TableLog {
     pub(super) fn new() -> Arc<Self> {
         Arc::new(Self::with(true))
@@ -296,6 +301,20 @@ impl TableLog {
         self.wake.send_replace(version);
     }
 
+    /// Reserves the next sequence before a durable action can publish its checkpoint. If the
+    /// action is rejected, replayed or fails, dropping the reservation leaves only a gap.
+    pub(super) fn reserve(&self) -> TableLogReservation {
+        if !self.enabled {
+            return TableLogReservation { sequence: None };
+        }
+        let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+        let sequence = ring.next_sequence;
+        ring.next_sequence += 1;
+        TableLogReservation {
+            sequence: Some(sequence),
+        }
+    }
+
     /// A table setting changed: every screen gets one fresh view, though no line was said and the
     /// game revision did not move. The version it bumps is the one each view carries.
     pub(super) fn settings_changed(&self) {
@@ -314,6 +333,31 @@ impl TableLog {
     /// [`LINE_CHARACTERS`] characters and an empty line is dropped.
     pub(super) fn push(
         &self,
+        speaker: &str,
+        role: rpc::TableRole,
+        hero_index: u32,
+        kind: rpc::TableKind,
+        text: &str,
+    ) {
+        self.push_line(None, speaker, role, hero_index, kind, text);
+    }
+
+    /// Fills an action's earlier reserved sequence; subsequent lines use [`Self::push`].
+    pub(super) fn push_reserved(
+        &self,
+        reservation: TableLogReservation,
+        speaker: &str,
+        role: rpc::TableRole,
+        hero_index: u32,
+        kind: rpc::TableKind,
+        text: &str,
+    ) {
+        self.push_line(reservation.sequence, speaker, role, hero_index, kind, text);
+    }
+
+    fn push_line(
+        &self,
+        reserved_sequence: Option<u64>,
         speaker: &str,
         role: rpc::TableRole,
         hero_index: u32,
@@ -344,16 +388,23 @@ impl TableLog {
         }
         let version = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
-            let sequence = ring.next_sequence;
-            ring.next_sequence += 1;
-            ring.lines.push_back(rpc::TableLine {
-                sequence,
-                speaker: speaker.chars().take(48).collect(),
-                role: role as i32,
-                hero_index,
-                kind: kind as i32,
-                text,
+            let sequence = reserved_sequence.unwrap_or_else(|| {
+                let sequence = ring.next_sequence;
+                ring.next_sequence += 1;
+                sequence
             });
+            let position = ring.lines.partition_point(|line| line.sequence < sequence);
+            ring.lines.insert(
+                position,
+                rpc::TableLine {
+                    sequence,
+                    speaker: speaker.chars().take(48).collect(),
+                    role: role as i32,
+                    hero_index,
+                    kind: kind as i32,
+                    text,
+                },
+            );
             while ring.lines.len() > RING_LINES {
                 ring.lines.pop_front();
             }
@@ -1294,6 +1345,67 @@ mod tests {
                 .all(|pair| pair[0].sequence < pair[1].sequence)
         );
         assert_eq!(lines[RING_LINES - 1].sequence, 30);
+    }
+
+    #[test]
+    fn a_filled_reservation_sorts_before_a_line_pushed_after_it() {
+        let log = TableLog::new();
+        let reservation = log.reserve();
+        speech(&log, "Calla greets the party");
+        log.push_reserved(
+            reservation,
+            "Brakka",
+            rpc::TableRole::Hero,
+            0,
+            rpc::TableKind::Action,
+            "leads on to the bothy",
+        );
+
+        let lines = log.lines();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "leads on to the bothy");
+        assert_eq!(lines[1].text, "Calla greets the party");
+        assert!(lines[0].sequence < lines[1].sequence);
+        assert_eq!(attached(&log).table_log, lines);
+    }
+
+    #[test]
+    fn a_released_reservation_leaves_no_line_and_allows_a_sequence_gap() {
+        let log = TableLog::new();
+        let reservation = log.reserve();
+        drop(reservation);
+        speech(&log, "Calla greets the party");
+
+        let lines = log.lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].sequence, 2);
+        assert_eq!(lines[0].text, "Calla greets the party");
+    }
+
+    #[test]
+    fn filling_an_old_reservation_keeps_the_ring_size_limit() {
+        let log = TableLog::new();
+        let reservation = log.reserve();
+        for number in 0..30 {
+            speech(&log, &format!("line {number}"));
+        }
+        log.push_reserved(
+            reservation,
+            "Brakka",
+            rpc::TableRole::Hero,
+            0,
+            rpc::TableKind::Action,
+            "leads on to the bothy",
+        );
+
+        let lines = log.lines();
+        assert_eq!(lines.len(), RING_LINES);
+        assert!(
+            lines
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+        assert_eq!(lines[RING_LINES - 1].sequence, 31);
     }
 
     fn display_view() -> rpc::ViewMessage {

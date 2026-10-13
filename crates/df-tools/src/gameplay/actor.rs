@@ -1426,6 +1426,7 @@ impl Actor {
         }
         let prior_revision = self.owner.checkpoint().basis().revision;
         let (item, receipt) = OwnedInput::new(context, scope, input);
+        let reservation = self.table_log.reserve();
         let commit_started = Instant::now();
         self.owner.reduce(AdmissionSequence(0), item);
         self.session.commit_millis =
@@ -1450,7 +1451,7 @@ impl Actor {
                 })?;
                 let replayed = replaying_uncertain || committed.basis().revision <= prior_revision;
                 if !replayed {
-                    self.record_table_action(member, &request, &accepted);
+                    self.record_table_action(member, &request, &accepted, reservation);
                     // The recorded moment keeps the commit's own lines: the
                     // publication hook runs before table lines are pushed.
                     self.refresh_dev_moment();
@@ -1617,6 +1618,7 @@ impl Actor {
         member: df_types::MemberId,
         request: &rpc::SubmitActionRequest,
         accepted: &rpc::AcceptedAction,
+        reservation: super::table_log::TableLogReservation,
     ) {
         record_combat_audit(accepted);
         let Ok(view) = wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member)
@@ -1647,14 +1649,31 @@ impl Actor {
             Ok(label) => label,
             Err(_) => return,
         };
-        for line in super::table_log::action_lines(
+        let mut lines = super::table_log::action_lines(
             kind,
             &hero,
             &accepted.combat,
             &weapon,
             &destination,
             &label,
-        ) {
+        )
+        .into_iter();
+        if let Some(line) = lines.next() {
+            let (role, hero_index) = if line.speaker == hero {
+                (rpc::TableRole::Hero, index)
+            } else {
+                (rpc::TableRole::Npc, 0)
+            };
+            self.table_log.push_reserved(
+                reservation,
+                &line.speaker,
+                role,
+                hero_index,
+                rpc::TableKind::Action,
+                &line.text,
+            );
+        }
+        for line in lines {
             let (role, hero_index) = if line.speaker == hero {
                 (rpc::TableRole::Hero, index)
             } else {
