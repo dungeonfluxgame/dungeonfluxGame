@@ -356,6 +356,13 @@ Sixteen independent read-only reviewers each checked four of the 63 fix commits 
 | REV-08 | 3 | The rules note is folded away on the TV as well as the phone, inside narration that is clipped to eight lines; the TV has no way to open it. | `5b9700c` (PHN-03) | Fixed `1cb72de3`: the TV shows the note in its own row (browser check pending) |
 | REV-09 | 3 | Cleanup of model text still accepts a Markdown list hyphen at the start of a line. | `1222ca1` (HNT-15) | Fixed `a6efb137` |
 | REV-10 | 3 | The play-and-record check can pick a persistent control ("Play", "Full character sheet") as if it were a story choice. It still completes a game, but its log is misleading. | `0a9436f` (DEV-05) | Fixed `585d88ea` (selectors checked against the sources; the script was not run) |
+| REV-11 | 3 | Second review round, 2026-10-13 (sixteen reviewers over the 64 fixes of the night; 57 judged sound). A speech bubble is not re-anchored when the same picture arrives with a new layout: the function returns early when the URL is unchanged. | `eca342df` (OBS-13) | |
+| REV-12 | 2 | The phone's fight controls are still replaced after an action: offer ids change with every checkpoint, and the in-place update is keyed by offer id. Seen by hand as well (the Move button was a new node after an attack). | `134d711b` (OBS-20) | |
+| REV-13 | 3 | The page a phone sees before it has joined still shows the neutral picture; only the waiting page takes the adventure's place. | `2cde9ae0` (OBS-02) | |
+| REV-14 | 2 | A character's newest line is removed from the phone's log in a fight, where there is no story card to show it; and when a new scene reuses a speaker, the card can show that speaker's line from the previous scene. | `06b4e213` (OBS-14) | |
+| REV-15 | 4 | Cleaned model text may still start with a hyphen followed by a tab. | `a6efb137` (REV-09) | |
+| REV-16 | 3 | The TV's rules note row sits under the full-screen battlefield layer, so it is never seen in a 3D fight. | `1cb72de3` (REV-08) | |
+| REV-17 | 3 | Only the giant weasel's "not used here" note is reworded; fights with giant rats or goblin warriors still show "Disclosed gap <id>". | `a0ae78d6` (OBS-46) | |
 
 ## 19. Hand-played session, 2026-10-13 (room KESEZA)
 
