@@ -14,6 +14,7 @@ use super::live_sfx::{self, Cue};
 use super::live_stage::{Figures, StageMode};
 use super::*;
 use crate::{
+    plate_layout::{PlateFrame, Rect},
     presentation::{
         Card, CardKind, HERO_ROLE, PlateState, PlateView, SceneFamily, StageActor, asset_url,
         shot_of,
@@ -140,6 +141,8 @@ struct PlateLayer {
     preloads: RefCell<Vec<(String, Element)>>,
     /// Layout to apply only when its matching picture becomes active.
     pending_layout: Rc<RefCell<Option<crate::presentation::PlateGeometry>>>,
+    /// Intrinsic dimensions of the active picture, used to mirror `object-fit: cover`.
+    picture_size: Rc<Cell<Option<(f64, f64)>>>,
 }
 
 /// How many plate pictures are kept fetched ahead.
@@ -344,6 +347,7 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
         seen: RefCell::new(String::new()),
         preloads: RefCell::new(Vec::new()),
         pending_layout: Rc::new(RefCell::new(None)),
+        picture_size: Rc::new(Cell::new(None)),
     })
 }
 
@@ -357,6 +361,7 @@ fn bind_plate_events(
             let (stage, root, image) = (stage.clone(), layer.root.clone(), image.clone());
             let figures = figures.clone();
             let pending_layout = Rc::clone(&layer.pending_layout);
+            let picture_size = Rc::clone(&layer.picture_size);
             Closure::wrap(Box::new(move |_: Event| {
                 if root.get_attribute("data-want") != image.get_attribute("data-src") {
                     return;
@@ -375,19 +380,17 @@ fn bind_plate_events(
                 );
                 if let Some(figures) = figures.upgrade() {
                     let layout = pending_layout.borrow().clone();
-                    if let Some(layout) = &layout {
-                        let _set = root.set_attribute(
-                            "style",
-                            &format!(
-                                "--head-x:{}%;--head-y:{}%",
-                                layout.head_x / 10,
-                                layout.head_y / 10
-                            ),
-                        );
+                    let size = image_dimensions(&image);
+                    picture_size.set(size);
+                    if let Some(style) = layout
+                        .as_ref()
+                        .and_then(|layout| plate_head_style(layout, size))
+                    {
+                        let _set = root.set_attribute("style", &style);
                     } else {
                         let _removed = root.remove_attribute("style");
                     }
-                    let _applied = figures.set_plate(layout);
+                    let _applied = figures.set_plate(layout, size);
                 }
                 let _set = stage.set_attribute("data-plate-loaded", "");
                 let _synced = sync_shot(&stage);
@@ -397,6 +400,7 @@ fn bind_plate_events(
             let (stage, root, image) = (stage.clone(), layer.root.clone(), image.clone());
             let figures = figures.clone();
             let pending_layout = Rc::clone(&layer.pending_layout);
+            let picture_size = Rc::clone(&layer.picture_size);
             Closure::wrap(Box::new(move |_: Event| {
                 if root.get_attribute("data-want") != image.get_attribute("data-src") {
                     return;
@@ -409,8 +413,9 @@ fn bind_plate_events(
                 let _removed = stage.remove_attribute("data-plate-loaded");
                 *pending_layout.borrow_mut() = None;
                 let _removed = root.remove_attribute("style");
+                picture_size.set(None);
                 if let Some(figures) = figures.upgrade() {
-                    let _applied = figures.set_plate(None);
+                    let _applied = figures.set_plate(None, None);
                 }
                 let _synced = sync_shot(&stage);
             }) as Box<dyn FnMut(Event)>)
@@ -420,6 +425,41 @@ fn bind_plate_events(
         layer.listeners.push((load, error));
     }
     Ok(())
+}
+
+fn image_dimensions(image: &Element) -> Option<(f64, f64)> {
+    let width = js_sys::Reflect::get(image.as_ref(), &JsValue::from_str("naturalWidth"))
+        .ok()?
+        .as_f64()?;
+    let height = js_sys::Reflect::get(image.as_ref(), &JsValue::from_str("naturalHeight"))
+        .ok()?
+        .as_f64()?;
+    (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
+        .then_some((width, height))
+}
+
+fn plate_head_style(
+    layout: &crate::presentation::PlateGeometry,
+    picture_size: Option<(f64, f64)>,
+) -> Option<String> {
+    let (picture_width, picture_height) = picture_size?;
+    let window = web_sys::window()?;
+    let width = window.inner_width().ok()?.as_f64()?;
+    let height = window.inner_height().ok()?.as_f64()?;
+    if !(width > 0.0 && height > 0.0) {
+        return None;
+    }
+    let frame = PlateFrame {
+        screen: Rect::new(0.0, 0.0, width, height),
+        picture_width,
+        picture_height,
+    };
+    let (x, y) = frame.head_center(layout.head_x, layout.head_y);
+    Some(format!(
+        "--head-x:{}%;--head-y:{}%",
+        x / width * 100.0,
+        y / height * 100.0
+    ))
 }
 
 impl TvStage {
@@ -1126,7 +1166,7 @@ impl TvStage {
             layer.scene.borrow_mut().clear();
             *layer.seen.borrow_mut() = scene_key.to_owned();
             *layer.pending_layout.borrow_mut() = None;
-            self.figures.set_plate(None)?;
+            self.figures.set_plate(None, None)?;
             return Ok(());
         };
         if layer.root.get_attribute("data-want").as_deref() == Some(url.as_str()) {
@@ -1134,19 +1174,15 @@ impl TvStage {
             let layout = plate.layout.clone();
             *layer.pending_layout.borrow_mut() = layout.clone();
             if self.root.has_attribute("data-plate-loaded") {
-                if let Some(layout) = &layout {
-                    layer.root.set_attribute(
-                        "style",
-                        &format!(
-                            "--head-x:{}%;--head-y:{}%",
-                            layout.head_x / 10,
-                            layout.head_y / 10
-                        ),
-                    )?;
+                if let Some(style) = layout
+                    .as_ref()
+                    .and_then(|layout| plate_head_style(layout, layer.picture_size.get()))
+                {
+                    layer.root.set_attribute("style", &style)?;
                 } else {
                     layer.root.remove_attribute("style")?;
                 }
-                self.figures.set_plate(layout)?;
+                self.figures.set_plate(layout, layer.picture_size.get())?;
             }
             return Ok(());
         }
@@ -1154,7 +1190,7 @@ impl TvStage {
             layer.scene.borrow().as_str() == scene_key && layer.root.has_attribute("data-want");
         *layer.pending_layout.borrow_mut() = plate.layout.clone();
         if !same_scene {
-            self.figures.set_plate(None)?;
+            self.figures.set_plate(None, None)?;
         }
         let next = layer.next.get();
         let Some(image) = layer.images.get(next) else {

@@ -72,33 +72,41 @@ impl Side {
     }
 }
 
-/// How the plate lies on the screen. The plate keeps its 16:9 shape and covers the screen
-/// (`object-fit: cover`), centred; `head` and `head_box` are given as permille of the plate.
+/// How the source picture lies on the screen. It covers the screen (`object-fit: cover`),
+/// centred; `head` and `head_box` are given as permille of the source picture.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PlateFrame {
     pub(crate) screen: Rect,
+    pub(crate) picture_width: f64,
+    pub(crate) picture_height: f64,
 }
 
 impl PlateFrame {
-    /// The plate's rectangle on screen: the smallest 16:9 rectangle that covers the screen,
-    /// centred on it.
+    /// The picture's rectangle on screen after the same centred cover crop as the display.
     pub(crate) fn plate(&self) -> Rect {
         let (width, height) = (self.screen.width(), self.screen.height());
-        let scale = (width / 16.0).max(height / 9.0);
-        let (plate_width, plate_height) = (16.0 * scale, 9.0 * scale);
+        let scale = (width / self.picture_width).max(height / self.picture_height);
+        let (plate_width, plate_height) = (self.picture_width * scale, self.picture_height * scale);
         let left = self.screen.left + (width - plate_width) / 2.0;
         let top = self.screen.top + (height - plate_height) / 2.0;
         Rect::new(left, top, left + plate_width, top + plate_height)
     }
 
-    /// The head box on screen from the layout's centre and size in permille of the plate.
+    /// The source point on screen from a centre in permille of the source picture.
+    pub(crate) fn head_center(&self, x: u32, y: u32) -> (f64, f64) {
+        let plate = self.plate();
+        let permille = |value: u32| f64::from(value.min(1000)) / 1000.0;
+        (
+            plate.left + permille(x) * plate.width(),
+            plate.top + permille(y) * plate.height(),
+        )
+    }
+
+    /// The head box on screen from the layout's centre and size in permille of the source picture.
     pub(crate) fn head_box(&self, x: u32, y: u32, width: u32, height: u32) -> Rect {
         let plate = self.plate();
         let permille = |value: u32| f64::from(value.min(1000)) / 1000.0;
-        let (cx, cy) = (
-            plate.left + permille(x) * plate.width(),
-            plate.top + permille(y) * plate.height(),
-        );
+        let (cx, cy) = self.head_center(x, y);
         let (half_width, half_height) = (
             permille(width) * plate.width() / 2.0,
             permille(height) * plate.height() / 2.0,
@@ -227,6 +235,7 @@ mod tests {
         right: 1920.0,
         bottom: 1080.0,
     };
+    const PICTURE: (f64, f64) = (16.0, 9.0);
 
     /// What the display draws over the picture: the party strip at the top left, the title at the
     /// top right and the choice chips at the bottom centre.
@@ -255,7 +264,11 @@ mod tests {
 
     #[test]
     fn the_bubble_stands_beside_the_head_on_the_given_side_for_every_anchor_the_server_sends() {
-        let frame = PlateFrame { screen: SCREEN };
+        let frame = PlateFrame {
+            screen: SCREEN,
+            picture_width: PICTURE.0,
+            picture_height: PICTURE.1,
+        };
         for (x, y, side) in [(640, 370, Side::Left), (360, 370, Side::Right)] {
             let head = frame.head_box(x, y, 120, 180);
             let size = (480.0, 190.0);
@@ -323,12 +336,16 @@ mod tests {
     fn the_plate_is_centred_and_covers_a_screen_of_any_shape() {
         let wide = PlateFrame {
             screen: Rect::new(0.0, 0.0, 2000.0, 800.0),
+            picture_width: PICTURE.0,
+            picture_height: PICTURE.1,
         };
         let plate = wide.plate();
         assert!(plate.contains(&wide.screen) || plate.width() >= 2000.0);
         assert!((plate.width() / plate.height() - 16.0 / 9.0).abs() < 1e-9);
         let tall = PlateFrame {
             screen: Rect::new(0.0, 0.0, 800.0, 1000.0),
+            picture_width: PICTURE.0,
+            picture_height: PICTURE.1,
         };
         let plate = tall.plate();
         assert!(plate.height() >= 1000.0 && plate.width() > 800.0);
@@ -342,9 +359,51 @@ mod tests {
 
     #[test]
     fn the_head_box_follows_the_layout_in_permille_of_the_plate() {
-        let frame = PlateFrame { screen: SCREEN };
+        let frame = PlateFrame {
+            screen: SCREEN,
+            picture_width: PICTURE.0,
+            picture_height: PICTURE.1,
+        };
         let head = frame.head_box(500, 500, 100, 200);
         assert!((head.left - 864.0).abs() < 1e-9 && (head.right - 1056.0).abs() < 1e-9);
         assert!((head.top - 432.0).abs() < 1e-9 && (head.bottom - 648.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_bubble_clears_the_source_head_after_cover_cropping_on_wide_and_four_by_three_screens() {
+        let picture = (1600.0, 900.0);
+        for screen in [
+            Rect::new(0.0, 0.0, 1466.0, 825.0),
+            Rect::new(0.0, 0.0, 1466.0, 1099.5),
+        ] {
+            let frame = PlateFrame {
+                screen,
+                picture_width: picture.0,
+                picture_height: picture.1,
+            };
+            let head = frame.head_box(440, 460, 120, 180);
+            for side in [Side::Left, Side::Right] {
+                let placed = place_bubble(screen, head, side, (256.0, 150.0), 50.0, &[]).unwrap();
+                assert_eq!(placed.side, side);
+                let clears_head = match side {
+                    Side::Left => placed.rect.right <= head.left,
+                    Side::Right => placed.rect.left >= head.right,
+                };
+                assert!(clears_head, "{placed:?} vs {head:?}");
+                assert!(!placed.rect.intersects(&head));
+            }
+        }
+    }
+
+    #[test]
+    fn a_four_by_three_source_picture_is_mapped_through_its_cover_crop() {
+        let frame = PlateFrame {
+            screen: Rect::new(0.0, 0.0, 1466.0, 825.0),
+            picture_width: 1200.0,
+            picture_height: 900.0,
+        };
+        let (x, y) = frame.head_center(440, 460);
+        assert!((x - 645.04).abs() < 0.01);
+        assert!((y - 368.52).abs() < 0.01);
     }
 }

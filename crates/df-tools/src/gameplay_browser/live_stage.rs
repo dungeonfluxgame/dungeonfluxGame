@@ -255,6 +255,8 @@ pub(super) struct Figures {
     plate_bubbles: Element,
     /// PLAY-V09: the plate's layout while it is on screen.
     plate: RefCell<Option<PlateGeometry>>,
+    /// The active picture's intrinsic dimensions for its cover crop.
+    plate_size: Cell<Option<(f64, f64)>>,
     figures: Vec<Figure>,
     hud: Vec<HudCard>,
     animation_end: Closure<dyn FnMut(Event)>,
@@ -426,6 +428,7 @@ impl Figures {
             root,
             plate_bubbles,
             plate: RefCell::new(None),
+            plate_size: Cell::new(None),
             figures,
             hud,
             animation_end,
@@ -935,7 +938,9 @@ impl Figures {
         // PLAY-V09: over a scene plate the bubble stands beside the speaker's head in the picture.
         let geometry = self.plate.borrow().clone();
         if let Some(geometry) = geometry {
-            self.place_bubble_on_plate(speaker, geometry);
+            if let Some((picture_width, picture_height)) = self.plate_size.get() {
+                self.place_bubble_on_plate(speaker, geometry, picture_width, picture_height);
+            }
             return;
         }
         let Some(window) = web_sys::window() else {
@@ -1002,9 +1007,14 @@ impl Figures {
     /// PLAY-V09: tells the stage that a scene plate with this layout covers the cut-outs (or, with
     /// `None`, that none does). The bubbles then stand in the plate's own layer and are placed
     /// from the layout; without a plate they return to their figures.
-    pub(super) fn set_plate(&self, geometry: Option<PlateGeometry>) -> Result<(), JsValue> {
+    pub(super) fn set_plate(
+        &self,
+        geometry: Option<PlateGeometry>,
+        picture_size: Option<(f64, f64)>,
+    ) -> Result<(), JsValue> {
         let before = self.plate.replace(geometry.clone());
-        if before == geometry {
+        let before_size = self.plate_size.replace(picture_size);
+        if before == geometry && before_size == picture_size {
             return Ok(());
         }
         for figure in &self.figures {
@@ -1038,7 +1048,13 @@ impl Figures {
     /// with its tail toward the head; never over the head, off the screen or under the party
     /// strip, the title or the choice chips. A hero's bubble stands beside the hero's edge of the
     /// frame (the plate's own staging of the heroes is not sent), and keeps off the speaker's head.
-    fn place_bubble_on_plate(&self, bubble_owner: &Figure, geometry: PlateGeometry) {
+    fn place_bubble_on_plate(
+        &self,
+        bubble_owner: &Figure,
+        geometry: PlateGeometry,
+        picture_width: f64,
+        picture_height: f64,
+    ) {
         let Some(window) = web_sys::window() else {
             return;
         };
@@ -1053,7 +1069,11 @@ impl Figures {
             dimension(window.inner_height(), 1080.0),
         );
         let screen = Rect::new(0.0, 0.0, width, height);
-        let frame = PlateFrame { screen };
+        let frame = PlateFrame {
+            screen,
+            picture_width,
+            picture_height,
+        };
         let speaker_head = frame.head_box(
             geometry.head_x,
             geometry.head_y,
