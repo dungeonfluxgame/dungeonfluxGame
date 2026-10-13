@@ -1178,10 +1178,10 @@ fn creation(
     let view=CharacterPhaseView {generation:state.revision.and_then(|revision|revision.epoch).and_then(|epoch|epoch.value).ok_or_else(||JsValue::from_str("creation epoch absent"))?,owner_key:owner,revision:state.revision.and_then(|revision|revision.sequence).ok_or_else(||JsValue::from_str("creation revision absent"))?,
         chapter:"Your hero".to_owned(),title:"A story begins with you".to_owned(),description:offer.description.clone(),
         connection:"Connected to your shared room".to_owned(),status:CharacterStatus::Editing,
-        status_message:"Choose one option in every group, then confirm. Character names use letters, dashes or underscores (up to 24 characters).".to_owned(),
+        status_message:"Review your hero, choose any options offered, then confirm. Character names use letters, dashes or underscores (up to 24 characters).".to_owned(),
         editable,name:String::new(),flavor:String::new(),appearance:None,portrait:None,
         groups:offer.groups.iter().map(|group|CharacterGroup {id:group.group_id.clone(),label:group.label.clone(),
-            description:"Choose one offered option.".to_owned(),selected:None,options:group.options.iter().map(|option|CharacterOption {
+            description:"Choose one offered option.".to_owned(),selected:(group.options.len() == 1).then(|| group.options[0].option_id.clone()),options:group.options.iter().map(|option|CharacterOption {
                 id:option.option_id.clone(),label:live_combat::display_label(&option.label),description:option.description.clone(),
                 enabled:true,availability:"Available in this room".to_owned(),portrait:None,
             }).collect()}).collect(),

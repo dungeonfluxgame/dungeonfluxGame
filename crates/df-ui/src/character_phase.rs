@@ -289,16 +289,7 @@ impl CharacterDraftState {
     fn create(view: &CharacterPhaseView) -> Self {
         Self {
             view: view.clone(),
-            choices: view
-                .groups
-                .iter()
-                .filter_map(|group| {
-                    group
-                        .selected
-                        .as_ref()
-                        .map(|option| (group.id.clone(), option.clone()))
-                })
-                .collect(),
+            choices: view.groups.iter().filter_map(initial_choice).collect(),
             dirty_groups: BTreeSet::new(),
             disposed: false,
         }
@@ -349,8 +340,8 @@ impl CharacterDraftState {
                     )
                 {
                     self.choices.remove(&group.id);
-                    if let Some(option) = &group.selected {
-                        self.choices.insert(group.id.clone(), option.clone());
+                    if let Some((id, option)) = initial_choice(group) {
+                        self.choices.insert(id, option);
                     }
                     self.dirty_groups.remove(&group.id);
                 }
@@ -460,6 +451,14 @@ impl CharacterDraftState {
         self.view.connection.clear();
         self.view.status_message.clear();
     }
+}
+
+fn initial_choice(group: &CharacterGroup) -> Option<(String, String)> {
+    group
+        .selected
+        .as_ref()
+        .or_else(|| (group.options.len() == 1).then(|| &group.options[0].id))
+        .map(|option| (group.id.clone(), option.clone()))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1327,6 +1326,14 @@ mod browser {
                 replace_text(&nodes.heading, Some(&group.label));
                 replace_text(&nodes.description, Some(&group.description));
                 place(&self.groups_root, &nodes.root, &mut group_cursor)?;
+                nodes.root.set_attribute(
+                    "data-choice-group",
+                    if group.options.len() == 1 {
+                        "false"
+                    } else {
+                        "true"
+                    },
+                )?;
                 let obsolete: Vec<_> = nodes
                     .options
                     .keys()
@@ -1400,9 +1407,10 @@ mod browser {
                     }
                     if let Some(card) = nodes.options.get(&option.id) {
                         scrub_text(card.action.element().as_ref());
+                        let fact = group.options.len() == 1;
                         card.action.update(ActionView {
                             label: &option.label,
-                            enabled: self.state.borrow().editable() && option.enabled,
+                            enabled: self.state.borrow().editable() && option.enabled && !fact,
                             pending: view.status == CharacterStatus::Pending,
                         })?;
                         let selected =
@@ -1414,6 +1422,10 @@ mod browser {
                         card.root.set_attribute(
                             "data-selected",
                             if selected { "true" } else { "false" },
+                        )?;
+                        card.root.set_attribute(
+                            "data-choice-option",
+                            if fact { "false" } else { "true" },
                         )?;
                         replace_text(&card.description, Some(&option.description));
                         replace_text(&card.availability, Some(&option.availability));
@@ -1755,6 +1767,23 @@ mod tests {
         );
         assert_eq!(sent.name, "local name");
         assert_eq!(state.view.status, CharacterStatus::Rejected);
+    }
+    #[test]
+    fn a_single_offered_option_is_submitted_as_a_fact() {
+        let mut data = view();
+        data.groups[0].selected = None;
+        data.groups[0].options.truncate(1);
+        let state = CharacterDraftState::create(&data);
+        let submission = state
+            .submission("submit-offer", "Mara".into(), "".into(), None, limits())
+            .expect("single option is included");
+        assert_eq!(
+            submission.choices,
+            vec![CharacterChoice {
+                group_id: "group".into(),
+                option_id: "first".into(),
+            }]
+        );
     }
     #[test]
     fn removed_disabled_and_unknown_offers_cannot_be_selected_or_submitted() {
