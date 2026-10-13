@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn a_downing_outcome_ends_with_the_enemy_fallen_and_the_finishing_card_shown_then_cleared() {
+    fn a_downing_outcome_ends_with_the_enemy_fallen_without_a_finishing_card() {
         let mut stage = stage();
         let mut feed = CombatFeed::default();
         feed.apply(&mut stage, &snapshot(vec![], [12, 12, 5]))
@@ -427,12 +427,10 @@ mod tests {
             &snapshot(vec![strike(true, 6, 0, true)], [12, 12, 0]),
         )
         .unwrap();
-        let mut saw_card = false;
         for _ in 0..400 {
             stage.update(Duration::from_millis(50));
-            saw_card |= stage.hud().finishing_blow.is_some();
+            assert!(stage.hud().finishing_blow.is_none());
         }
-        assert!(saw_card && stage.hud().finishing_blow.is_none());
         let frame = stage.frame();
         let enemy = frame.figures.iter().find(|f| f.id.0 == "e").unwrap();
         assert!(enemy.downed && enemy.slump > 0.99);

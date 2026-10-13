@@ -80,6 +80,7 @@ struct RollDetail {
     grazed: bool,
     damage: u32,
     target_down: bool,
+    fight_over: bool,
     turn_changed: bool,
     action_line: String,
     description: Option<RollDescriptionOwned>,
@@ -260,6 +261,7 @@ fn roll_detail(
     lines: &[TableLine],
     transitions: Transitions,
     voices: &HashMap<String, df_render::battle::VoiceSet>,
+    fight_over: bool,
 ) -> Option<RollDetail> {
     let description = live_combat::describe(outcome).map(|description| RollDescriptionOwned {
         label: description.label,
@@ -286,6 +288,7 @@ fn roll_detail(
         grazed: outcome.grazed,
         damage: outcome.damage,
         target_down: outcome.knocked_out || outcome.target_hit_points == 0,
+        fight_over,
         turn_changed: transitions.turn_changed,
         action_line,
         description,
@@ -636,11 +639,22 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 fresh_outcomes(&combat.outcomes, motion.latest_seq)
             });
             let marks = presentation::turn_marks(&shown, &before_cells, &standing);
+            let finishing_sequence = journey
+                .combat
+                .as_ref()
+                .filter(|_| matches!(snapshot.stage, CombatStage::Finished { .. }))
+                .and_then(|combat| combat.outcomes.last().map(|outcome| outcome.sequence));
             shown
                 .into_iter()
                 .zip(marks)
                 .filter_map(|(outcome, mark)| {
-                    let mut detail = roll_detail(outcome, &lines, transitions, &voices)?;
+                    let mut detail = roll_detail(
+                        outcome,
+                        &lines,
+                        transitions,
+                        &voices,
+                        finishing_sequence == Some(outcome.sequence),
+                    )?;
                     detail.turn_start = mark.turn_start;
                     detail.walk = mark.walk.filter(|_| !restart);
                     // A reload stages the current view silently: past beats keep their
@@ -1206,6 +1220,7 @@ fn battlefield_cue(state: StageState, detail: Option<&Detail>) {
             grazed: roll.grazed,
             damage: roll.damage,
             target_down: roll.target_down,
+            fight_over: roll.fight_over,
             attack_label: roll.attack_label.clone(),
             damage_type: roll.damage_type.clone(),
             ranged: roll.ranged,

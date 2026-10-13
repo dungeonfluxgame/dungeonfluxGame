@@ -1311,6 +1311,7 @@ pub(super) struct RollSummary {
     pub(super) grazed: bool,
     pub(super) damage: u32,
     pub(super) target_down: bool,
+    pub(super) fight_over: bool,
     /// The attack's name and the rules' damage type for the floating text.
     pub(super) attack_label: Option<String>,
     pub(super) damage_type: String,
@@ -2168,12 +2169,22 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                     } else {
                         AttackResult::Miss
                     };
-                    let _ = stage.stage(Beat::Strike {
-                        attacker,
-                        target,
-                        result,
-                        target_hit_points_after: after,
-                    });
+                    let strike = if roll.fight_over {
+                        Beat::FightEndingStrike {
+                            attacker,
+                            target,
+                            result,
+                            target_hit_points_after: after,
+                        }
+                    } else {
+                        Beat::Strike {
+                            attacker,
+                            target,
+                            result,
+                            target_hit_points_after: after,
+                        }
+                    };
+                    let _ = stage.stage(strike);
                 }
                 _ => {}
             }

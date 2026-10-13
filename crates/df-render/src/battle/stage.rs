@@ -130,8 +130,10 @@ pub mod beat_timing {
 fn acting_token(beat: &Beat) -> Option<&TokenId> {
     match beat {
         Beat::Attack { attacker, .. }
+        | Beat::FightEndingAttack { attacker, .. }
         | Beat::Approach { attacker, .. }
-        | Beat::Strike { attacker, .. } => Some(attacker),
+        | Beat::Strike { attacker, .. }
+        | Beat::FightEndingStrike { attacker, .. } => Some(attacker),
         Beat::Move { actor, .. } => Some(actor),
         Beat::TurnStart { .. } | Beat::Heal { .. } | Beat::Initiative { .. } => None,
     }
@@ -1039,8 +1041,14 @@ impl Stage {
             Beat::Attack {
                 attacker, target, ..
             }
+            | Beat::FightEndingAttack {
+                attacker, target, ..
+            }
             | Beat::Approach { attacker, target }
             | Beat::Strike {
+                attacker, target, ..
+            }
+            | Beat::FightEndingStrike {
                 attacker, target, ..
             } => [attacker, target]
                 .into_iter()
@@ -2656,7 +2664,7 @@ mod tests {
     }
 
     fn killing_blow() -> Beat {
-        Beat::Attack {
+        Beat::FightEndingAttack {
             attacker: TokenId::new("hero"),
             target: TokenId::new("enemy"),
             result: AttackResult::Hit {
@@ -4369,7 +4377,7 @@ mod tests {
     fn a_killing_strike_on_a_small_foe_keeps_it_visible_through_the_fall_and_the_finishing_shot() {
         let mut stage = weasel_fight();
         stage
-            .stage(Beat::Attack {
+            .stage(Beat::FightEndingAttack {
                 attacker: TokenId::new("brakka"),
                 target: TokenId::new("weasel"),
                 result: AttackResult::Hit {

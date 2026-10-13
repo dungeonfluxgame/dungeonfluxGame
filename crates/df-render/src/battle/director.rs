@@ -300,7 +300,14 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
             target,
             result,
             target_hit_points_after,
+        }
+        | Beat::FightEndingStrike {
+            attacker,
+            target,
+            result,
+            target_hit_points_after,
         } => {
+            let fight_over = matches!(beat, Beat::FightEndingStrike { .. });
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
             let mut builder = Builder { steps: Vec::new() };
             builder.at(Duration::ZERO, Step::SetActive(Some(attacker.id.clone())));
@@ -311,6 +318,7 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
                 *result,
                 *target_hit_points_after,
                 Duration::ZERO,
+                fight_over,
             );
             Ok(builder.finish(end))
         }
@@ -319,7 +327,14 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
             target,
             result,
             target_hit_points_after,
+        }
+        | Beat::FightEndingAttack {
+            attacker,
+            target,
+            result,
+            target_hit_points_after,
         } => {
+            let fight_over = matches!(beat, Beat::FightEndingAttack { .. });
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
             let mut builder = Builder { steps: Vec::new() };
             let ready = approach(&mut builder, attacker, target, Duration::ZERO);
@@ -330,6 +345,7 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
                 *result,
                 *target_hit_points_after,
                 ready + FOCUS_HOLD,
+                fight_over,
             );
             Ok(builder.finish(end))
         }
@@ -680,6 +696,7 @@ fn strike(
     result: AttackResult,
     hit_points_after: Option<u32>,
     base: Duration,
+    fight_over: bool,
 ) -> Duration {
     let sound = |builder: &mut Builder, at, kind, token: &Token| {
         builder.at(
@@ -752,10 +769,11 @@ fn strike(
     builder.at(contact, Step::Target(None));
     // The camera does not move at contact: the action shot already holds both fighters, so the
     // hit-stop and the shake land on a stable frame.
-    let finishing = matches!(result, AttackResult::Hit { downed: true, .. })
+    let downing_enemy = matches!(result, AttackResult::Hit { downed: true, .. })
         && target.side == Side::Enemy
         && attacker.side == Side::Hero;
-    if finishing {
+    let finishing = fight_over && downing_enemy;
+    if downing_enemy {
         // Time slows into the blow.
         builder.at(base, Step::SlowMotion);
     }
@@ -860,7 +878,7 @@ fn strike(
                 );
                 sound(builder, fall, SoundKind::Down, target);
                 sound(builder, fall + FALL_LANDS, SoundKind::BodyFall, target);
-                if target.side == Side::Enemy && attacker.side == Side::Hero {
+                if finishing {
                     let cue = fall + FINISHING_DELAY;
                     builder.at(
                         cue,
@@ -897,7 +915,16 @@ fn strike(
                         pan: SETTLE_PAN,
                     },
                 );
-                return fall + FALL;
+                let end = fall + FALL;
+                builder.at(end, Step::Highlight(None));
+                builder.at(
+                    end + Duration::from_millis(200),
+                    Step::Camera {
+                        command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
+                        pan: SETTLE_PAN,
+                    },
+                );
+                return end + SETTLE_PAN + Duration::from_millis(200);
             }
         }
     }
@@ -1125,11 +1152,16 @@ mod tests {
         let timeline = plan(
             &grid,
             &tokens,
-            &attack(AttackResult::Hit {
-                damage: 9,
-                critical: false,
-                downed: true,
-            }),
+            &Beat::FightEndingAttack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Hit {
+                    damage: 9,
+                    critical: false,
+                    downed: true,
+                },
+                target_hit_points_after: Some(0),
+            },
         )
         .unwrap();
         let names = names(&timeline);
@@ -1150,6 +1182,40 @@ mod tests {
         let times: Vec<Duration> = timeline.steps.iter().map(|step| step.at).collect();
         assert!(times.windows(2).all(|pair| pair[0] <= pair[1]));
         assert!(timeline.duration >= *times.last().unwrap());
+    }
+
+    #[test]
+    fn a_nonterminal_enemy_downing_fall_has_no_finishing_cue_and_returns_to_wide() {
+        let (grid, tokens) = field();
+        let timeline = plan(
+            &grid,
+            &tokens,
+            &Beat::Strike {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Hit {
+                    damage: 9,
+                    critical: false,
+                    downed: true,
+                },
+                target_hit_points_after: Some(0),
+            },
+        )
+        .unwrap();
+        let names = names(&timeline);
+        assert!(names.contains(&"fall"));
+        assert!(!names.contains(&"finishing"));
+        assert!(timeline.steps.iter().any(|timed| matches!(
+            &timed.step,
+            Step::Camera {
+                command: CameraCommand {
+                    shot: ShotName::CombatEst,
+                    focus: CameraFocus::Wide,
+                    ..
+                },
+                ..
+            }
+        )));
     }
 
     fn moves(timeline: &Timeline) -> Vec<(Cell, Duration)> {

@@ -118,12 +118,26 @@ pub enum Beat {
         result: AttackResult,
         target_hit_points_after: Option<u32>,
     },
+    /// A strike that ends the encounter, as reported by the server.
+    FightEndingStrike {
+        attacker: TokenId,
+        target: TokenId,
+        result: AttackResult,
+        target_hit_points_after: Option<u32>,
+    },
     /// `Approach` followed by `Strike` as one timeline.
     Attack {
         attacker: TokenId,
         target: TokenId,
         result: AttackResult,
         /// The target's hit points once the blow lands, as the server reports them.
+        target_hit_points_after: Option<u32>,
+    },
+    /// An attack that ends the encounter, as reported by the server.
+    FightEndingAttack {
+        attacker: TokenId,
+        target: TokenId,
+        result: AttackResult,
         target_hit_points_after: Option<u32>,
     },
     /// The server moved a figure to a cell: it walks the path of cells there (a straight eased
