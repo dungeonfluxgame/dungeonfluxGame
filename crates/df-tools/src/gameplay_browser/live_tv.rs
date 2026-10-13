@@ -153,7 +153,7 @@ pub(super) struct TvStage {
     art: Element,
     art_previous: Element,
     plate: PlateLayer,
-    /// PLAY-V12: the establishing shot's title card: the adventure and the place.
+    /// PLAY-V12: the establishing shot's title card: the adventure title on opening, then the scene title.
     establish_title: Element,
     establish_place: Element,
     lower: LowerThird,
@@ -854,12 +854,12 @@ impl TvStage {
         if announce && gathered && !was_gathered {
             live_sfx::play(Cue::PartyGathered, GATHERED_SOUND_DELAY);
         }
-        self.establish_title
-            .set_text_content(Some(if model.adventure_name.is_empty() {
-                &model.title
-            } else {
-                &model.adventure_name
-            }));
+        let establish_title = if !self.drawn.get() && !model.adventure_name.is_empty() {
+            &model.adventure_name
+        } else {
+            &model.title
+        };
+        self.establish_title.set_text_content(Some(establish_title));
         self.establish_place.set_text_content(Some(&model.place));
         set_hidden(&self.establish_place, model.place.is_empty())?;
         *self.portraits.borrow_mut() = model

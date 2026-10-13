@@ -185,6 +185,10 @@
   display: none;
 }
 
+.tv-stage[data-ended] :is(.tv-partybar, .tv-speaker, .tv-choices, .tv-bubble, .tv-intent) {
+  display: none !important;
+}
+
 /* The end card waits for the last spoken line: while the scene machine is still
  * presenting, the card holds back instead of cutting the final line off, then
  * fades in once nothing is left to say. An unknown machine state (a reload
