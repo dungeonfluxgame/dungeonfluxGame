@@ -25,7 +25,7 @@ pub(super) fn mount(document: &Document, host: &Element, note: &str) -> Result<(
     // a block, while a line within the paragraph always follows the story text.
     let line = document.create_element("span")?;
     line.set_class_name("rules-note");
-    node(document, &line, "span", "rules-note-tag", "Rules")?;
+    node(document, &line, "span", "rules-note-tag", "Rules:")?;
     node(document, &line, "span", "rules-note-text", note)?;
     narration.append_child(&line)?;
     Ok(())
