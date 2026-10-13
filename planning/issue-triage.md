@@ -70,8 +70,8 @@ In the order I would take them. One at a time, as agreed.
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
-| SES-01 | 1 | Pressing choices quickly broke a room for good. Two choices under a second apart, the second pressed three more times at 0.9 s. The server then answered everything with `UNAVAILABLE site=authority reason=InvalidCandidate` (73 times in two minutes), TV and phones showed "The connection to the game was lost", and the room never recovered. Not yet known whether the trigger is the repeated press or choosing before the previous step settled. | SR (BOSAKA) | |
-| SES-02 | 1 | The Hockley Valley scan (`scan-valley-bridges`) cannot start a fight against bandits: every press logged `REFUSAL action=DefendCourier reason=InvalidCandidate`. The same seed (0xb2563e1a9bd2a1a0) on the village scan started the fight at once. Cause unknown: every error on the fight-start path is logged as the same `InvalidCandidate`. | SC (KENOKA, SUFARO) | |
+| SES-01 | 1 | Pressing choices quickly broke a room for good. Two choices under a second apart, the second pressed three more times at 0.9 s. The server then answered everything with `UNAVAILABLE site=authority reason=InvalidCandidate` (73 times in two minutes), TV and phones showed "The connection to the game was lost", and the room never recovered. Not yet known whether the trigger is the repeated press or choosing before the previous step settled. | SR (BOSAKA) | Part `5abd72e`: the refused fight behind it is fixed; why a refusal left the room dead is still open |
+| SES-02 | 1 | The Hockley Valley scan (`scan-valley-bridges`) cannot start a fight against bandits: every press logged `REFUSAL action=DefendCourier reason=InvalidCandidate`. The same seed (0xb2563e1a9bd2a1a0) on the village scan started the fight at once. Cause unknown: every error on the fight-start path is logged as the same `InvalidCandidate`. | SC (KENOKA, SUFARO) | Fixed `5abd72e`: the cause was the order heroes were confirmed in, not the scan (HNT-01). Verified on a running server |
 | SES-03 | 2 | When a fight cannot start the players are told nothing; the choice stays on screen and can be pressed for ever. | SC | |
 | SES-04 | 1 | When both phones went away mid-fight the game stayed on "Brakka's turn" with no time limit seen. A new browser opening the room was offered only a fresh join, with no way to take the abandoned hero back. | SC (ZATOZO) | |
 | SES-05 | 2 | Start-up story text missed its 25 s deadline in 3 of 5 starts this evening and in playthrough 2. The session then runs on filler text for every line. Nothing says so on the TV, the phones or the lobby, nothing retries, and the lobby opens regardless. | P2, SC | |
@@ -91,7 +91,7 @@ In the order I would take them. One at a time, as agreed.
 | FLO-03 | 2 | Owner direction, not built: the story should branch off what the players learn. New information opens leads the player can review on the phone; leads read as hints, not quest markers; players may follow them or go their own way. A plan exists (`artifacts/tmp/leads-a1/plan.md`, four milestones). | OWNER | |
 | FLO-04 | 3 | Talking changes nothing that is offered: the choices are the same after a conversation, and a rumour that names the antagonist opens nothing to follow. | P1, P2, IV | |
 | FLO-05 | 3 | The only choice before the fight names an enemy nobody has seen ("Face the giant weasel") or reacts to no visible threat ("Stand your ground"). | P1, P2 | |
-| FLO-06 | 3 | Choices after the fight are chapter titles, not actions ("The Road Takes Its Toll"), and the phone mangles them into sentences: "Brakka thes Road Takes Its Toll", "Brakka calla'ses Thanks". | P1, P3 | |
+| FLO-06 | 3 | Choices after the fight are chapter titles, not actions ("The Road Takes Its Toll"), and the phone mangles them into sentences: "Brakka thes Road Takes Its Toll", "Brakka calla'ses Thanks". | P1, P3 | Part `67b9586`: the log no longer mangles titles; the choices are still titles, not actions |
 | FLO-07 | 3 | Rules steps are offered as story choices: "Advance 6 seconds · death saves", "Wait · a stable hero regains 1 hit point after 1d4 hours", and "Short Rest · 1 hour, no Hit Point Dice" offered first, twice, to heroes at full hit points. | P1, P2 | |
 | FLO-08 | 4 | The title card's sentence is repeated word for word in the Dungeon Master box straight after it, and one title card stayed up for at least 18 s while a long line was read. | P1, P2 | |
 
@@ -145,7 +145,7 @@ The owner's words: "the battle scene was out of sync", "make sure the state mach
 | SYN-02 | 2 | A defeated enemy acts again on screen: "it said enemy vanquished then he stood back up", "the dead guy moved". Consistent with the TV applying a death and then playing an older queued beat for the same figure. | OWNER (twice) | |
 | SYN-03 | 2 | The phone offers a hero his turn while the TV is still several beats behind (beat 6 of 6 on the phone, 2 of 6 on the TV); the TV's own counter went 6, 0, 2 during the entrance. | P1 | |
 | SYN-04 | 2 | The TV's health cards are wrong: hurt before any bite was shown, then full for 26 s while both phones said hurt, then hurt again. A heal on the phone (4 to 10) did not reach the TV for two rounds. | P1, P3 | |
-| SYN-05 | 2 | The phone keeps showing "YOUR TURN" with Attack, Move and End turn enabled for up to ten seconds after the turn is spent. Presses are refused ("That offer has ended") or silently dropped. | P1, SR, SC | |
+| SYN-05 | 2 | The phone keeps showing "YOUR TURN" with Attack, Move and End turn enabled for up to ten seconds after the turn is spent. Presses are refused ("That offer has ended") or silently dropped. | P1, SR, SC | Fixed `0761a5b` (browser check pending) |
 | SYN-06 | 3 | The victory fanfare, the scene transition and the ending music start before the last blow is shown (3.4 s early in one fight; before the last arrow was loosed in another). | P1, P2 | |
 | SYN-07 | 3 | The turn label flickers between names within seconds and can run one to two turns behind the server. | P1, EARLIER | |
 | SYN-08 | 3 | Heroes wait 11 to 15 s at a time for the TV to finish enemy turns; in the fastest possible game the fight was 2 min 56 s of 3 min 18 s. | SR | |
@@ -183,10 +183,10 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
-| AUD-01 | 2 | Music stays ducked for as long as any text is on screen, spoken or not: 31 s during a wait for a player, and for the whole of the defeat screen and the end card. The owner's rule is that music ducks under every voiced line (player, character, narrator) and comes back after. Ducking under a voiced line works. | P1, OWNER | |
+| AUD-01 | 2 | Music stays ducked for as long as any text is on screen, spoken or not: 31 s during a wait for a player, and for the whole of the defeat screen and the end card. The owner's rule is that music ducks under every voiced line (player, character, narrator) and comes back after. Ducking under a voiced line works. | P1, OWNER | Fixed `e995a87` (not yet heard) |
 | AUD-02 | 2 | On the defeat screen the narrator's line is hidden under the text and the closing paragraph is not read aloud ("I dont hear the DM narrating"). | P1, OWNER | |
 | AUD-03 | 3 | A bite sounds like a sword: each one logs `sword-swing` then `blade-hit`. | P1 | |
-| AUD-04 | 3 | The TV's "Enable sound" control is tiny and in a corner; the game is silent until someone finds it. | P1 | Fixed `dc17a41` (browser check pending) |
+| AUD-04 | 3 | The TV's "Enable sound" control is tiny and in a corner; the game is silent until someone finds it. | P1 | Fixed `dc17a41`, `307c2b4`. Seen in a browser |
 
 ## 10. Pictures
 
@@ -199,14 +199,14 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | PIC-05 | 3 | The picture does not follow what happens: after a hero swept the herbs off the table and called the patron a liar, the new picture showed her smiling with the herbs still there. A character's face can change between answers and not match the line. | P2, EARLIER | |
 | PIC-06 | 3 | Pictures of one place drift between shots (interior night, then outdoor day), and the phone's lobby picture does not match the TV's. | EARLIER | |
 | PIC-07 | 3 | The contact in the epilogue is not in the scene picture until after the end card is up. | P1 | |
-| PIC-08 | 4 | Cost: 20 pictures (half the session's budget of 40) and 18 voice clips for a ten-minute game; the opening picture is remade for each party size. | P1, EARLIER | |
+| PIC-08 | 4 | Cost: 20 pictures (half the session's budget of 40) and 18 voice clips for a ten-minute game; the opening picture is remade for each party size. | P1, EARLIER | Fixed `dce149c` |
 
 ## 11. TV layout
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
 | TVX-01 | 3 | A speech bubble flashes before a character talks ("before wystan talks a speech bubble flashes"): a small bubble appears beside the hero for half a second, an empty strip sits at the speaker's place for about 3 s, then the speaker's bubble grows in while the hero's fades out on top of it. A stray "..." bubble was also seen over a background figure. | P3, OWNER | Part `4c7e69b`: typed line leaves first; empty strip while generating not done |
-| TVX-02 | 3 | The hero's own typed line is a faded bubble over the other character's figure, partly under the reply. | P1, EARLIER | |
+| TVX-02 | 3 | The hero's own typed line is a faded bubble over the other character's figure, partly under the reply. | P1, EARLIER | Fixed `a1b3e25` (browser check pending) |
 | TVX-03 | 3 | On every scene change the TV shows the adventure's title again instead of the new scene's, and during the crossfade it sits over the new picture and the health cards. | P1, EARLIER | Fixed `3720b36` (browser check pending) |
 | TVX-04 | 3 | The adventure title and place stay printed large over the picture for the whole scene. | P1 | Fixed `3720b36` (browser check pending) |
 | TVX-05 | 3 | A rules log line is shown as a hero's speech bubble: "BRAKKA: has been stable for 1 hours and regains 1 hit point". | P1 | |
@@ -218,24 +218,24 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
 | PHN-01 | 2 | The fight screen is developer drop-downs with dozens of cell and weapon options. The tap-to-move map the owner decided on has no brief yet. | EARLIER, all | |
-| PHN-02 | 2 | A downed player's phone says nothing about dying or death saves and offers nothing to do. | P1 | |
+| PHN-02 | 2 | A downed player's phone says nothing about dying or death saves and offers nothing to do. | P1 | Fixed `0761a5b`: death-save progress shown (browser check pending) |
 | PHN-03 | 3 | Developer notes are shown to players: "Disclosed custom rule tactical.cover-centre-line…", "Disclosed gap giant-weasel: Climb Speed 30 ft is not modelled", "Greatsword Dropped; ownership retained", "defeat does not restore hit points or held weapons". | P1 | |
 | PHN-04 | 3 | Saying your own line is awkward and mislabelled: the send button reads "Ask for clarification" under two drop-downs reading "Uncertain intention" and "No action selected", and the character's reply is shown with a different portrait from the scene's. | P1, IV | Part `a252a22`: labels fixed; reply portrait still differs |
-| PHN-05 | 3 | "Confirm original strike" is offered from the aftermath to the end of the game and never explained. | P1 | Part `8fa68c8`: phone menu fixed; fight panel copy still to do |
+| PHN-05 | 3 | "Confirm original strike" is offered from the aftermath to the end of the game and never explained. | P1 | Fixed `8fa68c8`, `0761a5b` (browser check pending) |
 | PHN-06 | 3 | The fight's log line is carried into the story log of the next scene. | P2 | |
-| PHN-07 | 3 | The hero portrait is cropped to the top of a head, and an unstyled status line sits over the background picture. | P1 | |
+| PHN-07 | 3 | The hero portrait is cropped to the top of a head, and an unstyled status line sits over the background picture. | P1 | Fixed `0ad7d67` (browser check pending) |
 | PHN-08 | 4 | The "Ask" button re-renders while a voice line plays, so a tap can miss. | EARLIER | Fixed `a252a22` (browser check pending) |
 
 ## 13. Lobby and character creation
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
-| CRE-01 | 3 | Only Dwarf, Fighter and Soldier exist, so every party is the same. The form is about 7,100 px tall with twelve groups, four of which offer a single option under "Choose one offered option". | P1 | Part `e8a800f`: single options pre-selected; heading text and the class/species range not done |
+| CRE-01 | 3 | Only Dwarf, Fighter and Soldier exist, so every party is the same. The form is about 7,100 px tall with twelve groups, four of which offer a single option under "Choose one offered option". | P1 | Part `e8a800f`, `1d664bd`: single options read as facts; only one species, class and background exist |
 | CRE-02 | 3 | The field "A detail that makes you memorable" is in the page but collapsed to zero size; it cannot be seen or used. | P1 | Fixed `edece58` (browser check pending) |
 | CRE-03 | 3 | Developer wording is shown to players: "every submitted build is validated on the server", "Fighter B + Soldier B", "Other lawful SRD combinations remain unsupported", "Initiative tie agreement". | P1 | |
 | CRE-04 | 3 | The phone's join page is titled "Gather at the Lantern Wharf" with a harbour picture whatever the adventure's place is. | P1 | Fixed `301391e`: neutral title; the real place needs a server field (browser check pending) |
-| CRE-05 | 3 | The TV lobby shows neither the adventure's title nor what happens next or who starts; "THE PARTY IS GATHERED" is small grey text in a corner. | P2 | |
-| CRE-06 | 3 | The TV lobby prints "Or enter the code at 127.0.0.1:63319", an address no phone can reach, with no hint that the session is local only. | P1 | |
+| CRE-05 | 3 | The TV lobby shows neither the adventure's title nor what happens next or who starts; "THE PARTY IS GATHERED" is small grey text in a corner. | P2 | Fixed `6b5c691`. Seen in a browser |
+| CRE-06 | 3 | The TV lobby prints "Or enter the code at 127.0.0.1:63319", an address no phone can reach, with no hint that the session is local only. | P1 | Fixed `6b5c691`. Seen in a browser |
 | CRE-07 | 4 | The sticky "Confirm your hero" bar covers the form text beneath it. | P1 | Fixed `edece58` (browser check pending) |
 
 ## 14. Endings
@@ -252,7 +252,7 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
 | DEV-01 | 3 | The development command line cannot inspect or take over a session started from browsers: `dev health` and `dev state` answer "no seat has joined yet" while two players are in a fight. Health must not need a seat. | SC | |
-| DEV-02 | 3 | Refusals on the fight path all log `InvalidCandidate`, so a log cannot say which step refused (see SES-01, SES-02). | SR, SC | |
+| DEV-02 | 3 | Refusals on the fight path all log `InvalidCandidate`, so a log cannot say which step refused (see SES-01, SES-02). | SR, SC | Part `65ff23c`, `d495f61`: the refusing step is named on the story, fight-start and enemy-turn paths |
 | DEV-03 | 3 | `cargo test -p df-tools --lib` keeps nine long-standing failures, and the home-video tests time out under load. | EARLIER | |
 | DEV-04 | 3 | The command line's back, forward and restore are written and unit-tested but have no verified transcript; direct edits (`override`) are disabled. | this session | |
 | DEV-05 | 4 | The recording method used this evening (hidden browser with WebGPU, TV and one phone recorded) lives in the coordinator's scratch folder. Worth making a repository check so every fight change comes with a video. | SR | Fixed `0a9436f` |
@@ -264,12 +264,12 @@ Thirty read-only reviewers each read one module on the evening of 2026-10-12 and
 
 | ID | Sev | Issue | Source | Decision |
 |---|---|---|---|---|
-| HNT-01 | 1 | A fight is refused at the start when the heroes were confirmed in a different order from the order they joined: the fight builds its hero list in confirmation order and the admission check expects join order. Very likely the real cause of SES-02 and of the refused fight behind SES-01, since the recording script confirms both heroes at once. | H12 F1 | |
+| HNT-01 | 1 | A fight is refused at the start when the heroes were confirmed in a different order from the order they joined: the fight builds its hero list in confirmation order and the admission check expects join order. Very likely the real cause of SES-02 and of the refused fight behind SES-01, since the recording script confirms both heroes at once. | H12 F1 | Fixed `5abd72e`. Verified on a running server: refused before, starts now |
 | HNT-02 | 1 | Restoring a pending move accepts a diagonal path through blocked corners and can leave the fight permanently stuck. | H14 F1 | |
-| HNT-03 | 2 | A delayed attack command from an earlier turn can be accepted on the same hero's later turn. | H08 F1 | |
+| HNT-03 | 2 | A delayed attack command from an earlier turn can be accepted on the same hero's later turn. | H08 F1 | Part `cafd68c`: attacks fixed; the same fault for End turn is being fixed |
 | HNT-04 | 2 | An "observe" investigation offer advances the story without resolving or recording what was observed (medium confidence). | H05 F1 | |
 | HNT-05 | 2 | A wolf's or mastiff's bite knocks its target prone on every hit, without the Strength save the rules require. | H13 F1 | |
-| HNT-06 | 2 | A healed figure stays down on the TV during playback and its next action can be dropped. | H22 F1 | |
+| HNT-06 | 2 | A healed figure stays down on the TV during playback and its next action can be dropped. | H22 F1 | Fixed `4abbe0f` |
 | HNT-07 | 2 | Start-up story text that came back incomplete is cached as complete, so refused slots are never asked for again. | H27 F1 | |
 | HNT-08 | 2 | After stepping back with the development tool, a late report from the TV can release a beat in the restored fight (medium confidence). | H15 F1 | |
 | HNT-09 | 3 | Thrown weapons are used up but never recorded where they land, so they cannot be picked up. | H13 F2 | |

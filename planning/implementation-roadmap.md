@@ -295,7 +295,7 @@ done on 2026-10-12 and are proposals awaiting the owner.
 - [ ] **Bug** — The home video loop did not appear in the lobby in the time it took the party to join. (known-bugs-on-main.md, Still open, line 55)
 - [ ] **Blocked** — The home loop still jitters at the wrap and the two-clip hand-off is blocked on a server-side video decoder (no codec crate, no ffmpeg, new dependency forbidden; options in the PLAY-V10 worker note). (known-bugs-on-main.md, Still open, lines 56-57; play-session.md, PLAY-V10 worker note, Known defects)
 - [ ] **Follow-up** — Compare consecutive real plates of one place for hero sides, weapons and interior/exterior, and feed the sheet's weapon into the plate director via `PartyMemberView.attack_style` since art and sheet can disagree (e.g. longbow on the sheet, greatsword fighter in art). (play-session.md, PLAY-V12 worker note, Not started and open questions)
-- [ ] **Follow-up** — Stop remaking the opening plate for each party size (up to 3 requests) while an earlier party's plate keeps running as wasted spend. (play-session.md, PLAY-V12 worker note, Open)
+- [x] **Follow-up** — Stop remaking the opening plate for each party size (up to 3 requests) while an earlier party's plate keeps running as wasted spend. (play-session.md, PLAY-V12 worker note, Open) **FIXED in `dce149c`**.
 - [ ] **Not started** — Finish the PLAY-V05 carry-overs: party sizes 2 and 6 and the six-location recapture. (play-session.md, PLAY-V10 worker note, carry-overs)
 - [ ] **Follow-up** — Raise the pair video budget default from 4 to 8 since pairs, kill clip and dice template all draw on video. (play-session.md, PLAY-V10 worker note, Budget recommendation)
 
@@ -419,7 +419,7 @@ Start-up and lobby:
 
 - [ ] **Bug** — 17 of 54 generated text slots (31%) were refused by validation at start-up and replaced by table text.
 - [x] **Bug** — The phone's join page is titled "Gather at the Lantern Wharf" with a harbour picture whatever the adventure's place is; the waiting page then shows the right title over the same harbour picture. **FIXED in `301391e`** (neutral title; showing the real place needs a server field; browser check pending).
-- [ ] **Bug** — The TV lobby prints "Or enter the code at 127.0.0.1:63319", an address no phone can reach, with no hint that the session is local only.
+- [x] **Bug** — The TV lobby prints "Or enter the code at 127.0.0.1:63319", an address no phone can reach, with no hint that the session is local only. **FIXED in `6b5c691`** (seen in a browser).
 - [x] **Bug** — The TV's "Enable sound" control is tiny and in a corner; the game is silent until someone finds it. **FIXED in `dc17a41`** (browser check pending).
 
 Character creation (phone):
@@ -439,7 +439,7 @@ Story scenes:
 - [ ] **Bug** — The only choice before the fight is "Face the giant weasel", naming an enemy nobody has seen or mentioned.
 - [ ] **Bug** — The loading card says one "Wary Giant Weasel" springs out; the fight has three.
 - [ ] **Bug** — The private clue runs narration straight into the patron's first-person speech with no quotation ("Elspeth draws you close. I must reach Jorun Harrow..."), and it is repeated in the phone's story log on every later screen to the end.
-- [ ] **Bug** — Choices after the fight are chapter titles, not actions: "The Road Takes Its Toll", "The Clock Never Comes". The phone records them as "Brakka thes Road Takes Its Toll".
+- [ ] **Bug** — Choices after the fight are chapter titles, not actions: "The Road Takes Its Toll", "The Clock Never Comes". The phone records them as "Brakka thes Road Takes Its Toll". **PART FIXED in `67b9586`**: the log no longer mangles the titles; the choices are still titles.
 - [ ] **Bug** — The phone keeps offering "Confirm original strike" from the aftermath to the end; it is never explained. **PART FIXED in `8fa68c8`**: fixed in the phone menu; the fight panel copy is still to do.
 - [ ] **Bug** — A rules log line is shown as a hero's speech bubble on the TV: "BRAKKA: has been stable for 1 hours and regains 1 hit point".
 - [ ] **Bug** — The ending contradicts itself: the defeat says the patron "is dragged away"; the epilogue has the survivors report a lost clock and never mention her; the end text says "Elspeth and the survivors must begin again". The contact in the epilogue is not in the scene picture until after the end card is up.
@@ -450,7 +450,7 @@ Conversation with the patron (three typed lines, all answered by the model):
 - [ ] **Bug** — Asked whether she has children, she gives family facts (mother, a betrothed) and does not answer the question.
 - [ ] **Bug** — A threat with a drawn greatsword gets "Keep your voice low. I don't know what you're asking me to hide" plus a stock sentence; no reaction to the weapon, no change of attitude, no roll, no change to the picture.
 - [ ] **Bug** — The offered choices do not change after talking; nothing she says can be followed up.
-- [ ] **Bug** — TV: the hero's own typed line is a faded bubble over the patron's figure, partly under her reply.
+- [x] **Bug** — TV: the hero's own typed line is a faded bubble over the patron's figure, partly under her reply. **FIXED in `a1b3e25`** (browser check pending).
 - [ ] **Bug** — Phone composer: her reply is shown with a different portrait from the one in the scene card; the send button is labelled "Ask for clarification" under two drop-downs reading "Uncertain intention" and "No action selected". **PART FIXED in `a252a22`**: labels fixed; the reply portrait still differs.
 
 Fight (three giant weasels against two heroes):
@@ -461,10 +461,10 @@ Fight (three giant weasels against two heroes):
 - [ ] **Bug** — The turn label flickered Brakka, Giant Weasel 1, Brakka within five seconds.
 - [ ] **Bug** — The music moved to the ending suite 3.4 s before the last bite was shown.
 - [ ] **Bug** — No dice clip was seen in any frame of the fight; the dice element was on screen for under two seconds per roll. Death saves were rolled five times by the server and never shown at all.
-- [ ] **Bug** — After pressing End turn the phone still read "YOUR TURN" with Move enabled; the move was refused with "That offer has ended. Choose from the current view."
-- [ ] **Bug** — A downed player's phone says nothing about dying or death saves and offers nothing to do.
+- [x] **Bug** — After pressing End turn the phone still read "YOUR TURN" with Move enabled; the move was refused with "That offer has ended. Choose from the current view." **FIXED in `0761a5b`** (browser check pending).
+- [x] **Bug** — A downed player's phone says nothing about dying or death saves and offers nothing to do. **FIXED in `0761a5b`** (browser check pending).
 - [ ] **Bug** — A bite sounds like a sword: each one logs `sword-swing` then `blade-hit`.
-- [ ] **Bug** — Music stays ducked for as long as any line or paragraph is on screen, spoken or not: 31 s during a wait for a player, and for the whole of the defeat screen and the end card.
+- [x] **Bug** — Music stays ducked for as long as any line or paragraph is on screen, spoken or not: 31 s during a wait for a player, and for the whole of the defeat screen and the end card. **FIXED in `e995a87`** (not yet heard).
 - [ ] **Bug** — "FINISHING BLOW / ENEMY VANQUISHED" takes the whole screen for the first of three weasels.
 - [ ] **Bug** — Unlabelled round icons float above figures and under health cards; a downed hero is drawn as a dark spiky heap.
 - [ ] **Bug** — The phone's fight panel prints developer notes ("Disclosed custom rule tactical.cover-centre-line...", "Disclosed gap giant-weasel: Climb Speed 30 ft is not modelled") and an unstyled status line over the background picture.
@@ -521,7 +521,7 @@ Fight and its presentation:
 Pacing and layout:
 
 - [ ] **Bug** — The whole game is nine minutes and five screens again; the journey promised by the lobby (a market, a walk to the apothecary) does not exist.
-- [ ] **Bug** — The lobby shows neither the adventure's title nor what happens next or who starts; "THE PARTY IS GATHERED" is small grey text in a corner.
+- [x] **Bug** — The lobby shows neither the adventure's title nor what happens next or who starts; "THE PARTY IS GATHERED" is small grey text in a corner. **FIXED in `6b5c691`** (seen in a browser).
 - [ ] **Bug** — The title card with the Dungeon Master's box stayed up for at least 18 s on the apothecary transition while a long line was read.
 - [ ] **Bug** — The phone's label for a choice differs from the TV's ("Continue to the apothecary · Brannock's Apothecary" against "Continue to the apothecary").
 
@@ -548,7 +548,7 @@ New defects:
 - [ ] **Bug** — The TV asked "Brakka: Opportunity Attack?" with Brakka off screen.
 - [ ] **Bug** — The fight's intro again names one villain ("Tomas Ingram ... his scimitar dark with old blood") and fields three generic Bandits with crossbows; the victory text then blames Tomas Ingram, whom nobody met.
 - [ ] **Bug** — Epilogue lines are shared across adventures word for word: "Your names will be spoken kindly in every tavern from here to the coast", "You came through on your own feet. That is worth more than I can say" and "Rest well. The next road can wait for morning" were said by Kelbin in the previous game and by Calla in this one.
-- [ ] **Bug** — Choice labels are still titles and the phone still mangles them: "Brakka calla'ses Thanks", "Brakka thes Lantern's Last Light".
+- [ ] **Bug** — Choice labels are still titles and the phone still mangles them: "Brakka calla'ses Thanks", "Brakka thes Lantern's Last Light". **PART FIXED in `67b9586`**: the log no longer mangles the titles; the choices are still titles.
 - [ ] **Bug** — Eleven rolls in this fight, eleven still dice images, each on screen between 0.4 s and 1.8 s; no tumbling clip in any of them. Two of twenty-six beats were marked skipped by the TV.
 - [ ] **Follow-up** — Start-up text generation decides the quality of the whole session: with it the story is coherent, without it (the previous playthrough, deadline missed) every line is filler. It needs a retry or a longer deadline, and the lobby should not open until it has finished or failed for good.
 
@@ -556,10 +556,10 @@ New defects:
 
 At the owner's request ("record a video and play it as fast as possible") a script drove one TV and two phones in a hidden browser, pressing every choice and taking every fight turn the moment the phone offered it, while recording the TV and one phone. Videos (no sound) and logs: `artifacts/tmp/playthrough-6/` (`speedrun-tv.mp4`, `speedrun-phone.mp4`, `broken-run-tv.mp4`, `run.log`, `broken-run/`). The script is coordinator tooling in the session scratchpad, not in the repository.
 
-- [ ] **Bug** — Pressing choices quickly broke a session for good. In room BOSAKA the script chose "Question Osric closely" and under a second later "Face down the kobold", then pressed that again three times at 0.9 s intervals because the phone still offered it. From then on the server answered everything with `UNAVAILABLE site=authority reason=InvalidCandidate` (73 times in two minutes), the TV and phones showed "The connection to the game was lost", the fight never started and the room never recovered. Whether the trigger is the repeated press or choosing before the previous step had settled is not yet known. A player double-tapping could do this.
+- [ ] **Bug** — Pressing choices quickly broke a session for good. In room BOSAKA the script chose "Question Osric closely" and under a second later "Face down the kobold", then pressed that again three times at 0.9 s intervals because the phone still offered it. From then on the server answered everything with `UNAVAILABLE site=authority reason=InvalidCandidate` (73 times in two minutes), the TV and phones showed "The connection to the game was lost", the fight never started and the room never recovered. Whether the trigger is the repeated press or choosing before the previous step had settled is not yet known. A player double-tapping could do this. **PART FIXED in `5abd72e`**: the refused fight behind it is fixed (heroes confirmed out of join order); why a refusal left the room dead is still open.
 - [ ] **Bug** — The whole story before the fight can be skipped in 1.6 s: three presses, 0.3 s apart, with no line shown or spoken first. Nothing holds a choice until its scene has been presented.
 - [ ] **Bug** — A hero sometimes cannot move and attack in the same turn (intermittent; see the correction in the next section). After moving next to an enemy the greatsword attack was not offered within eight seconds, on four turns in the recorded game; it was offered on the following turn. The fighter loses his action every time he moves.
-- [ ] **Bug** — The phone keeps showing "YOUR TURN" with Attack and End turn enabled for up to ten seconds after the turn has been spent; the script pressed End turn up to seventeen times in a row. The server took only one action per turn, but the phone gives no sign the turn is over.
+- [x] **Bug** — The phone keeps showing "YOUR TURN" with Attack and End turn enabled for up to ten seconds after the turn has been spent; the script pressed End turn up to seventeen times in a row. The server took only one action per turn, but the phone gives no sign the turn is over. **FIXED in `0761a5b`** (browser check pending).
 - [ ] **Bug** — "Tomas and the Salve" had to be pressed twice: the first press showed "Waiting for the game server…" and the same choice was offered again.
 - [ ] **Bug** — Seen in the recording's frames: one almost black, blurred frame in the middle of the fight (the camera inside or against something); heavy smear with colour fringing during strikes; the still dice image with the gold square outline round it.
 - [ ] **Follow-up** — A full game played at the phones' pace took 3 min 18 s, of which 2 min 56 s was the fight, and most of that was heroes waiting 11 to 15 s at a time for the TV to finish showing enemy turns. Two of the three enemies died to a "graze" on a missed roll (a 3 and a 6), and seven enemy bites in a row missed, so nobody was hurt.
@@ -569,8 +569,8 @@ At the owner's request ("record a video and play it as fast as possible") a scri
 
 The owner asked for a session with a different scan in the fight. Two were tried with the same recording script as above, holding 12 s on each story scene. Evidence: `artifacts/tmp/playthrough-7/` (`riverbed-tv.mp4`, `riverbed-phone.mp4`, `sheet-riverbed.png`, `run.log`, `run-refused-valley.log`, `server-refused.log`, `server-riverbed.log`).
 
-- [ ] **Bug** — The Hockley Valley scan (`DF_GAMEPLAY_BATTLE_SCENE=scan-valley-bridges`) cannot start a fight against bandits. In room KENOKA (seed 0xb2563e1a9bd2a1a0, three bandits, story place orrery-library) every press of "Bar the thief's way" logged `REFUSAL action=DefendCourier reason=InvalidCandidate status=refused`; the TV kept the choice on screen and nothing else happened. The same seed on the village scan (room SUFARO) started the fight at once. The existing every-scene test passes, but it only stages kobolds. The cause is not known: every error on the fight-start path is reduced to `InvalidCandidate`, so the log cannot say which step refused. Needs a test that starts each adventure creature on both layouts of every scan, and a refusal reason that names the step.
-- [ ] **Bug** — When the fight cannot start the players are told nothing: the choice stays offered and can be pressed for ever.
+- [x] **Bug** — The Hockley Valley scan (`DF_GAMEPLAY_BATTLE_SCENE=scan-valley-bridges`) cannot start a fight against bandits. In room KENOKA (seed 0xb2563e1a9bd2a1a0, three bandits, story place orrery-library) every press of "Bar the thief's way" logged `REFUSAL action=DefendCourier reason=InvalidCandidate status=refused`; the TV kept the choice on screen and nothing else happened. The same seed on the village scan (room SUFARO) started the fight at once. The existing every-scene test passes, but it only stages kobolds. The cause is not known: every error on the fight-start path is reduced to `InvalidCandidate`, so the log cannot say which step refused. Needs a test that starts each adventure creature on both layouts of every scan, and a refusal reason that names the step. **FIXED in `5abd72e`** (the cause was the order the heroes were confirmed in, not the scan; verified on a running server).
+- [ ] **Bug** — When the fight cannot start the players are told nothing: the choice stays offered and can be pressed for ever. **PART FIXED in `65ff23c`**: the server log now names the refusing step; the phone still shows nothing.
 - [ ] **Follow-up** — The riverbed scan (`scan-riverbed`, room ZATOZO, two guards) works as a battlefield at level of detail 1: the fight started, the ground reads clearly under the light pool and the initiative close-up looks good. The fight was played to the second round and then lost to a fault in the coordinator's script, not the game, so the ending on this scan was not seen. The summit scan was not tried.
 - [ ] **Bug** — With a forced scan the fight is still titled after the story place: "THE SALT QUAY" over an autumn riverbed, straight after a card that says the party is on the quay. Acceptable for a private test scene; a scan chosen by a story must carry its own name.
 - [ ] **Bug** — One frame in the pane showed the whole battlefield smeared by motion blur during a camera move, with the figures reduced to dark streaks; in the wide view a hero is again about 30 px tall.
