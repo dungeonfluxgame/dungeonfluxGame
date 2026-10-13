@@ -291,7 +291,7 @@ const SHEET: &str = r#"
 .live-hero-head .combat-hp,.live-sheet-inline .combat-hp{position:relative;height:20px;border:1px solid #d9b77a59;border-radius:10px;background:#0a0e0b;overflow:hidden}
 .live-hero-head .combat-hp-fill,.live-sheet-inline .combat-hp-fill{position:absolute;inset:0 auto 0 0;width:var(--hp,0%);background:linear-gradient(90deg,#3f8553,#8fd18d)}
 .live-hero-head .combat-hp[data-state=low] .combat-hp-fill,.live-sheet-inline .combat-hp[data-state=low] .combat-hp-fill{background:linear-gradient(90deg,#92392a,#e0784f)}
-.live-hero-head .combat-hp-text,.live-sheet-inline .combat-hp-text{position:relative;display:block;text-align:center;font:700 13px/20px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px #000}
+.live-hero-head .combat-hp-text,.live-sheet-inline .combat-hp-text{position:relative;display:block;text-align:center;font:700 13px/20px system-ui,sans-serif;color:#fff;text-shadow:0 0 3px #000,0 0 3px #000,0 1px 3px #000}
 .live-sheet-inline{margin:20px 0 0;padding:16px;display:grid;gap:16px;scroll-margin-top:12px}
 .live-sheet-head{display:flex;align-items:center;gap:14px}
 .live-sheet-head .live-portrait{width:96px;height:96px;border-radius:14px}
