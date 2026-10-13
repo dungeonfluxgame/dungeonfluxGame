@@ -298,11 +298,14 @@ fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Opt
     (result, active)
 }
 
-fn rolls(combat: &rpc::CombatView) -> Vec<RollText> {
+fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollText> {
     // The server lists outcomes oldest first; the newest is shown first and largest.
     combat
         .outcomes
         .iter()
+        .filter(|outcome| {
+            released_sequence.is_none_or(|sequence| sequence == 0 || outcome.sequence <= sequence)
+        })
         .rev()
         .enumerate()
         .map(|(index, outcome)| {
@@ -396,7 +399,7 @@ pub(in crate::gameplay_browser) fn describe(
         outcomes: vec![outcome.clone()],
         ..Default::default()
     };
-    let roll = rolls(&single).into_iter().next()?;
+    let roll = rolls(&single, None).into_iter().next()?;
     Some(RollDescription {
         label: roll.label,
         value: roll.value,
@@ -556,7 +559,7 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         busy: state.busy,
         actors,
         offers: offers(state, view, blocked || waiting_for_view)?,
-        rolls: rolls(combat),
+        rolls: rolls(combat, player.then_some(combat.released_sequence)),
     })
 }
 
@@ -1118,6 +1121,34 @@ mod tests {
         assert_eq!(
             tactical_option_label("Longbow at Weasel", &covered),
             "Longbow at Weasel · half (+2 AC) cover · normal range: 10 ft · disadvantage"
+        );
+    }
+
+    #[test]
+    fn roll_cards_follow_the_released_sequence() {
+        let combat = rpc::CombatView {
+            outcomes: (1..=3)
+                .map(|sequence| rpc::CombatOutcome {
+                    sequence,
+                    actor_name: format!("Actor {sequence}"),
+                    ..Default::default()
+                })
+                .collect(),
+            latest_sequence: 3,
+            ..Default::default()
+        };
+
+        let released = super::rolls(&combat, Some(1));
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].label, "Actor 1 attacks ");
+
+        let fully_released = super::rolls(&combat, Some(3));
+        assert_eq!(
+            fully_released
+                .iter()
+                .map(|roll| roll.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Actor 3 attacks ", "Actor 2 attacks ", "Actor 1 attacks "]
         );
     }
 }
