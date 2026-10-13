@@ -1,7 +1,7 @@
 //! Durable authored choices for scripts whose scenes need no encounter or new rules.
 use super::{
     beat_script::{self, Beat, BeatEffect, BeatKind, BeatOffer, BeatScript, BeatTrigger},
-    journey, model, pack,
+    journey, model, pack, refusal_detail,
 };
 use df_model::checkpoint::*;
 use df_protocol::common as rpc;
@@ -15,6 +15,7 @@ pub(super) const CHOICE_ACTION: &str = "script-choice";
 pub(super) const RESOLVE_ACTION: &str = "resolve-errand";
 const OFFER_PREFIX: &str = "beat-script-offer-";
 fn invalid<T>() -> Result<T, RepositoryError> {
+    refusal_detail::note("beat-script-state");
     Err(RepositoryError::InvalidCandidate)
 }
 pub(super) fn marker(offer: &str) -> Result<ContentReference, RepositoryError> {

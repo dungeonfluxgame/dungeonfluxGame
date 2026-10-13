@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, watch};
 
 use super::{
-    model,
+    model, refusal_detail,
     table_settings::{self, TableSettings},
     wire,
 };
@@ -154,10 +154,18 @@ impl ActorInput for Call {
             | Self::Presence { .. }
             | Self::Presented { .. } => Some(0),
             Self::Dev { order, .. } => order.retained_heap_bytes(),
-            Self::DevDirect { order, request, .. } => order.text.as_ref().map_or(0, String::capacity)
+            Self::DevDirect { order, request, .. } => order
+                .text
+                .as_ref()
+                .map_or(0, String::capacity)
                 .checked_add(request.session_id.as_ref().map_or(0, |id| bytes(&id.value)))?
                 .checked_add(request.run_id.as_ref().map_or(0, |id| bytes(&id.value)))?
-                .checked_add(request.client_binding_id.as_ref().map_or(0, |id| bytes(&id.value))),
+                .checked_add(
+                    request
+                        .client_binding_id
+                        .as_ref()
+                        .map_or(0, |id| bytes(&id.value)),
+                ),
             Self::Dialogue { request, .. } => Some(request.retained_heap_bytes()),
             Self::Submit { request, .. } => {
                 let character_bytes = if let Some(character) = &request.character {
@@ -299,9 +307,14 @@ impl df_session::submission::SessionEngine<NativeScope<LocalDemoAuthority>> for 
                 .intents
                 .iter()
                 .find(|intent| intent.job == Some(completion.job))
-                .ok_or(RepositoryError::InvalidCandidate)?;
-            let admitted = super::courier_ai::execute(current, intent)
-                .map_err(|_| RepositoryError::InvalidCandidate)?;
+                .ok_or_else(|| {
+                    refusal_detail::note("job-intent-missing");
+                    RepositoryError::InvalidCandidate
+                })?;
+            let admitted = super::courier_ai::execute(current, intent).map_err(|_| {
+                refusal_detail::note("job-execute");
+                RepositoryError::InvalidCandidate
+            })?;
             if &admitted != completion {
                 return Err(RepositoryError::InputBinding);
             }
@@ -463,7 +476,8 @@ fn authority_unavailable() -> tonic::Status {
 /// One `UNAVAILABLE` line on stdout and the same fact on the shared observability path, for every
 /// place the phone is told to retain its operation or reconnect. `site` names the server path.
 fn record_unavailable(site: &'static str, reason: &str) {
-    println!("UNAVAILABLE site={site} reason={reason}");
+    let step = refusal_detail::step_or_unknown();
+    println!("UNAVAILABLE site={site} reason={reason} step={step}");
     let context = OperationContext {
         trace_parent: String::new(),
         build: crate::BUILD_ID.to_owned(),
@@ -474,6 +488,7 @@ fn record_unavailable(site: &'static str, reason: &str) {
         &[
             ("unavailable.site", site.to_owned()),
             ("unavailable.reason", reason.to_owned()),
+            ("unavailable.step", step.to_owned()),
         ],
     );
     span.finish_unmeasured("unavailable");
@@ -485,7 +500,8 @@ fn record_unavailable(site: &'static str, reason: &str) {
 fn record_refusal(action_kind: i32, reason: &str, status: &str) {
     let kind = rpc::GameplayActionKind::try_from(action_kind)
         .map_or_else(|_| action_kind.to_string(), |kind| format!("{kind:?}"));
-    println!("REFUSAL action={kind} reason={reason} status={status}");
+    let step = refusal_detail::step_or_unknown();
+    println!("REFUSAL action={kind} reason={reason} status={status} step={step}");
     let context = OperationContext {
         trace_parent: String::new(),
         build: crate::BUILD_ID.to_owned(),
@@ -493,7 +509,11 @@ fn record_refusal(action_kind: i32, reason: &str, status: &str) {
     let mut span = df_observe::begin(&context, "gameplay.action_refused");
     span.event(
         "gameplay.action_refused",
-        &[("action.kind", kind), ("refusal.reason", reason.to_owned())],
+        &[
+            ("action.kind", kind),
+            ("refusal.reason", reason.to_owned()),
+            ("refusal.step", step.to_owned()),
+        ],
     );
     span.finish_unmeasured(status);
 }
@@ -852,14 +872,23 @@ impl Actor {
         else {
             return Ok(());
         };
-        let member = super::courier_ai::recipient(self.owner.checkpoint(), &intent)
-            .map_err(|_| RepositoryError::InvalidCandidate)?;
-        let completion = super::courier_ai::expected_completion(&intent)
-            .map_err(|_| RepositoryError::InvalidCandidate)?;
-        let operation = super::courier_ai::completion_operation(&intent)
-            .map_err(|_| RepositoryError::InvalidCandidate)?;
-        let fingerprint = super::courier_ai::completion_fingerprint(&completion)
-            .map_err(|_| RepositoryError::InvalidCandidate)?;
+        let member =
+            super::courier_ai::recipient(self.owner.checkpoint(), &intent).map_err(|_| {
+                refusal_detail::note("completion-recipient");
+                RepositoryError::InvalidCandidate
+            })?;
+        let completion = super::courier_ai::expected_completion(&intent).map_err(|_| {
+            refusal_detail::note("completion-expected");
+            RepositoryError::InvalidCandidate
+        })?;
+        let operation = super::courier_ai::completion_operation(&intent).map_err(|_| {
+            refusal_detail::note("completion-operation");
+            RepositoryError::InvalidCandidate
+        })?;
+        let fingerprint = super::courier_ai::completion_fingerprint(&completion).map_err(|_| {
+            refusal_detail::note("completion-fingerprint");
+            RepositoryError::InvalidCandidate
+        })?;
         if !self.fenced {
             self.session.attempt = Some(Attempt::Completion);
         }
@@ -1711,6 +1740,9 @@ impl Actor {
 
 impl Reducer<Call> for Actor {
     fn reduce(&mut self, _: AdmissionSequence, call: Call) {
+        // One command's refusal detail must never be printed for another: every call
+        // this owner reduces starts from a cleared slot (see `refusal_detail`).
+        let _cleared = refusal_detail::take();
         // A speech-intent mark is served first and alone: no budget, heartbeat, grant
         // reconnect or committed-job dispatch, so it can neither fence nor delay the session.
         let call = match call {
@@ -1864,7 +1896,12 @@ impl Reducer<Call> for Actor {
                     self.dev(&credential, *order)
                 }))
                 .is_ok(),
-            Call::DevDirect { credential, request, order, reply } => reply
+            Call::DevDirect {
+                credential,
+                request,
+                order,
+                reply,
+            } => reply
                 .send(after_grant_reconnect(reconnected, || {
                     let history = self.dev_history.clone().ok_or_else(|| {
                         tonic::Status::permission_denied("development control is off")

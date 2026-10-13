@@ -55,6 +55,7 @@ mod qualification;
 #[cfg(test)]
 mod recovery_qualification;
 mod rest_qualification;
+mod refusal_detail;
 mod restart_qualification;
 mod room;
 mod room_code;

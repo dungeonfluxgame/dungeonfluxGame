@@ -1,5 +1,5 @@
 //! Pack-owned scene sequencing. Scripts select existing handlers, never mechanics.
-use super::{journey, model, pack};
+use super::{journey, model, pack, refusal_detail};
 use df_model::checkpoint::{Checkpoint, GameState};
 use df_protocol::common as rpc;
 use df_session::submission::RepositoryError;
@@ -779,6 +779,7 @@ impl BeatScript {
     }
     pub(super) fn current(&self, state: &GameState) -> Result<&Beat, RepositoryError> {
         let [durable] = state.narrative.active_beats.as_slice() else {
+            refusal_detail::note("beat-not-single-active");
             return Err(RepositoryError::InvalidCandidate);
         };
         let rested = state
@@ -809,10 +810,14 @@ impl BeatScript {
                 continue;
             }
             if found.replace(beat).is_some() {
+                refusal_detail::note("beat-ambiguous");
                 return Err(RepositoryError::InvalidCandidate);
             }
         }
-        found.ok_or(RepositoryError::InvalidCandidate)
+        found.ok_or_else(|| {
+            refusal_detail::note("beat-not-found");
+            RepositoryError::InvalidCandidate
+        })
     }
 }
 pub(super) fn with_script<T>(run: impl FnOnce(&BeatScript) -> T) -> T {
@@ -880,7 +885,10 @@ pub(super) fn validate_step(
             .offers
             .iter()
             .find(|o| o.effect.action() == action && o.id == selected_id)
-            .ok_or(RepositoryError::InvalidCandidate)?;
+            .ok_or_else(|| {
+                refusal_detail::note("step-offer-missing");
+                RepositoryError::InvalidCandidate
+            })?;
         let trigger = if beat.kind == BeatKind::Fight && next.kind != BeatKind::Fight {
             if journey::combat_victory(after.state())? {
                 BeatTrigger::FightWon
@@ -901,6 +909,7 @@ pub(super) fn validate_step(
         {
             Ok(())
         } else {
+            refusal_detail::note("step-transition-missing");
             Err(RepositoryError::InvalidCandidate)
         }
     })

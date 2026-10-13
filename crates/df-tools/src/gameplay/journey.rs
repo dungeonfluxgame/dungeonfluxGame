@@ -8,7 +8,7 @@ use df_types::{MemberId, OperationId};
 use prost::Message;
 use std::time::Duration;
 
-use super::{model, pack, wire};
+use super::{model, pack, refusal_detail, wire};
 
 pub(super) mod affordance;
 #[cfg(test)]
@@ -2524,11 +2524,20 @@ fn start_combat(
         .members
         .iter()
         .filter(|link| link.member.as_bytes() != &PLAYER)
-        .map(|link| link.character.ok_or(RepositoryError::InvalidCandidate))
+        .map(|link| {
+            link.character.ok_or_else(|| {
+                refusal_detail::note("combat-participant-missing-character");
+                RepositoryError::InvalidCandidate
+            })
+        })
         .chain([Ok(monster)])
         .collect::<Result<Vec<_>, _>>()?;
-    let admitted =
-        encounter_admission::admission(current, command, state, &participants).map_err(bad)?;
+    let admitted = encounter_admission::admission(current, command, state, &participants).map_err(
+        |error| {
+            refusal_detail::note("combat-admission");
+            bad(error)
+        },
+    )?;
     for _ in admitted.actors() {
         draw(operation, 20, draws, supplier)?;
     }
@@ -2563,12 +2572,15 @@ fn start_combat(
         state,
         &source,
     )
-    .map_err(bad)?
+    .map_err(|error| {
+        refusal_detail::note("combat-turn-order");
+        bad(error)
+    })?
     .to_vec();
-    let active = order
-        .first()
-        .copied()
-        .ok_or(RepositoryError::InvalidCandidate)?;
+    let active = order.first().copied().ok_or_else(|| {
+        refusal_detail::note("combat-empty-turn-order");
+        RepositoryError::InvalidCandidate
+    })?;
     state.encounters.push(EncounterState {
         id: RecordId::from_bytes(&ENCOUNTER).map_err(bad)?,
         definition: model::content("combat")?,
@@ -3215,7 +3227,9 @@ pub(super) fn stage_with_supplier(
     input: &GameInput,
     supplier: DiceSource<'_>,
 ) -> Result<Checkpoint, RepositoryError> {
-    let prepared = stage_using(current, input, supplier)?;
+    let prepared = stage_using(current, input, supplier).inspect_err(|_| {
+        refusal_detail::note("stage-using");
+    })?;
     let operation = command(input)?.operation;
     let draws = prepared
         .state()
@@ -3279,7 +3293,10 @@ pub(super) fn stage_with_supplier(
         &selector,
         &source,
     )
-    .map_err(bad)
+    .map_err(|error| {
+        refusal_detail::note("decide-command");
+        bad(error)
+    })
 }
 
 #[cfg(test)]
