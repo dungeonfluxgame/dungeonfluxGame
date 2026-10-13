@@ -81,7 +81,7 @@ In the order I would take them. One at a time, as agreed.
 | SES-06 | 3 | When the text does arrive, some of it is refused by validation and replaced by table text: 17 of 54 slots in playthrough 1, 19 of 55 in playthrough 3, 11 of 55 and 3 of 54 in later starts. | P1, P3, SR, SC | |
 | SES-07 | 3 | A choice had to be pressed twice: the first press showed "Waiting for the game server…" and the same choice was offered again. | SR (ZODAPO) | Fixed `56b69c7` (browser check pending) |
 | SES-08 | 2 | A failed start-up leaves `df_game` and `df_local_demo` behind, so the next start refuses with `retained_access_unavailable`. | EARLIER | Fixed `7d0f493`: a failed start-up releases its session |
-| SES-09 | 4 | "SESSION lease renewal failing (Unavailable); retrying" logged once in a session's first minute; it recovered. | SC | Part `5272a175`: start-up retries its first database connection for up to 20 s |
+| SES-09 | 4 | "SESSION lease renewal failing (Unavailable); retrying" logged once in a session's first minute; it recovered. | SC | |
 | SES-10 | 4 | With the same seed the story text differs between starts (two different titles for one seed), so a seed does not reproduce a session's wording. | SC | |
 | SES-11 | 3 | The battle scene drives the machine hard enough to throttle the processor ("its downclocking the cpu"). Sessions run the scan at level of detail 1 only because the session launcher sets it; the server default is still 0. | OWNER | Fixed `97f9d1e`: default level of detail is 1 |
 
@@ -475,6 +475,7 @@ One full game played by hand in a browser, at the owner's request ("scour the en
 | OBS-58 | 2 | After the server process is killed (not shut down), starting it again on the same database is refused with `owned gameplay admission refused: live_owner RevisionConflict` for at least two minutes, so a crashed game cannot be resumed. A clean `dev shutdown` followed by a restart resumes the same room at once. Found while restarting test servers on 2026-10-13. | SES-08 | Fixed `761b5356`, `a7673dd5`: start-up waits out a dead owner's lease (up to 300 s) and takes the game back; a second server against a live game still exits. (The first version of this fix broke every action until `a7673dd5`.) Not yet tried against a real crash |
 | OBS-59 | 4 | The two looks offered on the creation form are named "Greatsword hero" and "Second hero". | CRE-03 | Fixed `da21f17b`. Read back from the running page: "Red beard, greatsword" |
 | OBS-60 | 3 | The server's new log lines are out of order at a fight's start (the opening attacks are printed before the initiative order and the turn lines), and beginning the story is not logged. | DEV-02 | Fixed `aa982f70`. Seen in a running game's log: choice, initiative, then each turn with its moves and attacks; beginning the story is logged |
+| OBS-61 | 3 | A server started right after its database was created sometimes exited with "adventure database connection unavailable or deadline expired"; the same command ten seconds later worked. | SES-08 | Fixed `5272a175`: the first connection is retried for up to 20 s |
 
 ### Confirmed working in this game
 
