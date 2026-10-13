@@ -52,7 +52,16 @@ const MAX_BILLBOARDS: usize = 112;
 const BOLT_STRIDE: usize = 12;
 const MAX_BOLTS: usize = 8;
 const NEAR: f32 = 0.1;
+/// The share of the camera's distance to its target that is kept clear of scan geometry; the
+/// scan fades in over the next 40% of that (see the splat shader), so it is whole from 0.59.
+const NEAR_CLEAR_SHARE: f32 = 0.42;
 const FAR: f32 = 150.0;
+/// The tilt-shift at rest: the blur radius far outside the sharp band, in 1080p pixels; how far
+/// beyond the band's edge the blur reaches full strength, as a share of the picture's height
+/// (the shader halves it); and how much of the way the band moves toward the figures each frame.
+const REST_TILT_BLUR_PX: f32 = 10.0;
+const TILT_FALL_OFF: f32 = 0.42;
+const FOCUS_BAND_EASE: f32 = 0.12;
 /// Splats a scene may hold when its file does not say.
 pub const DEFAULT_SPLAT_CAPACITY: u32 = 2_500_000;
 const MIN_SPLAT_BUDGET: u32 = 250_000;
@@ -178,6 +187,9 @@ pub struct Renderer {
     grid_buffer: GpuBuffer,
     grid_group: GpuBindGroup,
     post_buffer: GpuBuffer,
+    /// The tilt-shift's sharp band as last drawn (centre, height), eased toward the figures'
+    /// band each frame so it never jumps when a figure walks or falls.
+    focus_band: std::cell::Cell<Option<(f32, f32)>>,
     decal_buffer: GpuBuffer,
     figure_buffer: GpuBuffer,
     bolt_buffer: GpuBuffer,
@@ -633,6 +645,7 @@ impl Renderer {
             grid_buffer,
             grid_group,
             post_buffer,
+            focus_band: std::cell::Cell::new(None),
             decal_buffer,
             figure_buffer,
             bolt_buffer,
@@ -1041,16 +1054,49 @@ impl Renderer {
             grade.highlight[2],
             0.0,
         ]);
-        // The tilt-shift blur belongs to a focus pull to a new subject only: at rest the picture is
-        // sharp edge to edge (a scan is already soft; nothing is stacked on top of it).
+        // Tilt-shift: the band of the picture the figures stand in is sharp, and the picture
+        // blurs progressively above and below it, so the eye rests on the heroes and their
+        // enemies and the far ground and the near ground read as out of focus. A focus pull to
+        // a new subject adds to the blur for a moment.
         let pull = ((frame.feel.focus_blur_factor - 1.0)
             / (crate::battle::feel::FOCUS_PULL_BLUR_FACTOR - 1.0))
             .clamp(0.0, 1.0);
+        let view = frame.camera.view();
+        let view_proj = frame
+            .camera
+            .projection(size.0 as f32 / size.1 as f32, NEAR, FAR)
+            .mul(&view);
+        let wanted = crate::battle::figure_clear::focus_band(
+            frame
+                .figures
+                .iter()
+                .filter(|figure| figure.alpha > 0.05)
+                .filter_map(|figure| {
+                    crate::battle::figure_clear::figure_box(
+                        &view,
+                        &view_proj,
+                        figure.position,
+                        figure.height_m,
+                    )
+                }),
+        );
+        let band = match (self.focus_band.get(), wanted) {
+            (Some((centre, height)), Some((to_centre, to_height))) => Some((
+                centre + (to_centre - centre) * FOCUS_BAND_EASE,
+                height + (to_height - height) * FOCUS_BAND_EASE,
+            )),
+            (_, wanted) => wanted,
+        };
+        self.focus_band.set(band);
+        let (centre, height, rest_px) = match band {
+            Some((centre, height)) => (centre, height, REST_TILT_BLUR_PX * size.1 as f32 / 1080.0),
+            None => (0.52, 0.5, 0.0),
+        };
         data.extend_from_slice(&[
-            0.52,
-            0.5,
-            0.4,
-            3.2 * crate::battle::feel::FOCUS_PULL_BLUR_FACTOR * pull,
+            centre,
+            height,
+            TILT_FALL_OFF,
+            rest_px + 3.2 * crate::battle::feel::FOCUS_PULL_BLUR_FACTOR * pull,
         ]);
         data.extend_from_slice(&[
             0.62,
@@ -1774,7 +1820,10 @@ impl Renderer {
             sort_range_m: 900.0,
             viewport: (lo.0 as f32, lo.1 as f32),
             focal_px,
-            near_cull_m: 0.2,
+            // Nothing of the scan is drawn in the nearest part of the way to what the camera
+            // looks at: the field and the figures lie beyond 0.7 of that distance in every
+            // shot, and what stands nearer is a tree or a bank in front of the lens.
+            near_cull_m: (pose.distance * NEAR_CLEAR_SHARE).max(0.2),
             min_extent_px: 1.0,
             min_contribution: quality.min_contribution,
             exposure_gain: grade.exposure_ev.exp2(),
@@ -1787,6 +1836,7 @@ impl Renderer {
             projection_m14: projection.0[14],
             depth_bias_m: layer.depth_bias_m,
             sky: grade.sky,
+            rim_m: layer.rim_m.unwrap_or(0.0),
             clip: layer.clip.map_or([0.0; 4], |(height, radius)| {
                 [height, radius * radius, centre.x, centre.z]
             }),

@@ -299,6 +299,7 @@ impl BattleStage {
                 grade: SplatGrade::NEUTRAL,
                 depth_bias_m: 0.15,
                 clip: None,
+                rim_m: None,
             })
         } else {
             scene.splat.clone()

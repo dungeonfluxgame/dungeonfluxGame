@@ -525,8 +525,8 @@ fn blurred(uv: vec2<f32>) -> vec3<f32> {
     }
     var sum = fetch(uv);
     var weight = 1.0;
-    for (var k = 1; k <= 10; k = k + 1) {
-        let t = f32(k) / 10.0;
+    for (var k = 1; k <= 18; k = k + 1) {
+        let t = f32(k) / 18.0;
         let angle = f32(k) * 2.39996;
         let o = vec2<f32>(cos(angle), sin(angle)) * sqrt(t) * radius * post.shake.zw;
         sum = sum + fetch(uv + o);

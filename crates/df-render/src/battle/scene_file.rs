@@ -248,6 +248,10 @@ struct FileSplat {
     /// does not fill the view of the arena.
     #[serde(default)]
     clip: Option<FileClip>,
+    /// How far from the grid centre the scan is drawn. A capture ends in a ragged rim of coarse
+    /// grey splats; the scan fades out over the last quarter of this radius instead of showing it.
+    #[serde(default)]
+    rim_m: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -358,6 +362,8 @@ pub struct SplatLayer {
     pub depth_bias_m: f32,
     /// `(height, radius)`: splats above `height` within `radius` of the grid centre are not drawn.
     pub clip: Option<(f32, f32)>,
+    /// The scan fades out over the last quarter of this distance from the grid centre.
+    pub rim_m: Option<f32>,
 }
 
 /// Where a scene may be shown from: `PrivateTestOnly` scans have no licence and are used only
@@ -684,6 +690,9 @@ fn validate_splat(splat: FileSplat) -> Result<SplatLayer, SceneFileError> {
     {
         return Err(SceneFileError::Splat("detail radius or depth bias"));
     }
+    if splat.rim_m.is_some_and(|rim| !positive(rim, 500.0)) {
+        return Err(SceneFileError::Splat("rim"));
+    }
     let clip = match splat.clip {
         Some(clip) if clip.above_m.is_finite() && positive(clip.radius_m, 500.0) => {
             Some((clip.above_m, clip.radius_m))
@@ -710,6 +719,7 @@ fn validate_splat(splat: FileSplat) -> Result<SplatLayer, SceneFileError> {
         grade,
         depth_bias_m: splat.depth_bias_m.unwrap_or(0.15),
         clip,
+        rim_m: splat.rim_m,
     })
 }
 

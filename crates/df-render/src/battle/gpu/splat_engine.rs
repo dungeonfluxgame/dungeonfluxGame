@@ -124,6 +124,8 @@ pub struct FrameParams {
     pub projection_m14: f32,
     pub depth_bias_m: f32,
     pub sky: [f32; 3],
+    /// The distance from the pool centre at which the scan has faded out (0: drawn everywhere).
+    pub rim_m: f32,
     /// Ceiling cut: `[height, radius squared, centre x, centre z]`, radius 0 for none.
     pub clip: [f32; 4],
     /// The full-resolution scene target the scan is composited into.
@@ -747,7 +749,7 @@ impl SplatEngine {
             frame.depth_bias_m,
             self.depth_threshold,
         ]);
-        data.extend_from_slice(&[frame.sky[0], frame.sky[1], frame.sky[2], 0.0]);
+        data.extend_from_slice(&[frame.sky[0], frame.sky[1], frame.sky[2], frame.rim_m]);
         data.extend_from_slice(&frame.clip);
         for index in 0..crate::battle::figure_clear::MAX_FIGURES {
             data.extend_from_slice(&frame.figures.get(index).copied().unwrap_or([0.0; 8]));

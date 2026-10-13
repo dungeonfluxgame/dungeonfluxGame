@@ -151,7 +151,10 @@ fn inside(rect: Rect, area: Rect) -> bool {
 /// The pose with heading `yaw_deg` that holds everything in `input` inside [`REST_AREA`] from as
 /// near as the scene's wide shot allows.
 fn fit(input: &RestInput<'_>, yaw_deg: f32, raise_deg: f32) -> CameraPose {
-    let pitch_deg = (input.hint.pitch_deg.clamp(MIN_PITCH_DEG, MAX_PITCH_DEG) + raise_deg)
+    // A scene may ask for a steeper wide shot than the usual upper limit (a wood whose trunks
+    // stand in the field is read from higher up); the raised limit still bounds it.
+    let own_limit = MAX_PITCH_DEG.max(input.hint.pitch_deg.min(MAX_RAISED_PITCH_DEG));
+    let pitch_deg = (input.hint.pitch_deg.clamp(MIN_PITCH_DEG, own_limit) + raise_deg)
         .min(MAX_RAISED_PITCH_DEG);
     let yaw = yaw_deg.to_radians();
     let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());

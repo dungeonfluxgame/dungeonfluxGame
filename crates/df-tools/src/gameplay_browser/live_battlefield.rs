@@ -630,6 +630,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             grade: battle::SplatGrade::NEUTRAL,
             depth_bias_m: 0.15,
             clip: None,
+            rim_m: None,
         });
     }
     let scene_for_choice = scene.clone();

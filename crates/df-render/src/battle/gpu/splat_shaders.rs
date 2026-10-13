@@ -27,7 +27,7 @@ struct U {
     tint: vec4<f32>,      // rgb tint
     pool: vec4<f32>,      // lit pool centre x, z
     depth: vec4<f32>,     // projection m10, m14, depth bias metres, resolve alpha threshold
-    sky: vec4<f32>,       // sky colour behind the scan (rgb)
+    sky: vec4<f32>,       // sky colour behind the scan (rgb), rim radius metres (0: none)
     clip: vec4<f32>,      // cut height, cut radius squared, centre x, centre z (radius 0: no cut)
     // Figures on the field, two vectors each: the screen box (left, bottom, right, top in device
     // coordinates), then view depth in metres and 1 when the slot is used.
@@ -63,7 +63,16 @@ fn project_splat(i: u32, out: ptr<function, array<u32, 8>>, key: ptr<function, u
         }
     }
     let rgba = unpack4x8unorm(records[b + 3u]);
-    let opacity = rgba.a;
+    // Scan geometry close to the lens (a branch, a trunk, leaves in front of the camera) fades
+    // out over the 40% of depth beyond the near cull, so the camera never looks at the field
+    // through a blurred mass and nothing pops at a hard edge.
+    var opacity = rgba.a * smoothstep(u.viewport.w, u.viewport.w * 1.4, -vc.z);
+    // A capture ends in a ragged rim of coarse grey splats. A scene that names a rim radius
+    // fades the scan out over the last quarter of it, into the sky behind.
+    if (u.sky.w > 0.0) {
+        let from_centre = length(pos.xz - u.pool.xy);
+        opacity = opacity * (1.0 - smoothstep(0.75 * u.sky.w, u.sky.w, from_centre));
+    }
     if (opacity < u.limits.z) {
         return false;
     }

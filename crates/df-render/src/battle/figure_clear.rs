@@ -79,6 +79,32 @@ pub fn figure_box(view: &Mat4, view_proj: &Mat4, feet: Vec3, height_m: f32) -> O
     Some(FigureBox { rect, depth_m })
 }
 
+/// Room kept sharp above the highest head and below the lowest feet, as a share of the picture's
+/// height, and the least height of the sharp band (one figure in a close shot still has room).
+pub const FOCUS_PAD: f32 = 0.05;
+pub const FOCUS_LEAST_BAND: f32 = 0.3;
+
+/// The band of the picture the tilt-shift keeps sharp: from above the highest figure's head to
+/// below the lowest figure's feet, as `(centre, height)` in shares of the picture's height
+/// measured from the top. `None` when no figure is on the screen (nothing is blurred then).
+pub fn focus_band(boxes: impl IntoIterator<Item = FigureBox>) -> Option<(f32, f32)> {
+    let (mut top, mut bottom) = (f32::MAX, f32::MIN);
+    for figure in boxes {
+        // Device y points up; the picture is measured from its top.
+        top = top.min(0.5 - 0.5 * figure.rect[3]);
+        bottom = bottom.max(0.5 - 0.5 * figure.rect[1]);
+    }
+    if top > bottom {
+        return None;
+    }
+    let top = (top - FOCUS_PAD).clamp(0.0, 1.0);
+    let bottom = (bottom + FOCUS_PAD).clamp(0.0, 1.0);
+    if bottom <= top {
+        return None;
+    }
+    Some(((top + bottom) * 0.5, (bottom - top).max(FOCUS_LEAST_BAND)))
+}
+
 /// Whether a splat takes no part in the depth that figures are tested against: it touches some
 /// figure's box but is not truly between the camera and that figure, and is not truly between the
 /// camera and any other.
@@ -156,5 +182,26 @@ mod tests {
         assert!(figure.rect[0] < 0.0 && figure.rect[2] > 0.0);
         assert!(figure.rect[1] < figure.rect[3]);
         assert!((figure.depth_m - 10.0).abs() < 1.5, "{}", figure.depth_m);
+    }
+
+    #[test]
+    fn the_sharp_band_spans_the_figures_with_room_and_is_absent_without_any() {
+        assert_eq!(focus_band([]), None);
+        let figure = |bottom: f32, top: f32| FigureBox {
+            rect: [-0.1, bottom, 0.1, top],
+            depth_m: 8.0,
+        };
+        // One figure from device y -0.2 (feet) to 0.2 (head): picture shares 0.4 to 0.6, padded
+        // to 0.35..0.65, which is exactly the least band.
+        let (centre, band) = focus_band([figure(-0.2, 0.2)]).unwrap();
+        assert!((centre - 0.5).abs() < 1e-6 && (band - FOCUS_LEAST_BAND).abs() < 1e-6);
+        // Enemies high in the picture and heroes low: the band holds both and all between.
+        let (centre, band) = focus_band([figure(0.3, 0.6), figure(-0.7, -0.4)]).unwrap();
+        let (top, bottom) = (centre - band * 0.5, centre + band * 0.5);
+        assert!((top - (0.2 - FOCUS_PAD)).abs() < 1e-6, "{top}");
+        assert!((bottom - (0.85 + FOCUS_PAD)).abs() < 1e-6, "{bottom}");
+        // A figure partly off the picture cannot push the band outside it.
+        let (centre, band) = focus_band([figure(-1.4, 0.9)]).unwrap();
+        assert!(centre - band * 0.5 >= 0.0 && centre + band * 0.5 <= 1.0);
     }
 }
