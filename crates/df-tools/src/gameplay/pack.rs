@@ -2375,7 +2375,14 @@ pub(super) struct BuildPackage {
 impl BuildPackage {
     /// The scores as the creation page shows them beside the package.
     pub(super) fn abilities_text(&self) -> String {
-        let [strength, dexterity, constitution, intelligence, wisdom, charisma] = self.abilities;
+        let [
+            strength,
+            dexterity,
+            constitution,
+            intelligence,
+            wisdom,
+            charisma,
+        ] = self.abilities;
         format!(
             "STR {strength} · DEX {dexterity} · CON {constitution} · INT {intelligence} · WIS {wisdom} · CHA {charisma}"
         )

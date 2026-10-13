@@ -410,10 +410,16 @@ fn each_offered_package_states_the_ability_scores_the_server_gives_its_hero() {
             let mut choices = PHONE_SHARED.to_vec();
             choices.push(("build-package", package.option_id.as_str()));
             choices.push(("portrait", appearance.option_id.as_str()));
-            let [strength, dexterity, constitution, intelligence, wisdom, charisma] =
-                pack::validate_character("Sylvie", &choices)
-                    .expect("offered package is accepted")
-                    .abilities;
+            let [
+                strength,
+                dexterity,
+                constitution,
+                intelligence,
+                wisdom,
+                charisma,
+            ] = pack::validate_character("Sylvie", &choices)
+                .expect("offered package is accepted")
+                .abilities;
             assert_eq!(
                 package.description,
                 format!(
@@ -423,7 +429,11 @@ fn each_offered_package_states_the_ability_scores_the_server_gives_its_hero() {
                 package.option_id
             );
             // Two packages with the same equipment are told apart by these scores.
-            assert!(seen.insert(package.description.clone()), "{}", package.option_id);
+            assert!(
+                seen.insert(package.description.clone()),
+                "{}",
+                package.option_id
+            );
         }
     });
 }
