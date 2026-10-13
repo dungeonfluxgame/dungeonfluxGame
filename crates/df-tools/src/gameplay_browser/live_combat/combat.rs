@@ -87,6 +87,60 @@ fn label(value: &str) -> Result<RevisionLabel, JsValue> {
     RevisionLabel::new(Some(value)).map_err(|_| invalid("offer identity invalid"))
 }
 
+fn death_save_summary(save: &rpc::DeathSaveState) -> String {
+    let state = if save.dead {
+        "Dead · "
+    } else if save.stable {
+        "Stable at 0 HP · "
+    } else {
+        ""
+    };
+    let success = if save.successes == 1 {
+        "success"
+    } else {
+        "successes"
+    };
+    let failure = if save.failures == 1 {
+        "failure"
+    } else {
+        "failures"
+    };
+    format!(
+        "{state}{} {success} · {} {failure}",
+        save.successes, save.failures,
+    )
+}
+
+fn death_save_for<'a>(
+    participant: &rpc::PartyMemberView,
+    saves: &'a [rpc::DeathSaveState],
+) -> Option<&'a rpc::DeathSaveState> {
+    saves.iter().find(|save| {
+        if participant.participant_id.is_empty() || save.participant_id.is_empty() {
+            save.name == participant.name
+        } else {
+            save.participant_id == participant.participant_id
+        }
+    })
+}
+
+fn waiting_for_current_view(
+    role: &str,
+    last_confirmed: bool,
+    request: Option<&rpc::SubmitActionRequest>,
+    offers: &[rpc::GameplayActionOffer],
+) -> bool {
+    role == "player"
+        && last_confirmed
+        && request.is_some_and(|request| {
+            request.action_kind != rpc::GameplayActionKind::SetTableSetting as i32
+                && !request.offer_id.is_empty()
+                && offers
+                    .iter()
+                    .any(|offer| offer.offer_id == request.offer_id)
+        })
+}
+
 fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Option<String>) {
     let own = view.journey.own_character.as_ref();
     let own_matches = own.map_or(0, |own| {
@@ -131,6 +185,9 @@ fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Opt
         }
         if !member.conditions.is_empty() {
             resources.push(("Conditions", member.conditions.join(", ")));
+        }
+        if let Some(save) = death_save_for(member, &combat.death_saves) {
+            resources.push(("Death saves", death_save_summary(save)));
         }
         if let Some(own) = own
             && own_matches == 1
@@ -398,6 +455,12 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         .own_character
         .as_ref()
         .is_some_and(|own| Some(own.name.as_str()) == active_name);
+    let waiting_for_view = waiting_for_current_view(
+        state.role,
+        state.last_confirmed,
+        state.last_request.as_ref(),
+        view.offers,
+    );
     let blocked = state.busy || (state.last_request.is_some() && !state.last_confirmed);
     // One clock: while the display is still presenting resolved beats the server withholds
     // offers; the phone says so instead of inviting an action the TV has not reached.
@@ -426,6 +489,7 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
             "Shared battle view"
         },
         turn_label: match (combat.finished, active_name) {
+            _ if waiting_for_view => format!("Round {} · Waiting for current view…", combat.round),
             _ if resolving && !combat.finished => {
                 format!("Round {} · On the TV now…", combat.round)
             }
@@ -435,6 +499,7 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         },
         active,
         action_empty: match (player, active_name) {
+            (true, _) if waiting_for_view => "Waiting for the current fight view.".to_owned(),
             (true, _) if resolving => "Watch the TV: the last action is playing out.".to_owned(),
             (false, _) => "Actions appear on each player's device.".to_owned(),
             (true, Some(name)) => format!("Waiting for {name}…"),
@@ -442,7 +507,7 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         },
         busy: state.busy,
         actors,
-        offers: offers(state, view, blocked)?,
+        offers: offers(state, view, blocked || waiting_for_view)?,
         rolls: rolls(combat),
     })
 }
@@ -664,6 +729,21 @@ fn publish_tactical_controls(
             &format!("Arrows {} · Bolts {}", ammunition.arrows, ammunition.bolts),
         )?;
     }
+    if waiting_for_current_view(
+        client.borrow().role,
+        client.borrow().last_confirmed,
+        client.borrow().last_request.as_ref(),
+        view.offers,
+    ) {
+        node(
+            &document,
+            &controls,
+            "p",
+            "turn-waiting",
+            "Waiting for the current fight view.",
+        )?;
+        return Ok(());
+    }
     for offer in view.offers {
         let mut offer = offer.clone();
         for group in &mut offer.input_groups {
@@ -818,5 +898,116 @@ fn handle_intent(client: &Rc<RefCell<Client>>, intent: CombatIntent) {
     ) {
         Ok(body) => send(client.clone(), body, false),
         Err(error) => crate::gameplay_browser::feedback(&client.borrow(), &error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{death_save_for, death_save_summary, waiting_for_current_view};
+    use df_protocol::common as rpc;
+
+    #[test]
+    fn accepted_offer_remains_blocked_until_a_new_view_replaces_it() {
+        let request = rpc::SubmitActionRequest {
+            action_kind: rpc::GameplayActionKind::EndTurn as i32,
+            offer_id: "old-turn".to_owned(),
+            ..Default::default()
+        };
+        let stale_view = [rpc::GameplayActionOffer {
+            offer_id: "old-turn".to_owned(),
+            ..Default::default()
+        }];
+        let current_view = [rpc::GameplayActionOffer {
+            offer_id: "next-turn".to_owned(),
+            ..Default::default()
+        }];
+
+        assert!(waiting_for_current_view(
+            "player",
+            true,
+            Some(&request),
+            &stale_view
+        ));
+        assert!(!waiting_for_current_view(
+            "player",
+            true,
+            Some(&request),
+            &current_view
+        ));
+    }
+
+    #[test]
+    fn table_setting_receipt_does_not_block_combat_offers() {
+        let request = rpc::SubmitActionRequest {
+            action_kind: rpc::GameplayActionKind::SetTableSetting as i32,
+            offer_id: "table-setting".to_owned(),
+            ..Default::default()
+        };
+        let stale_view = [rpc::GameplayActionOffer {
+            offer_id: "table-setting".to_owned(),
+            ..Default::default()
+        }];
+
+        assert!(!waiting_for_current_view(
+            "player",
+            true,
+            Some(&request),
+            &stale_view
+        ));
+    }
+
+    #[test]
+    fn death_save_summary_shows_progress_and_terminal_state() {
+        assert_eq!(
+            death_save_summary(&rpc::DeathSaveState {
+                successes: 1,
+                failures: 2,
+                ..Default::default()
+            }),
+            "1 success · 2 failures"
+        );
+        assert_eq!(
+            death_save_summary(&rpc::DeathSaveState {
+                failures: 2,
+                stable: true,
+                ..Default::default()
+            }),
+            "Stable at 0 HP · 0 successes · 2 failures"
+        );
+        assert_eq!(
+            death_save_summary(&rpc::DeathSaveState {
+                dead: true,
+                ..Default::default()
+            }),
+            "Dead · 0 successes · 0 failures"
+        );
+    }
+
+    #[test]
+    fn death_save_is_matched_by_participant_identity() {
+        let member = rpc::PartyMemberView {
+            participant_id: vec![1, 2],
+            name: "Hero".to_owned(),
+            ..Default::default()
+        };
+        let saves = [
+            rpc::DeathSaveState {
+                participant_id: vec![9],
+                name: "Hero".to_owned(),
+                failures: 2,
+                ..Default::default()
+            },
+            rpc::DeathSaveState {
+                participant_id: vec![1, 2],
+                name: "Other label".to_owned(),
+                failures: 1,
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(
+            death_save_for(&member, &saves).map(|save| save.failures),
+            Some(1)
+        );
     }
 }

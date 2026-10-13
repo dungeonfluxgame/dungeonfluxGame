@@ -262,7 +262,7 @@ fn party_portrait<'a>(view: &'a LiveView<'_>, own: &rpc::CharacterSheet) -> &'a 
 }
 
 /// Feedback and recovery controls, shown only when their condition holds.
-fn recovery(client: &Rc<RefCell<Client>>, parent: &Element) -> Result<(), JsValue> {
+fn recovery(client: &Rc<RefCell<Client>>, parent: &Element, in_fight: bool) -> Result<(), JsValue> {
     let document = client.borrow().document.clone();
     for stale in [".recovery-needed", ".live-confirm"] {
         if let Some(previous) = parent.query_selector(stale)? {
@@ -279,15 +279,20 @@ fn recovery(client: &Rc<RefCell<Client>>, parent: &Element) -> Result<(), JsValu
             node(&document, parent, "p", "feedback", "")?;
         }
     }
-    let confirm_strike = {
+    let confirm_strike = in_fight && {
         let state = client.borrow();
         let needs = recovery_needs(&state);
         state.first_attack.is_some() && (needs.lost_connection || needs.unknown_choice)
     };
     if confirm_strike {
-        let confirm = button(client, parent, "Confirm original strike", |client| {
-            replay(client, true);
-        })?;
+        let confirm = button(
+            client,
+            parent,
+            "Check that your last attack was received",
+            |client| {
+                replay(client, true);
+            },
+        )?;
         confirm.set_class_name("live-confirm");
     }
     Ok(())
@@ -299,6 +304,7 @@ fn mount_chrome(
     client: &Rc<RefCell<Client>>,
     host: &Element,
     view: &LiveView<'_>,
+    in_fight: bool,
 ) -> Result<(), JsValue> {
     let document = client.borrow().document.clone();
     if client.borrow().role != "player" {
@@ -310,7 +316,7 @@ fn mount_chrome(
             .map(|stage| stage.dock().clone())
             .ok_or_else(|| JsValue::from_str("display stage absent"))?;
         dock.set_text_content(None);
-        return recovery(client, &dock);
+        return recovery(client, &dock, in_fight);
     }
     let extras = match host.query_selector(":scope > .live-extras")? {
         Some(extras) => extras,
@@ -326,7 +332,7 @@ fn mount_chrome(
         sheet::mount_inline(client, &extras, own, portrait)?;
     }
     dialogue_recovery::mount(client, &extras, view.offers)?;
-    recovery(client, &extras)
+    recovery(client, &extras, in_fight)
 }
 
 /// A small gold badge for customised rules: top-right on the display, under the hero header on
@@ -401,7 +407,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
             Some(style::COMBAT_ART_URL.into()),
         )?);
     }
-    mount_chrome(client, &host, view)?;
+    mount_chrome(client, &host, view, screen == Screen::Combat)?;
     mount_rules_badge(client, &host, custom_rules)?;
     // PLAY-F03: the scene's rules note on its own line under the narration (see live_rules).
     live_rules::mount(&client.borrow().document, &host, &view.scene.rules_note)?;
