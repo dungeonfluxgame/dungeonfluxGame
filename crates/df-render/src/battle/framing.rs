@@ -273,7 +273,7 @@ pub fn action_shot_from(
     home_yaw: Option<f32>,
 ) -> ActionShot {
     action_shot_from_inner(
-        style, current, actor, target, also, bystanders, aspect, home_yaw, None,
+        style, current, actor, target, also, bystanders, aspect, home_yaw, None, 1.0,
     )
     .expect("unfiltered action candidates always include a pose")
 }
@@ -292,6 +292,25 @@ pub fn action_shot_from_occupancy(
     home_yaw: Option<f32>,
     occupancy: &Occupancy,
 ) -> Option<ActionShot> {
+    action_shot_from_occupancy_with_dolly(
+        style, current, actor, target, also, bystanders, aspect, home_yaw, occupancy, 0.85,
+    )
+}
+
+/// As [`action_shot_from_occupancy`], fitting and checking the pose after `dolly` is applied.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn action_shot_from_occupancy_with_dolly(
+    style: &CameraPose,
+    current: &CameraPose,
+    actor: &Body,
+    target: Option<&Body>,
+    also: &[Body],
+    bystanders: &[Body],
+    aspect: f32,
+    home_yaw: Option<f32>,
+    occupancy: &Occupancy,
+    dolly: f32,
+) -> Option<ActionShot> {
     action_shot_from_inner(
         style,
         current,
@@ -302,6 +321,7 @@ pub fn action_shot_from_occupancy(
         aspect,
         home_yaw,
         Some(occupancy),
+        dolly,
     )
 }
 
@@ -316,6 +336,7 @@ fn action_shot_from_inner(
     aspect: f32,
     home_yaw: Option<f32>,
     occupancy: Option<&Occupancy>,
+    fit_dolly: f32,
 ) -> Option<ActionShot> {
     let chest = |body: &Body| body.feet + Vec3::new(0.0, body.height_m * 0.5, 0.0);
     let other = target.copied().unwrap_or(*actor);
@@ -366,8 +387,6 @@ fn action_shot_from_inner(
         })
         .collect();
     slack_bodies.extend_from_slice(&bodies);
-    // The party close-up applies the tightest dolly after this fit.
-    let fit_dolly = if occupancy.is_some() { 0.85 } else { 1.0 };
     let fit = |swing: f32, pitch_raise: f32, distance_factor: f32| {
         let mut pose = CameraPose {
             target: focus,
@@ -400,7 +419,8 @@ fn action_shot_from_inner(
         for pitch_raise in pitch_raises {
             for distance_factor in distance_factors {
                 let pose = fit(*swing, *pitch_raise, *distance_factor);
-                let eye = pose.eye();
+                let displayed_pose = pose.dollied(fit_dolly);
+                let eye = displayed_pose.eye();
                 let occupancy_blocked = occupancy.is_some_and(|occupancy| {
                     involved.iter().any(|body| {
                         let chest = body.feet + Vec3::new(0.0, body.height_m * 0.7, 0.0);
@@ -414,9 +434,9 @@ fn action_shot_from_inner(
                 let mut blocked = if bystanders.is_empty() {
                     0
                 } else {
-                    blocked_by_bystanders(&pose, aspect, &involved, bystanders)
+                    blocked_by_bystanders(&displayed_pose, aspect, &involved, bystanders)
                 };
-                if has_line && pair_hidden(&pose, aspect, actor, &other) {
+                if has_line && pair_hidden(&displayed_pose, aspect, actor, &other) {
                     blocked += 1;
                 }
                 if chosen.is_none_or(|(least, _, _)| blocked < least) {
@@ -1012,6 +1032,36 @@ mod tests {
             assert!(
                 in_safe_area(&pushed_in, FRAMED_ASPECT, &fighter),
                 "push-in lost {fighter:?} from {shot:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn occupancy_aware_action_fit_keeps_both_fighters_framed_after_speech_push_in() {
+        let actor = body(-4.9, 3.5);
+        let target = body(4.9, -3.5);
+        let occupancy =
+            Occupancy::empty(Vec3::new(-40.0, -40.0, -40.0), 1.0, [80, 80, 80]).unwrap();
+
+        let shot = action_shot_from_occupancy_with_dolly(
+            &style(),
+            &current(0.0),
+            &actor,
+            Some(&target),
+            &[],
+            &[],
+            FRAMED_ASPECT,
+            None,
+            &occupancy,
+            0.78,
+        )
+        .expect("clear occupancy admits an action shot");
+        let speech_pose = shot.pose.dollied(0.78);
+
+        for fighter in [actor, target] {
+            assert!(
+                in_safe_area(&speech_pose, FRAMED_ASPECT, &fighter),
+                "speech push-in lost {fighter:?} from {shot:?}"
             );
         }
     }

@@ -1553,7 +1553,7 @@ impl Stage {
                     ))
                 },
                 |occupancy| {
-                    framing::action_shot_from_occupancy(
+                    framing::action_shot_from_occupancy_with_dolly(
                         &base,
                         &self.rig.pose(),
                         &actor_body,
@@ -1563,6 +1563,7 @@ impl Stage {
                         framing::FRAMED_ASPECT,
                         home_yaw,
                         occupancy,
+                        command.dolly,
                     )
                 },
             );
