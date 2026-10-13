@@ -39,7 +39,7 @@ pub(crate) const STYLES: &str = r#"
 .df-character .character-portrait{order:-1;display:block;width:100%;height:280px;margin:0 0 4px;border:12px solid transparent;border-image:url(/assets/ui/generated/panel-frame) 3.2% / 12px stretch;border-radius:0;background:url(/assets/ui/generated/portrait-hero-1-full) center 18%/cover,#162230}
 .df-character .character-portrait .portrait-bitmap,.df-character .character-portrait .portrait-fallback{display:none}
 .df-character .character-status,.df-character .character-message,.df-character .character-facts{order:90;margin-left:4px;margin-right:4px}
-.df-character .character-actions{order:99;width:100%;position:sticky;bottom:calc(78px + env(safe-area-inset-bottom));z-index:6;padding:12px 0 6px;background:linear-gradient(#05090f00,#05090f 38%)}
+.df-character .character-actions{order:99;width:100%;position:sticky;bottom:calc(78px + env(safe-area-inset-bottom));z-index:6;padding:12px 0 6px;background:linear-gradient(#05090f00,#05090f 12px);box-shadow:0 14px 0 #05090f}
 .df-character .character-actions button:enabled{min-height:60px;border:0;border-radius:0;background:url(/assets/ui/generated/button-frame) center/100% 100% no-repeat,linear-gradient(#2a2112f2,#14100af2) center/calc(100% - 26px) calc(100% - 16px) no-repeat;color:#ffe6b0;font:700 19px/1.3 var(--serif,Georgia,serif);letter-spacing:.03em;box-shadow:none}
 .df-character .character-actions button:disabled{min-height:60px;border:0;border-radius:0;background:url(/assets/ui/generated/button-frame) center/100% 100% no-repeat;opacity:.55;color:#e8cb94;font:600 18px/1.3 var(--serif,Georgia,serif)}
 .df-character .character-connection{display:none}

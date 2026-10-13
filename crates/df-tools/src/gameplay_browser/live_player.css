@@ -70,7 +70,7 @@ main .client.display{background:transparent}
 .client.player .df-campaign[data-join-phase] .join-heading{font-family:var(--serif)}
 
 /* Tab bar and menu sheet */
-.live-tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:space-around;align-items:stretch;padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:linear-gradient(180deg,#070c13ee,#05090f);border-top:1px solid #c9a35f55}
+.live-tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:space-around;align-items:stretch;padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:linear-gradient(180deg,#070c13,#05090f);border-top:1px solid #c9a35f55}
 .live-tab{flex:1;max-width:130px;min-height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:none;border:0;border-radius:6px;color:#cfc3a8;font:12px/1 var(--serif);letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
 .live-tab[hidden]{display:none}
 .live-tab-icon{width:26px;height:26px;object-fit:contain}
