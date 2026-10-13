@@ -13,9 +13,14 @@ use super::{
 use df_persistence::local_demo_scope::{self, AdventureStartup, DemoAdventure};
 use std::{
     fmt,
+    future::Future,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+const CONNECTION_DEADLINE: Duration = Duration::from_secs(20);
+const CONNECTION_ATTEMPT_DEADLINE: Duration = Duration::from_secs(2);
+const CONNECTION_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
 pub(crate) struct PreparedAdventure {
     pub(crate) directory: PathBuf,
@@ -76,13 +81,8 @@ pub(crate) async fn prepare(
     let database = configuration
         .get_dbname()
         .ok_or(StartupError::DatabaseName)?;
-    let (client, connection) = tokio::time::timeout(
-        Duration::from_secs(2),
-        configuration.connect(tokio_postgres::NoTls),
-    )
-    .await
-    .map_err(|_| StartupError::Connection)?
-    .map_err(|_| StartupError::Connection)?;
+    let (client, connection) =
+        connect_with_retry(|| configuration.connect(tokio_postgres::NoTls)).await?;
     let driver = tokio::spawn(connection);
     let result = tokio::time::timeout(
         Duration::from_secs(2),
@@ -106,6 +106,54 @@ pub(crate) async fn prepare(
     };
     select_with(settings, current, database, state, fresh)
 }
+
+async fn connect_with_retry<F, Fut, T, E>(mut connect: F) -> Result<T, StartupError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+{
+    let deadline = Instant::now() + CONNECTION_DEADLINE;
+    let mut attempt = 0;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(StartupError::Connection);
+        }
+        attempt += 1;
+        let attempt_deadline = CONNECTION_ATTEMPT_DEADLINE.min(remaining);
+        let result = tokio::time::timeout(attempt_deadline, connect()).await;
+        if let Ok(Ok(value)) = result {
+            return Ok(value);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(StartupError::Connection);
+        }
+        println!(
+            "ADVENTURE database_connect outcome=retry attempt={attempt} elapsed_ms={}",
+            CONNECTION_DEADLINE.saturating_sub(remaining).as_millis()
+        );
+        tokio::time::sleep(CONNECTION_RETRY_BACKOFF.min(remaining)).await;
+    }
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn database_connection_retries_after_two_failures() {
+    let mut attempts = 0;
+    let result = connect_with_retry(|| {
+        attempts += 1;
+        std::future::ready(match attempts {
+            1 | 2 => Err(()),
+            _ => Ok("connected"),
+        })
+    })
+    .await;
+
+    assert!(matches!(result, Ok("connected")));
+    assert_eq!(attempts, 3);
+}
+
 /// The pattern adventure is always built first; the storyteller may then rewrite its text.
 /// Whatever stops it (off, over budget, slow, refused) leaves the pattern adventure unchanged.
 async fn fresh_adventure(
