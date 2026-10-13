@@ -170,6 +170,7 @@ struct Runtime {
     walk: Option<Walk>,
     anim: Option<ActiveAnim>,
     downed: bool,
+    pending_revival: bool,
     shown_hp: Option<HitPoints>,
     /// While set, the server's newer hit points wait in `pending_hp` until the blow lands on
     /// screen (`ShowHitPoints`) or this many seconds pass.
@@ -964,6 +965,7 @@ impl Stage {
                         walk: None,
                         anim: None,
                         downed,
+                        pending_revival: false,
                         shown_hp: incoming.hit_points,
                         hp_hold_s: None,
                         pending_hp: None,
@@ -1015,6 +1017,7 @@ impl Stage {
             runtime.hp_hold_s = None;
             runtime.walk = None;
             runtime.anim = None;
+            runtime.pending_revival = false;
             if let Some(pending) = runtime.pending_hp.take() {
                 runtime.show_hp(Some(pending));
                 runtime.downed = pending.current == 0;
@@ -1060,10 +1063,9 @@ impl Stage {
         // actor is refused (and counted at play time for beats queued before it fell).
         // Being struck, healed or focused for its death save is still staged.
         if let Some(actor) = acting_token(&beat)
-            && self
-                .tokens
-                .iter()
-                .any(|runtime| &runtime.token.id == actor && runtime.downed)
+            && self.tokens.iter().any(|runtime| {
+                &runtime.token.id == actor && runtime.downed && !runtime.pending_revival
+            })
         {
             return Err(StageError::ActorDown(actor.clone()));
         }
@@ -1075,6 +1077,16 @@ impl Stage {
         {
             self.tokens[index].critical_next =
                 matches!(result, AttackResult::Hit { critical: true, .. });
+        }
+        if let Beat::Heal {
+            target,
+            target_hit_points_after: Some(current),
+            ..
+        } = &beat
+            && *current > 0
+            && let Some(index) = self.token_index(target)
+        {
+            self.tokens[index].pending_revival = true;
         }
         self.queue.push_back(beat);
         Ok(())
@@ -1725,6 +1737,10 @@ impl Stage {
                         current: current.min(maximum),
                         maximum,
                     }));
+                    if current > 0 {
+                        runtime.downed = false;
+                        runtime.pending_revival = false;
+                    }
                     runtime.hp_hold_s = None;
                     runtime.pending_hp = None;
                 }
@@ -2785,6 +2801,48 @@ mod tests {
         assert!(!fresh.is_busy(), "no walk beat for the fallen figure");
         let fallen = figure(&fresh, "enemy");
         assert!(fallen.downed);
+    }
+
+    #[test]
+    fn a_queued_heal_revives_actor_eligibility_at_its_ordered_presentation() {
+        let mut arena = stage();
+        arena.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 4), 0),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 5),
+        ]);
+        arena
+            .stage(Beat::Move {
+                actor: TokenId::new("ally"),
+                from: Cell::new(5, 4),
+                to: Cell::new(5, 2),
+            })
+            .unwrap();
+        arena
+            .stage(Beat::Heal {
+                source: TokenId::new("ally"),
+                target: TokenId::new("hero"),
+                amount: 4,
+                target_hit_points_after: Some(4),
+            })
+            .unwrap();
+        assert!(figure(&arena, "hero").downed, "the heal has not played yet");
+
+        arena
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Miss,
+                target_hit_points_after: None,
+            })
+            .unwrap();
+        assert_eq!(arena.dropped_beats(), 0);
+
+        run(&mut arena, 30.0);
+        let hero = figure(&arena, "hero");
+        assert!(!hero.downed, "the heal restores the standing presentation");
+        assert_eq!(hero.hit_points.unwrap().current, 4);
+        assert_eq!(arena.dropped_beats(), 0);
     }
 
     #[test]
