@@ -152,6 +152,12 @@ fn slot_at(position: usize) -> ActorSlot {
     }
 }
 
+fn typed_line_anchor(speaker: &str, heroes: &[Option<String>]) -> Option<usize> {
+    heroes
+        .iter()
+        .position(|name| name.as_deref() == Some(speaker))
+}
+
 fn slot_name(position: usize) -> String {
     if position < HEROES {
         format!("hero-{}", position + 1)
@@ -1252,9 +1258,28 @@ impl Figures {
         state: LineState,
         bubble: &LineBubble<'_>,
     ) -> Result<bool, JsValue> {
-        let Some(figure) = self.figures.get(position) else {
+        let anchor = if bubble.kind == BubbleKind::Typed {
+            let heroes = self
+                .figures
+                .iter()
+                .take(HEROES)
+                .map(|figure| Self::present(figure).then(|| figure.name_text.borrow().clone()))
+                .collect::<Vec<_>>();
+            typed_line_anchor(bubble.speaker, &heroes)
+        } else {
+            Some(position)
+        };
+        let Some(figure) = anchor.and_then(|position| self.figures.get(position)) else {
+            if bubble.kind == BubbleKind::Typed {
+                return self.set_typed_line_strip(id, state);
+            }
             return Ok(false);
         };
+        if bubble.kind == BubbleKind::Typed
+            && let Some(stage) = self.root.parent_element()
+        {
+            stage.remove_attribute("data-typed-strip")?;
+        }
         let existing = figure
             .bubbles
             .query_selector(&format!("[data-line-id=\"{id}\"]"))?;
@@ -1277,6 +1302,22 @@ impl Figures {
             _ => {}
         }
         Ok(opened)
+    }
+
+    fn set_typed_line_strip(&self, id: u64, state: LineState) -> Result<bool, JsValue> {
+        let Some(stage) = self.root.parent_element() else {
+            return Ok(false);
+        };
+        let line_id = id.to_string();
+        let already_shown = stage.get_attribute("data-typed-strip").as_deref() == Some(&line_id);
+        if state == LineState::Done {
+            if already_shown {
+                stage.remove_attribute("data-typed-strip")?;
+            }
+        } else if state != LineState::Closing {
+            stage.set_attribute("data-typed-strip", &line_id)?;
+        }
+        Ok(!already_shown && state != LineState::Closing && state != LineState::Done)
     }
 
     fn open_managed(
@@ -1373,5 +1414,24 @@ fn flag(element: &Element, name: &str, on: bool) -> Result<(), JsValue> {
         element.set_attribute(name, "")
     } else {
         element.remove_attribute(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::typed_line_anchor;
+
+    #[test]
+    fn typed_line_anchor_matches_the_speaking_hero() {
+        let heroes = [Some("Aria".to_owned()), Some("Bram".to_owned())];
+
+        assert_eq!(typed_line_anchor("Bram", &heroes), Some(1));
+    }
+
+    #[test]
+    fn typed_line_anchor_is_absent_when_the_hero_has_no_figure() {
+        let heroes = [Some("Aria".to_owned()), None];
+
+        assert_eq!(typed_line_anchor("Bram", &heroes), None);
     }
 }

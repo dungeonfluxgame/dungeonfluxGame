@@ -276,3 +276,6 @@
 
 /* the victory card keeps its text clear of the figures: a left column, wrapped whole */
 .tv-stage .df-aftermath .aftermath-narrative,.tv-stage .df-aftermath .aftermath-lower{max-width:58%!important;margin-right:auto;text-align:left}
+
+/* A typed line whose hero has no scene figure uses the named lower-third strip. */
+.tv-stage[data-typed-strip] .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]){opacity:1;visibility:visible;transform:translate(-50%,0);transition:opacity .45s ease,transform .45s ease,visibility 0s}
