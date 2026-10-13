@@ -393,9 +393,7 @@ fn exploration_model(
     let (_, members) = party_members(input.journey);
     let unconfirmed = !client.busy && !client.last_confirmed && client.last_request.is_some();
     let ended = input.journey.adventure_ended;
-    let choices: Vec<ExplorationChoiceModel> = if ended {
-        Vec::new()
-    } else {
+    let choices: Vec<ExplorationChoiceModel> = {
         input
             .offers
             .iter()

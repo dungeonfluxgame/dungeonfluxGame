@@ -310,10 +310,32 @@ pub(super) fn pins() -> Result<CheckpointPins, RepositoryError> {
         .map_err(invalid)?,
     })
 }
+static RUN: std::sync::RwLock<Option<RunId>> = std::sync::RwLock::new(None);
+
+fn run_identity_error<T>(_: T) -> RepositoryError {
+    super::refusal_detail::note("run-identity");
+    RepositoryError::InvalidCandidate
+}
+
+pub(super) fn install_database_run(database: &str) -> Result<(), RepositoryError> {
+    let bytes = if database.starts_with("df_gameplay_demo_next_") {
+        let digest = Sha256::digest(database.as_bytes());
+        digest[..16].try_into().map_err(run_identity_error)?
+    } else {
+        [0x42; 16]
+    };
+    *RUN.write().map_err(run_identity_error)? =
+        Some(RunId::from_bytes(&bytes).map_err(run_identity_error)?);
+    Ok(())
+}
+
 pub(super) fn basis() -> Result<Basis, RepositoryError> {
     Ok(Basis {
-        session: SessionId::from_bytes(&[0x41; 16]).map_err(invalid)?,
-        run: RunId::from_bytes(&[0x42; 16]).map_err(invalid)?,
+        session: SessionId::from_bytes(&[0x41; 16]).map_err(run_identity_error)?,
+        run: RUN
+            .read()
+            .map_err(invalid)?
+            .unwrap_or(RunId::from_bytes(&[0x42; 16]).map_err(invalid)?),
         revision: SessionRevision::new(RecoveryEpoch::new(1).map_err(invalid)?, 0),
     })
 }

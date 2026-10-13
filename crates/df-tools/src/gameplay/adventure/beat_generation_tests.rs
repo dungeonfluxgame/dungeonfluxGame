@@ -260,7 +260,7 @@ fn assert_labels_agree(current: &df_model::checkpoint::Checkpoint, kind: &str, s
     assert_eq!(display, phone, "{kind} {step}");
 }
 /// A peaceful chapter ends through submitted actions only: one resolution, one epilogue, then an
-/// end card that accepts nothing. The TV's choice labels are the phones' authored labels.
+/// end card that offers a new adventure. The TV's choice labels are the phones' authored labels.
 #[test]
 fn peaceful_ending_resolves_once_closes_on_the_end_card_and_shows_the_same_labels_on_tv() {
     let tables = tables();
@@ -381,9 +381,14 @@ fn peaceful_ending_resolves_once_closes_on_the_end_card_and_shows_the_same_label
                 journey::phase(&persisted).unwrap(),
                 rpc::JourneyPhase::Complete
             );
-            assert!(
-                offered(&persisted).is_empty(),
-                "{kind} end card offers nothing yet"
+            assert_eq!(
+                super::super::beat_script_runtime::view_offers(&persisted, native::first())
+                    .unwrap()
+                    .into_iter()
+                    .map(|(kind, _, _)| kind)
+                    .collect::<Vec<_>>(),
+                vec![rpc::GameplayActionKind::StartNewAdventure],
+                "{kind} end card offers the next adventure"
             );
             assert_eq!(
                 super::super::beat_script::with_script(|script| script

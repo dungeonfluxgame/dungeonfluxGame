@@ -213,7 +213,7 @@ fn print_help() {
          (direct edits need the milestone 3 proof); see dev describe.\n\
          \n\
          actions: begin ask escort defend move attack second-wind end-turn dash dodge\n\
-                  disengage stand pick-up short-rest inn resolve\n\
+                  disengage stand pick-up short-rest inn resolve new-adventure\n\
          one JSON document per command on stdout; errors are JSON on stderr.",
     );
 }

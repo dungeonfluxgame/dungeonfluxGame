@@ -2276,12 +2276,14 @@ fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<String> {
 
 // Startup installs one immutable revision before constructing any game state. Qualification
 // deliberately leaves this empty: all mechanics then use the compiled rules baseline.
-static ACTIVE: std::sync::OnceLock<std::sync::Arc<LoadedPack>> = std::sync::OnceLock::new();
+static ACTIVE: std::sync::RwLock<Option<std::sync::Arc<LoadedPack>>> = std::sync::RwLock::new(None);
 
 pub(super) fn install(loaded: LoadedPack) -> Result<(), io::Error> {
-    ACTIVE
-        .set(std::sync::Arc::new(loaded))
-        .map_err(|_| io::Error::other("gameplay pack already installed"))
+    *ACTIVE
+        .write()
+        .map_err(|_| io::Error::other("gameplay pack lock poisoned"))? =
+        Some(std::sync::Arc::new(loaded));
+    Ok(())
 }
 
 pub(super) fn active() -> Option<std::sync::Arc<LoadedPack>> {
@@ -2289,7 +2291,12 @@ pub(super) fn active() -> Option<std::sync::Arc<LoadedPack>> {
     if let Some(loaded) = TEST_ACTIVE.with(|slot| slot.borrow().clone()) {
         return Some(loaded);
     }
-    ACTIVE.get().cloned()
+    // Writers only swap a fully constructed immutable Arc. Even a poisoned lock retains
+    // that revision; poisoning must never select the qualification rules fallback.
+    ACTIVE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 #[cfg(test)]
@@ -2730,6 +2737,9 @@ pub(super) fn destination_label() -> String {
 
 pub(super) fn offer_label(kind: df_protocol::common::GameplayActionKind) -> String {
     use df_protocol::common::GameplayActionKind as Action;
+    if kind == Action::StartNewAdventure {
+        return "Start a new adventure".to_owned();
+    }
     with_content(|pack| {
         let labels = &pack.offer_labels;
         match kind {

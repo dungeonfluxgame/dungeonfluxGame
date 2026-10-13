@@ -3,6 +3,8 @@
 //! No production bootstrap, arbitrary scope constructor, or hosted identity is provided.
 mod adventure;
 mod recovery;
+mod restart;
+pub use restart::{ensure_run_database, retain_run_successor, run_successor};
 mod seats;
 pub use seats::{
     LocalReclaimedSeat, LocalRoomSeat, LocalSeatReclaim, SEAT_AWAY_MILLIS, SeatReclaimRefusal,

@@ -74,6 +74,7 @@ const THREAD_EVENTS: &[(&str, &str)] = &[
 pub(super) const CONTENT_ENTRIES: &[&str] = &[
     "room",
     "join-room",
+    "start-new-adventure",
     "joined-player",
     "dwarf-fighter-soldier",
     "create-character",
@@ -685,6 +686,20 @@ pub(super) fn offered(
     // The machine's state decides which kinds of offer may be built; each
     // branch below only builds labels and inputs for kinds it accepts.
     let state = session_machine::SessionState::of(current)?;
+    if matches!(
+        state,
+        session_machine::SessionState::Ended | session_machine::SessionState::Preparing
+    ) {
+        player_entity(member, current)?;
+        return Ok(if state == session_machine::SessionState::Ended {
+            vec![(
+                rpc::GameplayActionKind::StartNewAdventure,
+                "Start a new adventure".to_owned(),
+            )]
+        } else {
+            Vec::new()
+        });
+    }
     if tactical::present(current.state()) {
         if state == session_machine::SessionState::Fight {
             return tactical::offered(current, member);
@@ -711,6 +726,16 @@ fn authored_offered(
     member: MemberId,
 ) -> Result<Vec<(rpc::GameplayActionKind, String)>, RepositoryError> {
     super::beat_script::admit_offers(current, handler_offered(current, member)?)
+}
+
+pub(super) fn new_adventure_requested(current: &Checkpoint) -> bool {
+    current.state().facts.iter().any(|fact| {
+        matches!(&fact.value, FactValue::ContentEvent { definition, .. }
+            if definition.entry.as_str() == "start-new-adventure")
+            && current.state().decisions.iter().any(|decision| {
+                decision.operation == fact.operation && decision.facts.contains(&fact.id)
+            })
+    })
 }
 
 fn handler_offered(
@@ -860,7 +885,7 @@ fn handler_offered(
             result
         }
         // The end card accepts nothing, so it offers nothing.
-        State::Ended => vec![],
+        State::Ended | State::Preparing => vec![],
     };
     Ok(result)
 }
@@ -2858,6 +2883,42 @@ fn stage_using(
     {
         refusal_detail::note("combat-stale-basis");
         return Err(RepositoryError::InvalidCandidate);
+    }
+    if kind == rpc::GameplayActionKind::StartNewAdventure {
+        let state = session_machine::SessionState::of(current)?;
+        if session_machine::next(state, session_machine::Event::NewAdventure).is_err()
+            || !targets.is_empty()
+            || !submitted_choices.is_empty()
+        {
+            refusal_detail::note("new-adventure-machine");
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        let mut basis = current.basis();
+        basis.revision = basis.revision.next_sequence().map_err(|_| {
+            refusal_detail::note("new-adventure-revision");
+            RepositoryError::InvalidCandidate
+        })?;
+        let accepted = rpc::AcceptedAction {
+            phase: rpc::JourneyPhase::Complete as i32,
+            ..Default::default()
+        };
+        return finish(
+            current,
+            basis,
+            current.state().clone(),
+            command.operation,
+            Vec::new(),
+            DecisionContent {
+                entry: "start-new-adventure",
+                semantic: Some(hex(&accepted.encode_to_vec())),
+                policy: THREAD_POLICY,
+                audience: AudienceScope::Shared,
+                reaction: None,
+                escort_target: None,
+                objective_command: None,
+                script_choice: None,
+            },
+        );
     }
     let selected = super::beat_script_runtime::select(current, kind, submitted_choices)?;
     // The forward state machine gates every command before any handler runs:

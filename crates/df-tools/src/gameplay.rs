@@ -37,6 +37,8 @@ mod line_cleanup;
 mod living_scenes;
 mod model;
 mod music_assets;
+#[cfg(test)]
+mod new_adventure_tests;
 mod npc_dossier;
 #[cfg(test)]
 mod npc_dossier_live_tests;
@@ -60,6 +62,7 @@ mod refusal_detail;
 mod restart_qualification;
 mod room;
 mod room_code;
+mod run_restart;
 mod scene_mood;
 mod session_recovery;
 mod shot;
@@ -493,8 +496,8 @@ async fn player(join_scene_asset: Option<&str>) -> Html<String> {
         false,
     )
 }
-async fn display(State(state): State<PageState>) -> Html<String> {
-    page(
+async fn display(State(state): State<PageState>) -> Result<Html<String>, axum::http::StatusCode> {
+    let Html(body) = page(
         false,
         Some(state.display),
         state.battle_scene.as_deref(),
@@ -502,7 +505,19 @@ async fn display(State(state): State<PageState>) -> Html<String> {
         state.battle_fps,
         state.splat_lod,
         state.battle_grid,
-    )
+    );
+    let run_id = hex(model::basis()
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+        .run
+        .as_bytes());
+    Ok(Html(body.replace(
+        "id=\"display\"",
+        &format!(
+            "id=\"display\" data-run=\"{}\" data-run-id=\"{run_id}\" data-room=\"{}\"",
+            state.run_identity,
+            journey::room_code()
+        ),
+    )))
 }
 fn page(
     player: bool,
@@ -560,7 +575,7 @@ async fn credits() -> Html<&'static str> {
 /// argument keeps the fixed loopback address, 290-second limit, and small connection,
 /// stream, and call bounds the qualification harnesses were written against.
 pub async fn serve(
-    #[cfg(windows)] mut console_stop: tokio::sync::watch::Receiver<bool>,
+    #[cfg(windows)] console_stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(command) = std::env::args_os().nth(1)
         && (command == "--campaign-run" || command == "--campaign-status")
@@ -584,8 +599,21 @@ pub async fn serve(
             command == "--simulate-campaign",
         );
     }
+    run_restart::serve(
+        #[cfg(windows)]
+        console_stop,
+    )
+    .await
+}
+
+async fn serve_run(
+    #[cfg(windows)] mut console_stop: watch::Receiver<bool>,
+    database: tokio_postgres::Config,
+    first_run: bool,
+    fresh_seed: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
     let interactive = std::env::args().nth(4).is_none();
-    let adventure_settings = if interactive {
+    let mut adventure_settings = if interactive {
         Some(startup_configuration::adventure_settings(
             startup_configuration::AdventureInputs::from_environment(),
             &std::env::current_dir()?,
@@ -593,6 +621,9 @@ pub async fn serve(
     } else {
         None
     };
+    if fresh_seed && let Some(settings) = adventure_settings.as_mut() {
+        settings.seed = None;
+    }
     let mut generated_adventure: Option<adventure::startup::PreparedAdventure> = None;
     // Names the server run for pages that keep a seat; empty (no check) in qualification.
     let mut run_identity = String::new();
@@ -614,7 +645,9 @@ pub async fn serve(
         std::path::Path::new(&web_root),
         std::path::Path::new(&asset_root),
     )?;
-    home_theme::install(std::path::Path::new(&asset_root))?;
+    if first_run {
+        home_theme::install(std::path::Path::new(&asset_root))?;
+    }
     let splat_directory = startup_configuration::splat_directory(
         std::env::var("DF_GAMEPLAY_SPLAT_DIR"),
         &std::path::Path::new(&asset_root).join("../splat"),
@@ -622,7 +655,9 @@ pub async fn serve(
     )?;
     let battle_scene =
         startup_configuration::battle_scene(std::env::var("DF_GAMEPLAY_BATTLE_SCENE"))?;
-    journey::tactical::force_scene(battle_scene.as_deref()).map_err(std::io::Error::other)?;
+    if first_run {
+        journey::tactical::force_scene(battle_scene.as_deref()).map_err(std::io::Error::other)?;
+    }
     // The display stages every fight on the scene the server resolved, which can be a newer
     // revision of the id asked for (a scan's collider-authored grid).
     let battle_scene = journey::tactical::forced_scene().map(str::to_owned);
@@ -637,7 +672,9 @@ pub async fn serve(
             test.foe.as_deref().unwrap_or("the adventure's own")
         );
     }
-    journey::tactical::force_test_fight(test_fight).map_err(std::io::Error::other)?;
+    if first_run {
+        journey::tactical::force_test_fight(test_fight).map_err(std::io::Error::other)?;
+    }
     let battle_fps = startup_configuration::battle_fps(std::env::var("DF_GAMEPLAY_BATTLE_FPS"))?;
     let splat_lod = startup_configuration::splat_lod(std::env::var("DF_GAMEPLAY_SPLAT_LOD"))?;
     let battle_grid = startup_configuration::battle_grid(std::env::var("DF_GAMEPLAY_BATTLE_GRID"))?;
@@ -665,12 +702,21 @@ pub async fn serve(
     } else {
         startup_configuration::SessionSettings::qualification()
     };
-    join_link::install(&settings.join_origin)?;
+    if first_run {
+        join_link::install(&settings.join_origin)?;
+    }
+    let preparation = if interactive {
+        Some(run_restart::preparing(settings.listen, settings.allowed_origins.clone()).await?)
+    } else {
+        None
+    };
     if interactive {
         let rating = startup_configuration::content_rating_setting(std::env::var(
             "DF_GAMEPLAY_CONTENT_RATING",
         ))?;
-        startup_configuration::install_content_rating(rating)?;
+        if first_run {
+            startup_configuration::install_content_rating(rating)?;
+        }
         println!("{}", rating.startup_line());
     }
     let storyteller = std::sync::Arc::new(if interactive {
@@ -718,7 +764,7 @@ pub async fn serve(
             | startup_configuration::AdventureMode::Campaign => {
                 let mut prepared = adventure::startup::prepare(
                     settings,
-                    &database_config()?,
+                    &database,
                     &std::env::current_dir()?,
                     &storyteller,
                 )
@@ -823,15 +869,13 @@ pub async fn serve(
         span.finish_unmeasured("loaded");
         // Every run has its own room code, derived from its database so a restart keeps it.
         let mut loaded = loaded;
-        let run = database_config()?
-            .get_dbname()
-            .unwrap_or_default()
-            .to_owned();
+        let run = database.get_dbname().unwrap_or_default().to_owned();
         loaded.pack.room_code = room_code::select(
             room_code::pinned(std::env::var("DF_GAMEPLAY_ROOM_CODE"))?,
             &run,
         );
         run_identity = room_code::run_identity(&run, &loaded.pack_revision.to_hex());
+        run_restart::install_identity(&run_identity)?;
         println!("ROOM {}", loaded.pack.room_code);
         pack::install(loaded)?;
     }
@@ -892,6 +936,8 @@ pub async fn serve(
     let rest_budget = rest_phase
         .map(rest_qualification::call_budget)
         .transpose()?;
+    model::install_database_run(database.get_dbname().ok_or("run database missing")?)
+        .map_err(|_| io::Error::other("run identity refused"))?;
     let cold =
         journey::initial().map_err(|_| io::Error::other("gameplay baseline validation failed"))?;
     let plates_enabled =
@@ -912,7 +958,7 @@ pub async fn serve(
         model::random::<32>().map_err(|_| io::Error::other("local grant unavailable"))?;
     let display_credential =
         model::random::<32>().map_err(|_| io::Error::other("local grant unavailable"))?;
-    let database = database_config()?;
+
     let (mut grant_client, grant_connection) = tokio::time::timeout(
         Duration::from_secs(2),
         database.connect(tokio_postgres::NoTls),
@@ -1143,6 +1189,14 @@ pub async fn serve(
         closed.map_err(|_| io::Error::other("native setup driver close failed"))?;
         released.map_err(|_| io::Error::other("setup exact-fence release failed"))?;
         return Err(io::Error::other("native recovery configuration refused").into());
+    }
+    if let Some(preparation) = preparation {
+        preparation.abort();
+        if let Err(error) = preparation.await
+            && !error.is_cancelled()
+        {
+            return Err(error.into());
+        }
     }
     let listener = match tokio::net::TcpListener::bind(settings.listen).await {
         Ok(listener) => listener,
@@ -1493,6 +1547,7 @@ pub async fn serve(
         }
         return Err(io::Error::other("actor startup handoff refused").into());
     }
+    let mut restart_updates = receiver.clone();
     let service = Service {
         actor: sender.clone(),
         updates: receiver,
@@ -1721,9 +1776,18 @@ pub async fn serve(
     };
     #[cfg(not(windows))]
     let console_stopped = std::future::pending::<()>();
+    let mut new_adventure = false;
     let outcome: Result<(), Box<dyn std::error::Error>> = {
         tokio::select! {
             result=grpc=>result.map_err(Into::into),result=axum::serve(listener,router)=>result.map_err(Into::into),
+            _=async {
+                loop {
+                    if journey::new_adventure_requested(&restart_updates.borrow()) { break; }
+                    if restart_updates.changed().await.is_err() { std::future::pending::<()>().await; }
+                }
+                // Publish preparation and return the receipt before retiring transports.
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }=>{ new_adventure = true; Ok(()) },
             result=tokio::signal::ctrl_c()=>result.map_err(Into::into),
             _=console_stopped=>Ok(()),
             _=termination=>Ok(()),
@@ -1919,7 +1983,8 @@ pub async fn serve(
             courier_reductions.load(std::sync::atomic::Ordering::SeqCst),
         )?;
     }
-    outcome
+    outcome?;
+    Ok(new_adventure)
 }
 
 async fn close_unstarted_actor(mut actor: actor::Actor) -> Result<(), io::Error> {

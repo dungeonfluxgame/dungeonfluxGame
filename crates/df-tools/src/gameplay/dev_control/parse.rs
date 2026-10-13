@@ -64,6 +64,7 @@ pub(super) enum PlayAction {
     ShortRest,
     ChooseInn,
     ResolveErrand,
+    NewAdventure,
 }
 
 /// Maps one explicit action word to its engine kind. There is no free-text
@@ -87,6 +88,7 @@ pub(super) fn parse_action(text: &str) -> Result<PlayAction, String> {
         "short-rest" => PlayAction::ShortRest,
         "inn" | "choose-inn" => PlayAction::ChooseInn,
         "resolve" | "resolve-errand" => PlayAction::ResolveErrand,
+        "new-adventure" => PlayAction::NewAdventure,
         _ => return Err(format!("unknown action {text:?}; see dev describe")),
     })
 }
@@ -112,6 +114,7 @@ impl PlayAction {
             Self::ShortRest => rpc::GameplayActionKind::ShortRest,
             Self::ChooseInn => rpc::GameplayActionKind::ChooseHarborScene,
             Self::ResolveErrand => rpc::GameplayActionKind::ResolveErrand,
+            Self::NewAdventure => rpc::GameplayActionKind::StartNewAdventure,
         }
     }
 

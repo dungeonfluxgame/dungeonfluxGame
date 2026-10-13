@@ -67,6 +67,7 @@ pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
     Some(match entry {
         "script-choice" => rpc::GameplayActionKind::ExamineHarborSeal,
         "resolve-errand" => rpc::GameplayActionKind::ResolveErrand,
+        "start-new-adventure" => rpc::GameplayActionKind::StartNewAdventure,
         "create-character" => rpc::GameplayActionKind::CreateCharacter,
         "begin-story" => rpc::GameplayActionKind::BeginStory,
         "ask-courier" => rpc::GameplayActionKind::AskCourier,
@@ -92,6 +93,7 @@ pub(super) fn action_entry(kind: rpc::GameplayActionKind) -> Option<&'static str
     Some(match kind {
         rpc::GameplayActionKind::ExamineHarborSeal => "script-choice",
         rpc::GameplayActionKind::ResolveErrand => "resolve-errand",
+        rpc::GameplayActionKind::StartNewAdventure => "start-new-adventure",
         rpc::GameplayActionKind::CreateCharacter => "create-character",
         rpc::GameplayActionKind::BeginStory => "begin-story",
         rpc::GameplayActionKind::AskCourier => "ask-courier",
@@ -1107,6 +1109,7 @@ pub(super) fn project_journey(
         home: (phase == rpc::JourneyPhase::Room)
             .then(|| super::home_theme::lobby_view(&authored.asset, authored.setting.as_ref())),
         adventure_ended: super::beat_script_runtime::ended(state)?,
+        preparing_adventure: super::journey::new_adventure_requested(current),
         adventure_title: super::beat_script_runtime::adventure_title(state)?,
         // The room's setting is attached to every view by the owner (see `TableSettings::attach`).
         choice_hints_hidden: false,
@@ -1264,6 +1267,13 @@ pub(super) fn action_offer_rejection(
     offer: &str,
     choices: &[rpc::JourneyChoice],
 ) -> Result<Option<rpc::RejectionCode>, RepositoryError> {
+    if kind == rpc::GameplayActionKind::StartNewAdventure
+        && super::journey::session_machine::SessionState::of(current)?
+            != super::journey::session_machine::SessionState::Ended
+    {
+        super::refusal_detail::note("new-adventure-machine");
+        return Ok(Some(rpc::RejectionCode::StaleOffer));
+    }
     if super::journey::phase(current)? == rpc::JourneyPhase::Combat
         && !current_combat_turn(current, member)?
     {

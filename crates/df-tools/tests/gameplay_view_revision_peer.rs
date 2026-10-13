@@ -284,6 +284,17 @@ impl rpc::session_service_server::SessionService for Service {
 
 #[tonic::async_trait]
 impl rpc::room_service_server::RoomService for Service {
+    async fn current_adventure(
+        &self,
+        _: Request<rpc::CurrentAdventureRequest>,
+    ) -> Result<Response<rpc::CurrentAdventureResponse>, Status> {
+        Ok(Response::new(rpc::CurrentAdventureResponse {
+            room_code: "LANTERN".to_owned(),
+            run_identity: String::new(),
+            preparing: false,
+        }))
+    }
+
     async fn reclaim(
         &self,
         _request: Request<rpc::ReclaimRoomRequest>,

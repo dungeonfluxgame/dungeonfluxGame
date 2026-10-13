@@ -554,7 +554,7 @@ fn record_refusal(action_kind: i32, reason: &str, status: &str) {
     span.finish_unmeasured(status);
 }
 
-fn record_audit_line(event: &'static str, line: String) {
+pub(super) fn record_audit_line(event: &'static str, line: String) {
     println!("{line}");
     let context = OperationContext {
         trace_parent: String::new(),
@@ -576,7 +576,10 @@ fn record_session_machine_refusal(checkpoint: &Checkpoint, request: &rpc::Submit
     };
     if !matches!(
         step,
-        "session-machine" | "session-machine-rest" | "session-machine-outcome"
+        "session-machine"
+            | "session-machine-rest"
+            | "session-machine-outcome"
+            | "new-adventure-machine"
     ) {
         refusal_detail::note(step);
         return;
@@ -1502,6 +1505,7 @@ impl Actor {
                         }
                     };
                     if let Some(code) = rejection {
+                        record_session_machine_refusal(self.owner.checkpoint(), &request);
                         let receipt = wire::rejected(current, operation, code);
                         let bytes = receipt.encode_to_vec();
                         let recorded = self

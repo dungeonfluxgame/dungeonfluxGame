@@ -321,7 +321,15 @@ impl std::fmt::Debug for Engine {
     }
 }
 
-static ENGINE: OnceLock<Arc<Engine>> = OnceLock::new();
+static ENGINE: Mutex<Option<Arc<Engine>>> = Mutex::new(None);
+
+pub(super) fn retire() -> Result<(), io::Error> {
+    ENGINE
+        .lock()
+        .map_err(|_| io::Error::other("home video lock poisoned"))?
+        .take();
+    Ok(())
+}
 
 /// Counts the loops that have landed. A display stream subscribes to it when the living scenes
 /// have no wake of their own, so a landed loop reaches the display whatever else is running.
@@ -365,9 +373,9 @@ pub(crate) fn install(
         price: tokio::sync::Mutex::new(None),
         living: Some(living),
     };
-    ENGINE
-        .set(Arc::new(engine))
-        .map_err(|_| io::Error::other("home video already installed"))?;
+    *ENGINE
+        .lock()
+        .map_err(|_| io::Error::other("home video lock poisoned"))? = Some(Arc::new(engine));
     Ok(line)
 }
 
@@ -389,7 +397,7 @@ fn resolve_pins() -> Vec<FalCdnPin> {
 /// The loop the view carries for `painting`. The first call for a painting starts its one flight;
 /// later calls, from any number of displays, see the same state.
 pub(crate) fn observe(painting: &str) -> LoopView {
-    match ENGINE.get() {
+    match ENGINE.lock().ok().and_then(|engine| engine.clone()) {
         Some(engine) => engine.observe(painting),
         None => LoopView::None,
     }
@@ -919,7 +927,7 @@ pub(crate) fn span_for(range: Option<&str>, length: u64) -> Span {
 }
 
 async fn serve_clip(RoutePath(key): RoutePath<String>, headers: HeaderMap) -> Response {
-    let Some(engine) = ENGINE.get() else {
+    let Some(engine) = ENGINE.lock().ok().and_then(|engine| engine.clone()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     respond(&engine.cache_dir, &key, &headers).await
@@ -1069,7 +1077,13 @@ pub(crate) fn test_engine(
 /// Test helper: installs the engine the view and the route use. Only one test installs one.
 #[cfg(test)]
 pub(crate) fn install_for_test(engine: Arc<Engine>) -> Result<(), Arc<Engine>> {
-    ENGINE.set(engine)
+    match ENGINE.lock() {
+        Ok(mut slot) if slot.is_none() => {
+            *slot = Some(engine);
+            Ok(())
+        }
+        _ => Err(engine),
+    }
 }
 
 /// Test helper for the live check: the same engine with the live endpoints and a given credential.

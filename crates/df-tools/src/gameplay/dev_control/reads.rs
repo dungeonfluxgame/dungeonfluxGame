@@ -215,6 +215,7 @@ fn action_name(kind: i32) -> &'static str {
         Ok(rpc::GameplayActionKind::ShortRest) => "short-rest",
         Ok(rpc::GameplayActionKind::ChooseHarborScene) => "inn",
         Ok(rpc::GameplayActionKind::ResolveErrand) => "resolve",
+        Ok(rpc::GameplayActionKind::StartNewAdventure) => "new-adventure",
         _ => "unknown",
     }
 }

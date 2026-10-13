@@ -91,6 +91,8 @@ struct Client {
     served_run: Option<String>,
     /// Automatic repeats of the current join, which is idempotent.
     join_retries: u32,
+    /// Public preparation response survives reconnect redraws until the new page is loaded.
+    preparing_adventure: bool,
     /// Times the page has confirmed an unconfirmed choice by itself since it was sent.
     auto_confirms: u8,
     feedback_generation: u64,
@@ -625,6 +627,10 @@ fn join_room(client: Rc<RefCell<Client>>) {
             let (connection, channel) = BrowserConnection::connect(&url)
                 .await
                 .map_err(|_| ROOM_CONNECTION_UNAVAILABLE.to_owned())?;
+            if let Err(error) = recover_adventure(&client, channel.clone()).await {
+                connection.close();
+                return Err(error);
+            }
             let mut rooms = RoomClient::new(channel)
                 .max_decoding_message_size(8192)
                 .max_encoding_message_size(8192);
@@ -777,9 +783,13 @@ fn join_room(client: Rc<RefCell<Client>>) {
                 if retry {
                     feedback(
                         &client.borrow(),
-                        "The room did not answer yet. Trying again.",
+                        if error == NEW_ADVENTURE {
+                            NEW_ADVENTURE
+                        } else {
+                            "The room did not answer yet. Trying again."
+                        },
                     );
-                    schedule_join_retry(&client);
+                    schedule_join_retry(&client, error == NEW_ADVENTURE);
                 } else {
                     feedback(
                         &client.borrow(),
@@ -799,6 +809,9 @@ fn join_room(client: Rc<RefCell<Client>>) {
 }
 
 fn record_join_retry(error: &str, retries: &mut u32) -> bool {
+    if error == NEW_ADVENTURE {
+        return true;
+    }
     if error == SERVER_LOST || *retries >= crate::reconnect::JOIN_RETRIES {
         return false;
     }
@@ -807,14 +820,21 @@ fn record_join_retry(error: &str, retries: &mut u32) -> bool {
 }
 
 /// Repeats the pending join after a backoff while the page shows "Reconnecting…".
-fn schedule_join_retry(client: &Rc<RefCell<Client>>) {
+fn schedule_join_retry(client: &Rc<RefCell<Client>>, preparing: bool) {
     let (token, wait) = {
         let mut state = client.borrow_mut();
         state.reconnect.token += 1;
         let jitter = (js_sys::Math::random() * 1000.0) as u32;
         let wait = crate::reconnect::delay(state.reconnect.attempt, jitter);
         state.reconnect.attempt = state.reconnect.attempt.saturating_add(1);
-        show_notice(&state, Some(RECONNECTING));
+        show_notice(
+            &state,
+            Some(if preparing {
+                NEW_ADVENTURE
+            } else {
+                RECONNECTING
+            }),
+        );
         (state.reconnect.token, wait)
     };
     let weak = Rc::downgrade(client);
@@ -896,6 +916,10 @@ fn connect(client: Rc<RefCell<Client>>) {
             if owned.borrow().generation != generation {
                 connection.close();
                 return Ok::<(), String>(());
+            }
+            if let Err(error) = recover_adventure(&owned, channel.clone()).await {
+                connection.close();
+                return Err(error);
             }
             // The owner's view carries the combat section (reachable cells, legal targets, budget),
             // which exceeds 8 KiB in a three-enemy fight; RPC_MESSAGE_BYTES is the bridge's RPC ceiling.
@@ -994,6 +1018,77 @@ fn connect(client: Rc<RefCell<Client>>) {
     });
 }
 
+const NEW_ADVENTURE: &str = "A new adventure is being prepared...";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AdventureRecovery {
+    Current,
+    Preparing,
+    NewGame,
+}
+
+fn classify_adventure_recovery(
+    current: &rpc::CurrentAdventureResponse,
+    served_run: Option<&str>,
+    room: &str,
+) -> AdventureRecovery {
+    if current.preparing {
+        AdventureRecovery::Preparing
+    } else if served_run
+        .is_some_and(|run| !current.run_identity.is_empty() && run != current.run_identity)
+        || current.room_code != room
+    {
+        AdventureRecovery::NewGame
+    } else {
+        AdventureRecovery::Current
+    }
+}
+
+async fn recover_adventure(
+    client: &Rc<RefCell<Client>>,
+    channel: BrowserChannel,
+) -> Result<(), String> {
+    let mut request = tonic::Request::new(rpc::CurrentAdventureRequest {});
+    request.set_timeout(request_timeout());
+    let current = RoomClient::new(channel)
+        .max_decoding_message_size(8192)
+        .max_encoding_message_size(8192)
+        .current_adventure(request)
+        .await
+        .map_err(|_| "Current adventure unavailable".to_owned())?
+        .into_inner();
+    let recovery = {
+        let state = client.borrow();
+        classify_adventure_recovery(&current, state.served_run.as_deref(), &state.room_code)
+    };
+    match recovery {
+        AdventureRecovery::Current => {
+            client.borrow_mut().preparing_adventure = false;
+            Ok(())
+        }
+        AdventureRecovery::Preparing => {
+            client.borrow_mut().preparing_adventure = true;
+            show_notice(&client.borrow(), Some(NEW_ADVENTURE));
+            Err(NEW_ADVENTURE.to_owned())
+        }
+        AdventureRecovery::NewGame => {
+            let room = clean_room_code(&current.room_code).ok_or("New adventure room invalid")?;
+            let page = if client.borrow().role == "player" {
+                format!("/gameplay/player?room={room}")
+            } else {
+                "/gameplay/display".to_owned()
+            };
+            show_notice(&client.borrow(), Some(NEW_ADVENTURE));
+            web_sys::window()
+                .ok_or("Window absent")?
+                .location()
+                .replace(&page)
+                .map_err(|_| "New adventure page unavailable")?;
+            Err(NEW_ADVENTURE.to_owned())
+        }
+    }
+}
+
 const RECONNECTING: &str = "Reconnecting…";
 
 /// Shows `text` as the page's connection notice, or removes the notice.
@@ -1034,7 +1129,37 @@ fn schedule_reconnect(client: &Rc<RefCell<Client>>, refused: bool, lost: bool) {
         let jitter = (js_sys::Math::random() * 1000.0) as u32;
         let wait = crate::reconnect::delay(state.reconnect.attempt, jitter);
         state.reconnect.attempt = state.reconnect.attempt.saturating_add(1);
-        show_notice(&state, Some(if lost { SERVER_LOST } else { RECONNECTING }));
+        let preparing = state.preparing_adventure
+            || state
+                .views
+                .as_ref()
+                .and_then(|views| views.current())
+                .is_some_and(|view| {
+                    let journey = match &view.audience {
+                        Some(rpc::view_message::Audience::Player(player)) => {
+                            player.journey.as_ref()
+                        }
+                        Some(rpc::view_message::Audience::Display(display)) => {
+                            display.journey.as_ref()
+                        }
+                        _ => None,
+                    };
+                    journey.is_some_and(|journey| journey.preparing_adventure)
+                })
+            || state.last_request.as_ref().is_some_and(|request| {
+                request.action_kind == rpc::GameplayActionKind::StartNewAdventure as i32
+                    && (!state.last_confirmed || state.last_accepted)
+            });
+        show_notice(
+            &state,
+            Some(if preparing {
+                NEW_ADVENTURE
+            } else if lost {
+                SERVER_LOST
+            } else {
+                RECONNECTING
+            }),
+        );
         (state.reconnect.token, wait, state.role == "display")
     };
     let weak = Rc::downgrade(client);
@@ -1155,6 +1280,12 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
                 .map_err(|status| match classify_submit_failure(status.code()) {
                     SubmitFailure::Refused => ACTION_REFUSAL_FEEDBACK,
                     SubmitFailure::ServerLost => SERVER_LOST,
+                    SubmitFailure::Unknown
+                        if body.action_kind
+                            == rpc::GameplayActionKind::StartNewAdventure as i32 =>
+                    {
+                        NEW_ADVENTURE
+                    }
                     SubmitFailure::Unknown => {
                         "Outcome unknown. Confirm the same operation or reconnect."
                     }
@@ -1216,11 +1347,25 @@ fn complete_action_response(
                         if receipt.replayed { "true" } else { "false" },
                     );
                     match receipt.outcome {
-                                Some(rpc::decision_receipt::Outcome::Accepted(_))=>{
-                                    if body.action_kind==rpc::GameplayActionKind::GreatswordAttack as i32 && state.first_attack.is_none() {state.first_attack=Some(body.clone());}
-                                    if body.action_kind==rpc::GameplayActionKind::SetTableSetting as i32 {"Table setting saved.".to_owned()}
-                                    else if receipt.replayed {"Original saved outcome confirmed. No rolls or damage were repeated.".to_owned()} else {"Your choice is saved to the shared adventure.".to_owned()}
-                                }
+                        Some(rpc::decision_receipt::Outcome::Accepted(_)) => {
+                            if body.action_kind == rpc::GameplayActionKind::GreatswordAttack as i32
+                                && state.first_attack.is_none()
+                            {
+                                state.first_attack = Some(body.clone());
+                            }
+                            if body.action_kind == rpc::GameplayActionKind::StartNewAdventure as i32
+                            {
+                                NEW_ADVENTURE.to_owned()
+                            } else if body.action_kind
+                                == rpc::GameplayActionKind::SetTableSetting as i32
+                            {
+                                "Table setting saved.".to_owned()
+                            } else if receipt.replayed {
+                                "Original saved outcome confirmed. No rolls or damage were repeated.".to_owned()
+                            } else {
+                                "Your choice is saved to the shared adventure.".to_owned()
+                            }
+                        }
                         Some(rpc::decision_receipt::Outcome::Rejected(_)) => {
                             state.last_request = None;
                             ACTION_REFUSAL_FEEDBACK.to_owned()
@@ -1848,6 +1993,16 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         _ => return Err(JsValue::from_str("server audience mismatch")),
     };
     let journey = journey.ok_or_else(|| JsValue::from_str("server journey missing"))?;
+    if journey.preparing_adventure {
+        let surface = root
+            .query_selector(".view")?
+            .ok_or_else(|| JsValue::from_str("view absent"))?;
+        live_screens::release(client, &surface)?;
+        live_combat::release(client)?;
+        surface.set_text_content(Some(NEW_ADVENTURE));
+        show_notice(&client.borrow(), Some(NEW_ADVENTURE));
+        return Ok(());
+    }
     if journey.party.len() > 2 || offers.len() > 12 {
         return Err(JsValue::from_str("server view exceeds bound"));
     }
@@ -2139,7 +2294,7 @@ fn new_client(
         .unwrap_or_else(|| "LANTERN".to_owned());
     let client = Rc::new(RefCell::new(Client {
         document: document.clone(),
-        root,
+        root: root.clone(),
         role,
         credential,
         room_code,
@@ -2152,7 +2307,21 @@ fn new_client(
         },
         run: if role == "display" {
             Some(rpc::RunId {
-                value: Some(vec![0x42; 16]),
+                value: Some(match root.get_attribute("data-run-id") {
+                    Some(value) if value.len() == 32 && value.is_ascii() => value
+                        .as_bytes()
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|pair| {
+                            std::str::from_utf8(pair)
+                                .ok()
+                                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| JsValue::from_str("display run invalid"))?,
+                    _ => vec![0x42; 16],
+                }),
             })
         } else {
             None
@@ -2191,6 +2360,7 @@ fn new_client(
         reconnect: Reconnect::default(),
         served_run,
         join_retries: 0,
+        preparing_adventure: false,
         auto_confirms: 0,
         feedback_generation: 0,
     }));
@@ -2479,6 +2649,44 @@ mod tests {
         action_identity, classify_submit_failure, creation_option_description,
         creation_option_label, record_join_retry, should_replace_feedback, tactical_action_choice,
     };
+
+    #[test]
+    fn new_adventure_preparation_does_not_exhaust_join_retries_or_become_session_lost() {
+        let mut retries = crate::reconnect::JOIN_RETRIES;
+        for _ in 0..10 {
+            assert!(super::record_join_retry(super::NEW_ADVENTURE, &mut retries));
+        }
+        assert_eq!(retries, crate::reconnect::JOIN_RETRIES);
+        assert!(!super::record_join_retry(SERVER_LOST, &mut retries));
+    }
+
+    #[test]
+    fn new_game_recovery_redirects_to_the_server_room_instead_of_refusing_the_saved_seat() {
+        use super::{AdventureRecovery, classify_adventure_recovery, rpc};
+        let mut current = rpc::CurrentAdventureResponse {
+            room_code: "NEWROOM".to_owned(),
+            run_identity: "new-run".to_owned(),
+            preparing: true,
+        };
+        assert_eq!(
+            classify_adventure_recovery(&current, Some("old-run"), "OLDROOM"),
+            AdventureRecovery::Preparing
+        );
+        current.preparing = false;
+        assert_eq!(
+            classify_adventure_recovery(&current, Some("old-run"), "OLDROOM"),
+            AdventureRecovery::NewGame
+        );
+        assert_eq!(
+            classify_adventure_recovery(&current, Some("new-run"), "NEWROOM"),
+            AdventureRecovery::Current
+        );
+        current.room_code = "OLDROOM".to_owned();
+        assert_eq!(
+            classify_adventure_recovery(&current, Some("old-run"), "OLDROOM"),
+            AdventureRecovery::NewGame
+        );
+    }
 
     #[test]
     fn melee_creation_packages_keep_their_names_and_show_the_scores_they_are_sent() {

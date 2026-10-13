@@ -377,6 +377,18 @@ impl actor::Actor {
 }
 #[tonic::async_trait]
 impl rpc::room_service_server::RoomService for Service {
+    async fn current_adventure(
+        &self,
+        _: Request<rpc::CurrentAdventureRequest>,
+    ) -> Result<Response<rpc::CurrentAdventureResponse>, Status> {
+        Ok(Response::new(rpc::CurrentAdventureResponse {
+            room_code: journey::room_code(),
+            run_identity: super::run_restart::identity()
+                .map_err(|_| Status::internal("run identity unavailable"))?,
+            preparing: journey::new_adventure_requested(&self.updates.borrow()),
+        }))
+    }
+
     async fn reclaim(
         &self,
         request: Request<rpc::ReclaimRoomRequest>,

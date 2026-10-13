@@ -369,12 +369,34 @@ pub(super) fn validate(
     let mut started = false;
     let mut native_durable = "room";
     let mut creations = 0usize;
+    let mut restart_seen = false;
     for decision in &state.decisions {
         if decision.source_policy.as_str() != journey::THREAD_POLICY {
             continue;
         }
         let terminal = terminal(state, decision)?;
         let receipt = journey::accepted(decision)?;
+        if matches!(&terminal.value, FactValue::ContentEvent { definition, subjects }
+            if definition.entry.as_str() == "start-new-adventure" && subjects.is_empty())
+        {
+            if restart_seen
+                || beat.kind != BeatKind::Ending
+                || !beat.offers.is_empty()
+                || terminal.audience != AudienceScope::Shared
+                || decision.facts.len() != 1
+                || !decision.draws.is_empty()
+                || !decision.effects.is_empty()
+                || receipt
+                    != (rpc::AcceptedAction {
+                        phase: rpc::JourneyPhase::Complete as i32,
+                        ..Default::default()
+                    })
+            {
+                return invalid();
+            }
+            restart_seen = true;
+            continue;
+        }
         let Some((choice_fact, id, member)) = choice(state, decision)? else {
             let character = state
                 .characters
@@ -603,6 +625,9 @@ pub(super) fn matches_id(
     action: rpc::GameplayActionKind,
     id: &str,
 ) -> Result<bool, RepositoryError> {
+    if action == rpc::GameplayActionKind::StartNewAdventure {
+        return Ok(id == journey::offer_id(current, action));
+    }
     beat_script::with_script(|script| {
         if script.is_canonical()
             || (journey::tactical::present(current.state())
@@ -622,6 +647,12 @@ pub(super) fn view_offers(
     member: MemberId,
 ) -> Result<Vec<(rpc::GameplayActionKind, String, String)>, RepositoryError> {
     let available = journey::offered(current, member)?;
+    if ended(current.state())? {
+        return Ok(available
+            .into_iter()
+            .map(|(kind, label)| (kind, label, journey::offer_id(current, kind)))
+            .collect());
+    }
     beat_script::with_script(|script| {
         let dying = journey::tactical::present(current.state())
             && journey::tactical::dying(current.state())?;
@@ -728,6 +759,9 @@ pub(super) fn action_label(
     id: &str,
     kind: rpc::GameplayActionKind,
 ) -> Result<String, RepositoryError> {
+    if kind == rpc::GameplayActionKind::StartNewAdventure {
+        return Ok("Start a new adventure".to_owned());
+    }
     if journey::tactical::enabled() && journey::tactical::combat_action(kind) {
         return Ok(match kind {
             rpc::GameplayActionKind::GreatswordAttack => "Attack",

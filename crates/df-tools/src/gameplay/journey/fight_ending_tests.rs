@@ -1,5 +1,5 @@
 //! A fight chapter ends like every other: a resolution, an epilogue, then an end card that
-//! accepts nothing. These tests play fights to their end through submitted actions only.
+//! lets the table start another adventure. These tests play fights to their end through submitted actions only.
 use super::tactical::FightOutcome;
 use super::tests::{inn_command, input};
 use super::*;
@@ -123,11 +123,7 @@ fn assert_end_card(current: &Checkpoint) {
     assert_eq!(beat_id(current), "the-end");
     assert_eq!(phase(current).unwrap(), rpc::JourneyPhase::Complete);
     assert!(runtime::ended(current.state()).unwrap());
-    assert!(
-        listed(current).is_empty(),
-        "the end card offers nothing: {:?}",
-        listed(current)
-    );
+    assert_eq!(kinds(current), vec![K::StartNewAdventure]);
     for entry in [
         "short-rest",
         "resolve-errand",
@@ -143,7 +139,7 @@ fn assert_end_card(current: &Checkpoint) {
 }
 
 #[test]
-fn a_won_fight_resolves_once_closes_and_ends_on_a_card_that_accepts_nothing() {
+fn a_won_fight_resolves_once_closes_and_ends_on_a_card_that_offers_a_new_adventure() {
     live(|| {
         let victory = tactical::tests::current_victory("escort-courier");
         assert!(combat_victory(victory.state()).unwrap());

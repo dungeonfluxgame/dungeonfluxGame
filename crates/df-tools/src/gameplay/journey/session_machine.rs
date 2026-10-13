@@ -34,13 +34,18 @@ pub(crate) enum SessionState {
     Fight,
     Aftermath,
     Ended,
+    Preparing,
 }
 
 impl SessionState {
     /// The state of a checkpoint: its journey phase, with the end card split
     /// out of `Complete`.
     pub(crate) fn of(current: &Checkpoint) -> Result<Self, RepositoryError> {
-        Ok(match phase(current)? {
+        let phase = phase(current)?;
+        if super::new_adventure_requested(current) {
+            return Ok(Self::Preparing);
+        }
+        Ok(match phase {
             rpc::JourneyPhase::Room => Self::Lobby,
             rpc::JourneyPhase::Opening => Self::Story,
             rpc::JourneyPhase::Dialogue => Self::Conversation,
@@ -64,6 +69,7 @@ impl SessionState {
             Self::Fight => 3,
             Self::Aftermath => 4,
             Self::Ended => 5,
+            Self::Preparing => 6,
         }
     }
 }
@@ -82,6 +88,7 @@ pub(crate) enum Event {
     EndTurn,
     Rest,
     Resolve,
+    NewAdventure,
 }
 
 impl Event {
@@ -137,7 +144,7 @@ pub(super) struct MachineRefusal {
 
 /// Every event, so the accepted set of a state is derived from `next` and
 /// never restated.
-pub(super) const EVENTS: [Event; 9] = [
+pub(super) const EVENTS: [Event; 10] = [
     Event::CreateHero,
     Event::Begin,
     Event::StoryChoice,
@@ -147,6 +154,7 @@ pub(super) const EVENTS: [Event; 9] = [
     Event::EndTurn,
     Event::Rest,
     Event::Resolve,
+    Event::NewAdventure,
 ];
 
 /// The events `next` accepts from `state`.
@@ -183,6 +191,7 @@ pub(super) fn events_for_kind(kind: rpc::GameplayActionKind) -> &'static [Event]
         K::EndTurn => &[Event::EndTurn],
         K::ShortRest => &[Event::Rest],
         K::ResolveErrand => &[Event::Resolve],
+        K::StartNewAdventure => &[Event::NewAdventure],
         _ => &[],
     }
 }
@@ -328,6 +337,7 @@ pub(super) fn next(state: SessionState, event: Event) -> Result<Transition, Mach
             Transition::To(S::Aftermath)
         }
         (S::Aftermath, E::Resolve) => Transition::ResolveMayEnd,
+        (S::Ended, E::NewAdventure) => Transition::To(S::Preparing),
         _ => return Err(MachineRefusal { state, event }),
     };
     // Forward only, whatever a future table edit says.
@@ -343,15 +353,29 @@ pub(super) fn next(state: SessionState, event: Event) -> Result<Transition, Mach
 mod tests {
     use super::*;
 
-    const STATES: [SessionState; 6] = [
+    const STATES: [SessionState; 7] = [
         SessionState::Lobby,
         SessionState::Story,
         SessionState::Conversation,
         SessionState::Fight,
         SessionState::Aftermath,
         SessionState::Ended,
+        SessionState::Preparing,
     ];
     // `EVENTS` comes from the module: the table and the tests share it.
+
+    #[test]
+    fn new_adventure_is_an_ended_only_machine_edge() {
+        let kind = rpc::GameplayActionKind::try_from(21).expect("new adventure wire kind");
+        let event = Event::for_kind(SessionState::Ended, kind).expect("restart event");
+        assert!(next(SessionState::Ended, event).is_ok());
+        for state in STATES
+            .into_iter()
+            .filter(|state| *state != SessionState::Ended)
+        {
+            assert!(next(state, event).is_err(), "{state:?}");
+        }
+    }
 
     #[test]
     fn audit_event_distinguishes_begin_story_from_script_continue() {
@@ -399,7 +423,10 @@ mod tests {
             Ok(Transition::To(SessionState::Fight))
         );
         for event in EVENTS {
-            assert!(next(SessionState::Ended, event).is_err(), "{event:?}");
+            assert_eq!(
+                next(SessionState::Ended, event).is_ok(),
+                event == Event::NewAdventure
+            );
             assert!(
                 next(SessionState::Fight, event).is_err()
                     || matches!(event, Event::CombatAction | Event::EndTurn),
