@@ -249,7 +249,23 @@ mod saved_player {
     }
 }
 const SAVED_GAME_REFUSED: &str = "The server did not accept this saved game.";
-const ACTION_REFUSAL_FEEDBACK: &str = "That did not work. Try again, or pick something else.";
+const ACTION_REFUSAL_FEEDBACK: &str = "The game could not accept that. Choose again.";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SubmitFailure {
+    Refused,
+    ServerLost,
+    Unknown,
+}
+fn classify_submit_failure(code: tonic::Code) -> SubmitFailure {
+    match code {
+        tonic::Code::InvalidArgument
+        | tonic::Code::FailedPrecondition
+        | tonic::Code::PermissionDenied
+        | tonic::Code::ResourceExhausted => SubmitFailure::Refused,
+        tonic::Code::DataLoss => SubmitFailure::ServerLost,
+        _ => SubmitFailure::Unknown,
+    }
+}
 fn should_replace_feedback(text: &str, action_refusal_active: bool) -> bool {
     !text.is_empty() || !action_refusal_active
 }
@@ -1136,14 +1152,14 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
                 .submit(request)
                 .await
                 .map(|response| response.into_inner())
-                .map_err(|status| {
-                    if status.code() == tonic::Code::DataLoss {
-                        SERVER_LOST
-                    } else {
+                .map_err(|status| match classify_submit_failure(status.code()) {
+                    SubmitFailure::Refused => ACTION_REFUSAL_FEEDBACK,
+                    SubmitFailure::ServerLost => SERVER_LOST,
+                    SubmitFailure::Unknown => {
                         "Outcome unknown. Confirm the same operation or reconnect."
                     }
                 }),
-            Err(_) => Err("Input binding unavailable"),
+            Err(_) => Err(ACTION_REFUSAL_FEEDBACK),
         };
         if client.borrow().generation != generation {
             return;
@@ -1206,6 +1222,7 @@ fn complete_action_response(
                                     else if receipt.replayed {"Original saved outcome confirmed. No rolls or damage were repeated.".to_owned()} else {"Your choice is saved to the shared adventure.".to_owned()}
                                 }
                         Some(rpc::decision_receipt::Outcome::Rejected(_)) => {
+                            state.last_request = None;
                             ACTION_REFUSAL_FEEDBACK.to_owned()
                         }
                                 None=>"The server returned no decision outcome.".to_owned(),
@@ -1217,7 +1234,15 @@ fn complete_action_response(
             }
             None => "The server returned no operation outcome.".to_owned(),
         },
-        Err(error) => error.to_owned(),
+        Err(error) => {
+            if error == ACTION_REFUSAL_FEEDBACK {
+                state.last_request = None;
+                state.last_confirmed = true;
+                state.last_accepted = false;
+                state.auto_confirms = 0;
+            }
+            error.to_owned()
+        }
     }
 }
 /// A choice whose outcome was unknown is confirmed by the page itself once the game answers
@@ -2444,9 +2469,38 @@ pub mod fixture {
 #[cfg(test)]
 mod tests {
     use super::{
-        ACTION_REFUSAL_FEEDBACK, ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, action_identity,
-        record_join_retry, should_replace_feedback, tactical_action_choice,
+        ACTION_REFUSAL_FEEDBACK, ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, SubmitFailure,
+        action_identity, classify_submit_failure, record_join_retry, should_replace_feedback,
+        tactical_action_choice,
     };
+
+    #[test]
+    fn submit_status_classification_separates_refusals_from_unknown_outcomes() {
+        for code in [
+            tonic::Code::InvalidArgument,
+            tonic::Code::FailedPrecondition,
+            tonic::Code::PermissionDenied,
+            tonic::Code::ResourceExhausted,
+        ] {
+            assert_eq!(classify_submit_failure(code), SubmitFailure::Refused);
+        }
+        assert_eq!(
+            classify_submit_failure(tonic::Code::DataLoss),
+            SubmitFailure::ServerLost
+        );
+        for code in [
+            tonic::Code::Unavailable,
+            tonic::Code::DeadlineExceeded,
+            tonic::Code::Cancelled,
+            tonic::Code::Internal,
+        ] {
+            assert_eq!(classify_submit_failure(code), SubmitFailure::Unknown);
+        }
+        assert_eq!(
+            ACTION_REFUSAL_FEEDBACK,
+            "The game could not accept that. Choose again."
+        );
+    }
 
     #[test]
     fn tactical_attack_inputs_are_forwarded_only_when_the_offer_contains_them() {
