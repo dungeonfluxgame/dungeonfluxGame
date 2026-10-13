@@ -61,6 +61,8 @@ struct Client {
     last_request: Option<rpc::SubmitActionRequest>,
     first_attack: Option<rpc::SubmitActionRequest>,
     last_confirmed: bool,
+    /// The server accepted the last request (a rejection also confirms it, but changes nothing).
+    last_accepted: bool,
     action: Option<ActionClient>,
     /// A clone of the watch's session client for one-way unary reports (the display's
     /// presentation report); set with the watch connection, cleared with it.
@@ -364,6 +366,7 @@ fn clear_view_scope(client: &mut Client) -> Result<(), JsValue> {
     client.last_request = None;
     client.first_attack = None;
     client.last_confirmed = false;
+    client.last_accepted = false;
     clear_callbacks(client);
     let combat_cleanup = live_combat::dispose(client);
     let cleanup = client
@@ -1014,6 +1017,7 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
             state.dialogue.discard_unconfirmed();
             state.last_request = Some(body.clone());
             state.last_confirmed = false;
+            state.last_accepted = false;
             state.auto_confirms = 0;
         }
         state.busy = true;
@@ -1077,6 +1081,10 @@ fn complete_action_response(
                         .is_some_and(|saved| saved.operation_id == body.operation_id)
                     {
                         state.last_confirmed = receipt.outcome.is_some();
+                        state.last_accepted = matches!(
+                            receipt.outcome,
+                            Some(rpc::decision_receipt::Outcome::Accepted(_))
+                        );
                     }
                     if let Some(revision) = receipt.revision {
                         let _ = state.root.set_attribute(
@@ -1892,6 +1900,7 @@ fn new_client(
         last_request: None,
         first_attack: None,
         last_confirmed: false,
+        last_accepted: false,
         action: None,
         sessions: None,
         connection: None,

@@ -756,6 +756,7 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
             }
             state.last_request = Some(action);
             state.last_confirmed = false;
+            state.last_accepted = false;
             state.dialogue.confirmation = Some(body.clone());
         }
         let instance = Rc::new(());

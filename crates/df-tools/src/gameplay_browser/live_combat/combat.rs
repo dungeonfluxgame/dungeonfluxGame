@@ -178,14 +178,16 @@ fn action_empty(
     }
 }
 
+/// A turn is spent, and its buttons wait for the next view, only once the server has ACCEPTED
+/// the action: after a rejection the same offer is still good and stays usable.
 fn waiting_for_current_view(
     role: &str,
-    last_confirmed: bool,
+    last_accepted: bool,
     request: Option<&rpc::SubmitActionRequest>,
     offers: &[rpc::GameplayActionOffer],
 ) -> bool {
     role == "player"
-        && last_confirmed
+        && last_accepted
         && request.is_some_and(|request| {
             request.action_kind != rpc::GameplayActionKind::SetTableSetting as i32
                 && !request.offer_id.is_empty()
@@ -514,7 +516,7 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         .is_some_and(|own| Some(own.name.as_str()) == active_name);
     let waiting_for_view = waiting_for_current_view(
         state.role,
-        state.last_confirmed,
+        state.last_accepted,
         state.last_request.as_ref(),
         view.offers,
     );
@@ -790,7 +792,7 @@ fn publish_tactical_controls(
     }
     if waiting_for_current_view(
         client.borrow().role,
-        client.borrow().last_confirmed,
+        client.borrow().last_accepted,
         client.borrow().last_request.as_ref(),
         view.offers,
     ) {
