@@ -339,6 +339,7 @@ fn movement_diagonals_difficult_allies_hostiles_split_move_and_shortest_path() {
 }
 #[test]
 fn standing_crawling_dash_and_disengage_use_source_budgets() {
+    // SRD 5.2.1 p. 186: crawling adds movement cost; standing costs half Speed.
     let state = battle(vec![
         melee(1, Cell(1, 1)),
         CombatantSpec::creature(3, "wolf", Cell(10, 1), 0).unwrap(),
@@ -381,7 +382,8 @@ fn opportunity_window_is_optional_before_exit_and_reaction_refreshes_at_own_turn
         Action::Opportunity {
             attack: Some(usage(Weapon::Bite, false)),
         },
-        &[(20, 15), (6, 1), (20, 6)],
+        // SRD 5.2.1 p. 364: a Wolf Bite has no post-hit saving throw.
+        &[(20, 15), (6, 1)],
     );
     assert_eq!(reacted.attacks[0].distance_ft, 5);
     assert!(reacted.battle.actor(3).unwrap().budget().reaction_used);
@@ -414,7 +416,8 @@ fn opportunity_knockout_cancels_remaining_path_and_multiple_reactors_are_ordered
         &state,
         3,
         Action::Opportunity { attack: Some(bite) },
-        &[(20, 20), (20, 19), (6, 1), (6, 1), (20, 8)],
+        // SRD 5.2.1 p. 364: the two d20s are Pack Tactics' attack roll; no save follows.
+        &[(20, 20), (20, 19), (6, 1), (6, 1)],
     )
     .battle;
     assert_eq!(state.actor(1).unwrap().cell(), Cell(2, 2));
@@ -907,6 +910,22 @@ fn full_creature_catalog_preserves_actions_and_required_riders() {
         assert_eq!(spec.armor_class, u16::from(source.rules.armor_class));
         assert!(spec.speed_ft > 0);
     }
+    // SRD 5.2.1 pp. 357, 364: both are Medium, AC 12, Speed 40 ft.; HP are 5/11.
+    let wolf = CombatantSpec::creature(3, "wolf", Cell(2, 1), 0).unwrap();
+    assert_eq!(
+        (wolf.size, wolf.armor_class, wolf.hit_points, wolf.speed_ft),
+        (Size::Medium, 12, 11, 40)
+    );
+    let mastiff = CombatantSpec::creature(3, "mastiff", Cell(2, 1), 0).unwrap();
+    assert_eq!(
+        (
+            mastiff.size,
+            mastiff.armor_class,
+            mastiff.hit_points,
+            mastiff.speed_ft
+        ),
+        (Size::Medium, 12, 5, 40)
+    );
     let mut state = battle(vec![
         melee(1, Cell(1, 1)),
         CombatantSpec::creature(3, "wolf", Cell(2, 1), 0).unwrap(),
@@ -917,38 +936,48 @@ fn full_creature_catalog_preserves_actions_and_required_riders() {
         &state,
         3,
         strike(1, Weapon::Bite, false),
-        &[(20, 15), (20, 16), (6, 1), (20, 6)],
+        &[(20, 15), (20, 16), (6, 1)],
     );
     assert!(
         result.attacks[0]
             .advantage
             .contains(&AttackReason::PackTactics)
     );
-    let save = result.attacks[0].strength_save.unwrap();
+    assert_eq!(result.attacks[0].modifier, 4);
+    assert_eq!(result.attacks[0].damage_faces, vec![1]);
+    assert_eq!(result.attacks[0].damage, 3);
     assert_eq!(
-        (save.actor, save.dc, save.modifier, save.die),
-        (1, 12, 5, 6)
+        result
+            .draws
+            .iter()
+            .map(|draw| draw.sides)
+            .collect::<Vec<_>>(),
+        vec![20, 20, 6]
     );
-    assert!(!save.succeeded);
     assert!(result.battle.actor(1).unwrap().health().prone);
-    let mut mastiff = battle(vec![
+    let mut state = battle(vec![
         melee(1, Cell(1, 1)),
         CombatantSpec::creature(3, "mastiff", Cell(2, 1), 0).unwrap(),
     ]);
-    mastiff.active = 1;
+    state.active = 1;
     let result = step(
-        &mastiff,
+        &state,
         3,
         strike(1, Weapon::Bite, false),
-        &[(20, 15), (6, 1), (20, 8)],
+        &[(20, 15), (6, 1)],
     );
-    let save = result.attacks[0].strength_save.unwrap();
+    assert_eq!(result.attacks[0].modifier, 3);
+    assert_eq!(result.attacks[0].damage_faces, vec![1]);
+    assert_eq!(result.attacks[0].damage, 2);
     assert_eq!(
-        (save.actor, save.dc, save.modifier, save.die),
-        (1, 11, 5, 8)
+        result
+            .draws
+            .iter()
+            .map(|draw| draw.sides)
+            .collect::<Vec<_>>(),
+        vec![20, 6]
     );
-    assert!(save.succeeded);
-    assert!(!result.battle.actor(1).unwrap().health().prone);
+    assert!(result.battle.actor(1).unwrap().health().prone);
     let mut state = battle(vec![
         melee(1, Cell(1, 1)),
         CombatantSpec::creature(3, "goblin-warrior", Cell(2, 1), 20).unwrap(),
@@ -1028,6 +1057,95 @@ fn full_creature_catalog_preserves_actions_and_required_riders() {
         (3, 1)
     );
 }
+
+#[test]
+fn a_wolf_bite_does_not_knock_a_large_target_prone() {
+    // SRD 5.2.1 p. 364: the Prone rider applies only to Medium or smaller targets.
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "wolf", Cell(2, 1), 0).unwrap(),
+    ]);
+    state.active = 1;
+    // Large combatants are rejected by begin until the tactical grid supports 2x2 footprints.
+    // This isolated mutation exercises the bite's size boundary after a valid battle is created.
+    state.actor_mut(1).unwrap().spec.size = Size::Large;
+    let result = step(
+        &state,
+        3,
+        strike(1, Weapon::Bite, false),
+        &[(20, 15), (6, 1)],
+    );
+    assert!(!result.battle.actor(1).unwrap().health().prone);
+    assert_eq!(
+        result
+            .draws
+            .iter()
+            .map(|draw| draw.sides)
+            .collect::<Vec<_>>(),
+        vec![20, 6]
+    );
+}
+
+#[test]
+fn prone_attack_rolls_follow_the_five_foot_boundary() {
+    // SRD 5.2.1 p. 186: Prone attackers have Disadvantage; attacks against them have
+    // Advantage within 5 feet and Disadvantage beyond 5 feet.
+    let mut adjacent = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+    adjacent.actor_mut(3).unwrap().health.prone = true;
+    let (advantage, disadvantage) = adjacent
+        .attack_reasons(1, 3, usage(Weapon::Greatsword, false))
+        .unwrap();
+    assert!(advantage.contains(&AttackReason::ProneTarget));
+    assert!(!disadvantage.contains(&AttackReason::ProneTarget));
+
+    let mut distant = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(4, 1), 0).unwrap(),
+    ]);
+    distant.actor_mut(3).unwrap().health.prone = true;
+    let mut shortbow = usage(Weapon::Shortbow, true);
+    shortbow.use_mastery = false;
+    let (advantage, disadvantage) = distant.attack_reasons(1, 3, shortbow).unwrap();
+    assert!(!advantage.contains(&AttackReason::ProneTarget));
+    assert!(disadvantage.contains(&AttackReason::ProneTarget));
+
+    let mut prone_attacker = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+    prone_attacker.actor_mut(1).unwrap().health.prone = true;
+    let (_, disadvantage) = prone_attacker
+        .attack_reasons(1, 3, usage(Weapon::Greatsword, false))
+        .unwrap();
+    assert!(disadvantage.contains(&AttackReason::ProneAttacker));
+}
+
+#[test]
+fn wolf_pack_tactics_requires_an_ally_without_incapacitation() {
+    // SRD 5.2.1 p. 364: the nearby ally must not have the Incapacitated condition.
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "wolf", Cell(2, 1), 0).unwrap(),
+        CombatantSpec::creature(4, "wolf", Cell(2, 2), 0).unwrap(),
+    ]);
+    state.active = 1;
+    state.actor_mut(4).unwrap().health.unconscious = true;
+    let result = step(
+        &state,
+        3,
+        strike(1, Weapon::Bite, false),
+        &[(20, 15), (6, 1)],
+    );
+    assert!(
+        !result.attacks[0]
+            .advantage
+            .contains(&AttackReason::PackTactics)
+    );
+}
+
 #[test]
 fn initiative_group_draws_ties_and_invalid_size_or_stats_are_explicit() {
     let src = source();

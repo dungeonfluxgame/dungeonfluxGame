@@ -110,15 +110,6 @@ pub struct AttackSummary {
     pub knocked_out: bool,
     pub killed: bool,
     pub mastery: Option<Mastery>,
-    pub strength_save: Option<StrengthSaveSummary>,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StrengthSaveSummary {
-    pub actor: u32,
-    pub dc: i16,
-    pub modifier: i16,
-    pub die: u32,
-    pub succeeded: bool,
 }
 /// Squares a mover actually entered in one resolution, in order, and what they cost in feet
 /// (SRD p13-14: every square 5 ft, Difficult Terrain and crawling add 5 ft each). A move that
@@ -1006,37 +997,16 @@ fn attack(
             target.sap.push(effect);
         }
     }
-    let strength_save = if hit
+    if hit
         && usage.weapon == Weapon::Bite
         && matches!(kind, CreatureKind::Wolf | CreatureKind::Mastiff)
         && matches!(
             battle.actor(target)?.spec.size,
             super::Size::Small | super::Size::Medium
-        ) {
-        let dc = if kind == CreatureKind::Wolf { 12 } else { 11 };
-        let target_actor = battle.actor(target)?;
-        let modifier = crate::local_journey::ability_modifier(target_actor.spec.abilities[0])
-            as i16
-            + if target_actor.spec.kind == CreatureKind::Hero {
-                2
-            } else {
-                0
-            };
-        let die = draws.take(20)?;
-        let succeeded = die as i16 + modifier >= dc;
-        if !succeeded {
-            battle.actor_mut(target)?.health.prone = true;
-        }
-        Some(StrengthSaveSummary {
-            actor: target,
-            dc,
-            modifier,
-            die,
-            succeeded,
-        })
-    } else {
-        None
-    };
+        )
+    {
+        battle.actor_mut(target)?.health.prone = true;
+    }
     apply_damage(
         battle,
         target,
@@ -1071,7 +1041,6 @@ fn attack(
         knocked_out: target_actor.health.knocked_out,
         killed: target_actor.health.dead,
         mastery,
-        strength_save,
     })
 }
 fn apply_damage(

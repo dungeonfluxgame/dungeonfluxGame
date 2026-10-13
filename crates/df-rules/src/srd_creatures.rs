@@ -161,7 +161,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
             },
         },
     },
-    // SRD 5.2.1, p. 364. The Prone rider on a bite against a Medium or smaller target is not modeled. Pack Tactics needs an ally and none is present.
+    // SRD 5.2.1, p. 364. Tactical combat applies the Bite's Prone rider; this legacy single-opponent encounter has no Pack Tactics ally.
     SrdCreature {
         id: "wolf",
         name: "Wolf",
@@ -221,7 +221,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
             },
         },
     },
-    // SRD 5.2.1, p. 357. The Prone rider on a bite against a Medium or smaller target is not modeled.
+    // SRD 5.2.1, p. 357. Tactical combat applies the Bite's Prone rider; the legacy single-opponent encounter does not.
     SrdCreature {
         id: "mastiff",
         name: "Mastiff",
@@ -456,14 +456,14 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "Pack Tactics",
         Trait,
         Implemented,
-        "as the Kobold's",
+        "Advantage when a non-Incapacitated ally is within 5 ft of the target",
     ),
     feature(
         "wolf",
         "Bite",
         Action,
         Implemented,
-        "melee; a Medium or smaller target is knocked Prone",
+        "melee, reach 5 ft; on a hit, a Medium or smaller target is knocked Prone",
     ),
     feature(
         "giant-rat",
@@ -505,7 +505,7 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "Bite",
         Action,
         Implemented,
-        "melee; a Medium or smaller target is knocked Prone",
+        "melee, reach 5 ft; on a hit, a Medium or smaller target is knocked Prone",
     ),
     feature(
         "scout",
@@ -582,5 +582,26 @@ mod tests {
         }
         assert_eq!(missing_features("giant-rat").count(), 1);
         assert_eq!(missing_features("kobold-warrior").count(), 0);
+    }
+
+    #[test]
+    fn wolf_and_mastiff_bite_ledger_matches_the_prone_rider() {
+        // SRD 5.2.1 pp. 357, 364: each Bite knocks a Medium or smaller target Prone on a hit.
+        for creature in ["wolf", "mastiff"] {
+            let bite = SRD_521_CREATURE_FEATURES
+                .iter()
+                .find(|row| row.creature == creature && row.name == "Bite")
+                .expect("each creature has a Bite feature");
+            assert_eq!(bite.status, Implemented);
+            assert!(bite.note.contains("on a hit"));
+            assert!(bite.note.contains("Medium or smaller"));
+            assert!(bite.note.contains("Prone"));
+        }
+        let pack_tactics = SRD_521_CREATURE_FEATURES
+            .iter()
+            .find(|row| row.creature == "wolf" && row.name == "Pack Tactics")
+            .expect("Wolf has Pack Tactics");
+        assert!(pack_tactics.note.contains("non-Incapacitated ally"));
+        assert!(pack_tactics.note.contains("within 5 ft of the target"));
     }
 }

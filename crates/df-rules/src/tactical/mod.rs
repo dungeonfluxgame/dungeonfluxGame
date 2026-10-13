@@ -14,7 +14,7 @@ pub use map::{
 };
 pub use resolve::{
     Action, AttackReason, AttackSpend, AttackSummary, AttackUse, DeathSaveResult, DeathSaveSummary,
-    DrawBinding, MoveSummary, RecoverySummary, Resolution, StrengthSaveSummary, resolve,
+    DrawBinding, MoveSummary, RecoverySummary, Resolution, resolve,
 };
 pub use state::{
     Battle, Budget, Combatant, CombatantSpec, CreatureKind, Health, Side, Size, begin,
