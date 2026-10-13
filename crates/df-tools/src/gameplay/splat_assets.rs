@@ -28,6 +28,7 @@ pub(super) const MAXIMUM_DEPTH: usize = 3;
 const CACHE_CONTROL: &str = "public, max-age=3600";
 
 struct Entry {
+    root: PathBuf,
     path: PathBuf,
     mime: &'static str,
     etag: String,
@@ -62,11 +63,13 @@ fn scan(directory: &Path) -> Result<Vec<(String, Entry)>, io::Error> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(found),
         Err(error) => return Err(error),
     }
-    walk(directory, "/assets/splat", 0, &mut found)?;
+    let root = std::fs::canonicalize(directory)?;
+    walk(&root, &root, "/assets/splat", 0, &mut found)?;
     Ok(found)
 }
 
 fn walk(
+    root: &Path,
     directory: &Path,
     url: &str,
     depth: usize,
@@ -84,9 +87,15 @@ fn walk(
         let metadata = std::fs::symlink_metadata(entry.path())?;
         if metadata.is_dir() {
             if depth < MAXIMUM_DEPTH {
-                walk(&entry.path(), &format!("{url}/{name}"), depth + 1, found)?;
+                walk(
+                    root,
+                    &entry.path(),
+                    &format!("{url}/{name}"),
+                    depth + 1,
+                    found,
+                )?;
             }
-        } else if let Some(item) = candidate(&entry.path(), &name)? {
+        } else if let Some(item) = candidate(root, &entry.path(), &name)? {
             found.push((format!("{url}/{name}"), item));
         }
         if found.len() > MAXIMUM_FILES {
@@ -96,7 +105,7 @@ fn walk(
     Ok(())
 }
 
-fn candidate(path: &Path, name: &str) -> Result<Option<Entry>, io::Error> {
+fn candidate(root: &Path, path: &Path, name: &str) -> Result<Option<Entry>, io::Error> {
     let Some(mime) = mime_for(name).filter(|_| name_allowed(name)) else {
         return Ok(None);
     };
@@ -113,6 +122,7 @@ fn candidate(path: &Path, name: &str) -> Result<Option<Entry>, io::Error> {
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map_or(0, |time| time.as_secs());
     Ok(Some(Entry {
+        root: root.to_owned(),
         path: path.to_owned(),
         mime,
         etag: format!("\"{:x}-{:x}\"", metadata.len(), modified),
@@ -152,13 +162,16 @@ async fn respond(entry: &Entry, headers: &HeaderMap) -> Response {
     if revalidated {
         return (StatusCode::NOT_MODIFIED, validators, Body::empty()).into_response();
     }
-    let within_bound = tokio::fs::metadata(&entry.path)
+    let Some(path) = contained_file(&entry.root, &entry.path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let within_bound = tokio::fs::metadata(&path)
         .await
         .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= MAXIMUM_FILE_BYTES);
     if !within_bound {
         return StatusCode::NOT_FOUND.into_response();
     }
-    match tokio::fs::read(&entry.path).await {
+    match tokio::fs::read(&path).await {
         Ok(bytes) => {
             let length = (header::CONTENT_LENGTH, bytes.len().to_string());
             let [etag, mime, cache] = validators;
@@ -171,6 +184,15 @@ async fn respond(entry: &Entry, headers: &HeaderMap) -> Response {
         }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+fn contained_file(root: &Path, path: &Path) -> Option<PathBuf> {
+    let resolved = std::fs::canonicalize(path).ok()?;
+    is_within_root(root, &resolved).then_some(resolved)
+}
+
+fn is_within_root(root: &Path, resolved: &Path) -> bool {
+    resolved.starts_with(root)
 }
 
 #[cfg(test)]
@@ -277,6 +299,16 @@ mod tests {
     }
 
     #[test]
+    fn containment_requires_the_resolved_path_to_remain_under_the_root() {
+        let root = Path::new("/configured/splats");
+        assert!(is_within_root(
+            root,
+            Path::new("/configured/splats/map.splat")
+        ));
+        assert!(!is_within_root(root, Path::new("/configured/private.txt")));
+    }
+
+    #[test]
     fn more_files_than_the_bound_refuses_startup() {
         let directory = scratch("many");
         for index in 0..=MAXIMUM_FILES {
@@ -310,5 +342,24 @@ mod tests {
             ]
         );
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_file_replaced_by_an_outside_symlink_is_not_served() {
+        let parent = scratch("replaced-link");
+        let directory = parent.join("splat");
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("map.splat");
+        let outside = parent.join("outside.splat");
+        std::fs::write(&file, b"admitted bytes").unwrap();
+        std::fs::write(&outside, b"outside bytes").unwrap();
+        let mut router = router(&directory).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::os::unix::fs::symlink(&outside, &file).unwrap();
+
+        let response = get_path(&mut router, "/assets/splat/map.splat", HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        std::fs::remove_dir_all(parent).unwrap();
     }
 }

@@ -833,10 +833,18 @@ fn clip_path(cache_dir: &Path, key: &str) -> PathBuf {
 
 /// A cached clip that is present, bounded, and an MP4. The bytes were validated when written.
 fn cached_clip(cache_dir: &Path, key: &str) -> Option<PathBuf> {
-    let path = clip_path(cache_dir, key);
+    let root = std::fs::canonicalize(cache_dir).ok()?;
+    let path = std::fs::canonicalize(clip_path(cache_dir, key)).ok()?;
+    if !is_within_cache(&root, &path) {
+        return None;
+    }
     let metadata = std::fs::metadata(&path).ok()?;
     (metadata.is_file() && metadata.len() > 12 && metadata.len() <= MAXIMUM_CLIP_BYTES as u64)
         .then_some(path)
+}
+
+pub(super) fn is_within_cache(root: &Path, resolved: &Path) -> bool {
+    resolved.starts_with(root)
 }
 
 /// Writes a validated clip beside its key, through a temporary name so a reader never sees half a

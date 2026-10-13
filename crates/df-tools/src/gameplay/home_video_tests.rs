@@ -316,6 +316,35 @@ async fn the_route_serves_a_whole_clip_a_range_a_suffix_and_refuses_an_unsatisfi
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+#[test]
+fn cache_containment_uses_resolved_paths() {
+    let directory = scratch("containment");
+    let root = std::fs::canonicalize(&directory).expect("the cache root");
+    assert!(home_video::is_within_cache(&root, &root.join("clip.mp4")));
+    assert!(!home_video::is_within_cache(
+        &root,
+        &root.parent().expect("the parent").join("outside.mp4")
+    ));
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cached_clip_symlink_to_an_outside_file_is_not_served() {
+    let parent = scratch("outside-link");
+    let cache = parent.join("cache");
+    std::fs::create_dir_all(&cache).expect("the cache directory");
+    let key = "a".repeat(64);
+    let outside = parent.join("outside.mp4");
+    std::fs::write(&outside, [0u8; 13]).expect("the outside file");
+    std::os::unix::fs::symlink(&outside, cache.join(format!("{key}.mp4")))
+        .expect("the cache symlink");
+
+    let response = respond(&cache, &key, &HeaderMap::new()).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let _ = std::fs::remove_dir_all(parent);
+}
+
 #[tokio::test]
 async fn a_cached_loop_is_served_at_once_with_no_provider_call() {
     let fake = fake(Scenario::MalformedClip);
