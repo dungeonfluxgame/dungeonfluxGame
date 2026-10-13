@@ -67,7 +67,7 @@ struct Scenario {
     lines: &'static [&'static str],
 }
 
-const SCENARIOS: [Scenario; 11] = [
+const SCENARIOS: [Scenario; 12] = [
     Scenario {
         name: "patron-earnest",
         seed: 0,
@@ -201,6 +201,16 @@ const SCENARIOS: [Scenario; 11] = [
         lines: DIALOGUE_BASELINE,
     },
     Scenario {
+        name: "reply-fix",
+        seed: 0,
+        scene: SceneKey::Opening,
+        speaker: NpcRole::Patron,
+        tone: Tone::Earnest,
+        clue: Clue::NotInvolved,
+        hero: "Brakka",
+        lines: REPLY_FIX_LINES,
+    },
+    Scenario {
         name: "round2-replay-a",
         seed: 0,
         scene: SceneKey::Opening,
@@ -253,6 +263,14 @@ const DIALOGUE_BASELINE: &[&str] = &[
      and wants nothing from you. Explain that.",
     "Ha! A veteran afraid of the dark, guarding nursery rhymes. Do you sing them to the rats, \
      {npc}?",
+];
+
+/// The three lines of the DnA-18-50 reply-fix check: a plain question, a threat, and an
+/// open question on an empty topic.
+const REPLY_FIX_LINES: &[&str] = &[
+    "What signal, {npc}? Who cut it off, and how do we mend it?",
+    "Sigrun leans in. You will tell us everything, {npc}, or I will burn this inn down with you in it.",
+    "Anything else for us, {npc}? Anything you have not said?",
 ];
 
 /// The thirty interview lines of transcript-round2.md, in order: plain, hard, emotional,

@@ -104,6 +104,8 @@ async fn run_inner(arguments: &[OsString]) -> CommandResult {
         let word = &words[index];
         if word == "--pretty" {
             client.pretty = true;
+        } else if matches!(word.as_str(), "--keep" | "--wait") {
+            options.push((word.clone(), "true".to_owned()));
         } else if word == "--help" || word == "-h" {
             print_help();
             return CommandResult::Done;
@@ -189,6 +191,8 @@ fn print_help() {
          create <seat> <name>         create the canonical hero for a seat\n\
          act <hero> <action> [...]    play one action: --cell c5r6 --target <foe> --weapon <name> --option <id>\n\
          say <hero> <text>            speak one line; [--context question|social|plan|meta|joke]\n\
+         direct plate <text>          re-render the current scene picture; [--keep] [--wait]\n\
+         direct clear                 clear held directions and return to the ordinary plate\n\
          state                        room, phase, seats, fight, offers, revision\n\
          view --as tv|<hero>          exactly the view that screen is being sent\n\
          log [--since <seq>]          the table log and the override log\n\
@@ -293,6 +297,7 @@ async fn dispatch(
             post(client, "/dev/say", &body).await
         }
         "state" => get(client, "/dev/state").await,
+        "direct" => direct(client, positional, options).await,
         "view" => match flag("--as") {
             Some(who) => get(client, &format!("/dev/view?as={}", url_escape(&who))).await,
             None => client.print_error("view needs --as tv|<hero>"),
@@ -365,6 +370,38 @@ async fn post(client: &Client, path: &str, body: &Value) -> CommandResult {
     match round_trip(client, "POST", path, Some(&text)).await {
         Ok((status, document)) => client.print(&document, !(200..300).contains(&status)),
         Err(message) => CommandResult::Transport(message),
+    }
+}
+
+async fn direct(client: &Client, positional: &[String], options: &[(String, String)]) -> CommandResult {
+    let kind = positional.get(1).map(String::as_str).unwrap_or("");
+    if !matches!(kind, "plate" | "clear") {
+        return client.print_error("direct needs plate <text> or clear");
+    }
+    let enabled = |name: &str| options.iter().any(|(key, value)| key == name && value == "true");
+    let body = json!({"kind": kind, "text": positional.get(2..).unwrap_or(&[]).join(" "),
+        "keep": enabled("--keep")}).to_string();
+    let deadline = tokio::time::Instant::now() + client.timeout;
+    let poll = async {
+        let mut response = round_trip(client, "POST", "/dev/direct", Some(&body)).await?;
+        loop {
+            if !(200..300).contains(&response.0) || !enabled("--wait")
+                || response.1.get("state").and_then(Value::as_str) != Some("pending") {
+                return Ok::<_, String>(response);
+            }
+            let key = response.1.get("key").and_then(Value::as_str)
+                .ok_or_else(|| "pending plate has no key".to_owned())?.to_owned();
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            response = round_trip(client, "GET", &format!("/dev/direct/{}", url_escape(&key)), None).await?;
+        }
+    };
+    match tokio::time::timeout_at(deadline, poll).await {
+        Ok(Ok((status, document))) => {
+            let failed = !(200..300).contains(&status) || document.get("state").and_then(Value::as_str) == Some("failed");
+            client.print(&document, failed)
+        }
+        Ok(Err(message)) => CommandResult::Transport(message),
+        Err(_) => client.print(&json!({"status": "wait-timeout", "kind": kind}), true),
     }
 }
 
@@ -533,7 +570,9 @@ async fn run_script(
         let mut merged = vec!["dev".to_owned()];
         for (key, value) in options {
             merged.push(key.clone());
-            merged.push(value.clone());
+            if !matches!(key.as_str(), "--keep" | "--wait") {
+                merged.push(value.clone());
+            }
         }
         if client.pretty {
             merged.push("--pretty".to_owned());

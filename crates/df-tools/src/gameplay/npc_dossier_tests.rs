@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
 
 use df_protocol::common as rpc;
 use df_types::MemberId;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{
     adventure::{
@@ -20,7 +20,8 @@ use super::{
     social::{Approach, Conversation, SocialLedger, Standing, classify_keywords},
     startup_configuration::{ContentRating, TestRating, content_rating},
     storyteller::{
-        CallProfile, Expression, Slot, age_group, build_prompt, sexual_content_allowed,
+        CallProfile, Expression, Slot, age_group, build_prompt, check_request,
+        sexual_content_allowed,
         tests::{FakeEndpoint, Reply, cache_directory, teller},
     },
     table_log::TableLog,
@@ -1293,6 +1294,216 @@ fn the_speakers_own_past_is_offered_only_when_the_hero_asks_about_the_speaker() 
     }
 }
 
+/// Sources about the speaker's own life: a personal question is answered from these,
+// never from the errand, the danger or the place.
+const PERSONAL_SOURCES: [&str; 11] = [
+    "family_line",
+    "children_line",
+    "home_line",
+    "service_line",
+    "knowing_line",
+    "opinion_line",
+    "courtship_line",
+    "origin_line",
+    "trade_line",
+    "event_line",
+    "identity_line",
+];
+
+#[test]
+fn personal_questions_are_answered_from_the_personal_life() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let dossier = adventure.dossiers[0].clone();
+    let conversation = Conversation {
+        exchange: 1,
+        ..Conversation::default()
+    };
+    for question in [
+        "Do you have children? Anyone waiting at home for you?",
+        "Where did you serve? Tell me about your soldiering days?",
+        "What do you do when you are not on watch? Any trade, any wife?",
+    ] {
+        let (value, _) =
+            conversation_facts(&adventure, &dossier, friendly(), question, &conversation);
+        let lines = answer_lines(&value);
+        assert!(!lines.is_empty(), "{question} is answered with nothing: {value}");
+        for line in &lines {
+            let source = dossier
+                .knowledge
+                .says_freely
+                .iter()
+                .find(|item| item.text == *line)
+                .map(|item| item.source.as_str());
+            assert!(
+                source.is_some_and(|source| PERSONAL_SOURCES.contains(&source)),
+                "{question} is answered from outside the personal life: {line}",
+            );
+        }
+    }
+}
+
+#[test]
+fn knowing_the_cast_is_answered_with_the_acquaintance_not_the_secret() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let patron = adventure.dossiers[0].clone();
+    let contact = adventure
+        .dossiers
+        .iter()
+        .find(|dossier| dossier.role == NpcRole::Contact)
+        .expect("a contact")
+        .clone();
+    let question = format!(
+        "How do you know {}? Are you two old friends?",
+        contact.name
+    );
+    let (value, _) = conversation_facts(
+        &adventure,
+        &patron,
+        friendly(),
+        &question,
+        &Conversation {
+            exchange: 1,
+            ..Conversation::default()
+        },
+    );
+    let lines = answer_lines(&value);
+    assert!(
+        lines.iter().any(|line| line.contains(&contact.name)),
+        "{question} never names them: {value}"
+    );
+}
+
+#[test]
+fn flirting_is_answered_from_the_courtship_fact_and_recorded_in_the_facts() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let dossier = adventure.dossiers[0].clone();
+    let courtship = dossier
+        .knowledge
+        .says_freely
+        .iter()
+        .find(|item| item.source == "courtship_line")
+        .map(|item| item.text.clone())
+        .expect("a courtship line");
+    let (value, _) = conversation_facts(
+        &adventure,
+        &dossier,
+        friendly(),
+        "Is there a wife I should worry about, or are you free to be charmed?",
+        &Conversation {
+            exchange: 1,
+            ..Conversation::default()
+        },
+    );
+    assert_eq!(value["courtship"], json!(courtship));
+    assert!(
+        answer_lines(&value).iter().any(|line| line == &courtship),
+        "the courtship line answers: {value}"
+    );
+}
+
+#[test]
+fn a_fallback_line_never_starts_mid_thought() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let dossier = adventure.dossiers[0].clone();
+    let withheld = withheld_of(&adventure, &dossier);
+    let typed = "What is the lantern, and what did you tell Garrick?";
+    let mid = npc_facts::Offered {
+        key: "line:rumour_line:0".to_owned(),
+        text: "If they do, our steady lantern is at risk.".to_owned(),
+    };
+    let whole = npc_facts::Offered {
+        key: "line:errand_line:0".to_owned(),
+        text: dossier
+            .knowledge
+            .says_freely
+            .iter()
+            .find(|item| item.source == "errand_line")
+            .map(|item| item.text.clone())
+            .expect("an errand line"),
+    };
+    let conversation = Conversation::default();
+    // With a whole line beside it, the mid-thought line is passed over.
+    let both = [mid.clone(), whole.clone()];
+    let (answer, _) = fallback(
+        &dossier,
+        friendly(),
+        typed,
+        Approach::Question,
+        &withheld,
+        &npc_dossier::Memory {
+            conversation: &conversation,
+            said: &[],
+            offered: &both,
+        },
+    );
+    assert_eq!(answer, whole.text, "{answer}");
+    // Alone, it is not spoken: a prepared answer speaks instead.
+    let single = [mid.clone()];
+    let (alone, _) = fallback(
+        &dossier,
+        friendly(),
+        typed,
+        Approach::Question,
+        &withheld,
+        &npc_dossier::Memory {
+            conversation: &conversation,
+            said: &[],
+            offered: &single,
+        },
+    );
+    assert!(!alone.contains("If they do"), "{alone}");
+}
+
+#[test]
+fn small_talk_is_answered_from_opinions_and_an_open_errand_is_not_small_talk() {
+    let adventure = adventure(0x3c6e_f378_dd81_de97);
+    let dossier = adventure.dossiers[0].clone();
+    let small = Conversation {
+        exchange: 4,
+        ..Conversation::default()
+    };
+    let (value, _) = conversation_facts(
+        &adventure,
+        &dossier,
+        friendly(),
+        "Forget the lantern a moment. Ever seen a dragon?",
+        &small,
+    );
+    let lines = answer_lines(&value);
+    let opinions: Vec<&str> = dossier
+        .knowledge
+        .says_freely
+        .iter()
+        .filter(|item| item.source == "opinion_line")
+        .map(|item| item.text.as_str())
+        .collect();
+    assert!(
+        lines.iter().any(|line| opinions.contains(&line.as_str())),
+        "small talk is answered from an opinion: {value}"
+    );
+    assert!(
+        value.get("volunteer").is_none(),
+        "small talk gets no volunteered errand: {value}"
+    );
+    let (tasked, _) = conversation_facts(
+        &adventure,
+        &dossier,
+        friendly(),
+        "Anything else before we set out?",
+        &small,
+    );
+    assert!(
+        tasked.get("volunteer").is_some() || !answer_lines(&tasked).is_empty(),
+        "an open errand is answered: {tasked}"
+    );
+    for line in answer_lines(&tasked) {
+        assert!(
+            !opinions.contains(&line.as_str()),
+            "an open errand is not answered with small talk: {line}"
+        );
+    }
+}
+
 #[test]
 fn trusted_confidences_are_released_from_the_second_exchange_to_a_trusted_hero_only() {
     let adventure = adventure(0x3c6e_f378_dd81_de97);
@@ -1579,11 +1790,70 @@ fn the_reply_rules_fit_the_storytellers_guidance_limit_in_both_ratings() {
     for rating in [ContentRating::Restrained, ContentRating::Mature] {
         let rules = npc_dossier::profile(rating).guidance;
         assert!(
-            rules.chars().count() <= 4000,
-            "{rating:?}: {} characters",
+            rules.chars().count() <= 3700,
+            "{rating:?} guidance is {} characters (bound 4000, headroom wanted 300)",
             rules.chars().count()
         );
     }
+    assert!(
+        npc_dossier::STYLE.chars().count() <= 600,
+        "reply style is {} characters (bound 600)",
+        npc_dossier::STYLE.chars().count()
+    );
+}
+
+/// Every recorded dossier conversation builds a reply request the storyteller accepts at
+/// both ratings: a prompt that outgrows a bound is heard as an authored fallback, so the
+/// bound is checked here and not in front of the owner.
+#[test]
+fn every_dossier_fixture_builds_a_request_the_storyteller_accepts() {
+    let directory =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/gameplay/fixtures/npc-talk");
+    let mut conversations = 0;
+    let mut requests = 0;
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension().is_some_and(|extension| extension == "json")
+                && path
+                    .file_stem()
+                    .is_some_and(|stem| stem.to_string_lossy().starts_with("after-"))
+        })
+        .collect();
+    files.sort();
+    assert!(!files.is_empty(), "no dossier fixtures");
+    for path in &files {
+        let record: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+        let exchanges = record
+            .get("exchanges")
+            .and_then(|exchanges| exchanges.as_array())
+            .unwrap_or_else(|| panic!("{name} holds no exchanges"));
+        for exchange in exchanges {
+            let facts = exchange.get("facts").expect("{name} holds no facts");
+            for rating in [ContentRating::Restrained, ContentRating::Mature] {
+                let slots = [
+                    Slot::new("reply", npc_dossier::REPLY_CHARACTERS),
+                    Slot::new("approach", npc_dossier::APPROACH_CHARACTERS),
+                ];
+                let request = Expression {
+                    purpose: "npc_reply",
+                    facts,
+                    slots: &slots,
+                    style: npc_dossier::STYLE,
+                    profile: npc_dossier::profile(rating),
+                };
+                check_request(&request).unwrap_or_else(|error| {
+                    panic!("{name} at {rating:?}: {error:?}")
+                });
+                requests += 1;
+            }
+        }
+        conversations += 1;
+    }
+    assert!(conversations >= 6, "{conversations} recorded conversations");
+    assert!(requests > 0, "no requests checked");
 }
 
 /// The prepared words of a fallback reply, for comparison. The fallback no longer appends a

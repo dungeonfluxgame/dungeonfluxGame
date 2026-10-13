@@ -871,6 +871,156 @@ fn print_review_sheets() {
     }
 }
 
+/// The personal sources with how many lines each dossier holds of them.
+const PERSONAL_SOURCES: [(&str, usize); 7] = [
+    ("family_line", 1),
+    ("children_line", 1),
+    ("home_line", 1),
+    ("service_line", 1),
+    ("opinion_line", 2),
+    ("courtship_line", 1),
+    ("lore_line", 2),
+];
+
+#[test]
+fn every_dossier_holds_a_personal_life_with_stable_ids() {
+    let chapter = chapter_tables();
+    let tables = dossier_tables();
+    let mut checked = 0;
+    for index in 0..30 {
+        let generated = adventure(&chapter, seed(index));
+        let facts = facts_from(&chapter, &generated);
+        for dossier in roll_dossiers(&tables, &facts, generated.seed).unwrap() {
+            let freely = &dossier.knowledge.says_freely;
+            for (source, count) in PERSONAL_SOURCES {
+                let lines: Vec<_> = freely
+                    .iter()
+                    .filter(|item| item.source == source)
+                    .collect();
+                assert_eq!(
+                    lines.len(),
+                    count,
+                    "{} holds {source} {} time(s)",
+                    dossier.npc_id,
+                    lines.len()
+                );
+                for line in lines {
+                    assert!(!line.text.contains(['{', '}']), "{}", line.text);
+                    assert!(!line.text.contains([';', ':']), "{}", line.text);
+                    assert!(
+                        line.id.starts_with("personal:"),
+                        "{} has no stable id",
+                        line.text
+                    );
+                }
+            }
+            // Stable ids are unique within the dossier.
+            let mut ids: Vec<&str> = freely
+                .iter()
+                .filter(|item| !item.id.is_empty())
+                .map(|item| item.id.as_str())
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(
+                ids.len(),
+                freely.iter().filter(|item| !item.id.is_empty()).count()
+            );
+            // One knowing line per other cast member, pointing at them.
+            let knowing: Vec<_> = freely
+                .iter()
+                .filter(|item| item.source == "knowing_line")
+                .collect();
+            assert_eq!(knowing.len(), facts.cast.len() - 1, "{}", dossier.npc_id);
+            for line in knowing {
+                let pointed = line.about.as_deref().expect("a knowing line points");
+                assert!(
+                    facts.cast.iter().any(|member| member.id == pointed),
+                    "{pointed} is nobody"
+                );
+                assert_eq!(line.id, format!("personal:knowing:{pointed}"));
+                assert!(!line.text.contains(['{', '}']), "{}", line.text);
+            }
+            // The courtship answer matches the partner: tied with a living partner, free
+            // without one. The model never invents a partner because the dossier decides.
+            let partner = freely
+                .iter()
+                .find(|item| item.source == "family_line")
+                .unwrap();
+            let courtship = freely
+                .iter()
+                .find(|item| item.source == "courtship_line")
+                .unwrap();
+            let tied = ["wed-lodger", "sweetheart", "promised"]
+                .iter()
+                .any(|id| partner.id.ends_with(id));
+            assert_eq!(
+                courtship.id.starts_with("personal:courtship:tied-"),
+                tied,
+                "{} is {partner:?} but answers {courtship:?}",
+                dossier.npc_id,
+                partner = partner.text,
+                courtship = courtship.text,
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 50, "{checked} dossiers");
+}
+
+#[test]
+fn a_fighting_label_gets_a_service_history_and_a_trade_gets_a_trade() {
+    let chapter = chapter_tables();
+    let tables = dossier_tables();
+    let generated = adventure(&chapter, seed(7));
+    let martial = ["retired soldier", "veteran of the wars", "watch sergeant"];
+    for label in martial {
+        let mut facts = facts_from(&chapter, &generated);
+        facts.cast[0].role_label = label.into();
+        let dossiers = roll_dossiers(&tables, &facts, generated.seed).unwrap();
+        let service = dossiers[0]
+            .knowledge
+            .says_freely
+            .iter()
+            .find(|item| item.source == "service_line")
+            .unwrap();
+        assert!(
+            service.id.contains("martial-"),
+            "{label}: {}",
+            service.text
+        );
+        assert!(
+            !service.text.starts_with("I never wore a uniform"),
+            "{label}: {}",
+            service.text
+        );
+    }
+    for label in ["bell ringer", "miller", "old mapmaker"] {
+        let mut facts = facts_from(&chapter, &generated);
+        facts.cast[0].role_label = label.into();
+        let dossiers = roll_dossiers(&tables, &facts, generated.seed).unwrap();
+        let service = dossiers[0]
+            .knowledge
+            .says_freely
+            .iter()
+            .find(|item| item.source == "service_line")
+            .unwrap();
+        assert!(service.id.contains("trade-"), "{label}: {}", service.text);
+    }
+}
+
+#[test]
+fn knowledge_without_ids_still_loads_for_older_saves() {
+    let item: super::dossier::Knowledge = serde_json::from_value(json!({
+        "topic": "your_past",
+        "source": "event_line",
+        "text": "I once cooked a feast for a hundred people from nearly nothing."
+    }))
+    .unwrap();
+    assert!(item.id.is_empty());
+    assert!(item.about.is_none());
+}
+
 #[test]
 fn every_speaker_knows_their_own_side_of_the_errand_across_200_seeds() {
     let chapter = chapter_tables();

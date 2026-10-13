@@ -45,6 +45,8 @@ use super::{
     Inner, WorkerGuard, locked, record,
 };
 
+mod direct;
+
 /// Plates kept in the book; the oldest not in use are forgotten first.
 const MAXIMUM_ENTRIES: usize = 32;
 /// Requests that may wait for the worker; a further one is dropped and made again later.
@@ -364,6 +366,7 @@ struct Book {
     entries: BTreeMap<String, Entry>,
     order: VecDeque<String>,
     edit: Edit,
+    direct: direct::Book,
 }
 
 impl Book {
@@ -373,6 +376,7 @@ impl Book {
             entries: BTreeMap::new(),
             order: VecDeque::new(),
             edit: Edit::Idle,
+            direct: direct::Book::default(),
         }
     }
 
@@ -403,6 +407,12 @@ impl Book {
     /// The plate the display should show now, with its layout: the edited plate while an edit of
     /// the wanted face is ready, otherwise the first one.
     fn shown(&self) -> Option<(ImageKey, Option<PlatePlacement>)> {
+        if let Some(shown) = &self.direct.shown {
+            return match &self.edit {
+                Edit::Ready { key, .. } => Some((key.clone(), shown.1.clone())),
+                _ => Some(shown.clone()),
+            };
+        }
         let Some(Entry::Ready { key, placement }) = self.current_entry() else {
             return None;
         };
@@ -416,12 +426,13 @@ impl Book {
         self.current
             .as_ref()
             .is_some_and(|current| !current.in_combat)
-            && matches!(self.current_entry(), Some(Entry::Ready { .. }))
+            && (self.direct.shown.is_some() || matches!(self.current_entry(), Some(Entry::Ready { .. })))
     }
 }
 
 /// One request for the worker.
 enum Job {
+    Directed(Box<direct::Work>),
     Fresh {
         id: String,
         scene: PlateScene,
@@ -451,6 +462,12 @@ struct Locate {
 }
 
 enum Done {
+    Directed {
+        generation: u64,
+        scene_key: String,
+        key: Option<ImageKey>,
+        result: Result<(ImageKey, Option<PlatePlacement>), ImageFailure>,
+    },
     Located {
         id: String,
         key: ImageKey,
@@ -681,6 +698,7 @@ impl Shared {
                 .map(|scene| scene.plate_id(&view.heroes, &faces));
             if scene_changed {
                 book.edit = Edit::Idle;
+                book.direct.reset();
                 // A plate that failed is asked for again once when its scene comes back.
                 if let Some(id) = &id
                     && matches!(book.entries.get(id), Some(Entry::Failed))
@@ -789,6 +807,12 @@ impl Shared {
         if current.scene_key != scene_key || current.in_combat {
             return;
         }
+        if book.direct.shown.is_some() && let Some((key, placement)) = book.shown() {
+            scene.live_plate = key.path();
+            scene.plate_layout = placement.as_ref().map(wire_layout);
+            scene.plate_state = rpc::PlateState::Ready as i32;
+            return;
+        }
         match book.current_entry() {
             Some(Entry::Ready { .. }) => {
                 if let Some((key, placement)) = book.shown() {
@@ -838,6 +862,9 @@ impl Shared {
     fn spawn(self: &Arc<Self>, tasks: &mut JoinSet<Done>, job: Job) {
         let shared = Arc::clone(self);
         match job {
+            Job::Directed(work) => {
+                tasks.spawn(async move { shared.render_directed(*work).await });
+            }
             Job::Fresh {
                 id,
                 scene,
@@ -932,13 +959,14 @@ impl Shared {
         (figure, face)
     }
 
-    async fn render_fresh(
+    async fn fresh_request(
         &self,
         scene: &PlateScene,
         spec: &ShotSpec,
         heroes: &[u8],
         faces: &[(u8, ImageKey)],
-    ) -> Result<(ImageKey, Option<PlatePlacement>, Option<Box<Locate>>), ImageFailure> {
+        direction: Option<&str>,
+    ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
         let mut references = Vec::new();
         let mut sorted = heroes.to_vec();
         sorted.sort_unstable();
@@ -994,16 +1022,27 @@ impl Shared {
             },
         )
         .map_err(|_| ImageFailure::InvalidRequest)?;
-        let key = self
-            .inner
-            .imagery
-            .render(ImageRequest {
+        let prompt = match direction {
+            Some(direction) => prompt.with_development_direction(direction),
+            None => prompt,
+        };
+        Ok((ImageRequest {
                 kind: ImageKind::ScenePlate,
                 references,
                 prompt,
                 output: OutputSpec::PLATE,
-            })
-            .await?;
+            }, locator_face))
+    }
+
+    async fn render_fresh(
+        &self,
+        scene: &PlateScene,
+        spec: &ShotSpec,
+        heroes: &[u8],
+        faces: &[(u8, ImageKey)],
+    ) -> Result<(ImageKey, Option<PlatePlacement>, Option<Box<Locate>>), ImageFailure> {
+        let (request, locator_face) = self.fresh_request(scene, spec, heroes, faces, None).await?;
+        let key = self.inner.imagery.render(request).await?;
         let Some(speaker) = &spec.speaker else {
             return Ok((key, None, None));
         };
@@ -1136,6 +1175,11 @@ impl Shared {
             has_speaker_art,
         )
         .map_err(|_| ImageFailure::InvalidRequest)?;
+        let direction = locked(&self.book).direct.keep.clone();
+        let prompt = match direction {
+            Some(direction) => prompt.with_development_direction(&direction),
+            None => prompt,
+        };
         self.inner
             .imagery
             .render(ImageRequest {
@@ -1150,7 +1194,12 @@ impl Shared {
     /// Records a finished render. Every generation is logged with its time; the run manifest
     /// holds its cost.
     fn finish(&self, done: Done) {
+        if let Done::Directed { generation, scene_key, key, result } = done {
+            self.finish_directed(generation, &scene_key, key, result);
+            return;
+        }
         let (kind, elapsed, outcome) = match &done {
+            Done::Directed { .. } => unreachable!("handled above"),
             Done::Fresh {
                 elapsed, result, ..
             } => ("plate", *elapsed, result.as_ref().map(|_| ())),
@@ -1174,6 +1223,7 @@ impl Shared {
         );
         let mut book = locked(&self.book);
         match done {
+            Done::Directed { .. } => unreachable!("handled above"),
             Done::Located {
                 id, key, placement, ..
             } => {
@@ -1231,6 +1281,9 @@ impl Shared {
     /// a return to the neutral face returns to the first plate.
     fn poll_face(&self) {
         let mut book = locked(&self.book);
+        if book.direct.pending {
+            return;
+        }
         let Some(current) = &book.current else {
             return;
         };
@@ -1240,7 +1293,15 @@ impl Shared {
         let Some(speaker) = scene.speaker.clone() else {
             return;
         };
-        let Some(Entry::Ready { key: base, .. }) = book.current_entry().cloned() else {
+        let base = if book.direct.keep.is_some() {
+            book.direct.shown.as_ref().map(|shown| shown.0.clone())
+        } else {
+            None
+        }.or_else(|| match book.current_entry() {
+            Some(Entry::Ready { key, .. }) => Some(key.clone()),
+            _ => None,
+        });
+        let Some(base) = base else {
             return;
         };
         let scene_key = current.scene_key.clone();
@@ -1271,6 +1332,9 @@ impl Shared {
                     face,
                 };
                 if self.jobs.try_send(job).is_ok() {
+                    if book.direct.keep.is_none() {
+                        book.direct.shown = None;
+                    }
                     book.edit = Edit::Pending(face);
                     record(
                         "gameplay.living_scene.plate_edit_requested",

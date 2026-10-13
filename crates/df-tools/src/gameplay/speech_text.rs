@@ -50,7 +50,7 @@ pub(super) fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
-const FILLER_WORDS: [&str; 105] = [
+const FILLER_WORDS: [&str; 106] = [
     "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at", "for", "with", "from",
     "by", "is", "are", "was", "were", "be", "been", "am", "i", "you", "he", "she", "it", "we",
     "they", "me", "my", "your", "his", "her", "our", "their", "this", "that", "these", "those",
@@ -59,7 +59,7 @@ const FILLER_WORDS: [&str; 105] = [
     "say", "know", "need", "want", "any", "them", "him", "us", "one", "ones", "here", "very",
     "much", "more", "some", "just", "into", "than", "also", "like", "get", "got", "must", "may",
     "might", "should", "shall", "please", "now", "still", "too", "even", "only", "same", "such",
-    "other", "over", "after", "before", "while",
+    "other", "over", "after", "before", "while", "ever",
 ];
 
 /// The words of `text` that carry meaning: no filler, at least three letters, plural `s` cut.
@@ -270,6 +270,19 @@ mod tests {
             rule.violation("No word on that. The road is watched, though.")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn flat_dodges_count_as_denials() {
+        for dodge in [
+            "That is a question for another time.",
+            "I have nothing more to add.",
+            "My mind's elsewhere just now.",
+            "My thoughts keep straying back to the errand.",
+        ] {
+            assert!(is_denial(dodge), "{dodge}");
+        }
+        assert!(!is_denial("I buried the one I loved. Do not ask that of me."));
     }
 
     #[test]

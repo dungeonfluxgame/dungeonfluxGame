@@ -826,6 +826,24 @@ impl LivingScenes {
         }
     }
 
+    pub(super) fn direct_plate(
+        &self,
+        text: String,
+        keep: bool,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<serde_json::Value, ImageFailure>>, &'static str> {
+        self.plates.as_ref().ok_or("imagery or scene plates are off")?.direct(text, keep)
+    }
+
+    pub(super) fn clear_direction(&self) {
+        if let Some(plates) = &self.plates {
+            plates.clear_direction();
+        }
+    }
+
+    pub(super) fn direct_status(&self, key: &str) -> Option<serde_json::Value> {
+        self.plates.as_ref()?.direct_status(key)
+    }
+
     /// Notes a display view the server is sending: its scene, cast, tempo, revision and the
     /// health of the party and the cast. Player views are ignored.
     pub(super) fn observe(&self, message: &rpc::ViewMessage) {

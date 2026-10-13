@@ -63,7 +63,11 @@ struct FakeState {
 
 impl FakeOpenAi {
     fn start(delay: Duration, reply: Reply) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        Self::start_at("127.0.0.1:0".parse().unwrap(), delay, reply)
+    }
+
+    fn start_at(address: SocketAddr, delay: Duration, reply: Reply) -> Self {
+        let listener = TcpListener::bind(address).unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let requests = Arc::new(AtomicUsize::new(0));
@@ -388,6 +392,62 @@ fn imagery(fake: &FakeOpenAi, name: &str, budget: u32) -> (Imagery, PathBuf) {
         ),
         dir,
     )
+}
+
+pub(in crate::gameplay) struct DirectionFixture {
+    pub(in crate::gameplay) imagery: Imagery,
+    fake: FakeOpenAi,
+}
+
+impl DirectionFixture {
+    pub(in crate::gameplay) fn new(cache: &Path) -> Self {
+        let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+        let imagery = imagery_in(&fake, cache, None, 20, Duration::from_secs(5), ContentRating::Restrained);
+        Self { imagery, fake }
+    }
+
+    pub(in crate::gameplay) fn calls(&self) -> usize {
+        self.fake.calls()
+    }
+
+    pub(in crate::gameplay) fn prompt(&self) -> String {
+        self.fake.last_fields().0["prompt"].clone()
+    }
+}
+
+#[tokio::test]
+async fn development_direction_changes_the_key_and_preserves_the_undirected_cache() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (imagery, _) = imagery(&fake, "dev-direct-key", 3);
+    let baseline = refresh(Mood::Calm);
+    let original_prompt = baseline.prompt.as_str().to_owned();
+    let original = imagery.render(baseline).await.unwrap();
+    let mut directed = refresh(Mood::Calm);
+    directed.prompt = directed.prompt.with_development_direction("Brakka unsheathes his sword");
+    let key = imagery.render(directed).await.unwrap();
+    assert_ne!(key, original);
+    let sent = fake.last_fields().0;
+    assert!(sent["prompt"].starts_with(&original_prompt));
+    assert!(sent["prompt"].ends_with("Brakka unsheathes his sword"));
+    assert_eq!(imagery.render(refresh(Mood::Calm)).await.unwrap(), original);
+    assert_eq!(fake.calls(), 2);
+    assert_eq!(imagery.budget_remaining(), 1);
+}
+
+/// Owns a bounded local fake for the operator's full server/CLI smoke transcript. No live calls.
+#[test]
+#[ignore = "operator-run local fake server; ends at its stop file or after 15 minutes"]
+fn devctl_image_fixture_server() {
+    let address = std::env::var("DF_DEVCTL_FAKE_LISTEN").unwrap().parse().unwrap();
+    let output = PathBuf::from(std::env::var("DF_DEVCTL_FAKE_OUTPUT").unwrap());
+    let fake = FakeOpenAi::start_at(address, Duration::from_millis(50), Reply::Image);
+    println!("FIXTURE READY address={}", fake.address);
+    let deadline = std::time::Instant::now() + Duration::from_secs(900);
+    while std::time::Instant::now() < deadline && !output.join("stop").exists() {
+        let seen = fake.seen.lock().unwrap().clone();
+        std::fs::write(output.join("requests.json"), serde_json::to_vec_pretty(&seen).unwrap()).unwrap();
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn place() -> PlaceFacts {

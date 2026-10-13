@@ -225,10 +225,10 @@ struct Ask {
 fn read_ask(typed: &str) -> Ask {
     let lowered = normalised(typed);
     let has = |phrases: &[&str]| phrases.iter().any(|phrase| lowered.contains(phrase));
-    let topic = topic_of(typed, classify_keywords(typed));
+    let mapped = topic_of(typed, classify_keywords(typed));
     // Leading-space stems so "son" does not match "person", "war" does not match "warm".
-    let directed = match topic {
-        Topic::ComplimentOrFlirt | Topic::Threat | Topic::Bribe => Some(topic),
+    let directed = match mapped {
+        Topic::ComplimentOrFlirt | Topic::Threat | Topic::Bribe => Some(mapped),
         _ if has(&[
             "lover", "flirt", "seduc", "to bed", "kiss", "charm", "marry me",
         ]) =>
@@ -236,6 +236,33 @@ fn read_ask(typed: &str) -> Ask {
             Some(Topic::ComplimentOrFlirt)
         }
         _ => None,
+    };
+    // Personal life (kin, home, service) is the speaker's past; knowing the cast is who
+    // they are. Without this the generic mapping sends family questions to the bond and
+    // want lines, which outrank the family lines they resemble.
+    let personal = has(&[
+        "family", "children", "child", " kid", "kids", " son", "sons", "daughter", "wife",
+        "husband", "married", "marry", "partner", "sweetheart", "wedding", "parents", "mother",
+        "father", "brother", "sister", " home", "where do you live", "where you live", "house",
+        " lodg", " live", " living", "grew up", "where are you from", "how did you end up",
+        "your service", " serve", " served", " soldier", " war", " army", " unit", " rank",
+        "opinion",
+    ]);
+    let knowing = has(&[
+        "how do you know",
+        "do you know",
+        "know him",
+        "know her",
+        "know them",
+        "old friend",
+        "friends with",
+        "your friend",
+    ]);
+    let topic = match directed {
+        Some(topic) => topic,
+        None if knowing => Topic::WhoAreYou,
+        None if personal => Topic::YourPast,
+        None => mapped,
     };
     Ask {
         about_you: has(&[
@@ -391,10 +418,28 @@ fn small_talk(ask: &Ask) -> bool {
         && !ask.task
 }
 
+/// Whether the hero's words ask after the world with a wh-word ("what are the old wards?").
+/// A genuine question refuses in character when nothing answers it: it never takes small
+/// talk ("ever seen a dragon?" asks no wh-word) or padding.
+fn world_question(typed: &str) -> bool {
+    words(typed).iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "what" | "who" | "whom" | "whose" | "where" | "when" | "why" | "how" | "which"
+        )
+    })
+}
+
 /// How well a line answers the hero's words; a line that cannot answer them scores zero or less.
 fn score(line: &Line, ask: &Ask, typed: &str) -> i32 {
-    let shared = i32::try_from(shared_words(typed, &line.text)).unwrap_or(0);
     let talk = small_talk(ask);
+    // Small talk asks nothing topical, so shared words are incidental ("seen", "ever") and
+    // must not let a biography line outrank an opinion.
+    let shared = if talk {
+        0
+    } else {
+        i32::try_from(shared_words(typed, &line.text)).unwrap_or(0)
+    };
     let kind = match line.kind {
         Kind::Errand if ask.about_you && line.key.contains(":identity_line:") => 6,
         Kind::Errand if line.key.contains(":authored_line:") => 4,
@@ -494,6 +539,15 @@ fn split_clauses(chunk: &str) -> Vec<String> {
     parts
 }
 
+/// Whether the part asks something: a question mark or a question word. Scene-setting
+/// ("forget the lantern a moment") does not, and draws no answer line of its own.
+fn asks(part: &str) -> bool {
+    part.contains('?')
+        || words(part)
+            .iter()
+            .any(|word| QUESTION_WORDS.contains(&word.as_str()))
+}
+
 /// The parts of what the hero said, up to three: sentences first, then the clauses of a
 /// sentence that asks more than one thing. The reply answers each part in order.
 pub(super) fn question_parts(typed: &str) -> Vec<String> {
@@ -545,6 +599,15 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a
         .filter(|(points, _, _)| *points > 0)
         .collect();
     ranked.sort_by_key(|(points, order, _)| (std::cmp::Reverse(*points), *order));
+    // Small talk draws on the speaker's own life and opinions only: an errand line that
+    // happens to share a word never answers it. A question grounded in the errand's own
+    // things, or asking after the world, is never small talk.
+    let grounded = fresh.iter().any(|line| {
+        !matches!(line.kind, Kind::Yourself)
+            && shared_words(inputs.words, &line.text) > 0
+    });
+    let talk = small_talk(ask) && !grounded && !world_question(inputs.words);
+    let eligible = |line: &Line| !talk || matches!(line.kind, Kind::Yourself);
     // A question with no topic and no shared words is an open one ("what now?"): the best lines
     // answer it. Otherwise every line chosen must itself touch the question.
     let topical = ask.about_you || ask.place || ask.danger || ask.private || ask.directed.is_some();
@@ -573,24 +636,41 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a
     let taken = |answer: &[&Line], line: &Line| answer.iter().any(|taken| taken.key == line.key);
     let mut answer: Vec<&Line> = Vec::new();
     // One line per part of a several-part question, in the parts' order: the best-ranked fresh
-    // line that shares a content word with the part. A part with no line of its own is left
+    // line that shares a content word with the part. Only a part that asks (a question mark
+    // or a question word) draws a line: scene-setting ("forget the lantern a moment") must
+    // not harvest an errand line by a shared word. A part with no line of its own is left
     // for the reply to refuse in character.
     for part in question_parts(inputs.words) {
         if answer.len() >= ANSWER_LINES {
             break;
         }
-        if let Some((_, _, line)) = ranked
-            .iter()
-            .find(|(_, _, line)| !taken(&answer, line) && shared_words(&part, &line.text) > 0)
-        {
+        if !asks(&part) {
+            continue;
+        }
+        if let Some((_, _, line)) = ranked.iter().find(|(_, _, line)| {
+            !taken(&answer, line)
+                && eligible(line)
+                && shared_words(&part, &line.text) > 0
+        }) {
             answer.push(line);
         }
     }
+    // The answer fills from lines that touch the question; an open question also takes a
+    // grounded line (it shares a word) or, when asking what to do next, the best lines.
+    // Small talk fills from opinions. Nothing else is ever bolted on: a genuine question
+    // with no answering line stays empty for the in-character refusal.
+    let fills = |line: &Line| {
+        eligible(line)
+            && (talk
+                || touches(line)
+                || (open && ask.task)
+                || (open && shared_words(inputs.words, &line.text) > 0))
+    };
     for (_, _, line) in &ranked {
         if answer.len() >= ANSWER_LINES {
             break;
         }
-        if !taken(&answer, line) && (answer.is_empty() || open || touches(line)) {
+        if !taken(&answer, line) && fills(line) {
             answer.push(line);
         }
     }
@@ -599,7 +679,7 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a
     let volunteer = (inputs.conversation.exchange >= VOLUNTEER_FROM_EXCHANGE)
         .then(|| best_to_tell(&fresh, &answer))
         .flatten()
-        .filter(|line| (open && ask.task) || touches(line));
+        .filter(|line| !talk && ((open && ask.task) || touches(line)));
     let nearest = answer
         .is_empty()
         .then(|| best_to_tell(&fresh, &[]))

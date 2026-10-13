@@ -172,8 +172,11 @@ pub(super) enum FallbackReason {
     RateLimited,
     /// The per-run token budget could not cover the call.
     BudgetExhausted,
-    /// The model call failed, timed out, or the request was malformed.
+    /// The model call failed or timed out.
     CallFailed,
+    /// The storyteller refused the request itself: the label names what was wrong, today
+    /// "style" when the guidance outgrew its bound, "slot ..." for a malformed slot.
+    RequestInvalid(&'static str),
     /// The model answered, but its reply broke a rule on both attempts.
     ReplyRejected,
     /// The model answered, but the reply was empty.
@@ -187,6 +190,7 @@ impl FallbackReason {
             Self::RateLimited => "rate_limited",
             Self::BudgetExhausted => "budget_exhausted",
             Self::CallFailed => "call_failed",
+            Self::RequestInvalid(_) => "request_invalid",
             Self::ReplyRejected => "reply_rejected",
             Self::EmptyReply => "empty_reply",
         }
@@ -796,6 +800,18 @@ impl NpcVoice {
                 None,
             ),
             Err(reason) => {
+                // One server line per fallback, closed vocabulary, never reply text: the
+                // session log is where a coordinator reads why a prepared line spoke.
+                // (DIALOGUE-001 requirement; the OTEL event below carries the same reason.)
+                let detail = match reason {
+                    FallbackReason::RequestInvalid(label) => format!(" detail={label}"),
+                    _ => String::new(),
+                };
+                eprintln!(
+                    "NPC REPLY fallback reason={} npc={}{detail}",
+                    reason.label(),
+                    turn.dossier.npc_id,
+                );
                 let approach = classify_keywords(&context.typed_words);
                 let (answer, answer_key) = npc_dossier::fallback(
                     &turn.dossier,
@@ -939,9 +955,10 @@ impl NpcVoice {
                 StorytellerError::Off => FallbackReason::ModelOff,
                 StorytellerError::BudgetExhausted => FallbackReason::BudgetExhausted,
                 StorytellerError::Rejected(_) => FallbackReason::ReplyRejected,
-                StorytellerError::InvalidRequest(_)
-                | StorytellerError::DeadlineExceeded
-                | StorytellerError::Provider(_) => FallbackReason::CallFailed,
+                StorytellerError::InvalidRequest(label) => FallbackReason::RequestInvalid(label),
+                StorytellerError::DeadlineExceeded | StorytellerError::Provider(_) => {
+                    FallbackReason::CallFailed
+                }
             })?;
         let reply = values
             .get("reply")

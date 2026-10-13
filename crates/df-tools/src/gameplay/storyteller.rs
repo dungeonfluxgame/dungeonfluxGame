@@ -1121,7 +1121,10 @@ fn string_fields(value: &Value) -> Option<BTreeMap<String, String>> {
         .collect()
 }
 
-fn check_request(request: &Expression<'_>) -> Result<(), StorytellerError> {
+/// Whether the storyteller would send this request: bounds on purpose, slots, style,
+/// guidance and facts. The dialogue tests build the real reply request for every dossier
+/// fixture at both ratings and refuse to ship a prompt that outgrows a bound.
+pub(super) fn check_request(request: &Expression<'_>) -> Result<(), StorytellerError> {
     let invalid = StorytellerError::InvalidRequest;
     if request.purpose.is_empty()
         || request.purpose.len() > 32

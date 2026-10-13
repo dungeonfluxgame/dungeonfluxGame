@@ -301,20 +301,24 @@ pub(super) async fn step_forward(
     let mut before = String::new();
     let mut after = String::new();
     for _ in 0..n {
-        let moment = state
+        let popped = state
             .history
             .lock()
             .map_err(|_| failed("history lock poisoned"))?
-            .forward_pop()
-            .ok_or_else(|| {
-                (
-                    axum::http::StatusCode::OK,
-                    Json(json!({
-                        "status": "unavailable",
-                        "reason": format!("only {applied} redo steps are left; the rest were dropped or never stepped over"),
-                    })),
-                )
-            })?;
+            .forward_pop();
+        let Some(moment) = popped else {
+            notices.push(format!(
+                "only {applied} redo steps are left; the rest were dropped or never stepped over"
+            ));
+            return Err((
+                axum::http::StatusCode::OK,
+                Json(json!({
+                    "status": "unavailable",
+                    "reason": format!("only {applied} redo steps are left; the rest were dropped or never stepped over"),
+                    "notices": notices,
+                })),
+            ));
+        };
         // The popped moment is cloned for the attempt: a failed step returns
         // its entry to the redo stack instead of silently eating history.
         let step = owner_jump(

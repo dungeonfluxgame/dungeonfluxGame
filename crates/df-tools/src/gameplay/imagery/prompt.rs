@@ -84,6 +84,14 @@ impl AssembledPrompt {
         &self.text
     }
 
+    /// Only the authenticated, gated development owner may supply this bounded direction.
+    /// Append it after the scene description; retain the original identity and rating clauses.
+    pub(in crate::gameplay) fn with_development_direction(mut self, direction: &str) -> Self {
+        self.text.push_str("\nDevelopment picture direction (change the action only; preserve the scene, cast identities, faces, art style and content rating):\n");
+        self.text.push_str(direction);
+        self
+    }
+
     #[cfg(test)]
     pub(in crate::gameplay) fn parts(&self) -> &[Part] {
         &self.parts

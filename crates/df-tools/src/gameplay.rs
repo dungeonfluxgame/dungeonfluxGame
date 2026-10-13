@@ -1275,9 +1275,14 @@ pub async fn serve(
     // Living scenes: server-generated scene art that follows the story's mood, under the
     // server's one content rating.
     let rating = startup_configuration::content_rating();
+    let image_fixture = dev_control::direct::image_fixture(dev_on)?;
+    let mut imagery_inputs = startup_configuration::ImageryInputs::from_environment();
+    if image_fixture.is_some() {
+        imagery_inputs.credential = Ok("test-credential".to_owned());
+    }
     let imagery_settings = if interactive {
         startup_configuration::imagery_settings(
-            startup_configuration::ImageryInputs::from_environment(),
+            imagery_inputs,
             &std::env::current_dir()?,
             rating,
         )?
@@ -1290,11 +1295,12 @@ pub async fn serve(
         startup_configuration::ImagerySettings::On(configuration) => configuration.interval,
         startup_configuration::ImagerySettings::Off(_) => Duration::from_secs(30),
     };
-    let imagery = imagery::Imagery::start(
+    let imagery = dev_control::direct::start_imagery(
         imagery_settings,
         generated_adventure
             .as_ref()
             .map(|prepared| prepared.directory.as_path()),
+        image_fixture,
     )?;
     let living = living_scenes::LivingScenes::start(
         imagery.clone(),

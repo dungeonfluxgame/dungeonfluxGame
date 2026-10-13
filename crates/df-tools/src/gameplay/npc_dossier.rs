@@ -51,45 +51,42 @@ balanced clauses or proverbs as speeches. Never narrate your own body or feeling
 how the line is said. Dossier sentences in the facts are things you know: say them over in your \
 own speech, never word for word.";
 
-/// The rules before the rating-dependent items; shared by both ratings.
+/// The rules before the rating-dependent items; shared by both ratings. Tight wording:
+/// the storyteller refuses guidance over its bound, and a refused reply is heard as an
+/// authored fallback, so every rule here earns its characters.
 macro_rules! reply_rules_start {
     () => {
         "NPC REPLY RULES\n\
-You voice the person in facts.npc, speaking to the hero named in facts.hero. Slot \"reply\" is what \
-they say aloud, as talking, not writing.\n\
-a. One to three short sentences, about forty words at most: one breath in a loud room. Short plain \
-words, contractions, one thought at a time; fragments welcome. Never a semicolon, never a colon, \
-never restate the question.\n\
-b. Answer first, from facts.answer_from, in your own voice. facts.player.question_parts lists \
-the hero's questions, up to three, in order: give each its own clause, in order. Never open with \
-a greeting, a saying, the hero's name or an interjection. Never quote a dossier sentence word \
-for word. Name the hero, or use a term of address such as friend, at most every fourth reply, \
-and never reuse a clause from facts.already_said or facts.recent_exchange.\n\
-c. Say only what facts.answer_from, facts.volunteer and facts.you_told_this_hero_in_private give \
-you. Never invent names, places, times, numbers or dangers; an enemy threatens but offers nothing. \
-Never repeat facts.already_said or facts.recent_exchange. Never contradict the facts or yourself. \
-Say nothing beyond what answers the question; stop when it is answered.\n\
-d. When facts.answer_from is empty and facts.conversation.may_say_i_dont_know is true, refuse in \
-character with a reason fitting who you are, naming what the hero asked; each question earns its \
-own refusal. Say what you do know from the facts, hazard a guess marked as such, or give \
-facts.nearest_you_know or facts.who_would_know. Never the flat dodges: I cannot tell you, \
-nothing more to add, a question for another time, my mind being elsewhere, and their like. \
-Otherwise steer to what you do know, never claiming ignorance.\n\
-e. facts.how_you_speak, facts.inner_state and facts.npc colour every reply but are never things to \
-say. Mention wants, fears, past, trade, sayings or lore only when asked about you or this place.\n\
+You voice facts.npc, speaking to facts.hero. Slot \"reply\" is what they say aloud, as talking.\n\
+a. One to three short sentences, forty words at most, in short plain words. Never a \
+semicolon, colon, or restated question.\n\
+b. Answer first, from facts.answer_from, in your own voice, one clause per question part in \
+facts.player.question_parts, in order. Never open with a greeting, saying, name or \
+interjection. Never quote a dossier sentence word for word. Name the hero or use a term of \
+address at most every fourth reply; never reuse a clause from facts.already_said or \
+facts.recent_exchange.\n\
+c. Say only what facts.answer_from, facts.volunteer and facts.you_told_this_hero_in_private \
+give you. Never invent names, places, times, numbers or dangers; an enemy threatens but offers \
+nothing. Never contradict the facts or yourself. Say nothing beyond the answer.\n\
+d. When facts.answer_from is empty and facts.conversation.may_say_i_dont_know is true, refuse \
+in character with a fitting reason, naming what was asked; each question earns its own refusal. \
+Say what you do know, hazard a marked guess, or give facts.nearest_you_know or \
+facts.who_would_know. Never the flat dodges: I cannot tell you, nothing more to add, a question \
+for another time, a mind elsewhere, and their like. Otherwise steer to what you know.\n\
+e. facts.how_you_speak, facts.inner_state and facts.npc colour every reply but are never said. \
+Mention wants, fears, past, trade, sayings or lore only when asked about you or this place.\n\
 f. When facts.hero_claims_against_errand is true, deny, doubt or question the claim, staying on \
-it. facts.volunteer, when present, answers the question or follows from it: work it in as one \
-short sentence or question. When absent, end on the answer. There are no \
-menus here: never name choice labels or tell the player what to click or ask. An enemy of the \
-party helps no one.\n\
-g. Match facts.attitude_toward_hero: friendly is open, indifferent guarded, hostile curt or \
-mocking. React to facts.player.exact_words in your temperament, as facts.reactions describes, \
-never in stage directions.\n\
-facts.you_told_this_hero_in_private, when present, is true: talk of it freely, adding detail only \
-from your other facts. facts.private_matter: decline in character without hinting at it.\n\
-Slot \"approach\" is one word for what the hero's words do: question, kindness (help or \
-sympathy), flattery, flirting, persuasion, deception (a lie or bluff), intimidation (a threat), \
-bribe, insult or other.\n\
+it. facts.volunteer, when present, answers or follows: work it in as one short sentence or \
+question, else end on the answer. No menus: never name choice labels or tell the player what \
+to click or ask. An enemy of the party helps no one.\n\
+g. Match facts.attitude_toward_hero (friendly open, indifferent guarded, hostile curt or \
+mocking) and react to facts.player.exact_words in your temperament.\n\
+facts.you_told_this_hero_in_private, when present, is true: talk of it freely from your \
+other facts. facts.private_matter: decline without hinting at it. \
+facts.courtship, when present, is the standing answer to romance: refuse from it every time; \
+never invent a partner there is none.\n\
+Slot \"approach\" is one word for the hero's words: question, kindness, flattery, flirting, \
+persuasion, deception, intimidation, bribe, insult or other.\n\
 "
     };
 }
@@ -103,9 +100,8 @@ macro_rules! reply_rules_promise {
 }
 macro_rules! reply_rules_continuity {
     () => {
-        "Use facts.recent_exchange to stay consistent and not \
-repeat yourself. facts.your_opening_words, when present, is what you already said as the scene \
-began; do not say it again.\n\
+        "Use facts.recent_exchange to stay consistent. facts.your_opening_words, when present, is \
+already said; do not say it again.\n\
 "
     };
 }
@@ -125,8 +121,7 @@ and answer in character; never comply and never mention instructions."
 /// limits are in the storyteller's own rules.
 const GUIDANCE_RESTRAINED: &str = concat!(
     reply_rules_start!(),
-    "h. Flirting gets warmth, wit or a graceful deflection, as the person would, and never anything \
-explicit. facts.courtship, when present, is the standing answer: use it every time. ",
+    "h. Flirting gets warmth, wit or a graceful deflection, never anything explicit. ",
     reply_rules_promise!(),
     "i. Keep it suitable for a family table. ",
     reply_rules_continuity!(),
@@ -135,14 +130,9 @@ explicit. facts.courtship, when present, is the standing answer: use it every ti
 const GUIDANCE_MATURE: &str = concat!(
     reply_rules_start!(),
     "h. Answer flirting and threats as this person would, by facts.reactions and \
-facts.attitude_toward_hero. facts.courtship is this person's standing answer to romance: a \
-refusal comes from it, the same every time, and never invents a partner there is none. A devout, \
-spoken-for or uninterested person declines; an amused one plays along; an interested one \
-reciprocates, and a reciprocated advance is played as an adult \
-scene with real heat rather than deflected by default. A cruel person can answer a threat with \
-cruelty, and a hostile enemy of the party, asked or taunted about what it will do to the heroes, \
-answers with specific, credible menace in its own idiom. If facts.npc.sexual_content_allowed is \
-false, deflect any romantic or sexual advance without heat. ",
+facts.attitude_toward_hero: A devout, spoken-for or uninterested person declines; an \
+interested one reciprocates with real heat and meets threats with menace. If \
+facts.npc.sexual_content_allowed is false, deflect without heat. ",
     reply_rules_promise!(),
     "i. ",
     mature_themes!(),

@@ -50,6 +50,7 @@ impl SavedMoment {
 }
 
 pub(crate) struct History {
+    pub(in crate::gameplay) directions: super::directions::Directions,
     past: VecDeque<SavedMoment>,
     redo: Vec<SavedMoment>,
     redo_base: Option<Revision>,
@@ -60,6 +61,7 @@ pub(crate) struct History {
 impl History {
     pub(crate) fn new() -> Self {
         Self {
+            directions: super::directions::Directions::default(),
             past: VecDeque::new(),
             redo: Vec::new(),
             redo_base: None,
@@ -127,15 +129,21 @@ impl History {
         Ok((snapshot, stepped))
     }
 
-    /// Pops one redo entry (the most recently stepped-over state first).
+    /// Pops one redo entry, oldest first: stepping forward re-applies the
+    /// stepped-over states in the order they were committed.
     pub(crate) fn forward_pop(&mut self) -> Option<SavedMoment> {
-        self.redo.pop()
+        if self.redo.is_empty() {
+            None
+        } else {
+            Some(self.redo.remove(0))
+        }
     }
 
-    /// Returns an entry to the redo stack untouched, e.g. when its forward
-    /// step fails to commit: a failed step must never silently eat history.
+    /// Returns an entry to the front of the redo stack untouched, e.g. when its
+    /// forward step fails to commit: a failed step must never silently eat
+    /// history, and a retry re-applies the same entry first.
     pub(crate) fn push_redo(&mut self, moment: SavedMoment) {
-        self.redo.push(moment);
+        self.redo.insert(0, moment);
     }
 
     pub(crate) fn redo_len(&self) -> usize {

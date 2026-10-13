@@ -1078,7 +1078,7 @@ async fn serve_image(
 
 #[cfg(test)]
 #[path = "imagery_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
 #[path = "imagery_live_tests.rs"]

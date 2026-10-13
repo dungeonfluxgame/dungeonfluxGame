@@ -877,6 +877,13 @@ enum CommitMode {
     Rewind,
 }
 
+/// The source policy of a development rewind decision (DEVCTL-001). Every view
+/// projection replays only its own admitted policies and hex-decodes their
+/// semantic outputs, so the dev decision carries a policy no projection reads:
+/// replays walk exactly the saved moment's game decisions and skip the rewind
+/// marker itself.
+pub const DEV_REWIND_POLICY: &str = "dev-rewind-1";
+
 /// How a rewind candidate's chains relate to the current chains, per chain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RewindDirection {
@@ -958,7 +965,7 @@ fn validate_rewind(
     if dev.operation != operation || dev.revision != next {
         return Err(RepositoryError::InvalidCandidate);
     }
-    if !dev_marked(&dev.semantic_output) {
+    if dev.source_policy.as_str() != DEV_REWIND_POLICY || !dev_marked(&dev.semantic_output) {
         return Err(RepositoryError::InvalidCandidate);
     }
     if !dev.facts.is_empty() || !dev.draws.is_empty() || !dev.effects.is_empty() {

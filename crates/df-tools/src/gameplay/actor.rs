@@ -126,6 +126,12 @@ pub(super) enum Call {
         order: Box<super::dev_control::commands::DevOrder>,
         reply: oneshot::Sender<Result<super::dev_control::commands::DevResult, tonic::Status>>,
     },
+    DevDirect {
+        credential: [u8; 32],
+        request: rpc::WatchViewRequest,
+        order: super::dev_control::direct::Order,
+        reply: oneshot::Sender<Result<super::dev_control::direct::Admission, tonic::Status>>,
+    },
 }
 impl ActorInput for Call {
     fn retained_heap_bytes(&self) -> Option<usize> {
@@ -148,6 +154,10 @@ impl ActorInput for Call {
             | Self::Presence { .. }
             | Self::Presented { .. } => Some(0),
             Self::Dev { order, .. } => order.retained_heap_bytes(),
+            Self::DevDirect { order, request, .. } => order.text.as_ref().map_or(0, String::capacity)
+                .checked_add(request.session_id.as_ref().map_or(0, |id| bytes(&id.value)))?
+                .checked_add(request.run_id.as_ref().map_or(0, |id| bytes(&id.value)))?
+                .checked_add(request.client_binding_id.as_ref().map_or(0, |id| bytes(&id.value))),
             Self::Dialogue { request, .. } => Some(request.retained_heap_bytes()),
             Self::Submit { request, .. } => {
                 let character_bytes = if let Some(character) = &request.character {
@@ -1002,21 +1012,29 @@ impl Actor {
             .revision
             .next_sequence()
             .map_err(|_| tonic::Status::failed_precondition("revision sequence exhausted"))?;
-        let policy = current
-            .state()
-            .decisions
-            .last()
-            .map(|decision| decision.source_policy.clone())
-            .ok_or_else(|| tonic::Status::failed_precondition("no decisions committed yet"))?;
+        let restore_moment = match &order.job {
+            commands::DevJob::Restore { moment, .. } => Some(moment.clone()),
+            _ => None,
+        };
+        // A rewind marker carries the dev policy no view projection reads, so
+        // replays walk exactly the saved moment's game decisions and skip the
+        // marker itself; anything else keeps its author's admitted policy.
+        let policy = if restore_moment.is_some() {
+            df_types::RevisionLabel::new(Some(df_session::submission::DEV_REWIND_POLICY))
+                .map_err(|_| tonic::Status::failed_precondition("dev policy refused"))?
+        } else {
+            current
+                .state()
+                .decisions
+                .last()
+                .map(|decision| decision.source_policy.clone())
+                .ok_or_else(|| tonic::Status::failed_precondition("no decisions committed yet"))?
+        };
         let operation = loop {
             let bytes = model::random::<16>().map_err(unavailable)?;
             if let Ok(operation) = df_types::OperationId::from_bytes(&bytes) {
                 break operation;
             }
-        };
-        let restore_moment = match &order.job {
-            commands::DevJob::Restore { moment, .. } => Some(moment.clone()),
-            _ => None,
         };
         let change = match &order.job {
             commands::DevJob::Restore { moment, what } => candidate::Change::Restore {
@@ -1758,6 +1776,11 @@ impl Reducer<Call> for Actor {
                         "finite demonstration call budget exhausted",
                     )));
                 }
+                Call::DevDirect { reply, .. } => {
+                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
+                        "finite demonstration call budget exhausted",
+                    )));
+                }
                 Call::Presence { .. } | Call::Presented { .. } => {}
             }
             return;
@@ -1839,6 +1862,18 @@ impl Reducer<Call> for Actor {
             } => reply
                 .send(after_grant_reconnect(reconnected, || {
                     self.dev(&credential, *order)
+                }))
+                .is_ok(),
+            Call::DevDirect { credential, request, order, reply } => reply
+                .send(after_grant_reconnect(reconnected, || {
+                    let history = self.dev_history.clone().ok_or_else(|| {
+                        tonic::Status::permission_denied("development control is off")
+                    })?;
+                    let (_, view) = self.view(credential, request)?;
+                    let mut history = history.lock().map_err(|_| {
+                        tonic::Status::unavailable("development direction store unavailable")
+                    })?;
+                    super::dev_control::direct::admit(&mut history, &view, order)
                 }))
                 .is_ok(),
             Call::Presence { .. } | Call::Presented { .. } => true,

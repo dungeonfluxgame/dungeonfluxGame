@@ -127,6 +127,11 @@ pub(super) struct TableLog {
     ring: Mutex<Ring>,
     /// Carries the latest sequence so a watcher rebuilds its view when a line is appended.
     wake: watch::Sender<u64>,
+    /// The async runtime's handle, captured from whichever call first runs inside it (a
+    /// watch subscription). View publishing runs on the session owner thread, which has no
+    /// runtime of its own: without the captured handle the expiry/pacing timers could never
+    /// be armed from there and a wait would never end on its own.
+    runtime: Mutex<Option<tokio::runtime::Handle>>,
 }
 
 impl TableLog {
@@ -155,11 +160,26 @@ impl TableLog {
                 acks: VecDeque::new(),
             }),
             wake: watch::channel(0).0,
+            runtime: Mutex::new(None),
         }
+    }
+
+    /// The runtime to spawn timer tasks on: the caller's when it has one (captured for
+    /// later owner-thread calls), else the captured one.
+    fn runtime(&self) -> Option<tokio::runtime::Handle> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            *self.runtime.lock().unwrap_or_else(PoisonError::into_inner) = Some(handle.clone());
+            return Some(handle);
+        }
+        self.runtime
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Subscribes to appended lines; a change means "publish a fresh view".
     pub(super) fn subscribe(&self) -> watch::Receiver<u64> {
+        let _captured = self.runtime();
         self.wake.subscribe()
     }
 
@@ -377,7 +397,7 @@ impl TableLog {
     /// One task at a time waits for the earliest mark to expire, then for the next, so a closed
     /// tab clears from every screen without any other event.
     fn arm_reaper(self: &Arc<Self>, deadline: Instant) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        let Some(runtime) = self.runtime() else {
             return;
         };
         {
@@ -645,7 +665,7 @@ impl TableLog {
 
     /// One task at a time waits for the pacing release, like the presence reaper.
     fn arm_pacing(self: &Arc<Self>, deadline: Instant) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        let Some(runtime) = self.runtime() else {
             return;
         };
         {
@@ -1662,6 +1682,28 @@ mod tests {
             now + Duration::from_millis(PACING_MAX_WAIT_MS),
         );
         assert_eq!(released, 1);
+    }
+
+    #[tokio::test]
+    async fn the_pacing_timer_armed_from_the_owner_thread_still_releases() {
+        // View publishing runs on the session owner thread, which has no async runtime:
+        // arming there must use the handle captured by an earlier watch subscription, or
+        // the bound would never fire and the phones would wait forever.
+        let log = TableLog::new();
+        let mut wake = log.subscribe();
+        let now = Instant::now();
+        let (released, arm) = log.pacing_observe(1, &[(1, 50)], now);
+        assert_eq!(released, 0);
+        let arm = arm.expect("a presenting gate arms its bound");
+        let owner = log.clone();
+        std::thread::spawn(move || owner.arm_pacing(arm))
+            .join()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), wake.changed())
+            .await
+            .expect("woken by the pacing bound")
+            .unwrap();
+        assert_eq!(log.released_sequence(), 1);
     }
 
     #[test]

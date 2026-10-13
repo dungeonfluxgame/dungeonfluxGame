@@ -31,6 +31,8 @@ use super::{actor, timing};
 use crate::BUILD_ID;
 
 mod actions;
+pub(super) mod direct;
+pub(super) mod directions;
 pub(super) mod candidate;
 pub(crate) mod commands;
 pub(super) mod config;
@@ -170,6 +172,8 @@ pub(super) fn setup(
         .route("/dev/create", post(actions::create_hero))
         .route("/dev/act", post(actions::act))
         .route("/dev/say", post(actions::say))
+        .route("/dev/direct", post(direct::direct))
+        .route("/dev/direct/{key}", get(direct::status))
         .route("/dev/state", get(reads::game_state))
         .route("/dev/view", get(reads::view_as))
         .route("/dev/log", get(reads::game_log))
@@ -383,6 +387,8 @@ async fn owner_view(
     // projection below is exactly what the owner committed.
     let revision = view.revision.unwrap_or_default();
     super::home_video::apply(&mut view);
+    state.service.living.observe(&view);
+    state.service.living.apply(&mut view);
     Ok((revision, view))
 }
 

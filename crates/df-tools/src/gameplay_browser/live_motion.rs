@@ -833,9 +833,37 @@ fn effective_presented(motion: &Motion) -> u64 {
     }
 }
 
+thread_local! {
+    /// Which report keep-alive loop is current; an older one ends itself.
+    static REPORT_LOOP: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Sends one presentation report; returns the server's released sequence after it.
+async fn send_report(client: &Rc<RefCell<Client>>, sequence: u64) -> Option<u64> {
+    let (sessions, credential) = {
+        let state = client.borrow();
+        (state.sessions.clone()?, state.credential.clone())
+    };
+    let mut sessions = sessions;
+    let mut call = request(rpc::PresentedRequest { sequence }, &credential).ok()?;
+    call.set_timeout(Duration::from_millis(2_000));
+    let outcome = sessions.report_presented(call).await;
+    let root = client.borrow().root.clone();
+    let _marked = root.set_attribute(
+        "data-presented-report",
+        if outcome.is_ok() { "sent" } else { "failed" },
+    );
+    outcome
+        .ok()
+        .map(|response| response.into_inner().released_sequence)
+}
+
 /// Tells the server the last beat this display finished presenting, so it can release the
 /// next actor (its timer is only the bound for a missing display). Best effort like the
 /// speech-intent signal: a failed report is marked on the root and never blocks the stage.
+/// The report repeats on its own timer until the server's released sequence reaches the
+/// newest resolved beat: the stage stops ticking at idle, and a single report could leave
+/// an older in-window report governing the release forever.
 fn report_presented(client: &Rc<RefCell<Client>>) {
     if client.borrow().role != "display" {
         return;
@@ -859,29 +887,38 @@ fn report_presented(client: &Rc<RefCell<Client>>) {
     let Some(sequence) = due else {
         return;
     };
-    let (sessions, credential) = {
-        let state = client.borrow();
-        let Some(sessions) = state.sessions.clone() else {
-            return;
-        };
-        (sessions, state.credential.clone())
-    };
+    let id = REPORT_LOOP.with(|current| {
+        current.set(current.get() + 1);
+        current.get()
+    });
     let weak = Rc::downgrade(client);
     wasm_bindgen_futures::spawn_local(async move {
-        let mut sessions = sessions;
-        let outcome = match request(rpc::PresentedRequest { sequence }, &credential) {
-            Ok(mut call) => {
-                call.set_timeout(Duration::from_millis(2_000));
-                sessions.report_presented(call).await.map(|_| ())
+        let mut sequence = sequence;
+        loop {
+            let Some(client) = weak.upgrade() else {
+                return;
+            };
+            let released = send_report(&client, sequence).await;
+            let (presented, latest) =
+                with_motion(|motion| (effective_presented(motion), motion.latest_seq))
+                    .unwrap_or((sequence, sequence));
+            if released.is_some_and(|released| released >= latest) && presented >= latest {
+                return;
             }
-            Err(_) => return,
-        };
-        if let Some(client) = weak.upgrade() {
-            let root = client.borrow().root.clone();
-            let _marked = root.set_attribute(
-                "data-presented-report",
-                if outcome.is_ok() { "sent" } else { "failed" },
-            );
+            gloo_timers::future::TimeoutFuture::new(1_600).await;
+            if REPORT_LOOP.with(std::cell::Cell::get) != id {
+                return;
+            }
+            sequence = with_motion(|motion| {
+                let presented = effective_presented(motion);
+                motion.reported_seq = presented;
+                motion.reported_at_ms = now_ms();
+                presented
+            })
+            .unwrap_or(sequence);
+            if sequence == 0 {
+                return;
+            }
         }
     });
 }
