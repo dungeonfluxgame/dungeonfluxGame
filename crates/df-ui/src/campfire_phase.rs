@@ -103,8 +103,12 @@ impl CampfireView<'_> {
             if !members.insert(member.key) {
                 return Err(CampfireValidationError::DuplicateIdentity);
             }
-            for text in [member.key, member.name, member.condition, member.detail] {
+            for text in [member.key, member.name, member.detail] {
                 charge(text)?;
+            }
+            // A hero with nothing to report has no condition line: it is optional.
+            if !member.condition.is_empty() {
+                charge(member.condition)?;
             }
         }
         let mut offers = BTreeSet::new();
@@ -418,6 +422,11 @@ mod browser {
                 if let Some(nodes) = mounted.get(member.key) {
                     literal(&nodes.name, member.name);
                     literal(&nodes.condition, member.condition);
+                    if member.condition.is_empty() {
+                        nodes.condition.set_attribute("hidden", "")?;
+                    } else {
+                        nodes.condition.remove_attribute("hidden")?;
+                    }
                     literal(&nodes.detail, member.detail);
                     self.party.append_child(&nodes.root)?;
                 }
@@ -544,6 +553,36 @@ mod tests {
         assert_eq!(
             current.validate(),
             Err(CampfireValidationError::InvalidOwner)
+        );
+    }
+    #[test]
+    fn a_member_with_no_condition_is_valid_and_blank_text_elsewhere_is_not() {
+        let healthy = [CampfireMember {
+            key: "a",
+            name: "Brakka",
+            condition: "",
+            detail: "HP 13 / 13",
+        }];
+        assert_eq!(view(&healthy).validate(), Ok(()));
+        let nameless = [CampfireMember {
+            key: "a",
+            name: "",
+            condition: "",
+            detail: "HP 13 / 13",
+        }];
+        assert_eq!(
+            view(&nameless).validate(),
+            Err(CampfireValidationError::EmptyText)
+        );
+        let blank_condition = [CampfireMember {
+            key: "a",
+            name: "Brakka",
+            condition: "  ",
+            detail: "HP 13 / 13",
+        }];
+        assert_eq!(
+            view(&blank_condition).validate(),
+            Err(CampfireValidationError::EmptyText)
         );
     }
     #[test]
