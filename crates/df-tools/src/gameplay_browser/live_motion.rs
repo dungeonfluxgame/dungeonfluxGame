@@ -100,6 +100,7 @@ struct RollDetail {
     target_voice: Option<df_render::battle::VoiceSet>,
     /// The first outcome of this attacker's turn within the view: its turn begins here.
     turn_start: bool,
+    turn_only: bool,
     /// Where the attacker stood before this turn and where the server put it: shown as a walk
     /// before the turn's first attack.
     walk: Option<(GridCell, GridCell)>,
@@ -249,6 +250,7 @@ fn remember(seen: &mut VecDeque<u64>, sequence: u64) -> bool {
 }
 
 /// The outcomes the view adds, identified by the server's monotonic beat sequence.
+#[cfg(test)]
 fn fresh_outcomes(
     outcomes: &[rpc::CombatOutcome],
     after_sequence: u64,
@@ -266,6 +268,7 @@ fn roll_detail(
     voices: &HashMap<String, df_render::battle::VoiceSet>,
     fight_over: bool,
 ) -> Option<RollDetail> {
+    let turn_only = outcome.kind == rpc::OutcomeKind::Move as i32;
     let description = live_combat::describe(outcome).map(|description| RollDescriptionOwned {
         label: description.label,
         value: description.value,
@@ -285,12 +288,16 @@ fn roll_detail(
         );
     Some(RollDetail {
         attacker: outcome.actor_name.clone(),
-        target: outcome.target_name.clone(),
+        target: if turn_only {
+            outcome.actor_name.clone()
+        } else {
+            outcome.target_name.clone()
+        },
         hit: outcome.hit,
         critical: outcome.critical,
         grazed: outcome.grazed,
         damage: outcome.damage,
-        target_down: outcome.knocked_out || outcome.target_hit_points == 0,
+        target_down: !turn_only && (outcome.knocked_out || outcome.target_hit_points == 0),
         fight_over,
         turn_changed: transitions.turn_changed,
         action_line,
@@ -314,6 +321,7 @@ fn roll_detail(
         attack_voice: voices.get(&outcome.actor_name).copied(),
         target_voice: voices.get(&outcome.target_name).copied(),
         turn_start: false,
+        turn_only,
         walk: None,
         beat: Vec::new(),
         sequence: outcome.sequence,
@@ -553,6 +561,8 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         }
         let restart = motion.previous.is_none() || motion.generation != generation || hidden;
         let transitions = presentation::transitions(motion.previous.as_ref(), &snapshot);
+        let presented = effective_presented(motion);
+        motion.conductor.observe_presented(presented);
         let scene_changed = motion
             .scene_key
             .as_deref()
@@ -640,9 +650,16 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 }
             }
         }
-        let mut staged: Vec<RollDetail> = if transitions.new_roll {
+        let mut staged: Vec<RollDetail> = if !restart {
             let shown = journey.combat.as_ref().map_or_else(Vec::new, |combat| {
-                fresh_outcomes(&combat.outcomes, motion.latest_seq)
+                presentation::fresh_combat_beats(
+                    combat,
+                    if transitions.entered_combat {
+                        0
+                    } else {
+                        motion.latest_seq
+                    },
+                )
             });
             let marks = presentation::turn_marks(&shown, &before_cells, &standing);
             let finishing_sequence = journey
@@ -663,6 +680,13 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                     )?;
                     detail.turn_start = mark.turn_start;
                     detail.walk = mark.walk.filter(|_| !restart);
+                    if detail.turn_only {
+                        detail.walk = outcome
+                            .path
+                            .first()
+                            .zip(outcome.path.last())
+                            .map(|(from, to)| ((from.col, from.row), (to.col, to.row)));
+                    }
                     // A reload stages the current view silently: past beats keep their
                     // history, but their cries are not replayed.
                     if !restart {
@@ -703,8 +727,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 }
             }
             super::live_battlefield::accept_cells(&standing);
-            // Blows the director later skips never reach the cue stream, so the battlefield
-            // counts them as its cues arrive (rolling) and finish (impact), not here.
+            super::live_battlefield::accept_cues(turns);
         }
         let memorable = roll
             .as_ref()
@@ -715,8 +738,18 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             enters_combat: transitions.entered_combat
                 || (restart && snapshot.stage == CombatStage::Fighting),
             turn_changed: transitions.turn_changed,
-            roll: roll.clone().map(|roll| Detail::Roll(Box::new(roll))),
-            impact: roll.clone().map(|roll| Detail::Roll(Box::new(roll))),
+            roll: roll
+                .clone()
+                .filter(|roll| !roll.turn_only)
+                .map(|roll| Detail::Roll(Box::new(roll))),
+            turn: roll
+                .clone()
+                .filter(|roll| roll.turn_only)
+                .map(|roll| Detail::Roll(Box::new(roll))),
+            impact: roll
+                .clone()
+                .filter(|roll| !roll.turn_only)
+                .map(|roll| Detail::Roll(Box::new(roll))),
             defeat: roll
                 .filter(|roll| roll.target_down)
                 .map(|roll| Detail::Roll(Box::new(roll))),
@@ -781,8 +814,9 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             .set_battlefield_busy(super::live_battlefield::is_busy());
         let blow_plan = |roll: &RollDetail| ViewPlan {
             diff: ViewDiff {
-                roll: Some(Detail::Roll(Box::new(roll.clone()))),
-                impact: Some(Detail::Roll(Box::new(roll.clone()))),
+                roll: (!roll.turn_only).then(|| Detail::Roll(Box::new(roll.clone()))),
+                turn: roll.turn_only.then(|| Detail::Roll(Box::new(roll.clone()))),
+                impact: (!roll.turn_only).then(|| Detail::Roll(Box::new(roll.clone()))),
                 defeat: roll
                     .target_down
                     .then(|| Detail::Roll(Box::new(roll.clone()))),
@@ -992,16 +1026,21 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         beat_log,
     )) = with_motion(|motion| {
         let presented = effective_presented(motion);
+        motion.conductor.observe_presented(presented);
         super::live_battlefield::set_presented(presented);
         let beat_log = motion
             .conductor
             .beat_log()
             .iter()
-            .map(|record| {
-                format!(
-                    "{}:{}:{}:{}",
-                    record.sequence, record.kind, record.start_ms, record.end_ms
-                )
+            .map(|record| match record.skip_reason {
+                Some(reason) => format!(
+                    "{}:skipped:{reason}:{}:{}:wait={}",
+                    record.sequence, record.start_ms, record.end_ms, record.wait_ms
+                ),
+                None => format!(
+                    "{}:{}:{}:{}:wait={}",
+                    record.sequence, record.kind, record.start_ms, record.end_ms, record.wait_ms
+                ),
             })
             .collect::<Vec<_>>()
             .join(",");
@@ -1074,6 +1113,10 @@ fn apply(client: &Rc<RefCell<Client>>, commands: Vec<Command<Detail>>) -> Result
     let mut first_error = None;
     for command in commands {
         let outcome = match command {
+            Command::Skip { detail } => {
+                battlefield_cue_named("skipped", detail.as_ref());
+                Ok(())
+            }
             Command::Render => {
                 if let Some(Some(overlay)) = with_motion(|motion| motion.overlay.take()) {
                     overlay.remove();
@@ -1090,7 +1133,9 @@ fn apply(client: &Rc<RefCell<Client>>, commands: Vec<Command<Detail>>) -> Result
                 // roll, the closing line when the banner rises. Beats that never start
                 // never install their lines.
                 let beat = match (state, detail.as_ref()) {
-                    (StageState::Rolling, Some(Detail::Roll(roll))) => roll.beat.clone(),
+                    (StageState::Rolling | StageState::Turn, Some(Detail::Roll(roll))) => {
+                        roll.beat.clone()
+                    }
                     (StageState::Aftermath, Some(Detail::Banner { closing, .. })) => {
                         closing.clone()
                     }
@@ -1144,6 +1189,7 @@ fn state_name(state: StageState) -> &'static str {
         StageState::TitleCard => "title",
         StageState::EnteringScene => "entering",
         StageState::Rolling => "rolling",
+        StageState::Turn => "turn",
         StageState::Impact => "impact",
         StageState::Defeat => "defeat",
         StageState::Healing => "healing",
@@ -1217,6 +1263,10 @@ fn enter(
 /// PLAY-F02 hook: the 3D battlefield follows this same cue stream (roll, then impact), so the dice
 /// sound, the approach and strike, and the damage number stay in step. Copies what it needs.
 fn battlefield_cue(state: StageState, detail: Option<&Detail>) {
+    battlefield_cue_named(state_name(state), detail);
+}
+
+fn battlefield_cue_named(state: &str, detail: Option<&Detail>) {
     let summary = match detail {
         Some(Detail::Roll(roll)) => Some(super::live_battlefield::RollSummary {
             attacker: roll.attacker.clone(),
@@ -1246,7 +1296,7 @@ fn battlefield_cue(state: StageState, detail: Option<&Detail>) {
         }),
         _ => None,
     };
-    super::live_battlefield::on_cue(state_name(state), summary.as_ref());
+    super::live_battlefield::on_cue(state, summary.as_ref());
 }
 
 /// Effort, pain and fall sounds on the flat stage, from the server's voice family for the

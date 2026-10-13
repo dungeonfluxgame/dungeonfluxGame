@@ -34,6 +34,9 @@ use crate::{
 
 pub(crate) type LineId = u64;
 
+const BEAT_CLIP_WAIT_MS: u64 = 1_500;
+const BEAT_SPEECH_CAP_MS: u64 = 10_000;
+
 /// One line a view puts on the stage. The payload is opaque to the conductor.
 #[derive(Clone, Debug)]
 pub(crate) struct ScriptLine<D> {
@@ -91,6 +94,9 @@ pub(crate) enum ClipOp {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Command<D> {
     Render,
+    Skip {
+        detail: Option<D>,
+    },
     /// A cue-sequencer state began (transition, dice, impact, banner, cards).
     Enter {
         state: StageState,
@@ -218,6 +224,8 @@ pub(crate) struct Conductor<D> {
     turn_pending: bool,
     /// When the blow's cues finished and the exit began waiting for the battlefield.
     exit_waiting_since_ms: Option<u64>,
+    /// The current blow's speech may hold its successor, but never beyond ten seconds.
+    beat_since_ms: Option<u64>,
 }
 
 impl<D: Clone> Default for Conductor<D> {
@@ -248,6 +256,7 @@ impl<D: Clone> Conductor<D> {
             held_exit: None,
             turn_pending: false,
             exit_waiting_since_ms: None,
+            beat_since_ms: None,
         }
     }
 
@@ -268,6 +277,10 @@ impl<D: Clone> Conductor<D> {
     /// The last beat sequence the cue sequencer finished presenting (one clock).
     pub(crate) fn presented_sequence(&self) -> u64 {
         self.director.presented_sequence()
+    }
+
+    pub(crate) fn observe_presented(&mut self, sequence: u64) {
+        self.director.observe_presented(sequence);
     }
 
     /// The recent beat phases with their start and end times, for the debug record.
@@ -406,7 +419,7 @@ impl<D: Clone> Conductor<D> {
                 }
                 _ => true,
             });
-        self.director.state() != StageState::Idle
+        !self.director.is_idle()
             || matches!(self.scene, SceneState::Entering | SceneState::Exiting)
             || self.pending.is_some()
             || self.battle == BattleState::Entering
@@ -448,6 +461,7 @@ impl<D: Clone> Conductor<D> {
         self.held.clear();
         self.held_exit = None;
         self.finishing = false;
+        self.beat_since_ms = None;
         self.move_battle(now_ms, BattleEvent::Abandon, &mut out);
         for command in self.director.restart() {
             if let DirectorCommand::Render = command {
@@ -484,12 +498,19 @@ impl<D: Clone> Conductor<D> {
             // roll-call, so nothing of the fight happens behind the cover.
             let opening = ViewDiff {
                 roll: plan.diff.roll.take(),
+                turn: plan.diff.turn.take(),
                 impact: plan.diff.impact.take(),
                 defeat: plan.diff.defeat.take(),
                 blow_only: true,
+                sequence: plan.diff.sequence,
+                memorable: plan.diff.memorable,
                 ..ViewDiff::default()
             };
-            if opening.roll.is_some() || opening.impact.is_some() || opening.defeat.is_some() {
+            if opening.turn.is_some()
+                || opening.roll.is_some()
+                || opening.impact.is_some()
+                || opening.defeat.is_some()
+            {
                 self.held.push(opening);
             }
         }
@@ -557,6 +578,7 @@ impl<D: Clone> Conductor<D> {
 
     pub(crate) fn on_tick(&mut self, now_ms: u64) -> Vec<Command<D>> {
         let mut out = Vec::new();
+        self.advance_beat_speech(now_ms, &mut out);
         let commands = self.director.on_tick(now_ms);
         self.absorb(now_ms, commands, &mut out);
         self.step(now_ms, &mut out);
@@ -722,6 +744,7 @@ impl<D: Clone> Conductor<D> {
             let memorable = diff.memorable;
             let blow = ViewDiff {
                 roll: diff.roll.take(),
+                turn: diff.turn.take(),
                 impact: diff.impact.take(),
                 defeat: diff.defeat.take(),
                 memorable,
@@ -777,7 +800,7 @@ impl<D: Clone> Conductor<D> {
             self.move_battle(now_ms, BattleEvent::TurnClose, out);
         }
         match state {
-            StageState::Rolling => {
+            StageState::Rolling | StageState::Turn => {
                 self.move_battle(now_ms, BattleEvent::TurnOpen, out);
                 self.move_battle(now_ms, BattleEvent::ActBegin, out);
             }
@@ -809,6 +832,7 @@ impl<D: Clone> Conductor<D> {
         for command in commands {
             match command {
                 DirectorCommand::Render => out.push(Command::Render),
+                DirectorCommand::Skip { detail } => out.push(Command::Skip { detail }),
                 DirectorCommand::Rest => {
                     self.follow_battle(StageState::Idle, now_ms, out);
                     if self.turn_pending {
@@ -1079,9 +1103,38 @@ impl<D: Clone> Conductor<D> {
             return out;
         }
         self.close_all(now_ms, FIGHT_LINE_FADE_MS, &mut out);
+        self.beat_since_ms = Some(now_ms);
         self.install_more(script, now_ms, &mut out);
         self.step(now_ms, &mut out);
         out
+    }
+
+    fn advance_beat_speech(&mut self, now_ms: u64, out: &mut Vec<Command<D>>) {
+        let Some(since) = self.beat_since_ms else {
+            return;
+        };
+        let elapsed = now_ms.saturating_sub(since);
+        let waiting = self.sound_on
+            && self.lines.iter().any(|run| {
+                (run.clip == ClipState::Playing
+                    && now_ms.saturating_sub(run.clip_since_ms)
+                        < u64::from(run.clip_limit_ms.saturating_sub(CLIP_END_GRACE_MS)))
+                    || (elapsed < BEAT_CLIP_WAIT_MS
+                        && matches!(run.clip, ClipState::Requested | ClipState::Ready))
+            });
+        self.director
+            .set_speech_busy(waiting && elapsed < BEAT_SPEECH_CAP_MS);
+        let unheard = !waiting
+            && self.lines.iter().any(|run| {
+                matches!(
+                    run.clip,
+                    ClipState::Requested | ClipState::Ready | ClipState::Playing
+                )
+            });
+        if elapsed >= BEAT_SPEECH_CAP_MS || unheard {
+            self.close_all(now_ms, FIGHT_LINE_FADE_MS, out);
+            self.beat_since_ms = None;
+        }
     }
 
     fn set_line(
@@ -1747,6 +1800,308 @@ mod tests {
         fn focus(&self) -> Option<LineState> {
             self.conductor.focus_line().map(|(_, state)| state)
         }
+    }
+
+    #[test]
+    fn live_enemy_queue_keeps_ticking_while_the_battlefield_finishes_an_impact() {
+        let mut conductor = TestConductor::new();
+        conductor.restart(0, plain(Vec::new(), Vec::new()));
+        for (sequence, enemy) in [(3, "Weasel 1"), (4, "Weasel 2"), (5, "Weasel 3")] {
+            conductor.on_view(
+                0,
+                ViewPlan {
+                    diff: ViewDiff {
+                        roll: Some(enemy),
+                        impact: Some(enemy),
+                        blow_only: true,
+                        sequence,
+                        ..ViewDiff::default()
+                    },
+                    script: Vec::new(),
+                    cast: Vec::new(),
+                },
+            );
+        }
+        conductor.set_battlefield_busy(true);
+        conductor.on_tick(1_150);
+        conductor.on_tick(1_800);
+        assert!(
+            conductor.is_busy(),
+            "queued rolls still need the adapter clock"
+        );
+    }
+
+    #[test]
+    fn live_recorded_three_enemy_outcomes_keep_every_phase_and_bound_the_gap() {
+        let outcomes: Vec<_> = [(3, "Weasel 1"), (4, "Weasel 2"), (5, "Weasel 3")]
+            .into_iter()
+            .map(|(sequence, name)| df_protocol::common::CombatOutcome {
+                sequence,
+                actor_name: name.to_owned(),
+                ..Default::default()
+            })
+            .collect();
+        let refs: Vec<_> = outcomes.iter().collect();
+        let marks =
+            crate::presentation::turn_marks(&refs, &Default::default(), &Default::default());
+        assert!(marks.iter().all(|mark| mark.turn_start));
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), Vec::new());
+        harness.conductor.observe_presented(2);
+        let names = ["Weasel 1", "Weasel 2", "Weasel 3"];
+        for (outcome, name) in outcomes.iter().zip(names) {
+            harness.view(ViewPlan {
+                diff: ViewDiff {
+                    roll: Some(name),
+                    impact: Some(name),
+                    blow_only: true,
+                    sequence: outcome.sequence,
+                    ..ViewDiff::default()
+                },
+                script: Vec::new(),
+                cast: Vec::new(),
+            });
+        }
+        let mut busy_until = 5_000;
+        while harness.now < 20_000 && harness.conductor.is_busy() {
+            harness
+                .conductor
+                .set_battlefield_busy(harness.now < busy_until);
+            let before = harness.log.len();
+            harness.run_to(harness.now + 50);
+            if harness.log[before..].iter().any(|(_, command)| {
+                matches!(
+                    command,
+                    Command::Enter {
+                        state: StageState::Rolling,
+                        ..
+                    }
+                )
+            }) {
+                busy_until = harness.now + 5_000;
+            }
+        }
+        let phases: Vec<_> = harness
+            .conductor
+            .beat_log()
+            .iter()
+            .map(|record| (record.sequence, record.kind))
+            .collect();
+        assert_eq!(
+            phases,
+            [
+                (3, "rolling"),
+                (3, "impact"),
+                (4, "rolling"),
+                (4, "impact"),
+                (5, "rolling"),
+                (5, "impact")
+            ]
+        );
+        let headings: Vec<_> = harness
+            .log
+            .iter()
+            .filter_map(|(_, command)| match command {
+                Command::Enter {
+                    state: StageState::Rolling,
+                    detail,
+                    ..
+                } => *detail,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(headings, names);
+        assert!(
+            !harness.log.iter().any(|(_, command)| matches!(
+                command,
+                Command::Enter {
+                    state: StageState::Rolling | StageState::Impact,
+                    short: true,
+                    ..
+                }
+            )),
+            "ordinary enemy phases keep normal-speed rolls and impacts"
+        );
+        let records: Vec<_> = harness.conductor.beat_log().iter().collect();
+        for pair in records.windows(2) {
+            if pair[0].kind == "impact" {
+                assert!(pair[1].start_ms.saturating_sub(pair[0].end_ms) <= 1_500);
+            }
+        }
+        assert_eq!(harness.conductor.presented_sequence(), 5);
+    }
+
+    #[test]
+    fn live_a_voice_without_an_end_signal_holds_the_next_blow_only_to_the_cap() {
+        for (length_ms, before_ms, deadline_ms) in [
+            (120_000, 9_000, BEAT_SPEECH_CAP_MS + 50),
+            (1_000, 1_700, 1_850),
+            (4_000, 3_900, 4_250),
+        ] {
+            let voice = Voice {
+                length_ms: None,
+                reported_length_ms: Some(length_ms),
+                ..Voice::working(1_000)
+            };
+            let mut harness = Harness::new(voice, true, Vec::new(), Vec::new());
+            harness.view(ViewPlan {
+                diff: ViewDiff {
+                    roll: Some("first"),
+                    impact: Some("first"),
+                    sequence: 3,
+                    blow_only: true,
+                    ..ViewDiff::default()
+                },
+                script: Vec::new(),
+                cast: Vec::new(),
+            });
+            harness.view(ViewPlan {
+                diff: ViewDiff {
+                    roll: Some("second"),
+                    impact: Some("second"),
+                    sequence: 4,
+                    blow_only: true,
+                    ..ViewDiff::default()
+                },
+                script: Vec::new(),
+                cast: Vec::new(),
+            });
+            let commands = harness
+                .conductor
+                .install_beat(0, vec![line("cry", true, None)]);
+            harness.record(commands);
+            harness.run_to(before_ms);
+            assert!(!harness.log.iter().any(|(_, command)| matches!(
+                command,
+                Command::Enter {
+                    state: StageState::Rolling,
+                    detail: Some("second"),
+                    ..
+                }
+            )));
+            harness.run_to(deadline_ms + 1_800);
+            let second = harness
+                .log
+                .iter()
+                .find_map(|(at, command)| match command {
+                    Command::Enter {
+                        state: StageState::Rolling,
+                        detail: Some("second"),
+                        ..
+                    } => Some(*at),
+                    _ => None,
+                })
+                .expect("released at the speech cap");
+            assert!(second <= deadline_ms);
+            assert!(harness.closing("cry").is_some());
+        }
+    }
+
+    #[test]
+    fn live_muted_failed_and_unavailable_clips_do_not_hold_the_next_blow() {
+        for (sound, fails) in [(false, false), (true, true), (true, false)] {
+            let mut harness = Harness::new(
+                Voice {
+                    load_ms: None,
+                    ..Voice::working(1_000)
+                },
+                sound,
+                Vec::new(),
+                Vec::new(),
+            );
+            for (sequence, enemy) in [(3, "first"), (4, "second")] {
+                harness.view(ViewPlan {
+                    diff: ViewDiff {
+                        roll: Some(enemy),
+                        impact: Some(enemy),
+                        sequence,
+                        blow_only: true,
+                        ..ViewDiff::default()
+                    },
+                    script: Vec::new(),
+                    cast: Vec::new(),
+                });
+            }
+            let commands = harness
+                .conductor
+                .install_beat(0, vec![line("cry", true, None)]);
+            let id = commands.iter().find_map(|command| match command {
+                Command::Clip {
+                    id,
+                    op: ClipOp::Request,
+                    ..
+                } => Some(*id),
+                _ => None,
+            });
+            harness.record(commands);
+            if fails {
+                let commands = harness
+                    .conductor
+                    .on_clip(100, id.unwrap(), ClipSignal::Error);
+                harness.record(commands);
+            }
+            harness.run_to(3_500);
+            let second = harness
+                .log
+                .iter()
+                .find_map(|(at, command)| match command {
+                    Command::Enter {
+                        state: StageState::Rolling,
+                        detail: Some("second"),
+                        ..
+                    } => Some(*at),
+                    _ => None,
+                })
+                .expect("no wait for absent audio");
+            assert!(second <= 3_300, "sound={sound}, fails={fails}: {second}");
+        }
+    }
+
+    #[test]
+    fn live_a_recorded_move_only_turn_has_a_heading_and_no_invented_roll() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), Vec::new());
+        harness.view(ViewPlan {
+            diff: ViewDiff {
+                turn: Some("moving enemy"),
+                sequence: 3,
+                blow_only: true,
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: Vec::new(),
+        });
+        harness.view(ViewPlan {
+            diff: ViewDiff {
+                roll: Some("attacking enemy"),
+                impact: Some("attacking enemy"),
+                sequence: 4,
+                blow_only: true,
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: Vec::new(),
+        });
+        harness.run_to(4_000);
+        let cues: Vec<_> = harness
+            .log
+            .iter()
+            .filter_map(|(_, command)| match command {
+                Command::Enter {
+                    state,
+                    detail: Some(actor),
+                    ..
+                } => Some((*state, *actor)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            cues,
+            [
+                (StageState::Turn, "moving enemy"),
+                (StageState::Rolling, "attacking enemy"),
+                (StageState::Impact, "attacking enemy")
+            ]
+        );
+        assert_eq!(harness.conductor.presented_sequence(), 4);
     }
 
     #[test]

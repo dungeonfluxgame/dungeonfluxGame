@@ -156,6 +156,52 @@ pub(crate) fn new_outcomes<'a>(
 /// A grid cell as (column, row).
 pub(crate) type GridCell = (u32, u32);
 
+/// Merge move-only turns with attacks in server order. An attack already carries its walk:
+/// queuing that move separately would delay its dice behind the very walk they introduce.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn fresh_combat_beats(combat: &rpc::CombatView, after: u64) -> Vec<&rpc::CombatOutcome> {
+    let mut outcomes: Vec<_> = combat
+        .outcomes
+        .iter()
+        .chain(combat.move_outcomes.iter().filter(|movement| {
+            !combat.outcomes.iter().any(|attack| {
+                attack.sequence > movement.sequence && attack.actor_name == movement.actor_name
+            })
+        }))
+        .filter(|outcome| outcome.sequence > after)
+        .collect();
+    outcomes.sort_by_key(|outcome| outcome.sequence);
+    outcomes
+}
+
+/// A skipped blow still applies its server-provided position and exact health result.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn skipped_blow_tokens(
+    tokens: &[df_render::battle::Token],
+    attacker: &str,
+    target: &str,
+    destination: Option<df_render::battle::Cell>,
+    hit_points_after: u32,
+) -> Vec<df_render::battle::Token> {
+    tokens
+        .iter()
+        .cloned()
+        .map(|mut token| {
+            if token.name == attacker
+                && let Some(cell) = destination
+            {
+                token.cell = cell;
+            }
+            if token.name == target
+                && let Some(points) = &mut token.hit_points
+            {
+                points.current = hit_points_after;
+            }
+            token
+        })
+        .collect()
+}
+
 /// Where each combatant of the view stands, by name.
 // Read by the browser display; a native build only runs its tests.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -985,6 +1031,167 @@ fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> +
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    fn battle_token(name: &str, side: df_render::battle::Side) -> df_render::battle::Token {
+        use df_render::battle::{AttackStyle, Cell, HitPoints, Token, TokenId};
+        Token {
+            id: TokenId::new(name),
+            side,
+            name: name.to_owned(),
+            cell: Cell::new(3, 3),
+            height_m: 1.8,
+            figure: None,
+            portrait: None,
+            hit_points: Some(HitPoints {
+                current: 13,
+                maximum: 13,
+            }),
+            statuses: Vec::new(),
+            attack: AttackStyle::Melee,
+            voice: None,
+        }
+    }
+
+    #[test]
+    fn live_a_skipped_blow_lands_on_its_position_and_exact_health_result() {
+        use df_render::battle::{Cell, Side, Stage, load_embedded};
+        let tokens = [
+            battle_token("Weasel 2", Side::Enemy),
+            battle_token("Brakka", Side::Hero),
+        ];
+        let after = skipped_blow_tokens(&tokens, "Weasel 2", "Brakka", Some(Cell::new(2, 3)), 8);
+        assert_eq!(after[0].cell, Cell::new(2, 3));
+        assert_eq!(after[1].hit_points.unwrap().current, 8);
+        assert_eq!(
+            tokens[1].hit_points.unwrap().current,
+            13,
+            "borrowed snapshot stays intact"
+        );
+        let mut stage = Stage::new(load_embedded("salt-quay").unwrap().unwrap());
+        stage.set_tokens(tokens.to_vec());
+        stage.skip_to_idle();
+        stage.set_tokens(after);
+        stage.skip_to_idle();
+        assert!(
+            !stage.is_busy(),
+            "skipped movement is landed, not queued for replay"
+        );
+        let frame = stage.frame();
+        let attacker = frame
+            .figures
+            .iter()
+            .find(|figure| figure.name == "Weasel 2")
+            .unwrap();
+        assert_eq!(attacker.position, stage.grid().cell_centre(Cell::new(2, 3)));
+        let hero = frame
+            .figures
+            .iter()
+            .find(|figure| figure.name == "Brakka")
+            .unwrap();
+        assert_eq!(hero.hit_points.unwrap().current, 8);
+    }
+
+    #[test]
+    fn live_enemy_headings_remain_on_the_finished_enemy_between_cues() {
+        use df_render::battle::{Beat, Side, Stage, TokenId, hold_server_turn, load_embedded};
+        let mut stage = Stage::new(load_embedded("salt-quay").unwrap().unwrap());
+        stage.set_tokens(vec![
+            battle_token("Sigrun", Side::Hero),
+            battle_token("Weasel 1", Side::Enemy),
+            battle_token("Weasel 2", Side::Enemy),
+            battle_token("Weasel 3", Side::Enemy),
+        ]);
+        let mut headings = Vec::new();
+        for (sequence, name) in [(3, "Weasel 1"), (4, "Weasel 2"), (5, "Weasel 3")] {
+            stage.hold_active(hold_server_turn(true, 5, sequence - 1));
+            stage.show_turn_now(Some(TokenId::new(name)));
+            stage
+                .stage(Beat::TurnStart {
+                    actor: TokenId::new(name),
+                })
+                .unwrap();
+            for _ in 0..120 {
+                stage.set_active(Some(TokenId::new("Sigrun")));
+                stage.update(std::time::Duration::from_millis(50));
+                let shown = stage.frame().hud.active.as_ref().unwrap().0.clone();
+                assert_eq!(shown, name, "the raw view must not take the gap's heading");
+            }
+            headings.push(stage.frame().hud.active.as_ref().unwrap().0.clone());
+        }
+        assert_eq!(headings, ["Weasel 1", "Weasel 2", "Weasel 3"]);
+        stage.hold_active(false);
+        stage.update(std::time::Duration::from_millis(50));
+        assert_eq!(stage.frame().hud.active.as_ref().unwrap().0, "Sigrun");
+    }
+
+    #[test]
+    fn live_moves_and_attacks_are_merged_in_server_order_including_move_only_turns() {
+        let combat = rpc::CombatView {
+            outcomes: vec![rpc::CombatOutcome {
+                sequence: 4,
+                actor_name: "Weasel 2".to_owned(),
+                ..Default::default()
+            }],
+            move_outcomes: vec![
+                rpc::CombatOutcome {
+                    sequence: 3,
+                    actor_name: "Weasel 1".to_owned(),
+                    kind: rpc::OutcomeKind::Move as i32,
+                    ..Default::default()
+                },
+                rpc::CombatOutcome {
+                    sequence: 5,
+                    actor_name: "Weasel 3".to_owned(),
+                    kind: rpc::OutcomeKind::Move as i32,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let fresh = fresh_combat_beats(&combat, 2);
+        assert_eq!(
+            fresh
+                .iter()
+                .map(|outcome| outcome.sequence)
+                .collect::<Vec<_>>(),
+            [3, 4, 5]
+        );
+        let marks = turn_marks(&fresh, &HashMap::new(), &HashMap::new());
+        assert!(marks.iter().all(|mark| mark.turn_start));
+        assert_eq!(fresh_combat_beats(&combat, 4)[0].actor_name, "Weasel 3");
+    }
+
+    #[test]
+    fn live_an_attacking_enemys_walk_is_part_of_its_roll_without_an_extra_gap() {
+        let combat = rpc::CombatView {
+            move_outcomes: vec![rpc::CombatOutcome {
+                sequence: 3,
+                actor_name: "Weasel 1".to_owned(),
+                kind: rpc::OutcomeKind::Move as i32,
+                ..Default::default()
+            }],
+            outcomes: vec![rpc::CombatOutcome {
+                sequence: 4,
+                actor_name: "Weasel 1".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let fresh = fresh_combat_beats(&combat, 2);
+        assert_eq!(
+            fresh
+                .iter()
+                .map(|outcome| outcome.sequence)
+                .collect::<Vec<_>>(),
+            [4]
+        );
+        let before = HashMap::from([("Weasel 1".to_owned(), (3, 1))]);
+        let now = HashMap::from([("Weasel 1".to_owned(), (3, 3))]);
+        assert_eq!(
+            turn_marks(&fresh, &before, &now)[0].walk,
+            Some(((3, 1), (3, 3)))
+        );
+    }
 
     fn strike(actor: &str, target: &str) -> rpc::CombatOutcome {
         rpc::CombatOutcome {

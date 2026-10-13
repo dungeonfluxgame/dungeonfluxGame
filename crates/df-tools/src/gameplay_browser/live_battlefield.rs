@@ -2122,32 +2122,19 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
     // The mover's hold ends as its turn is staged; an outcome is no longer waiting once its blow
     // is. The label is released when none is left.
     let mut drained = false;
-    let released = LIVE.with(|live| {
+    LIVE.with(|live| {
         let mut live = live.borrow_mut();
-        let released = match state {
-            "rolling" => live
-                .held_moves
-                .iter()
-                .position(|(name, ..)| *name == roll.attacker)
-                .map(|at| live.held_moves.remove(at)),
-            _ => None,
-        };
-        if state == "rolling" {
-            // Counted here, not when the view was accepted: a blow the director's catch-up
-            // rule skips never reaches this stream, so the count always drains back to zero
-            // and the holds below always release.
-            live.pending_cues += 1;
-            live.pending_at = now_ms();
+        if matches!(state, "rolling" | "turn" | "skipped") {
+            live.held_moves.retain(|(name, ..)| *name != roll.attacker);
         }
-        if state == "impact" {
+        if matches!(state, "impact" | "turn" | "skipped") {
             live.pending_cues = live.pending_cues.saturating_sub(1);
             if live.pending_cues == 0 {
-                // The attacks of the view are over: anyone who only moved walks now.
+                // Every recorded move and attack has reached the cue stream.
                 live.held_moves.clear();
                 drained = true;
             }
         }
-        released
     });
 
     LIVE.with(|live| {
@@ -2179,7 +2166,23 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                 guard.presented_seq,
             ));
             match state {
-                "rolling" => {
+                "skipped" => {
+                    // The director emits skips in sequence, after the previous impact drains.
+                    // Land every layer on this blow's result before the next roll starts.
+                    stage.skip_to_idle();
+                    let tokens: Vec<_> = stage.tokens().cloned().collect();
+                    stage.set_tokens(crate::presentation::skipped_blow_tokens(
+                        &tokens,
+                        &roll.attacker,
+                        &roll.target,
+                        roll.walk.and_then(|(_, to)| cell_of(to)),
+                        roll.target_hp_after,
+                    ));
+                    // Token replacement can stage a walk; a skipped blow lands that walk too.
+                    stage.skip_to_idle();
+                    stage.show_turn_now(Some(attacker));
+                }
+                "rolling" | "turn" => {
                     // This attacker's turn, strictly in order: its label, the walk the server
                     // gave it, then the attack. Dropped, not fatal: the queue is bounded and the
                     // view sync still lands.
@@ -2191,10 +2194,13 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                             actor: attacker.clone(),
                         });
                     }
-                    if let (Some(_), Some((_, to))) = (released, roll.walk)
+                    if let Some((_, to)) = roll.walk
                         && let Some(to) = cell_of(to)
                     {
                         let _ = stage.stage_move(&attacker, to);
+                    }
+                    if state == "turn" {
+                        return;
                     }
                     stage.set_attack_style(&attacker, roll.attack_style);
                     let _ = stage.stage(Beat::Approach { attacker, target });
@@ -2406,6 +2412,15 @@ pub(super) fn hold_move(name: &str, from: GridCell) {
 /// Where the newest accepted view stands everyone (see `Live::accepted_cells`).
 pub(super) fn accept_cells(cells: &std::collections::HashMap<String, GridCell>) {
     LIVE.with(|live| live.borrow_mut().accepted_cells.clone_from(cells));
+}
+
+/// All accepted rolls, including those waiting in the director rather than the renderer.
+pub(super) fn accept_cues(count: usize) {
+    LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        live.pending_cues += count;
+        live.pending_at = now_ms();
+    });
 }
 
 /// Nothing is waiting any more (a restart, or the fight is over): holds are released.
