@@ -1047,6 +1047,34 @@ struct Written {
     tokens: u64,
 }
 
+async fn collect_before_deadline<T, F>(
+    requests: impl IntoIterator<Item = (usize, F)>,
+    results: &mut [Option<T>],
+    deadline: Instant,
+) -> bool
+where
+    F: std::future::Future<Output = T>,
+{
+    use futures::StreamExt;
+
+    if Instant::now() >= deadline {
+        return true;
+    }
+    let mut pending = futures::stream::FuturesUnordered::new();
+    for (index, future) in requests {
+        pending.push(async move { (index, future.await) });
+    }
+    let deadline = tokio::time::Instant::from_std(deadline);
+    while !pending.is_empty() {
+        match tokio::time::timeout_at(deadline, pending.next()).await {
+            Ok(Some((index, result))) => results[index] = Some(result),
+            Ok(None) => return false,
+            Err(_) => return true,
+        }
+    }
+    false
+}
+
 async fn write(
     storyteller: &Storyteller,
     baseline: &GeneratedAdventure,
@@ -1056,16 +1084,27 @@ async fn write(
     // Small groups in waves, opening scenes first: each group that arrives is
     // kept even when another group is slow, refused or falls back.
     let groups = slot_groups(planned);
-    let mut results: Vec<Result<Answer, StorytellerError>> = Vec::new();
-    for wave in groups.chunks(GROUP_CONCURRENCY) {
-        let pending: Vec<_> = wave
+    let mut results: Vec<Option<Result<Answer, StorytellerError>>> =
+        (0..groups.len()).map(|_| None).collect();
+    let deadline = started + DEADLINE;
+    let mut deadline_hit = false;
+    for (wave_index, wave) in groups.chunks(GROUP_CONCURRENCY).enumerate() {
+        if Instant::now() >= deadline {
+            deadline_hit = true;
+            break;
+        }
+        let first_index = wave_index * GROUP_CONCURRENCY;
+        let pending = wave
             .iter()
-            .map(|(label, group, names)| {
-                ask_group(storyteller, baseline, planned, label, *group, names)
-            })
-            .collect();
-        results.extend(futures::future::join_all(pending).await);
-        if started.elapsed() >= DEADLINE {
+            .enumerate()
+            .map(|(offset, (label, group, names))| {
+                let index = first_index + offset;
+                (index, async move {
+                    ask_group(storyteller, baseline, planned, label, *group, names).await
+                })
+            });
+        if collect_before_deadline(pending, &mut results, deadline).await {
+            deadline_hit = true;
             break;
         }
     }
@@ -1073,22 +1112,31 @@ async fn write(
     let mut refused: BTreeMap<String, String> = BTreeMap::new();
     let mut tokens = 0_u64;
     let mut failure = None;
-    for ((_, _, names), result) in groups.iter().zip(results) {
+    for ((label, _, names), result) in groups.iter().zip(results) {
         match result {
-            Ok(answer) => {
+            Some(Ok(answer)) => {
                 raw.extend(answer.accepted);
                 refused.extend(answer.refused);
                 tokens = tokens.saturating_add(answer.tokens);
             }
-            Err(error) => {
+            Some(Err(error)) => {
                 for name in names {
                     refused.insert(name.clone(), error_label(&error).to_owned());
                 }
                 failure = Some(error);
             }
+            None => {
+                for name in names {
+                    refused.insert(name.clone(), "deadline".to_owned());
+                }
+                log_group(label, "deadline", "overall_deadline", started.elapsed());
+            }
         }
     }
     if raw.is_empty() {
+        if deadline_hit {
+            return Err(Declined::Deadline);
+        }
         return Err(failure.map_or(Declined::NothingAccepted, Declined::Storyteller));
     }
     let known = known_words(baseline);
@@ -1158,9 +1206,7 @@ pub(crate) async fn express(
         .to_owned();
     let planned = plan(baseline)?;
     let started = Instant::now();
-    let written = tokio::time::timeout(DEADLINE, write(storyteller, baseline, &planned, started))
-        .await
-        .map_err(|_| Declined::Deadline)??;
+    let written = write(storyteller, baseline, &planned, started).await?;
     let mut texts: Vec<Option<String>> = vec![None; baseline.fact_sheet.len()];
     for slot in &planned {
         if let (Some(text), Some(entry)) = (

@@ -128,6 +128,27 @@ async fn express_with(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn completed_group_results_survive_wave_deadline() {
+    let mut results = vec![None, None];
+    let pending = vec![
+        (
+            0,
+            futures::future::Either::Left(futures::future::ready("arrived")),
+        ),
+        (
+            1,
+            futures::future::Either::Right(futures::future::pending()),
+        ),
+    ];
+
+    let deadline = Instant::now() + Duration::from_millis(10);
+    let timed_out = super::collect_before_deadline(pending, &mut results, deadline).await;
+
+    assert!(timed_out);
+    assert_eq!(results, vec![Some("arrived"), None]);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn accepted_slots_take_the_model_text_and_refused_slots_keep_their_pattern_text() {
     let endpoint = FakeEndpoint::start(answers());
     let cache = cache_directory("expression-mixed");
