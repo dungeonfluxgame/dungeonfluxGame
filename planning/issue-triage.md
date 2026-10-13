@@ -145,7 +145,7 @@ The owner's words: "the battle scene was out of sync", "make sure the state mach
 | SYN-02 | 2 | A defeated enemy acts again on screen: "it said enemy vanquished then he stood back up", "the dead guy moved". Consistent with the TV applying a death and then playing an older queued beat for the same figure. | OWNER (twice) | Fixed `8d5425b` (browser check pending) |
 | SYN-03 | 2 | The phone offers a hero his turn while the TV is still several beats behind (beat 6 of 6 on the phone, 2 of 6 on the TV); the TV's own counter went 6, 0, 2 during the entrance. | P1 | |
 | SYN-04 | 2 | The TV's health cards are wrong: hurt before any bite was shown, then full for 26 s while both phones said hurt, then hurt again. A heal on the phone (4 to 10) did not reach the TV for two rounds. | P1, P3 | Fixed `0bf7237`: heals wait for their beat; cards running ahead of damage beats still to confirm in a browser |
-| SYN-05 | 2 | The phone keeps showing "YOUR TURN" with Attack, Move and End turn enabled for up to ten seconds after the turn is spent. Presses are refused ("That offer has ended") or silently dropped. | P1, SR, SC | Fixed `0761a5b` (browser check pending) |
+| SYN-05 | 2 | The phone keeps showing "YOUR TURN" with Attack, Move and End turn enabled for up to ten seconds after the turn is spent. Presses are refused ("That offer has ended") or silently dropped. | P1, SR, SC | Fixed `0761a5b`: the waiting state was seen in a recording; see REV-01 for a fault in the fix |
 | SYN-06 | 3 | The victory fanfare, the scene transition and the ending music start before the last blow is shown (3.4 s early in one fight; before the last arrow was loosed in another). | P1, P2 | Fixed `4570a60` for the finale music (not yet heard); the fanfare and scene transition are still to confirm |
 | SYN-07 | 3 | The turn label flickers between names within seconds and can run one to two turns behind the server. | P1, EARLIER | |
 | SYN-08 | 3 | Heroes wait 11 to 15 s at a time for the TV to finish enemy turns; in the fastest possible game the fight was 2 min 56 s of 3 min 18 s. | SR | |
@@ -184,7 +184,7 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
 | AUD-01 | 2 | Music stays ducked for as long as any text is on screen, spoken or not: 31 s during a wait for a player, and for the whole of the defeat screen and the end card. The owner's rule is that music ducks under every voiced line (player, character, narrator) and comes back after. Ducking under a voiced line works. | P1, OWNER | Fixed `e995a87` (not yet heard) |
-| AUD-02 | 2 | On the defeat screen the narrator's line is hidden under the text and the closing paragraph is not read aloud ("I dont hear the DM narrating"). | P1, OWNER | |
+| AUD-02 | 2 | On the defeat screen the narrator's line is hidden under the text and the closing paragraph is not read aloud ("I dont hear the DM narrating"). | P1, OWNER | Fixed `3b05752`: long narration is spoken in parts (not yet heard) |
 | AUD-03 | 3 | A bite sounds like a sword: each one logs `sword-swing` then `blade-hit`. | P1 | |
 | AUD-04 | 3 | The TV's "Enable sound" control is tiny and in a corner; the game is silent until someone finds it. | P1 | Fixed `dc17a41`, `307c2b4`. Seen in a browser |
 
@@ -219,11 +219,11 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 |---|---|---|---|---|
 | PHN-01 | 2 | The fight screen is developer drop-downs with dozens of cell and weapon options. The tap-to-move map the owner decided on has no brief yet. | EARLIER, all | |
 | PHN-02 | 2 | A downed player's phone says nothing about dying or death saves and offers nothing to do. | P1 | Fixed `0761a5b`: death-save progress shown (browser check pending) |
-| PHN-03 | 3 | Developer notes are shown to players: "Disclosed custom rule tactical.cover-centre-line…", "Disclosed gap giant-weasel: Climb Speed 30 ft is not modelled", "Greatsword Dropped; ownership retained", "defeat does not restore hit points or held weapons". | P1 | Part `5b9700c`: the fight panel folds the rules note away; notes in other screens remain |
+| PHN-03 | 3 | Developer notes are shown to players: "Disclosed custom rule tactical.cover-centre-line…", "Disclosed gap giant-weasel: Climb Speed 30 ft is not modelled", "Greatsword Dropped; ownership retained", "defeat does not restore hit points or held weapons". | P1 | Part `5b9700c`: the phone fight panel folds the rules note away (seen in a recording); notes in other screens remain |
 | PHN-04 | 3 | Saying your own line is awkward and mislabelled: the send button reads "Ask for clarification" under two drop-downs reading "Uncertain intention" and "No action selected", and the character's reply is shown with a different portrait from the scene's. | P1, IV | Part `a252a22`: labels fixed; reply portrait still differs |
 | PHN-05 | 3 | "Confirm original strike" is offered from the aftermath to the end of the game and never explained. | P1 | Fixed `8fa68c8`, `0761a5b` (browser check pending) |
 | PHN-06 | 3 | The fight's log line is carried into the story log of the next scene. | P2 | |
-| PHN-07 | 3 | The hero portrait is cropped to the top of a head, and an unstyled status line sits over the background picture. | P1 | Fixed `0ad7d67`, `5b9700c` (browser check pending) |
+| PHN-07 | 3 | The hero portrait is cropped to the top of a head, and an unstyled status line sits over the background picture. | P1 | Fixed `0ad7d67`, `5b9700c`. Resource chips seen in a recording; portrait crop not yet looked at |
 | PHN-08 | 4 | The "Ask" button re-renders while a voice line plays, so a tap can miss. | EARLIER | Fixed `a252a22` (browser check pending) |
 
 ## 13. Lobby and character creation
@@ -235,7 +235,7 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | CRE-03 | 3 | Developer wording is shown to players: "every submitted build is validated on the server", "Fighter B + Soldier B", "Other lawful SRD combinations remain unsupported", "Initiative tie agreement". | P1 | |
 | CRE-04 | 3 | The phone's join page is titled "Gather at the Lantern Wharf" with a harbour picture whatever the adventure's place is. | P1 | Fixed `301391e`: neutral title; the real place needs a server field (browser check pending) |
 | CRE-05 | 3 | The TV lobby shows neither the adventure's title nor what happens next or who starts; "THE PARTY IS GATHERED" is small grey text in a corner. | P2 | Fixed `6b5c691`. Seen in a browser |
-| CRE-06 | 3 | The TV lobby prints "Or enter the code at 127.0.0.1:63319", an address no phone can reach, with no hint that the session is local only. | P1 | Fixed `6b5c691`. Seen in a browser |
+| CRE-06 | 3 | The TV lobby prints "Or enter the code at 127.0.0.1:63319", an address no phone can reach, with no hint that the session is local only. | P1 | Fixed `6b5c691`, `a44e30b`. TV lobby seen in a browser |
 | CRE-07 | 4 | The sticky "Confirm your hero" bar covers the form text beneath it. | P1 | Fixed `edece58` (browser check pending) |
 
 ## 14. Endings
@@ -335,6 +335,23 @@ Causes the second pass found for issues already listed:
 | END-03 | The end card appears when the final line starts lingering, before its hold and close finish. | W18 F1 |
 | TVX-07 | The narrator caption is hidden after narration ends while choice hints are off. | W18 F2 |
 | SES-07 | Offered story choices stay enabled while a press is rejected as busy. | W26 F2 |
+
+## 18. Review of the fixes themselves
+
+Sixteen independent read-only reviewers each checked four of the 63 fix commits made on the evening of 2026-10-12. Forty-nine commits were judged sound; one flagged fault was already fixed (`307c2b4`) and one was fixed at once (`b3f740ee`). The rest are below, unverified and unfixed. Write-ups: `artifacts/tmp/campaign/hunt/V01` to `V16`.
+
+| ID | Sev | Issue in the fix | Commit | Decision |
+|---|---|---|---|---|
+| REV-01 | 2 | After a fight action is rejected while the same offer is still on screen, the phone may stay in its waiting state: the new "turn spent" gate treats any receipt as confirmation. This matters more now that refusals are answered with a recorded rejection (`1817d9e`). | `0761a5b` (SYN-05) | |
+| REV-02 | 2 | Start-up story text: an outer deadline can still cancel the whole write when a later wave of group requests runs long, discarding groups that had arrived. | `ffed4a4` (SES-05, work in progress) | |
+| REV-03 | 2 | A member who takes damage and is then healed between two feed snapshots can end with the wrong hit points on the TV, because the heal hold skips members who were also attack targets. | `0bf7237` (SYN-04) | |
+| REV-04 | 2 | A typed hero line shown in the lower strip (a hero with no figure in the scene) is not closed before the reply's bubble opens; the hand-over only looks at figure bubbles. | `4c7e69b` (TVX-01) | |
+| REV-05 | 2 | Start-up cleanup after admission covers the campaign worker and the social ledger only; a later failing step (for example an invalid picture setting) still returns without releasing the session. | `7d0f493` (SES-08) | |
+| REV-06 | 3 | The dice clip is forced visible with an inline style, which overrides the reduced-motion rule that should keep it a still. | `0d8934f` (FPX-01) | |
+| REV-07 | 3 | The close-up camera reserves room for a 0.85 push-in, but speech close-ups push in to 0.78, so a speaker can still leave the frame or be covered. | `7a3d505` (FPX-02) | |
+| REV-08 | 3 | The rules note is folded away on the TV as well as the phone, inside narration that is clipped to eight lines; the TV has no way to open it. | `5b9700c` (PHN-03) | |
+| REV-09 | 3 | Cleanup of model text still accepts a Markdown list hyphen at the start of a line. | `1222ca1` (HNT-15) | |
+| REV-10 | 3 | The play-and-record check can pick a persistent control ("Play", "Full character sheet") as if it were a story choice. It still completes a game, but its log is misleading. | `0a9436f` (DEV-05) | |
 
 ## Fixed and confirmed this evening
 
