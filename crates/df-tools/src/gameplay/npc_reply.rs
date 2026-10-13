@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 
 use super::{
     adventure::dossier::{Dossier, NpcRole, mentions_term},
+    approach_model::ApproachModel,
     npc_dossier::{self, Clue, Inputs, Turn, Withheld, released_terms},
     pack::{Age, PackFile, SceneKey, SpeakerProfile},
     social::{Approach, Shift, SocialLedger, classify_keywords, shift_line},
@@ -140,6 +141,7 @@ pub(super) struct NpcReplyContext {
     hero_name: String,
     hero_index: u32,
     pub(super) typed_words: String,
+    public_scene: String,
     /// Names present in the scene (heroes, cast, places): the only names a cleaned-up line may
     /// be corrected to.
     known_names: Vec<String>,
@@ -390,6 +392,7 @@ impl NpcReplyContext {
             hero_name: hero.name.clone(),
             hero_index,
             typed_words: words,
+            public_scene: player.narration.clone(),
             known_names: scene_names(journey, player.scene.as_ref()),
             turn: Some(Box::new(Turn {
                 ledger: social.clone(),
@@ -491,6 +494,7 @@ impl NpcReplyContext {
             hero_name: hero.name.clone(),
             hero_index,
             typed_words: words,
+            public_scene: player.narration.clone(),
             known_names: scene_names(journey, player.scene.as_ref()),
             turn: None,
         })
@@ -709,6 +713,7 @@ impl ReplyLimiter {
 pub(super) struct NpcVoice {
     storyteller: Arc<Storyteller>,
     limiter: Arc<ReplyLimiter>,
+    approach_model: ApproachModel,
 }
 
 impl NpcVoice {
@@ -716,7 +721,13 @@ impl NpcVoice {
         Self {
             storyteller,
             limiter: Arc::default(),
+            approach_model: ApproachModel::default(),
         }
+    }
+
+    pub(super) fn with_approach_model(mut self, approach_model: ApproachModel) -> Self {
+        self.approach_model = approach_model;
+        self
     }
 
     /// A voice that never answers.
@@ -801,8 +812,17 @@ impl NpcVoice {
         mut context: NpcReplyContext,
         log: &TableLog,
     ) -> Option<Exchange> {
-        let keyword_approach = classify_keywords(&context.typed_words);
-        let threat_shift = if keyword_approach == Approach::Intimidation {
+        let approach = self
+            .approach_model
+            .classify(
+                &context.typed_words,
+                &context.speaker,
+                &context.public_scene,
+            )
+            .await
+            .unwrap_or_else(|| classify_keywords(&context.typed_words));
+        context.facts["player"]["approach"] = json!(approach.label());
+        let threat_shift = if approach == Approach::Intimidation {
             let turn = context.turn.as_mut()?;
             let shift = turn
                 .ledger
@@ -831,16 +851,9 @@ impl NpcVoice {
         }
         let modeled = self.model_dialogue(&context).await;
         let turn = context.turn.as_ref()?;
-        let (text, approach, fallback) = match modeled {
-            Ok((reply, approach)) => (
-                reply,
-                if keyword_approach == Approach::Intimidation {
-                    keyword_approach
-                } else {
-                    approach.unwrap_or(keyword_approach)
-                },
-                None,
-            ),
+        let (text, fallback) = match modeled {
+            // Jev (or the keyword fallback) decided before the reaction and reply.
+            Ok((reply, _)) => (reply, None),
             Err(reason) => {
                 // One server line per fallback, closed vocabulary, never reply text: the
                 // session log is where a coordinator reads why a prepared line spoke.
@@ -854,7 +867,6 @@ impl NpcVoice {
                     reason.label(),
                     turn.dossier.npc_id,
                 );
-                let approach = keyword_approach;
                 let (answer, answer_key) = npc_dossier::fallback(
                     &turn.dossier,
                     turn.standing,
@@ -875,7 +887,7 @@ impl NpcVoice {
                         std::slice::from_ref(&key),
                     );
                 }
-                (answer, approach, Some(reason))
+                (answer, Some(reason))
             }
         };
         let from_model = fallback.is_none();
@@ -1602,6 +1614,10 @@ mod tests {
 
     fn question(words: &str) -> NpcReplyContext {
         NpcReplyContext::from_view(&view("", "Courier"), member(1), words, &story()).unwrap()
+    }
+
+    mod approach_model {
+        include!("approach_model_reply_tests.rs");
     }
 
     #[tokio::test(flavor = "current_thread")]

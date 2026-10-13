@@ -28,6 +28,8 @@ pub(in crate::gameplay) enum Reply {
     Compute(Arc<dyn Fn(&str) -> Value + Send + Sync>),
     /// A bare HTTP status with a JSON body.
     Status(u16, Value),
+    /// A bare JSON response deliberately arriving after the caller's deadline.
+    DelayedStatus(Duration, u16, Value),
     /// Accept the connection and never answer.
     Hang,
 }
@@ -89,6 +91,10 @@ impl FakeEndpoint {
                             respond(&mut socket, 200, &completed(&body, slots.to_string()))
                         }
                         Some(Reply::Status(status, body)) => respond(&mut socket, status, &body),
+                        Some(Reply::DelayedStatus(delay, status, body)) => {
+                            thread::sleep(delay);
+                            respond(&mut socket, status, &body);
+                        }
                         Some(Reply::Hang) | None => {
                             while !stop.load(Ordering::SeqCst) {
                                 thread::sleep(Duration::from_millis(10));

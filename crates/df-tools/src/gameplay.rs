@@ -2,6 +2,7 @@
 //! membership, not production bootstrap. The action and its outcome use generated RPC.
 mod actor;
 mod adventure;
+mod approach_model;
 mod beat_script;
 mod beat_script_runtime;
 #[cfg(test)]
@@ -687,6 +688,15 @@ pub async fn serve(
     } else {
         storyteller::Storyteller::disabled()
     });
+    let approach_model = approach_model::ApproachModel::configured(if interactive {
+        startup_configuration::approach_settings(
+            std::env::var("DF_JEV_API_KEY"),
+            std::env::var("DF_JEV_BASE_URL"),
+        )?
+    } else {
+        None
+    });
+    println!("{}", approach_model.startup_line());
     if interactive {
         let settings = adventure_settings
             .as_ref()
@@ -1485,7 +1495,9 @@ pub async fn serve(
         updates: receiver,
         streams: Arc::new(Semaphore::new(settings.max_watch_streams)),
         voice: voice.clone(),
-        npc_voice: Arc::new(npc_reply::NpcVoice::new(storyteller)),
+        npc_voice: Arc::new(
+            npc_reply::NpcVoice::new(storyteller).with_approach_model(approach_model),
+        ),
         // DEVCTL-001: cloned, not moved: the control surface takes one below.
         table_log: table_log.clone(),
         living,

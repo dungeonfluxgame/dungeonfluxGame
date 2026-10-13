@@ -13,9 +13,13 @@ mod native_http;
 #[cfg(not(target_arch = "wasm32"))]
 mod speech_adapter;
 #[cfg(not(target_arch = "wasm32"))]
+mod systemone;
+#[cfg(not(target_arch = "wasm32"))]
 mod text_response;
 #[cfg(not(target_arch = "wasm32"))]
 mod text_schema;
+#[cfg(not(target_arch = "wasm32"))]
+pub use systemone::{SystemOneChoiceProvider, SystemOneError};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use reconciliation::{reconcile_speech_attempt, reconcile_stt_attempt};

@@ -1147,6 +1147,28 @@ pub(super) struct StorytellerInputs {
     pub(super) deadline_seconds: Result<String, VarError>,
 }
 
+/// Jev's optional startup credential and endpoint; no process environment is read per line.
+pub(super) struct ApproachSettings {
+    pub(super) credential: String,
+    pub(super) base_url: String,
+}
+
+pub(super) fn approach_settings(
+    credential: Result<String, VarError>,
+    base_url: Result<String, VarError>,
+) -> Result<Option<ApproachSettings>, io::Error> {
+    let Some(credential) = optional(credential)? else {
+        return Ok(None);
+    };
+    if credential.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(ApproachSettings {
+        credential,
+        base_url: optional(base_url)?.unwrap_or_else(|| "https://api.typesafe.ai".to_owned()),
+    }))
+}
+
 impl StorytellerInputs {
     pub(super) fn from_environment() -> Self {
         Self {
