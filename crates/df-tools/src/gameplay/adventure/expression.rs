@@ -290,7 +290,9 @@ fn slot_groups(planned: &[Planned<'_>]) -> Vec<(String, Group, BTreeSet<String>)
     for group in [Group::Scenes, Group::Voices] {
         let names: Vec<&str> = planned
             .iter()
-            .filter(|slot| slot.group == group)
+            // Offer labels are deterministic authored actions with generator facts substituted;
+            // they must not be rewritten into chapter titles.
+            .filter(|slot| slot.group == group && slot.sheet.slot != "beat_label")
             .map(|slot| slot.name.as_str())
             .collect();
         for (index, chunk) in names.chunks(GROUP_SLOTS).enumerate() {

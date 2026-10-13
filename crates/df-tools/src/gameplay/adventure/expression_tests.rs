@@ -210,6 +210,46 @@ async fn accepted_slots_take_the_model_text_and_refused_slots_keep_their_pattern
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn generated_beat_offer_labels_keep_their_deterministic_action_text() {
+    let endpoint = FakeEndpoint::start(
+        (0..48)
+            .map(|_| {
+                model_that(|name, draft, _| {
+                    name.starts_with("beat_label_")
+                        .then(|| "Calla's Quiet Welcome".to_owned())
+                        .or_else(|| Some(draft.to_owned()))
+                })
+            })
+            .collect(),
+    );
+    let cache = cache_directory("expression-beat-labels");
+
+    let (baseline, outcome) = express_with(&endpoint, &cache).await;
+
+    let (generated, model) = outcome.unwrap();
+    let baseline_script = baseline.pack.beat_script.as_ref().unwrap();
+    let generated_script = generated.pack.beat_script.as_ref().unwrap();
+    assert_eq!(generated_script.labels, baseline_script.labels);
+    assert_eq!(
+        generated_script.labels["resolve-label"],
+        format!("Settle things with {}", baseline.facts["contact.first"])
+    );
+    assert!(
+        model
+            .model_slots
+            .iter()
+            .all(|slot| !slot.starts_with("beat_label_"))
+    );
+    assert!(
+        model
+            .pattern_slots
+            .iter()
+            .any(|slot| slot.starts_with("beat_label_"))
+    );
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn the_final_adventure_reloads_and_records_the_model_slots() {
     let endpoint = FakeEndpoint::start(answers());
     let cache = cache_directory("expression-record");
@@ -342,7 +382,17 @@ fn slot_groups_are_small_opening_first_and_never_mixed() {
             seen.push(name);
         }
     }
-    assert_eq!(seen.len(), planned.len(), "every slot in exactly one group");
+    // Offer labels are authored actions and are never sent for rewriting.
+    let rewritable = planned
+        .iter()
+        .filter(|slot| slot.sheet.slot != "beat_label")
+        .count();
+    assert_eq!(
+        seen.len(),
+        rewritable,
+        "every rewritable slot in exactly one group"
+    );
+    assert!(rewritable < planned.len(), "the plan holds offer labels");
     let first = &groups[0].2;
     assert!(
         first.contains(&planned[0].name),
