@@ -541,14 +541,118 @@ fn record_refusal(action_kind: i32, reason: &str, status: &str) {
 fn record_combat_audit(accepted: &rpc::AcceptedAction) {
     for outcome in &accepted.combat {
         let line = super::table_log::audit_line(outcome);
-        println!("{line}");
-        let context = OperationContext {
-            trace_parent: String::new(),
-            build: crate::BUILD_ID.to_owned(),
-        };
-        let mut span = df_observe::begin(&context, "gameplay.combat_outcome");
-        span.event("gameplay.combat_outcome", &[("combat.line", line)]);
-        span.finish_unmeasured("recorded");
+        record_audit_line("gameplay.combat_outcome", line);
+    }
+}
+
+fn record_audit_line(event: &'static str, line: String) {
+    println!("{line}");
+    let context = OperationContext {
+        trace_parent: String::new(),
+        build: crate::BUILD_ID.to_owned(),
+    };
+    let mut span = df_observe::begin(&context, event);
+    let field = if event == "gameplay.combat_outcome" {
+        "combat.line"
+    } else {
+        "audit.line"
+    };
+    span.event(event, &[(field, line)]);
+    span.finish_unmeasured("recorded");
+}
+
+fn audit_kind_name(kind: rpc::GameplayActionKind) -> String {
+    let mut name = String::new();
+    for character in format!("{kind:?}").chars() {
+        if character.is_ascii_uppercase() && !name.is_empty() {
+            name.push('_');
+        }
+        name.push(character.to_ascii_lowercase());
+    }
+    name
+}
+
+fn audit_phase_name(phase: rpc::JourneyPhase) -> &'static str {
+    match phase {
+        rpc::JourneyPhase::Unspecified => "unspecified",
+        rpc::JourneyPhase::Room => "room",
+        rpc::JourneyPhase::CharacterCreation => "character_creation",
+        rpc::JourneyPhase::Opening => "opening",
+        rpc::JourneyPhase::Dialogue => "dialogue",
+        rpc::JourneyPhase::Combat => "combat",
+        rpc::JourneyPhase::Complete => "complete",
+    }
+}
+
+fn audit_combat_view(
+    checkpoint: &Checkpoint,
+    member: df_types::MemberId,
+) -> Option<rpc::CombatView> {
+    let view = wire::journey_view(checkpoint, LocalDemoRole::Player, member).ok()?;
+    let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+        return None;
+    };
+    player.journey?.combat
+}
+
+fn audit_hero(checkpoint: &Checkpoint, member: df_types::MemberId) -> Option<String> {
+    let view = wire::journey_view(checkpoint, LocalDemoRole::Player, member).ok()?;
+    let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+        return None;
+    };
+    player
+        .journey?
+        .own_character
+        .map(|character| character.name)
+}
+
+fn record_turn_starts(
+    outcomes: &[rpc::CombatOutcome],
+    before: Option<&rpc::CombatView>,
+    after: Option<&rpc::CombatView>,
+) {
+    let Some(after) = after else {
+        return;
+    };
+    let mut actor = before
+        .map_or("", |combat| combat.active_actor.as_str())
+        .to_owned();
+    let mut round = before.map_or(1, |combat| combat.round);
+    let turn_order = after
+        .initiative
+        .iter()
+        .map(|roll| roll.name.as_str())
+        .collect::<Vec<_>>();
+    for outcome in outcomes {
+        if rpc::OutcomeKind::try_from(outcome.kind) == Ok(rpc::OutcomeKind::OpportunityAttack)
+            || outcome.actor_name == actor
+        {
+            continue;
+        }
+        advance_audit_round(&actor, &outcome.actor_name, &turn_order, &mut round);
+        record_audit_line(
+            "gameplay.combat_turn",
+            super::table_log::turn_audit_line(&outcome.actor_name, round),
+        );
+        actor.clone_from(&outcome.actor_name);
+    }
+    if !after.active_actor.is_empty() && after.active_actor != actor {
+        advance_audit_round(&actor, &after.active_actor, &turn_order, &mut round);
+        record_audit_line(
+            "gameplay.combat_turn",
+            super::table_log::turn_audit_line(&after.active_actor, round),
+        );
+    }
+}
+
+fn advance_audit_round(actor: &str, next: &str, order: &[&str], round: &mut u32) {
+    let current = order.iter().position(|name| *name == actor);
+    let next = order.iter().position(|name| *name == next);
+    if current
+        .zip(next)
+        .is_some_and(|(current, next)| next <= current)
+    {
+        *round = round.saturating_add(1);
     }
 }
 
@@ -1425,6 +1529,7 @@ impl Actor {
             }
         }
         let prior_revision = self.owner.checkpoint().basis().revision;
+        let before = self.owner.checkpoint().clone();
         let (item, receipt) = OwnedInput::new(context, scope, input);
         let reservation = self.table_log.reserve();
         let commit_started = Instant::now();
@@ -1451,7 +1556,7 @@ impl Actor {
                 })?;
                 let replayed = replaying_uncertain || committed.basis().revision <= prior_revision;
                 if !replayed {
-                    self.record_table_action(member, &request, &accepted, reservation);
+                    self.record_table_action(member, &request, &accepted, &before, reservation);
                     // The recorded moment keeps the commit's own lines: the
                     // publication hook runs before table lines are pushed.
                     self.refresh_dev_moment();
@@ -1618,9 +1723,10 @@ impl Actor {
         member: df_types::MemberId,
         request: &rpc::SubmitActionRequest,
         accepted: &rpc::AcceptedAction,
+        before: &Checkpoint,
         reservation: super::table_log::TableLogReservation,
     ) {
-        record_combat_audit(accepted);
+        self.record_accepted_audit(member, request, accepted, before);
         let Ok(view) = wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member)
         else {
             return;
@@ -1685,6 +1791,172 @@ impl Actor {
                 hero_index,
                 rpc::TableKind::Action,
                 &line.text,
+            );
+        }
+    }
+
+    fn record_say_audit(&mut self, credential: &[u8; 32], request: &rpc::RawDialogueRequest) {
+        let Ok(member) = self.dialogue_member(credential) else {
+            return;
+        };
+        let Ok(view) = wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member)
+        else {
+            return;
+        };
+        let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+            return;
+        };
+        let Some(journey) = player.journey else {
+            return;
+        };
+        let Some(actor) = journey.own_character.map(|character| character.name) else {
+            return;
+        };
+        record_audit_line(
+            "gameplay.story_say",
+            super::table_log::story_say_audit_line(
+                &actor,
+                request.text.chars().count(),
+                &journey.speaker,
+            ),
+        );
+    }
+
+    fn record_accepted_audit(
+        &self,
+        member: df_types::MemberId,
+        request: &rpc::SubmitActionRequest,
+        accepted: &rpc::AcceptedAction,
+        before: &Checkpoint,
+    ) {
+        record_combat_audit(accepted);
+        let after = self.owner.checkpoint();
+        let Ok(kind) = rpc::GameplayActionKind::try_from(request.action_kind) else {
+            return;
+        };
+        let before_phase = super::journey::phase(before).ok();
+        let after_phase = super::journey::phase(after).ok();
+        let before_combat = audit_combat_view(before, member);
+        let after_combat = audit_combat_view(after, member);
+
+        if before_phase != Some(rpc::JourneyPhase::Combat)
+            && after_phase == Some(rpc::JourneyPhase::Combat)
+            && let Ok(rolls) = super::journey::initiative_rolls(after)
+        {
+            record_audit_line(
+                "gameplay.combat_start",
+                super::table_log::initiative_audit_line(&rolls),
+            );
+        }
+
+        record_turn_starts(
+            &accepted.combat,
+            before_combat.as_ref(),
+            after_combat.as_ref(),
+        );
+
+        let hero = audit_hero(after, member);
+        if let Some(actor) = hero.as_deref() {
+            match kind {
+                rpc::GameplayActionKind::SecondWind => {
+                    if let Some(entity) = after
+                        .state()
+                        .members
+                        .iter()
+                        .find(|link| link.member == member)
+                        .and_then(|link| link.character)
+                        && let (Ok(before_hp), Ok(hit_points), Ok(uses_left)) = (
+                            super::journey::value(before.state(), entity, "hit-points"),
+                            super::journey::value(after.state(), entity, "hit-points"),
+                            super::journey::value(after.state(), entity, "second-wind"),
+                        )
+                    {
+                        record_audit_line(
+                            "gameplay.second_wind",
+                            super::table_log::second_wind_audit_line(
+                                actor,
+                                hit_points.saturating_sub(before_hp),
+                                hit_points,
+                                uses_left,
+                            ),
+                        );
+                    }
+                }
+                rpc::GameplayActionKind::EndTurn => record_audit_line(
+                    "gameplay.turn_end",
+                    super::table_log::end_turn_audit_line(actor),
+                ),
+                rpc::GameplayActionKind::Dash
+                | rpc::GameplayActionKind::Dodge
+                | rpc::GameplayActionKind::Disengage => record_audit_line(
+                    "gameplay.combat_action",
+                    super::table_log::combat_action_audit_line(
+                        &audit_kind_name(kind).replace('_', "-"),
+                        actor,
+                    ),
+                ),
+                rpc::GameplayActionKind::ShortRest => record_audit_line(
+                    "gameplay.story_rest",
+                    super::table_log::story_rest_audit_line(actor),
+                ),
+                rpc::GameplayActionKind::GreatswordAttack
+                | rpc::GameplayActionKind::Move
+                | rpc::GameplayActionKind::OpportunityAttack
+                | rpc::GameplayActionKind::DeclineReaction
+                | rpc::GameplayActionKind::Stand
+                | rpc::GameplayActionKind::PickUpWeapon
+                | rpc::GameplayActionKind::CreateCharacter
+                | rpc::GameplayActionKind::BeginStory
+                | rpc::GameplayActionKind::Unspecified
+                | rpc::GameplayActionKind::SetTableSetting => {}
+                _ => {
+                    if let (Some(phase_before), Some(phase_after)) = (before_phase, after_phase)
+                        && let Ok(label) =
+                            super::beat_script_runtime::action_label(&request.offer_id, kind)
+                    {
+                        record_audit_line(
+                            "gameplay.story_choice",
+                            super::table_log::story_choice_audit_line(
+                                actor,
+                                &audit_kind_name(kind),
+                                &label,
+                                audit_phase_name(phase_before),
+                                audit_phase_name(phase_after),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+
+        if before_phase == Some(rpc::JourneyPhase::Combat)
+            && after_phase == Some(rpc::JourneyPhase::Complete)
+        {
+            let rounds = before_combat.as_ref().map_or(0, |combat| combat.round);
+            let hero_ids = after
+                .state()
+                .characters
+                .iter()
+                .map(|character| character.entity.as_bytes())
+                .collect::<Vec<_>>();
+            let defeat = accepted.combat.iter().any(|outcome| {
+                let hero_target = hero_ids
+                    .iter()
+                    .any(|hero_id| *hero_id == outcome.target_id.as_slice());
+                let hero_actor = hero_ids
+                    .iter()
+                    .any(|hero_id| *hero_id == outcome.actor_id.as_slice());
+                (outcome.knocked_out && hero_target)
+                    || (hero_actor
+                        && rpc::DeathSaveResult::try_from(outcome.death_save_result)
+                            == Ok(rpc::DeathSaveResult::Died))
+            });
+            record_audit_line(
+                "gameplay.fight_end",
+                super::table_log::fight_end_audit_line(
+                    if defeat { "defeat" } else { "victory" },
+                    rounds,
+                ),
             );
         }
     }
@@ -1920,11 +2192,24 @@ impl Reducer<Call> for Actor {
                 credential,
                 request,
                 reply,
-            } => reply
-                .send(after_grant_reconnect(reconnected, || {
+            } => {
+                let say = match &request {
+                    super::dialogue::DialogueRequest::Raw(bytes) => {
+                        rpc::RawDialogueRequest::decode(bytes.as_slice()).ok()
+                    }
+                    super::dialogue::DialogueRequest::Confirm(_)
+                    | super::dialogue::DialogueRequest::Cancel(_) => None,
+                };
+                let result = after_grant_reconnect(reconnected, || {
                     self.handle_dialogue(credential, request)
-                }))
-                .is_ok(),
+                });
+                if let (Some(request), Ok(super::dialogue::DialogueReply::Raw(_, _))) =
+                    (say.as_ref(), &result)
+                {
+                    self.record_say_audit(&credential, request);
+                }
+                reply.send(result).is_ok()
+            }
             Call::Submit {
                 credential,
                 request,

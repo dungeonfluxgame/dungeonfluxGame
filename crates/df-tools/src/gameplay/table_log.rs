@@ -1081,6 +1081,62 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
     }
 }
 
+pub(super) fn initiative_audit_line(rolls: &[rpc::InitiativeRoll]) -> String {
+    let order = rolls
+        .iter()
+        .map(|roll| format!("{}:{}", roll.name, roll.total))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("COMBAT initiative order=[{order}]")
+}
+
+pub(super) fn turn_audit_line(actor: &str, round: u32) -> String {
+    format!("COMBAT turn actor={actor:?} round={round}")
+}
+
+pub(super) fn second_wind_audit_line(
+    actor: &str,
+    healed: u32,
+    hit_points: u32,
+    uses_left: u32,
+) -> String {
+    format!(
+        "COMBAT second-wind actor={actor:?} healed={healed} hit_points={hit_points} uses_left={uses_left}"
+    )
+}
+
+pub(super) fn end_turn_audit_line(actor: &str) -> String {
+    format!("COMBAT end-turn actor={actor:?}")
+}
+
+pub(super) fn combat_action_audit_line(action: &str, actor: &str) -> String {
+    format!("COMBAT {action} actor={actor:?}")
+}
+
+pub(super) fn fight_end_audit_line(outcome: &str, rounds: u32) -> String {
+    format!("COMBAT fight-end outcome={outcome} rounds={rounds}")
+}
+
+pub(super) fn story_choice_audit_line(
+    actor: &str,
+    action: &str,
+    label: &str,
+    phase_before: &str,
+    phase_after: &str,
+) -> String {
+    format!(
+        "STORY choice actor={actor:?} action={action} label={label:?} phase={phase_before}->{phase_after}"
+    )
+}
+
+pub(super) fn story_rest_audit_line(actor: &str) -> String {
+    format!("STORY rest actor={actor:?}")
+}
+
+pub(super) fn story_say_audit_line(actor: &str, chars: usize, target: &str) -> String {
+    format!("STORY say actor={actor:?} chars={chars} target={target:?}")
+}
+
 fn is_attack(outcome: &rpc::CombatOutcome) -> bool {
     !matches!(
         rpc::OutcomeKind::try_from(outcome.kind),
@@ -1144,6 +1200,100 @@ fn third_person_words(rest: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initiative_audit_formatter_preserves_committed_order_and_totals() {
+        let rolls = [
+            rpc::InitiativeRoll {
+                name: "Sigrun".to_owned(),
+                total: 18,
+                order: 1,
+                ..Default::default()
+            },
+            rpc::InitiativeRoll {
+                name: "Giant Weasel".to_owned(),
+                total: 12,
+                order: 2,
+                ..Default::default()
+            },
+        ];
+        assert_eq!(
+            initiative_audit_line(&rolls),
+            "COMBAT initiative order=[Sigrun:18, Giant Weasel:12]"
+        );
+    }
+
+    #[test]
+    fn turn_audit_formatter_quotes_the_actor_and_names_the_round() {
+        assert_eq!(
+            turn_audit_line("Brakka", 3),
+            "COMBAT turn actor=\"Brakka\" round=3"
+        );
+    }
+
+    #[test]
+    fn second_wind_audit_formatter_records_the_heal_hp_and_uses() {
+        assert_eq!(
+            second_wind_audit_line("Brakka", 4, 12, 0),
+            "COMBAT second-wind actor=\"Brakka\" healed=4 hit_points=12 uses_left=0"
+        );
+    }
+
+    #[test]
+    fn end_turn_audit_formatter_quotes_the_actor() {
+        assert_eq!(
+            end_turn_audit_line("Brakka"),
+            "COMBAT end-turn actor=\"Brakka\""
+        );
+    }
+
+    #[test]
+    fn combat_action_audit_formatter_records_the_action_and_actor() {
+        assert_eq!(
+            combat_action_audit_line("dash", "Brakka"),
+            "COMBAT dash actor=\"Brakka\""
+        );
+    }
+
+    #[test]
+    fn fight_end_audit_formatter_records_outcome_and_round_count() {
+        assert_eq!(
+            fight_end_audit_line("victory", 2),
+            "COMBAT fight-end outcome=victory rounds=2"
+        );
+    }
+
+    #[test]
+    fn story_choice_audit_formatter_records_kind_label_and_phase_transition() {
+        assert_eq!(
+            story_choice_audit_line(
+                "Brakka",
+                "ask_courier",
+                "Ask Perrin what troubles him",
+                "opening",
+                "dialogue"
+            ),
+            "STORY choice actor=\"Brakka\" action=ask_courier label=\"Ask Perrin what troubles him\" phase=opening->dialogue"
+        );
+    }
+
+    #[test]
+    fn story_rest_audit_formatter_quotes_the_actor() {
+        assert_eq!(
+            story_rest_audit_line("Brakka"),
+            "STORY rest actor=\"Brakka\""
+        );
+    }
+
+    #[test]
+    fn story_say_audit_formatter_contains_only_character_count_and_target() {
+        let line = story_say_audit_line("Brakka", 17, "Perrin");
+        assert_eq!(
+            line,
+            "STORY say actor=\"Brakka\" chars=17 target=\"Perrin\""
+        );
+        assert!(!line.contains("typed words"));
+    }
 
     fn speech(log: &TableLog, text: &str) {
         log.push(
