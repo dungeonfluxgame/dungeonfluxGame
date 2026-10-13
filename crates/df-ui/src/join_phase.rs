@@ -149,8 +149,12 @@ impl JoinPhaseView<'_> {
             text(message)?;
         }
         if let Some(room) = &self.room {
-            for value in [room.label, room.code, room.detail] {
+            for value in [room.label, room.code] {
                 text(value)?;
+            }
+            // A room with no address to share (a game on this computer only) has no detail line.
+            if !room.detail.is_empty() {
+                text(room.detail)?;
             }
         }
         if self.participants.len() > limits.max_members {
@@ -737,6 +741,7 @@ mod browser {
                 self.room_label.set_text_content(Some(room.label));
                 self.room_code.set_text_content(Some(room.code));
                 self.room_detail.set_text_content(Some(room.detail));
+                hidden(&self.room_detail, room.detail.is_empty())?;
             } else {
                 for node in [&self.room_label, &self.room_code, &self.room_detail] {
                     node.set_text_content(None);
@@ -908,6 +913,27 @@ mod tests {
             lobby_offer: None,
             pairing_fallback: "Public join information unavailable",
         }
+    }
+
+    #[test]
+    fn a_room_with_no_address_to_share_still_validates_and_an_empty_code_does_not() {
+        let mut current = view(&[]);
+        current.stage = JoinStage::Lobby;
+        current.room = Some(JoinRoom {
+            label: "Room code",
+            code: "ABCD",
+            detail: "",
+        });
+        assert_eq!(current.validate(limits()), Ok(()));
+        current.room = Some(JoinRoom {
+            label: "Room code",
+            code: "",
+            detail: "",
+        });
+        assert_eq!(
+            current.validate(limits()),
+            Err(JoinValidationError::EmptyText)
+        );
     }
 
     #[test]
