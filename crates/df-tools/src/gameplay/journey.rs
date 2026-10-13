@@ -740,6 +740,7 @@ fn handler_offered(
             },
         );
     }
+    let rest_accepted = session_machine::rest_accepted(current)?;
     if let Some(offers) = super::beat_script::with_script(|script| {
         if !script.uses_encounter() && state != State::Lobby {
             Some(script.current(current.state()).and_then(|beat| {
@@ -748,6 +749,8 @@ fn handler_offered(
                     .filter(|offer| {
                         session_machine::next(state, session_machine::Event::of(offer.effect))
                             .is_ok()
+                            && (offer.effect != super::beat_script::BeatEffect::ShortRest
+                                || rest_accepted)
                     })
                     .map(|offer| {
                         script
@@ -836,11 +839,18 @@ fn handler_offered(
             {
                 return Ok(Vec::new());
             }
+            // Validates the rest cursor and due schedules even when no
+            // rest is offered; forged cursors refuse here.
             prepare_short_rest(current)?;
-            let mut result = vec![(
-                rpc::GameplayActionKind::ShortRest,
-                pack::offer_label(rpc::GameplayActionKind::ShortRest),
-            )];
+            // The machine's rest rule decides whether the rest is offered:
+            // once per aftermath, and only while a living hero regains.
+            let mut result = Vec::new();
+            if session_machine::rest_accepted(current)? {
+                result.push((
+                    rpc::GameplayActionKind::ShortRest,
+                    pack::offer_label(rpc::GameplayActionKind::ShortRest),
+                ));
+            }
             if inn_source(current)?.is_some() && value(current.state(), who, "unconscious")? == 0 {
                 result.push((
                     rpc::GameplayActionKind::ChooseHarborScene,
@@ -2813,6 +2823,12 @@ fn stage_using(
             refusal_detail::note("session-machine");
             return Err(RepositoryError::InvalidCandidate);
         }
+        // The machine also decides the Aftermath rest rule: once per
+        // aftermath, and only while a living hero has something to regain.
+        if event == session_machine::Event::Rest && !session_machine::rest_accepted(current)? {
+            refusal_detail::note("session-machine-rest");
+            return Err(RepositoryError::InvalidCandidate);
+        }
     }
     let original_kind = kind;
     let kind = if selected.effect == super::beat_script::BeatEffect::ThirdApproach {
@@ -3431,7 +3447,11 @@ mod tests {
     pub(super) fn tuning_journey() -> Vec<Checkpoint> {
         if tactical::enabled() {
             let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
-            let victory = tactical::tests::current_victory("escort-courier");
+            // The ordinary played fight leaves both heroes untouched, and
+            // the machine refuses a rest nobody gains from, so this journey
+            // rests after a victory where a hero spent Second Wind.
+            let victory =
+                tactical::tests::current_victory_with_spent_second_wind("escort-courier");
             let rested = stage_with_supplier(
                 &victory,
                 &input(&victory, first, 201, "short-rest", vec![]),
@@ -4729,19 +4749,16 @@ mod tests {
             Ok(rested.clone())
         );
         assert!(stage_with_supplier(&rested, &command, &mut |_| panic!("stale rest")).is_err());
-        let next = stage_with_supplier(
-            &rested,
-            &input(&rested, first, 10, "short-rest", vec![]),
-            &mut |_| panic!("fresh rest cannot draw"),
-        )
-        .unwrap();
-        assert_rest_preserves_battle(&rested, &next);
-        for bytes in ENTITIES {
-            assert_eq!(
-                value(next.state(), entity(bytes).unwrap(), "second-wind"),
-                Ok(2)
-            );
-        }
+        // One rest per aftermath: a second rest in the same aftermath is
+        // refused by the machine, however much the heroes still lack.
+        assert!(
+            stage_with_supplier(
+                &rested,
+                &input(&rested, first, 10, "short-rest", vec![]),
+                &mut |_| panic!("second rest cannot draw"),
+            )
+            .is_err()
+        );
         let mut shifted = defeated.state().clone();
         let event = shifted
             .schedules
@@ -4904,9 +4921,26 @@ mod tests {
             vec![(model::label("elapsed").unwrap(), model::label("1").unwrap())],
         );
         assert!(stage_with_supplier(&victory, &invalid, &mut |_| panic!("invalid rest")).is_err());
+        // One rest per aftermath: the second is refused by the machine.
         invalid = input(&rest, member, 11, "short-rest", vec![]);
-        let second = stage_with_supplier(&rest, &invalid, &mut |_| panic!("fresh rest")).unwrap();
-        assert_rest_preserves_battle(&rest, &second);
+        assert!(
+            stage_with_supplier(&rest, &invalid, &mut |_| panic!("second rest cannot draw"))
+                .is_err()
+        );
+    }
+
+    /// A victory where the first hero has a Second Wind use to regain, so
+    /// the aftermath rest is one the machine accepts. The ordinary played
+    /// victories leave both heroes untouched.
+    pub(super) fn gaining_victory() -> Checkpoint {
+        if tactical::enabled() {
+            return tactical::tests::current_victory_with_spent_second_wind("ask-courier");
+        }
+        let victory = inn_victory();
+        let mut state = victory.state().clone();
+        let hero = state.characters[0].entity;
+        set(&mut state, hero, "second-wind", 1).unwrap();
+        model::checkpoint(victory.basis(), state).unwrap()
     }
 
     pub(super) fn inn_victory() -> Checkpoint {
@@ -5116,7 +5150,7 @@ mod tests {
     #[test]
     fn encounter_round_one_survives_real_rest_inn_and_restored_checkpoint() {
         let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
-        let victory = inn_victory();
+        let victory = gaining_victory();
         assert_round_views(&victory, 1);
         let command = input(&victory, first, 9, "short-rest", vec![]);
         let rest = stage_with_supplier(&victory, &command, &mut |_| panic!("rest dice")).unwrap();
@@ -5163,6 +5197,12 @@ mod tests {
         .unwrap();
         assert_eq!(victory, retry);
         assert!(combat_victory(victory.state()).unwrap());
+        // The wrapped fight leaves both heroes untouched, so spend a
+        // Second Wind use on paper for the rest to regain.
+        let mut spent = victory.state().clone();
+        let hero = spent.characters[0].entity;
+        set(&mut spent, hero, "second-wind", 1).unwrap();
+        let victory = model::checkpoint(victory.basis(), spent).unwrap();
         let rest = stage_with_supplier(
             &victory,
             &input(&victory, first, 11, "short-rest", vec![]),
@@ -5548,7 +5588,7 @@ mod tests {
     #[test]
     fn actual_victory_inn_is_voluntary_for_either_member_before_or_after_rest_without_mechanical_effects()
      {
-        let victory = inn_victory();
+        let victory = gaining_victory();
         let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
         let rest = stage_with_supplier(
             &victory,
@@ -5560,10 +5600,13 @@ mod tests {
             for bytes in MEMBERS {
                 let member = MemberId::from_bytes(&bytes).unwrap();
                 let offers = offered(current, member).unwrap();
-                assert!(
+                // The rest is offered once per aftermath: at the victory,
+                // where a hero has a use to regain, and not again after it.
+                assert_eq!(
                     offers
                         .iter()
-                        .any(|(kind, _)| *kind == rpc::GameplayActionKind::ShortRest)
+                        .any(|(kind, _)| *kind == rpc::GameplayActionKind::ShortRest),
+                    current == &victory
                 );
                 assert!(
                     offers
@@ -5850,7 +5893,7 @@ mod tests {
 
     #[test]
     fn post_rest_inn_preserves_real_cursor_and_refuses_forged_policy_time_or_pending_queue() {
-        let victory = inn_victory();
+        let victory = gaining_victory();
         let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
         let rested = stage_with_supplier(
             &victory,
@@ -5899,7 +5942,8 @@ mod tests {
                 stage_with_supplier(&forged, &inn_command(&forged, member, 62), &mut |_| panic!(
                     "forged cursor"
                 ))
-                .is_err()
+                .is_err(),
+                "variant {variant} must refuse the forged cursor"
             );
             assert_eq!(forged, before);
         }
@@ -5908,7 +5952,7 @@ mod tests {
     fn campaign_terminal_policy_waits_for_destination_and_retains_actual_secret_holder_and_rest() {
         let completion = super::super::adventure::campaign_completion::terminal_outcome;
         let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
-        let victory = inn_victory();
+        let victory = gaining_victory();
         assert!(completion(&victory).unwrap().is_none());
         let arrived = stage_with_supplier(&victory, &inn_command(&victory, first, 90), &mut |_| {
             panic!("inn dice")

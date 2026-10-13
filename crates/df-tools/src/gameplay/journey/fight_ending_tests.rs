@@ -156,7 +156,9 @@ fn a_won_fight_resolves_once_closes_and_ends_on_a_card_that_accepts_nothing() {
         .unwrap();
         assert_eq!(beat_id(&inn), "harbor-inn");
         assert!(kinds(&inn).contains(&K::ResolveErrand));
-        assert!(kinds(&inn).contains(&K::ShortRest));
+        // The played fight left both heroes untouched, so nobody has
+        // anything to regain and no rest is offered.
+        assert!(!kinds(&inn).contains(&K::ShortRest));
         let stale = listed(&inn)
             .into_iter()
             .find(|(kind, _, _)| *kind == K::ResolveErrand)
@@ -186,7 +188,8 @@ fn a_won_fight_resolves_once_closes_and_ends_on_a_card_that_accepts_nothing() {
 #[test]
 fn a_short_rest_at_the_inn_still_comes_first_and_the_resolution_stays_offered() {
     live(|| {
-        let victory = tactical::tests::current_victory("ask-courier");
+        // A hero with a spent Second Wind use, so the inn rest regains it.
+        let victory = tactical::tests::current_victory_with_spent_second_wind("ask-courier");
         let inn = stage_with_supplier(&victory, &inn_command(&victory, first(), 21), &mut |_| {
             panic!("inn dice")
         })
@@ -201,6 +204,47 @@ fn a_short_rest_at_the_inn_still_comes_first_and_the_resolution_stays_offered() 
         let epilogue = ending_step(&rested, 23).unwrap();
         assert_eq!(beat_id(&epilogue), "epilogue");
         assert_end_card(&ending_step(&persisted(&epilogue), 24).unwrap());
+    });
+}
+
+/// The machine's rest rule (OBS-48): one rest per aftermath, only while a
+/// living hero has something to regain, and a stored game that resumes
+/// after the rest loads and plays on to the end card.
+#[test]
+fn a_rest_is_once_per_aftermath_and_a_resumed_rested_game_plays_on() {
+    live(|| {
+        let victory = tactical::tests::current_victory_with_spent_second_wind("escort-courier");
+        assert!(session_machine::rest_accepted(&victory).unwrap());
+        assert!(kinds(&victory).contains(&K::ShortRest));
+        let rested = stage_with_supplier(
+            &victory,
+            &input(&victory, first(), 30, "short-rest", vec![]),
+            &mut |_| panic!("rest dice"),
+        )
+        .unwrap();
+        // Resumed from stored bytes, the rested aftermath offers no second
+        // rest and refuses one, but the inn and the ending still play.
+        let resumed = persisted(&rested);
+        assert!(!session_machine::rest_accepted(&resumed).unwrap());
+        assert!(!kinds(&resumed).contains(&K::ShortRest));
+        refuses(&resumed, first(), 31, "short-rest");
+        let inn = stage_with_supplier(&resumed, &inn_command(&resumed, first(), 32), &mut |_| {
+            panic!("inn dice")
+        })
+        .unwrap();
+        assert!(!kinds(&inn).contains(&K::ShortRest));
+        assert_end_card(&ending_step(&ending_step(&inn, 33).unwrap(), 34).unwrap());
+    });
+}
+
+/// With nobody to regain anything, the rest is neither offered nor staged.
+#[test]
+fn no_rest_is_offered_when_no_living_hero_has_anything_to_regain() {
+    live(|| {
+        let victory = tactical::tests::current_victory("escort-courier");
+        assert!(!session_machine::rest_accepted(&victory).unwrap());
+        assert!(!kinds(&victory).contains(&K::ShortRest));
+        refuses(&victory, first(), 30, "short-rest");
     });
 }
 
@@ -349,7 +393,7 @@ fn every_offer_on_the_played_path_is_an_event_the_machine_accepts() {
         )
         .unwrap();
         let combat = tactical::tests::current_combat("escort-courier");
-        let victory = tactical::tests::current_victory("escort-courier");
+        let victory = tactical::tests::current_victory_with_spent_second_wind("escort-courier");
         let defeat = tactical::tests::current_defeat("escort-courier");
         let inn = stage_with_supplier(&victory, &inn_command(&victory, first(), 21), &mut |_| {
             panic!("inn dice")

@@ -684,7 +684,7 @@ pub(super) fn completion_source<'a>(
 mod tests {
     use super::super::{
         MEMBERS, bootstrap_member, initial, offered, phase, stage_join, stage_with_supplier,
-        tests::{build, inn_command, inn_victory, input, opening_story, prepared_story},
+        tests::{build, gaining_victory, inn_command, inn_victory, input, opening_story, prepared_story},
     };
     use super::*;
     use df_types::MemberId;
@@ -947,7 +947,7 @@ mod tests {
 
     #[test]
     fn orthogonal_rest_marker_requires_accepted_native_rest_and_time_source() {
-        let victory = inn_victory();
+        let victory = gaining_victory();
         let mut forged = victory.state().clone();
         forged
             .narrative
@@ -1050,7 +1050,7 @@ mod tests {
                 expected
             );
         }
-        let victory = inn_victory();
+        let victory = gaining_victory();
         assert_eq!(phase(&victory).unwrap(), rpc::JourneyPhase::Complete);
         let rest = stage_with_supplier(
             &victory,
@@ -1062,7 +1062,7 @@ mod tests {
             super::super::value(rest.state(), entity(BANDIT).unwrap(), "unconscious").unwrap(),
             0
         );
-        for before in [&victory, &rest] {
+        for (before, already_rested) in [(&victory, false), (&rest, true)] {
             let arrived =
                 stage_with_supplier(before, &inn_command(before, first(), 10), &mut |_| {
                     panic!("inn cannot roll")
@@ -1077,9 +1077,16 @@ mod tests {
                 &restored,
                 &input(&restored, first(), 11, "short-rest", vec![]),
                 &mut |_| panic!("restored rest cannot roll"),
-            )
-            .unwrap();
-            assert_eq!(phase(&rested).unwrap(), rpc::JourneyPhase::Complete);
+            );
+            if already_rested {
+                // One rest per aftermath, at the inn as at the fight.
+                assert!(rested.is_err());
+            } else {
+                assert_eq!(
+                    phase(&rested.unwrap()).unwrap(),
+                    rpc::JourneyPhase::Complete
+                );
+            }
         }
     }
 

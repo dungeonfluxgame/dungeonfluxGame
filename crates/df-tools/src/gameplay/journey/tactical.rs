@@ -2393,8 +2393,38 @@ pub(super) mod tests {
     use super::super::offered;
     use super::super::tests::{build, input, opening_story};
     use super::*;
+    /// The active hero spends a Second Wind use, so a later aftermath rest
+    /// has something to regain.
+    fn spend_second_wind(current: &Checkpoint, operation: u8) -> Checkpoint {
+        let member = [MEMBERS[0], MEMBERS[1]]
+            .into_iter()
+            .map(|bytes| MemberId::from_bytes(&bytes).unwrap())
+            .find(|member| {
+                offered(current, *member).is_ok_and(|offers| {
+                    offers
+                        .iter()
+                        .any(|(kind, _)| *kind == rpc::GameplayActionKind::SecondWind)
+                })
+            })
+            .expect("a hero can spend Second Wind");
+        stage_with_supplier(
+            current,
+            &input(current, member, operation, "second-wind", vec![]),
+            &mut |sides| Ok(sides.min(3)),
+        )
+        .unwrap()
+    }
     pub(in crate::gameplay::journey) fn current_victory(approach: &str) -> Checkpoint {
         play_fight(current_combat(approach), 8, None, None).0
+    }
+    /// A victory whose first hero spent a Second Wind use on the opening
+    /// turn, so the aftermath rest has something to regain. The ordinary
+    /// played victory leaves both heroes untouched.
+    pub(in crate::gameplay::journey) fn current_victory_with_spent_second_wind(
+        approach: &str,
+    ) -> Checkpoint {
+        let spent = spend_second_wind(&current_combat(approach), 8);
+        play_fight(spent, 9, None, None).0
     }
     pub(in crate::gameplay::journey) fn current_combat(approach: &str) -> Checkpoint {
         let opening = opening_story();
@@ -3176,8 +3206,16 @@ pub(super) mod tests {
                     .spec()
                     .archery
             );
-            let (final_state, first, checkpoints) = play_fight(started.clone(), 8, None, None);
-            let (_, second, _) = play_fight(fight(true), 8, Some(&final_state.state().draws), None);
+            // Spend a Second Wind use first, so the closing rest has a
+            // use to regain; both plays spend it the same way.
+            let started = spend_second_wind(&started, 8);
+            let (final_state, first, checkpoints) = play_fight(started.clone(), 9, None, None);
+            let (_, second, _) = play_fight(
+                spend_second_wind(&fight(true), 8),
+                9,
+                Some(&final_state.state().draws),
+                None,
+            );
             assert_eq!(first, second);
             let mid = checkpoints.first().unwrap();
             assert!(phase(mid).unwrap() == rpc::JourneyPhase::Combat);
@@ -3200,7 +3238,7 @@ pub(super) mod tests {
                 );
             }
             let (resumed, resumed_bytes, _) =
-                play_fight(restored, 9, Some(&final_state.state().draws), None);
+                play_fight(restored, 10, Some(&final_state.state().draws), None);
             assert_eq!(final_state, resumed);
             assert_eq!(&first[1..], resumed_bytes.as_slice());
             let battle = read(final_state.state()).unwrap();
@@ -3777,8 +3815,10 @@ pub(super) mod tests {
                 offered(&fight, first).unwrap(),
                 offered(&restored, first).unwrap()
             );
-            let mut current = fight;
-            for operation in 8..40 {
+            // Spend a Second Wind use first, so the closing rest has a
+            // use to regain.
+            let mut current = spend_second_wind(&fight, 8);
+            for operation in 9..40 {
                 if phase(&current).unwrap() == rpc::JourneyPhase::Complete {
                     break;
                 }
@@ -4155,6 +4195,9 @@ pub(super) mod tests {
                 }
                 if present(current.state()) {
                     assert!(read(current.state()).unwrap().combatants().len() >= 4);
+                    // Spend a Second Wind use first, so the closing rest
+                    // has a use to regain.
+                    let current = spend_second_wind(&current, 8);
                     let (finished, evidence, _) = play_fight(current.clone(), 9, None, None);
                     let (_, replay, _) =
                         play_fight(current, 9, Some(&finished.state().draws), None);

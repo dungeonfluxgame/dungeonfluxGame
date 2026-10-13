@@ -402,7 +402,18 @@ fn real_pre_change_checkpoint_bytes_resume_with_exact_pins_and_reencode_unchange
                         (model::label("graze").unwrap(), model::label("no").unwrap()),
                     ],
                 ),
-                _ => ("short-rest", vec![]),
+                // The stored heroes are untouched, so a short rest would
+                // regain nothing and the machine refuses it; the resumed
+                // game continues to the inn, and from the inn to its
+                // resolution.
+                8 => (
+                    "choose-harbor-scene",
+                    vec![(
+                        model::label("harbor-destination").unwrap(),
+                        model::label("harbor-inn").unwrap(),
+                    )],
+                ),
+                _ => ("resolve-errand", vec![]),
             };
             let continued = stage_with_supplier(
                 &current,

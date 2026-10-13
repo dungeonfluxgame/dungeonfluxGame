@@ -1,5 +1,5 @@
 use super::{
-    MEMBERS, PACKET_THREAD, THREAD_POLICY, THREAT_THREAD, accepted, model, offered, phase,
+    MEMBERS, PACKET_THREAD, THREAD_POLICY, THREAT_THREAD, accepted, model, offered, phase, set,
     stage_with_supplier,
     tests::{inn_command, input, opening_story},
 };
@@ -102,6 +102,12 @@ fn registered_narrative_runtime_retains_both_deliveries_through_recovery_rest_an
         assert_eq!(ledger.len(), 6);
         let recovered = model::checkpoint(current.basis(), current.state().clone()).unwrap();
         assert_eq!(recovered, current);
+        // The played fight leaves both heroes untouched, so spend a
+        // Second Wind use on paper for the rest to regain.
+        let mut spent = recovered.state().clone();
+        let hero = spent.characters[0].entity;
+        set(&mut spent, hero, "second-wind", 1).unwrap();
+        let recovered = model::checkpoint(recovered.basis(), spent).unwrap();
         let rest_input = input(&recovered, member(0), 11, "short-rest", vec![]);
         let rested = stage_with_supplier(&recovered, &rest_input, &mut |_| {
             panic!("recovered rest cannot draw")

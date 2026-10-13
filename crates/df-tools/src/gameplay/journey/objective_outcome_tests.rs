@@ -252,6 +252,12 @@ fn objective_registered_rest_and_inn_preserve_the_terminal_and_original_history(
     for victory in [true, false] {
         let (_, _, complete) = completed(victory);
         let cause = terminal_fact(&complete).clone();
+        // Spend a Second Wind use on paper so the rest has a use to
+        // regain; the played fight leaves both heroes untouched.
+        let mut spent = complete.state().clone();
+        let hero = spent.characters[0].entity;
+        set(&mut spent, hero, "second-wind", 1).unwrap();
+        let complete = model::checkpoint(complete.basis(), spent).unwrap();
         let input = tests::input(&complete, first(), 9, "short-rest", vec![]);
         let rest =
             stage_with_supplier(&complete, &input, &mut |_| panic!("rest cannot sample")).unwrap();
@@ -339,10 +345,15 @@ fn objective_legacy_committed_pairs_remain_readable_without_a_new_terminal_event
     for victory in [true, false] {
         let (_, _, complete) = completed(victory);
         let old = legacy(&complete, victory);
-        let before = old.clone();
         assert_eq!(phase(&old), Ok(rpc::JourneyPhase::Complete));
         assert_eq!(combat_victory(old.state()), Ok(victory));
         assert_eq!(combat_round(&old), combat_round(&complete));
+        // Spend a Second Wind use on paper so the rest has a use to regain.
+        let mut spent = old.state().clone();
+        let hero = spent.characters[0].entity;
+        set(&mut spent, hero, "second-wind", 1).unwrap();
+        let old = model::checkpoint(old.basis(), spent).unwrap();
+        let before = old.clone();
         let rest = stage_with_supplier(
             &old,
             &tests::input(&old, first(), 9, "short-rest", vec![]),

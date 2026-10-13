@@ -168,7 +168,8 @@ impl SessionEngine<Scope> for Engine {
         // Reuse the legal supplied faces of narrative_runtime_tests::victory. The
         // registered handler consumes the recorded draws; no random/provider path runs.
         stage_with_supplier(current, input, &mut |sides| {
-            assert!(matches!(sides, 6 | 20));
+            // d6 damage, the d10 Second Wind die, and d20 checks.
+            assert!(matches!(sides, 6 | 10 | 20));
             let mut db = self.0.borrow_mut();
             db.samples += 1;
             Ok(if sides == 20 { 10 } else { db.damage })
@@ -569,13 +570,17 @@ fn durable_registered_journey_retains_each_legal_opening_branch_through_inn_and_
             SubmissionOutcome::Refused(RepositoryError::InvalidCandidate),
         );
 
+        // The first hero also spends Second Wind, so the aftermath rest
+        // below has a use to regain (the machine refuses a rest nobody
+        // gains from).
         for (index, operation, kind) in [
             (0, 7, Action::DefendCourier),
             (0, 8, Action::GreatswordAttack),
-            (0, 9, Action::EndTurn),
-            (1, 10, Action::GreatswordAttack),
+            (0, 9, Action::SecondWind),
+            (0, 10, Action::EndTurn),
+            (1, 11, Action::GreatswordAttack),
         ] {
-            if operation == 10 {
+            if operation == 11 {
                 database.borrow_mut().damage = 6;
             }
             let scope = action(runtime.owner.checkpoint(), index, operation, kind);
@@ -592,7 +597,7 @@ fn durable_registered_journey_retains_each_legal_opening_branch_through_inn_and_
         );
         let knowledge = victory.state().knowledge.clone();
         let round = combat_round(&victory).unwrap();
-        let scope = action(&victory, 0, 11, Action::ShortRest);
+        let scope = action(&victory, 0, 12, Action::ShortRest);
         let receipt = runtime.accept(&scope);
         accepted.push((scope, receipt));
         let after_rest = runtime.owner.checkpoint().state().logical_time;
@@ -606,7 +611,7 @@ fn durable_registered_journey_retains_each_legal_opening_branch_through_inn_and_
         );
         assert_eq!(combat_round(runtime.owner.checkpoint()).unwrap(), round);
         let rested = runtime.owner.checkpoint().clone();
-        let scope = action(&rested, 1, 12, Action::ChooseHarborScene);
+        let scope = action(&rested, 1, 13, Action::ChooseHarborScene);
         let receipt = runtime.accept(&scope);
         accepted.push((scope, receipt));
         let arrived = runtime.owner.checkpoint().clone();

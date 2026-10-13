@@ -8,7 +8,7 @@
 //! encounter, and it is entered (`StartFight`) and left (a combat event whose
 //! rules outcome ends it) only through this table.
 
-use df_model::checkpoint::Checkpoint;
+use df_model::checkpoint::{Checkpoint, FactValue};
 use df_protocol::common as rpc;
 use df_session::submission::RepositoryError;
 
@@ -199,6 +199,49 @@ pub(super) fn internal_reason(state: SessionState, event: Event) -> Option<&'sta
         }
         _ => None,
     }
+}
+
+/// The Aftermath rest rule, decided here like every other transition: a
+/// short rest is accepted at most once per aftermath (per fight), and only
+/// while some living hero has something to regain: hit points below the
+/// maximum, a Second Wind use below the maximum, or a knockout to wake
+/// from. (The rest itself currently restores Second Wind and wakes the
+/// knocked out; spending Hit Dice to heal is not built yet.) Derived from
+/// the checkpoint like the state itself, so a stored game that resumes
+/// inside an aftermath that has already rested loads and continues with
+/// its other offers.
+pub(super) fn rest_accepted(current: &Checkpoint) -> Result<bool, RepositoryError> {
+    if SessionState::of(current)? != SessionState::Aftermath {
+        return Ok(false);
+    }
+    let state = current.state();
+    // This aftermath began at the latest fight-end fact; a rest recorded
+    // after it is this aftermath's one rest.
+    let fight_end = state.facts.iter().rposition(|fact| {
+        matches!(&fact.value, FactValue::ContentEvent { definition, .. }
+            if matches!(definition.entry.as_str(), "combat-victory" | "combat-defeat"))
+    });
+    let rested = state.facts.iter().enumerate().any(|(index, fact)| {
+        fight_end.is_none_or(|end| index > end)
+            && matches!(&fact.value, FactValue::ContentEvent { definition, .. }
+                if definition.entry.as_str() == "short-rest-start")
+    });
+    if rested {
+        return Ok(false);
+    }
+    for character in &state.characters {
+        let who = character.entity;
+        let hit_points = super::value(state, who, "hit-points")?;
+        if hit_points > 0
+            && (hit_points < super::maximum_hit_points(state, who)?
+                || super::value(state, who, "second-wind")?
+                    < u32::from(super::super::pack::second_wind().uses_max)
+                || super::value(state, who, "unconscious")? != 0)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The one table: for the current state and an event, the next state or a
