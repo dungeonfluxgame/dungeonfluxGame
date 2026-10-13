@@ -50,6 +50,8 @@ main .client.display{background:transparent}
 .client.player .live-dock .npc-you{margin:0 0 8px;padding:0 4px;font:15px/1.4 var(--serif);color:#cfc3a8;overflow-wrap:anywhere}
 .client.player .live-dock .npc-bubble{display:flex;gap:14px;align-items:flex-start;padding:14px;background:linear-gradient(135deg,#142133f2,#080f19f5);border:1px solid #c9a35fb3;border-radius:8px 18px 18px 18px;box-shadow:0 6px 22px #0009,inset 0 0 0 1px #e8cb9422}
 .client.player .live-dock .npc-bubble-portrait{flex:none;width:60px;height:60px;border-radius:10px;border:1px solid #cba466b3;object-fit:cover;object-position:center 20%;background:#05090f}
+.client.player .live-hero-head .live-portrait{width:48px;height:72px;aspect-ratio:2/3}
+.client.player .live-hero-head .live-portrait::before{background-position:center 18%;background-size:cover}
 .client.player .live-dock .npc-bubble-body{min-width:0}
 .client.player .live-dock .npc-bubble-name{margin:0 0 4px;font:400 19px/1.2 var(--serif);color:var(--gold)}
 .client.player .live-dock .npc-bubble-reply{margin:0;font:italic 18px/1.5 var(--serif);color:#f3ead6;overflow-wrap:anywhere}
