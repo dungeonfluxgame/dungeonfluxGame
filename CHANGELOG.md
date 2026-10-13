@@ -20,6 +20,43 @@ Integration history from 2026-10-11T15:24:05-04:00 through 2026-10-12T04:33:02-0
 
 Integration history from 2026-10-12T18:31:36-04:00 through 2026-10-13T06:51:17-04:00 on `main`, generated from Git by revision range `558654d38a30..e5034d48311b`: six-hour blocks by first-parent commit time, 173 commits, each listed once in integration order.
 
+Integration history from 2026-10-13T06:51:46-04:00 through 2026-10-13T10:55:22-04:00 on `main`, generated from Git by revision range `e5034d48311b..cefa2864f788`: six-hour blocks by first-parent commit time, 26 commits, each listed once in integration order.
+
+## 2026-10-13T06:51:46-04:00 to 2026-10-13T10:55:22-04:00
+
+Range: e5034d48311bc22079174965b58199904c878ab4..cefa2864f7887557351490c88279a4112ca52c1e
+
+- 503a541470578a5b53d70ebfa483719a55e74e89 — Changelog: the blocks from 2026-10-12 18:31 to 2026-10-13 06:51 (173 commits)
+- b42aa199e256242ea74b2985141cd5a14590317a — SES-04: a hero whose phone has gone away can be taken back from another phone
+- 9beca9560cbc1f6d8e9f7272b19635347787be0c — FLO-01: a new story scene's choices are withheld for four seconds
+- 0b1fa9d11cffa34704044fcb4090f5a66b483253 — Triage list and roadmap: the seat take-back (the last severity 1 row) and the story hold
+- 10a3c565989fbf632db4271a03a582b83ee6a52a — Browser code: four linter findings
+- 103fe7a0bdfb886f4db69e5dbeca6d1c9cefa828 — After a won fight both phones went blank: a healthy hero's empty condition line was refused by the rest screen
+- c5ba0b4de48aeb690849b0da8c973a4fb8f16a67 — Triage list: second hand-played session (room RUREGO), thirteen findings
+- ff1dfb078608e32707f1eb2d9a317ce5d52542d7 — DEV-03: three long-failing preview tests pass again
+- a9ea26a1f959c98fbc63e72edf4f783f11b78227 — DEV-03: the reply-cache and speech-capture tests pass again
+- c4eeeb81caeb2a05ccfcb6f0104617cddf65ef43 — DEV-03: three stale pins and expectations in the generation and picture tests
+- 7ecfbb17d98f5d7016a625b897730bd77bc0e472 — DEV-03: small talk and a private clue are answered again
+- cde1bce117091c4615ba09df857a3bb7f8f01909 — FLO-07: the death-save and stable-hero choices are worded as what the heroes do
+- 57f0bfdea70e63cca3849cd0cfb52cdc8208d52e — PHN-06: a story scene's log starts at the action that opened the scene
+- 21d2f25cecb2c0683c5abbda960cb2a5710730bf — OBS-63: the phone says a refused request was refused, and stops re-sending it
+- 8c0f9759f8bccd2c2f5015801291549dfb765318 — RUN-06: story choices in the table log read as actions
+- 44792e864e4a366261b04976decadd414471ce3a — RUN-05, OBS-22: plain threats are recognised, a threat is not read as a bribe, and stock replies answer it
+- 1db1e80e41800ea384a94c3f0b41fb655eb9b125 — The TV fight: health cards follow the presented beats, heals show, thrown weapons and bites get their own presentation
+- eeeb2093fff466245cab88feb2ffe6b5f89893a2 — RUN-11, RUN-12: a look left as the only option is selected by itself; no composer at The End
+- 6ee86b2fcc2ed27804c2b7af46065fc73739c5ed — Phone fight map: never a few enormous squares
+- baa51c539c95062ed67be1e31137633a4262a023 — RUN-09, RUN-07: the continue choice names its destination once; no second 'Your turn' card under the controls
+- fbe5a3ef8f734ea67c1f890928026a6492104e1b — Triage list: the second hand-played session's fixes, and ten of the twelve long-failing tests
+- 8645c254332e829230a300ac911ba5bb1f0e1982 — RUN-02, OBS-31: a TV display running behind the server no longer stages a heal back to the old number
+- 9c6886d278aa0440048eeda4ec4545e8ffe76d3a — RUN-10: a speech bubble is placed through the picture's real crop, so it does not lie over the speaker's head
+- dbdcad0c8d3ec7e93f0f3e7e4443c3af70fd690d — DEV-03: the last two long-failing tests pass, and live replies are held to two rules only the transcripts were
+- 7edf7afd05168b5091a1cf19a15e0414abf6dcb2 — A model, not a phrase list, reads how a hero speaks: Jev classifies each spoken line before the reply
+- cefa2864f7887557351490c88279a4112ca52c1e — Triage list: the health cards, Jev classification, the speech bubble and the last failing tests
+
+Next block baseline: `cefa2864f7887557351490c88279a4112ca52c1e`.
+
+The commit writing this block remains pending for capture in the next block. This block is still open: the work session had not ended when it was written, and it is shorter than six hours.
+
 ## 2026-10-13T06:45:20-04:00 to 2026-10-13T06:51:17-04:00
 
 Range: 07ac688e3ee33f0235d00fb90c6624045db5c9d8..e5034d48311bc22079174965b58199904c878ab4
