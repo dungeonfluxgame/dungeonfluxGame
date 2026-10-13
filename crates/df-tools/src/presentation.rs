@@ -76,10 +76,20 @@ fn fingerprint(outcome: &rpc::CombatOutcome) -> u64 {
     fnv(&parts)
 }
 
-/// "Victory" when the server projects the courier's closing line, which only the won
-/// encounter has. The aftermath screen uses this same rule for its heading.
+/// "Victory" when every server-projected enemy is at zero hit points.
+/// The aftermath screen uses this same rule for its heading.
 pub(crate) fn is_victory(journey: &rpc::JourneyView) -> bool {
-    !journey.dialogue.is_empty()
+    let Some(combat) = journey.combat.as_ref() else {
+        return false;
+    };
+    let mut enemies = combat
+        .participants
+        .iter()
+        .filter(|participant| participant.side == 2);
+    let Some(first_enemy) = enemies.next() else {
+        return false;
+    };
+    first_enemy.hit_points == 0 && enemies.all(|enemy| enemy.hit_points == 0)
 }
 
 /// The display's type scale for the aftermath's closing paragraph, by its length in
@@ -1122,6 +1132,20 @@ mod tests {
     }
 
     #[test]
+    fn defeat_dialogue_does_not_make_the_encounter_a_victory() {
+        let mut defeated = journey(rpc::JourneyPhase::Complete, true, vec![]);
+        defeated.dialogue = "The bandit takes the packet and leaves.".to_owned();
+        defeated.combat.as_mut().unwrap().participants = vec![rpc::PartyMemberView {
+            name: "Bandit".to_owned(),
+            side: 2,
+            hit_points: 4,
+            ..Default::default()
+        }];
+
+        assert!(!is_victory(&defeated));
+    }
+
+    #[test]
     fn first_view_presents_nothing() {
         let first = snapshot(
             &journey(
@@ -1185,6 +1209,11 @@ mod tests {
             vec![outcome("Brakka", "Perrin", 20, true)],
         );
         ended.dialogue = "Thank you.".to_owned();
+        ended.combat.as_mut().unwrap().participants = vec![rpc::PartyMemberView {
+            name: "Perrin".to_owned(),
+            side: 2,
+            ..Default::default()
+        }];
         let over = snapshot(&ended, &scene());
         let changes = transitions(Some(&fight), &over);
         assert!(changes.new_roll);
