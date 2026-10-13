@@ -536,15 +536,6 @@ fn record_refusal(action_kind: i32, reason: &str, status: &str) {
     span.finish_unmeasured(status);
 }
 
-/// One `COMBAT` stdout line and one shared-path event per recorded outcome of an accepted
-/// action, so a turn can be checked against the rules from the server log alone.
-fn record_combat_audit(accepted: &rpc::AcceptedAction) {
-    for outcome in &accepted.combat {
-        let line = super::table_log::audit_line(outcome);
-        record_audit_line("gameplay.combat_outcome", line);
-    }
-}
-
 fn record_audit_line(event: &'static str, line: String) {
     println!("{line}");
     let context = OperationContext {
@@ -604,56 +595,6 @@ fn audit_hero(checkpoint: &Checkpoint, member: df_types::MemberId) -> Option<Str
         .journey?
         .own_character
         .map(|character| character.name)
-}
-
-fn record_turn_starts(
-    outcomes: &[rpc::CombatOutcome],
-    before: Option<&rpc::CombatView>,
-    after: Option<&rpc::CombatView>,
-) {
-    let Some(after) = after else {
-        return;
-    };
-    let mut actor = before
-        .map_or("", |combat| combat.active_actor.as_str())
-        .to_owned();
-    let mut round = before.map_or(1, |combat| combat.round);
-    let turn_order = after
-        .initiative
-        .iter()
-        .map(|roll| roll.name.as_str())
-        .collect::<Vec<_>>();
-    for outcome in outcomes {
-        if rpc::OutcomeKind::try_from(outcome.kind) == Ok(rpc::OutcomeKind::OpportunityAttack)
-            || outcome.actor_name == actor
-        {
-            continue;
-        }
-        advance_audit_round(&actor, &outcome.actor_name, &turn_order, &mut round);
-        record_audit_line(
-            "gameplay.combat_turn",
-            super::table_log::turn_audit_line(&outcome.actor_name, round),
-        );
-        actor.clone_from(&outcome.actor_name);
-    }
-    if !after.active_actor.is_empty() && after.active_actor != actor {
-        advance_audit_round(&actor, &after.active_actor, &turn_order, &mut round);
-        record_audit_line(
-            "gameplay.combat_turn",
-            super::table_log::turn_audit_line(&after.active_actor, round),
-        );
-    }
-}
-
-fn advance_audit_round(actor: &str, next: &str, order: &[&str], round: &mut u32) {
-    let current = order.iter().position(|name| *name == actor);
-    let next = order.iter().position(|name| *name == next);
-    if current
-        .zip(next)
-        .is_some_and(|(current, next)| next <= current)
-    {
-        *round = round.saturating_add(1);
-    }
 }
 
 fn after_grant_reconnect<T>(
@@ -1829,7 +1770,6 @@ impl Actor {
         accepted: &rpc::AcceptedAction,
         before: &Checkpoint,
     ) {
-        record_combat_audit(accepted);
         let after = self.owner.checkpoint();
         let Ok(kind) = rpc::GameplayActionKind::try_from(request.action_kind) else {
             return;
@@ -1838,23 +1778,6 @@ impl Actor {
         let after_phase = super::journey::phase(after).ok();
         let before_combat = audit_combat_view(before, member);
         let after_combat = audit_combat_view(after, member);
-
-        if before_phase != Some(rpc::JourneyPhase::Combat)
-            && after_phase == Some(rpc::JourneyPhase::Combat)
-            && let Ok(rolls) = super::journey::initiative_rolls(after)
-        {
-            record_audit_line(
-                "gameplay.combat_start",
-                super::table_log::initiative_audit_line(&rolls),
-            );
-        }
-
-        record_turn_starts(
-            &accepted.combat,
-            before_combat.as_ref(),
-            after_combat.as_ref(),
-        );
-
         let hero = audit_hero(after, member);
         if let Some(actor) = hero.as_deref() {
             match kind {
@@ -1906,7 +1829,6 @@ impl Actor {
                 | rpc::GameplayActionKind::Stand
                 | rpc::GameplayActionKind::PickUpWeapon
                 | rpc::GameplayActionKind::CreateCharacter
-                | rpc::GameplayActionKind::BeginStory
                 | rpc::GameplayActionKind::Unspecified
                 | rpc::GameplayActionKind::SetTableSetting => {}
                 _ => {
@@ -1927,6 +1849,23 @@ impl Actor {
                     }
                 }
             }
+        }
+
+        if before_phase != Some(rpc::JourneyPhase::Combat)
+            && after_phase == Some(rpc::JourneyPhase::Combat)
+            && let Ok(rolls) = super::journey::initiative_rolls(after)
+        {
+            record_audit_line(
+                "gameplay.combat_start",
+                super::table_log::initiative_audit_line(&rolls),
+            );
+        }
+        for (event, line) in super::table_log::combat_audit_lines(
+            &accepted.combat,
+            before_combat.as_ref(),
+            after_combat.as_ref(),
+        ) {
+            record_audit_line(event, line);
         }
 
         if before_phase == Some(rpc::JourneyPhase::Combat)

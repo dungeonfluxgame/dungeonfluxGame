@@ -1090,6 +1090,58 @@ pub(super) fn initiative_audit_line(rolls: &[rpc::InitiativeRoll]) -> String {
     format!("COMBAT initiative order=[{order}]")
 }
 
+pub(super) fn combat_audit_lines(
+    outcomes: &[rpc::CombatOutcome],
+    before: Option<&rpc::CombatView>,
+    after: Option<&rpc::CombatView>,
+) -> Vec<(&'static str, String)> {
+    let mut lines = Vec::new();
+    let mut actor = before
+        .map_or("", |combat| combat.active_actor.as_str())
+        .to_owned();
+    let mut round = before.map_or(1, |combat| combat.round);
+    let turn_order = after
+        .into_iter()
+        .flat_map(|combat| &combat.initiative)
+        .map(|roll| roll.name.as_str())
+        .collect::<Vec<_>>();
+    for outcome in outcomes {
+        let opportunity_attack =
+            rpc::OutcomeKind::try_from(outcome.kind) == Ok(rpc::OutcomeKind::OpportunityAttack);
+        if !opportunity_attack && outcome.actor_name != actor {
+            advance_audit_round(&actor, &outcome.actor_name, &turn_order, &mut round);
+            lines.push((
+                "gameplay.combat_turn",
+                turn_audit_line(&outcome.actor_name, round),
+            ));
+            actor.clone_from(&outcome.actor_name);
+        }
+        lines.push(("gameplay.combat_outcome", audit_line(outcome)));
+    }
+    if let Some(after) = after
+        && !after.active_actor.is_empty()
+        && after.active_actor != actor
+    {
+        advance_audit_round(&actor, &after.active_actor, &turn_order, &mut round);
+        lines.push((
+            "gameplay.combat_turn",
+            turn_audit_line(&after.active_actor, round),
+        ));
+    }
+    lines
+}
+
+fn advance_audit_round(actor: &str, next: &str, order: &[&str], round: &mut u32) {
+    let current = order.iter().position(|name| *name == actor);
+    let next = order.iter().position(|name| *name == next);
+    if current
+        .zip(next)
+        .is_some_and(|(current, next)| next <= current)
+    {
+        *round = round.saturating_add(1);
+    }
+}
+
 pub(super) fn turn_audit_line(actor: &str, round: u32) -> String {
     format!("COMBAT turn actor={actor:?} round={round}")
 }
@@ -1268,12 +1320,53 @@ mod tests {
         assert_eq!(
             story_choice_audit_line(
                 "Brakka",
-                "ask_courier",
-                "Ask Perrin what troubles him",
-                "opening",
-                "dialogue"
+                "begin_story",
+                "Begin the story",
+                "character_creation",
+                "opening"
             ),
-            "STORY choice actor=\"Brakka\" action=ask_courier label=\"Ask Perrin what troubles him\" phase=opening->dialogue"
+            "STORY choice actor=\"Brakka\" action=begin_story label=\"Begin the story\" phase=character_creation->opening"
+        );
+    }
+
+    #[test]
+    fn combat_audit_orders_each_turn_before_that_actors_outcomes() {
+        let outcome = |actor: &str| rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::Attack as i32,
+            actor_name: actor.to_owned(),
+            ..Default::default()
+        };
+        let before = rpc::CombatView::default();
+        let after = rpc::CombatView {
+            active_actor: "Weasel".to_owned(),
+            ..Default::default()
+        };
+        let outcomes = [outcome("Brakka"), outcome("Weasel")];
+        let lines = combat_audit_lines(&outcomes, Some(&before), Some(&after));
+
+        assert_eq!(
+            lines.iter().map(|(event, _)| *event).collect::<Vec<_>>(),
+            [
+                "gameplay.combat_turn",
+                "gameplay.combat_outcome",
+                "gameplay.combat_turn",
+                "gameplay.combat_outcome",
+            ]
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|(_, line)| line
+                    .split("actor=")
+                    .nth(1)
+                    .and_then(|actor| actor.split_whitespace().next()))
+                .collect::<Vec<_>>(),
+            [
+                Some("\"Brakka\""),
+                Some("\"Brakka\""),
+                Some("\"Weasel\""),
+                Some("\"Weasel\""),
+            ]
         );
     }
 
