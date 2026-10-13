@@ -552,6 +552,30 @@ fn record_audit_line(event: &'static str, line: String) {
     span.finish_unmeasured("recorded");
 }
 
+fn record_session_machine_refusal(checkpoint: &Checkpoint, request: &rpc::SubmitActionRequest) {
+    let Some(step) = refusal_detail::take() else {
+        return;
+    };
+    if !matches!(
+        step,
+        "session-machine" | "session-machine-rest" | "session-machine-outcome"
+    ) {
+        refusal_detail::note(step);
+        return;
+    }
+    if let (Ok(kind), Ok(state)) = (
+        rpc::GameplayActionKind::try_from(request.action_kind),
+        super::journey::session_machine::SessionState::of(checkpoint),
+    ) && let Some(event) = super::journey::session_machine::Event::for_kind(state, kind)
+    {
+        record_audit_line(
+            "gameplay.session_machine_refused",
+            format!("STATE refused state={state:?} event={event:?} reason={step}"),
+        );
+    }
+    refusal_detail::note(step);
+}
+
 fn audit_kind_name(kind: rpc::GameplayActionKind) -> String {
     let mut name = String::new();
     for character in format!("{kind:?}").chars() {
@@ -1546,6 +1570,7 @@ impl Actor {
             SubmissionOutcome::Refused(error)
                 if self.owner.is_current() && command_refusal_code(error).is_some() =>
             {
+                record_session_machine_refusal(self.owner.checkpoint(), &request);
                 record_refusal(request.action_kind, &format!("{error:?}"), "refused");
                 Ok(wire::committed(wire::rejected(
                     current,
@@ -1561,6 +1586,7 @@ impl Actor {
                 if error == RepositoryError::Unauthorized {
                     return Err(unavailable(error));
                 }
+                record_session_machine_refusal(self.owner.checkpoint(), &request);
                 record_refusal(request.action_kind, &format!("{error:?}"), "unavailable");
                 Err(authority_unavailable())
             }
@@ -1780,6 +1806,26 @@ impl Actor {
         let after_combat = audit_combat_view(after, member);
         let hero = audit_hero(after, member);
         if let Some(actor) = hero.as_deref() {
+            let state_audit = if let (Ok(state_before), Ok(state_after)) = (
+                super::journey::session_machine::SessionState::of(before),
+                super::journey::session_machine::SessionState::of(after),
+            ) {
+                super::journey::session_machine::Event::for_kind(state_before, kind).map(|event| {
+                    (
+                        event,
+                        format!(
+                            "STATE {state_before:?} -> {state_after:?} event={event:?} actor={actor:?}"
+                        ),
+                    )
+                })
+            } else {
+                None
+            };
+            if let Some((event, line)) = &state_audit
+                && *event != super::journey::session_machine::Event::StoryChoice
+            {
+                record_audit_line("gameplay.session_machine_transition", line.clone());
+            }
             match kind {
                 rpc::GameplayActionKind::SecondWind => {
                     if let Some(entity) = after
@@ -1848,6 +1894,9 @@ impl Actor {
                         );
                     }
                 }
+            }
+            if let Some((super::journey::session_machine::Event::StoryChoice, line)) = state_audit {
+                record_audit_line("gameplay.session_machine_transition", line);
             }
         }
 

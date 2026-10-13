@@ -27,7 +27,7 @@ use crate::gameplay::beat_script::BeatEffect;
 
 /// Where a session is, from lobby to the end card.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SessionState {
+pub(crate) enum SessionState {
     Lobby,
     Story,
     Conversation,
@@ -39,7 +39,7 @@ pub(super) enum SessionState {
 impl SessionState {
     /// The state of a checkpoint: its journey phase, with the end card split
     /// out of `Complete`.
-    pub(super) fn of(current: &Checkpoint) -> Result<Self, RepositoryError> {
+    pub(crate) fn of(current: &Checkpoint) -> Result<Self, RepositoryError> {
         Ok(match phase(current)? {
             rpc::JourneyPhase::Room => Self::Lobby,
             rpc::JourneyPhase::Opening => Self::Story,
@@ -70,7 +70,7 @@ impl SessionState {
 
 /// What a submitted command asks the session to do, named by progress.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Event {
+pub(crate) enum Event {
     CreateHero,
     Begin,
     StoryChoice,
@@ -105,6 +105,17 @@ impl Event {
             | BeatEffect::ChooseHarborScene => Self::StoryChoice,
             BeatEffect::GreatswordAttack | BeatEffect::SecondWind => Self::CombatAction,
         }
+    }
+
+    /// The machine event represented by an action kind in this state. The
+    /// BeginStory kind is shared by the lobby's Begin offer and authored
+    /// script Continue steps; the event list keeps that distinction ordered.
+    pub(crate) fn for_kind(state: SessionState, kind: rpc::GameplayActionKind) -> Option<Self> {
+        events_for_kind(kind)
+            .iter()
+            .copied()
+            .find(|event| next(state, *event).is_ok())
+            .or_else(|| events_for_kind(kind).first().copied())
     }
 }
 
@@ -341,6 +352,18 @@ mod tests {
         SessionState::Ended,
     ];
     // `EVENTS` comes from the module: the table and the tests share it.
+
+    #[test]
+    fn audit_event_distinguishes_begin_story_from_script_continue() {
+        assert_eq!(
+            Event::for_kind(SessionState::Lobby, rpc::GameplayActionKind::BeginStory),
+            Some(Event::Begin)
+        );
+        assert_eq!(
+            Event::for_kind(SessionState::Story, rpc::GameplayActionKind::BeginStory),
+            Some(Event::ScriptStep)
+        );
+    }
 
     #[test]
     fn the_table_names_every_state_and_event() {

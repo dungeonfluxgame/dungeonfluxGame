@@ -34,7 +34,7 @@ mod objective_outcome;
 mod objective_outcome_tests;
 #[cfg(test)]
 mod session_flow_tests;
-mod session_machine;
+pub(super) mod session_machine;
 pub(super) mod tactical;
 #[cfg(test)]
 mod text_pack_tests;
