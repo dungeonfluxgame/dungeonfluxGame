@@ -2502,6 +2502,13 @@ pub(super) mod tests {
         faces: &[u32],
         reverse_character_storage: bool,
     ) -> Result<Checkpoint, RepositoryError> {
+        let dialogue = dialogue_checkpoint(mixed, reverse_character_storage)?;
+        start_fight_from(&dialogue, operation, faces)
+    }
+    fn dialogue_checkpoint(
+        mixed: bool,
+        reverse_character_storage: bool,
+    ) -> Result<Checkpoint, RepositoryError> {
         let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
         let opening = if mixed {
             mixed_opening()
@@ -2518,6 +2525,14 @@ pub(super) mod tests {
             state.characters.reverse();
             dialogue = model::checkpoint(dialogue.basis(), state)?;
         }
+        Ok(dialogue)
+    }
+    fn start_fight_from(
+        dialogue: &Checkpoint,
+        operation: [u8; 16],
+        faces: &[u32],
+    ) -> Result<Checkpoint, RepositoryError> {
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
         let mut supplied = faces.iter().copied();
         let mut defend = input(&dialogue, member, 7, "defend-courier", vec![]);
         let GameInput::Game(command) = &mut defend else {
@@ -2527,6 +2542,50 @@ pub(super) mod tests {
         stage_with_supplier(&dialogue, &defend, &mut |sides| {
             Ok(supplied.next().unwrap_or(10).clamp(1, sides))
         })
+    }
+    fn adventure_table_creatures() -> Vec<String> {
+        let tables: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../../content/adventure-tables/antagonists.json"
+        ))
+        .unwrap();
+        let mut creatures = std::collections::BTreeSet::new();
+        for entry in tables["tables"]["antagonists"]["entries"]
+            .as_array()
+            .unwrap()
+        {
+            for enemy in entry["tactical"]["enemies"].as_array().unwrap() {
+                creatures.insert(enemy["srd_id"].as_str().unwrap().to_owned());
+            }
+        }
+        creatures.into_iter().collect()
+    }
+    fn finish_enemy_first_round(mut current: Checkpoint) -> Result<Checkpoint, String> {
+        for operation in 8_u8..40 {
+            let battle = read(current.state()).map_err(|error| format!("read: {error:?}"))?;
+            if battle.finished() || battle.reaction_offers().is_empty() {
+                return Ok(current);
+            }
+            let member = [MEMBERS[0], MEMBERS[1]]
+                .into_iter()
+                .map(|bytes| MemberId::from_bytes(&bytes).unwrap())
+                .find(|member| offered(&current, *member).is_ok_and(|actions| !actions.is_empty()))
+                .ok_or_else(|| "a reaction is offered but no hero may answer it".to_owned())?;
+            let entry = wire::action_entry(rpc::GameplayActionKind::DeclineReaction)
+                .ok_or_else(|| "decline-reaction has no action entry".to_owned())?;
+            let _ = crate::gameplay::refusal_detail::take();
+            current = stage_with_supplier(
+                &current,
+                &input(&current, member, operation, entry, vec![]),
+                &mut |sides| Ok(10_u32.clamp(1, sides)),
+            )
+            .map_err(|error| {
+                format!(
+                    "decline reaction: step={:?} error={error:?}",
+                    crate::gameplay::refusal_detail::take()
+                )
+            })?;
+        }
+        Err("hero reactions did not settle within 32 declines".to_owned())
     }
     /// An operation id whose layout hash selects `wanted` among `layouts` layouts,
     /// mirroring the fold in `start`. A repeated single byte always hashes even, so the
@@ -2548,6 +2607,151 @@ pub(super) mod tests {
                     == wanted
             })
             .expect("an operation id selects each layout")
+    }
+    /// Exhaustively checks every stored adventure creature, scene layout and enemy count.
+    #[test]
+    #[ignore]
+    fn every_adventure_creature_plays_its_first_round_on_every_layout() {
+        with_live(|| {
+            let creatures = adventure_table_creatures();
+            assert!(!creatures.is_empty(), "adventure tables field creatures");
+            let dialogues = [
+                dialogue_checkpoint(true, false).unwrap(),
+                dialogue_checkpoint(true, true).unwrap(),
+            ];
+            let mut failures = Vec::new();
+            let mut checked = 0_usize;
+            for (order_index, dialogue) in dialogues.iter().enumerate() {
+                let membership_order = participants(dialogue)
+                    .into_iter()
+                    .map(|participant| participant.character.unwrap())
+                    .collect::<Vec<_>>();
+                for id in scene_ids() {
+                    let bytes = scene_bytes(id).unwrap();
+                    let data: tactical_rules::BattleSceneData =
+                        serde_json::from_slice(bytes).unwrap();
+                    TEST_SCENE_OVERRIDE.with(|own| own.set(scene_ids().find(|known| *known == id)));
+                    for layout in &data.layouts {
+                        let layout_index = data
+                            .layouts
+                            .iter()
+                            .position(|known| known.id == layout.id)
+                            .unwrap();
+                        let operation = operation_for_layout(layout_index, data.layouts.len());
+                        for creature in &creatures {
+                            for count in 1..=MAXIMUM_ENEMIES {
+                                checked += 1;
+                                let tag = format!(
+                                    "{id}/{} {creature}x{count} hero-order-{order_index}",
+                                    layout.id
+                                );
+                                TEST_FIGHT_OVERRIDE.with(|own| {
+                                    *own.borrow_mut() = Some(TestFight {
+                                        enemies: count,
+                                        foe: Some(creature.clone()),
+                                    });
+                                });
+                                let _ = crate::gameplay::refusal_detail::take();
+                                let started = start_fight_from(dialogue, operation, &[1, 2, 20])
+                                    .map_err(|error| {
+                                        format!(
+                                            "start refused: step={:?} error={error:?}",
+                                            crate::gameplay::refusal_detail::take()
+                                        )
+                                    })
+                                    .and_then(finish_enemy_first_round);
+                                let current = match started {
+                                    Ok(current) => current,
+                                    Err(problem) => {
+                                        failures.push(format!("{tag}: {problem}"));
+                                        continue;
+                                    }
+                                };
+                                let battle = match read(current.state()) {
+                                    Ok(battle) => battle,
+                                    Err(error) => {
+                                        failures.push(format!("{tag}: read: {error:?}"));
+                                        continue;
+                                    }
+                                };
+                                if snapshot(current.state()).map(|saved| saved.layout.as_str())
+                                    != Ok(layout.id.as_str())
+                                {
+                                    failures.push(format!("{tag}: wrong layout staged"));
+                                }
+                                if current.state().encounters[0].participants[..2]
+                                    != membership_order
+                                {
+                                    failures
+                                        .push(format!("{tag}: heroes not staged in join order"));
+                                }
+                                let enemies: Vec<_> = battle
+                                    .combatants()
+                                    .iter()
+                                    .filter(|actor| actor.side() == Side::Enemies)
+                                    .collect();
+                                if enemies.len() != count
+                                    || enemies
+                                        .iter()
+                                        .any(|actor| actor.spec().kind.srd_id() != Some(creature))
+                                {
+                                    failures.push(format!(
+                                        "{tag}: staged {:?} enemies",
+                                        enemies
+                                            .iter()
+                                            .map(|actor| actor.spec().kind.srd_id())
+                                            .collect::<Vec<_>>()
+                                    ));
+                                }
+                                let enemies_first =
+                                    battle.initiative_order()[..count].iter().all(|actor| {
+                                        battle.actor(*actor).is_ok_and(|combatant| {
+                                            combatant.side() == Side::Enemies
+                                        })
+                                    });
+                                if !enemies_first {
+                                    failures.push(format!(
+                                        "{tag}: enemies not first in initiative {:?}",
+                                        battle.initiative_order()
+                                    ));
+                                }
+                                let hero_to_act = battle.finished()
+                                    || battle.active_actor().is_some_and(|actor| {
+                                        battle
+                                            .actor(actor)
+                                            .is_ok_and(|combatant| combatant.side() == Side::Heroes)
+                                    });
+                                if !hero_to_act {
+                                    failures.push(format!(
+                                        "{tag}: first round stopped on actor {:?} round {}",
+                                        battle.active_actor(),
+                                        battle.round()
+                                    ));
+                                }
+                                if battle.round() != 1 {
+                                    failures.push(format!(
+                                        "{tag}: first round ended in round {}",
+                                        battle.round()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            TEST_SCENE_OVERRIDE.with(|own| own.set(None));
+            TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
+            println!(
+                "{checked} combinations checked, {} refusals",
+                failures.len()
+            );
+            assert!(
+                failures.is_empty(),
+                "{} failures:\n{}",
+                failures.len(),
+                failures.join("\n")
+            );
+        });
     }
     #[test]
     fn ses02_valley_bandits_start_a_fight_on_both_layouts_with_enemies_first() {

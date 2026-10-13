@@ -1258,6 +1258,44 @@ fn tactical_snapshot_preserves_optional_opportunity_pending_path_and_continuatio
 }
 
 #[test]
+fn tactical_snapshot_keeps_a_pending_move_paused_on_an_ally_cell() {
+    let before = battle(vec![
+        melee(1, Cell(2, 2)),
+        melee(2, Cell(2, 4)),
+        CombatantSpec::creature(3, "bandit", Cell(3, 2), 0).unwrap(),
+    ]);
+    let before = step(&before, 1, Action::EndTurn, &[]).battle;
+    let pending = step(
+        &before,
+        2,
+        Action::Move(vec![Cell(2, 3), Cell(2, 2), Cell(1, 1)]),
+        &[],
+    )
+    .battle;
+    assert_eq!(pending.reaction_offers(), &[3]);
+    assert_eq!(pending.actor(2).unwrap().cell(), Cell(2, 2));
+    let saved = pending.snapshot().unwrap();
+    let recovered = Battle::from_snapshot(map("open-court"), &saved).unwrap();
+    assert_eq!(pending, recovered);
+}
+
+#[test]
+fn tactical_snapshot_rejects_two_combatants_at_rest_on_one_cell() {
+    let before = battle(vec![
+        melee(1, Cell(2, 2)),
+        melee(2, Cell(2, 4)),
+        CombatantSpec::creature(3, "bandit", Cell(3, 2), 0).unwrap(),
+    ]);
+    let mut snapshot: serde_json::Value =
+        serde_json::from_slice(&before.snapshot().unwrap()).unwrap();
+    snapshot["actors"][1]["spec"]["cell"] = serde_json::json!([2, 2]);
+    assert_eq!(
+        Battle::from_snapshot(map("open-court"), &serde_json::to_vec(&snapshot).unwrap()),
+        Err(RuleError::SnapshotData)
+    );
+}
+
+#[test]
 fn tactical_snapshot_rejects_pending_diagonal_path_through_blocked_corners() {
     let src = source();
     let pending = begin(

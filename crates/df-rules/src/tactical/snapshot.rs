@@ -66,6 +66,12 @@ impl Battle {
         let mut ids = BTreeSet::new();
         let mut living_cells = BTreeSet::new();
         for actor in &state.actors {
+            // A pending mover is passing through this cell and has not ended its move here.
+            let in_transit = state.pending.as_ref().is_some_and(|pending| {
+                pending.actor == actor.id()
+                    && pending.next > 0
+                    && pending.path.get(pending.next - 1) == Some(&actor.cell())
+            });
             if actor.id() == 0
                 || !ids.insert(actor.id())
                 || !map.contains(actor.cell())
@@ -82,7 +88,7 @@ impl Battle {
                 || actor.dropped.len() > 12
                 || actor.weapon_counts.len() > 12
                 || actor.extra_attacks > 1
-                || (!actor.health.dead && !living_cells.insert(actor.cell()))
+                || (!actor.health.dead && !in_transit && !living_cells.insert(actor.cell()))
                 || actor.budget.movement_spent_ft > 240
                 || (actor.budget.dash && !actor.budget.action_used)
                 || (actor.budget.dodging && !actor.budget.action_used)
