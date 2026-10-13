@@ -695,9 +695,9 @@ pub(super) fn offered(
             return Ok(vec![(
                 rpc::GameplayActionKind::EndTurn,
                 if tactical::needs_saves(current.state())? {
-                    "Advance 6 seconds · death saves"
+                    "Hold on while the fallen fight for breath (death saves)"
                 } else {
-                    "Wait · a stable hero regains 1 hit point after 1d4 hours"
+                    "Wait with the wounded until they stir (a stable hero wakes with 1 hit point)"
                 }
                 .to_owned(),
             )]);
