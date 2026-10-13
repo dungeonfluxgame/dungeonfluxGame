@@ -435,6 +435,90 @@ fn party_member(
     Ok(view)
 }
 
+fn defeat_context(participants: &[rpc::PartyMemberView]) -> Option<String> {
+    let mut enemies = std::collections::BTreeMap::<&str, usize>::new();
+    for participant in participants.iter().filter(|member| member.side == 2) {
+        let kind = participant
+            .name
+            .rsplit_once(' ')
+            .filter(|(_, index)| index.parse::<usize>().is_ok())
+            .map_or(participant.name.as_str(), |(kind, _)| kind);
+        *enemies.entry(kind).or_default() += 1;
+    }
+    if enemies.is_empty() {
+        return None;
+    }
+
+    let enemy_groups = enemies
+        .into_iter()
+        .map(|(kind, count)| counted_creatures(kind, count))
+        .collect::<Vec<_>>();
+    let enemy_description = sentence_case(&join_names(&enemy_groups));
+    let fallen = participants
+        .iter()
+        .filter(|member| member.side == 1 && member.unconscious)
+        .map(|member| member.name.as_str())
+        .collect::<Vec<_>>();
+    Some(if fallen.is_empty() {
+        format!("{enemy_description} overwhelmed the party.")
+    } else {
+        format!(
+            "{enemy_description} overwhelmed the party. {} fell.",
+            join_names(&fallen)
+        )
+    })
+}
+
+/// "three giant weasels", "a bandit": a creature kind and how many of it, in words.
+fn counted_creatures(kind: &str, count: usize) -> String {
+    let noun = kind.to_lowercase();
+    if count == 1 {
+        let article = if noun.starts_with(['a', 'e', 'i', 'o', 'u']) {
+            "an"
+        } else {
+            "a"
+        };
+        return format!("{article} {noun}");
+    }
+    let number = match count {
+        2 => "two".to_owned(),
+        3 => "three".to_owned(),
+        4 => "four".to_owned(),
+        5 => "five".to_owned(),
+        6 => "six".to_owned(),
+        more => more.to_string(),
+    };
+    let plural = match noun.strip_suffix("wolf") {
+        Some(stem) => format!("{stem}wolves"),
+        None => format!("{noun}s"),
+    };
+    format!("{number} {plural}")
+}
+
+fn sentence_case(text: &str) -> String {
+    let mut characters = text.chars();
+    match characters.next() {
+        Some(first) => first.to_uppercase().chain(characters).collect(),
+        None => String::new(),
+    }
+}
+
+fn join_names<T: AsRef<str>>(names: &[T]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.as_ref().to_owned(),
+        [first, second] => format!("{} and {}", first.as_ref(), second.as_ref()),
+        _ => {
+            let all_but_last = names[..names.len() - 1]
+                .iter()
+                .map(AsRef::as_ref)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{all_but_last} and {}", names[names.len() - 1].as_ref())
+        }
+    }
+}
+
 fn shared_source_decision(
     state: &GameState,
     selected: &[&GameFact],
@@ -957,6 +1041,16 @@ pub(super) fn project_journey(
         }
         narration
     });
+    let narration = if key == SceneKey::Defeat {
+        combat
+            .as_ref()
+            .and_then(|view| defeat_context(&view.participants))
+            .map_or(narration.clone(), |context| {
+                format!("{context} {narration}")
+            })
+    } else {
+        narration
+    };
     // A rested scene and an epilogue replace the story text whole, and the rules wording
     // belonged to the text they replace.
     let epilogue_replaces =
@@ -1084,6 +1178,44 @@ pub(super) fn project_journey(
 #[cfg(test)]
 #[path = "perception_tests.rs"]
 mod perception_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defeat_context_names_enemy_kind_count_and_fallen_heroes() {
+        let participants = vec![
+            rpc::PartyMemberView {
+                name: "Brynn".to_owned(),
+                side: 1,
+                unconscious: true,
+                ..Default::default()
+            },
+            rpc::PartyMemberView {
+                name: "Vale".to_owned(),
+                side: 1,
+                unconscious: true,
+                ..Default::default()
+            },
+            rpc::PartyMemberView {
+                name: "Giant Weasel 1".to_owned(),
+                side: 2,
+                ..Default::default()
+            },
+            rpc::PartyMemberView {
+                name: "Giant Weasel 2".to_owned(),
+                side: 2,
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(
+            defeat_context(&participants).as_deref(),
+            Some("Two giant weasels overwhelmed the party. Brynn and Vale fell.")
+        );
+    }
+}
 
 pub(super) fn current_combat_turn(
     current: &Checkpoint,
