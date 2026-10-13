@@ -61,8 +61,9 @@ pub use lod::{
 pub use math::{Mat4, Quat, Vec3};
 pub use model::{
     AttackResult, AttackStyle, BadgeView, Beat, CameraCommand, CameraFocus, DieView, FinishingBlow,
-    FloatTone, FloatingText, Highlight, HighlightKind, HitPoints, HudState, InitiativeRoll,
-    InitiativeShow, RollCard, Side, Token, TokenId, initiative_line, ordinal,
+    FloatTone, FloatingText, Highlight, HighlightKind, HitPointChange, HitPoints, HudState,
+    InitiativeRoll, InitiativeShow, RollCard, Side, Token, TokenId, advance_presented_sequence,
+    hit_points_at_sequence, initiative_line, ordinal,
 };
 pub use occupancy::{Occupancy, OccupancyError};
 pub use pacing::{BattleFps, FramePacer, Pace};

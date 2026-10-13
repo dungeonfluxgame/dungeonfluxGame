@@ -28,6 +28,21 @@ pub enum AttackStyle {
     Melee,
     /// Stays put, draws and looses an arrow that flies to the target.
     Ranged,
+    /// Stays put and throws a melee weapon at the target.
+    Thrown,
+}
+
+impl AttackStyle {
+    /// Selects the presentation style from the resolved mode and weapon id.
+    pub fn for_weapon(ranged: bool, weapon: &str) -> Self {
+        if !ranged {
+            Self::Melee
+        } else if matches!(weapon, "javelin" | "spear" | "dagger") {
+            Self::Thrown
+        } else {
+            Self::Ranged
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -312,9 +327,63 @@ pub struct CameraCommand {
     pub dolly: f32,
 }
 
+/// A combatant's hit-point change at one presentation sequence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HitPointChange {
+    pub sequence: u64,
+    pub before: u32,
+    pub after: u32,
+}
+
+/// Keeps a display's presented cursor from moving backwards within one fight.
+pub const fn advance_presented_sequence(current: u64, reported: u64) -> u64 {
+    if reported > current {
+        reported
+    } else {
+        current
+    }
+}
+
+/// Projects hit points to the last change at or before the presented sequence.
+pub fn hit_points_at_sequence(
+    current: u32,
+    presented_sequence: u64,
+    changes: &[HitPointChange],
+) -> u32 {
+    changes
+        .iter()
+        .rev()
+        .find(|change| change.sequence <= presented_sequence)
+        .map(|change| change.after)
+        .or_else(|| changes.first().map(|change| change.before))
+        .unwrap_or(current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ranged_attack_style_distinguishes_thrown_weapons_from_bows() {
+        assert_eq!(
+            AttackStyle::for_weapon(true, "javelin"),
+            AttackStyle::Thrown
+        );
+        assert_eq!(AttackStyle::for_weapon(true, "spear"), AttackStyle::Thrown);
+        assert_eq!(AttackStyle::for_weapon(true, "dagger"), AttackStyle::Thrown);
+        assert_eq!(
+            AttackStyle::for_weapon(true, "longbow"),
+            AttackStyle::Ranged
+        );
+        assert_eq!(
+            AttackStyle::for_weapon(true, "light-crossbow"),
+            AttackStyle::Ranged
+        );
+        assert_eq!(
+            AttackStyle::for_weapon(false, "javelin"),
+            AttackStyle::Melee
+        );
+    }
 
     #[test]
     fn ordinals_follow_english_including_the_teens() {
@@ -328,6 +397,49 @@ mod tests {
                 "101st", "111th"
             ]
         );
+    }
+
+    #[test]
+    fn battlefield_hit_points_follow_only_presented_changes_across_redraws() {
+        let weasel = [HitPointChange {
+            sequence: 1,
+            before: 9,
+            after: 7,
+        }];
+        let cursor = advance_presented_sequence(1, 0);
+        assert_eq!(
+            cursor, 1,
+            "a view without a new beat cannot rewind the cursor"
+        );
+        assert_eq!(hit_points_at_sequence(9, cursor, &weasel), 7);
+
+        let brakka = [
+            HitPointChange {
+                sequence: 4,
+                before: 13,
+                after: 4,
+            },
+            HitPointChange {
+                sequence: 6,
+                before: 4,
+                after: 0,
+            },
+            HitPointChange {
+                sequence: 9,
+                before: 0,
+                after: 0,
+            },
+        ];
+        assert_eq!(hit_points_at_sequence(0, 4, &brakka), 4);
+        assert_eq!(hit_points_at_sequence(0, 6, &brakka), 0);
+
+        let heal = [HitPointChange {
+            sequence: 6,
+            before: 8,
+            after: 11,
+        }];
+        assert_eq!(hit_points_at_sequence(11, 5, &heal), 8);
+        assert_eq!(hit_points_at_sequence(11, 6, &heal), 11);
     }
 
     #[test]

@@ -400,6 +400,11 @@ pub struct FrameView<'a> {
     pub show_grid: bool,
 }
 
+struct QueuedBeat {
+    beat: Beat,
+    round: u32,
+}
+
 pub struct Stage {
     scene: BattleScene,
     /// The scene's grid with the chosen layout's obstacles applied.
@@ -415,7 +420,7 @@ pub struct Stage {
     tokens: Vec<Runtime>,
     rig: CameraRig,
     playing: Option<Playback>,
-    queue: VecDeque<Beat>,
+    queue: VecDeque<QueuedBeat>,
     pending_tokens: Option<Vec<Token>>,
     highlight: Option<Highlight>,
     tactical_highlights: Vec<Highlight>,
@@ -424,6 +429,7 @@ pub struct Stage {
     /// The attack names waiting for their blow's result: who struck, and with what.
     attack_labels: Vec<(TokenId, String, String)>,
     hud: HudState,
+    server_round: u32,
     /// The server's active combatant, which the label and marker show once no beat is playing.
     server_active: Option<TokenId>,
     /// While set, the label and marker follow the beats being played, not the server's active
@@ -498,6 +504,7 @@ impl Stage {
             server_active: None,
             active_held: false,
             hud: HudState::default(),
+            server_round: 0,
             floats: Vec::new(),
             flash: None,
             clock_s: 0.0,
@@ -606,7 +613,10 @@ impl Stage {
     }
 
     pub fn set_round(&mut self, round: u32) {
-        self.hud.round = round;
+        self.server_round = round;
+        if !self.is_showing_beats() {
+            self.hud.round = round;
+        }
     }
 
     /// Shows the roll card, but only once the camera has settled on the fighters: while it is
@@ -1035,6 +1045,11 @@ impl Stage {
 
     /// Queues a resolved beat for staging.
     pub fn stage(&mut self, beat: Beat) -> Result<(), StageError> {
+        self.stage_in_round(beat, self.hud.round)
+    }
+
+    /// Queues a beat with the round in which the server resolved it.
+    pub fn stage_in_round(&mut self, beat: Beat, round: u32) -> Result<(), StageError> {
         let known = |id: &TokenId| self.tokens.iter().any(|runtime| &runtime.token.id == id);
         let missing = match &beat {
             Beat::TurnStart { actor } => (!known(actor)).then(|| actor.clone()),
@@ -1096,7 +1111,7 @@ impl Stage {
         {
             self.tokens[index].pending_revival = true;
         }
-        self.queue.push_back(beat);
+        self.queue.push_back(QueuedBeat { beat, round });
         Ok(())
     }
 
@@ -1108,7 +1123,8 @@ impl Stage {
     }
 
     fn start_next(&mut self) {
-        while let Some(beat) = self.queue.pop_front() {
+        while let Some(queued) = self.queue.pop_front() {
+            let QueuedBeat { beat, round } = queued;
             // A beat queued before its actor fell must not move the body when its turn
             // comes: drop it here as well as refusing it in `stage`.
             if let Some(actor) = acting_token(&beat)
@@ -1120,6 +1136,7 @@ impl Stage {
                 self.dropped_beats += 1;
                 continue;
             }
+            self.hud.round = round;
             match director::plan(&self.grid, &self.resting_tokens(), &beat) {
                 Ok(timeline) => {
                     self.initiative_playing = matches!(beat, Beat::Initiative { .. });
@@ -1165,8 +1182,11 @@ impl Stage {
             self.start_next();
         }
         self.advance_playback(sim);
-        if !self.is_showing_beats() && self.hud.active != self.server_active {
-            self.hud.active.clone_from(&self.server_active);
+        if !self.is_showing_beats() {
+            if self.hud.active != self.server_active {
+                self.hud.active.clone_from(&self.server_active);
+            }
+            self.hud.round = self.server_round;
         }
         self.advance_celebration(real_dt);
         let showing_beats = self.is_showing_beats();
@@ -1376,7 +1396,7 @@ impl Stage {
             || self
                 .queue
                 .iter()
-                .any(|beat| matches!(beat, Beat::Move { .. }))
+                .any(|queued| matches!(queued.beat, Beat::Move { .. }))
     }
 
     /// Whether the camera is about to move: a beat is queued, or the one playing has a camera

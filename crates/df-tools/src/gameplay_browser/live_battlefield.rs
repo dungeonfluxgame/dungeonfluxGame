@@ -1315,8 +1315,8 @@ pub(super) struct RollSummary {
     /// The attack's name and the rules' damage type for the floating text.
     pub(super) attack_label: Option<String>,
     pub(super) damage_type: String,
-    /// The blow resolved was ranged: the figure draws or swings accordingly.
-    pub(super) ranged: bool,
+    /// The server-reported weapon determines whether this was a bow, throw or melee blow.
+    pub(super) attack_style: AttackStyle,
     /// The attacker's turn begins with this blow.
     pub(super) turn_start: bool,
     /// The cells the attacker walks from and to before this blow, when the turn includes a move.
@@ -1374,8 +1374,8 @@ struct Live {
     /// The last beat sequence the display finished presenting: the feed is truncated to it,
     /// so health cards and downed poses never show a blow that has not landed on screen.
     presented_seq: u64,
-    /// Per resolved outcome `(sequence, target name, damage, hit points after)`, oldest
-    /// first: what the truncation winds the newest view's hit points back from.
+    /// Per HP change `(sequence, target name, before, after)`, oldest first: the values used to
+    /// project the newest view's hit points to the last presented beat.
     beat_hp: Vec<(u64, String, u32, u32)>,
 }
 
@@ -1721,18 +1721,71 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
                 .collect();
         }
         if let Some(combat) = &view.journey.combat {
-            live.beat_hp = combat
-                .outcomes
-                .iter()
-                .map(|outcome| {
-                    (
-                        outcome.sequence,
-                        outcome.target_name.clone(),
-                        outcome.damage,
-                        outcome.target_hit_points,
-                    )
-                })
-                .collect();
+            for outcome in &combat.outcomes {
+                if live.beat_hp.iter().any(|(sequence, target, ..)| {
+                    *sequence == outcome.sequence && *target == outcome.target_name
+                }) {
+                    continue;
+                }
+                let maximum = snapshot
+                    .members
+                    .iter()
+                    .find(|member| member.name == outcome.target_name)
+                    .map_or(u32::MAX, |member| member.maximum_hit_points);
+                let before = live
+                    .beat_hp
+                    .iter()
+                    .rev()
+                    .find(|(_, target, ..)| *target == outcome.target_name)
+                    .map_or_else(
+                        || {
+                            outcome
+                                .target_hit_points
+                                .saturating_add(outcome.damage)
+                                .min(maximum)
+                        },
+                        |(_, _, _, after)| *after,
+                    );
+                live.beat_hp.push((
+                    outcome.sequence,
+                    outcome.target_name.clone(),
+                    before,
+                    outcome.target_hit_points,
+                ));
+                live.beat_hp.sort_by_key(|(sequence, ..)| *sequence);
+            }
+            let mut heals = Vec::new();
+            if let Some(previous) = &live.latest {
+                for member in &snapshot.members {
+                    let Some(before) = previous
+                        .members
+                        .iter()
+                        .find(|previous| previous.id == member.id)
+                        .map(|previous| previous.hit_points)
+                    else {
+                        continue;
+                    };
+                    if member.hit_points <= before {
+                        continue;
+                    }
+                    let change_before = live
+                        .beat_hp
+                        .iter()
+                        .rev()
+                        .find(|(_, target, ..)| *target == member.name)
+                        .map_or(before, |(_, _, _, after)| *after);
+                    if member.hit_points > change_before {
+                        heals.push((
+                            combat.latest_sequence,
+                            member.name.clone(),
+                            change_before,
+                            member.hit_points,
+                        ));
+                    }
+                }
+            }
+            live.beat_hp.extend(heals);
+            live.beat_hp.sort_by_key(|(sequence, ..)| *sequence);
         }
         live.latest = Some(snapshot);
         let idle = matches!(live.phase, Phase::Idle);
@@ -1970,28 +2023,18 @@ fn sync() {
             // carries the exact figure for the moment it lands.
             let presented_seq = live.presented_seq;
             for member in &mut shown.members {
-                let mut shown_hp = None;
-                let mut add_back = 0u32;
-                for (sequence, target, damage, after) in &live.beat_hp {
-                    if *target != member.name {
-                        continue;
-                    }
-                    if *sequence <= presented_seq {
-                        shown_hp = Some(*after);
-                    } else {
-                        add_back = add_back.saturating_add(*damage);
-                    }
-                }
-                match shown_hp {
-                    Some(hit_points) => member.hit_points = hit_points,
-                    None if add_back > 0 => {
-                        member.hit_points = member
-                            .hit_points
-                            .saturating_add(add_back)
-                            .min(member.maximum_hit_points);
-                    }
-                    None => {}
-                }
+                let changes: Vec<battle::HitPointChange> = live
+                    .beat_hp
+                    .iter()
+                    .filter(|(_, target, ..)| *target == member.name)
+                    .map(|(sequence, _, before, after)| battle::HitPointChange {
+                        sequence: *sequence,
+                        before: *before,
+                        after: *after,
+                    })
+                    .collect();
+                member.hit_points =
+                    battle::hit_points_at_sequence(member.hit_points, presented_seq, &changes);
             }
         }
         if live.begun_live {
@@ -2142,14 +2185,7 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                     {
                         let _ = stage.stage_move(&attacker, to);
                     }
-                    stage.set_attack_style(
-                        &attacker,
-                        if roll.ranged {
-                            AttackStyle::Ranged
-                        } else {
-                            AttackStyle::Melee
-                        },
-                    );
+                    stage.set_attack_style(&attacker, roll.attack_style);
                     let _ = stage.stage(Beat::Approach { attacker, target });
                     // The card waits for the camera to arrive on the two fighters.
                     if let Some(card) = roll.card.clone() {
@@ -2298,14 +2334,11 @@ fn splat_streaming(live: &Live) -> bool {
 pub(super) fn set_presented(sequence: u64) {
     let changed = LIVE.with(|live| {
         let mut live = live.borrow_mut();
-        if sequence <= live.presented_seq {
-            // A new fight restarts the sequence; a lower value with nothing staged is it.
-            if sequence == 0 {
-                live.presented_seq = 0;
-            }
+        let presented = battle::advance_presented_sequence(live.presented_seq, sequence);
+        if presented == live.presented_seq {
             return false;
         }
-        live.presented_seq = sequence;
+        live.presented_seq = presented;
         true
     });
     if changed {
@@ -2459,6 +2492,8 @@ fn reset_fight(live: &mut Live) {
     live.phase = Phase::Idle;
     live.latest = None;
     live.host = None;
+    live.presented_seq = 0;
+    live.beat_hp.clear();
     live.feed = CombatFeed::new(FeedMode::HoldForCues);
 }
 

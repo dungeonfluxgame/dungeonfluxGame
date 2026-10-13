@@ -215,7 +215,10 @@ impl CombatFeed {
                 // Someone already acted: the initiative moment is history.
                 stage.skip_initiative();
             }
-            let fresh: Vec<&Outcome> = snapshot.outcomes.iter().skip(self.seen_outcomes).collect();
+            let fresh_start = self.seen_outcomes;
+            let fresh: Vec<&Outcome> = snapshot.outcomes.iter().skip(fresh_start).collect();
+            let beat_rounds =
+                rounds_for_outcomes(&snapshot.outcomes, &snapshot.initiative, &snapshot.members);
             self.seen_outcomes = snapshot.outcomes.len();
             let healed_members: Vec<&Member> = snapshot
                 .members
@@ -242,7 +245,7 @@ impl CombatFeed {
             stage.hold_hit_points(&targets);
             stage.set_tokens(tokens);
             if self.mode == FeedMode::StageOutcomes {
-                for outcome in &fresh {
+                for (outcome, round) in fresh.iter().zip(beat_rounds.iter().skip(fresh_start)) {
                     if let Some(label) = outcome.attack_label() {
                         stage.set_attack_label(
                             &TokenId::new(outcome.actor.clone()),
@@ -250,7 +253,7 @@ impl CombatFeed {
                             &outcome.damage_type,
                         );
                     }
-                    match stage.stage(beat_for(outcome)) {
+                    match stage.stage_in_round(beat_for(outcome), *round) {
                         Ok(()) => report.staged += 1,
                         Err(_) => report.dropped += 1,
                     }
@@ -274,7 +277,7 @@ impl CombatFeed {
                         amount,
                         target_hit_points_after: Some(member.hit_points),
                     };
-                    match stage.stage(beat) {
+                    match stage.stage_in_round(beat, snapshot.round) {
                         Ok(()) => report.staged += 1,
                         Err(_) => report.dropped += 1,
                     }
@@ -290,7 +293,7 @@ impl CombatFeed {
                 let beat = Beat::TurnStart {
                     actor: TokenId::new(active.clone()),
                 };
-                if stage.stage(beat).is_err() {
+                if stage.stage_in_round(beat, snapshot.round).is_err() {
                     report.dropped += 1;
                 }
             }
@@ -316,6 +319,34 @@ impl CombatFeed {
     }
 }
 
+fn rounds_for_outcomes(
+    outcomes: &[Outcome],
+    initiative: &[InitiativeEntry],
+    members: &[Member],
+) -> Vec<u32> {
+    let order: Vec<&str> = if initiative.is_empty() {
+        members.iter().map(|member| member.id.as_str()).collect()
+    } else {
+        initiative.iter().map(|entry| entry.id.as_str()).collect()
+    };
+    let mut round = 1;
+    let mut previous_index = None;
+    outcomes
+        .iter()
+        .map(|outcome| {
+            let index = order.iter().position(|id| *id == outcome.actor);
+            if let (Some(previous), Some(current)) = (previous_index, index)
+                && current < previous
+            {
+                round += 1;
+            }
+            if index.is_some() {
+                previous_index = index;
+            }
+            round
+        })
+        .collect()
+}
 fn beat_for(outcome: &Outcome) -> Beat {
     Beat::Attack {
         attacker: TokenId::new(outcome.actor.clone()),
@@ -549,6 +580,151 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod round_tests {
+    use super::*;
+    use crate::battle::scene_file::load_embedded;
+    use std::time::Duration;
+
+    fn snapshot(outcomes: Vec<Outcome>, hp: [u32; 3]) -> CombatSnapshot {
+        let member = |id: &str, side| Member {
+            id: id.to_owned(),
+            name: id.to_uppercase(),
+            side,
+            hit_points: hp[match id {
+                "a" => 0,
+                "b" => 1,
+                _ => 2,
+            }],
+            maximum_hit_points: 12,
+            height_m: 1.5,
+            figure: None,
+            portrait: None,
+            attack: AttackStyle::Melee,
+            voice: None,
+            cell: None,
+            statuses: Vec::new(),
+        };
+        CombatSnapshot {
+            members: vec![
+                member("a", Side::Hero),
+                member("b", Side::Hero),
+                member("e", Side::Enemy),
+            ],
+            active: Some("a".to_owned()),
+            round: 1,
+            outcomes,
+            initiative: Vec::new(),
+            begun_live: false,
+        }
+    }
+
+    fn strike() -> Outcome {
+        Outcome {
+            actor: "a".to_owned(),
+            target: "e".to_owned(),
+            hit: true,
+            critical: false,
+            damage: 1,
+            target_hit_points_after: 11,
+            downed: false,
+            weapon: String::new(),
+            grazed: false,
+            damage_type: String::new(),
+        }
+    }
+
+    #[test]
+    fn outcome_rounds_advance_only_when_initiative_order_wraps() {
+        let mut outcomes = vec![strike(), strike(), strike(), strike()];
+        for (outcome, actor) in outcomes.iter_mut().zip(["e", "e", "a", "e"]) {
+            outcome.actor = actor.to_owned();
+        }
+        let initiative = vec![
+            InitiativeEntry {
+                id: "a".to_owned(),
+                die: 12,
+                modifier: 0,
+                total: 12,
+            },
+            InitiativeEntry {
+                id: "b".to_owned(),
+                die: 10,
+                modifier: 0,
+                total: 10,
+            },
+            InitiativeEntry {
+                id: "e".to_owned(),
+                die: 8,
+                modifier: 0,
+                total: 8,
+            },
+        ];
+        let members = Vec::new();
+
+        assert_eq!(
+            rounds_for_outcomes(&outcomes, &initiative, &members),
+            [1, 1, 2, 2]
+        );
+    }
+    #[test]
+    fn a_queued_round_one_enemy_beat_keeps_round_one_under_a_round_two_view() {
+        let mut stage = Stage::new(load_embedded("salt-quay").unwrap().unwrap());
+        let mut feed = CombatFeed::default();
+        let mut opening = snapshot(vec![], [12, 12, 12]);
+        opening.active = Some("e".to_owned());
+        opening.initiative = vec![
+            InitiativeEntry {
+                id: "e".to_owned(),
+                die: 10,
+                modifier: 0,
+                total: 10,
+            },
+            InitiativeEntry {
+                id: "a".to_owned(),
+                die: 9,
+                modifier: 0,
+                total: 9,
+            },
+            InitiativeEntry {
+                id: "b".to_owned(),
+                die: 8,
+                modifier: 0,
+                total: 8,
+            },
+        ];
+        feed.apply(&mut stage, &opening).unwrap();
+
+        let mut outcome = strike();
+        outcome.actor = "e".to_owned();
+        let mut next = snapshot(vec![outcome], [12, 12, 11]);
+        next.active = Some("a".to_owned());
+        next.round = 2;
+        next.initiative = opening.initiative;
+        feed.apply(&mut stage, &next).unwrap();
+        stage.update(Duration::from_millis(1));
+
+        assert_eq!(stage.hud().round, 1);
+        assert_eq!(
+            stage.hud().active.as_ref().map(|id| id.0.as_str()),
+            Some("e")
+        );
+
+        for _ in 0..400 {
+            if !stage.is_busy() {
+                break;
+            }
+            stage.update(Duration::from_millis(50));
+        }
+
+        assert!(!stage.is_busy());
+        assert_eq!(stage.hud().round, 2);
+        assert_eq!(
+            stage.hud().active.as_ref().map(|id| id.0.as_str()),
+            Some("a")
+        );
+    }
+}
 #[cfg(test)]
 mod hold_tests {
     use super::*;

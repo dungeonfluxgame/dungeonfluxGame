@@ -714,9 +714,9 @@ fn strike(
             cells: vec![target.cell],
         })),
     );
-    let ranged = attacker.attack == AttackStyle::Ranged;
+    let ranged = attacker.attack != AttackStyle::Melee;
     let hits = matches!(result, AttackResult::Hit { .. });
-    let (contact, mut end) = if ranged {
+    let (contact, mut end) = if attacker.attack == AttackStyle::Ranged {
         let release = base + DRAW_RELEASE;
         builder.at(
             base,
@@ -747,6 +747,25 @@ fn strike(
         );
         let contact = release + FLIGHT;
         (contact, contact + (LUNGE - LUNGE_CONTACT))
+    } else if attacker.attack == AttackStyle::Thrown {
+        builder.at(
+            base,
+            Step::Animate {
+                token: attacker.id.clone(),
+                anim: Anim::Lunge {
+                    toward: target.id.clone(),
+                },
+            },
+        );
+        sound(builder, base, SoundKind::Throw, attacker);
+        sound(
+            builder,
+            base + Duration::from_millis(30),
+            SoundKind::Effort,
+            attacker,
+        );
+        builder.at(base + Duration::from_millis(30), Step::Whoosh);
+        (base + LUNGE_CONTACT, base + LUNGE)
     } else {
         builder.at(
             base,
@@ -1104,6 +1123,7 @@ mod tests {
                     SoundKind::Parry => "snd-parry",
                     SoundKind::BowDraw => "snd-bow-draw",
                     SoundKind::BowRelease => "snd-bow-release",
+                    SoundKind::Throw => "snd-throw",
                     SoundKind::ArrowFlight => "snd-arrow-flight",
                     SoundKind::ArrowImpact => "snd-arrow-impact",
                     SoundKind::ArrowMiss => "snd-arrow-miss",
@@ -1494,6 +1514,24 @@ mod tests {
             })
             .unwrap();
         assert!(!arrow);
+    }
+
+    #[test]
+    fn a_thrown_javelin_uses_a_throw_cue_without_a_bow_or_arrow() {
+        let (grid, mut tokens) = field();
+        tokens[0].attack = AttackStyle::Thrown;
+        let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
+        let labels = names(&timeline);
+        assert!(labels.contains(&"snd-throw"), "{labels:?}");
+        assert!(labels.contains(&"whoosh"), "{labels:?}");
+        for absent in [
+            "snd-bow-draw",
+            "snd-bow-release",
+            "snd-arrow-flight",
+            "arrow",
+        ] {
+            assert!(!labels.contains(&absent), "{absent} in {labels:?}");
+        }
     }
 
     #[test]

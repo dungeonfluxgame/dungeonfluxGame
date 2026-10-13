@@ -87,8 +87,8 @@ struct RollDetail {
     /// The attack's name and the rules' damage type, for the named damage text.
     attack_label: Option<String>,
     damage_type: String,
-    /// The attack the server resolved was ranged (from the outcome, not from the figure's art).
-    ranged: bool,
+    /// The attack presentation follows the resolved style and weapon id, not the figure's art.
+    attack_style: df_render::battle::AttackStyle,
     /// The server's d20 numbers for the visible die: the kept face, every draw (a pair for
     /// advantage or disadvantage), and the roll mode. The browser settles only on `attack_die`.
     attack_die: u32,
@@ -304,7 +304,10 @@ fn roll_detail(
         } else {
             outcome.damage_type.clone()
         },
-        ranged: outcome.attack_style == 2,
+        attack_style: df_render::battle::AttackStyle::for_weapon(
+            outcome.attack_style == 2,
+            &outcome.weapon,
+        ),
         attack_die: outcome.attack_die,
         faces: outcome.faces.clone(),
         roll_mode: outcome.roll_mode,
@@ -1226,7 +1229,7 @@ fn battlefield_cue(state: StageState, detail: Option<&Detail>) {
             fight_over: roll.fight_over,
             attack_label: roll.attack_label.clone(),
             damage_type: roll.damage_type.clone(),
-            ranged: roll.ranged,
+            attack_style: roll.attack_style,
             turn_start: roll.turn_start,
             walk: roll.walk,
             target_hp_after: roll.target_hp_after,
