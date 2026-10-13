@@ -197,6 +197,25 @@ impl RestRules {
         Ok(())
     }
 }
+/// SRD 5.2.1 p47: the Fighter's Hit Point Die is a d10.
+pub const LEVEL_ONE_FIGHTER_HIT_POINT_DIE_SIDES: u32 = 10;
+/// SRD 5.2.1 p187: heal by the die roll plus Constitution (minimum 1); p17 caps HP at its maximum.
+pub fn heal_hit_point_die(
+    die: u32,
+    constitution_modifier: i32,
+    current: u32,
+    maximum: u32,
+) -> Result<(u32, u32), JourneyRuleError> {
+    if !(1..=LEVEL_ONE_FIGHTER_HIT_POINT_DIE_SIDES).contains(&die) {
+        return Err(JourneyRuleError::InvalidDie);
+    }
+    if maximum == 0 || current == 0 || current >= maximum {
+        return Err(JourneyRuleError::InvalidTarget);
+    }
+    let rolled = (i64::from(die) + i64::from(constitution_modifier)).max(1) as u32;
+    let healed = rolled.min(maximum - current);
+    Ok((current + healed, healed))
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WeaponRules {
     pub damage_dice: u8,
@@ -644,6 +663,31 @@ pub fn complete_no_hit_dice_short_rest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn srd_p17_p47_p187_short_rest_hit_point_die_adds_modifier_minimum_and_cap() {
+        assert_eq!(heal_hit_point_die(5, 2, 3, 13), Ok((10, 7)));
+        assert_eq!(heal_hit_point_die(1, -5, 7, 13), Ok((8, 1)));
+        assert_eq!(heal_hit_point_die(10, 5, 12, 13), Ok((13, 1)));
+    }
+    #[test]
+    fn srd_p47_p187_short_rest_hit_point_die_rejects_zero_hp_full_hp_and_invalid_faces() {
+        assert_eq!(
+            heal_hit_point_die(5, 2, 0, 13),
+            Err(JourneyRuleError::InvalidTarget)
+        );
+        assert_eq!(
+            heal_hit_point_die(5, 2, 13, 13),
+            Err(JourneyRuleError::InvalidTarget)
+        );
+        assert_eq!(
+            heal_hit_point_die(0, 2, 3, 13),
+            Err(JourneyRuleError::InvalidDie)
+        );
+        assert_eq!(
+            heal_hit_point_die(11, 2, 3, 13),
+            Err(JourneyRuleError::InvalidDie)
+        );
+    }
     fn choices() -> Vec<(&'static str, &'static str)> {
         vec![
             ("species", "dwarf"),
