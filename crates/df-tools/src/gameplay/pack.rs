@@ -2339,6 +2339,7 @@ pub(super) fn with_creation<T>(
 #[derive(Deserialize)]
 struct ArcherPackage {
     creation: CreationPack,
+    hero: ArcherHero,
     equipment: Vec<EquipmentRow>,
     #[serde(flatten)]
     _source_fields: BTreeMap<String, serde::de::IgnoredAny>,
@@ -2347,10 +2348,51 @@ fn archer_package() -> Result<ArcherPackage, df_rules::local_journey::JourneyRul
     serde_json::from_str(df_rules::tactical::ARCHER_CREATION_JSON)
         .map_err(|_| df_rules::local_journey::JourneyRuleError::InvalidRules)
 }
+/// The archer build's ability data, as far as the creation page shows it.
+#[derive(serde::Deserialize)]
+struct ArcherHero {
+    ability_arrays: Vec<ArcherArray>,
+    background_bonus: ArcherBonus,
+}
+#[derive(serde::Deserialize)]
+struct ArcherArray {
+    id: String,
+    scores: [u8; 6],
+}
+#[derive(serde::Deserialize)]
+struct ArcherBonus {
+    dexterity: u8,
+    constitution: u8,
+}
 pub(super) struct BuildPackage {
     pub(super) id: String,
     pub(super) label: String,
+    /// Ability scores after the background bonus, in STR DEX CON INT WIS CHA order. Two
+    /// packages can grant the same equipment and differ only here, so the page shows them.
+    pub(super) abilities: [u8; 6],
     choices: Vec<(String, String)>,
+}
+impl BuildPackage {
+    /// The scores as the creation page shows them beside the package.
+    pub(super) fn abilities_text(&self) -> String {
+        let [strength, dexterity, constitution, intelligence, wisdom, charisma] = self.abilities;
+        format!(
+            "STR {strength} · DEX {dexterity} · CON {constitution} · INT {intelligence} · WIS {wisdom} · CHA {charisma}"
+        )
+    }
+}
+/// A melee array's scores with the Soldier bonus the creation rules add to it.
+fn melee_abilities(array: &str) -> Option<[u8; 6]> {
+    with_creation(|rules| {
+        let mut scores = rules
+            .ability_arrays
+            .iter()
+            .find(|candidate| candidate.id == array)?
+            .scores;
+        scores[0] = scores[0].checked_add(rules.background_bonus.strength)?;
+        scores[2] = scores[2].checked_add(rules.background_bonus.constitution)?;
+        Some(scores)
+    })
 }
 pub(super) fn build_packages()
 -> Result<Vec<BuildPackage>, df_rules::local_journey::JourneyRuleError> {
@@ -2359,16 +2401,19 @@ pub(super) fn build_packages()
             .groups
             .iter()
             .find(|group| group.id == "array")
-            .map(|group| {
+            .and_then(|group| {
                 group
                     .options
                     .iter()
-                    .map(|array| BuildPackage {
-                        id: format!("melee-{}", array.id),
-                        label: format!("{} · Greatsword and Defense", array.label),
-                        choices: vec![("array".to_owned(), array.id.clone())],
+                    .map(|array| {
+                        Some(BuildPackage {
+                            id: format!("melee-{}", array.id),
+                            label: format!("{} · Greatsword and Defense", array.label),
+                            abilities: melee_abilities(&array.id)?,
+                            choices: vec![("array".to_owned(), array.id.clone())],
+                        })
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Option<Vec<_>>>()
             })
             .ok_or(df_rules::local_journey::JourneyRuleError::InvalidRules)
     })?;
@@ -2400,9 +2445,24 @@ pub(super) fn build_packages()
         };
         choices.push((key.to_owned(), option.id.clone()));
     }
+    let array = choices
+        .first()
+        .and_then(|(_, id)| {
+            source
+                .hero
+                .ability_arrays
+                .iter()
+                .find(|candidate| &candidate.id == id)
+        })
+        .ok_or(df_rules::local_journey::JourneyRuleError::InvalidRules)?;
+    let mut abilities = array.scores;
+    let bonus = &source.hero.background_bonus;
+    abilities[1] = abilities[1].saturating_add(bonus.dexterity);
+    abilities[2] = abilities[2].saturating_add(bonus.constitution);
     packages.push(BuildPackage {
         id: "archer".to_owned(),
         label: "Longbow and Archery · Fighter B + Soldier B".to_owned(),
+        abilities,
         choices,
     });
     Ok(packages)

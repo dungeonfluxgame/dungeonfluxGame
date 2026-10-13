@@ -390,6 +390,44 @@ fn appearance_must_match_the_combat_package_on_the_server() {
     });
 }
 #[test]
+fn each_offered_package_states_the_ability_scores_the_server_gives_its_hero() {
+    live_pack(|| {
+        let offer = wire::creation_offer().expect("creation offer");
+        let group = |id: &str| {
+            offer
+                .groups
+                .iter()
+                .find(|group| group.group_id == id)
+                .expect("offered group")
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        for package in &group("build-package").options {
+            let appearance = group("portrait")
+                .options
+                .iter()
+                .find(|look| look.requires_options.contains(&package.option_id))
+                .expect("every package has a look");
+            let mut choices = PHONE_SHARED.to_vec();
+            choices.push(("build-package", package.option_id.as_str()));
+            choices.push(("portrait", appearance.option_id.as_str()));
+            let [strength, dexterity, constitution, intelligence, wisdom, charisma] =
+                pack::validate_character("Sylvie", &choices)
+                    .expect("offered package is accepted")
+                    .abilities;
+            assert_eq!(
+                package.description,
+                format!(
+                    "STR {strength} · DEX {dexterity} · CON {constitution} · INT {intelligence} · WIS {wisdom} · CHA {charisma}"
+                ),
+                "{}",
+                package.option_id
+            );
+            // Two packages with the same equipment are told apart by these scores.
+            assert!(seen.insert(package.description.clone()), "{}", package.option_id);
+        }
+    });
+}
+#[test]
 fn the_offer_lists_each_appearance_only_with_the_packages_the_server_accepts_it_with() {
     live_pack(|| {
         let offer = wire::creation_offer().expect("creation offer");

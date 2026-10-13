@@ -343,9 +343,9 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
                     options: packages
                         .into_iter()
                         .map(|package| rpc::JourneyOption {
+                            description: package.abilities_text(),
                             option_id: package.id,
                             label: package.label,
-                            description: String::new(),
                             ..Default::default()
                         })
                         .collect(),

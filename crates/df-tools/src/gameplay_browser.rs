@@ -1401,6 +1401,12 @@ fn creation_group_label(group_id: &str, label: &str) -> String {
 
 fn creation_option_label(group_id: &str, label: &str) -> String {
     if group_id == "build-package" {
+        if label.starts_with("Stalwart ·") {
+            return "Stalwart · Greatsword and chain mail · Defense style".to_owned();
+        }
+        if label.starts_with("Vanguard ·") {
+            return "Vanguard · Greatsword and chain mail · Defense style".to_owned();
+        }
         if label.contains("Fighter A") {
             return "Greatsword and Defense".to_owned();
         }
@@ -2470,9 +2476,37 @@ pub mod fixture {
 mod tests {
     use super::{
         ACTION_REFUSAL_FEEDBACK, ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, SubmitFailure,
-        action_identity, classify_submit_failure, record_join_retry, should_replace_feedback,
-        tactical_action_choice,
+        action_identity, classify_submit_failure, creation_option_description,
+        creation_option_label, record_join_retry, should_replace_feedback, tactical_action_choice,
     };
+
+    #[test]
+    fn melee_creation_packages_keep_their_names_and_show_the_scores_they_are_sent() {
+        assert_eq!(
+            creation_option_label("build-package", "Stalwart · Greatsword and Defense"),
+            "Stalwart · Greatsword and chain mail · Defense style"
+        );
+        // The scores come from the server, which owns them; the page shows them as sent.
+        assert_eq!(
+            creation_option_description("build-package", "STR 17 · DEX 13 · CON 15"),
+            "STR 17 · DEX 13 · CON 15"
+        );
+        assert_eq!(
+            creation_option_label("build-package", "Vanguard · Greatsword and Defense"),
+            "Vanguard · Greatsword and chain mail · Defense style"
+        );
+        assert_eq!(
+            creation_option_label(
+                "build-package",
+                "Longbow and Archery · Fighter B + Soldier B"
+            ),
+            "Longbow and Archery"
+        );
+        assert_eq!(
+            creation_option_label("portrait", "Second hero"),
+            "Braided hair, greatsword"
+        );
+    }
 
     #[test]
     fn submit_status_classification_separates_refusals_from_unknown_outcomes() {
