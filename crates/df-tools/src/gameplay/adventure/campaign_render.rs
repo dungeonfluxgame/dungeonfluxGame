@@ -529,6 +529,7 @@ pub(crate) fn generate_chapter(
         }
     }
     script_continuity(&mut generated)?;
+    remove_repeated_ending_sentences(&mut generated, None);
     for scene in &generated.pack.scenes {
         check(&scene.title, 32, "scene title")?;
         check(&scene.dialogue, 160, "spoken line")?;
@@ -779,4 +780,78 @@ pub(super) fn script_continuity(generated: &mut GeneratedAdventure) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Removes exact sentences reused by an ending in an earlier scene at a different place.
+pub(super) fn remove_repeated_ending_sentences(
+    generated: &mut GeneratedAdventure,
+    table_text: Option<&GeneratedAdventure>,
+) {
+    let Some(script) = &mut generated.pack.beat_script else {
+        return;
+    };
+    let mut earlier: Vec<(String, String, String)> = Vec::new();
+    for beat in &script.beats {
+        if beat.kind == super::super::beat_script::BeatKind::Ending {
+            if let Some(variant) = &beat.scene_variant
+                && let Some(ending) = script.scenes.get_mut(variant)
+            {
+                let prior_text: Vec<&str> = earlier
+                    .iter()
+                    .filter(|(place_id, _, _)| {
+                        ending
+                            .setting
+                            .as_ref()
+                            .is_some_and(|setting| setting.place_id.as_str() != place_id.as_str())
+                    })
+                    .flat_map(|(_, narration, dialogue)| [narration.as_str(), dialogue.as_str()])
+                    .collect();
+                let narration =
+                    super::expression::remove_repeated_sentences(&ending.narration, &prior_text);
+                if narration.is_empty() {
+                    ending.narration = table_text
+                        .and_then(|table| {
+                            table
+                                .pack
+                                .beat_script
+                                .as_ref()?
+                                .scenes
+                                .get(variant)
+                                .map(|scene| scene.narration.clone())
+                        })
+                        .unwrap_or_default();
+                } else {
+                    ending.narration = narration;
+                }
+                let dialogue =
+                    super::expression::remove_repeated_sentences(&ending.dialogue, &prior_text);
+                if dialogue.is_empty() {
+                    ending.dialogue = table_text
+                        .and_then(|table| {
+                            table
+                                .pack
+                                .beat_script
+                                .as_ref()?
+                                .scenes
+                                .get(variant)
+                                .map(|scene| scene.dialogue.clone())
+                        })
+                        .unwrap_or_default();
+                } else {
+                    ending.dialogue = dialogue;
+                }
+            }
+            continue;
+        }
+        if let Some(variant) = &beat.scene_variant
+            && let Some(scene) = script.scenes.get(variant)
+            && let Some(setting) = &scene.setting
+        {
+            earlier.push((
+                setting.place_id.clone(),
+                scene.narration.clone(),
+                scene.dialogue.clone(),
+            ));
+        }
+    }
 }

@@ -602,6 +602,28 @@ fn sentences(text: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Removes whole sentences already spoken or read in another scene.
+pub(super) fn remove_repeated_sentences(text: &str, earlier: &[&str]) -> String {
+    let repeated: BTreeSet<String> = earlier
+        .iter()
+        .flat_map(|text| sentences(text))
+        .map(normalized_sentence)
+        .collect();
+    sentences(text)
+        .into_iter()
+        .filter(|sentence| !repeated.contains(&normalized_sentence(sentence)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalized_sentence(text: &str) -> String {
+    words(text)
+        .into_iter()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Section 7 validators that need more than the storyteller's own checks, by problem name: no
 /// digits, markup or stage directions, no capitalised word that is neither a fact nor
 /// sentence-initial, narration that reads aloud, and titles that belong to this adventure.
@@ -1153,8 +1175,9 @@ pub(crate) async fn express(
         position: Cell::new(0),
         used: RefCell::new(BTreeSet::new()),
     };
-    let rebuilt =
+    let mut rebuilt =
         generate_with_prose(tables, seed, options, forced, &accepted).map_err(Declined::Replay)?;
+    super::campaign_render::remove_repeated_ending_sentences(&mut rebuilt, Some(baseline));
     let used = accepted.used.into_inner();
     let (model_slots, pattern_slots): (Vec<_>, Vec<_>) = planned
         .iter()
@@ -1190,3 +1213,30 @@ pub(crate) async fn express(
 #[cfg(test)]
 #[path = "expression_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod regression_tests {
+    use super::remove_repeated_sentences;
+
+    #[test]
+    fn repeated_ending_sentence_is_removed_without_dropping_new_prose() {
+        assert_eq!(
+            remove_repeated_sentences(
+                "The fire warms the room. Ice glitters on the old waystation walls.",
+                &["Ice glitters on the old waystation walls."],
+            ),
+            "The fire warms the room."
+        );
+    }
+
+    #[test]
+    fn all_repeated_ending_sentences_leave_no_text_for_table_fallback() {
+        assert!(
+            remove_repeated_sentences(
+                "Ice glitters on the old waystation walls.",
+                &["Ice glitters on the old waystation walls."],
+            )
+            .is_empty()
+        );
+    }
+}
