@@ -195,13 +195,7 @@ fn candidate_lines(inputs: &Inputs<'_>) -> Vec<Line> {
         // The whisper's own sentences, minus the narration around them ("draws you close").
         for (index, text) in sentences(clue)
             .into_iter()
-            .filter(|sentence| {
-                let spoken = words(sentence);
-                spoken.len() >= MINIMUM_STATEMENT_WORDS
-                    && !spoken
-                        .iter()
-                        .any(|word| matches!(word.as_str(), "you" | "your" | "us" | "others"))
-            })
+            .filter(|sentence| words(sentence).len() >= MINIMUM_STATEMENT_WORDS)
             .enumerate()
         {
             let key = format!("private:{index}");
@@ -611,10 +605,14 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a
     // Small talk draws on the speaker's own life and opinions only: an errand line that
     // happens to share a word never answers it. A question grounded in the errand's own
     // things, or asking after the world, is never small talk.
-    let grounded = fresh.iter().any(|line| {
-        !matches!(line.kind, Kind::Yourself)
-            && shared_words(inputs.words, &line.text) > 0
-    });
+    let grounded = question_parts(inputs.words)
+        .into_iter()
+        .filter(|part| asks(part))
+        .any(|part| {
+            fresh.iter().any(|line| {
+                !matches!(line.kind, Kind::Yourself) && shared_words(&part, &line.text) > 0
+            })
+        });
     let talk = small_talk(ask) && !grounded && !world_question(inputs.words);
     let eligible = |line: &Line| !talk || matches!(line.kind, Kind::Yourself);
     // A question with no topic and no shared words is an open one ("what now?"): the best lines
