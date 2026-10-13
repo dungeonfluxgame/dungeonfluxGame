@@ -170,14 +170,16 @@ const MATURE_STANCE: &str = "Mature content rating: violence, horror and desire 
     the story demands, not softened.";
 const RESTRAINED_LIMITS: &str = "No gore, no nudity, no sexual content.";
 const MOMENT_FIRST: &str = "Image 1 is the previous film still of this exact scene. Keep the \
-    same room, camera position, framing, light, props, extras and all people exactly as in it, \
-    with the same faces, hair, costumes and weapons, and change only the following.";
+    same place, cast, faces, hair, clothing, weapons and photographic art style. Keep the \
+    camera and framing roughly the same, but let poses and small actions move on naturally \
+    from what was just said or done: a gesture, a turn of the head, a step, or hands busy with \
+    the scene's activity. Change the expression and this small action to match what just happened.";
 const MOMENT_SPEAKER_WITH_REFERENCE: &str =
     "The speaker (image 2 shows their face and clothes) now shows";
 const MOMENT_SPEAKER: &str = "The speaker now shows";
 const MOMENT_APPEARANCE: &str = "The speaker also appears";
-const MOMENT_LAST: &str = "Everything else stays identical, and the speaker's head stays in the \
-    same place in the frame.";
+const MOMENT_LAST: &str = "Keep the same people and place; the speaker's head stays roughly in \
+    the same place in the frame.";
 
 fn gender_phrase(gender: Option<Gender>) -> &'static str {
     match gender {
