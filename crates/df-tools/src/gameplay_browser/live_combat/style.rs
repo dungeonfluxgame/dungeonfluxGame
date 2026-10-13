@@ -178,6 +178,7 @@ const PLAYER: &str = r#"
 @S[data-role=player] .combat-narration{font-size:16px;line-height:1.6}
 @S[data-role=player] .combat-lower{order:2;display:flex;flex-direction:column;gap:16px;width:100%;margin:0;padding:0 16px 16px}
 @S[data-role=player] .combat-action-rail{padding:16px}
+@S[data-role=player] .df-combat:has(>.tactical-controls>.offered-action) .combat-action-rail{display:none}
 @S[data-role=player] .combat-action-rail h2{font-size:21px;margin:0 0 12px}
 @S[data-role=player] .combat-offers{grid-template-columns:1fr;gap:12px}
 @S[data-role=player] .combat-offer[data-kind=action] button{font-size:18px}

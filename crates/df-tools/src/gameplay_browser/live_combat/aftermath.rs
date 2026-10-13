@@ -63,6 +63,20 @@ fn condition(member: &rpc::PartyMemberView) -> &'static str {
     }
 }
 
+/// The continue choice names its one destination, unless its own wording already does
+/// ("Follow Rowan to the Vestry" needs no "· the Vestry" after it).
+fn continue_label(label: &str, destination: &str) -> String {
+    let named = destination
+        .strip_prefix("the ")
+        .or_else(|| destination.strip_prefix("The "))
+        .unwrap_or(destination);
+    if named.is_empty() || label.to_lowercase().contains(&named.to_lowercase()) {
+        label.to_owned()
+    } else {
+        format!("{label} · {destination}")
+    }
+}
+
 fn dialogue_line(journey: &rpc::JourneyView) -> Option<String> {
     (!journey.dialogue.is_empty()).then(|| format!("{}: “{}”", journey.speaker, journey.dialogue))
 }
@@ -232,7 +246,7 @@ pub(super) fn present_rest(
     let proceed = offer_of(view.offers, rpc::GameplayActionKind::ChooseHarborScene);
     // The offered destination is part of the label so the choice is never ambiguous.
     let proceed_label = proceed.map(|offer| match offer.destinations.as_slice() {
-        [only] => format!("{} · {}", offer.label, only.label),
+        [only] => continue_label(&offer.label, &only.label),
         _ => offer.label.clone(),
     });
     let single_destination = proceed.is_some_and(|offer| offer.destinations.len() == 1);
@@ -346,7 +360,7 @@ fn submit(client: &Rc<RefCell<Client>>, selection: &CampfireSelection) {
 
 #[cfg(test)]
 mod tests {
-    use super::{condition, dialogue_line};
+    use super::{condition, continue_label, dialogue_line};
     use df_protocol::common as rpc;
 
     #[test]
@@ -398,5 +412,18 @@ mod tests {
             Some("Perrin: “Thank you for bringing the ledger home.”")
         );
         assert_eq!(dialogue_line(&rpc::JourneyView::default()), None);
+    }
+
+    #[test]
+    fn the_continue_choice_does_not_name_its_destination_twice() {
+        assert_eq!(
+            continue_label("Follow Rowan to the Vestry", "the Vestry"),
+            "Follow Rowan to the Vestry"
+        );
+        assert_eq!(
+            continue_label("Move on", "the Vestry"),
+            "Move on · the Vestry"
+        );
+        assert_eq!(continue_label("Move on", ""), "Move on");
     }
 }
