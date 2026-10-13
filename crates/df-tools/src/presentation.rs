@@ -837,8 +837,24 @@ pub(crate) fn replying_speaker(view: &rpc::ViewMessage) -> Option<String> {
     (!answered).then(|| speaker.to_owned())
 }
 
+/// The newest public reply from the scene's speaker, if the accepted table log has one.
+pub(crate) fn newest_scene_speech(journey: &rpc::JourneyView) -> Option<(u64, &str, &str)> {
+    let speaker = journey.speaker.trim();
+    if speaker.is_empty() {
+        return None;
+    }
+    journey.table_log.iter().rev().find_map(|line| {
+        (rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Npc)
+            && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Speech)
+            && line.speaker.trim() == speaker
+            && !line.text.trim().is_empty())
+        .then_some((line.sequence, line.speaker.as_str(), line.text.trim()))
+    })
+}
+
 /// The table lines of one audience view, oldest first: the scene's own speaker line, then the
-/// server's public table log.
+/// server's public table log. A player view omits the scripted line and newest scene-speaker reply
+/// already shown on its story card; display views retain the complete feed.
 ///
 /// SERVER FEED SWITCH POINT: this is the one place the feed is read; consumers in
 /// `live_motion` depend only on this signature. A log line whose role or kind the server left
@@ -856,9 +872,25 @@ pub(crate) fn table_lines(view: &rpc::ViewMessage) -> Vec<TableLine> {
     let Some(journey) = journey else {
         return Vec::new();
     };
-    scene_line(journey, scene)
+    let player_card = matches!(&view.audience, Some(rpc::view_message::Audience::Player(_)))
+        && !journey.adventure_ended;
+    let newest_reply = if player_card {
+        newest_scene_speech(journey)
+    } else {
+        None
+    };
+    let authored_line = if player_card {
+        None
+    } else {
+        scene_line(journey, scene)
+    };
+    authored_line
         .into_iter()
-        .chain(logged_lines(journey))
+        .chain(
+            logged_lines(journey).filter(|line| {
+                !newest_reply.is_some_and(|(sequence, _, _)| line.sequence == sequence)
+            }),
+        )
         .collect()
 }
 
@@ -1425,6 +1457,101 @@ mod tests {
         shown.dialogue = "A bell tolls.".to_owned();
         let lines = table_lines(&view(shown));
         assert_eq!(lines[0].role, TableRole::Narrator);
+    }
+
+    #[test]
+    fn newest_scene_speech_uses_the_latest_reply_from_the_current_speaker() {
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.speaker = "Courier".to_owned();
+        shown.table_log = vec![
+            server_line(
+                1,
+                "Courier",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "First answer.",
+            ),
+            server_line(
+                2,
+                "Bandit",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "A different speaker.",
+            ),
+            server_line(
+                3,
+                "Courier",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "Newest answer.",
+            ),
+        ];
+
+        assert_eq!(
+            newest_scene_speech(&shown),
+            Some((3, "Courier", "Newest answer."))
+        );
+    }
+
+    #[test]
+    fn player_table_lines_omit_the_story_card_line_but_display_feed_keeps_it() {
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.speaker = "Courier".to_owned();
+        shown.dialogue = "The authored opening.".to_owned();
+        shown.table_log = vec![
+            server_line(
+                1,
+                "Courier",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "An earlier answer.",
+            ),
+            server_line(
+                2,
+                "Courier",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "The newest answer.",
+            ),
+        ];
+        let player = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    journey: Some(shown.clone()),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+
+        let phone_lines = table_lines(&player);
+        assert_eq!(phone_lines.len(), 1);
+        assert_eq!(phone_lines[0].sequence, 1);
+        assert_eq!(phone_lines[0].text, "An earlier answer.");
+        assert_eq!(table_lines(&view(shown)).len(), 3);
+    }
+
+    #[test]
+    fn player_table_lines_omit_the_authored_fallback_from_the_story_card() {
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.speaker = "Courier".to_owned();
+        shown.dialogue = "The authored opening.".to_owned();
+        let player = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    journey: Some(shown),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+
+        assert!(table_lines(&player).is_empty());
     }
 
     #[test]

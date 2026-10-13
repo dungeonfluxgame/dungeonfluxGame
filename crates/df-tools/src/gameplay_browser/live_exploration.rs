@@ -132,7 +132,8 @@ fn with_view<R>(
             scene_label: model.scene_label,
             narration: &model.whisper,
             connection: "Local browser room · two players · the server owns the game",
-            notice: &model.title,
+            // The title is the screen's heading; the top bar does not repeat it.
+            notice: "",
             members: &members,
             objectives: &[],
         },

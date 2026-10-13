@@ -415,21 +415,31 @@ fn exploration_model(
         "scene-whisper-in-the-rain" => ConceptScene::WhisperInTheRain,
         _ => ConceptScene::CourierRoad,
     };
-    let speaker = (!ended && !input.journey.dialogue.is_empty()).then(|| ExplorationSpeaker {
-        name: if input.journey.speaker.is_empty() {
-            "Narrator".to_owned()
-        } else {
-            input.journey.speaker.clone()
-        },
-        context: input.scene.title.clone(),
-        line: input.journey.dialogue.clone(),
-        portrait: match input.journey.speaker.as_str() {
-            "Courier" => Some(ExplorationPortrait::Courier),
-            "Bandit" => Some(ExplorationPortrait::Bandit),
-            "Vell" => Some(ExplorationPortrait::Vell),
-            _ => None,
-        },
-    });
+    let scene_speech = crate::presentation::newest_scene_speech(input.journey)
+        .map(|(sequence, name, line)| (Some(sequence), name, line))
+        .or_else(|| {
+            (!input.journey.dialogue.trim().is_empty()).then_some((
+                None,
+                input.journey.speaker.as_str(),
+                input.journey.dialogue.as_str(),
+            ))
+        });
+    let speaker =
+        if ended { None } else { scene_speech }.map(|(_, name, line)| ExplorationSpeaker {
+            name: if name.is_empty() {
+                "Narrator".to_owned()
+            } else {
+                name.to_owned()
+            },
+            context: input.scene.title.clone(),
+            line: line.to_owned(),
+            portrait: match name {
+                "Courier" => Some(ExplorationPortrait::Courier),
+                "Bandit" => Some(ExplorationPortrait::Bandit),
+                "Vell" => Some(ExplorationPortrait::Vell),
+                _ => None,
+            },
+        });
     // PLAY-V09: a ready scene plate is the scene picture at the top of the player page, cropped to
     // keep the speaker in view; the authored painting stays the fallback behind it.
     let plate = crate::presentation::plate_of(input.scene);
