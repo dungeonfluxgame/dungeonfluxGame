@@ -453,12 +453,27 @@ fn offers(state: &Client, view: &LiveView<'_>, blocked: bool) -> Result<Vec<Offe
                 .iter()
                 .all(|group| offered_input(group).is_some());
         let identity = label(&offer.offer_id)?;
+        let offer_label = if offer.action_kind == rpc::GameplayActionKind::SecondWind as i32
+            && view
+                .journey
+                .own_character
+                .as_ref()
+                .is_some_and(|character| {
+                    crate::combat_text::at_full_hit_points(
+                        character.hit_points,
+                        character.maximum_hit_points,
+                    )
+                }) {
+            crate::combat_text::second_wind_full_hp_label().to_owned()
+        } else {
+            offer.label.clone()
+        };
         result.push(OfferText {
             key,
             offer: identity.clone(),
             option: None,
             kind: CombatOfferKind::Action,
-            label: offer.label.clone(),
+            label: offer_label,
             explanation: if supported {
                 explanation
             } else {
@@ -1424,6 +1439,46 @@ fn handle_intent(client: &Rc<RefCell<Client>>, intent: CombatIntent) {
         );
         return;
     };
+    let full_hit_points = {
+        let state = client.borrow();
+        state
+            .views
+            .as_ref()
+            .and_then(|views| views.current())
+            .and_then(|view| match &view.audience {
+                Some(rpc::view_message::Audience::Player(player)) => player
+                    .journey
+                    .as_ref()
+                    .and_then(|journey| journey.own_character.as_ref()),
+                _ => None,
+            })
+            .is_some_and(|character| {
+                crate::combat_text::at_full_hit_points(
+                    character.hit_points,
+                    character.maximum_hit_points,
+                )
+            })
+    };
+    if offer.action_kind == rpc::GameplayActionKind::SecondWind as i32 && full_hit_points {
+        let Some(window) = web_sys::window() else {
+            crate::gameplay_browser::feedback(
+                &client.borrow(),
+                crate::combat_text::second_wind_confirmation_unavailable(),
+            );
+            return;
+        };
+        match window.confirm_with_message(crate::combat_text::second_wind_full_hp_confirmation()) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(_) => {
+                crate::gameplay_browser::feedback(
+                    &client.borrow(),
+                    crate::combat_text::second_wind_confirmation_unavailable(),
+                );
+                return;
+            }
+        }
+    }
     // A switch travels only with an offer that asks for it: the server refuses it on any other.
     let (savage, graze) = {
         let state = client.borrow();

@@ -48,6 +48,8 @@ pub(crate) mod dice_roll;
 #[cfg(any(target_arch = "wasm32", test))]
 mod speech_capture;
 // PLAY-H01: the one definition of the health tiers, shared by the server and both clients.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod combat_text;
 pub(crate) mod health_tier;
 // PLAY-H01: shake sizes and timings (pure), used by the browser's health cues.
 #[cfg(any(target_arch = "wasm32", test))]

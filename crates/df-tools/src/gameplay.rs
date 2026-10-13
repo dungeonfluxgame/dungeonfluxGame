@@ -80,6 +80,8 @@ mod table_settings;
 mod tempo_clock;
 mod timing;
 mod voice;
+#[cfg(test)]
+mod weapon_swap_audit;
 mod wire;
 
 use axum::{

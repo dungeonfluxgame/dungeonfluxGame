@@ -108,19 +108,6 @@ struct PipRow {
 /// Most icons shown over a figure's head before the rest collapse into "+N".
 const MAX_PIPS: usize = 4;
 
-/// A floating number never rises above this share of the picture height (the round strip is above).
-const FLOAT_TOP_LIMIT: f32 = 0.27;
-/// A floating result keeps this margin from the edge of the screen.
-const FLOAT_SCREEN_MARGIN: f32 = 0.02;
-
-fn clamp_float_box(x: f32, y: f32, width: f32, height: f32) -> (f32, f32) {
-    let left = FLOAT_SCREEN_MARGIN + width * 0.5;
-    let right = 1.0 - FLOAT_SCREEN_MARGIN - width * 0.5;
-    let top = FLOAT_TOP_LIMIT + height * 0.5;
-    let bottom = 1.0 - FLOAT_SCREEN_MARGIN - height * 0.5;
-    (x.clamp(left, right), y.clamp(top, bottom))
-}
-
 fn marker_overlaps_figure(marker: Rect, figure: Rect) -> bool {
     marker.overlap(&figure) > 0.0
 }
@@ -596,21 +583,17 @@ impl Hud {
             // Kept under the round strip and clear of the side cards, however high the figure
             // stands in the picture.
             let (width, height) = float_text::estimate_size(&text.text, aspect);
-            // Clamp the whole result box, not just its anchor, into the safe screen area.
-            let (x, y) = clamp_float_box(x, y, width, height);
+            // Clamp the whole result box, not just its anchor, into the clear middle.
+            let (x, y) = float_text::clamp_to_rest_area(x, y, width, height);
             let wanted = Rect {
                 left: x - width * 0.5,
                 top: y - height * 0.5,
                 right: x + width * 0.5,
                 bottom: y + height * 0.5,
             };
-            let shift = float_text::clear_shift(
-                &placed,
-                wanted,
-                height * 1.1,
-                FLOAT_TOP_LIMIT,
-                1.0 - FLOAT_SCREEN_MARGIN,
-            );
+            let (_, rest_top, _, rest_bottom) = super::rest_shot::REST_AREA;
+            let shift =
+                float_text::clear_shift(&placed, wanted, height * 1.1, rest_top, rest_bottom);
             let y = y + shift;
             placed.push(Rect {
                 top: wanted.top + shift,
@@ -902,26 +885,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn floating_result_boxes_stay_inside_the_screen_margin() {
-        let (left_x, top_y) = clamp_float_box(-0.2, 0.0, 0.3, 0.05);
-        let left_box = Rect {
-            left: left_x - 0.15,
-            top: top_y - 0.025,
-            right: left_x + 0.15,
-            bottom: top_y + 0.025,
+    fn srd_p90_graze_result_boxes_stay_inside_the_clear_middle() {
+        let (left, top, right, bottom) = super::super::rest_shot::REST_AREA;
+        let (x, y) = float_text::clamp_to_rest_area(0.0, 1.0, 0.3, 0.05);
+        let result = Rect {
+            left: x - 0.15,
+            top: y - 0.025,
+            right: x + 0.15,
+            bottom: y + 0.025,
         };
-        assert!((left_box.left - FLOAT_SCREEN_MARGIN).abs() < 1e-6);
-        assert!((left_box.top - FLOAT_TOP_LIMIT).abs() < 1e-6);
-
-        let (right_x, bottom_y) = clamp_float_box(1.2, 1.2, 0.3, 0.05);
-        let right_box = Rect {
-            left: right_x - 0.15,
-            top: bottom_y - 0.025,
-            right: right_x + 0.15,
-            bottom: bottom_y + 0.025,
-        };
-        assert!((right_box.right - (1.0 - FLOAT_SCREEN_MARGIN)).abs() < 1e-6);
-        assert!((right_box.bottom - (1.0 - FLOAT_SCREEN_MARGIN)).abs() < 1e-6);
+        assert!(result.left >= left);
+        assert!(result.top >= top);
+        assert!(result.right <= right);
+        assert!(result.bottom <= bottom);
     }
 
     #[test]

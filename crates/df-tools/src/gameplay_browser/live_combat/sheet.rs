@@ -1,7 +1,6 @@
 //! The player's accepted character sheet: a compact hero card in the scene, and the designed
-//! `CharacterSheetSurface` in a full-screen overlay opened from it. Every value shown is a
-//! `CharacterSheet` field or fact exactly as the server sent it; nothing is derived here, so
-//! ability modifiers (which the wire does not carry) are not displayed.
+//! `CharacterSheetSurface` in a full-screen overlay opened from it. All character facts come
+//! from the server; the compact sheet also derives each ability modifier from its score.
 
 use crate::gameplay_browser::{Client, button, feedback, node};
 use df_protocol::common as rpc;
@@ -36,12 +35,42 @@ const IDENTITY: [&str; 10] = [
     "First language",
     "Second language",
     "Base language",
+    "Gaming set",
     "First class skill",
     "Second class skill",
-    "Gaming set",
 ];
-const FEATURES: [&str; 2] = ["Origin feat", "Masteries"];
-const EQUIPMENT: [&str; 4] = ["Armor", "Weapon", "Starting equipment", "Greatsword"];
+const FEATURES: [&str; 7] = [
+    "Origin feat",
+    "Masteries",
+    "Size",
+    "Darkvision",
+    "Dwarven Resilience",
+    "Dwarven Toughness",
+    "Stonecunning",
+];
+const SKILLS: [&str; 3] = [
+    "Soldier skill proficiencies",
+    "First class skill",
+    "Second class skill",
+];
+const COMBAT_FACTS: [&str; 5] = [
+    "Proficiency Bonus",
+    "Speed",
+    "Initiative",
+    "Passive Perception",
+    "Hit Point Dice",
+];
+const SAVES: [&str; 1] = ["Saving throw proficiencies"];
+const EQUIPMENT: [&str; 8] = [
+    "Armor",
+    "Weapon",
+    "Starting equipment",
+    "Greatsword",
+    "Armor training",
+    "Weapon proficiencies",
+    "In hand",
+    "Dropped weapons",
+];
 
 /// One open sheet. Dropping it removes its overlay, close listener and sheet surface.
 pub(super) struct SheetOverlay {
@@ -178,11 +207,11 @@ fn sections(sheet: &rpc::CharacterSheet) -> Vec<OwnedSection> {
             summary: "Current condition",
         });
     }
-    let mut abilities = Vec::new();
+    let mut abilities_and_saves = Vec::new();
     for (short, long) in ABILITIES {
         if let Some(score) = fact(sheet, short) {
             used.push(short.to_owned());
-            abilities.push(OwnedRow {
+            abilities_and_saves.push(OwnedRow {
                 key: format!("abilities-{short}"),
                 title: long.to_owned(),
                 value: nonblank(score).to_owned(),
@@ -190,20 +219,36 @@ fn sections(sheet: &rpc::CharacterSheet) -> Vec<OwnedSection> {
             });
         }
     }
-    let identity = labelled_rows(
+    abilities_and_saves.extend(labelled_rows(
+        "saves",
+        sheet,
+        &SAVES,
+        "Saving throw proficiency",
+        &mut used,
+    ));
+    let skills = labelled_rows("skills", sheet, &SKILLS, "Skill proficiency", &mut used);
+    let mut combat = labelled_rows(
+        "combat-facts",
+        sheet,
+        &COMBAT_FACTS,
+        "Combat statistic",
+        &mut used,
+    );
+    combat.extend(vitals);
+    let mut features_and_traits = labelled_rows(
         "identity",
         sheet,
-        &IDENTITY,
+        &IDENTITY[..8],
         "Character identity",
         &mut used,
     );
-    let features = labelled_rows(
+    features_and_traits.extend(labelled_rows(
         "features",
         sheet,
         &FEATURES,
-        "Granted at creation",
+        "Feature or trait",
         &mut used,
-    );
+    ));
     let equipment = labelled_rows("equipment", sheet, &EQUIPMENT, "Carried gear", &mut used);
     let other: Vec<OwnedRow> = sheet
         .facts
@@ -219,32 +264,32 @@ fn sections(sheet: &rpc::CharacterSheet) -> Vec<OwnedSection> {
         .collect();
     [
         (
-            "vitals",
+            "combat",
             SheetTab::Character,
-            "Combat statistics",
-            "Hit points, armor and conditions",
-            vitals,
+            "Combat",
+            "Hit points, armor, movement and resources",
+            combat,
         ),
         (
-            "abilities",
+            "abilities-and-saves",
             SheetTab::Character,
-            "Ability scores",
-            "As accepted at creation",
-            abilities,
+            "Abilities and saves",
+            "Scores and saving throw proficiencies",
+            abilities_and_saves,
         ),
         (
-            "identity",
+            "skills",
             SheetTab::Character,
-            "Who you are",
-            "Ancestry, class, background and training",
-            identity,
+            "Skills",
+            "Background and class proficiencies",
+            skills,
         ),
         (
-            "features",
+            "features-and-traits",
             SheetTab::Character,
-            "Features",
-            "Origin feat and weapon masteries",
-            features,
+            "Features and traits",
+            "Character, origin and species features",
+            features_and_traits,
         ),
         (
             "other",
@@ -271,6 +316,45 @@ fn sections(sheet: &rpc::CharacterSheet) -> Vec<OwnedSection> {
         rows,
     })
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // SRD 5.2.1 pp. 47, 83–84: Fighter training, Soldier skills, and Dwarf traits.
+    #[test]
+    fn srd_p47_p83_p84_character_facts_have_readable_sections() {
+        let facts = [
+            "STR",
+            "Saving throw proficiencies",
+            "Soldier skill proficiencies",
+            "Proficiency Bonus",
+            "Armor training",
+            "Size",
+        ]
+        .into_iter()
+        .map(|label| rpc::SheetFact {
+            label: label.to_owned(),
+            value: "recorded".to_owned(),
+        })
+        .collect();
+        let sheet = rpc::CharacterSheet {
+            facts,
+            ..Default::default()
+        };
+
+        let sections = sections(&sheet);
+        for title in [
+            "Abilities and saves",
+            "Skills",
+            "Combat",
+            "Equipment",
+            "Features and traits",
+        ] {
+            assert!(sections.iter().any(|section| section.title == title));
+        }
+    }
 }
 
 fn with_view<T>(
@@ -568,6 +652,7 @@ pub(in crate::gameplay_browser) fn mount_inline(
         "live-hero-line",
         &format!("Armor Class {}", sheet.armor_class),
     )?;
+    node(&document, &section, "h2", "", "Abilities and saves")?;
     let grid = node(&document, &section, "div", "live-abilities", "")?;
     for (short, long) in ABILITIES {
         let Some(score) = fact(sheet, short) else {
@@ -591,11 +676,26 @@ pub(in crate::gameplay_browser) fn mount_inline(
             &modifier_text(score).unwrap_or_default(),
         )?;
     }
-    let mut proficiencies = Vec::new();
-    let skills = joined(sheet, &["First class skill", "Second class skill"]);
-    if !skills.is_empty() {
-        proficiencies.push(("Skills", skills));
+    let saves: Vec<(&str, String)> = SAVES
+        .iter()
+        .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
+        .collect();
+    list(client, &section, "Saving throws", &saves)?;
+    let combat: Vec<(&str, String)> = COMBAT_FACTS
+        .iter()
+        .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
+        .collect();
+    list(client, &section, "Combat", &combat)?;
+    let mut skills = Vec::new();
+    if let Some(soldier) = fact(sheet, "Soldier skill proficiencies") {
+        skills.push(("Soldier skills", soldier.to_owned()));
     }
+    let class_skills = joined(sheet, &["First class skill", "Second class skill"]);
+    if !class_skills.is_empty() {
+        skills.push(("Fighter skills", class_skills));
+    }
+    list(client, &section, "Skills", &skills)?;
+    let mut proficiencies = Vec::new();
     if let Some(set) = fact(sheet, "Gaming set") {
         proficiencies.push(("Gaming set", set.to_owned()));
     }
@@ -606,17 +706,26 @@ pub(in crate::gameplay_browser) fn mount_inline(
     if !languages.is_empty() {
         proficiencies.push(("Languages", languages));
     }
-    list(client, &section, "Proficiencies", &proficiencies)?;
+    list(client, &section, "Other proficiencies", &proficiencies)?;
     let gear: Vec<(&str, String)> = EQUIPMENT
         .iter()
         .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
         .collect();
     list(client, &section, "Equipment", &gear)?;
-    let features: Vec<(&str, String)> = ["Origin feat", "Masteries", "Alignment"]
-        .iter()
-        .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
-        .collect();
-    list(client, &section, "Features", &features)?;
+    let features: Vec<(&str, String)> = [
+        "Origin feat",
+        "Masteries",
+        "Alignment",
+        "Size",
+        "Darkvision",
+        "Dwarven Resilience",
+        "Dwarven Toughness",
+        "Stonecunning",
+    ]
+    .iter()
+    .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
+    .collect();
+    list(client, &section, "Features and traits", &features)?;
     let open = button(client, &section, "Full character sheet", open_from_button)?;
     open.set_class_name("live-sheet-open");
     Ok(())

@@ -92,8 +92,19 @@ pub fn attack_name(weapon_id: &str) -> String {
 /// A guess at a result's size in screen fractions, for stacking: wider with its words.
 pub fn estimate_size(text: &str, aspect: f32) -> (f32, f32) {
     let characters = text.chars().count().max(1) as f32;
-    let width = (0.03 + characters * 0.0145 * (16.0 / 9.0) / aspect.max(0.1)).min(0.4);
-    (width, 0.05)
+    let line_width = 0.03 + characters * 0.0145 * (16.0 / 9.0) / aspect.max(0.1);
+    let max_width = 0.51;
+    let lines = (line_width / max_width).ceil().max(1.0);
+    (line_width.min(max_width), 0.05 * lines)
+}
+
+/// Keeps the whole floating result inside the clear middle used by the resting shot.
+pub fn clamp_to_rest_area(x: f32, y: f32, width: f32, height: f32) -> (f32, f32) {
+    let (left, top, right, bottom) = super::rest_shot::REST_AREA;
+    (
+        x.clamp(left + width * 0.5, right - width * 0.5),
+        y.clamp(top + height * 0.5, bottom - height * 0.5),
+    )
 }
 
 /// Moves `wanted` (a result's resting box) clear of the boxes already `placed`: up by whole steps
@@ -153,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn a_result_names_the_attack_its_damage_type_and_its_result() {
+    fn srd_p87_and_p90_a_result_names_critical_and_graze_damage() {
         use FloatTone::*;
         assert_eq!(
             compose(Some(("Greatsword", "slashing")), "9", Damage, false),
@@ -191,6 +202,24 @@ mod tests {
         assert_eq!(attack_name("hand-axe"), "Hand axe");
         assert_eq!(attack_name("light_crossbow"), "Light crossbow");
         assert_eq!(attack_name(""), "");
+    }
+
+    #[test]
+    fn srd_p90_a_graze_result_stays_inside_the_clear_middle_of_the_picture() {
+        let (x, y) = clamp_to_rest_area(0.0, 1.0, 0.4, 0.1);
+        let (left, top, right, bottom) = super::super::rest_shot::REST_AREA;
+        assert!(x - 0.2 >= left && x + 0.2 <= right);
+        assert!(y - 0.05 >= top && y + 0.05 <= bottom);
+    }
+
+    #[test]
+    fn srd_p90_a_long_graze_result_has_a_wrapped_height_estimate() {
+        let (width, height) = estimate_size(
+            "Greatsword · 3 slashing, graze, disadvantage from target dodging",
+            16.0 / 9.0,
+        );
+        assert!(width <= 0.51);
+        assert!(height > 0.05);
     }
 
     fn at(left: f32, top: f32, width: f32) -> Rect {

@@ -40,7 +40,7 @@ centre. It stays in the card's flex row, where the HUD paints it alongside the r
 .bf-party .bf-hp-fill{background:linear-gradient(90deg,#3f9d58,#7fd68a)}
 
 .bf-floats{position:absolute;inset:0}
-.bf-float{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;font-size:calc(var(--u)*2.6);font-weight:700;color:#ff6b5e;text-shadow:0 3px 14px #000,0 0 calc(var(--u)*1) #000}
+.bf-float{position:absolute;transform:translate(-50%,-50%);max-width:51%;white-space:normal;overflow-wrap:anywhere;text-align:center;font-size:calc(var(--u)*2.6);font-weight:700;color:#ff6b5e;text-shadow:0 3px 14px #000,0 0 calc(var(--u)*1) #000}
 .bf-float[data-tone=critical]{font-size:calc(var(--u)*3.2);color:#ffd24a}
 .bf-float[data-tone=miss]{font-size:calc(var(--u)*2.4);font-style:italic;font-weight:400;color:#c9d3df}
 .bf-float[data-tone=heal]{color:#7ee8a0}
