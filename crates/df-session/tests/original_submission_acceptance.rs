@@ -298,6 +298,7 @@ enum Lookup {
     Expired,
     Conflict,
     Error,
+    Refused,
     Receipt(DecisionReceipt),
 }
 #[derive(Clone, Copy)]
@@ -338,6 +339,7 @@ impl SessionRepository for Shared {
             Lookup::Expired => Ok(OperationLookup::ExpiredOrIndeterminate),
             Lookup::Conflict => Ok(OperationLookup::Conflict),
             Lookup::Error => Err(RepositoryError::Unavailable),
+            Lookup::Refused => Err(RepositoryError::InvalidCandidate),
             Lookup::Receipt(receipt) => Ok(OperationLookup::Committed(receipt)),
         }
     }
@@ -604,6 +606,31 @@ fn lookup_uncertainty_and_lookup_only_absence_fence_new_operations() {
         SubmissionOutcome::LookupRequired
     );
     assert_eq!(events(&shared), vec!["lookup", "lookup"]);
+}
+
+#[test]
+fn definitive_refusals_leave_the_owner_serving_the_next_operation() {
+    // A lookup that refuses definitively (nothing was written, the cache was
+    // current) must not fence the owner: the next operation is served.
+    let (shared, mut owner) = fixture();
+    set_lookup(&shared, &scope(6), Lookup::Refused);
+    assert_eq!(
+        submit(&mut owner, scope(6)),
+        SubmissionOutcome::Refused(RepositoryError::InvalidCandidate)
+    );
+    assert!(owner.is_current(), "a definitive refusal must not fence");
+    confirmed(submit(&mut owner, scope(7)));
+
+    // The same after the engine refuses a candidate: refused once, then served.
+    let (shared, mut owner) = fixture();
+    shared.0.lock().unwrap().invalid_candidate = true;
+    assert_eq!(
+        submit(&mut owner, scope(6)),
+        SubmissionOutcome::Refused(RepositoryError::InvalidCandidate)
+    );
+    shared.0.lock().unwrap().invalid_candidate = false;
+    assert!(owner.is_current(), "a refused candidate must not fence");
+    confirmed(submit(&mut owner, scope(7)));
 }
 
 #[test]

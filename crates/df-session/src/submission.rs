@@ -29,6 +29,18 @@ pub enum RepositoryError {
     Unavailable,
 }
 
+/// Errors that refuse an operation outright, decided from the request and the
+/// current state alone: no write was attempted and no commit can be in doubt.
+fn definitive_refusal(error: RepositoryError) -> bool {
+    matches!(
+        error,
+        RepositoryError::Unauthorized
+            | RepositoryError::InputBinding
+            | RepositoryError::InvalidCandidate
+            | RepositoryError::Capacity
+    )
+}
+
 /// Adapter-owned operation data from authenticated native ingress. Implementing this
 /// trait supplies input binding, not authority: repository methods independently
 /// verify tenant/principal/namespace/fence/access against their trusted DB boundary.
@@ -452,6 +464,20 @@ where
         Ok(key)
     }
 
+    /// Fences for an unknown outcome, unless `error` definitively refused the
+    /// operation before any write while the cache was known current: then the
+    /// operation is known not to have committed, so the owner keeps serving.
+    fn fence_unless_definitive_refusal(
+        &mut self,
+        operation: <R::Scope as OperationScope>::UncertaintyKey,
+        error: RepositoryError,
+    ) {
+        if matches!(&self.cache, CacheState::Current) && definitive_refusal(error) {
+            return;
+        }
+        self.fence_uncertain(operation);
+    }
+
     fn fence_uncertain(&mut self, operation: <R::Scope as OperationScope>::UncertaintyKey) {
         // A later lookup cannot replace the first unresolved operation. Only its
         // exact committed receipt plus validated reload can release this fence.
@@ -567,7 +593,7 @@ where
             }
             Ok(OperationLookup::NotRecorded) => {}
             Err(error) => {
-                self.fence_uncertain(key);
+                self.fence_unless_definitive_refusal(key, error);
                 return SubmissionOutcome::Refused(error);
             }
         }
@@ -748,9 +774,10 @@ where
             }
             Ok(OperationLookup::NotRecorded) => {}
             Err(error) => {
-                // Lookup failure carries no confirmed not-committed phase. It
-                // must not permit another key to execute around an unknown result.
-                self.fence_uncertain(key);
+                // A lookup failure that leaves the outcome in doubt must not
+                // permit another key to execute around an unknown result. A
+                // definitive refusal is known not to have committed.
+                self.fence_unless_definitive_refusal(key, error);
                 return SubmissionOutcome::Refused(error);
             }
         }

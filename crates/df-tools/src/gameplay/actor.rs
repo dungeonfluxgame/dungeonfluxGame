@@ -458,6 +458,23 @@ pub(super) struct Actor {
     #[cfg(test)]
     pub completion_observer: Option<CompletionObserver>,
 }
+/// The rejection a phone is shown when this command was definitively refused
+/// against the current state (nothing committed, the owner keeps serving), or
+/// `None` when the failure is an authority problem the phone must retry after
+/// recovery. A definitive refusal must never become `Unavailable`: the phone
+/// would keep its operation and show the lost-connection state for a command
+/// the game has already answered.
+fn command_refusal_code(error: RepositoryError) -> Option<rpc::RejectionCode> {
+    match error {
+        RepositoryError::InvalidCandidate | RepositoryError::Capacity => {
+            Some(rpc::RejectionCode::CapabilityUnavailable)
+        }
+        RepositoryError::InputBinding => Some(rpc::RejectionCode::InvalidSelection),
+        RepositoryError::OperationConflict => Some(rpc::RejectionCode::OperationConflict),
+        _ => None,
+    }
+}
+
 pub(super) fn unavailable(error: RepositoryError) -> tonic::Status {
     match error {
         RepositoryError::Unauthorized => {
@@ -1351,14 +1368,29 @@ impl Actor {
                     {
                         Some(rpc::RejectionCode::InvalidSelection)
                     } else {
-                        wire::action_offer_rejection(
+                        // An offer check that definitively refuses this command
+                        // is a refusal the phone can show, recorded like any
+                        // other rejection below; only an authority failure is
+                        // told to retain its operation and retry.
+                        match wire::action_offer_rejection(
                             checkpoint,
                             member,
                             kind,
                             &request.offer_id,
                             &request.action_choices,
-                        )
-                        .map_err(unavailable)?
+                        ) {
+                            Ok(rejection) => rejection,
+                            Err(error) => {
+                                let code = command_refusal_code(error)
+                                    .ok_or_else(|| unavailable(error))?;
+                                record_refusal(
+                                    request.action_kind,
+                                    &format!("{error:?}"),
+                                    "refused",
+                                );
+                                Some(code)
+                            }
+                        }
                     };
                     if let Some(code) = rejection {
                         let receipt = wire::rejected(current, operation, code);
@@ -1461,17 +1493,18 @@ impl Actor {
                 self.fence();
                 Err(tonic::Status::unavailable("operation lookup required"))
             }
-            // The owner stayed current, so no uncertain commit was recorded: the candidate was
+            // The owner stayed current, so no uncertain commit was recorded: the command was
             // refused before anything reached durable storage. Nothing applies, so a retry of
             // this operation is refused the same way and the player can choose again.
-            SubmissionOutcome::Refused(
-                error @ (RepositoryError::InvalidCandidate | RepositoryError::Capacity),
-            ) if self.owner.is_current() => {
+            SubmissionOutcome::Refused(error)
+                if self.owner.is_current() && command_refusal_code(error).is_some() =>
+            {
                 record_refusal(request.action_kind, &format!("{error:?}"), "refused");
                 Ok(wire::committed(wire::rejected(
                     current,
                     operation,
-                    rpc::RejectionCode::CapabilityUnavailable,
+                    command_refusal_code(error)
+                        .unwrap_or(rpc::RejectionCode::CapabilityUnavailable),
                 )))
             }
             SubmissionOutcome::Refused(error) => {
@@ -1958,6 +1991,42 @@ mod qualification_tests {
 
         assert_eq!(heartbeat_wake(true, &heartbeat, due), None);
         assert_eq!(heartbeat_wake(false, &heartbeat, due), Some(due));
+    }
+
+    #[test]
+    fn only_definitive_refusals_are_answered_as_rejections() {
+        // SES-01: a command refused against the current state is answered with
+        // a rejection the phone can show; authority failures stay retryable.
+        for (error, code) in [
+            (
+                RepositoryError::InvalidCandidate,
+                Some(rpc::RejectionCode::CapabilityUnavailable),
+            ),
+            (
+                RepositoryError::Capacity,
+                Some(rpc::RejectionCode::CapabilityUnavailable),
+            ),
+            (
+                RepositoryError::InputBinding,
+                Some(rpc::RejectionCode::InvalidSelection),
+            ),
+            (
+                RepositoryError::OperationConflict,
+                Some(rpc::RejectionCode::OperationConflict),
+            ),
+            (RepositoryError::Unavailable, None),
+            (RepositoryError::UnresolvedCommit, None),
+            (RepositoryError::RevisionConflict, None),
+            (RepositoryError::StaleEpoch, None),
+            (RepositoryError::StaleFence, None),
+            (RepositoryError::ExpiredOwner, None),
+            (RepositoryError::InvalidReceipt, None),
+            (RepositoryError::SequenceExhausted, None),
+            (RepositoryError::RetiredNamespace, None),
+            (RepositoryError::Unauthorized, None),
+        ] {
+            assert_eq!(command_refusal_code(error), code, "{error:?}");
+        }
     }
 
     #[test]
