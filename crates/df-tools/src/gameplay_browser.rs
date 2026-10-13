@@ -1406,39 +1406,116 @@ fn action_button(
     offer: rpc::GameplayActionOffer,
 ) -> Result<(), JsValue> {
     let document = client.borrow().document.clone();
-    let mut inputs = Vec::new();
     if offer.input_groups.len() > 3 {
         return Err(JsValue::from_str("offered inputs exceed bound"));
-    }
-    for group in &offer.input_groups {
-        if group.options.is_empty() || group.options.len() > 256 {
-            return Err(JsValue::from_str("unsupported offered input shape"));
-        }
-        let label = node(&document, parent, "label", "attack-option", &group.label)?;
-        let select = node(&document, &label, "select", "", "")?.dyn_into::<HtmlSelectElement>()?;
-        for option in &group.options {
-            let item = node(&document, select.as_ref(), "option", "", &option.label)?;
-            item.set_attribute("value", &option.option_id)?;
-        }
-        inputs.push((group.group_id.clone(), select));
     }
     if offer.destinations.len() > 4 {
         return Err(JsValue::from_str("offered destinations exceed bound"));
     }
+    let children = parent.query_selector_all(":scope > .offered-action")?;
+    let existing = (0..children.length())
+        .filter_map(|index| children.item(index))
+        .map(|element| element.unchecked_into::<Element>())
+        .find(|element| element.get_attribute("data-offer-id").as_deref() == Some(&offer.offer_id));
+    if let Some(wrapper) = existing {
+        for group in &offer.input_groups {
+            let labels = wrapper.query_selector_all(":scope > label[data-group-id]")?;
+            let label = (0..labels.length())
+                .filter_map(|index| labels.item(index))
+                .map(|element| element.unchecked_into::<Element>())
+                .find(|element| {
+                    element.get_attribute("data-group-id").as_deref() == Some(&group.group_id)
+                });
+            if let Some(label) = label {
+                if let Some(text) = label.query_selector(":scope > .input-label")? {
+                    text.set_text_content(Some(&group.label));
+                }
+                if let Some(select) = label.query_selector(":scope > select")? {
+                    let select = select.dyn_into::<HtmlSelectElement>()?;
+                    let old_value = select.value();
+                    select.set_text_content(None);
+                    for option in &group.options {
+                        let item = node(&document, &select, "option", "", &option.label)?;
+                        item.set_attribute("value", &option.option_id)?;
+                    }
+                    if group
+                        .options
+                        .iter()
+                        .any(|option| option.option_id == old_value)
+                    {
+                        select.set_value(&old_value);
+                    }
+                }
+            }
+        }
+        if let Some(label) = wrapper.query_selector(":scope > label[data-destination]")? {
+            if offer.destinations.is_empty() {
+                label.remove();
+            } else if let Some(select) = label.query_selector(":scope > select")? {
+                let select = select.dyn_into::<HtmlSelectElement>()?;
+                let old_value = select.value();
+                select.set_text_content(None);
+                for option in &offer.destinations {
+                    let item = node(&document, &select, "option", "", &option.label)?;
+                    item.set_attribute("value", &option.destination.to_string())?;
+                }
+                if offer
+                    .destinations
+                    .iter()
+                    .any(|option| option.destination.to_string() == old_value)
+                {
+                    select.set_value(&old_value);
+                }
+            }
+        }
+        if let Some(button) = wrapper.query_selector(":scope > button.offered")? {
+            button.set_text_content(Some(&offer.label));
+            button.set_attribute("data-action-kind", &offer.action_kind.to_string())?;
+            if client.borrow().busy
+                || (!client.borrow().last_confirmed && client.borrow().last_request.is_some())
+            {
+                button.set_attribute("disabled", "")?;
+            } else {
+                button.remove_attribute("disabled")?;
+            }
+        }
+        return Ok(());
+    }
+
+    let wrapper = node(&document, parent, "div", "offered-action", "")?;
+    wrapper.set_attribute("data-offer-id", &offer.offer_id)?;
+    let mut inputs = Vec::new();
+    for group in &offer.input_groups {
+        if group.options.is_empty() || group.options.len() > 256 {
+            return Err(JsValue::from_str("unsupported offered input shape"));
+        }
+        let label = node(&document, &wrapper, "label", "attack-option", "")?;
+        label.set_attribute("data-group-id", &group.group_id)?;
+        node(&document, &label, "span", "input-label", &group.label)?;
+        let select = node(&document, &label, "select", "", "")?.dyn_into::<HtmlSelectElement>()?;
+        select.set_attribute("data-group-id", &group.group_id)?;
+        for option in &group.options {
+            let item = node(&document, &select, "option", "", &option.label)?;
+            item.set_attribute("value", &option.option_id)?;
+        }
+        inputs.push((group.group_id.clone(), select));
+    }
     let destination = if offer.destinations.is_empty() {
         None
     } else {
-        let label = node(&document, parent, "label", "attack-option", "Destination")?;
+        let label = node(&document, &wrapper, "label", "attack-option", "")?;
+        label.set_attribute("data-destination", "")?;
+        node(&document, &label, "span", "input-label", "Destination")?;
         let select = node(&document, &label, "select", "", "")?.dyn_into::<HtmlSelectElement>()?;
-        select.set_attribute("data-input", "destination")?;
+        select.set_attribute("data-destination", "")?;
         for option in &offer.destinations {
-            let item = node(&document, select.as_ref(), "option", "", &option.label)?;
+            let item = node(&document, &select, "option", "", &option.label)?;
             item.set_attribute("value", &option.destination.to_string())?;
         }
         Some(select)
     };
     let offered = offer.clone();
-    let button = button(client, parent, &offer.label, move |client| {
+    let button = button(client, &wrapper, &offer.label, move |client| {
         let mut savage = false;
         let mut graze = false;
         let mut action_choices = Vec::new();
@@ -1505,6 +1582,8 @@ fn action_button(
         || (!client.borrow().last_confirmed && client.borrow().last_request.is_some())
     {
         button.set_attribute("disabled", "")?;
+    } else {
+        button.remove_attribute("disabled")?;
     }
     Ok(())
 }

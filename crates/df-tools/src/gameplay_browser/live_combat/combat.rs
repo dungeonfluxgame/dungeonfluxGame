@@ -13,7 +13,7 @@ use df_ui::{
     CombatTone, CombatVerdict,
 };
 use std::{cell::RefCell, rc::Rc};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::Element;
 
 const LIMITS: CombatLimits = CombatLimits {
@@ -748,12 +748,15 @@ fn publish_tactical_controls(
     };
     let document = client.borrow().document.clone();
     let controls = match existing {
-        Some(existing) => {
-            existing.set_text_content(None);
-            existing
-        }
+        Some(existing) => existing,
         None => node(&document, root, "div", "tactical-controls", "")?,
     };
+    let stale_children = controls.query_selector_all(":scope > :not(.offered-action)")?;
+    for index in (0..stale_children.length()).rev() {
+        if let Some(child) = stale_children.item(index) {
+            child.unchecked_into::<Element>().remove();
+        }
+    }
     if let Some(budget) = &combat.own_budget {
         let strip = node(
             &document,
@@ -796,6 +799,12 @@ fn publish_tactical_controls(
         client.borrow().last_request.as_ref(),
         view.offers,
     ) {
+        let actions = controls.query_selector_all(":scope > .offered-action")?;
+        for index in (0..actions.length()).rev() {
+            if let Some(action) = actions.item(index) {
+                action.unchecked_into::<Element>().remove();
+            }
+        }
         node(
             &document,
             &controls,
@@ -805,6 +814,7 @@ fn publish_tactical_controls(
         )?;
         return Ok(());
     }
+    let mut active_offer_ids = Vec::new();
     for offer in view.offers {
         let mut offer = offer.clone();
         for group in &mut offer.input_groups {
@@ -818,7 +828,20 @@ fn publish_tactical_controls(
                 }
             }
         }
+        active_offer_ids.push(offer.offer_id.clone());
         action_button(client, &controls, offer)?;
+    }
+    let offers = controls.query_selector_all(":scope > .offered-action")?;
+    for index in (0..offers.length()).rev() {
+        if let Some(element) = offers.item(index) {
+            let element = element.unchecked_into::<Element>();
+            if element
+                .get_attribute("data-offer-id")
+                .is_some_and(|offer_id| !active_offer_ids.contains(&offer_id))
+            {
+                element.remove();
+            }
+        }
     }
     Ok(())
 }
