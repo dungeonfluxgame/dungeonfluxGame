@@ -138,6 +138,15 @@ const COMMON: &str = r#"
 @S .live-extras .feedback:empty{display:none}
 @S[data-role=player] .tactical-controls .resource-strip{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px;padding:8px;border:1px solid #d9b77a66;border-radius:8px;background:#0a1018e8;color:inherit;font:600 13px/1.35 system-ui,sans-serif}
 @S[data-role=player] .tactical-controls .resource-chip{display:inline-flex;padding:5px 8px;border:1px solid #d9b77a66;border-radius:6px;background:#17222de8;color:inherit}
+@S[data-role=player] .tactical-controls{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:10px 12px 12px;border:1px solid #d9b77a40;border-radius:12px;background:#0a1018e8}
+@S[data-role=player] .tactical-controls>*{grid-column:1/-1}
+@S[data-role=player] .tactical-controls .resource-strip{margin:0}
+@S[data-role=player] .tactical-controls .attack-option{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin:4px 0 0;font:600 12px/1.3 system-ui,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:#cdb98c}
+@S[data-role=player] .tactical-controls .attack-option select{width:100%;min-width:0;min-height:44px;padding:9px 10px;font:500 15px/1.3 system-ui,sans-serif;letter-spacing:0;text-transform:none}
+@S[data-role=player] .tactical-controls>button.offered{margin:0;text-align:center}
+@S[data-role=player] .tactical-controls>button:is([data-action-kind="13"],[data-action-kind="14"],[data-action-kind="15"]){grid-column:span 2;padding-left:4px;padding-right:4px}
+@S[data-role=player] .tactical-controls>button:is([data-action-kind="9"],[data-action-kind="10"]){grid-column:span 3}
+@S[data-role=player] .tactical-controls:not(:has(>button[data-action-kind="9"]))>button[data-action-kind="10"]{grid-column:1/-1}
 @S .rules-disclosure{display:block;margin-top:8px;padding:7px 10px;border:1px solid #d9b77a66;border-radius:8px;background:#0a1018d9;color:inherit;font:13px/1.45 system-ui,sans-serif}
 @S .rules-disclosure summary{cursor:pointer;color:inherit;font-weight:650}
 @S .rules-disclosure .rules-note{display:block;margin-top:6px;color:inherit}
@@ -190,13 +199,14 @@ body:has(.tv-stage[data-tv-mode=combat])>main{min-height:0}
 .tv-stage:not([data-tv-mode=combat])>.live-screen{display:none}
 @S[data-role=display]{position:absolute;inset:0;z-index:1;overflow:hidden;background:#05080a;--u:min(1vw,1.7778vh);--frame-w:calc(var(--u)*.7)}
 @S[data-role=display] .live-extras{position:absolute;z-index:5;top:1.2vh;right:2vw;max-width:34vw;font-size:calc(var(--u)*1.25)}
-@S[data-role=display] .df-combat{display:grid;width:100%;height:100%;min-height:0;overflow:hidden;font-size:calc(var(--u)*1.3);grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);grid-template-rows:auto auto auto minmax(0,1fr) auto;grid-template-areas:"banner banner" "title roll" "narr roll" "key roll" "cast cast";gap:calc(var(--u)*1.2) calc(var(--u)*2.4);padding:4.5vh 4.5vw}
+@S[data-role=display] .df-combat{display:grid;width:100%;height:100%;min-height:0;overflow:hidden;font-size:calc(var(--u)*1.3);grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);grid-template-rows:auto auto auto auto minmax(0,1fr) auto;grid-template-areas:"banner banner" "title roll" "narr roll" "rules roll" "key roll" "cast cast";gap:calc(var(--u)*1.2) calc(var(--u)*2.4);padding:4.5vh 4.5vw}
 @S[data-role=display] .df-combat:before{background:linear-gradient(180deg,#05080ae0 0,#05080a40 20%,#05080a33 40%,#05080aeb 78%,#05080a),linear-gradient(90deg,#05080acc,transparent 55%)}
 @S[data-role=display] .combat-stage,@S[data-role=display] .combat-lower,@S[data-role=display] .combat-story{display:contents}
 @S[data-role=display] .combat-action-rail{display:none}
 @S[data-role=display] .combat-turn-badge{grid-area:banner;justify-self:center;display:block;margin:0;padding:.1em 1.6em;font:600 calc(var(--u)*3.3)/1.2 Georgia,serif;letter-spacing:.14em;text-transform:uppercase;color:#f0cf8e;text-align:center;border:0;border-top:1px solid #d9b77a99;border-bottom:1px solid #d9b77a99;border-radius:0;background:linear-gradient(90deg,transparent,#120d05d9 18%,#120d05d9 82%,transparent);text-shadow:0 3px 18px #000}
 @S[data-role=display] .df-combat h1{grid-area:title;align-self:end;margin:0 0 calc(var(--u)*.6);max-width:none;font-size:calc(var(--u)*2.5);letter-spacing:-.01em;line-height:1.1}
 @S[data-role=display] .combat-narration{grid-area:narr;align-self:start;max-width:none;font-size:calc(var(--u)*1.4);line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical}
+@S[data-role=display] .rules-disclosure{grid-area:rules;align-self:start;margin:0}
 @S[data-role=display] .combat-roll-panel{grid-area:roll;min-height:0;overflow:hidden;padding:calc(var(--u)*1) calc(var(--u)*1.6);align-self:stretch;display:flex;flex-direction:column;justify-content:center}
 @S[data-role=display] .combat-roll-panel h2{margin:0 0 calc(var(--u)*.4);font-size:calc(var(--u)*1.3);letter-spacing:.2em;text-transform:uppercase;color:#e0b877}
 @S[data-role=display] .combat-roll-panel .combat-muted{font-size:calc(var(--u)*1.3)}

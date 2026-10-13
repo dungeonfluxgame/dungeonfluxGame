@@ -365,6 +365,7 @@ fn mount_rules_note(
     host: &Element,
     note: &str,
     fight: bool,
+    player: bool,
 ) -> Result<(), JsValue> {
     if let Some(previous) = host.query_selector(".rules-disclosure")? {
         previous.remove();
@@ -384,7 +385,15 @@ fn mount_rules_note(
     let summary = document.create_element("summary")?;
     summary.set_text_content(Some("Rules for this fight"));
     disclosure.append_child(&summary)?;
-    narration.insert_before(&disclosure, Some(&line))?;
+    if player {
+        narration.insert_before(&disclosure, Some(&line))?;
+    } else {
+        let story = narration
+            .parent_element()
+            .ok_or_else(|| JsValue::from_str("combat story parent absent"))?;
+        let after = narration.next_sibling();
+        story.insert_before(&disclosure, after.as_ref())?;
+    }
     disclosure.append_child(&line)?;
     Ok(())
 }
@@ -445,6 +454,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
         &host,
         &view.scene.rules_note,
         screen == Screen::Combat,
+        player,
     )?;
     // PLAY-F02 dispatch point: on the shared display the 3D battlefield overlays this flat view
     // when it can run; otherwise today's view above is what the table sees.
