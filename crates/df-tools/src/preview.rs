@@ -308,33 +308,46 @@ mod tests {
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
 
-    fn root() -> PathBuf {
-        let root = env::temp_dir().join(format!(
-            "preview-unit-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+    fn private_directory(path: &Path) {
         // Directory modes are a Unix-only property.
         #[cfg(unix)]
         {
-            fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+            fs::DirBuilder::new().mode(0o700).create(path).unwrap();
         }
         #[cfg(not(unix))]
         {
-            fs::DirBuilder::new().create(&root).unwrap();
+            fs::DirBuilder::new().create(path).unwrap();
         }
+    }
+
+    fn root() -> PathBuf {
+        let attempt = format!(
+            "preview-unit-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap();
+        let namespace = workspace.join("artifacts").join("tmp").join(attempt);
+        private_directory(&namespace);
+        let root = namespace.join("state");
+        private_directory(&root);
         root
     }
 
     fn configuration(root: PathBuf) -> PreviewConfiguration {
         PreviewConfiguration {
-            root,
-            attempt: env::temp_dir()
+            attempt: root
+                .parent()
+                .unwrap()
                 .file_name()
                 .unwrap()
                 .to_str()
                 .unwrap()
                 .into(),
+            root,
             web_source: "web-test".into(),
         }
     }
