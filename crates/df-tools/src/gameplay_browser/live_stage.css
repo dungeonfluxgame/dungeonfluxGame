@@ -222,7 +222,8 @@
 
 /* the words follow the voice: the Dungeon Master's caption or the character's bubble, one at a time */
 .tv-stagebox{transition:opacity .45s ease,visibility 0s}
-.tv-stage[data-speaker=character] .tv-stagebox{opacity:0;visibility:hidden;transition:opacity .45s ease,visibility 0s .45s}
+/* the narrator's box is gone before the speaker's line fades in over the same band */
+.tv-stage[data-speaker=character] .tv-stagebox{opacity:0;visibility:hidden;transition:opacity .12s ease,visibility 0s .12s}
 .tv-stage[data-speaker=character] :is(.combat-narration,.aftermath-narrative){color:transparent!important;text-shadow:none!important;transition:color .45s ease}
 .tv-stage[data-speaker=narrator] .tv-bubble[data-kind=speech]{visibility:hidden;opacity:0}
 .tv-stage[data-tv-mode=scene] .tv-safe{z-index:7}
@@ -240,7 +241,7 @@
 
 /* ---------- display stage machines: every state is on the DOM, every appearance follows one ---------- */
 /* narrator box: shown only while the narrator is the speaker the line machine says */
-.tv-stage[data-scene-state]:not([data-speaker=narrator]) .tv-stagebox{opacity:0;visibility:hidden;transition:opacity .4s ease,visibility 0s .4s}
+.tv-stage[data-scene-state]:not([data-speaker=narrator]) .tv-stagebox{opacity:0;visibility:hidden;transition:opacity .12s ease,visibility 0s .12s}
 .tv-dm[data-line-state=closing]{opacity:0;transition:opacity .4s ease}
 /* choice chips are visible only once every line has been said */
 .tv-stage[data-scene-state]:not([data-scene-state=awaiting-choice]) .tv-choices{opacity:0;visibility:hidden}
