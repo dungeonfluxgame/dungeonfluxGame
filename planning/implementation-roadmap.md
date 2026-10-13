@@ -418,29 +418,29 @@ Owner directions given while watching:
 Start-up and lobby:
 
 - [ ] **Bug** — 17 of 54 generated text slots (31%) were refused by validation at start-up and replaced by table text.
-- [ ] **Bug** — The phone's join page is titled "Gather at the Lantern Wharf" with a harbour picture whatever the adventure's place is; the waiting page then shows the right title over the same harbour picture.
+- [x] **Bug** — The phone's join page is titled "Gather at the Lantern Wharf" with a harbour picture whatever the adventure's place is; the waiting page then shows the right title over the same harbour picture. **FIXED in `301391e`** (neutral title; showing the real place needs a server field; browser check pending).
 - [ ] **Bug** — The TV lobby prints "Or enter the code at 127.0.0.1:63319", an address no phone can reach, with no hint that the session is local only.
-- [ ] **Bug** — The TV's "Enable sound" control is tiny and in a corner; the game is silent until someone finds it.
+- [x] **Bug** — The TV's "Enable sound" control is tiny and in a corner; the game is silent until someone finds it. **FIXED in `dc17a41`** (browser check pending).
 
 Character creation (phone):
 
-- [ ] **Bug** — The field "A detail that makes you memorable" is in the page but collapsed to zero size; it cannot be seen or used.
-- [ ] **Bug** — The form is about 7,100 px tall with twelve groups; four of them offer a single option under "Choose one offered option". Only Dwarf, Fighter and Soldier exist, so every party is the same.
+- [x] **Bug** — The field "A detail that makes you memorable" is in the page but collapsed to zero size; it cannot be seen or used. **FIXED in `edece58`** (browser check pending).
+- [ ] **Bug** — The form is about 7,100 px tall with twelve groups; four of them offer a single option under "Choose one offered option". Only Dwarf, Fighter and Soldier exist, so every party is the same. **PART FIXED in `e8a800f`**: single options are pre-selected; the heading text and the range of classes are not done.
 - [ ] **Bug** — Developer wording is shown to players: "every submitted build is validated on the server", "Fighter B + Soldier B", "Other lawful SRD combinations remain unsupported", "Initiative tie agreement".
-- [ ] **Bug** — The sticky "Confirm your hero" bar covers the form text beneath it.
+- [x] **Bug** — The sticky "Confirm your hero" bar covers the form text beneath it. **FIXED in `edece58`** (browser check pending).
 
 Story scenes:
 
 - [ ] **Bug** — The title card's sentence is repeated word for word in the Dungeon Master box straight after it.
-- [ ] **Bug** — On every scene change the TV shows the adventure's title again instead of the new scene's, and during the crossfade it sits over the new picture and the health cards.
+- [x] **Bug** — On every scene change the TV shows the adventure's title again instead of the new scene's, and during the crossfade it sits over the new picture and the health cards. **FIXED in `3720b36`** (browser check pending).
 - [ ] **Bug** — The heroes in the scene pictures are tall red-haired humans seen from behind; they are dwarves with different portraits. The patron is a different-looking woman in the second picture. Characters are not consistent between pictures, or with their portraits.
-- [ ] **Bug** — The adventure title and place stay printed large over the picture for the whole scene.
+- [x] **Bug** — The adventure title and place stay printed large over the picture for the whole scene. **FIXED in `3720b36`** (browser check pending).
 - [ ] **Bug** — The whole story is five screens: opening, one follow-up, the fight, the aftermath, the epilogue. Three of the four choices had a single option. There is no journey, no investigation and no use for the private clue.
 - [ ] **Bug** — The only choice before the fight is "Face the giant weasel", naming an enemy nobody has seen or mentioned.
 - [ ] **Bug** — The loading card says one "Wary Giant Weasel" springs out; the fight has three.
 - [ ] **Bug** — The private clue runs narration straight into the patron's first-person speech with no quotation ("Elspeth draws you close. I must reach Jorun Harrow..."), and it is repeated in the phone's story log on every later screen to the end.
 - [ ] **Bug** — Choices after the fight are chapter titles, not actions: "The Road Takes Its Toll", "The Clock Never Comes". The phone records them as "Brakka thes Road Takes Its Toll".
-- [ ] **Bug** — The phone keeps offering "Confirm original strike" from the aftermath to the end; it is never explained.
+- [ ] **Bug** — The phone keeps offering "Confirm original strike" from the aftermath to the end; it is never explained. **PART FIXED in `8fa68c8`**: fixed in the phone menu; the fight panel copy is still to do.
 - [ ] **Bug** — A rules log line is shown as a hero's speech bubble on the TV: "BRAKKA: has been stable for 1 hours and regains 1 hit point".
 - [ ] **Bug** — The ending contradicts itself: the defeat says the patron "is dragged away"; the epilogue has the survivors report a lost clock and never mention her; the end text says "Elspeth and the survivors must begin again". The contact in the epilogue is not in the scene picture until after the end card is up.
 
@@ -451,7 +451,7 @@ Conversation with the patron (three typed lines, all answered by the model):
 - [ ] **Bug** — A threat with a drawn greatsword gets "Keep your voice low. I don't know what you're asking me to hide" plus a stock sentence; no reaction to the weapon, no change of attitude, no roll, no change to the picture.
 - [ ] **Bug** — The offered choices do not change after talking; nothing she says can be followed up.
 - [ ] **Bug** — TV: the hero's own typed line is a faded bubble over the patron's figure, partly under her reply.
-- [ ] **Bug** — Phone composer: her reply is shown with a different portrait from the one in the scene card; the send button is labelled "Ask for clarification" under two drop-downs reading "Uncertain intention" and "No action selected".
+- [ ] **Bug** — Phone composer: her reply is shown with a different portrait from the one in the scene card; the send button is labelled "Ask for clarification" under two drop-downs reading "Uncertain intention" and "No action selected". **PART FIXED in `a252a22`**: labels fixed; the reply portrait still differs.
 
 Fight (three giant weasels against two heroes):
 
@@ -474,8 +474,8 @@ Fight (three giant weasels against two heroes):
 Defeat, aftermath and end card:
 
 - [ ] **Bug** — The defeat screen says "The party decides: rest or move on" and offers one choice, "Advance 6 seconds · death saves", then "Wait · a stable hero regains 1 hit point after 1d4 hours". These are rules steps shown as story choices.
-- [ ] **Bug** — The end card leaves the health cards and the last speaker's line visible under it, and the scene picture changes behind it while it is up.
-- [ ] **Bug** — After "The End" nothing on the TV or the phones offers a new game or a way back to the lobby; the phone still shows the composer.
+- [ ] **Bug** — The end card leaves the health cards and the last speaker's line visible under it, and the scene picture changes behind it while it is up. **PART FIXED in `3720b36`**: cards, bubbles and choices are hidden; the picture changing behind the card is not done.
+- [ ] **Bug** — After "The End" nothing on the TV or the phones offers a new game or a way back to the lobby; the phone still shows the composer. **PART FIXED in `301391e`**: the phone now shows a clear end state; a new-game path is still missing.
 - [ ] **Bug** — The phone shows internal notes to the player ("Greatsword Dropped; ownership retained", "defeat does not restore hit points or held weapons") and a hero portrait cropped to the top of a head.
 - [ ] **Follow-up** — Cost: 20 pictures (half the session's budget of 40) and 18 voice clips for a ten-minute game.
 
@@ -533,8 +533,8 @@ Same build, played critically with the owner watching and commenting. The advent
 
 Owner directions given while watching:
 
-- [ ] **Owner direction** — "before wystan talks a speech bubble flashes". Measured at 50 ms steps: a small "intent" bubble (about 46 by 22 px) fades in beside the hero and is gone half a second later; an empty 35 px strip sits at the speaker's place for about 3 s while the reply is generated; the speaker's bubble then appears at 10 percent opacity and about 60 percent size and grows over 0.3 s while the hero's bubble fades out on top of it. A stray "..." bubble was also seen floating over a background figure in the final scene.
-- [ ] **Owner direction** — "on the display plate refreshes the characters dont move". The refresh prompt tells the picture model to keep exactly the same pose, framing, camera distance and lighting and change only the expression, so every refresh within a scene shows the same people frozen in place. Poses do change between scenes.
+- [ ] **Owner direction** — "before wystan talks a speech bubble flashes". Measured at 50 ms steps: a small "intent" bubble (about 46 by 22 px) fades in beside the hero and is gone half a second later; an empty 35 px strip sits at the speaker's place for about 3 s while the reply is generated; the speaker's bubble then appears at 10 percent opacity and about 60 percent size and grows over 0.3 s while the hero's bubble fades out on top of it. A stray "..." bubble was also seen floating over a background figure in the final scene. **PART FIXED in `4c7e69b`**: the typed line now leaves first; the empty strip while a reply is generated is not done.
+- [x] **Owner direction** — "on the display plate refreshes the characters dont move". The refresh prompt tells the picture model to keep exactly the same pose, framing, camera distance and lighting and change only the expression, so every refresh within a scene shows the same people frozen in place. Poses do change between scenes. **FIXED in `7ecd7f9`** (needs a paid picture to confirm; browser check pending).
 - [ ] **Owner direction** — "if the match idles the DM should make some more commentary, he tries to keep intensity up". Nothing is spoken between beats or while the game waits on a player; waits of 20 s and more are silent.
 - [ ] **Owner direction** — "it said enemy vanquished then he stood back up". Not caught in a frame by the coordinator; consistent with the display applying a death and then playing an older queued beat for the same figure (see "the dead guy moved" above). In this fight one "vanquished" came from a miss: the greatsword's graze dealt 3 to a bandit with 3 hit points, which the screen gives no way to understand.
 - [ ] **Owner direction** — "the guys are walking through the fence, there should be a smart way to block off those grids using the voxel strategy from the supersplat or playcanvas repos". Figures cross the scan's stockade freely; the walkable grid is not derived from the scan. Needs a research pass on how those repositories voxelise a splat scene, then blocked cells and cover taken from it.
@@ -563,7 +563,7 @@ At the owner's request ("record a video and play it as fast as possible") a scri
 - [ ] **Bug** — "Tomas and the Salve" had to be pressed twice: the first press showed "Waiting for the game server…" and the same choice was offered again.
 - [ ] **Bug** — Seen in the recording's frames: one almost black, blurred frame in the middle of the fight (the camera inside or against something); heavy smear with colour fringing during strikes; the still dice image with the gold square outline round it.
 - [ ] **Follow-up** — A full game played at the phones' pace took 3 min 18 s, of which 2 min 56 s was the fight, and most of that was heroes waiting 11 to 15 s at a time for the TV to finish showing enemy turns. Two of the three enemies died to a "graze" on a missed roll (a 3 and a 6), and seven enemy bites in a row missed, so nobody was hurt.
-- [ ] **Follow-up** — The recording method works on this machine (headless Edge has WebGPU, so the scan battlefield is in the video). Worth turning into a repository check so every fight change comes with a video.
+- [x] **Follow-up** — The recording method works on this machine (headless Edge has WebGPU, so the scan battlefield is in the video). Worth turning into a repository check so every fight change comes with a video. **FIXED in `0a9436f`** (development/browser-checks/play-and-record.mjs; browser check pending).
 
 ### Other scans as the battlefield, 2026-10-12 night (rooms KENOKA, SUFARO, ZATOZO)
 

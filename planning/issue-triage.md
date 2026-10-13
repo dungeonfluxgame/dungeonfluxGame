@@ -80,7 +80,7 @@ In the order I would take them. One at a time, as agreed.
 | SES-08 | 2 | A failed start-up leaves `df_game` and `df_local_demo` behind, so the next start refuses with `retained_access_unavailable`. | EARLIER | |
 | SES-09 | 4 | "SESSION lease renewal failing (Unavailable); retrying" logged once in a session's first minute; it recovered. | SC | |
 | SES-10 | 4 | With the same seed the story text differs between starts (two different titles for one seed), so a seed does not reproduce a session's wording. | SC | |
-| SES-11 | 3 | The battle scene drives the machine hard enough to throttle the processor ("its downclocking the cpu"). Sessions run the scan at level of detail 1 only because the session launcher sets it; the server default is still 0. | OWNER | |
+| SES-11 | 3 | The battle scene drives the machine hard enough to throttle the processor ("its downclocking the cpu"). Sessions run the scan at level of detail 1 only because the session launcher sets it; the server default is still 0. | OWNER | Fixed `97f9d1e`: default level of detail is 1 |
 
 ## 2. Story flow and pacing
 
@@ -186,7 +186,7 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | AUD-01 | 2 | Music stays ducked for as long as any text is on screen, spoken or not: 31 s during a wait for a player, and for the whole of the defeat screen and the end card. The owner's rule is that music ducks under every voiced line (player, character, narrator) and comes back after. Ducking under a voiced line works. | P1, OWNER | |
 | AUD-02 | 2 | On the defeat screen the narrator's line is hidden under the text and the closing paragraph is not read aloud ("I dont hear the DM narrating"). | P1, OWNER | |
 | AUD-03 | 3 | A bite sounds like a sword: each one logs `sword-swing` then `blade-hit`. | P1 | |
-| AUD-04 | 3 | The TV's "Enable sound" control is tiny and in a corner; the game is silent until someone finds it. | P1 | |
+| AUD-04 | 3 | The TV's "Enable sound" control is tiny and in a corner; the game is silent until someone finds it. | P1 | Fixed `dc17a41` (browser check pending) |
 
 ## 10. Pictures
 
@@ -194,7 +194,7 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 |---|---|---|---|---|
 | PIC-01 | 2 | The heroes in the scene pictures are not the heroes the players made: tall red-haired humans seen from behind where the party is two dwarves with their own portraits. Other characters change appearance between pictures, and one described as a mapmaker is drawn as an apothecary. | P1, P2 | |
 | PIC-02 | 2 | Owner request, partly written and never verified: direct any generated output from the command line, for example "rerender the plate but brakka unsheathes his sword", for every generated output and not only pictures. The worker was stopped; brief at `artifacts/tmp/devctl-a3/brief.md`. | OWNER | |
-| PIC-03 | 3 | A picture refresh keeps everyone in the same pose ("on the display plate refreshes the characters dont move"): the refresh prompt asks for the same pose, framing and lighting with only the expression changed. | P3, OWNER | |
+| PIC-03 | 3 | A picture refresh keeps everyone in the same pose ("on the display plate refreshes the characters dont move"): the refresh prompt asks for the same pose, framing and lighting with only the expression changed. | P3, OWNER | Fixed `7ecd7f9` (needs a paid picture to confirm) |
 | PIC-04 | 3 | Heroes look unhurt in the pictures at 1 of 13 hit points. Owner: "the player characters should look beat up in the display plates when they are low hp". | P1, OWNER | |
 | PIC-05 | 3 | The picture does not follow what happens: after a hero swept the herbs off the table and called the patron a liar, the new picture showed her smiling with the herbs still there. A character's face can change between answers and not match the line. | P2, EARLIER | |
 | PIC-06 | 3 | Pictures of one place drift between shots (interior night, then outdoor day), and the phone's lobby picture does not match the TV's. | EARLIER | |
@@ -205,10 +205,10 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
-| TVX-01 | 3 | A speech bubble flashes before a character talks ("before wystan talks a speech bubble flashes"): a small bubble appears beside the hero for half a second, an empty strip sits at the speaker's place for about 3 s, then the speaker's bubble grows in while the hero's fades out on top of it. A stray "..." bubble was also seen over a background figure. | P3, OWNER | |
+| TVX-01 | 3 | A speech bubble flashes before a character talks ("before wystan talks a speech bubble flashes"): a small bubble appears beside the hero for half a second, an empty strip sits at the speaker's place for about 3 s, then the speaker's bubble grows in while the hero's fades out on top of it. A stray "..." bubble was also seen over a background figure. | P3, OWNER | Part `4c7e69b`: typed line leaves first; empty strip while generating not done |
 | TVX-02 | 3 | The hero's own typed line is a faded bubble over the other character's figure, partly under the reply. | P1, EARLIER | |
-| TVX-03 | 3 | On every scene change the TV shows the adventure's title again instead of the new scene's, and during the crossfade it sits over the new picture and the health cards. | P1, EARLIER | |
-| TVX-04 | 3 | The adventure title and place stay printed large over the picture for the whole scene. | P1 | |
+| TVX-03 | 3 | On every scene change the TV shows the adventure's title again instead of the new scene's, and during the crossfade it sits over the new picture and the health cards. | P1, EARLIER | Fixed `3720b36` (browser check pending) |
+| TVX-04 | 3 | The adventure title and place stay printed large over the picture for the whole scene. | P1 | Fixed `3720b36` (browser check pending) |
 | TVX-05 | 3 | A rules log line is shown as a hero's speech bubble: "BRAKKA: has been stable for 1 hours and regains 1 hit point". | P1 | |
 | TVX-06 | 4 | The phone's label for a choice differs from the TV's ("Continue to the apothecary · Brannock's Apothecary" against "Continue to the apothecary"). | P2 | |
 | TVX-07 | 4 | The speaker's bubble is drawn over the rules note and title; with choice chips off the narrator box stays empty while the table waits. | EARLIER | |
@@ -220,31 +220,31 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | PHN-01 | 2 | The fight screen is developer drop-downs with dozens of cell and weapon options. The tap-to-move map the owner decided on has no brief yet. | EARLIER, all | |
 | PHN-02 | 2 | A downed player's phone says nothing about dying or death saves and offers nothing to do. | P1 | |
 | PHN-03 | 3 | Developer notes are shown to players: "Disclosed custom rule tactical.cover-centre-line…", "Disclosed gap giant-weasel: Climb Speed 30 ft is not modelled", "Greatsword Dropped; ownership retained", "defeat does not restore hit points or held weapons". | P1 | |
-| PHN-04 | 3 | Saying your own line is awkward and mislabelled: the send button reads "Ask for clarification" under two drop-downs reading "Uncertain intention" and "No action selected", and the character's reply is shown with a different portrait from the scene's. | P1, IV | |
-| PHN-05 | 3 | "Confirm original strike" is offered from the aftermath to the end of the game and never explained. | P1 | |
+| PHN-04 | 3 | Saying your own line is awkward and mislabelled: the send button reads "Ask for clarification" under two drop-downs reading "Uncertain intention" and "No action selected", and the character's reply is shown with a different portrait from the scene's. | P1, IV | Part `a252a22`: labels fixed; reply portrait still differs |
+| PHN-05 | 3 | "Confirm original strike" is offered from the aftermath to the end of the game and never explained. | P1 | Part `8fa68c8`: phone menu fixed; fight panel copy still to do |
 | PHN-06 | 3 | The fight's log line is carried into the story log of the next scene. | P2 | |
 | PHN-07 | 3 | The hero portrait is cropped to the top of a head, and an unstyled status line sits over the background picture. | P1 | |
-| PHN-08 | 4 | The "Ask" button re-renders while a voice line plays, so a tap can miss. | EARLIER | |
+| PHN-08 | 4 | The "Ask" button re-renders while a voice line plays, so a tap can miss. | EARLIER | Fixed `a252a22` (browser check pending) |
 
 ## 13. Lobby and character creation
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
-| CRE-01 | 3 | Only Dwarf, Fighter and Soldier exist, so every party is the same. The form is about 7,100 px tall with twelve groups, four of which offer a single option under "Choose one offered option". | P1 | |
-| CRE-02 | 3 | The field "A detail that makes you memorable" is in the page but collapsed to zero size; it cannot be seen or used. | P1 | |
+| CRE-01 | 3 | Only Dwarf, Fighter and Soldier exist, so every party is the same. The form is about 7,100 px tall with twelve groups, four of which offer a single option under "Choose one offered option". | P1 | Part `e8a800f`: single options pre-selected; heading text and the class/species range not done |
+| CRE-02 | 3 | The field "A detail that makes you memorable" is in the page but collapsed to zero size; it cannot be seen or used. | P1 | Fixed `edece58` (browser check pending) |
 | CRE-03 | 3 | Developer wording is shown to players: "every submitted build is validated on the server", "Fighter B + Soldier B", "Other lawful SRD combinations remain unsupported", "Initiative tie agreement". | P1 | |
-| CRE-04 | 3 | The phone's join page is titled "Gather at the Lantern Wharf" with a harbour picture whatever the adventure's place is. | P1 | |
+| CRE-04 | 3 | The phone's join page is titled "Gather at the Lantern Wharf" with a harbour picture whatever the adventure's place is. | P1 | Fixed `301391e`: neutral title; the real place needs a server field (browser check pending) |
 | CRE-05 | 3 | The TV lobby shows neither the adventure's title nor what happens next or who starts; "THE PARTY IS GATHERED" is small grey text in a corner. | P2 | |
 | CRE-06 | 3 | The TV lobby prints "Or enter the code at 127.0.0.1:63319", an address no phone can reach, with no hint that the session is local only. | P1 | |
-| CRE-07 | 4 | The sticky "Confirm your hero" bar covers the form text beneath it. | P1 | |
+| CRE-07 | 4 | The sticky "Confirm your hero" bar covers the form text beneath it. | P1 | Fixed `edece58` (browser check pending) |
 
 ## 14. Endings
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
 | END-01 | 2 | The defeat screen is not about this fight: two generic sentences with nothing about the enemies, who fell or how ("the defeat screen isnt contextual"). | P1, OWNER | |
-| END-02 | 2 | After "The End" nothing on the TV or the phones offers a new game or a way back to the lobby; the phone still shows the composer. | P1 | |
-| END-03 | 3 | The end card leaves the health cards and the last speaker's line visible under it, the scene picture changes behind it, and it can appear before the last line has finished. | P1, EARLIER | |
+| END-02 | 2 | After "The End" nothing on the TV or the phones offers a new game or a way back to the lobby; the phone still shows the composer. | P1 | Part `301391e`: phone shows the end state; no new-game path yet |
+| END-03 | 3 | The end card leaves the health cards and the last speaker's line visible under it, the scene picture changes behind it, and it can appear before the last line has finished. | P1, EARLIER | Part `3720b36`: cards, bubbles and choices hidden; picture changing behind the card not done |
 | END-04 | 4 | Older victory-card faults (cut-out figures over a dark plate, text cut off, a bubble in mid-air) were not seen again: the victory screen was clean in playthroughs 2 and 3. Confirm and close. | EARLIER | |
 
 ## 15. Tools and tests
@@ -255,8 +255,45 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | DEV-02 | 3 | Refusals on the fight path all log `InvalidCandidate`, so a log cannot say which step refused (see SES-01, SES-02). | SR, SC | |
 | DEV-03 | 3 | `cargo test -p df-tools --lib` keeps nine long-standing failures, and the home-video tests time out under load. | EARLIER | |
 | DEV-04 | 3 | The command line's back, forward and restore are written and unit-tested but have no verified transcript; direct edits (`override`) are disabled. | this session | |
-| DEV-05 | 4 | The recording method used this evening (hidden browser with WebGPU, TV and one phone recorded) lives in the coordinator's scratch folder. Worth making a repository check so every fight change comes with a video. | SR | |
+| DEV-05 | 4 | The recording method used this evening (hidden browser with WebGPU, TV and one phone recorded) lives in the coordinator's scratch folder. Worth making a repository check so every fight change comes with a video. | SR | Fixed `0a9436f` |
 | DEV-06 | 4 | Work in the tree since commit `c400f95` is uncommitted: the stopped workers' changes and this evening's roadmap sections. | this session | |
+
+## 16. Found by reading the code
+
+Thirty read-only reviewers each read one module on the evening of 2026-10-12 and reported only defects with a concrete trigger. Each finding below is unverified until a worker reproduces it; the full write-up with file, line, trigger and proposed fix is in `artifacts/tmp/campaign/hunt/<reviewer>/findings.md`.
+
+| ID | Sev | Issue | Source | Decision |
+|---|---|---|---|---|
+| HNT-01 | 1 | A fight is refused at the start when the heroes were confirmed in a different order from the order they joined: the fight builds its hero list in confirmation order and the admission check expects join order. Very likely the real cause of SES-02 and of the refused fight behind SES-01, since the recording script confirms both heroes at once. | H12 F1 | |
+| HNT-02 | 1 | Restoring a pending move accepts a diagonal path through blocked corners and can leave the fight permanently stuck. | H14 F1 | |
+| HNT-03 | 2 | A delayed attack command from an earlier turn can be accepted on the same hero's later turn. | H08 F1 | |
+| HNT-04 | 2 | An "observe" investigation offer advances the story without resolving or recording what was observed (medium confidence). | H05 F1 | |
+| HNT-05 | 2 | A wolf's or mastiff's bite knocks its target prone on every hit, without the Strength save the rules require. | H13 F1 | |
+| HNT-06 | 2 | A healed figure stays down on the TV during playback and its next action can be dropped. | H22 F1 | |
+| HNT-07 | 2 | Start-up story text that came back incomplete is cached as complete, so refused slots are never asked for again. | H27 F1 | |
+| HNT-08 | 2 | After stepping back with the development tool, a late report from the TV can release a beat in the restored fight (medium confidence). | H15 F1 | |
+| HNT-09 | 3 | Thrown weapons are used up but never recorded where they land, so they cannot be picked up. | H13 F2 | |
+| HNT-10 | 3 | When the server loses its ownership lease for good, an expired wake-up stays armed and the session thread spins. | H02 F1 | |
+
+Causes the reviewers found for issues already listed above:
+
+| Issue | Cause found | Source |
+|---|---|---|
+| SES-04 | A seat cannot be reclaimed after the room phase, and a fight has no inactivity deadline. | H03 F1, F2 |
+| SES-05 | An outer deadline throws away prose groups that had already arrived when a later request runs long. | H24 F1, H27 F2 |
+| SES-08 | A start-up failure after admission strands the local database and lets its retained credentials expire. | H30 F1 |
+| FLO-06 | Authored ending labels are run through the code that turns action labels into sentences. | H07 F1 |
+| FGT-05 | The attack list ignores the fighter build's greatsword-only restriction. | H10 F1 |
+| SYN-01, SYN-02 | A later combat outcome identical to an earlier one is taken for an old beat and never queued; and a six-outcome cut before the queue discards deaths and earlier turns. | H17 F1, F2 |
+| SYN-04 | The TV's health cards apply a heal before its beat is shown. | H18 F1 |
+| SYN-05 | The phone re-enables turn-spending buttons from a stale view after the action's response. | H19 F1 |
+| PHN-02 | The phone drops the server's death-save progress for a downed hero. | H19 F2 |
+| FPX-01 | Rolls that arrive while the TV is catching up are deliberately drawn as stills, and almost every roll arrives that way. | H21 F1 |
+| FPX-02 | Close-up camera poses for finishing blows and other actions are chosen without checking the scene's occupancy. | H23 F1 |
+| STO-03 | The generated villain text has no matching named combatant and describes one arrival while the roster expands to several. | H25 F1 |
+| DLG-02 | A hostile character's fallback repeats one curt answer once its few answer keys are used up. | H26 F1 |
+| DLG-01 | The shipped pack has no social ledger, so spoken and typed lines never reach the code that records attitude. | H29 F1 |
+| PIC-08 | The opening picture's key includes the party, and the lobby requests it at each confirmation. | H28 F1 |
 
 ## Fixed and confirmed this evening
 
