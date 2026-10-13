@@ -1347,6 +1347,54 @@ fn options(
             Ok(_) | Err(RuleError::MissingDraw { .. })
         )
     });
+    if kind == K::GreatswordAttack {
+        let weapons = &combatant.spec().weapons;
+        let mut ranked = candidates
+            .into_iter()
+            .map(|candidate| {
+                let rank = if let Action::Attack {
+                    target,
+                    weapon,
+                    spend,
+                } = &candidate.1
+                {
+                    let (advantage, disadvantage) = battle
+                        .attack_reasons(actor, *target, *weapon)
+                        .map_err(bad)?;
+                    let cover = battle.attack_cover(actor, *target).map_err(bad)?;
+                    let cover_rank = match cover {
+                        tactical_rules::Cover::None => 0,
+                        tactical_rules::Cover::Half => 1,
+                        tactical_rules::Cover::ThreeQuarters => 2,
+                        tactical_rules::Cover::Total => 3,
+                    };
+                    let weapon_rank = weapons
+                        .iter()
+                        .position(|held| held.id() == weapon.weapon.id())
+                        .unwrap_or(weapons.len());
+                    let variant_rank = weapon.use_mastery || weapon.savage_attacker;
+                    let spend_rank = match spend {
+                        AttackSpend::Action => 0,
+                        AttackSpend::LightBonus => 1,
+                        AttackSpend::Nick => 2,
+                        AttackSpend::Multiattack => 3,
+                    };
+                    (
+                        !disadvantage.is_empty() && advantage.is_empty(),
+                        cover_rank,
+                        weapon_rank,
+                        variant_rank,
+                        spend_rank,
+                    )
+                } else {
+                    (false, 0, 0, false, 0)
+                };
+                Ok((rank, candidate))
+            })
+            .collect::<Result<Vec<_>, RepositoryError>>()?;
+        ranked.sort_by_key(|(rank, _)| *rank);
+        candidates = ranked.into_iter().map(|(_, candidate)| candidate).collect();
+    }
     if candidates.len() > 256 {
         return Err(RepositoryError::Capacity);
     }
@@ -3432,6 +3480,79 @@ pub(super) mod tests {
                     .completed_beats
                     .contains(&model::content("short-rest-complete").unwrap())
             );
+        });
+    }
+
+    #[test]
+    fn archer_attack_options_prioritize_unobstructed_melee_and_stay_paired_with_legal_targets() {
+        use rpc::GameplayActionKind as K;
+        with_live(|| {
+            let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+            let mut current = fight(true);
+            current = submit(
+                &current,
+                first,
+                &request(&current, 8, K::EndTurn, None),
+                &mut |_| panic!("end turn has no draw"),
+            );
+            let move_id = options(current.state(), 2, K::Move)
+                .unwrap()
+                .into_iter()
+                .find(|(_, action, _)| {
+                    matches!(action, Action::Move(path) if path.last() == Some(&tactical_rules::Cell(4, 2)))
+                })
+                .unwrap()
+                .0;
+            current = submit(
+                &current,
+                second,
+                &request(&current, 9, K::Move, Some(&move_id)),
+                &mut |_| panic!("move has no draw"),
+            );
+
+            let attacks = options(current.state(), 2, K::GreatswordAttack).unwrap();
+            let (first_id, first_action, _) = attacks.first().unwrap();
+            let group = groups(&current, second, K::GreatswordAttack).unwrap();
+            assert_eq!(group[0].options[0].option_id, *first_id);
+            let Action::Attack {
+                target,
+                weapon,
+                spend,
+            } = first_action
+            else {
+                panic!("first option must be an attack");
+            };
+            assert!(!weapon.ranged);
+            assert!(!weapon.use_mastery);
+            assert!(!weapon.savage_attacker);
+            assert_eq!(*spend, AttackSpend::Action);
+
+            let mut view = rpc::CombatView::default();
+            project_combat(&current, Some(entity(ENTITIES[1]).unwrap()), &mut view).unwrap();
+            let first_target = view
+                .legal_targets
+                .iter()
+                .find(|legal| legal.option_id == *first_id)
+                .unwrap();
+            assert_eq!(first_target.cover, "none");
+            assert!(!first_target.disadvantage);
+            assert_eq!(
+                first_target.participant_id,
+                canonical(current.state(), *target).unwrap().as_bytes()
+            );
+            assert_eq!(
+                group[0].options.len(),
+                view.legal_targets
+                    .iter()
+                    .filter(|legal| !legal.option_id.is_empty())
+                    .count()
+            );
+            assert!(group[0].options.iter().all(|option| {
+                view.legal_targets
+                    .iter()
+                    .any(|legal| legal.option_id == option.option_id)
+            }));
         });
     }
 
