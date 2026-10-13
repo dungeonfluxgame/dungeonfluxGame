@@ -102,6 +102,8 @@ struct Row {
 #[derive(Default)]
 pub(super) struct Talk {
     capture: Capture,
+    capture_revision: Option<rpc::SessionRevision>,
+    transcript_revision: Option<rpc::SessionRevision>,
     availability: Availability,
     probing: bool,
     probe_failures: u8,
@@ -216,6 +218,7 @@ pub(super) fn mount(client: &Rc<RefCell<Client>>, panel: &Element) -> Result<(),
     if client.borrow().role != "player" {
         return Ok(());
     }
+    ensure_current_scope(client);
     if client.borrow().dialogue.talk.row.is_none() {
         build(client)?;
     }
@@ -498,6 +501,9 @@ fn press_down(client: &Rc<RefCell<Client>>, held: Held) {
 
 /// The press ended. Released over the control, it is a tap: it starts or stops listening.
 fn release(client: &Rc<RefCell<Client>>, inside: bool) {
+    if !ensure_current_scope(client) {
+        return;
+    }
     step(client, |talk| {
         talk.held = None;
         talk.capture.release(now(), inside, environment())
@@ -523,6 +529,7 @@ fn interrupt(client: &Rc<RefCell<Client>>, why: Interruption) {
 /// Typing in the text box ends listening. The draft's own signal already tells the table, so
 /// this stops the control without sending a stop of its own.
 fn typed(client: &Rc<RefCell<Client>>) {
+    client.borrow_mut().dialogue.talk.transcript_revision = None;
     if client.borrow().dialogue.talk.capture.is_busy() {
         client
             .borrow_mut()
@@ -556,6 +563,9 @@ fn step(client: &Rc<RefCell<Client>>, operation: impl FnOnce(&mut Talk) -> Optio
 }
 
 fn tick(client: &Rc<RefCell<Client>>) {
+    if !ensure_current_scope(client) {
+        return;
+    }
     let attached = client
         .borrow()
         .dialogue
@@ -569,9 +579,46 @@ fn tick(client: &Rc<RefCell<Client>>) {
     }
 }
 
+fn scope_matches(
+    capture_revision: Option<rpc::SessionRevision>,
+    current_revision: Option<rpc::SessionRevision>,
+) -> bool {
+    matches!((capture_revision, current_revision), (Some(capture), Some(current)) if capture == current)
+}
+
+/// Cancels recordings and drops their transcript when the player moves to another view.
+fn ensure_current_scope(client: &Rc<RefCell<Client>>) -> bool {
+    let (active, capture_revision, transcript_revision, current_revision) = {
+        let state = client.borrow();
+        (
+            state.dialogue.talk.capture.is_busy(),
+            state.dialogue.talk.capture_revision,
+            state.dialogue.talk.transcript_revision,
+            state.revision,
+        )
+    };
+    let capture_stale = active && !scope_matches(capture_revision, current_revision);
+    let transcript_stale = transcript_revision
+        .is_some_and(|revision| !scope_matches(Some(revision), current_revision));
+    if capture_stale {
+        interrupt(client, Interruption::SceneChanged);
+    }
+    if transcript_stale {
+        let mut state = client.borrow_mut();
+        if let Some(editor) = state.dialogue.editor().cloned() {
+            editor.set_value("");
+        }
+        state.dialogue.talk.transcript_revision = None;
+    }
+    !capture_stale && !transcript_stale
+}
+
 fn execute(client: &Rc<RefCell<Client>>, command: Option<Command>) {
     match command {
         Some(Command::OpenMicrophone) => {
+            let mut state = client.borrow_mut();
+            state.dialogue.talk.capture_revision = state.revision;
+            drop(state);
             let weak = Rc::downgrade(client);
             spawn_local(open_microphone(weak));
         }
@@ -624,6 +671,20 @@ async fn open_microphone(weak: WeakClient) {
         }
         return;
     };
+    if !ensure_current_scope(&client) {
+        let command = client
+            .borrow_mut()
+            .dialogue
+            .talk
+            .capture
+            .microphone_ready(now());
+        execute(&client, command);
+        if let Ok(stream) = &requested {
+            stop_tracks(stream);
+        }
+        show(&client);
+        return;
+    }
     let stream = match requested {
         Ok(stream) => stream,
         Err(error) => {
@@ -736,6 +797,9 @@ fn finish_recording(client: &Rc<RefCell<Client>>) {
 
 /// The recorder has stopped: release the microphone, then decode and upload the capture.
 fn recorded(client: &Rc<RefCell<Client>>) {
+    if !ensure_current_scope(client) {
+        return;
+    }
     let blob = {
         let mut state = client.borrow_mut();
         let Some(recording) = state.dialogue.talk.recording.take() else {
@@ -792,6 +856,9 @@ async fn hear(weak: WeakClient, blob: Blob) {
     let Some(client) = weak.upgrade() else {
         return;
     };
+    if !ensure_current_scope(&client) {
+        return;
+    }
     let samples = match decoded {
         Ok(samples) => samples,
         Err(_) => {
@@ -818,6 +885,9 @@ async fn hear(weak: WeakClient, blob: Blob) {
     let Some(client) = weak.upgrade() else {
         return;
     };
+    if !ensure_current_scope(&client) {
+        return;
+    }
     let (outcome, words) = match answer {
         Ok(answer) => answer,
         Err(_) => {
@@ -830,8 +900,10 @@ async fn hear(weak: WeakClient, blob: Blob) {
         let mut state = client.borrow_mut();
         state.dialogue.talk.upload = None;
         let heard = state.dialogue.talk.capture.heard(outcome, &words);
-        if heard && let Some(editor) = state.dialogue.editor() {
+        let editor = heard.then(|| state.dialogue.editor().cloned()).flatten();
+        if let Some(editor) = editor {
             editor.set_value(&words);
+            state.dialogue.talk.transcript_revision = state.dialogue.talk.capture_revision;
         }
         heard
     };
@@ -978,6 +1050,9 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
 
 /// Sends the draft exactly as if it had been typed.
 fn send(client: Rc<RefCell<Client>>) {
+    if !ensure_current_scope(&client) {
+        return;
+    }
     client.borrow_mut().dialogue.talk.capture.settle_draft();
     show(&client);
     dialogue_recovery::submit(client);
@@ -989,6 +1064,30 @@ fn clear(client: Rc<RefCell<Client>>) {
         editor.set_value("");
     }
     client.borrow_mut().dialogue.talk.capture.settle_draft();
+    client.borrow_mut().dialogue.talk.transcript_revision = None;
     show(&client);
     live_presence::signal(&client, live_presence::Intent::Stopped);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scope_matches;
+    use crate::gameplay_browser::rpc;
+
+    fn revision(sequence: u64) -> rpc::SessionRevision {
+        rpc::SessionRevision {
+            epoch: Some(rpc::RecoveryEpoch { value: Some(1) }),
+            sequence: Some(sequence),
+        }
+    }
+
+    #[test]
+    fn capture_scope_matches_only_its_originating_revision() {
+        let origin = revision(4);
+
+        assert!(scope_matches(Some(origin), Some(origin)));
+        assert!(!scope_matches(Some(origin), Some(revision(5))));
+        assert!(!scope_matches(Some(origin), None));
+        assert!(!scope_matches(None, Some(origin)));
+    }
 }
