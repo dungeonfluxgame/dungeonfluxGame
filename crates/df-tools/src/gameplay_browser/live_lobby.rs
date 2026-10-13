@@ -35,6 +35,7 @@ pub(super) struct LobbyModel {
     pub(super) stage: JoinStage,
     pub(super) title: String,
     pub(super) narration: String,
+    pub(super) scene_asset: Option<String>,
     pub(super) code: String,
     pub(super) join_url: String,
     pub(super) join_label: &'static str,
@@ -47,6 +48,7 @@ pub(super) struct LobbyModel {
 pub(super) struct LobbyScreen {
     surface: JoinPhaseSurface,
     stamp: Cell<u64>,
+    scene_asset: RefCell<Option<live_screens::ServerImage>>,
 }
 
 fn initial(name: &str) -> String {
@@ -111,7 +113,7 @@ fn with_view<R>(
         },
         stage: model.stage,
         campaign: CampaignView {
-            scene: ConceptScene::LobbyHarbor,
+            scene: ConceptScene::Campfire,
             chapter: "An adventure awaits",
             title: &model.title,
             description: &model.narration,
@@ -181,6 +183,7 @@ mod tests {
                 stage: JoinStage::Lobby,
                 title: String::new(),
                 narration: String::new(),
+                scene_asset: None,
                 code: "ABCD".to_owned(),
                 join_url: join_url.to_owned(),
                 join_label: "Join this room",
@@ -209,6 +212,7 @@ mod tests {
             stage: JoinStage::Lobby,
             title: String::new(),
             narration: String::new(),
+            scene_asset: None,
             code: "ABCD".to_owned(),
             join_url: "http://192.168.1.20:63419/gameplay/player?room=ABCD".to_owned(),
             join_label: "Join this room",
@@ -244,6 +248,20 @@ fn fix_fields(surface: &JoinPhaseSurface) -> Result<(), JsValue> {
 }
 
 impl LobbyScreen {
+    fn set_scene_asset(&self, scene_asset: Option<&str>) -> Result<(), JsValue> {
+        self.scene_asset.borrow_mut().take();
+        let Some(source) = scene_asset else {
+            return Ok(());
+        };
+        let Some(image) = self.surface.root().query_selector(".scene-art")? else {
+            return Ok(());
+        };
+        let fallback = Some(format!("/{}", ConceptScene::Campfire.asset_path()));
+        *self.scene_asset.borrow_mut() =
+            Some(live_screens::ServerImage::install(image, source, fallback)?);
+        Ok(())
+    }
+
     /// Presents `model` in place, mounting the surface under `parent` on first use.
     pub(super) fn present(
         client: &Rc<RefCell<Client>>,
@@ -263,6 +281,7 @@ impl LobbyScreen {
             if applied != JoinUpdate::Applied {
                 return Err(render_error(client, &"stale lobby presentation"));
             }
+            screen.set_scene_asset(model.scene_asset.as_deref())?;
             return fix_fields(&screen.surface);
         }
         let document = client.borrow().document.clone();
@@ -289,11 +308,14 @@ impl LobbyScreen {
             })
             .map_err(|error| render_error(client, &error))?;
         fix_fields(&surface)?;
-        parent.append_child(surface.root())?;
-        client.borrow_mut().live.lobby = Some(LobbyScreen {
+        let screen = LobbyScreen {
             surface,
             stamp: Cell::new(1),
-        });
+            scene_asset: RefCell::new(None),
+        };
+        screen.set_scene_asset(model.scene_asset.as_deref())?;
+        parent.append_child(screen.surface.root())?;
+        client.borrow_mut().live.lobby = Some(screen);
         Ok(())
     }
 

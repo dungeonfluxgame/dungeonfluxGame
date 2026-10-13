@@ -198,6 +198,10 @@ fn art(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> (String, &'stati
     (painting, fallback)
 }
 
+fn lobby_art_source(scene_asset: &str, live_backdrop: &str) -> Option<String> {
+    crate::presentation::imagery_url(live_backdrop).or_else(|| asset_url(scene_asset))
+}
+
 fn speaker_portrait_stem(name: &str) -> Option<&'static str> {
     match name {
         "Courier" => Some("portrait-courier"),
@@ -351,6 +355,7 @@ fn lobby_model(input: &SceneInput<'_>, client: &Client) -> Result<LobbyModel, Js
         stage: JoinStage::Lobby,
         title: input.scene.title.clone(),
         narration: input.narration.to_owned(),
+        scene_asset: lobby_art_source(&input.scene.scene_asset, &input.scene.live_backdrop),
         code: input.journey.room_code.clone(),
         join_url: join_label(join_url),
         join_label: "Join this room",
@@ -681,7 +686,27 @@ fn render_display(
 
 #[cfg(test)]
 mod tests {
-    use super::{choice_disabled_reason, is_new_private_clue};
+    use super::{choice_disabled_reason, is_new_private_clue, lobby_art_source};
+
+    #[test]
+    fn lobby_art_uses_the_server_scene_asset_when_it_is_a_local_asset_path() {
+        let live_backdrop = format!("/gameplay/imagery/{}", "a".repeat(64));
+        assert_eq!(
+            lobby_art_source("assets/ui/generated/scene-place-guardhouse", ""),
+            Some("/assets/ui/generated/scene-place-guardhouse".to_owned())
+        );
+        assert_eq!(
+            lobby_art_source("assets/ui/generated/scene-place-guardhouse", &live_backdrop),
+            Some(live_backdrop)
+        );
+        assert_eq!(
+            lobby_art_source(
+                "https://example.com/scene.webp",
+                "https://example.com/live.webp"
+            ),
+            None
+        );
+    }
 
     #[test]
     fn retained_private_clue_is_not_a_new_reveal() {
@@ -738,6 +763,7 @@ pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         stage: JoinStage::Invitation,
         title: "Join the table".to_owned(),
         narration: "Connect to the shared room and create your own hero.".to_owned(),
+        scene_asset: None,
         code,
         join_url: String::new(),
         join_label: if retries >= crate::reconnect::JOIN_RETRIES {
