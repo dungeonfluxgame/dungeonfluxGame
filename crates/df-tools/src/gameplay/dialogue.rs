@@ -394,6 +394,24 @@ impl actor::Actor {
             ))
         .then(|| self.npc_reply_context(member, &request.text))
         .flatten();
+        if finality == InputFinality::Final
+            && declared != DiscourseContext::Meta
+            && result != IntentDisposition::Meta
+            && npc.is_none()
+            && let Ok(projection) = wire::project_journey(current, LocalDemoRole::Player, member)
+            && let Some(rpc::view_message::Audience::Player(player)) = projection.view.audience
+            && let Some(journey) = player.journey
+            && let Some(hero) = journey.own_character.as_ref()
+        {
+            let hero_index = journey
+                .party
+                .iter()
+                .position(|party_member| party_member.name == hero.name)
+                .and_then(|position| u32::try_from(position).ok())
+                .unwrap_or(0);
+            self.table_log
+                .push_speech(&hero.name, hero_index, &request.text);
+        }
         // Typed words to the scene's speaker are table talk, answered or not: the service
         // publishes their display version, cleaned off the actor thread.
         Ok((

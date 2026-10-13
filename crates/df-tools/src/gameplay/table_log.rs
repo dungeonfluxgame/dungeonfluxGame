@@ -342,6 +342,16 @@ impl TableLog {
         self.push_line(None, speaker, role, hero_index, kind, text);
     }
 
+    pub(super) fn push_speech(&self, speaker: &str, hero_index: u32, text: &str) {
+        self.push(
+            speaker,
+            rpc::TableRole::Hero,
+            hero_index,
+            rpc::TableKind::Speech,
+            text,
+        );
+    }
+
     /// Fills an action's earlier reserved sequence; subsequent lines use [`Self::push`].
     pub(super) fn push_reserved(
         &self,
@@ -1738,6 +1748,42 @@ mod tests {
         let off = TableLog::disabled();
         speech(&off, "hello");
         assert!(off.lines().is_empty());
+    }
+
+    #[test]
+    fn public_hero_speech_is_recorded_once_and_wakes_both_audiences() {
+        let log = TableLog::new();
+        let watcher = log.subscribe();
+
+        log.push_speech("Sigrun", 1, "Brakka, take the left one");
+
+        let lines = log.lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].speaker, "Sigrun");
+        assert_eq!(lines[0].hero_index, 1);
+        assert_eq!(lines[0].role, rpc::TableRole::Hero as i32);
+        assert_eq!(lines[0].kind, rpc::TableKind::Speech as i32);
+        assert_eq!(lines[0].text, "Brakka, take the left one");
+        assert!(watcher.has_changed().unwrap());
+
+        let view = attached(&log);
+        assert_eq!(view.table_log, lines);
+        assert_eq!(view.presentation_sequence, 1);
+
+        let mut player = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    journey: Some(rpc::JourneyView::default()),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        log.attach(&mut player);
+        let Some(rpc::view_message::Audience::Player(player)) = player.audience else {
+            panic!("the test builds a player view");
+        };
+        assert_eq!(player.journey.unwrap().table_log, lines);
     }
 
     fn outcome(actor: &str, target: &str, hit: bool, damage: u32) -> rpc::CombatOutcome {
