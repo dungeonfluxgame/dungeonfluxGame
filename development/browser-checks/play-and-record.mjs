@@ -65,15 +65,21 @@ const checkLost = async () => {
 };
 const state = (page) => page.evaluate(() => {
   const text = document.querySelector('main')?.innerText || '';
-  const offers = [...document.querySelectorAll('main button:not([disabled])')]
+  const offers = [...document.querySelectorAll('main [data-exploration-offer]:not(:disabled)')]
     .map((button) => button.textContent.trim()).filter((label) => label.length > 3 && label.length < 90);
-  const round = (text.match(/ROUND[^\n]*/) || [''])[0];
-  return { offers, round, fight: /ROUND \d/.test(text), end: /THE END/.test(text),
-    outcome: (text.slice(0, 500).match(/VICTORY|DEFEAT/) || [''])[0], head: text.slice(0, 160) };
+  const round = (text.match(/ROUND[^\n]*/i) || [''])[0];
+  return { offers, round, fight: /ROUND \d/i.test(text), end: /THE END/i.test(text),
+    outcome: (text.slice(0, 500).match(/VICTORY|DEFEAT/i) || [''])[0], head: text.slice(0, 160) };
 });
 // A button is looked up once per click, so a changed offer is never accidentally clicked twice.
 const clickButton = (page, label) => page.evaluate((wanted) => {
   const button = [...document.querySelectorAll('main button')]
+    .find((candidate) => candidate.textContent.trim() === wanted && !candidate.disabled);
+  if (button) button.click();
+  return Boolean(button);
+}, label);
+const clickStoryChoice = (page, label) => page.evaluate((wanted) => {
+  const button = [...document.querySelectorAll('main [data-exploration-offer]')]
     .find((candidate) => candidate.textContent.trim() === wanted && !candidate.disabled);
   if (button) button.click();
   return Boolean(button);
@@ -100,33 +106,29 @@ async function heroTurn(page, prefer) {
   return page.evaluate(async (wanted) => {
     const sleepInPage = (ms) => new Promise((done) => setTimeout(done, ms));
     const main = () => document.querySelector('main');
-    const button = (label) => [...document.querySelectorAll('main button')].find((item) => item.textContent.trim() === label && !item.disabled);
-    const select = (pattern) => [...document.querySelectorAll('main select')].find((item) => [...item.options].some((option) => pattern.test(option.value)));
-    const set = (element, value) => { element.value = value; element.dispatchEvent(new Event('input', { bubbles: true })); element.dispatchEvent(new Event('change', { bubbles: true })); };
-    const round = () => (main().innerText.match(/ROUND[^\n]*/) || [''])[0];
-    const reaction = button('Opportunity attack');
-    if (reaction) { reaction.click(); await sleepInPage(800); return 'opportunity attack'; }
-    if (!/YOUR TURN/.test(round())) return '';
-    const pattern = new RegExp(wanted);
-    const options = () => { const action = select(/-action$/); return action ? [...action.options].filter((option) => /-action$/.test(option.value)) : []; };
-    const pool = options().filter((option) => pattern.test(option.textContent));
-    const chosen = pool[pool.length - 1] || options()[0];
-    if (chosen && button('Attack')) { set(select(/-action$/), chosen.value); button('Attack').click(); await sleepInPage(1200); }
-    for (let index = 0; index < 20 && !button('End turn') && /ROUND/.test(round()); index += 1) await sleepInPage(300);
+    const button = (label) => [...document.querySelectorAll('.combat-action-rail button')].find((item) => item.textContent.trim() === label && !item.disabled);
+    const round = () => (main().innerText.match(/ROUND[^\n]*/i) || [''])[0];
+    const reaction = [...document.querySelectorAll('.combat-action-rail button')]
+      .find((item) => item.textContent.trim().startsWith('Opportunity attack') && !item.disabled);
+    if (reaction) { reaction.click(); await sleepInPage(800); return reaction.textContent.trim(); }
+    if (!/YOUR TURN/i.test(round())) return '';
+    const attack = button('Attack');
+    if (attack) { attack.click(); await sleepInPage(1200); }
+    for (let index = 0; index < 20 && !button('End turn') && /ROUND/i.test(round()); index += 1) await sleepInPage(300);
     const end = button('End turn');
-    if (end) { end.click(); await sleepInPage(400); return `attack ${chosen?.textContent.trim() || 'available action'}, end`; }
-    return chosen ? `attack ${chosen.textContent.trim()}` : '';
+    if (end) { end.click(); await sleepInPage(400); return `${attack ? 'attack' : ''} ${wanted}, end`.trim(); }
+    return attack ? `attack ${wanted}` : '';
   }, prefer);
 }
 let reachedEnd = false;
 try {
   await tv.goto(`${base}/gameplay/display`);
-  await Promise.all([makeHero(pa, 'Brakka', ['Dwarf', 'Fighter', 'Soldier', 'Lawful Good', 'Elvish', 'Giant', 'Insight', 'Persuasion', 'Dice', 'Party agrees', 'Stalwart', 'Greatsword hero']),
-    makeHero(pb, 'Sigrun', ['Dwarf', 'Fighter', 'Soldier', 'Neutral Good', 'Elvish', 'Goblin', 'Perception', 'Survival', 'Playing Cards', 'Party agrees', 'Longbow', 'Woman with a bow'])]);
+  await Promise.all([makeHero(pa, 'Brakka', ['Dwarf', 'Fighter', 'Soldier', 'Lawful Good', 'Elvish', 'Giant', 'Insight', 'Persuasion', 'Dice', 'Party agrees', 'Greatsword and Defense', 'Greatsword hero']),
+    makeHero(pb, 'Sigrun', ['Dwarf', 'Fighter', 'Soldier', 'Neutral Good', 'Elvish', 'Goblin', 'Perception', 'Survival', 'Playing Cards', 'Party agrees', 'Longbow and Archery', 'Woman with a bow'])]);
   await pa.waitForTimeout(2500);
   const first = (await state(pa)).offers[0];
   if (!first) throw new Error('No opening story choice was offered.');
-  await clickButton(pa, first);
+  await clickStoryChoice(pa, first);
   let lastHead = '';
   let idle = 0;
   const deadline = Date.now() + 9 * 60 * 1000;
@@ -145,7 +147,7 @@ try {
     if (pick) {
       if (storyHoldMs > 0 && !current.outcome) await sleep(storyHoldMs);
       note(`choose: ${pick}`);
-      await clickButton(pa, pick);
+      await clickStoryChoice(pa, pick);
       // Press each choice once, then wait until the offers change before considering another choice.
       const before = JSON.stringify(current.offers);
       const pressed = Date.now();
