@@ -842,10 +842,20 @@ pub(crate) fn newest_scene_speech(journey: &rpc::JourneyView) -> Option<(u64, &s
     if speaker.is_empty() {
         return None;
     }
+    let scene_start = journey
+        .table_log
+        .iter()
+        .rev()
+        .find(|line| {
+            rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Hero)
+                && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Action)
+        })
+        .map_or(0, |line| line.sequence);
     journey.table_log.iter().rev().find_map(|line| {
         (rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Npc)
             && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Speech)
             && line.speaker.trim() == speaker
+            && line.sequence > scene_start
             && !line.text.trim().is_empty())
         .then_some((line.sequence, line.speaker.as_str(), line.text.trim()))
     })
@@ -872,7 +882,19 @@ pub(crate) fn table_lines(view: &rpc::ViewMessage) -> Vec<TableLine> {
         return Vec::new();
     };
     let player_card = matches!(&view.audience, Some(rpc::view_message::Audience::Player(_)))
-        && !journey.adventure_ended;
+        && !journey.adventure_ended
+        && match rpc::JourneyPhase::try_from(journey.phase) {
+            Ok(
+                rpc::JourneyPhase::Room | rpc::JourneyPhase::Opening | rpc::JourneyPhase::Dialogue,
+            ) => true,
+            Ok(rpc::JourneyPhase::Complete) => {
+                journey.combat.is_none()
+                    || scene.is_some_and(|scene| {
+                        scene.destination == rpc::HarborDestination::HarborInn as i32
+                    })
+            }
+            _ => false,
+        };
     let newest_reply = if player_card {
         newest_scene_speech(journey)
     } else {
@@ -1481,6 +1503,14 @@ mod tests {
             ),
             server_line(
                 3,
+                "Brakka",
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Action,
+                "asks again",
+            ),
+            server_line(
+                4,
                 "Courier",
                 rpc::TableRole::Npc,
                 0,
@@ -1491,8 +1521,34 @@ mod tests {
 
         assert_eq!(
             newest_scene_speech(&shown),
-            Some((3, "Courier", "Newest answer."))
+            Some((4, "Courier", "Newest answer."))
         );
+    }
+
+    #[test]
+    fn newest_scene_speech_ignores_a_reply_before_the_latest_hero_action() {
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.speaker = "Courier".to_owned();
+        shown.table_log = vec![
+            server_line(
+                1,
+                "Courier",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "The previous scene's reply.",
+            ),
+            server_line(
+                2,
+                "Brakka",
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Action,
+                "travels onward",
+            ),
+        ];
+
+        assert_eq!(newest_scene_speech(&shown), None);
     }
 
     #[test]
@@ -1533,6 +1589,33 @@ mod tests {
         assert_eq!(phone_lines[0].sequence, 1);
         assert_eq!(phone_lines[0].text, "An earlier answer.");
         assert_eq!(table_lines(&view(shown)).len(), 3);
+    }
+
+    #[test]
+    fn player_table_lines_keep_speech_when_the_phone_has_no_story_card() {
+        let mut shown = journey(rpc::JourneyPhase::Combat, false, vec![]);
+        shown.speaker = "Courier".to_owned();
+        shown.table_log = vec![server_line(
+            1,
+            "Courier",
+            rpc::TableRole::Npc,
+            0,
+            rpc::TableKind::Speech,
+            "Hold the gate!",
+        )];
+        let player = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    journey: Some(shown),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+
+        let lines = table_lines(&player);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Hold the gate!");
     }
 
     #[test]
