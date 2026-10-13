@@ -588,7 +588,8 @@ impl Actor {
         } else {
             None
         };
-        let heartbeat = Some(self.session.heartbeat.next_due(Instant::now()));
+        let heartbeat =
+            heartbeat_wake(self.session_lost(), &self.session.heartbeat, Instant::now());
         [completion, recovery, heartbeat]
             .into_iter()
             .flatten()
@@ -600,7 +601,7 @@ impl Actor {
     /// Ownership taken over by another process is the one failure that cannot heal.
     fn heartbeat_if_due(&mut self) {
         let now = Instant::now();
-        if !self.session.heartbeat.due(now) {
+        if self.session_lost() || !self.session.heartbeat.due(now) {
             return;
         }
         match self.issuer.renew_owner() {
@@ -1936,9 +1937,28 @@ impl Reducer<Call> for Actor {
     }
 }
 
+fn heartbeat_wake(
+    session_lost: bool,
+    heartbeat: &super::session_recovery::Heartbeat,
+    now: Instant,
+) -> Option<Instant> {
+    (!session_lost).then(|| heartbeat.next_due(now))
+}
+
 #[cfg(test)]
 mod qualification_tests {
     use super::*;
+
+    #[test]
+    fn lost_session_does_not_schedule_an_expired_heartbeat() {
+        let now = Instant::now();
+        let mut heartbeat = super::super::session_recovery::Heartbeat::for_lease(30);
+        heartbeat.renewed(now);
+        let due = heartbeat.next_due(now);
+
+        assert_eq!(heartbeat_wake(true, &heartbeat, due), None);
+        assert_eq!(heartbeat_wake(false, &heartbeat, due), Some(due));
+    }
 
     #[test]
     fn failed_grant_reconnect_never_dispatches_the_original_call() {
