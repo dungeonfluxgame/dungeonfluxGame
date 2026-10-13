@@ -140,13 +140,15 @@ const COMMON: &str = r#"
 @S[data-role=player] .tactical-controls .resource-chip{display:inline-flex;padding:5px 8px;border:1px solid #d9b77a66;border-radius:6px;background:#17222de8;color:inherit}
 @S[data-role=player] .tactical-controls{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:10px 12px 12px;border:1px solid #d9b77a40;border-radius:12px;background:#0a1018e8}
 @S[data-role=player] .tactical-controls>*{grid-column:1/-1}
-@S[data-role=player] .tactical-controls .resource-strip{margin:0}
+@S[data-role=player] .tactical-controls .resource-strip{margin:0;order:-1}
+@S[data-role=player] .tactical-controls>.offered-action{display:contents}
+@S[data-role=player] .tactical-controls>.offered-action>*{grid-column:1/-1}
 @S[data-role=player] .tactical-controls .attack-option{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin:4px 0 0;font:600 12px/1.3 system-ui,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:#cdb98c}
 @S[data-role=player] .tactical-controls .attack-option select{width:100%;min-width:0;min-height:44px;padding:9px 10px;font:500 15px/1.3 system-ui,sans-serif;letter-spacing:0;text-transform:none}
-@S[data-role=player] .tactical-controls>button.offered{margin:0;text-align:center}
-@S[data-role=player] .tactical-controls>button:is([data-action-kind="13"],[data-action-kind="14"],[data-action-kind="15"]){grid-column:span 2;padding-left:4px;padding-right:4px}
-@S[data-role=player] .tactical-controls>button:is([data-action-kind="9"],[data-action-kind="10"]){grid-column:span 3}
-@S[data-role=player] .tactical-controls:not(:has(>button[data-action-kind="9"]))>button[data-action-kind="10"]{grid-column:1/-1}
+@S[data-role=player] .tactical-controls>.offered-action>button.offered{margin:0;text-align:center}
+@S[data-role=player] .tactical-controls>.offered-action>button:is([data-action-kind="13"],[data-action-kind="14"],[data-action-kind="15"]){grid-column:span 2;padding-left:4px;padding-right:4px}
+@S[data-role=player] .tactical-controls>.offered-action>button:is([data-action-kind="9"],[data-action-kind="10"]){grid-column:span 3}
+@S[data-role=player] .tactical-controls:not(:has(button[data-action-kind="9"])) button[data-action-kind="10"]{grid-column:1/-1}
 @S .rules-disclosure{display:block;margin-top:8px;padding:7px 10px;border:1px solid #d9b77a66;border-radius:8px;background:#0a1018d9;color:inherit;font:13px/1.45 system-ui,sans-serif}
 @S .rules-disclosure summary{cursor:pointer;color:inherit;font-weight:650}
 @S .rules-disclosure .rules-note{display:block;margin-top:6px;color:inherit}
