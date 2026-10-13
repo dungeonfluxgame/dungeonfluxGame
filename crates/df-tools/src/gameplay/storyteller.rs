@@ -761,8 +761,20 @@ impl Storyteller {
                 .attempt(request, key, attempt, &prompt, reserved, started)
                 .await;
             match answer {
-                Ok(Attempt::Text(values, _)) => match validate(request, &values) {
-                    Ok(()) => {
+                Ok(Attempt::Text(values, _)) => match validate(request, &values)
+                    .map(|()| values.clone())
+                    .or_else(|failure| {
+                        // Keep a mechanically repairable answer when the repair
+                        // passes validation whole (DLG-02).
+                        let repaired: BTreeMap<String, String> = values
+                            .iter()
+                            .map(|(name, text)| (name.clone(), repair_mechanical(text)))
+                            .collect();
+                        validate(request, &repaired)
+                            .map(|()| repaired)
+                            .map_err(|_| failure)
+                    }) {
+                    Ok(values) => {
                         if let Err(error) = write_cache(file, &values).await {
                             span.event(
                                 "storyteller.cache_write_failed",
@@ -1307,6 +1319,35 @@ fn slot_rules(request: &Expression<'_>) -> SlotRules {
     }
 }
 
+/// The mechanical repair of a model text (DLG-02): quoting, punctuation and
+/// whitespace only. It never adds, drops or reorders a word, and a repaired
+/// text is used only when it then passes the full validation below, so no
+/// secret, rating or mention check can be repaired around.
+pub(super) fn repair_mechanical(text: &str) -> String {
+    let mut repaired: String = text
+        .chars()
+        .map(|character| match character {
+            ';' => '.',
+            ':' => ',',
+            character if character.is_control() => ' ',
+            character => character,
+        })
+        .collect();
+    repaired = repaired.split_whitespace().collect::<Vec<_>>().join(" ");
+    for (open, close) in [('"', '"'), ('\u{201c}', '\u{201d}'), ('\'', '\'')] {
+        if repaired.len() >= open.len_utf8() + close.len_utf8()
+            && repaired.starts_with(open)
+            && repaired.ends_with(close)
+        {
+            repaired = repaired[open.len_utf8()..repaired.len() - close.len_utf8()]
+                .trim()
+                .to_owned();
+            break;
+        }
+    }
+    repaired
+}
+
 /// Checks a model's text before anyone sees it. Never truncates: a text that breaks a rule
 /// is refused whole.
 pub(super) fn validate(
@@ -1408,7 +1449,26 @@ fn sort_slots(
                 }
             }
             Err(failure) => {
-                rejected.insert(slot.name.clone(), failure);
+                // A mechanically repairable text is kept when the repair passes
+                // the same checks whole; anything else keeps its refusal.
+                let repaired = values.get(&slot.name).and_then(|text| {
+                    let repaired = repair_mechanical(text);
+                    let mut candidate = BTreeMap::new();
+                    candidate.insert(slot.name.clone(), repaired);
+                    validate_slot(rules, slot, &candidate)
+                        .ok()
+                        .map(|()| candidate)
+                });
+                match repaired {
+                    Some(mut candidate) => {
+                        if let Some(text) = candidate.remove(&slot.name) {
+                            accepted.insert(slot.name.clone(), text);
+                        }
+                    }
+                    None => {
+                        rejected.insert(slot.name.clone(), failure);
+                    }
+                }
             }
         }
     }

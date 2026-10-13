@@ -100,7 +100,9 @@ fn rewrites(name: &str, draft: &str, facts: &Value) -> Option<String> {
 /// Plenty of answers: each group is asked once, a refused slot is asked again, and the lint may
 /// ask a third time.
 fn answers() -> Vec<Reply> {
-    (0..8).map(|_| model_that(rewrites)).collect()
+    // One reply per slot-group request (SES-05 groups), plus the storyteller's
+    // own re-ask of refused slots and the lint re-ask.
+    (0..48).map(|_| model_that(rewrites)).collect()
 }
 
 async fn express_with(
@@ -271,10 +273,12 @@ async fn the_requests_carry_low_reasoning_a_large_cap_and_tell_the_secret_only_w
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_failing_or_off_storyteller_leaves_the_pattern_adventure_to_the_caller() {
-    let endpoint = FakeEndpoint::start(vec![
-        Reply::Status(500, json!({"error": {}})),
-        Reply::Status(500, json!({"error": {}})),
-    ]);
+    // Every slot group (and its one retry) meets the same provider failure.
+    let endpoint = FakeEndpoint::start(
+        (0..64)
+            .map(|_| Reply::Status(500, json!({"error": {}})))
+            .collect(),
+    );
     let cache = cache_directory("expression-failure");
 
     let (_, outcome) = express_with(&endpoint, &cache).await;
@@ -296,6 +300,62 @@ async fn a_failing_or_off_storyteller_leaves_the_pattern_adventure_to_the_caller
         Err(Declined::Storyteller(StorytellerError::Off))
     ));
     assert_eq!(outcome.err().unwrap().to_string(), "storyteller off");
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+/// SES-05: the adventure is asked for in small groups, opening text first,
+/// and a group never mixes scene slots with voice slots (secret handling).
+#[test]
+fn slot_groups_are_small_opening_first_and_never_mixed() {
+    let tables = tables();
+    let baseline = baseline(&tables);
+    let planned = plan(&baseline).unwrap();
+    let groups = slot_groups(&planned);
+    assert!(groups.len() > 2, "groups={}", groups.len());
+    let mut seen: Vec<&str> = Vec::new();
+    for (_, group, names) in &groups {
+        assert!(names.len() <= GROUP_SLOTS, "group too large: {names:?}");
+        for name in names {
+            let slot = planned.iter().find(|slot| &slot.name == name).unwrap();
+            assert_eq!(slot.group, *group, "mixed group at {name}");
+            seen.push(name);
+        }
+    }
+    assert_eq!(seen.len(), planned.len(), "every slot in exactly one group");
+    let first = &groups[0].2;
+    assert!(
+        first.contains(&planned[0].name),
+        "first group must hold the opening slot {}: {first:?}",
+        planned[0].name
+    );
+}
+
+/// SES-05: a provider that fails some groups still yields the groups that
+/// arrived; the failed slots keep pattern text and name their reason.
+#[tokio::test(flavor = "current_thread")]
+async fn a_partially_failing_provider_keeps_the_groups_that_arrived() {
+    let mut script: Vec<Reply> = (0..6)
+        .map(|_| Reply::Status(500, json!({"error": {}})))
+        .collect();
+    script.extend(answers());
+    let endpoint = FakeEndpoint::start(script);
+    let cache = cache_directory("expression-partial-failure");
+
+    let (_, outcome) = express_with(&endpoint, &cache).await;
+
+    let (_, model) = outcome.unwrap();
+    assert!(
+        !model.model_slots.is_empty(),
+        "arrived groups must be kept: {model:?}"
+    );
+    assert!(
+        model
+            .refused
+            .iter()
+            .any(|entry| entry.ends_with(": provider_error")),
+        "failed groups must name provider_error: {:?}",
+        model.refused
+    );
     let _ = std::fs::remove_dir_all(cache);
 }
 
@@ -536,7 +596,7 @@ async fn express_rated(
     Result<(GeneratedAdventure, ModelExpression), Declined>,
     Vec<Value>,
 ) {
-    let endpoint = FakeEndpoint::start((0..8).map(|_| script()).collect());
+    let endpoint = FakeEndpoint::start((0..48).map(|_| script()).collect());
     let cache = cache_directory(cache_name);
     let tables = tables();
     let baseline = generate(&tables, SEED, rated(rating), &ForcedEntries::new()).unwrap();

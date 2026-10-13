@@ -28,9 +28,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Overall deadline of the whole step; startup never waits longer for the model.
-pub(super) const DEADLINE: Duration = Duration::from_secs(25);
-/// The second ask is skipped when less than this is left of the deadline.
+/// Overall budget of the whole step; startup never waits longer for the model.
+/// Kept only as the outer guard: each slot group runs under its own shorter
+/// deadline, so one slow group can no longer discard the text that did arrive.
+pub(super) const DEADLINE: Duration = Duration::from_secs(60);
+/// Deadline of one slot-group request attempt. Groups are small, so a healthy
+/// answer arrives well inside this; a miss is retried once (see `ask_group`).
+const GROUP_DEADLINE: Duration = Duration::from_secs(20);
+/// Slots per model request. Two whole-adventure requests routinely missed the
+/// old single 25 s deadline; small groups answer faster and fail independently.
+const GROUP_SLOTS: usize = 6;
+/// How many slot groups are in flight at once.
+const GROUP_CONCURRENCY: usize = 4;
+/// The second ask is skipped when less than this is left of the budget.
 const REASK_MINIMUM: Duration = Duration::from_secs(5);
 /// Slots before the first scene: the five offer labels and the private clue.
 const LEADING_SLOTS: usize = 6;
@@ -237,10 +247,64 @@ impl std::fmt::Display for Declined {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Group {
     Scenes,
     Voices,
+}
+
+impl Group {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Scenes => "scenes",
+            Self::Voices => "voices",
+        }
+    }
+}
+
+/// Closed-vocabulary label for a storyteller failure; safe for the server log.
+fn error_label(error: &StorytellerError) -> &'static str {
+    match error {
+        StorytellerError::Off => "off",
+        StorytellerError::BudgetExhausted => "budget_exhausted",
+        StorytellerError::InvalidRequest(_) => "invalid_request",
+        StorytellerError::DeadlineExceeded => "deadline",
+        StorytellerError::Provider(_) => "provider_error",
+        StorytellerError::Rejected(_) => "rejected",
+    }
+}
+
+/// One line per slot group, so a session that fell back says which group and why.
+fn log_group(label: &str, outcome: &str, detail: &str, elapsed: Duration) {
+    println!(
+        "ADVENTURE PROSE group={label} outcome={outcome} {detail} elapsed_ms={}",
+        elapsed.as_millis()
+    );
+}
+
+/// The planned slots split into request groups: generation order (opening
+/// scenes first), never mixing scenes with voices because only a voices
+/// request may be told the secret.
+fn slot_groups(planned: &[Planned<'_>]) -> Vec<(String, Group, BTreeSet<String>)> {
+    let mut groups: Vec<(String, Group, BTreeSet<String>)> = Vec::new();
+    for group in [Group::Scenes, Group::Voices] {
+        let names: Vec<&str> = planned
+            .iter()
+            .filter(|slot| slot.group == group)
+            .map(|slot| slot.name.as_str())
+            .collect();
+        for (index, chunk) in names.chunks(GROUP_SLOTS).enumerate() {
+            groups.push((
+                format!("{}_{index}", group.label()),
+                group,
+                chunk.iter().map(|name| (*name).to_owned()).collect(),
+            ));
+        }
+    }
+    // Opening text first: order groups by the earliest slot they contain.
+    let position = |name: &str| planned.iter().position(|slot| slot.name == name);
+    groups.sort_by_key(|(_, _, names)| names.iter().filter_map(|name| position(name)).min());
+    groups
 }
 
 /// One model-written slot of the pattern adventure.
@@ -866,6 +930,77 @@ async fn ask(
     })
 }
 
+/// One slot group, with one bounded retry for a deadline or provider failure.
+/// A validation refusal is not retried here: the storyteller already re-asks
+/// refused slots once inside the call.
+async fn ask_group(
+    storyteller: &Storyteller,
+    baseline: &GeneratedAdventure,
+    planned: &[Planned<'_>],
+    label: &str,
+    group: Group,
+    names: &BTreeSet<String>,
+) -> Result<Answer, StorytellerError> {
+    let started = Instant::now();
+    let mut attempt = 0_u32;
+    loop {
+        attempt += 1;
+        match ask(
+            storyteller,
+            baseline,
+            planned,
+            Some(names),
+            Some(group),
+            None,
+            GROUP_DEADLINE,
+        )
+        .await
+        {
+            Ok(answer) => {
+                let outcome = if answer.accepted.is_empty() {
+                    "refused"
+                } else {
+                    "arrived"
+                };
+                log_group(
+                    label,
+                    outcome,
+                    &format!(
+                        "accepted={} refused={} tokens={} attempt={attempt}",
+                        answer.accepted.len(),
+                        answer.refused.len(),
+                        answer.tokens
+                    ),
+                    started.elapsed(),
+                );
+                return Ok(answer);
+            }
+            Err(error) => {
+                let retryable = matches!(
+                    error,
+                    StorytellerError::DeadlineExceeded | StorytellerError::Provider(_)
+                );
+                if retryable && attempt < 2 {
+                    log_group(
+                        label,
+                        "retried",
+                        &format!("reason={} attempt={attempt}", error_label(&error)),
+                        started.elapsed(),
+                    );
+                    continue;
+                }
+                log_group(
+                    label,
+                    "fell_back",
+                    &format!("reason={} attempt={attempt}", error_label(&error)),
+                    started.elapsed(),
+                );
+                return Err(error);
+            }
+        }
+    }
+}
+
 /// The cleaned text of an answer: plain punctuation, and a spoken line without its quotes.
 fn cleaned(planned: &[Planned<'_>], answer: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     planned
@@ -896,39 +1031,39 @@ async fn write(
     planned: &[Planned<'_>],
     started: Instant,
 ) -> Result<Written, Declined> {
-    let (scenes, voices) = futures::future::join(
-        ask(
-            storyteller,
-            baseline,
-            planned,
-            None,
-            Some(Group::Scenes),
-            None,
-            DEADLINE,
-        ),
-        ask(
-            storyteller,
-            baseline,
-            planned,
-            None,
-            Some(Group::Voices),
-            None,
-            DEADLINE,
-        ),
-    )
-    .await;
+    // Small groups in waves, opening scenes first: each group that arrives is
+    // kept even when another group is slow, refused or falls back.
+    let groups = slot_groups(planned);
+    let mut results: Vec<Result<Answer, StorytellerError>> = Vec::new();
+    for wave in groups.chunks(GROUP_CONCURRENCY) {
+        let pending: Vec<_> = wave
+            .iter()
+            .map(|(label, group, names)| {
+                ask_group(storyteller, baseline, planned, label, *group, names)
+            })
+            .collect();
+        results.extend(futures::future::join_all(pending).await);
+        if started.elapsed() >= DEADLINE {
+            break;
+        }
+    }
     let mut raw: BTreeMap<String, String> = BTreeMap::new();
     let mut refused: BTreeMap<String, String> = BTreeMap::new();
     let mut tokens = 0_u64;
     let mut failure = None;
-    for result in [scenes, voices] {
+    for ((_, _, names), result) in groups.iter().zip(results) {
         match result {
             Ok(answer) => {
                 raw.extend(answer.accepted);
                 refused.extend(answer.refused);
                 tokens = tokens.saturating_add(answer.tokens);
             }
-            Err(error) => failure = Some(error),
+            Err(error) => {
+                for name in names {
+                    refused.insert(name.clone(), error_label(&error).to_owned());
+                }
+                failure = Some(error);
+            }
         }
     }
     if raw.is_empty() {

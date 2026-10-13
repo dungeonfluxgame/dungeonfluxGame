@@ -761,6 +761,26 @@ fn dice_difficulty_classes_and_hit_points_need_the_exact_text_in_the_facts() {
     assert_eq!(check(&with_dc, "That lock is a DC 15 job."), Ok(()));
 }
 
+/// DLG-02: the mechanical repair fixes quoting, punctuation and control
+/// characters only; it never repairs around a forbidden (secret) term.
+#[test]
+fn mechanical_repair_fixes_punctuation_but_never_a_forbidden_term() {
+    let facts = json!({"forbidden": ["Vell"]});
+    let broken = "\"The road is long;\nwe leave at dawn: together.\"";
+    assert!(check(&facts, broken).is_err(), "unrepaired text must fail");
+    let repaired = repair_mechanical(broken);
+    assert_eq!(repaired, "The road is long. we leave at dawn, together.");
+    assert_eq!(check(&facts, &repaired), Ok(()));
+    let leaking = repair_mechanical("\"Vell waits;\nby the quay.\"");
+    assert!(
+        matches!(
+            check(&facts, &leaking),
+            Err(ValidationFailure::ForbiddenTerm { .. })
+        ),
+        "repair must not hide a forbidden term: {leaking}"
+    );
+}
+
 #[test]
 fn control_characters_and_empty_text_are_rejected() {
     let facts = facts();
