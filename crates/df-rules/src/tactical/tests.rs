@@ -374,7 +374,7 @@ fn opportunity_window_is_optional_before_exit_and_reaction_refreshes_at_own_turn
         Action::Opportunity {
             attack: Some(usage(Weapon::Bite, false)),
         },
-        &[(20, 15), (6, 1)],
+        &[(20, 15), (6, 1), (20, 6)],
     );
     assert_eq!(reacted.attacks[0].distance_ft, 5);
     assert!(reacted.battle.actor(3).unwrap().budget().reaction_used);
@@ -407,7 +407,7 @@ fn opportunity_knockout_cancels_remaining_path_and_multiple_reactors_are_ordered
         &state,
         3,
         Action::Opportunity { attack: Some(bite) },
-        &[(20, 20), (20, 19), (6, 1), (6, 1)],
+        &[(20, 20), (20, 19), (6, 1), (6, 1), (20, 8)],
     )
     .battle;
     assert_eq!(state.actor(1).unwrap().cell(), Cell(2, 2));
@@ -886,14 +886,38 @@ fn full_creature_catalog_preserves_actions_and_required_riders() {
         &state,
         3,
         strike(1, Weapon::Bite, false),
-        &[(20, 15), (20, 16), (6, 1)],
+        &[(20, 15), (20, 16), (6, 1), (20, 6)],
     );
     assert!(
         result.attacks[0]
             .advantage
             .contains(&AttackReason::PackTactics)
     );
+    let save = result.attacks[0].strength_save.unwrap();
+    assert_eq!(
+        (save.actor, save.dc, save.modifier, save.die),
+        (1, 12, 5, 6)
+    );
+    assert!(!save.succeeded);
     assert!(result.battle.actor(1).unwrap().health().prone);
+    let mut mastiff = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "mastiff", Cell(2, 1), 0).unwrap(),
+    ]);
+    mastiff.active = 1;
+    let result = step(
+        &mastiff,
+        3,
+        strike(1, Weapon::Bite, false),
+        &[(20, 15), (6, 1), (20, 8)],
+    );
+    let save = result.attacks[0].strength_save.unwrap();
+    assert_eq!(
+        (save.actor, save.dc, save.modifier, save.die),
+        (1, 11, 5, 8)
+    );
+    assert!(save.succeeded);
+    assert!(!result.battle.actor(1).unwrap().health().prone);
     let mut state = battle(vec![
         melee(1, Cell(1, 1)),
         CombatantSpec::creature(3, "goblin-warrior", Cell(2, 1), 20).unwrap(),
