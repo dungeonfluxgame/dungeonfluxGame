@@ -449,7 +449,10 @@ fn family_of(place_kind: &str) -> Result<(&'static str, &'static Family), ShotEr
     vocabulary()?
         .families
         .iter()
-        .find(|(_, family)| family.table_kinds.iter().any(|kind| kind == place_kind))
+        .find(|(name, family)| {
+            family.table_kinds.iter().any(|kind| kind == place_kind)
+                || (name.as_str() == "archive" && place_kind == "library-hall")
+        })
         .map(|(name, family)| (name.as_str(), family))
         .ok_or(ShotError::UnknownPlaceKind)
 }
@@ -699,14 +702,38 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
 }
 
+fn contains_word_or_phrase(text: &str, phrase: &str) -> bool {
+    let words: Vec<&str> = text
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let phrase_words: Vec<&str> = phrase
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    !phrase_words.is_empty()
+        && words
+            .windows(phrase_words.len())
+            .any(|candidate| candidate == phrase_words)
+}
+
 fn story_time(text: &str) -> Option<TimeOfDay> {
-    if contains_any(text, &["dawn", "sunrise", "first light"]) {
+    if ["dawn", "sunrise", "first light"]
+        .iter()
+        .any(|cue| contains_word_or_phrase(text, cue))
+    {
         Some(TimeOfDay::Dawn)
-    } else if contains_any(text, &["dusk", "sunset", "evening"]) {
+    } else if ["dusk", "sunset", "evening"]
+        .iter()
+        .any(|cue| contains_word_or_phrase(text, cue))
+    {
         Some(TimeOfDay::Dusk)
-    } else if contains_any(text, &["night", "tonight", "moon", "dark"]) {
+    } else if ["night", "tonight", "moon", "dark"]
+        .iter()
+        .any(|cue| contains_word_or_phrase(text, cue))
+    {
         Some(TimeOfDay::Night)
-    } else if text.contains("morning") {
+    } else if contains_word_or_phrase(text, "morning") {
         Some(TimeOfDay::Morning)
     } else {
         None

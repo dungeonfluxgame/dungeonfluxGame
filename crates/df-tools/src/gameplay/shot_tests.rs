@@ -75,6 +75,19 @@ fn every_place_kind_scene_key_speaker_and_party_is_staged_validly() {
 }
 
 #[test]
+fn library_hall_scene_is_staged() {
+    let heroes = [1];
+    let scene = input(
+        "library-hall",
+        SceneKey::Opening,
+        None,
+        &heroes,
+        "A quiet morning.",
+    );
+    assert!(direct(&scene).is_ok());
+}
+
+#[test]
 fn the_same_scene_always_gets_the_same_spec_and_other_scenes_can_differ() {
     let heroes = [1, 2, 3];
     let scene = input(
@@ -283,6 +296,20 @@ fn story_cues_pick_the_time_of_day_and_the_expression() {
     assert_eq!(night.time_of_day, TimeOfDay::Dawn);
     assert_eq!(night.speaker.unwrap().expression, Expression::Anxious);
     assert_eq!(night.mood, Mood::Urgent);
+}
+
+#[test]
+fn knight_does_not_override_explicit_morning() {
+    let heroes = [1];
+    let scene = input(
+        "inn",
+        SceneKey::Opening,
+        None,
+        &heroes,
+        "The knight returned in the morning.",
+    );
+    let spec = direct(&scene).unwrap();
+    assert_eq!(spec.time_of_day, TimeOfDay::Morning);
 }
 
 /// The saved adventures of this checkout (and, in a worktree, of the main checkout). Absent on a
