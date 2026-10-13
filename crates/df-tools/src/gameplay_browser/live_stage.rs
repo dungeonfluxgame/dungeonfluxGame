@@ -1198,8 +1198,17 @@ impl Figures {
         };
         let combat = self.root.get_attribute("data-arrange").as_deref() == Some("combat");
         let host = if combat { &card.root } else { &figure.bubbles };
+        let other_host = if combat { &figure.bubbles } else { &card.root };
         let selector = format!("[data-line-id=\"{id}\"]");
-        let existing = host.query_selector(&selector)?;
+        let existing = host
+            .query_selector(&selector)?
+            .or(other_host.query_selector(&selector)?);
+        let live = matches!(state, LineState::Composing | LineState::Submitted);
+        if live {
+            figure.root.set_attribute("data-intent", state.name())?;
+        } else {
+            figure.root.remove_attribute("data-intent")?;
+        }
         let loader = match (existing, state) {
             (Some(loader), _) => loader,
             (None, LineState::Composing | LineState::Submitted) => {
@@ -1235,12 +1244,6 @@ impl Figures {
             "data-submitted",
             matches!(kind, IntentKind::Submitted),
         )?;
-        let live = matches!(state, LineState::Composing | LineState::Submitted);
-        if live {
-            figure.root.set_attribute("data-intent", state.name())?;
-        } else {
-            figure.root.remove_attribute("data-intent")?;
-        }
         if state == LineState::Done {
             loader.remove();
         }
