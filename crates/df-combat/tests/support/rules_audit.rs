@@ -482,10 +482,9 @@ pub fn judge_attack(
     if a.side() == t.side() || a.id() == t.id() || t.health().dead {
         return Err("bad-target");
     }
-    if usage.weapon != Weapon::UnarmedStrike
-        && (a.weapon_count(usage.weapon) == 0
-            || a.dropped_weapons().iter().any(|(w, _)| *w == usage.weapon))
-    {
+    // A hero carries eight javelins: one lying where it landed does not empty the hand. The
+    // count is what is left to use; a thrown or dropped weapon has already been taken off it.
+    if usage.weapon != Weapon::UnarmedStrike && a.weapon_count(usage.weapon) == 0 {
         return Err("weapon-not-held");
     }
     let distance = feet(a.cell(), t.cell());
