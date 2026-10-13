@@ -393,6 +393,7 @@ impl<D: Clone> StageDirector<D> {
         let sequence = diff.sequence;
         let finishing = diff.banner.is_some();
         let memorable = diff.memorable;
+        let mut preserve_heal_pair = false;
         let make = |kind, detail| Self::cue(kind, detail, now_ms, finishing, sequence);
         let mut cues = Vec::new();
         if finishing || diff.scene_changed {
@@ -422,11 +423,17 @@ impl<D: Clone> StageDirector<D> {
             let has_blow = diff.roll.is_some() || diff.impact.is_some() || diff.defeat.is_some();
             if !has_blow {
                 cues.push(Self::cue(CueKind::Render, None, now_ms, false, 0));
+                preserve_heal_pair = diff.heal.is_some();
             }
-            cues.extend(
-                diff.heal
-                    .map(|d| Self::cue(CueKind::Heal, Some(d), now_ms, false, sequence)),
-            );
+            if let Some(detail) = diff.heal {
+                cues.push(Self::cue(
+                    CueKind::Heal,
+                    Some(detail),
+                    now_ms,
+                    false,
+                    sequence,
+                ));
+            }
             // A blow is an outcome: when the display is behind it is shortened, never dropped.
             cues.extend(
                 diff.roll
@@ -449,6 +456,13 @@ impl<D: Clone> StageDirector<D> {
             }
         }
         Self::mark_unskippable(&mut cues, memorable);
+        if preserve_heal_pair {
+            for cue in &mut cues {
+                if matches!(cue.kind, CueKind::Render | CueKind::Heal) {
+                    cue.keep = true;
+                }
+            }
+        }
         self.queue.extend(cues);
         self.collapse_if_behind(now_ms);
         self.advance(now_ms)
@@ -510,7 +524,7 @@ impl<D: Clone> StageDirector<D> {
                             | CueKind::Banner
                             | CueKind::Closing
                     );
-                if position >= newest || outcome {
+                if position >= newest || outcome || cue.keep {
                     kept.push_back(cue);
                 }
             }
@@ -526,7 +540,7 @@ impl<D: Clone> StageDirector<D> {
         let mut kept: Vec<Cue<D>> = Vec::new();
         let mut dropped_render = false;
         for mut cue in self.queue.drain(..) {
-            if cue.outcome || cue.kind == CueKind::Scene {
+            if cue.outcome || cue.kind == CueKind::Scene || cue.keep {
                 cue.short = true;
                 // Two scene changes converge to one: the newest view is drawn once.
                 if cue.kind == CueKind::Scene
@@ -544,7 +558,11 @@ impl<D: Clone> StageDirector<D> {
                 dropped_render = true;
             }
         }
-        if dropped_render && !kept.iter().any(|cue| cue.kind == CueKind::Scene) {
+        if dropped_render
+            && !kept
+                .iter()
+                .any(|cue| matches!(cue.kind, CueKind::Render | CueKind::Scene))
+        {
             kept.push(Self::cue(CueKind::Render, None, now_ms, false, 0));
         }
         // Catch-up rule: the display may lag the server by at most LAG_LIMIT_MS (or QUEUE_CAP
@@ -987,8 +1005,86 @@ mod tests {
             },
         );
         let commands = director.on_tick(LAG_LIMIT_MS + 100);
-        assert!(!states(&commands).iter().any(|name| name == "Healing"));
-        assert!(director.queue_len() <= 1);
+        assert_eq!(enters(&commands, StageState::Healing), 1);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| matches!(command, Command::Render))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_queued_heal_redraw_survives_catch_up_after_the_blows() {
+        let mut director = Director::new();
+        let mut commands = director.on_view(0, blow("first"));
+        commands.extend(director.on_view(1, blow("second")));
+        commands.extend(director.on_view(
+            LAG_LIMIT_MS + 1,
+            ViewDiff {
+                heal: Some("second wind"),
+                ..ViewDiff::default()
+            },
+        ));
+        commands.extend(run(&mut director, LAG_LIMIT_MS + 2, 8_000));
+
+        let second_blow = commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    Command::Enter {
+                        state: StageState::Rolling,
+                        detail: Some("second"),
+                        ..
+                    }
+                )
+            })
+            .expect("the second queued blow is shown");
+        let second_impact = commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    Command::Enter {
+                        state: StageState::Impact,
+                        detail: Some("second"),
+                        ..
+                    }
+                )
+            })
+            .expect("the second queued blow finishes before healing");
+        let redraw = commands
+            .iter()
+            .position(|command| matches!(command, Command::Render))
+            .expect("the accepted heal view is redrawn");
+        let healing = commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    Command::Enter {
+                        state: StageState::Healing,
+                        detail: Some("second wind"),
+                        ..
+                    }
+                )
+            })
+            .unwrap_or_else(|| panic!("the heal cue is shown: {commands:?}"));
+        assert!(
+            second_blow < second_impact && second_impact < redraw,
+            "redraw follows the blows: {commands:?}"
+        );
+        assert!(redraw < healing, "redraw precedes healing: {commands:?}");
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| matches!(command, Command::Render))
+                .count(),
+            1,
+            "the accepted heal view is redrawn once"
+        );
     }
 
     #[test]
@@ -1249,13 +1345,14 @@ mod tests {
             },
         );
 
-        let commands = director.on_view(
+        let mut commands = director.on_view(
             4_002,
             ViewDiff {
                 scene_changed: true,
                 ..ViewDiff::default()
             },
         );
+        commands.extend(run(&mut director, 4_052, 6_000));
 
         assert!(
             states(&commands)
