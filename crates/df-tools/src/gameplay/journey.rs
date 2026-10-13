@@ -6149,7 +6149,9 @@ mod tests {
                                 content.escort_support_suffix.replace("{name}", "Brynn")
                             }));
                         }
-                        assert_eq!(view.narration, expected);
+                        // The defeat text opens with what the party fought and who fell.
+                        assert!(view.narration.ends_with(&expected), "{}", view.narration);
+                        assert!(view.narration.contains("overwhelmed the party"));
                         assert!(ending.defeat.chars().count() <= 220);
                         assert!(
                             !view.narration.contains(

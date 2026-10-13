@@ -249,6 +249,13 @@ fn a_total_party_defeat_waits_for_the_death_saves_then_ends_without_reviving_any
             else {
                 panic!("player audience");
             };
+            assert!(view.narration.contains("Two bandits overwhelmed the party"));
+            assert!(view.narration.contains("fell."));
+            assert!(
+                view.narration.starts_with("Two bandits overwhelmed the party. "),
+                "{}",
+                view.narration
+            );
             (
                 view.scene.unwrap().destination == rpc::HarborDestination::HarborInn as i32,
                 view.journey.unwrap().combat.is_none(),
