@@ -89,3 +89,6 @@ body:has(.tv-stage[data-tv-mode=lobby]) .tv-voice-control{right:5vw!important;to
 @media (max-width: 1000px) {
   body:has(.tv-stage[data-tv-mode=lobby]) .tv-voice-label{display:none}
 }
+
+.tv-voice-prompt{position:fixed;inset:50% auto auto 50%;z-index:41;transform:translate(-50%,-50%);padding:1em 1.5em;border:2px solid #f3d59d;border-radius:1em;background:rgb(8 15 23/.94);color:#fff4d8;font:clamp(26px,3vw,64px) "Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;text-align:center;box-shadow:0 1em 4em #000b;cursor:pointer}
+.tv-voice-prompt[data-visible="false"]{display:none}

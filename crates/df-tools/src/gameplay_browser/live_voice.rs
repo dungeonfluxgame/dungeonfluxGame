@@ -67,6 +67,7 @@ struct Current {
 struct Director {
     audio: HtmlAudioElement,
     control: Element,
+    prompt: Element,
     icon: Element,
     label: Element,
     switch: SoundSwitch,
@@ -93,12 +94,21 @@ impl Director {
     }
 
     fn render_control(&self) {
-        let (state, label, paths, name) = match self.sound() {
+        let sound = self.sound();
+        let (state, label, paths, name) = match sound {
             Sound::Locked => ("locked", "Enable sound", WAVE_PATHS, "Enable sound"),
             Sound::On => ("on", "", WAVE_PATHS, "Mute narration"),
             Sound::Muted => ("muted", "", MUTE_PATHS, "Unmute narration"),
         };
         let _marked = self.control.set_attribute("data-voice-state", state);
+        let _prompt = self.prompt.set_attribute(
+            "data-visible",
+            if sound == Sound::Locked {
+                "true"
+            } else {
+                "false"
+            },
+        );
         let _stalled = self
             .control
             .set_attribute("data-voice-stalls", &self.stalls.to_string());
@@ -212,8 +222,12 @@ fn director(document: &Document, root: &Element) -> Result<Shared, JsValue> {
         }
     };
     let control = shared.borrow().control.clone();
+    let prompt = shared.borrow().prompt.clone();
     if !control.is_connected() {
         root.append_child(&control)?;
+    }
+    if !prompt.is_connected() {
+        root.append_child(&prompt)?;
     }
     Ok(shared)
 }
@@ -224,11 +238,17 @@ fn create(document: &Document) -> Result<Shared, JsValue> {
     control.set_attribute("type", "button")?;
     control.set_attribute("class", "tv-voice-control")?;
     control.set_attribute("style", CONTROL_STYLE)?;
+    let prompt = document.create_element("button")?;
+    prompt.set_attribute("type", "button")?;
+    prompt.set_attribute("class", "tv-voice-prompt")?;
+    prompt.set_text_content(Some("Sound is off. Press here to turn it on"));
+
     let icon = node(document, &control, "span", "tv-voice-icon", "")?;
     let label = node(document, &control, "span", "tv-voice-label", "")?;
     let shared = Rc::new(RefCell::new(Director {
         audio: audio.clone(),
         control: control.clone(),
+        prompt: prompt.clone(),
         icon,
         label,
         switch: SoundSwitch::new(),
@@ -245,6 +265,7 @@ fn create(document: &Document) -> Result<Shared, JsValue> {
     listen(&shared, audio.as_ref(), "ended", on_ended)?;
     listen(&shared, audio.as_ref(), "error", on_error)?;
     listen(&shared, control.as_ref(), "click", on_control)?;
+    listen(&shared, prompt.as_ref(), "click", on_control)?;
     listen(&shared, document.as_ref(), "pointerdown", on_gesture)?;
     listen(&shared, document.as_ref(), "keydown", on_gesture)?;
     Ok(shared)
