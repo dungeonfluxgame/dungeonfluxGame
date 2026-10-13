@@ -133,6 +133,10 @@ fn assert_end_card(current: &Checkpoint) {
         "resolve-errand",
         "end-turn",
         "choose-harbor-scene",
+        // Ended is entered from nowhere: no new fight, no new conversation.
+        "defend-courier",
+        "ask-courier",
+        "escort-courier",
     ] {
         refuses(current, first(), 90, entry);
     }
@@ -364,6 +368,31 @@ fn a_defeat_with_survivors_may_rest_or_end_and_both_reach_the_card() {
 
 fn input_for(current: &Checkpoint, operation: u8, entry: &str) -> GameInput {
     input(current, first(), operation, entry, vec![])
+}
+
+/// The sub-machines are entered and left only through the machine: a
+/// conversation cannot be entered from a fight, and a fight cannot be
+/// re-entered or fought on from its aftermath.
+#[test]
+fn a_conversation_cannot_be_entered_from_a_fight_and_a_fight_cannot_be_reentered() {
+    live(|| {
+        let combat = tactical::tests::current_combat("escort-courier");
+        assert_eq!(
+            session_machine::SessionState::of(&combat).unwrap(),
+            session_machine::SessionState::Fight
+        );
+        refuses(&combat, first(), 40, "ask-courier");
+        refuses(&combat, first(), 41, "escort-courier");
+        refuses(&combat, first(), 42, "defend-courier");
+        let victory = tactical::tests::current_victory("escort-courier");
+        assert_eq!(
+            session_machine::SessionState::of(&victory).unwrap(),
+            session_machine::SessionState::Aftermath
+        );
+        refuses(&victory, first(), 43, "defend-courier");
+        refuses(&victory, first(), 44, "greatsword-attack");
+        refuses(&victory, first(), 45, "ask-courier");
+    });
 }
 
 /// The offer/machine agreement, over the checkpoints a played game actually

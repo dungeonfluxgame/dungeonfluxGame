@@ -7,6 +7,16 @@
 //! sub-machine: its turn order and dying/death-save facts live in the
 //! encounter, and it is entered (`StartFight`) and left (a combat event whose
 //! rules outcome ends it) only through this table.
+//!
+//! The executors `stage_using` calls once an edge is accepted, one per
+//! transition into or out of the sub-machines: `enter_fight` (the only
+//! production caller of `tactical::start` / `start_combat`),
+//! `enter_conversation` (the only staging caller of the conversation
+//! narrative transition), and inside fight resolution `finish_if_done` /
+//! `finish_combat` for the exit. After they run, `outcome_legal` verifies
+//! the candidate landed where the transition named. Offers are derived
+//! from the same table (`kind_accepted`), and the Aftermath rest rule is
+//! decided here too (`rest_accepted`).
 
 use df_model::checkpoint::{Checkpoint, FactValue};
 use df_protocol::common as rpc;
@@ -244,6 +254,49 @@ pub(super) fn rest_accepted(current: &Checkpoint) -> Result<bool, RepositoryErro
     Ok(false)
 }
 
+/// Whether a staged candidate landed where the transition said it would.
+/// Checked in `stage_using` after the executors run, so no handler can move
+/// the session somewhere the table did not name: the fight is entered only
+/// into `Fight` and left only into `Aftermath`, a resolution ends only in
+/// `Aftermath` or `Ended`, and nothing ever moves backwards. Pure script
+/// steps are the loaded script's own forward edges, so for them only the
+/// forward rank is checked.
+pub(super) fn outcome_legal(
+    before: SessionState,
+    event: Event,
+    transition: Transition,
+    after: SessionState,
+) -> bool {
+    if after.rank() < before.rank() {
+        return false;
+    }
+    if event == Event::StartFight && after != SessionState::Fight {
+        return false;
+    }
+    // And the fight is entered by no other event, however far a script
+    // edge travels.
+    if after == SessionState::Fight && before != SessionState::Fight && event != Event::StartFight
+    {
+        return false;
+    }
+    match transition {
+        // Story choices and pure script steps follow the loaded script's
+        // own validated forward edges: they may stay, reach the named
+        // state, or move further forward along the script (a conversation
+        // choice that travels to its destination's aftermath). The rank
+        // check above still forbids any backward move.
+        Transition::To(target) => {
+            after == target || matches!(event, Event::StoryChoice | Event::ScriptStep)
+        }
+        Transition::FightMayEnd => {
+            matches!(after, SessionState::Fight | SessionState::Aftermath)
+        }
+        Transition::ResolveMayEnd => {
+            matches!(after, SessionState::Aftermath | SessionState::Ended)
+        }
+    }
+}
+
 /// The one table: for the current state and an event, the next state or a
 /// typed refusal.
 pub(super) fn next(state: SessionState, event: Event) -> Result<Transition, MachineRefusal> {
@@ -330,6 +383,85 @@ mod tests {
                 "only combat events are legal in a fight: {event:?}"
             );
         }
+    }
+
+    #[test]
+    fn outcomes_must_land_where_the_transition_named() {
+        use Event as E;
+        use SessionState as S;
+        // The fight is entered only into Fight and left only into Aftermath.
+        assert!(outcome_legal(
+            S::Conversation,
+            E::StartFight,
+            Transition::To(S::Fight),
+            S::Fight
+        ));
+        assert!(!outcome_legal(
+            S::Conversation,
+            E::StartFight,
+            Transition::To(S::Fight),
+            S::Aftermath
+        ));
+        assert!(outcome_legal(
+            S::Fight,
+            E::CombatAction,
+            Transition::FightMayEnd,
+            S::Aftermath
+        ));
+        assert!(!outcome_legal(
+            S::Fight,
+            E::CombatAction,
+            Transition::FightMayEnd,
+            S::Ended
+        ));
+        assert!(!outcome_legal(
+            S::Fight,
+            E::EndTurn,
+            Transition::FightMayEnd,
+            S::Conversation
+        ));
+        // A conversation is entered only where StoryChoice names it, and a
+        // resolution ends only in Aftermath or Ended.
+        assert!(outcome_legal(
+            S::Story,
+            E::StoryChoice,
+            Transition::To(S::Conversation),
+            S::Conversation
+        ));
+        // A story choice never lands in a fight: only StartFight enters one.
+        assert!(!outcome_legal(
+            S::Story,
+            E::StoryChoice,
+            Transition::To(S::Conversation),
+            S::Fight
+        ));
+        // But a look around the opening scene may stay in Story, and a
+        // conversation choice may travel on to its aftermath.
+        assert!(outcome_legal(
+            S::Story,
+            E::StoryChoice,
+            Transition::To(S::Conversation),
+            S::Story
+        ));
+        assert!(outcome_legal(
+            S::Conversation,
+            E::StoryChoice,
+            Transition::To(S::Conversation),
+            S::Aftermath
+        ));
+        assert!(outcome_legal(
+            S::Aftermath,
+            E::Resolve,
+            Transition::ResolveMayEnd,
+            S::Ended
+        ));
+        // Nothing moves backwards, script steps included.
+        assert!(!outcome_legal(
+            S::Aftermath,
+            E::ScriptStep,
+            Transition::To(S::Aftermath),
+            S::Story
+        ));
     }
 
     #[test]

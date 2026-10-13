@@ -888,10 +888,19 @@ mod tests {
             let mut calls = 0;
             let mut draws = Vec::new();
             let mut outcomes = Vec::new();
+            // The fight is entered only through the machine's executor;
+            // its private start boundary is what refuses here.
+            let selected = crate::gameplay::beat_script_runtime::select(
+                &current,
+                rpc::GameplayActionKind::DefendCourier,
+                &[],
+            )
+            .unwrap();
             assert_eq!(
-                super::super::start_combat(
+                super::super::enter_fight(
                     &current,
                     &proposed,
+                    &selected,
                     &mut staged,
                     &mut draws,
                     &mut outcomes,

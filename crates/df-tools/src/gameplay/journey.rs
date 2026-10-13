@@ -2762,6 +2762,53 @@ fn accept_character(
     }
     Ok(())
 }
+/// The one entry into a fight, called by `stage_using` only after the
+/// machine accepted `StartFight`. Both fight engines are entered here and
+/// nowhere else in production: the tactical fight through
+/// `tactical::start`, the source-qualified fight through `start_combat`.
+/// The fight is left only inside its own resolution (`finish_if_done` /
+/// `finish_combat`, the `FightMayEnd` executors), which the machine's
+/// outcome check in `stage_using` verifies lands in `Aftermath`.
+fn enter_fight(
+    current: &Checkpoint,
+    command: &CommandInput,
+    selected: &super::beat_script::BeatOffer,
+    state: &mut GameState,
+    draws: &mut Vec<ActualDraw>,
+    outcomes: &mut Vec<rpc::CombatOutcome>,
+    supplier: DiceSource<'_>,
+) -> Result<(), RepositoryError> {
+    state
+        .narrative
+        .open_threads
+        .push(model::content(THREAT_THREAD)?);
+    if tactical::enabled() {
+        let scene = super::beat_script_runtime::fight_scene(current, selected)?;
+        tactical::start(current, command, state, draws, outcomes, supplier, &scene)
+    } else {
+        start_combat(current, command, state, draws, outcomes, supplier)
+    }
+}
+
+/// The one entry into a conversation, called by `stage_using` only after
+/// the machine accepted `StoryChoice` from `Story` (or within a
+/// conversation). Returns whether the exchange is private to the asker.
+/// A conversation is left only through the machine's own edges: a script
+/// step along the loaded script's beats, or `StartFight` via
+/// `enter_fight`.
+fn enter_conversation(
+    current: &Checkpoint,
+    input: &GameInput,
+    state: &mut GameState,
+    kind: rpc::GameplayActionKind,
+) -> Result<bool, RepositoryError> {
+    state.narrative = narrative_transition::select(current, input)?
+        .state()
+        .narrative
+        .clone();
+    Ok(kind == rpc::GameplayActionKind::AskCourier)
+}
+
 fn stage_using(
     current: &Checkpoint,
     input: &GameInput,
@@ -2816,19 +2863,22 @@ fn stage_using(
     // The forward state machine gates every command before any handler runs:
     // a command that is illegal in the session's current state is refused
     // here, whatever its handler might have allowed.
-    {
-        let state = session_machine::SessionState::of(current)?;
-        let event = session_machine::Event::of(selected.effect);
-        if session_machine::next(state, event).is_err() {
+    let machine_state = session_machine::SessionState::of(current)?;
+    let machine_event = session_machine::Event::of(selected.effect);
+    let machine_transition = match session_machine::next(machine_state, machine_event) {
+        Ok(transition) => transition,
+        Err(_) => {
             refusal_detail::note("session-machine");
             return Err(RepositoryError::InvalidCandidate);
         }
-        // The machine also decides the Aftermath rest rule: once per
-        // aftermath, and only while a living hero has something to regain.
-        if event == session_machine::Event::Rest && !session_machine::rest_accepted(current)? {
-            refusal_detail::note("session-machine-rest");
-            return Err(RepositoryError::InvalidCandidate);
-        }
+    };
+    // The machine also decides the Aftermath rest rule: once per
+    // aftermath, and only while a living hero has something to regain.
+    if machine_event == session_machine::Event::Rest
+        && !session_machine::rest_accepted(current)?
+    {
+        refusal_detail::note("session-machine-rest");
+        return Err(RepositoryError::InvalidCandidate);
     }
     let original_kind = kind;
     let kind = if selected.effect == super::beat_script::BeatEffect::ThirdApproach {
@@ -2943,41 +2993,21 @@ fn stage_using(
             if !choices.is_empty() {
                 return Err(RepositoryError::InvalidCandidate);
             }
-            state.narrative = narrative_transition::select(current, input)?
-                .state()
-                .narrative
-                .clone();
-            private = kind == rpc::GameplayActionKind::AskCourier;
+            private = enter_conversation(current, input, &mut state, kind)?;
         }
         rpc::GameplayActionKind::DefendCourier => {
             if !choices.is_empty() {
                 return Err(RepositoryError::InvalidCandidate);
             }
-            state
-                .narrative
-                .open_threads
-                .push(model::content(THREAT_THREAD)?);
-            if tactical::enabled() {
-                let scene = super::beat_script_runtime::fight_scene(current, &selected)?;
-                tactical::start(
-                    current,
-                    command,
-                    &mut state,
-                    &mut draws,
-                    &mut outcomes,
-                    supplier,
-                    &scene,
-                )?;
-            } else {
-                start_combat(
-                    current,
-                    command,
-                    &mut state,
-                    &mut draws,
-                    &mut outcomes,
-                    supplier,
-                )?;
-            }
+            enter_fight(
+                current,
+                command,
+                &selected,
+                &mut state,
+                &mut draws,
+                &mut outcomes,
+                supplier,
+            )?;
         }
         rpc::GameplayActionKind::GreatswordAttack => {
             combat_transition::stage(
@@ -3130,6 +3160,17 @@ fn stage_using(
             },
         },
     )?;
+    // The candidate must land where the machine's transition said: no
+    // executor may move the session anywhere else, or backwards.
+    if !session_machine::outcome_legal(
+        machine_state,
+        machine_event,
+        machine_transition,
+        session_machine::SessionState::of(&candidate)?,
+    ) {
+        refusal_detail::note("session-machine-outcome");
+        return Err(RepositoryError::InvalidCandidate);
+    }
     super::beat_script::validate_step(current, &candidate, original_kind, &selected.id)?;
     if private {
         super::courier_ai::append_request(candidate, command.operation)
