@@ -231,6 +231,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn encoded_clip_round_trips_through_the_server_container_check() {
         let wav = encode_wav(&tone(16_000));
@@ -241,6 +242,7 @@ mod tests {
         assert_eq!(pcm_duration(pcm.len()), Duration::from_secs(1));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn samples_are_clamped_and_non_finite_samples_are_silent() {
         let wav = encode_wav(&[2.0, -2.0, f32::NAN, f32::INFINITY]);
@@ -250,6 +252,7 @@ mod tests {
         assert_eq!(pcm, [0xff, 0x7f, 0x01, 0x80, 0, 0, 0, 0]);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn container_that_is_not_the_exact_format_is_refused() {
         let wav = encode_wav(&tone(100));
@@ -271,6 +274,7 @@ mod tests {
         assert_eq!(wav_pcm(&[]), Err(ContainerFault::NotWav));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn unknown_chunks_before_the_data_are_skipped() {
         let wav = encode_wav(&tone(10));

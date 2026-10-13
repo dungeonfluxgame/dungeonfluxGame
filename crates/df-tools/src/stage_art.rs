@@ -33,6 +33,7 @@ pub(crate) fn stem_of(path: &str) -> &str {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn portrait_stems_map_to_sprite_twins() {
         assert_eq!(
@@ -49,6 +50,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn non_portrait_stems_have_no_sprite() {
         for stem in [

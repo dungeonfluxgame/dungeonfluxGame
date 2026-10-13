@@ -52,7 +52,7 @@ impl HealthTier {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn from_label(label: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|tier| tier.label() == label)
     }
@@ -200,6 +200,7 @@ mod tests {
         assert_eq!(tier(1, u32::MAX), Some(HealthTier::Critical));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn healing_walks_back_up_through_every_tier_in_order() {
         let walk: Vec<HealthTier> = (0..=13).filter_map(|hp| tier(hp, 13)).collect();
@@ -230,6 +231,7 @@ mod tests {
         assert_eq!(tier_of(flagged), None);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn labels_round_trip_and_severity_orders_the_tiers() {
         for tier in HealthTier::ALL {

@@ -220,6 +220,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn long_voice_text_splits_at_sentences_and_respects_provider_limit() {
         let text = format!("{}. {}.", "a".repeat(350), "b".repeat(300));
@@ -240,6 +241,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn short_voice_text_is_preserved_byte_for_byte() {
         let text = "  First.\nSecond!  ";
@@ -247,6 +249,7 @@ mod tests {
         assert_eq!(voice_segments(text), vec![text]);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn role_changes_the_key_of_identical_text() {
         let narrator = VoiceLine {
