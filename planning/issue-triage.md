@@ -265,7 +265,7 @@ Thirty read-only reviewers each read one module on the evening of 2026-10-12 and
 | ID | Sev | Issue | Source | Decision |
 |---|---|---|---|---|
 | HNT-01 | 1 | A fight is refused at the start when the heroes were confirmed in a different order from the order they joined: the fight builds its hero list in confirmation order and the admission check expects join order. Very likely the real cause of SES-02 and of the refused fight behind SES-01, since the recording script confirms both heroes at once. | H12 F1 | Fixed `5abd72e`. Verified on a running server: refused before, starts now |
-| HNT-02 | 1 | Restoring a pending move accepts a diagonal path through blocked corners and can leave the fight permanently stuck. | H14 F1 | |
+| HNT-02 | 3 | Restoring a pending move accepts a diagonal path through blocked corners and can leave the fight permanently stuck. Needs a hand-altered saved game to trigger, so lowered from severity 1. | H14 F1 | |
 | HNT-03 | 2 | A delayed attack command from an earlier turn can be accepted on the same hero's later turn. | H08 F1 | Part `cafd68c`: attacks fixed; the same fault for End turn is being fixed |
 | HNT-04 | 2 | An "observe" investigation offer advances the story without resolving or recording what was observed (medium confidence). | H05 F1 | |
 | HNT-05 | 2 | A wolf's or mastiff's bite knocks its target prone on every hit, without the Strength save the rules require. | H13 F1 | |
@@ -294,6 +294,47 @@ Causes the reviewers found for issues already listed above:
 | DLG-02 | A hostile character's fallback repeats one curt answer once its few answer keys are used up. | H26 F1 |
 | DLG-01 | The shipped pack has no social ledger, so spoken and typed lines never reach the code that records attitude. | H29 F1 |
 | PIC-08 | The opening picture's key includes the party, and the lobby requests it at each confirmation. | H28 F1 |
+
+## 17. Found by reading the code, second pass
+
+Forty more read-only reviewers covered the modules the first thirty did not. Same rules: each finding has a concrete trigger and is unverified until a worker reproduces it. Write-ups are in `artifacts/tmp/campaign/hunt/W01` to `W40`.
+
+| ID | Sev | Issue | Source | Decision |
+|---|---|---|---|---|
+| HNT-11 | 2 | The server will serve a file outside its configured folder through a symlink, for scan files and for the lobby-video cache. | W06 F1, F2 | |
+| HNT-12 | 2 | A stale End turn from an earlier round can use up the same hero's later turn (the same missing revision check as HNT-03). | W39 F1 | |
+| HNT-13 | 2 | Push-to-talk audio recorded under one view can be sent under the next view's offer. | W20 F1 | |
+| HNT-14 | 2 | Cancelling during a speech upload does not stop the browser's request or the server's transcription. | W30 F1 | |
+| HNT-15 | 2 | Cleanup of model text can remove every meaningful word and still pass validation; Markdown formatting survives cleanup and reaches the spoken line. | W15 F1, F2 | |
+| HNT-16 | 2 | Duplicate speaker profiles in the content pack make a character's safety facts depend on array order. | W01 F1 | |
+| HNT-17 | 2 | A catch-up on the TV can erase a submitted scene transition and leave the TV on the previous scene (medium confidence). | W27 F1 | |
+| HNT-18 | 2 | A defeat scene that has authored dialogue is labelled as a victory (medium confidence). | W29 F1 | |
+| HNT-19 | 2 | Scan level-of-detail range counts are trusted past the chunk size and can submit an invalid GPU dispatch (medium confidence). | W33 F1 | |
+| HNT-20 | 2 | The browser's connection set-up can wait for ever, and join retries never stop when the tunnel cannot be made (medium confidence). | W40 F1, W26 F1 | |
+| HNT-21 | 3 | A morning scene whose text contains "knight" gets night lighting; a valid library scene is permanently marked as having no picture. | W02 F2, F1 | |
+| HNT-22 | 3 | An oversized picture cache file is reported as a successful image and then served as unavailable. | W04 F2 | |
+| HNT-23 | 3 | A speech-intent loader can be left on the fight display when its line closes after the TV has gone back to a story scene. | W17 F1 | |
+| HNT-24 | 3 | A dice folder setting that is not valid Unicode is silently ignored. | W07 F1 | |
+| HNT-25 | 3 | Animals' sensory traits are missing from the creature catalogue and the gap is not disclosed (medium confidence). | W36 F1 | |
+
+Causes the second pass found for issues already listed:
+
+| Issue | Cause found | Source |
+|---|---|---|
+| PIC-01 | The scene picture can be built from a different hero appearance from the one chosen in character creation. | W04 F1 |
+| PIC-04 | A hero at 1 hit point keeps healthy art when the hurt variant is not cached at the start of the fight. | W16 F1 |
+| PIC-05 | Actions inside one scene never reach the picture update. | W16 F2 |
+| AUD-02 | A defeat narration longer than 600 characters cannot be voiced, and nothing says so. | W05 F1 |
+| AUD-03, FPX-06 | Sound cues are chosen from melee or ranged style only, so bites sound like swords and thrown javelins like bows. | W23 F1 |
+| SYN-06 | The finale stinger is triggered by the completed server view, before the last beat is presented. | W22 F1 |
+| SYN-09 | Downed combatants with portrait art stay as nameless dim circles in the turn strip. | W32 F1 |
+| STO-08 | The phone repeats a saved private clue as narration on every later story view. | W19 F1 |
+| DLG-03 | A "how did you meet" question filters out the generated acquaintance fact. | W13 F1 |
+| DLG-07 | The fallback rotation is longer than the remembered reply history, so fallbacks repeat. | W14 F1 |
+| DEV-01 | The development tool's read commands need its own seat cache to supply the session scope. | W11 F1 |
+| END-03 | The end card appears when the final line starts lingering, before its hold and close finish. | W18 F1 |
+| TVX-07 | The narrator caption is hidden after narration ends while choice hints are off. | W18 F2 |
+| SES-07 | Offered story choices stay enabled while a press is rejected as busy. | W26 F2 |
 
 ## Fixed and confirmed this evening
 
