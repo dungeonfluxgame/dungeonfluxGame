@@ -26,6 +26,7 @@ Not in this list: business and legal decisions, unmerged branches, and built-but
 | SC | Other-scan sessions, rooms KENOKA, SUFARO, ZATOZO |
 | IV | Dialogue interview with the patron (30 lines, `artifacts/tmp/dialogue-a1/transcript-round2.md`) |
 | OWNER | Said by the owner during the session |
+| P4 | Hand-played session, room KESEZA, 2026-10-13, victory (section 19) |
 | EARLIER | From the open-items list at commit `de32f94`; not re-checked this evening |
 
 The last column is empty for the reviewer: fix now, fix later, will not fix, or duplicate.
@@ -50,6 +51,8 @@ The last column is empty for the reviewer: fix now, fix later, will not fix, or 
 | Endings (END) | 0 | 2 | 1 | 1 | 4 |
 | Tools and tests (DEV) | 0 | 0 | 4 | 2 | 6 |
 | **All** | **3** | **30** | **68** | **12** | **113** |
+
+This table counts sections 1 to 15 only. Sections 16 to 18 add 36 rows found by reading the code and by reviewing the fixes. Section 19, the game played by hand on 2026-10-13, adds 57 more (8 of severity 2, 44 of severity 3, 5 of severity 4); most repeat a row above with new detail, and four of them reopen a row that had been marked fixed.
 
 ## Suggested first ten
 
@@ -141,13 +144,13 @@ The owner's words: "the battle scene was out of sync", "make sure the state mach
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
-| SYN-01 | 2 | The TV skips enemy turns. In playthrough 1 six beats were resolved before the first hero turn; the TV showed the first, waited about 25 s and jumped to the sixth, so the bites that hurt the heroes were never seen. In playthrough 2 a whole enemy turn was marked skipped ("the 3rd creature didnt even get a chance to play"). In playthrough 3 two of 26 beats were skipped. | P1, P2, P3, OWNER | Part `8d5425b`: beats are queued by sequence and none are cut before the queue, but the display worker's browser run at 23:38 still saw beats 4, 6 and 12 skipped while the TV waited for the battlefield. Not proven |
+| SYN-01 | 2 | The TV skips enemy turns. In playthrough 1 six beats were resolved before the first hero turn; the TV showed the first, waited about 25 s and jumped to the sixth, so the bites that hurt the heroes were never seen. In playthrough 2 a whole enemy turn was marked skipped ("the 3rd creature didnt even get a chance to play"). In playthrough 3 two of 26 beats were skipped. | P1, P2, P3, OWNER | Part `8d5425b`: beats are queued by sequence and none are cut before the queue, but the display worker's browser run at 23:38 still saw beats 4, 6 and 12 skipped while the TV waited for the battlefield. Not proven. Seen plainly by hand on 2026-10-13: between enemy beats the TV falls back to an older state (OBS-31) |
 | SYN-02 | 2 | A defeated enemy acts again on screen: "it said enemy vanquished then he stood back up", "the dead guy moved". Consistent with the TV applying a death and then playing an older queued beat for the same figure. | OWNER (twice) | Fixed `8d5425b` (browser check pending) |
 | SYN-03 | 2 | The phone offers a hero his turn while the TV is still several beats behind (beat 6 of 6 on the phone, 2 of 6 on the TV); the TV's own counter went 6, 0, 2 during the entrance. | P1 | Part `b4d7f432`: a beat held for the battlefield entrance is no longer counted as presented; phones releasing before the field is ready was seen in the same run and needs re-checking |
-| SYN-04 | 2 | The TV's health cards are wrong: hurt before any bite was shown, then full for 26 s while both phones said hurt, then hurt again. A heal on the phone (4 to 10) did not reach the TV for two rounds. | P1, P3 | Part `0bf7237`: heals wait for their beat; the display worker still saw health cards one beat ahead at 23:38; see also REV-03 |
+| SYN-04 | 2 | The TV's health cards are wrong: hurt before any bite was shown, then full for 26 s while both phones said hurt, then hurt again. A heal on the phone (4 to 10) did not reach the TV for two rounds. | P1, P3 | Part `0bf7237`. Played by hand on 2026-10-13 a Second Wind heal never reached the TV, twice (OBS-32); see also REV-03 |
 | SYN-05 | 2 | The phone keeps showing "YOUR TURN" with Attack, Move and End turn enabled for up to ten seconds after the turn is spent. Presses are refused ("That offer has ended") or silently dropped. | P1, SR, SC | Fixed `0761a5b`: the waiting state was seen in a recording; see REV-01 for a fault in the fix |
-| SYN-06 | 3 | The victory fanfare, the scene transition and the ending music start before the last blow is shown (3.4 s early in one fight; before the last arrow was loosed in another). | P1, P2 | Fixed `4570a60` for the finale music (not yet heard); the fanfare and scene transition are still to confirm |
-| SYN-07 | 3 | The turn label flickers between names within seconds and can run one to two turns behind the server. | P1, EARLIER | |
+| SYN-06 | 3 | The victory fanfare, the scene transition and the ending music start before the last blow is shown (3.4 s early in one fight; before the last arrow was loosed in another). | P1, P2 | Part `4570a60` (finale music, not yet heard). Played by hand on 2026-10-13 the last blow was never shown at all (OBS-33) |
+| SYN-07 | 3 | The turn label flickers between names within seconds and can run one to two turns behind the server. | P1, EARLIER | Seen again by hand 2026-10-13, every enemy phase (OBS-31) |
 | SYN-08 | 3 | Heroes wait 11 to 15 s at a time for the TV to finish enemy turns; in the fastest possible game the fight was 2 min 56 s of 3 min 18 s. | SR | |
 | SYN-09 | 3 | The turn strip looks out of order ("the character icon order seems broken"): the highlight jumps because skipped enemy turns are never shown, dead combatants stay as unlabelled dim circles, and the phone lists the party first instead of turn order. | P1, OWNER | Part `9f4f1ff`: downed chips are named and marked; the highlight jumping is the timeline work |
 | SYN-10 | 3 | The TV asked "Brakka: Opportunity Attack?" with Brakka off screen. | P3 | |
@@ -206,9 +209,9 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
 | TVX-01 | 3 | A speech bubble flashes before a character talks ("before wystan talks a speech bubble flashes"): a small bubble appears beside the hero for half a second, an empty strip sits at the speaker's place for about 3 s, then the speaker's bubble grows in while the hero's fades out on top of it. A stray "..." bubble was also seen over a background figure. | P3, OWNER | Part `4c7e69b`: typed line leaves first; empty strip while generating not done |
-| TVX-02 | 3 | The hero's own typed line is a faded bubble over the other character's figure, partly under the reply. | P1, EARLIER | Fixed `a1b3e25` (browser check pending) |
-| TVX-03 | 3 | On every scene change the TV shows the adventure's title again instead of the new scene's, and during the crossfade it sits over the new picture and the health cards. | P1, EARLIER | Fixed `3720b36` (browser check pending) |
-| TVX-04 | 3 | The adventure title and place stay printed large over the picture for the whole scene. | P1 | Fixed `3720b36` (browser check pending) |
+| TVX-02 | 3 | The hero's own typed line is a faded bubble over the other character's figure, partly under the reply. | P1, EARLIER | Fixed `a1b3e25`. Seen by hand 2026-10-13: both heroes' typed lines sat by their own figures |
+| TVX-03 | 3 | On every scene change the TV shows the adventure's title again instead of the new scene's, and during the crossfade it sits over the new picture and the health cards. | P1, EARLIER | Fixed `3720b36`. Seen by hand 2026-10-13: each scene card carried its own title |
+| TVX-04 | 3 | The adventure title and place stay printed large over the picture for the whole scene. | P1 | Reopened. Fix `3720b36` is not effective in story scenes: title and place stayed up all scene on 2026-10-13 (OBS-12) |
 | TVX-05 | 3 | A rules log line is shown as a hero's speech bubble: "BRAKKA: has been stable for 1 hours and regains 1 hit point". | P1 | |
 | TVX-06 | 4 | The phone's label for a choice differs from the TV's ("Continue to the apothecary · Brannock's Apothecary" against "Continue to the apothecary"). | P2 | |
 | TVX-07 | 4 | The speaker's bubble is drawn over the rules note and title; with choice chips off the narrator box stays empty while the table waits. | EARLIER | |
@@ -224,19 +227,19 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | PHN-05 | 3 | "Confirm original strike" is offered from the aftermath to the end of the game and never explained. | P1 | Fixed `8fa68c8`, `0761a5b` (browser check pending) |
 | PHN-06 | 3 | The fight's log line is carried into the story log of the next scene. | P2 | |
 | PHN-07 | 3 | The hero portrait is cropped to the top of a head, and an unstyled status line sits over the background picture. | P1 | Fixed `0ad7d67`, `5b9700c`. Resource chips seen in a recording; portrait crop not yet looked at |
-| PHN-08 | 4 | The "Ask" button re-renders while a voice line plays, so a tap can miss. | EARLIER | Fixed `a252a22` (browser check pending) |
+| PHN-08 | 4 | The "Ask" button re-renders while a voice line plays, so a tap can miss. | EARLIER | Reopened. Fix `a252a22` is not enough: controls were still replaced under the pointer five times on 2026-10-13 (OBS-20) |
 
 ## 13. Lobby and character creation
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
 | CRE-01 | 3 | Only Dwarf, Fighter and Soldier exist, so every party is the same. The form is about 7,100 px tall with twelve groups, four of which offer a single option under "Choose one offered option". | P1 | Part `e8a800f`, `1d664bd`: single options read as facts; only one species, class and background exist |
-| CRE-02 | 3 | The field "A detail that makes you memorable" is in the page but collapsed to zero size; it cannot be seen or used. | P1 | Fixed `edece58` (browser check pending) |
+| CRE-02 | 3 | The field "A detail that makes you memorable" is in the page but collapsed to zero size; it cannot be seen or used. | P1 | Reopened. Fix `edece58` is not effective: the box was still zero size when played by hand on 2026-10-13 (OBS-04) |
 | CRE-03 | 3 | Developer wording is shown to players: "every submitted build is validated on the server", "Fighter B + Soldier B", "Other lawful SRD combinations remain unsupported", "Initiative tie agreement". | P1 | |
 | CRE-04 | 3 | The phone's join page is titled "Gather at the Lantern Wharf" with a harbour picture whatever the adventure's place is. | P1 | Fixed `301391e`: neutral title; the real place needs a server field (browser check pending) |
 | CRE-05 | 3 | The TV lobby shows neither the adventure's title nor what happens next or who starts; "THE PARTY IS GATHERED" is small grey text in a corner. | P2 | Fixed `6b5c691`. Seen in a browser |
-| CRE-06 | 3 | The TV lobby prints "Or enter the code at 127.0.0.1:63319", an address no phone can reach, with no hint that the session is local only. | P1 | Fixed `6b5c691`, `a44e30b`. TV lobby seen in a browser |
-| CRE-07 | 4 | The sticky "Confirm your hero" bar covers the form text beneath it. | P1 | Fixed `edece58` (browser check pending) |
+| CRE-06 | 3 | The TV lobby prints "Or enter the code at 127.0.0.1:63319", an address no phone can reach, with no hint that the session is local only. | P1 | Part `6b5c691`, `a44e30b`: the TV lobby text is right; the TV still draws the loopback QR code and the phone waiting page still prints the address (OBS-01, OBS-09) |
+| CRE-07 | 4 | The sticky "Confirm your hero" bar covers the form text beneath it. | P1 | Reopened. Fix `edece58` is not effective: the bar still covered the Class card on 2026-10-13 (OBS-06) |
 
 ## 14. Endings
 
@@ -353,6 +356,134 @@ Sixteen independent read-only reviewers each checked four of the 63 fix commits 
 | REV-08 | 3 | The rules note is folded away on the TV as well as the phone, inside narration that is clipped to eight lines; the TV has no way to open it. | `5b9700c` (PHN-03) | |
 | REV-09 | 3 | Cleanup of model text still accepts a Markdown list hyphen at the start of a line. | `1222ca1` (HNT-15) | |
 | REV-10 | 3 | The play-and-record check can pick a persistent control ("Play", "Full character sheet") as if it were a story choice. It still completes a game, but its log is misleading. | `0a9436f` (DEV-05) | |
+
+## 19. Hand-played session, 2026-10-13 (room KESEZA)
+
+One full game played by hand in a browser, at the owner's request ("scour the entire process for bugs", "just use computer use to observe the game"): one TV page and two phone pages at 375 by 812, from the lobby through hero creation, the opening scene, three typed lines to the patron, a three-round fight against three giant weasels, the victory screen, two aftermath scenes and "The End". Tree at `6d4ab2f7`. Text, voice and pictures on; the story text came from the model (50 of 54 slots); the village scan was forced as the battlefield by the session launcher; seed `0x982e5d9d6433d25a`, adventure "Perrin at the Guardhouse". Sound was not heard (the browser pane plays none to me); sound items come from the TV's network record. The server log (`artifacts/tmp/play-session-1/server.log`) holds no refusal for this game.
+
+"Relates to" names the earlier row an item repeats or contradicts. Where that row was marked fixed and the fault was still on screen, the earlier row's decision has been changed to say so.
+
+### The order I would take these in
+
+1. **OBS-31, OBS-32, OBS-33, OBS-34**: the fight's timeline on the TV. Between enemy beats the TV falls back to an older state of the fight, a heal never reaches it, and the last blow is never shown. This is the SYN group seen plainly by hand, and the display has no log to diagnose it from (OBS-57).
+2. **OBS-25, OBS-24, OBS-22**: characters do not know the adventure's state, and nothing a player says moves them.
+3. **OBS-43, OBS-44**: the phone's fight panel.
+4. **OBS-04, OBS-06, OBS-12, OBS-09**: four fixes from the evening of 2026-10-12 that are not effective on screen.
+5. **OBS-48**: the short rest.
+
+### Lobby, join and hero creation
+
+| ID | Sev | Issue | Relates to | Decision |
+|---|---|---|---|---|
+| OBS-01 | 3 | The TV lobby still draws a QR code that leads to a loopback address, right beside the line saying phones cannot join yet. | CRE-06 (text fixed, code left) | |
+| OBS-02 | 3 | Phone join page: a harbour picture whatever the adventure's place; the heading "Join the table" is repeated by the card under it; the page holds two "Join this room" buttons, one of them off screen. | CRE-04 | |
+| OBS-03 | 3 | Developer wording is still all through the creation form: the opening paragraph, "…retained.", "three masteries", "Other lawful SRD combinations remain unsupported" (three times), "Fighter B + Soldier B", "Hero appearance (presentation only)", "Art only; this changes no character rules", "Draft · editing", "Supported rules SRD5.2.1-2024-local-journey-2+custom-…". | CRE-03 | |
+| OBS-04 | 3 | "A detail that makes you memorable" is still a text box of zero size. The fix did not take effect. | CRE-02 (marked fixed `edece58`) | |
+| OBS-05 | 3 | The heading "Give your story a name" sits over the field for the hero's name; the page opens scrolled past its own heading; the say-something composer is on the creation page, where there is nobody to talk to. | new | |
+| OBS-06 | 4 | The sticky "Confirm your hero" bar still covers the text of the Class card. The fix did not take effect. | CRE-07 (marked fixed `edece58`) | |
+| OBS-07 | 3 | Two starting packages have the same name and the same description ("Greatsword and Defense", for Stalwart and for Vanguard), and the appearance options change when the package changes, with nothing saying why. | new | |
+| OBS-08 | 3 | The tie rule printed on the form names the wrong enemy: "the GM chooses allies before the Bandit when tied" in an adventure whose enemy is a giant weasel. | CRE-03, FGT-08 | |
+| OBS-09 | 3 | Phone waiting page: the loopback address is still printed under the room code (`127.0.0.1:63319/gameplay/player?room=…`); the place name "The Windward Pass" sits over the harbour picture; the party is shown as initials, not the portraits just chosen; the button that starts the game is below the fold. | CRE-06 (TV fixed, phone not), CRE-04 | |
+
+### Story scenes on the TV
+
+| ID | Sev | Issue | Relates to | Decision |
+|---|---|---|---|---|
+| OBS-10 | 3 | The title card's sentence is repeated in the Dungeon Master box straight after it, and that same opening narration then stays in the box for the whole scene and comes back after every exchange, however much has been said since. | FLO-08 | |
+| OBS-11 | 3 | During the hand-over from narration to the patron's first line, the Dungeon Master box and the patron's line box are drawn on top of each other and neither can be read. | TVX-01 | |
+| OBS-12 | 3 | The scene title and place stay printed large in the top right for the whole of every story scene. The fix did not take effect in story scenes. | TVX-04 (marked fixed `3720b36`) | |
+| OBS-13 | 3 | The first speech bubble is drawn over the speaker's face, then jumps to another spot when the picture refreshes. | new | |
+| OBS-49 | 3 | The narration does not describe the picture, and one place has three looks: "the bothy is stone and turf, its stove glowing … Calla stands with her lantern held high" is read over a barn with a sheep pen and no lantern; the empty backdrop for the same place four seconds earlier is a stone room with a stove; the next scene, same place, is a different barn with hens and a cauldron. In the second scene "snow hisses over the stones" is read over an indoor guardroom. | PIC-06, STO-04 | |
+| OBS-50 | 4 | The DungeonFlux logo shows through the scene title card during a change of scene. The epilogue has no title card: the screen is an empty backdrop for about two seconds. | new | |
+
+### Story screen and composer on the phone
+
+| ID | Sev | Issue | Relates to | Decision |
+|---|---|---|---|---|
+| OBS-14 | 3 | The scene title is printed twice at the top; the speaker's newest line appears twice (cut short in the log, in full on the card); the main card keeps the scene's opening line after newer replies; log lines are cut mid-word with "…" and cannot be opened. | new | |
+| OBS-15 | 4 | The hero sheet reads like stored data: "Skills insight, persuasion", "Alignment lawful good", "Languages Common, elvish, giant", "Starting equipment Fighter A + Soldier A · 18 GP", "Greatsword Held", "Weapon Longbow · Slow · +2 Archery". | CRE-03 | |
+| OBS-19 | 3 | Saying one line takes five controls (text box, Tap to talk, a "Just saying it" list, "Choose an offered action (optional)", then Say it, Decline this choice or Confirm offered choice). "Nothing happens until you confirm a choice" is untrue: Say it sends at once. "Decline this choice" and "Confirm offered choice" are shown with nothing offered. "Only spoken words: no action or check was made." stays on screen from then on. The composer is still there at The End. The page also holds a second, hidden "Say it" and a second unnamed text box. | PHN-04 | |
+| OBS-20 | 3 | Controls are rebuilt whenever anything on the page changes: "Say it" while typing, "Move" and "Attack" after picking from a list. A press aimed at the old control can land on nothing. Seen five times in this game. | PHN-08 (marked fixed `a252a22`) | |
+| OBS-21 | 3 | The patron's reply in the composer is shown with a hooded stock portrait while the story card above it shows his own. | PHN-04 | |
+| OBS-51 | 3 | The table log is out of order and incomplete: Calla's greeting is listed before "Brakka leads on to the Shepherds' Bothy"; two short rests are logged as one; the log is empty after leaving the page and coming back. | PHN-06 | |
+| OBS-56 | 4 | Menu: "Confirm saved choice" is not explained. Credits is a separate page that takes the phone out of the game, and reads "Local browser journey · player-created Dwarf Fighter / Soldier · selected SRD 5.2.1 rules. Other character options and mechanics remain in development." Coming back does resume the hero. | new | |
+
+### Choices, conversation and story
+
+| ID | Sev | Issue | Relates to | Decision |
+|---|---|---|---|---|
+| OBS-16 | 3 | "Ask Perrin what troubles him" is offered straight after he has said what troubles him, and the two choices are the same after three typed exchanges. | FLO-04 | |
+| OBS-17 | 3 | The only choice before the fight names an enemy nobody has seen or heard of: "Shield Perrin from the giant weasel". | FLO-05 | |
+| OBS-18 | 3 | The choices after the fight are chapter titles ("Calla's Quiet Welcome", "The Ledger's Last Road"), and the log quotes them back: Brakka chose "Calla's Quiet Welcome". | FLO-06 | |
+| OBS-22 | 2 | A threat with drawn steel gets no reaction. The patron restates his errand, no roll is asked for, and the refreshed picture shows him smiling. | DLG-01, PIC-05 | |
+| OBS-23 | 3 | Asked what the job is and what it pays, the patron answers "The exact job, I can't add to what I've told you. The pay, I don't know." Two scenes later he promises "I'll see you're thanked"; nothing is ever paid or mentioned again. | DLG-05, STO-02 | |
+| OBS-24 | 3 | Plot facts shift between lines: the errand is to "reach Calla", then to carry the ledger "to the Shepherds' Bothy"; the animal enemy is spoken of by its table label as a schemer ("Whatever the Shaggy Giant Weasel wants with it, it won't ask twice"); the victory text says "Someone set the Shaggy Giant Weasel in your path". | STO-03, STO-09 | |
+| OBS-25 | 2 | The contact does not know the adventure. Asked where Perrin is and what the ledger holds, Calla says the heroes have "come for the ledger", that she has "carried it myself", and that she has "no word of where they are", one screen after Perrin thanked the party at her door and one screen before the narration has her take the ledger from them. Her reply also starts a sentence in lower case ("it's heavier than it looks"). | STO-09, DLG-04 | |
+| OBS-26 | 3 | Calla says nearly the same line in two scenes running ("I know a sealed cellar nobody has opened in years. Ask me when you are rested"), and the cellar is never offered or mentioned again. Perrin is in the narration of both aftermath scenes and in neither picture. | STO-07, FLO-04 | |
+| OBS-52 | 3 | The epilogue and the end card close on a stray scenery sentence: "Ice glitters on the old waystation walls." It was first read in the guardhouse scene; at the end the party is in the bothy, and it is the only line on the end card. | STO-06 | |
+
+### Fight: start, rules and what the players are told
+
+| ID | Sev | Issue | Relates to | Decision |
+|---|---|---|---|---|
+| OBS-27 | 3 | The TV goes from the choice straight to the loading card. The fight's introduction is on the phones only, and it describes one creature ("the Shaggy Giant Weasel pours from darkness … It rushes at you") where three take the field. | STO-03 | |
+| OBS-28 | 3 | The fight is headed "WINDWARD PASS" and the story speaks of snow and ice; the battlefield is a green village with market tents. The session launcher forces the village scan, so this is the test set-up showing through, but nothing in the game ties the scan to the place. | FPX-10 | |
+| OBS-29 | 3 | The initiative roll-call and the turn strip disagree. The tags show the weasels rolling 6, 16 and 9 from left to right; the strip lists them in name order after the first hero, and Brakka, also on 6, is last. Either the tags are on the wrong figures or the strip is not in initiative order. The enemy tags are still drawn tilted. The server log has no initiative line to settle it. | FPX-08, FGT-08, SYN-09 | |
+| OBS-36 | 3 | The table log contradicts the roll: "Brakka swings the greatsword — miss" for a graze that did 3 damage and is shown as GRAZE everywhere else; "Sigrun strikes with the longbow"; "Brakka moves" with no distance where an enemy gets "moves 4 squares (20 ft)"; the first enemy's move is missing. | FGT-03 | |
+| OBS-37 | 3 | Enemies never take an opportunity attack. Brakka walked out of the reach of two weasels; the server log shows his move split in three at the points where a reaction could be taken; none was, and nothing was shown or said. | FGT-04 | |
+| OBS-38 | 3 | An animal talks: a speech bubble "GIANT WEASEL 2: Weakling!" at the start of its turn. | new | |
+| OBS-48 | 3 | The short rest. It is a story choice labelled "Short Rest · 1 hour, no Hit Point Dice"; taking it replaces the victory text on the TV with rules prose ("An uninterrupted hour has passed without Hit Point Dice or healing. Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived. The original victory and Perrin's unresolved journey remain."); it heals nobody (a hero on 7 of 13 has no way to recover for the rest of the game); it can be taken again and again (Second Wind went 0, 1, 2 in two presses); and it is offered again in the next scene. | FLO-07 | |
+| OBS-47 | 3 | The victory card says the party is "At the Shepherds' Bothy" under the title "The Ledger Reaches Shelter", then offers "Go on to the bothy". Each hero's state is the word "Awake". The hit point numbers inside the bars are too small to read from a sofa. Perrin's thanks are on the phones and not on the TV. | STO-04 | |
+
+### Fight timeline on the TV
+
+| ID | Sev | Issue | Relates to | Decision |
+|---|---|---|---|---|
+| OBS-31 | 2 | Between enemy beats the TV falls back to an older state of the fight. Round 2, in order, about two seconds apart: weasel 2 walks to Brakka; its bite card; "Bite · 7 piercing" with Brakka's card dropping to 4 of 13, BLOODIED; then a wide shot with weasel 2 back on its old square and Brakka's card back at 8 of 13, HURT; the heading changes to "Sigrun's turn" with her square lit; then "Giant Weasel 3's turn" and its bite. The same happened in round 1 (enemies back on the far row between their two attacks, the heading reading "Sigrun's turn" twice). The state is right once the next hero's turn begins. | SYN-01, SYN-02, SYN-07 | |
+| OBS-32 | 2 | Second Wind never reaches the TV. No beat, no card, no number. Brakka healed from 8 to 11 on his phone and the TV kept "8/13 HURT" until he was next bitten, a full round later; he healed from 4 to 12 and the TV kept "4/13 BLOODIED" until the fight ended. The server log has no line for Second Wind either. | SYN-04 (part `0bf7237`), REV-03 | |
+| OBS-33 | 2 | The last blow of the fight is never shown. Four seconds after the press the victory card was up; no attack card, no hit, no fall. The fight's heading, its turn strip and the unshown attack's card ("Sigrun strikes Giant Weasel 3 · Shortsword") were visible through the victory card as it came in. | SYN-06 | |
+| OBS-34 | 2 | The phone is ahead of the TV during enemy turns: Brakka's phone showed the second weasel's hit and "Brakka has 8 HP left" while the TV was still showing the first weasel's miss. | SYN-03 | |
+| OBS-35 | 3 | On a hero's own turn his phone says "Your actions — Waiting for Brakka…" in a card under the working action panel. Both phones, every turn. | SYN-05 | |
+
+### Fight presentation
+
+| ID | Sev | Issue | Relates to | Decision |
+|---|---|---|---|---|
+| OBS-30 | 4 | In the roll-call close-up the place card ("5th · Brakka — 6") covers the hero's shoulder and sword, and the figure hangs above its own shadow. | FPX-08 | |
+| OBS-39 | 3 | A dead enemy leaves two round icons with no label and a pool of blood that are drawn over whatever is at that spot on screen: over Brakka's head and chest when he stood near the body (he looked like the one bleeding), over the health cards on the right in close-ups, and over the "Target · Brakka" label. | FPX-09 | |
+| OBS-40 | 3 | "FINISHING BLOW / ENEMY VANQUISHED" takes the whole screen for the first and the second of three enemies, and the camera stays in the close-up afterwards for the rest of the turn. | FPX-07 | |
+| OBS-41 | 3 | Close-ups frame the wrong thing: the other hero fills the foreground with her bow drawn at the attacker's back while the target is hidden behind him; a scimitar swing is shown with the bow drawn; heroes face the camera, not the enemy; floating text runs off the screen edge ("hortsword · 3 piercing"). | FPX-02, FPX-03 | |
+| OBS-42 | 3 | The tumbling die appears in the middle of the field, away from the attacker (once directly above a corpse); two dice tumble for a single d20 roll; damage is still not rolled on screen. | FPX-01, FGT-02 | |
+
+### Fight panel on the phone
+
+| ID | Sev | Issue | Relates to | Decision |
+|---|---|---|---|---|
+| OBS-43 | 2 | Still the developer lists. Movement is a list of 33 entries of the form "Column 1, row 3" with no grid shown on the TV. The attack list has 12 to 37 entries, one for every weapon, target, "mastery" and "Savage Attacker" combination, worded "Longbow → Giant Weasel 2 · half (+2 AC) cover · normal range: 10 ft · disadvantage" and "none cover". The entry chosen for the player can be the worst one (the longbow at disadvantage through half cover, with a sword that has neither lower in the list), and nothing says why a shot is at disadvantage. | PHN-01, FGT-06 | |
+| OBS-44 | 3 | Layout of the panel: labels sit against the left edge on top of the background picture; the lists are cut off ("Column '", "Greatswo"); End turn is under the bottom bar until the page is scrolled; the hit point number cannot be read where the bar's fill ends; a "Bolts 0" chip is shown to heroes who have no crossbow. | PHN-07 | |
+| OBS-45 | 3 | The list of combatants gives a dead enemy "Conditions prone, unconscious, dead" and gives everyone's place as "Cell Column 4, row 1". | PHN-03 | |
+| OBS-46 | 3 | Opening "Rules for this fight" shows developer text: "RULESCombat uses the server-selected grid layout, source movement, range, cover and optional opportunity reactions … Disclosed custom rule tactical.cover-centre-line … Disclosed gap giant-weasel: Climb Speed 30 ft is not modelled". | PHN-03 (folded away, wording unchanged) | |
+
+### Ending, sound and tools
+
+| ID | Sev | Issue | Relates to | Decision |
+|---|---|---|---|---|
+| OBS-53 | 2 | After "The End" the phones say "A new game is started from the TV", and the TV has nothing to start one with: its only control is "Mute narration". | END-02 | |
+| OBS-54 | 3 | The health cards are still visible, dimmed, behind the end card. | END-03 | |
+| OBS-55 | 3 | The TV asked for four music files and got 404 for each (`/assets/music/c-score-bed`, `-motif`, `-tension`, `-combat`), so this session had no score. The TV's console also logged one "play() request was interrupted because the media was removed from the document". | AUD-01 | |
+| OBS-57 | 3 | The logs cannot explain the TV's faults. For a whole game the server log holds attacks and moves only: no initiative order, no turn start or end, no Second Wind, no rest, no story choice or typed line, no state-machine transition, and nothing about what the TV has presented. The display keeps no log the command line can read. OBS-31 to OBS-34 were established from screenshots alone. | DEV-02 | |
+
+### Confirmed working in this game
+
+- The scene title cards now carry each scene's own title (TVX-03).
+- A hero's typed line is anchored to that hero's figure, for both heroes (TVX-02).
+- The fight started with three enemies and the heroes confirmed out of join order (HNT-01; HNT-26 was not hit this time).
+- After an action the phone's panel drops the spent buttons at once (SYN-05).
+- The tumbling dice clip plays (FPX-01).
+- A picture refresh changes the pose (PIC-03).
+- Start-up story text arrived for every group on the first attempt (SES-05).
+- A personal question got an answer from the character's own record ("No children. Harlan left years back, and good riddance. I manage alone.").
+- Leaving the phone page and coming back resumes the same hero.
 
 ## State of the forward state machine
 
