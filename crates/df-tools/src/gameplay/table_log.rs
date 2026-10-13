@@ -6,7 +6,7 @@
 //! per run; it is presentation only and never an authority for game state.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
@@ -30,10 +30,15 @@ const PRESENCE_HEROES: u32 = 2;
 /// stage reads (`df_render::battle::beat_timing`); the display's report is the primary
 /// release signal and the timer only bounds its absence.
 const PACING_MAX_WAIT_MS: u64 = 20_000;
-/// Reports older than this no longer speak for a display: the slowest display that
-/// reported inside the window governs the release, so a closed or frozen tab stops
-/// governing once its reports age out.
-const ACK_WINDOW_MS: u64 = 1_500;
+/// A display whose newest report is older than this no longer governs the release: a
+/// closed, frozen or hidden-away display stops holding the table after this bound,
+/// and the pacing timer wakes then to drop it even if no report ever arrives again.
+/// A live display re-reports about every 1.6 s while the server is behind it, so this
+/// bound is more than two missed reports.
+const ACK_STALE_MS: u64 = 4_000;
+/// Displays whose reports are tracked at once; beyond this the stalest report is
+/// dropped. Several televisions on one room stay distinguishable by instance.
+const ACK_DISPLAYS: usize = 8;
 
 /// The server-side presentation gate, as one typed state so "phones may act on beat N"
 /// and "beat N is still being shown" cannot both be recorded. Transitions happen only in
@@ -111,12 +116,18 @@ struct Ring {
     reaper_armed: bool,
     /// The fight presentation gate: which resolved beats the phones may act past.
     pacing: Pacing,
-    /// A task is waiting for the pacing release time.
-    pacing_armed: bool,
-    /// Recent display presentation reports `(sequence, at)`, newest last. The slowest
-    /// report inside [`ACK_WINDOW_MS`] governs, so with several displays the slowest
-    /// visible one sets the pace and a silent one ages out.
-    acks: VecDeque<(u64, Instant)>,
+    /// The instant the live pacing timer task will wake at, when one is running. The
+    /// task itself owns clearing this (inside the same lock as the release it makes),
+    /// so a newer wait can never find the flag set by a task that has already gone.
+    pacing_armed_until: Option<Instant>,
+    /// The pacing timer could not be armed (no runtime handle captured yet) and the
+    /// failure has been logged; cleared by the next successful arm so a later failure
+    /// logs again instead of stalling silently.
+    pacing_arm_failed: bool,
+    /// The newest presentation report of each display instance, `(sequence, at)`. The
+    /// slowest display whose report is still fresh governs the release; a display
+    /// that stops reporting is dropped after [`ACK_STALE_MS`] and stops governing.
+    acks: BTreeMap<u64, (u64, Instant)>,
 }
 
 pub(super) struct TableLog {
@@ -156,11 +167,15 @@ impl TableLog {
                 composing: Vec::new(),
                 reaper_armed: false,
                 pacing: Pacing::CaughtUp { released: 0 },
-                pacing_armed: false,
-                acks: VecDeque::new(),
+                pacing_armed_until: None,
+                pacing_arm_failed: false,
+                acks: BTreeMap::new(),
             }),
             wake: watch::channel(0).0,
-            runtime: Mutex::new(None),
+            // Construction usually runs inside the server's runtime; capture its handle
+            // now so the first timer can arm even if it is requested (on the session
+            // owner thread) before any watcher subscribes.
+            runtime: Mutex::new(tokio::runtime::Handle::try_current().ok()),
         }
     }
 
@@ -177,10 +192,77 @@ impl TableLog {
             .clone()
     }
 
-    /// Subscribes to appended lines; a change means "publish a fresh view".
-    pub(super) fn subscribe(&self) -> watch::Receiver<u64> {
+    /// Subscribes to appended lines; a change means "publish a fresh view". A
+    /// subscription runs inside the async runtime, so it also captures the runtime
+    /// handle and re-arms a pacing wait whose timer could not be armed earlier (the
+    /// wait was entered on the owner thread before any watcher arrived): arming can
+    /// never be lost just because of the thread it was first requested on.
+    pub(super) fn subscribe(self: &Arc<Self>) -> watch::Receiver<u64> {
         let _captured = self.runtime();
+        if let Some(at) = self.pacing_next_wake() {
+            self.arm_pacing(at);
+        }
         self.wake.subscribe()
+    }
+
+    /// The instant the pacing timer should next wake at, when a wait is in progress:
+    /// the earlier of the release bound and the moment the stalest governing report
+    /// ages out.
+    fn pacing_next_wake(&self) -> Option<Instant> {
+        let ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+        Self::next_wake_locked(&ring)
+    }
+
+    fn next_wake_locked(ring: &Ring) -> Option<Instant> {
+        let Pacing::Presenting { release_at, .. } = ring.pacing else {
+            return None;
+        };
+        let stale = Duration::from_millis(ACK_STALE_MS);
+        let ages_out = ring.acks.values().map(|(_, at)| *at + stale).min();
+        Some(ages_out.map_or(release_at, |at| at.min(release_at)))
+    }
+
+    /// Advances the gate as of `now` under the caller's lock: drops reports whose
+    /// display has gone silent past the bound, lets the slowest fresh report advance
+    /// the released sequence, and lands the timer release when its time has come.
+    /// Returns whether the released sequence moved (watchers must be woken).
+    fn advance_pacing_locked(ring: &mut Ring, now: Instant) -> bool {
+        let Pacing::Presenting {
+            released,
+            latest,
+            stamped_at,
+            release_at,
+        } = ring.pacing
+        else {
+            return false;
+        };
+        let stale = Duration::from_millis(ACK_STALE_MS);
+        ring.acks
+            .retain(|_, (_, at)| now.saturating_duration_since(*at) <= stale);
+        if now >= release_at {
+            ring.pacing = Pacing::CaughtUp { released: latest };
+            ring.acks.clear();
+            return true;
+        }
+        let Some(governing) = ring.acks.values().map(|(seq, _)| *seq).min() else {
+            return false;
+        };
+        let governing = governing.clamp(released, latest);
+        if governing <= released {
+            return false;
+        }
+        if governing >= latest {
+            ring.pacing = Pacing::CaughtUp { released: latest };
+            ring.acks.clear();
+        } else {
+            ring.pacing = Pacing::Presenting {
+                released: governing,
+                latest,
+                stamped_at,
+                release_at,
+            };
+        }
+        true
     }
 
     /// The first table sequence not yet assigned: the floor a development rewind
@@ -207,7 +289,6 @@ impl TableLog {
             ring.lines.retain(|line| line.sequence < floor);
             ring.next_sequence = floor.min(ring.next_sequence);
             ring.pacing = Pacing::CaughtUp { released: 0 };
-            ring.pacing_armed = false;
             ring.acks.clear();
             ring.version += 1;
             ring.version + ring.presence_version
@@ -439,21 +520,15 @@ impl TableLog {
                 .sum()
         };
         let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+        if latest < ring.pacing.latest_known() {
+            ring.pacing = Pacing::CaughtUp { released: 0 };
+            ring.acks.clear();
+        }
+        // A due release (and any report that aged out) lands first, so beats committed
+        // during the wait start a fresh wait of their own instead of extending one
+        // already served. No wake is needed: the caller is publishing this view.
+        let _advanced = Self::advance_pacing_locked(&mut ring, now);
         let mut pacing = ring.pacing;
-        if latest < pacing.latest_known() {
-            pacing = Pacing::CaughtUp { released: 0 };
-        }
-        // A due release lands first, so beats committed during the wait start a fresh
-        // wait of their own instead of extending one already served.
-        if let Pacing::Presenting {
-            latest: known,
-            release_at,
-            ..
-        } = pacing
-            && now >= release_at
-        {
-            pacing = Pacing::CaughtUp { released: known };
-        }
         pacing = match pacing {
             Pacing::CaughtUp { released } if latest <= released => {
                 Pacing::CaughtUp { released: latest }
@@ -497,39 +572,28 @@ impl TableLog {
             }
         };
         ring.pacing = pacing;
-        let arm = match pacing {
-            Pacing::Presenting { release_at, .. } => Some(release_at),
-            Pacing::CaughtUp { .. } => {
-                ring.pacing_armed = false;
-                None
-            }
-        };
+        let arm = Self::next_wake_locked(&ring);
         (pacing.released(), arm)
     }
 
-    /// Releases beats whose presentation wait has elapsed; republishes so the phones are
-    /// offered the next action without waiting for another event. Returns the next
-    /// release instant when one remains.
+    /// The pacing timer's wake: lands a due release, drops displays that stopped
+    /// reporting (releasing what the remaining fresh reports allow), and republishes
+    /// so the phones are offered the next action without waiting for another event.
+    /// Returns the next wake instant when a wait remains; the armed marker is cleared
+    /// in the same lock as the release, by the timer task itself, so it can never be
+    /// left set for a wait no task is watching.
     fn expire_pacing_at(&self, now: Instant) -> Option<Instant> {
-        let (released_any, version, next) = {
+        let (advanced, version, next) = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
-            match ring.pacing {
-                Pacing::Presenting {
-                    latest, release_at, ..
-                } if now >= release_at => {
-                    ring.pacing = Pacing::CaughtUp { released: latest };
-                    ring.version += 1;
-                    (true, ring.version + ring.presence_version, None)
-                }
-                Pacing::Presenting { release_at, .. } => (false, 0, Some(release_at)),
-                Pacing::CaughtUp { .. } => (false, 0, None),
+            let advanced = Self::advance_pacing_locked(&mut ring, now);
+            if advanced {
+                ring.version += 1;
             }
+            let next = Self::next_wake_locked(&ring);
+            ring.pacing_armed_until = next;
+            (advanced, ring.version + ring.presence_version, next)
         };
-        if next.is_none() {
-            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
-            ring.pacing_armed = false;
-        }
-        if released_any {
+        if advanced {
             self.wake.send_replace(version);
         }
         next
@@ -544,62 +608,55 @@ impl TableLog {
             .released()
     }
 
-    /// The display finished presenting beat `sequence`. The report is clamped to the
-    /// beats actually pending (never behind released, never beyond latest) and can do
-    /// nothing but advance the released sequence; the slowest report inside the ack
-    /// window governs. Returns the released sequence after the report.
-    pub(super) fn report_presented_at(&self, sequence: u64, now: Instant) -> u64 {
+    /// Display instance `display` finished presenting beat `sequence`. Only the
+    /// newest report per instance is kept, clamped to the beats actually pending
+    /// (never beyond latest); the slowest fresh instance governs, and a report can do
+    /// nothing but advance the released sequence — a reconnected display reporting
+    /// from the start therefore never moves it backward. Also arms the pacing timer
+    /// for the new wake (this report's own ageing-out), whichever thread it runs on.
+    /// Returns the released sequence after the report.
+    pub(super) fn report_presented_at(
+        self: &Arc<Self>,
+        display: u64,
+        sequence: u64,
+        now: Instant,
+    ) -> u64 {
         if !self.enabled {
             return sequence;
         }
-        let (released, advanced, version) = {
+        let (released, advanced, version, wake_at) = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
-            let Pacing::Presenting {
-                released,
-                latest,
-                stamped_at,
-                release_at,
-            } = ring.pacing
-            else {
+            let Pacing::Presenting { latest, .. } = ring.pacing else {
                 return ring.pacing.released();
             };
-            let clamped = sequence.clamp(released, latest);
-            ring.acks.push_back((clamped, now));
-            while ring.acks.len() > 64 {
-                ring.acks.pop_front();
+            if !ring.acks.contains_key(&display) && ring.acks.len() >= ACK_DISPLAYS {
+                // Bounded: the stalest tracked display makes room for a new one.
+                if let Some(stalest) = ring
+                    .acks
+                    .iter()
+                    .min_by_key(|(_, (_, at))| *at)
+                    .map(|(instance, _)| *instance)
+                {
+                    ring.acks.remove(&stalest);
+                }
             }
-            let window = Duration::from_millis(ACK_WINDOW_MS);
-            ring.acks
-                .retain(|(_, at)| now.saturating_duration_since(*at) <= window);
-            let governing = ring
-                .acks
-                .iter()
-                .map(|(seq, _)| *seq)
-                .min()
-                .unwrap_or(released);
-            if governing <= released {
-                return released;
+            ring.acks.insert(display, (sequence.min(latest), now));
+            let advanced = Self::advance_pacing_locked(&mut ring, now);
+            if advanced {
+                ring.version += 1;
             }
-            if governing >= latest {
-                ring.pacing = Pacing::CaughtUp { released: latest };
-                ring.acks.clear();
-            } else {
-                ring.pacing = Pacing::Presenting {
-                    released: governing,
-                    latest,
-                    stamped_at,
-                    release_at,
-                };
-            }
-            ring.version += 1;
             (
-                governing.min(latest),
-                true,
+                ring.pacing.released(),
+                advanced,
                 ring.version + ring.presence_version,
+                Self::next_wake_locked(&ring),
             )
         };
         if advanced {
             self.wake.send_replace(version);
+        }
+        if let Some(at) = wake_at {
+            self.arm_pacing(at);
         }
         released
     }
@@ -663,17 +720,29 @@ impl TableLog {
         }
     }
 
-    /// One task at a time waits for the pacing release, like the presence reaper.
+    /// Arms the pacing timer whatever thread asks: the runtime handle captured at
+    /// construction or by a watcher subscription is used when the caller (the
+    /// session owner thread) has none of its own. A running task follows the gate's
+    /// next wake by itself, so a second task is spawned only when no task is running
+    /// or the new wake is earlier than the one it sleeps to. When no handle exists
+    /// yet the failure is logged once per wait and the marker stays unset, so the
+    /// next subscription, view or report retries the arm instead of stalling.
     fn arm_pacing(self: &Arc<Self>, deadline: Instant) {
         let Some(runtime) = self.runtime() else {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            if !ring.pacing_arm_failed {
+                ring.pacing_arm_failed = true;
+                println!("PACING timer_unarmed step=arm_pacing reason=no_runtime_handle");
+            }
             return;
         };
         {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
-            if ring.pacing_armed {
+            ring.pacing_arm_failed = false;
+            if ring.pacing_armed_until.is_some_and(|at| at <= deadline) {
                 return;
             }
-            ring.pacing_armed = true;
+            ring.pacing_armed_until = Some(deadline);
         }
         let log = self.clone();
         runtime.spawn(async move {
@@ -1627,37 +1696,115 @@ mod tests {
     }
 
     #[test]
-    fn display_reports_release_beats_and_the_slowest_in_the_window_governs() {
+    fn one_displays_reports_release_each_beat_as_it_is_presented() {
         let log = TableLog::new();
         let now = Instant::now();
         let durations = [(1, 9_000), (2, 9_000), (3, 9_000)];
         let (released, _) = log.pacing_observe(3, &durations, now);
         assert_eq!(released, 0);
-        // One display races ahead; another (older report in the window) is behind:
-        // the slowest governs, so nothing passes beat 1 yet.
-        assert_eq!(log.report_presented_at(1, now), 1);
+        // Only the display's newest report speaks for it: its own earlier reports
+        // never hold the release back.
+        assert_eq!(log.report_presented_at(7, 1, now), 1);
         assert_eq!(
-            log.report_presented_at(3, now + Duration::from_millis(400)),
+            log.report_presented_at(7, 2, now + Duration::from_millis(100)),
+            2
+        );
+        assert_eq!(
+            log.report_presented_at(7, 3, now + Duration::from_millis(200)),
+            3,
+            "the last beat releases at once, long before the timer bound"
+        );
+        let (released, arm) = log.pacing_observe(3, &durations, now + Duration::from_millis(200));
+        assert_eq!((released, arm), (3, None), "caught up by ack");
+        // A report with nothing presenting changes nothing.
+        assert_eq!(
+            log.report_presented_at(7, 3, now + Duration::from_millis(300)),
+            3
+        );
+    }
+
+    #[test]
+    fn two_displays_the_slowest_governs_until_it_stops_reporting() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        let durations = [(1, 9_000), (2, 9_000), (3, 9_000)];
+        let (released, _) = log.pacing_observe(3, &durations, now);
+        assert_eq!(released, 0);
+        // Display 1 is slow, display 2 races ahead: the slowest governs.
+        assert_eq!(log.report_presented_at(1, 1, now), 1);
+        assert_eq!(
+            log.report_presented_at(2, 3, now + Duration::from_millis(400)),
             1,
-            "the slow display's report inside the window still governs"
+            "the slow display still governs"
         );
         // Illegal reports are clamped, never obeyed past the pending beats.
         assert_eq!(
-            log.report_presented_at(99, now + Duration::from_millis(500)),
+            log.report_presented_at(2, 99, now + Duration::from_millis(500)),
             1
         );
-        // Once the slow report ages out of the window, fresh reports release fully —
-        // long before the timer bound, because the ack is the primary signal.
-        let later = now + Duration::from_millis(ACK_WINDOW_MS + 600);
-        assert_eq!(log.report_presented_at(3, later), 3);
-        let (released, arm) = log.pacing_observe(3, &durations, later);
+        // Display 1 reports nothing more. At the timer's wake just past its bound it
+        // is dropped without any new report, and display 2's fresh report releases.
+        let fast_fresh = now + Duration::from_millis(ACK_STALE_MS - 500);
+        assert_eq!(log.report_presented_at(2, 3, fast_fresh), 1);
+        let wake = now + Duration::from_millis(ACK_STALE_MS + 1);
+        assert_eq!(log.expire_pacing_at(wake), None);
         assert_eq!(
-            (released, arm),
-            (3, None),
-            "caught up by ack, timer disarmed"
+            log.released_sequence(),
+            3,
+            "a silent display stopped governing after the bounded time"
         );
-        // A report with nothing presenting changes nothing.
-        assert_eq!(log.report_presented_at(3, later), 3);
+    }
+
+    #[test]
+    fn a_display_reconnecting_mid_beat_never_moves_the_release_backward() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        let durations = [(1, 9_000), (2, 9_000), (3, 9_000), (4, 9_000), (5, 9_000)];
+        let (released, _) = log.pacing_observe(5, &durations, now);
+        assert_eq!(released, 0);
+        assert_eq!(log.report_presented_at(1, 2, now), 2);
+        // The same television reloads: a new instance starts from nothing. It holds
+        // further release while it catches up but cannot un-release beat 2.
+        let mid = now + Duration::from_millis(300);
+        assert_eq!(log.report_presented_at(9, 0, mid), 2);
+        assert_eq!(
+            log.report_presented_at(1, 4, mid + Duration::from_millis(100)),
+            2,
+            "the reconnected display governs until it catches up"
+        );
+        // It jumps to the newest beat (its coherent catch-up) and releases follow.
+        assert_eq!(
+            log.report_presented_at(9, 5, mid + Duration::from_millis(200)),
+            4
+        );
+        assert_eq!(
+            log.report_presented_at(1, 5, mid + Duration::from_millis(300)),
+            5
+        );
+    }
+
+    #[test]
+    fn a_display_that_goes_away_leaves_the_timer_bound_in_charge() {
+        let log = TableLog::new();
+        let now = Instant::now();
+        let durations = [(1, 5_000), (2, 5_000)];
+        let (released, arm) = log.pacing_observe(2, &durations, now);
+        assert_eq!(released, 0);
+        assert_eq!(arm, Some(now + Duration::from_millis(10_000)));
+        // The only display reports once and is then closed.
+        assert_eq!(log.report_presented_at(4, 1, now), 1);
+        // Its stale wake drops it but releases nothing more; the timer bound governs.
+        let stale_wake = now + Duration::from_millis(ACK_STALE_MS + 1);
+        assert_eq!(
+            log.expire_pacing_at(stale_wake),
+            Some(now + Duration::from_millis(10_000))
+        );
+        assert_eq!(log.released_sequence(), 1);
+        assert_eq!(
+            log.expire_pacing_at(now + Duration::from_millis(10_000)),
+            None
+        );
+        assert_eq!(log.released_sequence(), 2);
     }
 
     #[test]
@@ -1702,6 +1849,29 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), wake.changed())
             .await
             .expect("woken by the pacing bound")
+            .unwrap();
+        assert_eq!(log.released_sequence(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_wait_entered_before_any_runtime_handle_is_rearmed_by_the_first_watcher() {
+        // The fight-a5 stall: the gate was entered on the session owner thread, which
+        // has no runtime, before any watcher had subscribed, so no timer ever armed.
+        // The first subscription must capture the runtime and arm the pending wait.
+        let log = std::thread::spawn(|| {
+            let log = TableLog::new();
+            let (_released, arm) = log.pacing_observe(1, &[(1, 50)], Instant::now());
+            // Arming here cannot work: this thread has no runtime and none is captured.
+            log.arm_pacing(arm.expect("a presenting gate arms its bound"));
+            log
+        })
+        .join()
+        .unwrap();
+        assert_eq!(log.released_sequence(), 0);
+        let mut wake = log.subscribe();
+        tokio::time::timeout(Duration::from_secs(2), wake.changed())
+            .await
+            .expect("woken by the re-armed pacing bound")
             .unwrap();
         assert_eq!(log.released_sequence(), 1);
     }

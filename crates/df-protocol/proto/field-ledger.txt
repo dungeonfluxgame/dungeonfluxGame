@@ -685,5 +685,6 @@ field dungeonflux.public.v1.CombatView 21 released_sequence type=4 label=1 prese
 message dungeonflux.public.v1.PresentedRequest
 message dungeonflux.public.v1.PresentedResponse
 field dungeonflux.public.v1.PresentedRequest 1 sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentedRequest 2 display_instance type=4 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PresentedResponse 1 released_sequence type=4 label=1 presence=false target=- oneof=-
 method dungeonflux.public.v1.SessionService ReportPresented .dungeonflux.public.v1.PresentedRequest .dungeonflux.public.v1.PresentedResponse client-stream=false server-stream=false

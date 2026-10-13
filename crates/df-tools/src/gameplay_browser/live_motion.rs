@@ -836,6 +836,21 @@ fn effective_presented(motion: &Motion) -> u64 {
 thread_local! {
     /// Which report keep-alive loop is current; an older one ends itself.
     static REPORT_LOOP: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// This page's display instance, chosen once per page load: two televisions on
+    /// one room (and one television across a reload) report as different instances,
+    /// so the server can let the slowest fresh one govern and drop a silent one.
+    static DISPLAY_INSTANCE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// This page's display instance (never zero, which the server reads as legacy).
+fn display_instance() -> u64 {
+    DISPLAY_INSTANCE.with(|cell| {
+        if cell.get() == 0 {
+            let seed = (js_sys::Math::random() * 9_007_199_254_740_991.0) as u64;
+            cell.set(seed.max(1) ^ (u64::from(now_ms()) << 17) | 1);
+        }
+        cell.get()
+    })
 }
 
 /// Sends one presentation report; returns the server's released sequence after it.
@@ -845,7 +860,14 @@ async fn send_report(client: &Rc<RefCell<Client>>, sequence: u64) -> Option<u64>
         (state.sessions.clone()?, state.credential.clone())
     };
     let mut sessions = sessions;
-    let mut call = request(rpc::PresentedRequest { sequence }, &credential).ok()?;
+    let mut call = request(
+        rpc::PresentedRequest {
+            sequence,
+            display_instance: display_instance(),
+        },
+        &credential,
+    )
+    .ok()?;
     call.set_timeout(Duration::from_millis(2_000));
     let outcome = sessions.report_presented(call).await;
     let root = client.borrow().root.clone();
@@ -990,6 +1012,7 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             root.set_attribute("data-battle-state", battle.name())?;
             // The one-clock debug record: checks assert sync from these numbers.
             root.set_attribute("data-presented-seq", &presented.to_string())?;
+            root.set_attribute("data-display-instance", &display_instance().to_string())?;
             root.set_attribute("data-latest-seq", &latest.to_string())?;
             root.set_attribute("data-beat-log", &beat_log)?;
             root.set_attribute(

@@ -110,6 +110,7 @@ pub(super) enum Call {
     Presented {
         credential: [u8; 32],
         sequence: u64,
+        display_instance: u64,
         reply: oneshot::Sender<Result<u64, tonic::Status>>,
     },
     /// Which current room member a player binding belongs to (speech input).
@@ -1726,7 +1727,12 @@ impl Actor {
     /// A presentation report from the shared display. Only the display credential's
     /// reports advance the pacing gate; a player credential's report is ignored (it
     /// learns the current released sequence and nothing changes).
-    fn presented(&mut self, credential: &[u8; 32], sequence: u64) -> Result<u64, tonic::Status> {
+    fn presented(
+        &mut self,
+        credential: &[u8; 32],
+        sequence: u64,
+        display_instance: u64,
+    ) -> Result<u64, tonic::Status> {
         if self.session_lost() {
             return Err(session_lost_status());
         }
@@ -1734,7 +1740,9 @@ impl Actor {
         if role != LocalDemoRole::Display {
             return Ok(self.table_log.released_sequence());
         }
-        Ok(self.table_log.report_presented_at(sequence, Instant::now()))
+        Ok(self
+            .table_log
+            .report_presented_at(display_instance, sequence, Instant::now()))
     }
 }
 
@@ -1757,9 +1765,11 @@ impl Reducer<Call> for Actor {
             Call::Presented {
                 credential,
                 sequence,
+                display_instance,
                 reply,
             } => {
-                let _delivered = reply.send(self.presented(&credential, sequence));
+                let _delivered =
+                    reply.send(self.presented(&credential, sequence, display_instance));
                 return;
             }
             other => other,

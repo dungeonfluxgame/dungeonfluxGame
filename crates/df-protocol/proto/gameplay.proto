@@ -6,7 +6,11 @@ service SessionService { rpc Watch(WatchViewRequest) returns (stream ViewMessage
 // The shared display's presentation report: the last combat beat sequence it has finished
 // presenting (CombatOutcome.sequence). Sequence only; the server accepts it solely from the
 // room's display credential and lets it do nothing but advance the released sequence.
-message PresentedRequest { uint64 sequence = 1; }
+// display_instance distinguishes several displays sharing that credential (and one display
+// across a page reload): the server keeps the newest report per instance and the slowest
+// fresh instance governs, so a display that goes away stops governing when its report ages
+// out. Zero is the legacy unknown instance.
+message PresentedRequest { uint64 sequence = 1; uint64 display_instance = 2; }
 message PresentedResponse { uint64 released_sequence = 1; }
 enum GameplayActionKind { GAMEPLAY_ACTION_KIND_UNSPECIFIED = 0; EXAMINE_HARBOR_SEAL = 1; CHOOSE_HARBOR_SCENE = 2; CREATE_CHARACTER = 3; BEGIN_STORY = 4; ASK_COURIER = 5; ESCORT_COURIER = 6; DEFEND_COURIER = 7; GREATSWORD_ATTACK = 8; SECOND_WIND = 9; END_TURN = 10; SHORT_REST = 11; MOVE = 12; DASH = 13; DODGE = 14; DISENGAGE = 15; OPPORTUNITY_ATTACK = 16; DECLINE_REACTION = 17; STAND = 18; PICK_UP_WEAPON = 19; RESOLVE_ERRAND = 20; SET_TABLE_SETTING = 40; }
 enum RejectionCode { REJECTION_CODE_UNSPECIFIED = 0; STALE_OFFER = 1; WRONG_TURN = 2; INVALID_SELECTION = 3; PAUSED = 4; RESOURCE_MISSING = 5; CAPABILITY_UNAVAILABLE = 6; RECOVERY_REQUIRED = 7; REVISION_CONFLICT = 8; OPERATION_CONFLICT = 9; OPERATION_EXPIRED = 10; }

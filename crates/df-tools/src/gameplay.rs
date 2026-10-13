@@ -316,12 +316,13 @@ impl rpc::session_service_server::SessionService for Service {
         request: Request<rpc::PresentedRequest>,
     ) -> Result<Response<rpc::PresentedResponse>, Status> {
         let credential = credential(&request)?;
-        let sequence = request.into_inner().sequence;
+        let request = request.into_inner();
         let (reply, wait) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::Presented {
                 credential,
-                sequence,
+                sequence: request.sequence,
+                display_instance: request.display_instance,
                 reply,
             })
             .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
