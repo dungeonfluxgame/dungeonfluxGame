@@ -104,3 +104,21 @@ The other three scenes (`scan-riverbed`, `scan-valley-bridges`, `scan-summit`) a
 Shachar Weis and Zhi Wang that have **no licence** and downloads disabled by their authors. They are
 used for private local testing only: no scan data or derived image is committed, and they are
 excluded from the default scene rotation.
+
+## PlayCanvas scan voxel collision (MIT)
+
+The Rust collision authoring in `crates/df-render/src/battle/collider.rs` ports Gaussian
+voxel density accumulation, sparse octant traversal with 4x4x4 masks, and capsule/voxel
+box contact from:
+
+- `playcanvas/splat-transform`, commit `45931669547a7c70cbc44d2657749f8a56e5533c`:
+  `src/lib/gpu/gpu-voxelization.ts`, `src/lib/writers/sparse-octree.ts`.
+  <https://github.com/playcanvas/splat-transform/tree/45931669547a7c70cbc44d2657749f8a56e5533c>
+- `playcanvas/supersplat-viewer`, commit `cd0e316e397929ffa87abd4833f73f8a0bd1fd2b`:
+  `src/collision/voxel-collision.ts`, `src/collision/collision.ts`.
+  <https://github.com/playcanvas/supersplat-viewer/tree/cd0e316e397929ffa87abd4833f73f8a0bd1fd2b>
+
+Copyright (c) 2011-2026 PlayCanvas Ltd. Both repositories use the MIT license, reproduced
+in the PlayCanvas engine notice above. Our authoring uses bounded CPU evaluation,
+explicit child indices, no interior filling or collision push-out, and arbitrary
+segment capsules. No upstream JavaScript or scan voxel data ships with this port.

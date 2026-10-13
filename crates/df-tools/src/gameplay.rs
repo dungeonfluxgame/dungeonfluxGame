@@ -623,6 +623,9 @@ pub async fn serve(
     let battle_scene =
         startup_configuration::battle_scene(std::env::var("DF_GAMEPLAY_BATTLE_SCENE"))?;
     journey::tactical::force_scene(battle_scene.as_deref()).map_err(std::io::Error::other)?;
+    // The display stages every fight on the scene the server resolved, which can be a newer
+    // revision of the id asked for (a scan's collider-authored grid).
+    let battle_scene = journey::tactical::forced_scene().map(str::to_owned);
     let test_fight = startup_configuration::test_fight(
         std::env::var("DF_GAMEPLAY_TEST_FIGHT"),
         std::env::var("DF_GAMEPLAY_TEST_FOE"),

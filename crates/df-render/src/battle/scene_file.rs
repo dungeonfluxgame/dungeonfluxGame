@@ -203,6 +203,8 @@ struct FileGrid {
     rows: u32,
     #[serde(default)]
     blocked: Vec<[i32; 2]>,
+    #[serde(default)]
+    blocked_steps: Option<Vec<[[i32; 2]; 2]>>,
 }
 
 #[derive(Deserialize)]
@@ -482,6 +484,13 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         )
         .map_err(SceneFileError::Terrain)?;
         grid = grid.with_terrain(field);
+    }
+    if let Some(steps) = file.grid.blocked_steps {
+        let steps: Vec<_> = steps
+            .into_iter()
+            .map(|[a, b]| [Cell::new(a[0], a[1]), Cell::new(b[0], b[1])])
+            .collect();
+        grid = grid.with_collision(&steps).map_err(SceneFileError::Grid)?;
     }
     let distribution = match file.distribution.as_deref() {
         None | Some("public") => Distribution::Public,
@@ -777,6 +786,10 @@ embedded!(
     "scan-village",
     "scan-valley-bridges",
     "scan-summit",
+    "scan-riverbed-voxel-v1",
+    "scan-village-voxel-v1",
+    "scan-valley-bridges-voxel-v1",
+    "scan-summit-voxel-v1",
 );
 
 /// The scene a display shows when a location has no description of its own.
@@ -823,7 +836,21 @@ pub fn load_embedded(location_id: &str) -> Option<Result<BattleScene, SceneFileE
     EMBEDDED
         .iter()
         .find(|(id, _)| *id == location_id)
-        .map(|(_, json)| parse(json))
+        .map(|(_, json)| {
+            let mut scene = parse(json)?;
+            if let Some(original_id) = location_id.strip_suffix("-voxel-v1") {
+                let original = load_embedded(original_id)
+                    .ok_or(SceneFileError::Identifier("collision source scene"))??;
+                // The revision may place the scan a little differently (its grid moved toward
+                // a landmark); the camera's map of the scan moves with it.
+                let moved = match (&scene.splat, &original.splat) {
+                    (Some(now), Some(then)) => now.translate - then.translate,
+                    _ => Vec3::new(0.0, 0.0, 0.0),
+                };
+                scene.occupancy = original.occupancy.map(|map| map.moved(moved));
+            }
+            Ok(scene)
+        })
 }
 
 #[cfg(test)]
@@ -852,7 +879,7 @@ mod tests {
             assert!(scene.grid.walkable_cells().count() >= 12, "{id}");
             assert!(scene.ground.stem.starts_with("ground-"));
         }
-        assert_eq!(embedded_ids().count(), 13);
+        assert_eq!(embedded_ids().count(), 17);
     }
 
     #[test]
@@ -1089,7 +1116,7 @@ mod tests {
 
     #[test]
     fn the_embedded_scan_scenes_are_private_test_only_unless_licensed_and_leave_the_rotation() {
-        let mut private = 0;
+        let mut private = std::collections::BTreeSet::new();
         for id in embedded_ids().filter(|id| id.starts_with("scan-")) {
             let scene = load_embedded(id).unwrap().unwrap();
             let layer = scene
@@ -1105,7 +1132,7 @@ mod tests {
             );
             let attribution = scene.attribution.as_ref().expect("scans name their source");
             if scene.distribution == Distribution::PrivateTestOnly {
-                private += 1;
+                private.insert(attribution.source_url.clone());
                 assert!(attribution.licence.contains("private test only"), "{id}");
             } else {
                 assert_eq!(attribution.licence, "CC BY 4.0", "{id}");
@@ -1122,7 +1149,17 @@ mod tests {
                 scene.grid.play_plane_y(),
                 scene.grid.walkable_cells().count()
             );
-            assert!(deviation <= limit + 1e-3, "{id}: deviation {deviation}");
+            if !scene.grid.has_collision() {
+                assert!(deviation <= limit + 1e-3, "{id}: deviation {deviation}");
+            } else {
+                for cell in scene.grid.walkable_cells() {
+                    let feet = scene.grid.cell_centre(cell);
+                    assert_eq!(
+                        feet.y,
+                        scene.grid.terrain().unwrap().height_at(feet.x, feet.z)
+                    );
+                }
+            }
             // Heroes and enemies need room: a connected open area, not scattered cells.
             let largest = scene
                 .grid
@@ -1130,9 +1167,10 @@ mod tests {
                 .map(|cell| scene.grid.reachable_from(cell).len())
                 .max()
                 .unwrap_or(0);
-            assert!(largest >= 16, "{id}: largest open area {largest}");
+            let minimum = if scene.grid.has_collision() { 8 } else { 16 };
+            assert!(largest >= minimum, "{id}: largest open area {largest}");
         }
-        assert_eq!(private, 3, "three unlicensed scans");
+        assert_eq!(private.len(), 3, "three unlicensed scan sources");
         // No location of the adventure tables is a scan: the default rotation never reaches one.
         let table = include_str!("../../../../content/adventure-tables/locations.json");
         assert!(!table.contains("scan-"));

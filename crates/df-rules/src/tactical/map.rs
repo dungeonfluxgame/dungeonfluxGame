@@ -56,6 +56,8 @@ pub struct GridData {
     pub cols: u16,
     pub rows: u16,
     pub blocked: Vec<Cell>,
+    #[serde(default)]
+    pub blocked_steps: Vec<[Cell; 2]>,
     #[serde(flatten)]
     pub rendering_fields: BTreeMap<String, IgnoredAny>,
 }
@@ -94,6 +96,7 @@ pub struct BattleMap {
     cols: u16,
     rows: u16,
     blocked: BTreeSet<Cell>,
+    blocked_steps: BTreeSet<[Cell; 2]>,
     difficult: BTreeSet<Cell>,
     cover: BTreeMap<Cell, Cover>,
     hero_spawns: Vec<Cell>,
@@ -119,7 +122,9 @@ impl BattleMap {
             return Err(RuleError::Capacity);
         }
         let cell_capacity = usize::from(data.grid.cols) * usize::from(data.grid.rows);
-        if data.grid.blocked.len() > cell_capacity {
+        if data.grid.blocked.len() > cell_capacity
+            || data.grid.blocked_steps.len() > cell_capacity * 4
+        {
             return Err(RuleError::Capacity);
         }
         let mut ids = BTreeSet::new();
@@ -156,6 +161,7 @@ impl BattleMap {
                 cols: data.grid.cols,
                 rows: data.grid.rows,
                 blocked: BTreeSet::new(),
+                blocked_steps: BTreeSet::new(),
                 difficult: BTreeSet::new(),
                 cover: BTreeMap::new(),
                 hero_spawns: layout.spawns.heroes.clone(),
@@ -169,6 +175,16 @@ impl BattleMap {
                 }
             }
             let mut obstacle_ids = BTreeSet::new();
+            for &[from, to] in &data.grid.blocked_steps {
+                map.require_cell(from)?;
+                map.require_cell(to)?;
+                if from.distance(to) != 5 {
+                    return Err(RuleError::MapData);
+                }
+                if !map.blocked_steps.insert(ordered_step(from, to)) {
+                    return Err(RuleError::DuplicateCell);
+                }
+            }
             for obstacle in &layout.obstacles {
                 if !valid_id(&obstacle.id) || !obstacle_ids.insert(&obstacle.id) {
                     return Err(RuleError::DuplicateId);
@@ -288,6 +304,7 @@ impl BattleMap {
         self.contains(from)
             && self.contains(to)
             && from.distance(to) == 5
+            && !self.blocked_steps.contains(&ordered_step(from, to))
             && !self.is_blocked(to)
             && (from.0 == to.0
                 || from.1 == to.1
@@ -307,6 +324,9 @@ impl BattleMap {
         self.require_cell(from)?;
         self.require_cell(to)?;
         let mut cover = Cover::None;
+        if barrier_between(&self.blocked_steps, from, to) {
+            cover = Cover::Total;
+        }
         for (&cell, &grade) in &self.cover {
             if cell != from && intersects(from, to, cell) {
                 cover = cover.max(grade);
@@ -320,6 +340,72 @@ impl BattleMap {
         }
         Ok(cover)
     }
+}
+
+fn ordered_step(from: Cell, to: Cell) -> [Cell; 2] {
+    if from < to { [from, to] } else { [to, from] }
+}
+
+// A blocked step between two cells that share an edge is a barrier along that edge (a fence
+// runs there). In doubled grid coordinates a cell's centre is odd and an edge's ends are even,
+// so a line between two centres never runs along a barrier. It is stopped when it passes
+// through the inside of a barrier, or through a corner where barriers lie on both sides of it
+// (the wall goes on past the corner). A line that only touches the end of a wall is not
+// stopped, the same way a line that only touches an obstacle's corner takes no cover from it.
+// A blocked diagonal step is a body-width fact (a figure cannot squeeze round that corner) and
+// stops no line. All arithmetic is integral.
+fn barrier_between(steps: &BTreeSet<[Cell; 2]>, from: Cell, to: Cell) -> bool {
+    if from == to {
+        return false;
+    }
+    let p = [i64::from(from.0) * 2 + 1, i64::from(from.1) * 2 + 1];
+    let q = [i64::from(to.0) * 2 + 1, i64::from(to.1) * 2 + 1];
+    let cross = |u: [i64; 2], v: [i64; 2], w: [i64; 2]| {
+        (v[0] - u[0]) * (w[1] - u[1]) - (v[1] - u[1]) * (w[0] - u[0])
+    };
+    let within = |point: [i64; 2]| {
+        (0..2)
+            .all(|axis| p[axis].min(q[axis]) <= point[axis] && point[axis] <= p[axis].max(q[axis]))
+    };
+    // Corners the line touches, with the sides of the line a barrier leaves them on.
+    let mut touched: Vec<([i64; 2], bool, bool)> = Vec::new();
+    for &[a, b] in steps {
+        let delta = [
+            i64::from(b.0) - i64::from(a.0),
+            i64::from(b.1) - i64::from(a.1),
+        ];
+        if delta[0] != 0 && delta[1] != 0 {
+            continue;
+        }
+        let mid = [
+            i64::from(a.0) + i64::from(b.0) + 1,
+            i64::from(a.1) + i64::from(b.1) + 1,
+        ];
+        let r = [mid[0] - delta[1], mid[1] + delta[0]];
+        let s = [mid[0] + delta[1], mid[1] - delta[0]];
+        let (side_r, side_s) = (cross(p, q, r).signum(), cross(p, q, s).signum());
+        if side_r * side_s < 0 {
+            if cross(r, s, p).signum() * cross(r, s, q).signum() < 0 {
+                return true;
+            }
+            continue;
+        }
+        for (corner, side) in [(r, side_s), (s, side_r)] {
+            if cross(p, q, corner) != 0 || !within(corner) {
+                continue;
+            }
+            let index = match touched.iter().position(|(known, _, _)| *known == corner) {
+                Some(index) => index,
+                None => {
+                    touched.push((corner, false, false));
+                    touched.len() - 1
+                }
+            };
+            touched[index].1 |= side > 0;
+            touched[index].2 |= side < 0;
+        }
+    }
+    touched.iter().any(|(_, left, right)| *left && *right)
 }
 
 fn valid_id(id: &str) -> bool {
@@ -359,4 +445,102 @@ fn intersects(from: Cell, to: Cell, cell: Cell) -> bool {
         }
     }
     low.0 * high.1 < high.0 * low.1
+}
+
+#[cfg(test)]
+mod collision_tests {
+    use super::*;
+
+    #[test]
+    fn scan_barriers_refuse_steps_reach_and_line_of_effect_in_both_directions() {
+        let bytes = br#"{"schema":2,"grid":{"cols":4,"rows":4,"blocked":[],"blocked_steps":[[[1,1],[2,1]]]},"layouts":[{"id":"scan","obstacles":[],"difficult":[],"spawns":{"heroes":[[0,0]],"enemies":[[0,3]]}}]}"#;
+        let map = BattleMap::from_json(bytes, "scan").unwrap();
+        assert!(!map.step_clear(Cell(1, 1), Cell(2, 1)));
+        assert!(!map.step_clear(Cell(2, 1), Cell(1, 1)));
+        assert_eq!(
+            map.cover_between(Cell(0, 1), Cell(3, 1), &[]),
+            Ok(Cover::Total)
+        );
+        assert_eq!(
+            map.cover_between(Cell(3, 1), Cell(0, 1), &[]),
+            Ok(Cover::Total)
+        );
+        assert_eq!(
+            map.cover_between(Cell(0, 0), Cell(3, 0), &[]),
+            Ok(Cover::None)
+        );
+        assert_eq!(
+            map.cover_between(Cell(0, 1), Cell(3, 1), &[Cell(99, 99)]),
+            Err(RuleError::OutOfBounds)
+        );
+    }
+    fn scan(steps: &str) -> BattleMap {
+        let bytes = format!(
+            r#"{{"schema":2,"grid":{{"cols":6,"rows":6,"blocked":[],"blocked_steps":{steps}}},"layouts":[{{"id":"scan","obstacles":[],"difficult":[],"spawns":{{"heroes":[[0,0]],"enemies":[[5,5]]}}}}]}}"#
+        );
+        BattleMap::from_json(bytes.as_bytes(), "scan").unwrap()
+    }
+
+    #[test]
+    fn a_blocked_diagonal_step_stops_a_body_and_no_line() {
+        let map = scan("[[[1,1],[2,2]]]");
+        assert!(!map.step_clear(Cell(1, 1), Cell(2, 2)));
+        for (from, to) in [
+            (Cell(1, 1), Cell(2, 2)),
+            (Cell(0, 2), Cell(1, 2)),
+            (Cell(2, 1), Cell(3, 1)),
+            (Cell(0, 0), Cell(4, 4)),
+        ] {
+            assert_eq!(map.cover_between(from, to, &[]), Ok(Cover::None));
+        }
+    }
+
+    #[test]
+    fn a_line_past_the_end_of_a_wall_is_clear_and_a_line_through_its_joint_or_corner_is_not() {
+        // A wall along the top edge of row 2, under columns 0 to 2: it ends at the corner
+        // shared by cells (2,1), (3,1), (2,2) and (3,2).
+        let wall = scan("[[[0,1],[0,2]],[[1,1],[1,2]],[[2,1],[2,2]]]");
+        // Through the inside of a piece, and through the joint between two pieces.
+        assert_eq!(
+            wall.cover_between(Cell(1, 3), Cell(1, 0), &[]),
+            Ok(Cover::Total)
+        );
+        assert_eq!(
+            wall.cover_between(Cell(0, 2), Cell(1, 1), &[]),
+            Ok(Cover::Total)
+        );
+        assert_eq!(
+            wall.cover_between(Cell(1, 1), Cell(0, 2), &[]),
+            Ok(Cover::Total)
+        );
+        // Past the wall's end, touching its last corner: the weasel in the open can be shot.
+        assert_eq!(
+            wall.cover_between(Cell(2, 2), Cell(3, 1), &[]),
+            Ok(Cover::None)
+        );
+        assert_eq!(
+            wall.cover_between(Cell(1, 3), Cell(4, 0), &[]),
+            Ok(Cover::None)
+        );
+        assert_eq!(
+            wall.cover_between(Cell(4, 0), Cell(1, 3), &[]),
+            Ok(Cover::None)
+        );
+        // Clear of it altogether.
+        assert_eq!(
+            wall.cover_between(Cell(3, 3), Cell(3, 0), &[]),
+            Ok(Cover::None)
+        );
+        // The same wall turning a corner downward at its end: the line through that corner now
+        // has wall on both sides of it and is stopped; a line outside the corner is not.
+        let corner = scan("[[[0,1],[0,2]],[[1,1],[1,2]],[[2,1],[2,2]],[[2,2],[3,2]]]");
+        assert_eq!(
+            corner.cover_between(Cell(2, 2), Cell(3, 1), &[]),
+            Ok(Cover::Total)
+        );
+        assert_eq!(
+            corner.cover_between(Cell(3, 2), Cell(2, 1), &[]),
+            Ok(Cover::None)
+        );
+    }
 }

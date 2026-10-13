@@ -64,6 +64,22 @@ const SCENES: &[(&str, &[u8])] = &[
         "scan-summit",
         include_bytes!("../../../../../content/battle-scenes/scan-summit.json"),
     ),
+    (
+        "scan-riverbed-voxel-v1",
+        include_bytes!("../../../../../content/battle-scenes/scan-riverbed-voxel-v1.json"),
+    ),
+    (
+        "scan-village-voxel-v1",
+        include_bytes!("../../../../../content/battle-scenes/scan-village-voxel-v1.json"),
+    ),
+    (
+        "scan-valley-bridges-voxel-v1",
+        include_bytes!("../../../../../content/battle-scenes/scan-valley-bridges-voxel-v1.json"),
+    ),
+    (
+        "scan-summit-voxel-v1",
+        include_bytes!("../../../../../content/battle-scenes/scan-summit-voxel-v1.json"),
+    ),
 ];
 
 /// The typed lighting fact of every scene the server holds (SRD 5.2.1 p302 Sunlight Sensitivity).
@@ -90,6 +106,13 @@ const LIGHTING: &[(&str, tactical_rules::Lighting)] = &[
     ("scan-village", tactical_rules::Lighting::Sunlight),
     ("scan-valley-bridges", tactical_rules::Lighting::Sunlight),
     ("scan-summit", tactical_rules::Lighting::Sunlight),
+    ("scan-riverbed-voxel-v1", tactical_rules::Lighting::Sunlight),
+    ("scan-village-voxel-v1", tactical_rules::Lighting::Sunlight),
+    (
+        "scan-valley-bridges-voxel-v1",
+        tactical_rules::Lighting::Sunlight,
+    ),
+    ("scan-summit-voxel-v1", tactical_rules::Lighting::Sunlight),
 ];
 /// The rules map for authored scene bytes the server holds, with its lighting fact.
 fn scene_map(bytes: &[u8], layout: &str) -> Result<BattleMap, RepositoryError> {
@@ -113,21 +136,36 @@ fn scene_map(bytes: &[u8], layout: &str) -> Result<BattleMap, RepositoryError> {
 /// from the story location's own scene.
 static FORCED_SCENE: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
 
+// Original scan ids stay available for stored fights. Startup aliases select the latest
+// collider-authored revision for new fights, whose projected scene id is versioned.
+fn preferred_scene(id: &str) -> Option<&'static str> {
+    let current = format!("{id}-voxel-v1");
+    SCENES
+        .iter()
+        .find(|(known, _)| *known == current)
+        .or_else(|| SCENES.iter().find(|(known, _)| *known == id))
+        .map(|(known, _)| *known)
+}
+
 /// Records the forced scene at startup. The id must be one of the scenes the server holds.
 pub(in crate::gameplay) fn force_scene(id: Option<&str>) -> Result<(), String> {
     let forced = match id {
         None => None,
         Some(id) => Some(
-            SCENES
-                .iter()
-                .find(|(known, _)| *known == id)
-                .map(|(known, _)| *known)
+            preferred_scene(id)
                 .ok_or_else(|| format!("DF_GAMEPLAY_BATTLE_SCENE {id:?} has no authored grid"))?,
         ),
     };
     FORCED_SCENE
         .set(forced)
         .map_err(|_| "the forced battle scene was already set".to_owned())
+}
+
+/// The forced scene as the server resolved it at startup: the latest collider-authored revision
+/// of the id that was asked for. The display is told this id, not the one in the environment,
+/// so it draws the grid, the barriers and the ground the server plays on.
+pub(in crate::gameplay) fn forced_scene() -> Option<&'static str> {
+    FORCED_SCENE.get().copied().flatten()
 }
 
 /// The scene a fight at the story's `place` is staged on.
@@ -2821,6 +2859,56 @@ pub(super) mod tests {
     /// recorded receipt was longer than the checkpoint's per-text limit, so
     /// `finish` refused the fight at `finish-checkpoint`.
     #[test]
+    fn stored_scan_fights_keep_their_original_map_and_new_fights_select_voxel_revision() {
+        use super::super::super::beat_script_variety_tests as fixture;
+        with_live(|| {
+            assert_eq!(
+                preferred_scene("scan-village"),
+                Some("scan-village-voxel-v1")
+            );
+            let old = scene_bytes("scan-village").unwrap();
+            let current = scene_bytes("scan-village-voxel-v1").unwrap();
+            assert!(
+                !scene_map(old, "north-south")
+                    .unwrap()
+                    .is_blocked(tactical_rules::Cell(3, 0))
+            );
+            assert!(
+                scene_map(current, "north-south")
+                    .unwrap()
+                    .is_blocked(tactical_rules::Cell(3, 0))
+            );
+            let data: tactical_rules::BattleSceneData = serde_json::from_slice(old).unwrap();
+            let index = data
+                .layouts
+                .iter()
+                .position(|layout| layout.id == "north-south")
+                .unwrap();
+            TEST_SCENE_OVERRIDE.with(|own| own.set(Some("scan-village")));
+            let original = staged_fight(
+                true,
+                operation_for_layout(index, data.layouts.len()),
+                &[20, 19, 1],
+            );
+            TEST_SCENE_OVERRIDE.with(|own| own.set(None));
+            let original = original.unwrap();
+            let restored = fixture::persisted(&original);
+            assert_eq!(snapshot(restored.state()).unwrap().scene, old);
+            let battle = read(restored.state()).unwrap();
+            assert_eq!(read(original.state()).unwrap(), battle);
+            assert!(
+                battle
+                    .combatants()
+                    .iter()
+                    .any(|actor| actor.cell() == tactical_rules::Cell(3, 0))
+            );
+            let mut view = rpc::CombatView::default();
+            project_combat(&restored, None, &mut view).unwrap();
+            assert_eq!(view.location_id, "scan-village");
+        });
+    }
+
+    #[test]
     fn three_scouts_opening_on_the_salt_quay_start_their_fight() {
         with_live(|| {
             let dialogue = dialogue_checkpoint(true, false).unwrap();
@@ -5264,6 +5352,24 @@ mod shared_scene_tests {
                 // Every spawn is on an open cell, both sides can reach each other.
                 for spawn in map.hero_spawns().iter().chain(map.enemy_spawns()) {
                     assert!(!map.is_blocked(*spawn), "{id}/{}: {spawn:?}", layout.id);
+                    if id.ends_with("-voxel-v1") {
+                        let from = cell(i32::from(spawn.0), i32::from(spawn.1));
+                        assert!(
+                            grid.walkable_cells().any(|to| grid.step_clear(from, to)),
+                            "{id}: spawn has no free step"
+                        );
+                    }
+                }
+                for &[from, to] in &data.grid.blocked_steps {
+                    assert!(!grid.step_clear(
+                        cell(i32::from(from.0), i32::from(from.1)),
+                        cell(i32::from(to.0), i32::from(to.1))
+                    ));
+                    // A fence between two cells that share an edge stops a line as well as a
+                    // body; a blocked diagonal step only stops the body.
+                    if from.0 == to.0 || from.1 == to.1 {
+                        assert_eq!(map.cover_between(from, to, &[]), Ok(Cover::Total));
+                    }
                 }
                 for hero in &drawn.heroes {
                     let reach = grid.reachable_from(*hero);
@@ -5318,7 +5424,10 @@ mod shared_scene_tests {
                 }
             }
         }
-        assert_eq!(scans, 4, "the four scan scenes are authored for the server");
+        assert_eq!(
+            scans, 8,
+            "four original and four collider-authored scan revisions"
+        );
     }
 
     fn kobolds(count: u8) -> Vec<pack::TacticalEnemy> {

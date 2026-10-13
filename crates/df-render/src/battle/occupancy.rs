@@ -71,6 +71,13 @@ impl Occupancy {
         self.origin
     }
 
+    /// The same map moved by `by`: for a revision of a scene that places the same scan a
+    /// little differently (the grid moved toward a landmark).
+    pub fn moved(mut self, by: Vec3) -> Self {
+        self.origin = self.origin + by;
+        self
+    }
+
     pub fn cell_m(&self) -> f32 {
         self.cell_m
     }

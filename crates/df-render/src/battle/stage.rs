@@ -1931,6 +1931,9 @@ impl Stage {
         let runtime = &mut self.tokens[index];
         let from = grid.cell_at(runtime.position).unwrap_or(runtime.token.cell);
         let path = grid.path(from, cell).unwrap_or_default();
+        if grid.has_collision() && path.is_empty() {
+            return;
+        }
         if per_step.is_zero() {
             runtime.walk = None;
             runtime.position = target;
@@ -2420,6 +2423,11 @@ impl Stage {
             .shown_hp
             .and_then(|hp| health::tone_of(hp.current, hp.maximum, down));
         let position = self.shaken(runtime, tone, position, rest);
+        let anchor = runtime
+            .walk
+            .as_ref()
+            .map_or(runtime.position, walk_position);
+        let position = self.grid.constrain_figure(position, anchor);
         FigureView {
             id: runtime.token.id.clone(),
             side: runtime.token.side,
@@ -2654,6 +2662,84 @@ mod tests {
             attack: crate::battle::model::AttackStyle::Melee,
             voice: None,
         }
+    }
+
+    #[test]
+    fn scan_spawn_walk_attack_and_fall_keep_surveyed_feet_and_free_cells() {
+        let scene = load_embedded("scan-village-voxel-v1").unwrap().unwrap();
+        let home = scene.layouts[0].heroes[0];
+        let mut stage = Stage::new(scene);
+        assert!(stage.set_layout("north-south"));
+        stage.set_tokens(vec![token("hero", Side::Hero, home, 12)]);
+        let id = TokenId::new("other");
+        for anim in [
+            Anim::Lunge { toward: id.clone() },
+            Anim::Recoil { from: id.clone() },
+            Anim::Dodge { from: id },
+            Anim::Ready {
+                style: ReadyStyle::Brandish,
+            },
+            Anim::Fall,
+        ] {
+            let duration = anim.duration().as_secs_f32();
+            stage.tokens[0].anim = Some(ActiveAnim {
+                anim,
+                elapsed_s: duration * 0.5,
+                direction: Vec3::new(1.0, 0.0, 0.0),
+                landed: false,
+            });
+            // Wherever the pose puts the figure, it is the centre of its cell or a point on
+            // the checked line to a neighbour with a clear step, no further than halfway.
+            let shown = stage.figure(&stage.tokens[0]);
+            let centre = stage.grid.cell_centre(home);
+            let moved = (shown.position.x - centre.x).hypot(shown.position.z - centre.z);
+            assert!(moved <= stage.grid.cell_m() * 0.5 * 2f32.sqrt() + 1e-4);
+            assert_eq!(
+                shown.position.y,
+                stage.grid.ground_height(shown.position.x, shown.position.z)
+            );
+            if moved > 1e-4 {
+                let east = Cell::new(home.col + 1, home.row);
+                assert!(stage.grid.step_clear(home, east));
+                assert!(shown.position.x > centre.x && shown.position.z == centre.z);
+            }
+        }
+        stage.tokens[0].anim = None;
+        let destination = stage
+            .grid
+            .walkable_cells()
+            .find(|cell| {
+                stage
+                    .grid
+                    .path(home, *cell)
+                    .is_some_and(|path| path.len() > 2)
+            })
+            .unwrap();
+        stage.move_to(
+            &TokenId::new("hero"),
+            destination,
+            Duration::from_millis(100),
+        );
+        for _ in 0..100 {
+            advance_runtime(&mut stage.tokens[0], 0.02);
+            let shown = stage.figure(&stage.tokens[0]);
+            let cell = stage.grid.cell_at(shown.position).unwrap();
+            assert!(stage.grid.is_walkable(cell));
+            assert_eq!(
+                shown.position.y,
+                stage.grid.ground_height(shown.position.x, shown.position.z)
+            );
+        }
+        assert_eq!(
+            stage.tokens[0].position,
+            stage.grid.cell_centre(destination)
+        );
+        stage.move_to(&TokenId::new("hero"), Cell::new(3, 0), Duration::ZERO);
+        assert_eq!(
+            stage.tokens[0].position,
+            stage.grid.cell_centre(destination),
+            "no invented teleport through a fence"
+        );
     }
 
     fn stage() -> Stage {

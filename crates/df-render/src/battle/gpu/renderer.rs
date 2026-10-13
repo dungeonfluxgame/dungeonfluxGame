@@ -1138,7 +1138,12 @@ impl Renderer {
             if out.len() / DECAL_STRIDE < MAX_DECALS {
                 out.extend_from_slice(&shape);
                 out.extend_from_slice(&colour);
-                out.extend_from_slice(&[params[0], params[1], params[2], 0.0]);
+                out.extend_from_slice(&[
+                    params[0],
+                    params[1],
+                    params[2],
+                    grid.ground_height(shape[0], shape[1]),
+                ]);
             }
         };
         let highlighted = |cell: crate::battle::Cell| {
@@ -1216,7 +1221,11 @@ impl Renderer {
                     ([0.36, 0.02, 0.03, 0.78], 1.0)
                 };
                 push(
-                    [figure.position.x, figure.position.z + 0.04, 0.8, 0.62],
+                    if grid.has_collision() {
+                        [figure.position.x, figure.position.z, 0.35, 0.35]
+                    } else {
+                        [figure.position.x, figure.position.z + 0.04, 0.8, 0.62]
+                    },
                     tone,
                     [11.0, cross, 0.0],
                 );

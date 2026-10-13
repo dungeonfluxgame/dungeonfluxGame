@@ -13,7 +13,7 @@ struct Frame {
     ground: vec4<f32>,    // centre x, centre z, half size, fall-off
     backdrop: vec4<f32>,  // wall z, half width, base y, height
     spot: vec4<f32>,      // warm pool under the acting figure: x, z, radius, strength
-    plane: vec4<f32>,     // height of the flat play plane, unused x3
+    plane: vec4<f32>,     // play-plane height, ground margin, unused x2
 }
 @group(0) @binding(0) var<uniform> frame: Frame;
 
@@ -297,7 +297,7 @@ fn vs(
     @builtin(vertex_index) i: u32,
     @location(0) shape: vec4<f32>,   // centre x, centre z, half x, half z
     @location(1) col: vec4<f32>,
-    @location(2) params: vec4<f32>,  // kind, glow, active, unused
+    @location(2) params: vec4<f32>,  // kind, glow, active, local ground height
 ) -> VOut {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
@@ -306,8 +306,8 @@ fn vs(
     let x = shape.x + c.x * shape.z;
     let z = shape.y + c.y * shape.w;
     var out: VOut;
-    // The marker lies on the flat play plane; its depth is lifted per pixel in `fs`.
-    let on_ground = vec3<f32>(x, frame.plane.x + 0.012, z);
+    // Each marker uses its own surveyed ground height; depth is lifted per pixel in `fs`.
+    let on_ground = vec3<f32>(x, params.w + 0.012, z);
     out.pos = frame.view_proj * vec4<f32>(on_ground, 1.0);
     out.world = on_ground;
     out.c = c;

@@ -1678,3 +1678,48 @@ fn a_kobold_throws_its_dagger_at_normal_range_and_carries_three() {
         RuleError::OutOfRange,
     );
 }
+
+#[test]
+fn a_scan_fence_refuses_movement_reach_and_attacks_without_spending_a_turn() {
+    let mut data = serde_json::json!({"schema":2,"grid":{"cols":4,"rows":4,"blocked":[]},
+        "layouts":[{"id":"fence","obstacles":[],"difficult":[],"spawns":{"heroes":[[1,1]],"enemies":[[1,3]]}}]});
+    let mut barriers = Vec::new();
+    for row in 0..4 {
+        for next_row in (row - 1).max(0)..=(row + 1).min(3) {
+            barriers.push([[1, row], [2, next_row]]);
+        }
+    }
+    data["grid"]["blocked_steps"] = serde_json::json!(barriers);
+    let map = BattleMap::from_json(&serde_json::to_vec(&data).unwrap(), "fence").unwrap();
+    let src = source();
+    let state = begin(
+        map,
+        vec![
+            melee(1, Cell(1, 1)),
+            CombatantSpec::creature(2, "wolf", Cell(2, 1), 0).unwrap(),
+        ],
+        binding(&src),
+        &records(&src, &[(20, 20), (20, 1)]),
+    )
+    .unwrap()
+    .battle;
+    assert!(
+        state
+            .reachable_cells(1)
+            .unwrap()
+            .iter()
+            .all(|cell| cell.0 < 2)
+    );
+    rejects(
+        &state,
+        1,
+        Action::Move(vec![Cell(1, 1), Cell(2, 1)]),
+        RuleError::Blocked,
+    );
+    rejects(
+        &state,
+        1,
+        strike(2, Weapon::Greatsword, false),
+        RuleError::TotalCover,
+    );
+}

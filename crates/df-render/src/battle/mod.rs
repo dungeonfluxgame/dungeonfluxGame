@@ -16,6 +16,7 @@ mod hud;
 mod speech_bubble;
 
 mod camera;
+pub mod collider;
 mod combat_feed;
 mod director;
 pub mod feel;

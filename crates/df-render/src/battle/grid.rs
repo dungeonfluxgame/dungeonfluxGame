@@ -57,6 +57,8 @@ pub struct Grid {
     no_stand: Vec<bool>,
     difficult: Vec<bool>,
     cover: Vec<Cover>,
+    blocked_steps: BTreeSet<[Cell; 2]>,
+    collision_ground: bool,
 }
 
 impl Grid {
@@ -99,6 +101,8 @@ impl Grid {
             no_stand: vec![false; cells],
             difficult: vec![false; cells],
             cover: vec![Cover::None; cells],
+            blocked_steps: BTreeSet::new(),
+            collision_ground: false,
         })
     }
 
@@ -165,7 +169,85 @@ impl Grid {
 
     /// Ground height at a world point: the play plane everywhere (`0` on a flat grid).
     pub fn ground_height(&self, _x: f32, _z: f32) -> f32 {
+        if self.collision_ground
+            && let Some(terrain) = &self.terrain
+        {
+            return terrain.height_at(_x, _z);
+        }
         self.play_plane_y
+    }
+
+    /// Scan-authored barriers and local ground heights; old scenes retain their play plane.
+    pub fn with_collision(mut self, steps: &[[Cell; 2]]) -> Result<Self, GridError> {
+        if steps.len() > (self.cols * self.rows * 4) as usize {
+            return Err(GridError::WalkableIndexOutOfRange);
+        }
+        for &[from, to] in steps {
+            if !self.in_bounds(from) || !self.in_bounds(to) || from.steps_to(to) != 1 {
+                return Err(GridError::WalkableIndexOutOfRange);
+            }
+            self.blocked_steps.insert(ordered_step(from, to));
+        }
+        self.collision_ground = true;
+        Ok(self)
+    }
+
+    pub fn step_clear(&self, from: Cell, to: Cell) -> bool {
+        self.is_walkable(from)
+            && self.is_walkable(to)
+            && from.steps_to(to) == 1
+            && !self.blocked_steps.contains(&ordered_step(from, to))
+            && (from.col == to.col
+                || from.row == to.row
+                || (self.is_walkable(Cell::new(from.col, to.row))
+                    && self.is_walkable(Cell::new(to.col, from.row))))
+    }
+
+    pub(crate) fn has_collision(&self) -> bool {
+        self.collision_ground
+    }
+
+    /// A scan validates the capsule at cell centres and along the sweeps between neighbours
+    /// with a clear step, and nowhere else. An offset a pose invents (a lunge, a recoil, a
+    /// shake) is therefore kept only along such a sweep from a cell's centre, and no further
+    /// than halfway; any other offset is dropped, so feet never move into a fence. The poses
+    /// can still lean.
+    pub(crate) fn constrain_figure(&self, point: Vec3, anchor: Vec3) -> Vec3 {
+        if !self.collision_ground {
+            return point;
+        }
+        let (x, z) = self
+            .checked_offset(point, anchor)
+            .map_or((anchor.x, anchor.z), |offset| {
+                (anchor.x + offset[0], anchor.z + offset[1])
+            });
+        Vec3::new(x, self.ground_height(x, z), z)
+    }
+
+    /// The part of `point - anchor` that lies on a checked sweep; see [`Self::constrain_figure`].
+    fn checked_offset(&self, point: Vec3, anchor: Vec3) -> Option<[f32; 2]> {
+        let home = self.cell_at(anchor)?;
+        let centre = self.cell_centre(home);
+        let on_centre = (anchor.x - centre.x).abs().max((anchor.z - centre.z).abs()) < 1e-3;
+        let offset = [point.x - anchor.x, point.z - anchor.z];
+        let length = offset[0].hypot(offset[1]);
+        if !on_centre || !length.is_finite() || length < 1e-4 {
+            return None;
+        }
+        // The neighbour the offset points at, of the eight.
+        let toward = Cell::new(
+            home.col + (offset[0] / length).round() as i32,
+            home.row + (offset[1] / length).round() as i32,
+        );
+        if toward == home || !self.step_clear(home, toward) {
+            return None;
+        }
+        let neighbour = self.cell_centre(toward);
+        let sweep = [neighbour.x - centre.x, neighbour.z - centre.z];
+        let sweep_length = sweep[0].hypot(sweep[1]);
+        let along = (offset[0] * sweep[0] + offset[1] * sweep[1]) / sweep_length;
+        let kept = along.clamp(0.0, sweep_length * 0.5) / sweep_length;
+        Some([sweep[0] * kept, sweep[1] * kept])
     }
 
     /// The walkable cells, or every cell when none is walkable.
@@ -269,7 +351,7 @@ impl Grid {
     fn steps_from(&self, current: Cell) -> impl Iterator<Item = Cell> + '_ {
         NEIGHBOURS.iter().filter_map(move |(delta_col, delta_row)| {
             let next = Cell::new(current.col + delta_col, current.row + delta_row);
-            if !self.is_walkable(next) {
+            if !self.step_clear(current, next) {
                 return None;
             }
             let diagonal = *delta_col != 0 && *delta_row != 0;
@@ -397,6 +479,10 @@ impl Grid {
             .min()
             .map(|(_, _, _, cell)| cell)
     }
+}
+
+fn ordered_step(from: Cell, to: Cell) -> [Cell; 2] {
+    if from < to { [from, to] } else { [to, from] }
 }
 
 const NEIGHBOURS: [(i32, i32); 8] = [
@@ -548,5 +634,49 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(second.steps_to(target), 1);
         assert_eq!(grid.free_cell_beside(target, from, &[target]), Some(first));
+    }
+}
+
+#[cfg(test)]
+mod scan_collision_tests {
+    use super::*;
+
+    #[test]
+    fn scan_steps_detour_in_both_directions_and_figures_follow_local_ground() {
+        let terrain = HeightField::new(
+            [0.0, 0.0],
+            1.0,
+            4,
+            3,
+            vec![0.0, 0.2, 0.4, 0.6, 0.0, 0.2, 0.4, 0.6, 0.0, 0.2, 0.4, 0.6],
+        )
+        .unwrap();
+        let a = Cell::new(1, 0);
+        let b = Cell::new(2, 0);
+        let grid = Grid::open_except([0.0, 0.0], 1.0, 3, 2, &[])
+            .unwrap()
+            .with_terrain(terrain)
+            .with_collision(&[[a, b]])
+            .unwrap();
+        assert!(!grid.step_clear(a, b));
+        assert!(!grid.step_clear(b, a));
+        assert!(grid.path(a, b).unwrap().len() > 2);
+        assert!((grid.cell_centre(Cell::new(0, 0)).y - 0.1).abs() < 1e-5);
+        let home = grid.cell_centre(a);
+        let invented = Vec3::new(2.9, 20.0, -3.0);
+        assert_eq!(grid.constrain_figure(invented, home), home);
+        // Toward the barrier: dropped, however small. Away from it, along a clear step: kept on
+        // the line between the two centres, on the local ground, and never past halfway.
+        let toward_fence = Vec3::new(home.x + 0.2, home.y, home.z);
+        assert_eq!(grid.constrain_figure(toward_fence, home), home);
+        let lunge = grid.constrain_figure(Vec3::new(home.x - 0.3, 9.0, home.z + 0.05), home);
+        assert!((lunge.x - (home.x - 0.3)).abs() < 1e-5 && lunge.z == home.z);
+        assert_eq!(lunge.y, grid.ground_height(lunge.x, lunge.z));
+        let far = grid.constrain_figure(Vec3::new(home.x - 5.0, 0.0, home.z), home);
+        assert!((far.x - (home.x - 0.5)).abs() < 1e-5);
+        // Off a centre (mid-walk) nothing is added: the walk itself is the checked line.
+        let walking = Vec3::new(home.x - 0.25, home.y, home.z);
+        let shown = grid.constrain_figure(Vec3::new(walking.x, 0.0, walking.z + 0.2), walking);
+        assert_eq!((shown.x, shown.z), (walking.x, walking.z));
     }
 }
