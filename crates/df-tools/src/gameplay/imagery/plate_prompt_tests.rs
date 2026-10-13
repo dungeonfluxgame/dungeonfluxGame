@@ -277,9 +277,9 @@ fn a_mood_edit_names_the_previous_plate_the_change_and_what_stays_in_both_rating
                 let text = prompt.as_str();
                 assert!(text.starts_with("Image 1 is the previous film still"));
                 assert!(text.contains("poses and small actions move on naturally"));
-                assert!(
-                    text.contains("same faces, hair, clothing, weapons and photographic art style")
-                );
+                assert!(text.contains(
+                    "same place, cast, faces, hair, clothing, weapons and photographic art style"
+                ));
                 assert!(!text.contains(
                     "camera position, framing, light, props, extras and all people exactly"
                 ));

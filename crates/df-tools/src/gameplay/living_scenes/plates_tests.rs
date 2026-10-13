@@ -106,8 +106,10 @@ fn shared(capacity: usize) -> (Arc<Shared>, mpsc::Receiver<Job>) {
 #[tokio::test]
 async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_base_cached() {
     use crate::gameplay::imagery::tests::DirectionFixture;
-    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/devctl-a3/unit-plate-cache");
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/campaign/luna6/J17/unit-plate-cache-{}",
+        std::process::id()
+    ));
     let fixture = DirectionFixture::new(&cache);
     let mut timing = Timing::from_interval(Duration::from_secs(30));
     timing.roll_quiet = Duration::ZERO;
