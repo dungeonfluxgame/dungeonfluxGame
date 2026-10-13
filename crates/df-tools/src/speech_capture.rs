@@ -584,7 +584,11 @@ mod tests {
         assert_eq!(source.matches("permissions()").count(), 0);
         assert_eq!(source.matches("open_microphone(").count(), 2);
         let start = source.find("Some(Command::OpenMicrophone) =>").unwrap();
-        assert!(source[start..start + 200].contains("open_microphone(weak)"));
+        let finish = source[start..]
+            .find("Some(Command::FinishRecording)")
+            .unwrap()
+            + start;
+        assert!(source[start..finish].contains("open_microphone(weak)"));
         let call = source.find("get_user_media").unwrap();
         let function = source.find("async fn open_microphone").unwrap();
         let next_function = source[function + 1..].find("\nfn ").unwrap() + function;

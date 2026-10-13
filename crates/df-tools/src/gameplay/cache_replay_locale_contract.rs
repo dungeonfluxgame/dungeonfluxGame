@@ -1233,8 +1233,9 @@ use prost::Message;
 fn retain_wire(case: &str, role: &str, side: &str, bytes: &[u8], status: &str) {
     use std::fs::{File, OpenOptions};
     use std::io::{Read, Write};
-    let root =
-        std::path::PathBuf::from(std::env::var_os("TMPDIR").expect("guarded witness directory"));
+    let root = std::env::var_os("TMPDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
     let build = option_env!("DF_FIXTURE_BUILD").unwrap_or("unregistered-build");
     let dir = root.join(format!("ai-d04-full-wire-{build}"));
     std::fs::create_dir_all(&dir).unwrap();
