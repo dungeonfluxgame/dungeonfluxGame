@@ -211,7 +211,7 @@ const SCENE_ROLES: &[(&str, &str)] = &[
     ),
     (
         "combat",
-        "the enemy confronts the party and the fight begins",
+        "describe exactly the listed number of creatures and their weapons before the fight begins",
     ),
     (
         "victory",
@@ -463,6 +463,15 @@ fn group_facts(
     rewrites: Option<&Rewrites>,
 ) -> Value {
     let fact = |key: &str| baseline.facts.get(key).cloned().unwrap_or_default();
+    let encounter_fact = |key: &str| {
+        baseline
+            .fact_sheet
+            .iter()
+            .find(|sheet| sheet.beat == "confrontation" && sheet.slot == "narration")
+            .and_then(|sheet| sheet.facts.get(key))
+            .cloned()
+            .unwrap_or_default()
+    };
     let person = |prefix: &str| {
         let age = fact(&format!("{prefix}.age"));
         json!({
@@ -518,6 +527,10 @@ fn group_facts(
             "contact": person("contact"),
             "enemy": {
                 "name": fact("ant.short"),
+                "encounter_count": encounter_fact("encounter.count"),
+                "creatures": encounter_fact("encounter.creatures"),
+                "weapons": encounter_fact("encounter.weapons"),
+                "pattern_fallback": encounter_fact("encounter.fallback"),
                 "speaks": speaks,
                 "voice": fact("ant.voice"),
                 "delivery": fact("ant.delivery"),

@@ -117,6 +117,63 @@ fn forced_entries_are_checked_and_recorded() {
 }
 
 #[test]
+fn combat_introduction_fact_sheet_includes_roster_and_source_weapons() {
+    let forced = ForcedEntries::from([
+        ("location".into(), "pinewood-trail".into()),
+        ("antagonist".into(), "giant-weasel".into()),
+    ]);
+    let generated = generate(&tables(), 17, GenerateOptions::default(), &forced).unwrap();
+    let sheet = generated
+        .fact_sheet
+        .iter()
+        .find(|sheet| sheet.beat == "confrontation" && sheet.slot == "narration")
+        .unwrap();
+
+    assert_eq!(sheet.facts["encounter.count"], "3");
+    assert_eq!(sheet.facts["encounter.weapons"], "bite");
+    assert!(sheet.facts["encounter.creatures"].contains("giant weasels"));
+    assert!(sheet.facts["encounter.fallback"].contains("three giant weasels"));
+    assert!(sheet.facts["encounter.fallback"].contains("bite"));
+
+    // Every antagonist's roster reads as English: the count as a word and a real plural.
+    let creatures = |antagonist: &str| {
+        let tables = tables();
+        let fits = &tables
+            .antagonists
+            .entries
+            .iter()
+            .find(|entry| entry.id == antagonist)
+            .unwrap()
+            .fits;
+        let location = tables
+            .locations
+            .entries
+            .iter()
+            .find(|entry| super::tables::intersects(&entry.tags, fits))
+            .unwrap();
+        let forced = ForcedEntries::from([
+            ("location".into(), location.id.clone()),
+            ("antagonist".into(), antagonist.into()),
+        ]);
+        let options = GenerateOptions {
+            rules_mode: RulesMode::CustomAllowed,
+            ..GenerateOptions::default()
+        };
+        let generated = generate(&tables, 17, options, &forced).unwrap();
+        generated
+            .fact_sheet
+            .iter()
+            .find(|sheet| sheet.beat == "confrontation" && sheet.slot == "narration")
+            .unwrap()
+            .facts["encounter.creatures"]
+            .clone()
+    };
+    assert_eq!(creatures("wolf"), "two wolves");
+    assert_eq!(creatures("mastiff"), "three mastiffs");
+    assert_eq!(creatures("scout"), "one scout and one bandit");
+}
+
+#[test]
 fn longest_coherent_opening_fits_the_narration_bound() {
     let tables = tables();
     let forced = ForcedEntries::from([
@@ -1164,7 +1221,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "575733f0349983b147b0cbc9511a3aa0b9cf7ed9244076dded9f97afae2f4bef",
             "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
-            "79e44f17d3134a305dc5df54d33581a8087ce5b87d801fca1c1579709504e9a0",
+            "9cfefad545bc26dbf4877b6d842e9195ee61558327fc931abb79bd78db06ce97",
         ],
     ),
     (
@@ -1172,7 +1229,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "94829369c00648864f8c968fb01b5f9736b8504197404813bae399c2b34e44c8",
             "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
-            "625e20e9af2f67eb17a6ee39d50b302f0e887e644b23423c324cdd7a44adc4e4",
+            "73a10213df2c7571a22d7ee8d2a6c96f56acf263a0369e0ccd0f25eb65d3aa42",
         ],
     ),
     (
@@ -1180,7 +1237,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "f281627efc12c4dd8fccdc14cadd747ffdf77bbf1ee17ddb06d0cb14ef728674",
             "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
-            "f32559e44dbb05c6b3c440ee2978dc3fadba8ef0ffdb2be9424f221eb76ff263",
+            "bc48d41480a937ca03120dde501bf1b25ce420af02022b74132118826ef52767",
         ],
     ),
 ];

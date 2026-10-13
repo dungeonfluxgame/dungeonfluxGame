@@ -428,6 +428,7 @@ pub(crate) fn generate_with_prose(
             ("age", &ant.age),
         ],
     );
+    let encounter = encounter_details(ant)?;
     let [sub, obj, pos, reflexive] = pronouns(&ant.gender)?;
     put(
         &mut context,
@@ -568,6 +569,12 @@ pub(crate) fn generate_with_prose(
         let mut scene_context = context.clone();
         scene_context.insert("place".into(), place.name.clone());
         scene_context.insert("place_short".into(), place.short.clone());
+        if scene_key == Some(SceneKey::Combat) {
+            scene_context.insert("encounter.count".into(), encounter.count.to_string());
+            scene_context.insert("encounter.creatures".into(), encounter.creatures.clone());
+            scene_context.insert("encounter.weapons".into(), encounter.weapons.clone());
+            scene_context.insert("encounter.fallback".into(), encounter.fallback.clone());
+        }
         let detail = match scene_key {
             Some(SceneKey::Room | SceneKey::Defeat) => context
                 .get("loc.atmos_a")
@@ -939,4 +946,86 @@ fn check(slot: &str, text: &str, maximum: usize) -> Result<(), GenerateError> {
         return Err(GenerateError::Pattern(slot.into()));
     }
     Ok(())
+}
+
+struct EncounterDetails {
+    count: u16,
+    creatures: String,
+    weapons: String,
+    fallback: String,
+}
+
+fn encounter_details(ant: &Antagonist) -> Result<EncounterDetails, GenerateError> {
+    let tactical = ant
+        .tactical
+        .as_ref()
+        .ok_or_else(|| GenerateError::Pattern("ant.tactical".into()))?;
+    let mut count = 0_u16;
+    let mut creatures = Vec::new();
+    let mut weapons = BTreeSet::new();
+    for enemy in &tactical.enemies {
+        count += u16::from(enemy.count);
+        let creature = df_rules::SRD_521_CREATURES
+            .iter()
+            .find(|creature| creature.id == enemy.srd_id)
+            .ok_or_else(|| GenerateError::Pattern("tactical creature source".into()))?;
+        let spec = df_rules::tactical::CombatantSpec::creature(
+            1,
+            &enemy.srd_id,
+            df_rules::tactical::Cell(0, 0),
+            enemy.ammunition,
+        )
+        .map_err(|_| GenerateError::Pattern("tactical creature weapons".into()))?;
+        for weapon in spec.weapons {
+            weapons.insert(weapon.id().replace('-', " "));
+        }
+        creatures.push((enemy.count, creature.name.to_lowercase()));
+    }
+    if count == 0 {
+        return Err(GenerateError::Pattern("empty tactical encounter".into()));
+    }
+    let creatures = creatures
+        .iter()
+        .map(|(number, name)| {
+            if *number == 1 {
+                format!("one {name}")
+            } else {
+                format!("{} {}", number_word(u16::from(*number)), pluralize(name))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" and ");
+    let weapons = weapons.into_iter().collect::<Vec<_>>().join(", ");
+    let noun = if count == 1 { "takes" } else { "take" };
+    let fallback = format!("{creatures} {noun} the field with {weapons}.");
+    Ok(EncounterDetails {
+        count,
+        creatures,
+        weapons,
+        fallback,
+    })
+}
+
+fn number_word(number: u16) -> String {
+    match number {
+        2 => "two".into(),
+        3 => "three".into(),
+        4 => "four".into(),
+        _ => number.to_string(),
+    }
+}
+
+fn pluralize(noun: &str) -> String {
+    if let Some(stem) = noun.strip_suffix("lf") {
+        format!("{stem}lves")
+    } else if let Some(stem) = noun
+        .strip_suffix('y')
+        .filter(|stem| !stem.ends_with(['a', 'e', 'i', 'o', 'u']))
+    {
+        format!("{stem}ies")
+    } else if noun.ends_with('s') {
+        format!("{noun}es")
+    } else {
+        format!("{noun}s")
+    }
 }
