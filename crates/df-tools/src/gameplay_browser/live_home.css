@@ -40,7 +40,7 @@
 /* Bottom: the party row, as wide as the page grid. Heroes fill seats from the left; open seats are
    quiet outlines; five or six heroes make the seats narrower, never a second row. */
 .tv-stage[data-tv-mode=lobby] .tv-roster{position:relative;grid-column:1/-1;grid-row:2;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;row-gap:calc(var(--u)*.8);padding:0;border:0;border-image:none;background:none;box-shadow:none}
-.tv-stage[data-tv-mode=lobby] .tv-roster-slot{grid-column:1/-1;display:block;container-type:inline-size;animation:df-home-in 1.4s ease .8s backwards}
+.tv-stage[data-tv-mode=lobby] .tv-roster-slot{grid-column:1/-1;grid-row:3;display:block;container-type:inline-size;animation:df-home-in 1.4s ease .8s backwards}
 .tv-stage[data-tv-mode=lobby] .tv-party{--seats:4;--seat:calc((100cqi - var(--gap)*(var(--seats) - 1)) / var(--seats));grid-template-columns:repeat(var(--seats),minmax(0,1fr));gap:var(--gap)}
 .tv-stage[data-tv-mode=lobby] .tv-roster[data-count="5"] .tv-party{--seats:5}
 .tv-stage[data-tv-mode=lobby] .tv-roster[data-count="6"] .tv-party{--seats:6}
@@ -51,7 +51,7 @@
 .tv-stage[data-tv-mode=lobby] .tv-member-name{font-size:clamp(calc(var(--u)*1.1),calc(var(--seat)*.08),calc(var(--u)*1.8));line-height:1.2}
 .tv-stage[data-tv-mode=lobby] .tv-member-role,.tv-stage[data-tv-mode=lobby] .tv-member-status{font-size:clamp(calc(var(--u)*.9),calc(var(--seat)*.058),calc(var(--u)*1.25))}
 .tv-stage[data-tv-mode=lobby] .tv-card[data-empty] .tv-member-name{color:#c9bb9b;font-size:clamp(calc(var(--u)*1),calc(var(--seat)*.07),calc(var(--u)*1.4))}
-.tv-stage[data-tv-mode=lobby] .tv-gathered{font-size:var(--fs-label)}
+.tv-stage[data-tv-mode=lobby] .tv-gathered{grid-column:1/-1;grid-row:2;margin:calc(var(--u)*.5) 0;text-align:center;font-size:clamp(24px,calc(var(--u)*2.8),60px);line-height:1.2;color:#f3d59d;text-shadow:0 2px 14px #000d}
 @keyframes df-home-in{from{opacity:0;transform:translateY(calc(var(--u)*1))}to{opacity:1;transform:none}}
 
 /* The sound control is small and sits in the top right corner, above the join card. */

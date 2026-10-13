@@ -20,7 +20,11 @@ use crate::{
     },
     stage_machines::LineState,
 };
-use std::{cell::Cell, time::Duration};
+use std::{
+    cell::Cell,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 use web_sys::Event;
 
 pub(super) const GENERATED: &str = "/assets/ui/generated";
@@ -223,6 +227,27 @@ fn initial(name: &str) -> String {
     name.chars()
         .next()
         .map_or_else(|| "?".to_owned(), |first| first.to_uppercase().collect())
+}
+
+fn is_loopback_join_host(join_host: &str) -> bool {
+    if join_host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    if join_host
+        .parse::<SocketAddr>()
+        .is_ok_and(|address| address.ip().is_loopback())
+    {
+        return true;
+    }
+    if join_host
+        .parse::<IpAddr>()
+        .is_ok_and(|address| address.is_loopback())
+    {
+        return true;
+    }
+    join_host
+        .split_once(':')
+        .is_some_and(|(hostname, _)| hostname.eq_ignore_ascii_case("localhost"))
 }
 
 fn portrait(
@@ -707,7 +732,12 @@ impl TvStage {
         let known_place = self.place.text_content().unwrap_or_default();
         self.same_place
             .set(!model.place.is_empty() && known_place == model.place);
-        self.title.set_text_content(Some(&model.title));
+        let lobby_title = if lobby && !model.adventure_name.is_empty() {
+            &model.adventure_name
+        } else {
+            &model.title
+        };
+        self.title.set_text_content(Some(lobby_title));
         self.place.set_text_content(Some(&model.place));
         set_hidden(&self.place, model.place.is_empty())?;
         self.lede.set_text_content(Some(&model.lede));
@@ -751,9 +781,14 @@ impl TvStage {
             "style",
             &format!("--chars:{}", model.room_code.chars().count().max(1)),
         )?;
-        // PLAY-Q01
-        self.hint
-            .set_text_content(Some(&format!("Or enter the code at {}", model.join_host)));
+        if is_loopback_join_host(&model.join_host) {
+            self.hint.set_text_content(Some(
+                "Phones cannot join yet: the game was started for this computer only",
+            ));
+        } else {
+            self.hint
+                .set_text_content(Some(&format!("Or enter the code at {}", model.join_host)));
+        }
         match &model.speaker {
             Some(speaker) if !lobby => {
                 set_hidden(&self.speaker, false)?;
@@ -847,7 +882,18 @@ impl TvStage {
         } else {
             self.roster.remove_attribute("data-gathered")?;
         }
-        set_hidden(&self.gathered, !gathered)?;
+        set_hidden(&self.gathered, !lobby)?;
+        if lobby {
+            let ready_heroes = if ready_seats == 1 { "hero" } else { "heroes" };
+            let next_step = if gathered {
+                "Any player can begin the adventure from their phone"
+            } else {
+                "Waiting for heroes"
+            };
+            self.gathered.set_text_content(Some(&format!(
+                "{ready_seats} {ready_heroes} ready. {next_step}."
+            )));
+        }
         if newly_ready {
             live_sfx::play(Cue::HeroReady, Duration::ZERO);
         }
@@ -1091,5 +1137,24 @@ impl TvStage {
         self.home_loop.release();
         self.root.remove();
         removed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_loopback_join_host;
+
+    #[test]
+    fn loopback_join_hosts_are_not_shown_as_phone_addresses() {
+        assert!(is_loopback_join_host("127.0.0.1:63319"));
+        assert!(is_loopback_join_host("127.42.0.9:63319"));
+        assert!(is_loopback_join_host("[::1]:63319"));
+        assert!(is_loopback_join_host("localhost:63319"));
+    }
+
+    #[test]
+    fn network_join_hosts_remain_available_to_phones() {
+        assert!(!is_loopback_join_host("192.168.1.20:63319"));
+        assert!(!is_loopback_join_host("game.example.com:63319"));
     }
 }
