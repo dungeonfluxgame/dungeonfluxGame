@@ -217,10 +217,25 @@ impl CombatFeed {
             }
             let fresh: Vec<&Outcome> = snapshot.outcomes.iter().skip(self.seen_outcomes).collect();
             self.seen_outcomes = snapshot.outcomes.len();
-            let targets: Vec<TokenId> = fresh
+            let healed_members: Vec<&Member> = snapshot
+                .members
+                .iter()
+                .filter(|member| {
+                    self.last_hit_points
+                        .get(&member.id)
+                        .is_some_and(|before| member.hit_points > *before)
+                        && !fresh.iter().any(|outcome| outcome.target == member.id)
+                })
+                .collect();
+            let mut targets: Vec<TokenId> = fresh
                 .iter()
                 .map(|outcome| TokenId::new(outcome.target.clone()))
                 .collect();
+            targets.extend(
+                healed_members
+                    .iter()
+                    .map(|member| TokenId::new(member.id.clone())),
+            );
             stage.hold_hit_points(&targets);
             stage.set_tokens(tokens);
             if self.mode == FeedMode::StageOutcomes {
@@ -240,8 +255,7 @@ impl CombatFeed {
             }
             for member in &snapshot.members {
                 let before = self.last_hit_points.get(&member.id).copied();
-                let healed = before.is_some_and(|before| member.hit_points > before)
-                    && !fresh.iter().any(|outcome| outcome.target == member.id);
+                let healed = healed_members.iter().any(|healed| healed.id == member.id);
                 if healed {
                     let amount = member.hit_points - before.unwrap_or(0);
                     let beat = Beat::Heal {
@@ -414,6 +428,34 @@ mod tests {
         assert!(enemy.downed && enemy.slump > 0.99);
     }
 
+    #[test]
+    fn a_healed_hit_point_bar_waits_until_the_heal_beat_is_presented() {
+        fn shown_hp(stage: &Stage) -> Option<u32> {
+            stage
+                .frame()
+                .figures
+                .iter()
+                .find(|figure| figure.id.0 == "a")
+                .and_then(|figure| figure.hit_points)
+                .map(|hp| hp.current)
+        }
+        let mut stage = stage();
+        let mut feed = CombatFeed::default();
+        feed.apply(&mut stage, &snapshot(vec![], [6, 12, 12]))
+            .unwrap();
+
+        let report = feed
+            .apply(&mut stage, &snapshot(vec![], [10, 12, 12]))
+            .unwrap();
+
+        assert_eq!(report.staged, 1);
+        assert_eq!(shown_hp(&stage), Some(6));
+
+        for _ in 0..400 {
+            stage.update(Duration::from_millis(50));
+        }
+        assert_eq!(shown_hp(&stage), Some(10));
+    }
     #[test]
     fn a_hit_point_rise_without_an_outcome_is_staged_as_a_heal() {
         let mut stage = stage();
