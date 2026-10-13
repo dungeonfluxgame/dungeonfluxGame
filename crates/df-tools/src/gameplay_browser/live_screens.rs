@@ -470,7 +470,7 @@ fn exploration_model(
             input.scene.title.clone()
         },
         description: if ended {
-            "The adventure is over. A new game is started from the TV.".to_owned()
+            "The adventure is over. Thank you for playing.".to_owned()
         } else {
             input.narration.to_owned()
         },
