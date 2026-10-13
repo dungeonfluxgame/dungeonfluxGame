@@ -71,7 +71,12 @@
 /* the scene's own title, the party strip and the bubbles wait for the cut; a pending plate's
    speaker is named in the lower third instead */
 .tv-stage[data-shot=establishing] .tv-headline{visibility:hidden}
-.tv-stage[data-shot=plate] .tv-headline{animation:df-shot-in .9s ease .4s backwards}
+/* the scene's title greets the cut, then leaves the picture to the scene
+   (with or without a generated picture); the second name restarts it for the next scene */
+.tv-stage[data-tv-mode=scene]:is([data-shot=plate],[data-shot=stage]) .tv-headline{animation:df-headline-visit 8s ease .4s both}
+.tv-stage[data-tv-mode=scene][data-scene-swap=b]:is([data-shot=plate],[data-shot=stage]) .tv-headline{animation-name:df-headline-visit-b}
+@keyframes df-headline-visit{0%{opacity:0;visibility:visible}11%,82%{opacity:1;visibility:visible}100%{opacity:0;visibility:hidden}}
+@keyframes df-headline-visit-b{0%{opacity:0;visibility:visible}11%,82%{opacity:1;visibility:visible}100%{opacity:0;visibility:hidden}}
 .tv-hud{transition:opacity .8s ease}
 .tv-stage[data-shot=establishing]:not([data-narration-over]) .tv-hud{opacity:0}
 .tv-stage[data-shot=establishing] :is(.tv-fig-bubbles,.tv-plate-bubbles){visibility:hidden}
