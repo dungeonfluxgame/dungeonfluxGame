@@ -323,6 +323,7 @@ pub(super) fn validate(raw: &str, candidate: &str, names: &[String]) -> Option<S
         .trim_matches(|character| matches!(character, '"' | '\u{201c}' | '\u{201d}'))
         .trim();
     if candidate.is_empty()
+        || candidate.starts_with("- ")
         || candidate
             .chars()
             .any(|character| character.is_control() || is_markup_delimiter(character))
@@ -598,6 +599,11 @@ mod tests {
     #[test]
     fn refuses_markdown_markup_in_a_display_candidate() {
         assert_eq!(validate("Open the door", "**Open the door**", &[]), None);
+        assert_eq!(validate("I want the key", "- I want the key", &[]), None);
+        assert_eq!(
+            validate("I want-the key", "I want-the key", &[]).as_deref(),
+            Some("I want-the key")
+        );
         assert_eq!(normalise("**Open the door**", &[]), "Open the door.");
     }
 
