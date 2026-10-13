@@ -238,6 +238,9 @@ fn phase_kind(state: StageState) -> &'static str {
 }
 
 /// The longest a blow waits for the battlefield to finish the one before it.
+pub(crate) const ROLLING_MS: u32 = 1_150;
+const TURN_CUE_MS: u32 = 650;
+const IMPACT_CUE_MS: u32 = 650;
 const BATTLEFIELD_WAIT_CAP_MS: u64 = 20_000;
 
 impl<D: Clone> Default for StageDirector<D> {
@@ -276,9 +279,11 @@ impl<D: Clone> StageDirector<D> {
         self.presented
     }
 
-    /// Preserve the adapter's idle projection cursor before a new batch starts playing.
+    /// Accept a strike the battlefield has shown, or preserve its idle projection cursor.
     pub(crate) fn observe_presented(&mut self, sequence: u64) {
-        if self.is_idle() {
+        if self.staged.contains(&sequence) {
+            self.resolve(sequence);
+        } else if self.is_idle() {
             self.presented = self.presented.max(sequence);
         }
     }
@@ -712,9 +717,15 @@ impl<D: Clone> StageDirector<D> {
 
     fn begin(&mut self, now_ms: u64, cue: &Cue<D>, state: StageState) -> (Active<D>, Command<D>) {
         let (minimum_ms, maximum_ms) = match state {
-            StageState::Rolling => (shorten(1_150, cue.short, 3), shorten(1_150, cue.short, 3)),
-            StageState::Turn => (650, 650),
-            StageState::Impact => (shorten(650, cue.short, 3), shorten(650, cue.short, 3)),
+            StageState::Rolling => (
+                shorten(ROLLING_MS, cue.short, 3),
+                shorten(ROLLING_MS, cue.short, 3),
+            ),
+            StageState::Turn => (TURN_CUE_MS, TURN_CUE_MS),
+            StageState::Impact => (
+                shorten(IMPACT_CUE_MS, cue.short, 3),
+                shorten(IMPACT_CUE_MS, cue.short, 3),
+            ),
             StageState::Defeat => (
                 shorten(DEFEAT_HOLD_MS, cue.short, 3),
                 shorten(DEFEAT_HOLD_MS, cue.short, 3),
@@ -1490,6 +1501,22 @@ mod tests {
                 .iter()
                 .all(|record| record.sequence == 3)
         );
+    }
+
+    /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display timing only.
+    #[test]
+    fn strike_ack_advances_presented_while_the_battlefield_is_still_draining() {
+        let mut director = Director::new();
+        director.on_view(0, sequenced_blow(3, "bite"));
+        director.set_battlefield_busy(true);
+        run(&mut director, 50, 1_200);
+        assert_eq!(director.state(), StageState::Impact);
+        assert_eq!(director.presented_sequence(), 0);
+
+        director.observe_presented(3);
+
+        assert_eq!(director.presented_sequence(), 3);
+        assert_eq!(director.state(), StageState::Impact);
     }
 
     #[test]

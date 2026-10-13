@@ -261,6 +261,16 @@ fn fresh_outcomes(
         .collect()
 }
 
+fn restore_pending_move_origin(
+    cells: &mut HashMap<String, GridCell>,
+    previous: &HashMap<String, GridCell>,
+    movement: &rpc::CombatOutcome,
+) -> Option<GridCell> {
+    let from = *previous.get(&movement.actor_name)?;
+    cells.insert(movement.actor_name.clone(), from);
+    Some(from)
+}
+
 fn roll_detail(
     outcome: &rpc::CombatOutcome,
     lines: &[TableLine],
@@ -635,6 +645,16 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         // between two views. At a fight's start the server's already-resolved opening turns are
         // held and staged after the entrance; otherwise the newest is the view's own blow.
         let before_cells = std::mem::replace(&mut motion.cells, standing.clone());
+        if !restart
+            && let Some(movement) = journey
+                .combat
+                .as_ref()
+                .and_then(presentation::pending_combat_move)
+            && let Some(from) =
+                restore_pending_move_origin(&mut motion.cells, &before_cells, movement)
+        {
+            super::live_battlefield::hold_move(&movement.actor_name, from);
+        }
         // The server's voice family per combatant, for effort, pain and fall sounds on the
         // flat stage. The 3D battlefield reads the same wire field for its own tokens.
         let mut voices: HashMap<String, df_render::battle::VoiceSet> = HashMap::new();
@@ -882,8 +902,8 @@ fn show_thinking(
     stage.figures().set_thinking(slot)
 }
 
-/// The sequence this display has finished presenting: the cue sequencer's presented
-/// sequence, promoted to the newest resolved beat once nothing is playing anywhere (which
+/// The sequence whose result this display has presented: strike acknowledgements from the
+/// battlefield, promoted to the newest resolved beat once nothing is playing anywhere (which
 /// covers beats the sequencer never cues, such as a death save shown by the stage alone).
 fn effective_presented(motion: &Motion) -> u64 {
     let presented = motion.conductor.presented_sequence();
@@ -895,6 +915,12 @@ fn effective_presented(motion: &Motion) -> u64 {
     } else {
         presented
     }
+}
+
+/// The battlefield's impact event confirms that the strike result is visible now.
+pub(super) fn strike_landed(sequence: u64) {
+    let _observed = with_motion(|motion| motion.conductor.observe_presented(sequence));
+    ensure_frame();
 }
 
 thread_local! {
@@ -1085,6 +1111,10 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             root.set_attribute("data-latest-seq", &latest.to_string())?;
             root.set_attribute("data-beat-log", &beat_log)?;
             root.set_attribute(
+                "data-battlefield-beat-log",
+                &super::live_battlefield::beat_log(),
+            )?;
+            root.set_attribute(
                 "data-battlefield-live",
                 if battlefield_live() { "true" } else { "false" },
             )?;
@@ -1269,6 +1299,7 @@ fn battlefield_cue(state: StageState, detail: Option<&Detail>) {
 fn battlefield_cue_named(state: &str, detail: Option<&Detail>) {
     let summary = match detail {
         Some(Detail::Roll(roll)) => Some(super::live_battlefield::RollSummary {
+            sequence: roll.sequence,
             attacker: roll.attacker.clone(),
             target: roll.target.clone(),
             hit: roll.hit,
@@ -2049,7 +2080,27 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::fresh_outcomes;
+    use super::{fresh_outcomes, restore_pending_move_origin};
+    use std::collections::HashMap;
+
+    /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
+    #[test]
+    fn pending_move_keeps_its_origin_for_the_next_view_attack() {
+        let movement = df_protocol::common::CombatOutcome {
+            sequence: 1,
+            actor_name: "Weasel 1".to_owned(),
+            kind: df_protocol::common::OutcomeKind::Move as i32,
+            ..Default::default()
+        };
+        let previous = HashMap::from([("Weasel 1".to_owned(), (3, 1))]);
+        let mut cells = HashMap::from([("Weasel 1".to_owned(), (3, 3))]);
+
+        assert_eq!(
+            restore_pending_move_origin(&mut cells, &previous, &movement),
+            Some((3, 1))
+        );
+        assert_eq!(cells["Weasel 1"], (3, 1));
+    }
 
     #[test]
     fn fresh_outcomes_uses_sequence_and_keeps_every_new_beat_in_order() {

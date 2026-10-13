@@ -32,6 +32,7 @@ const DEFAULT_PREVIEW_HEROES: usize = 3;
 const DEFAULT_PREVIEW_ENEMIES: usize = 1;
 /// The most figures per side the preview stands without a layout to seat them.
 const PREVIEW_MAX_PER_SIDE: usize = 6;
+const BATTLEFIELD_BEAT_LOG_CAP: usize = 32;
 
 thread_local! {
     static PREVIEW: RefCell<Option<BattleStage>> = const { RefCell::new(None) };
@@ -1300,9 +1301,11 @@ pub(super) fn start_preview(document: &Document) -> Result<(), JsValue> {
 use super::live_combat::LiveView;
 use crate::presentation::GridCell;
 use df_render::battle::{CombatFeed, CombatSnapshot, FeedMode, Member, Outcome, RollCard};
+use std::collections::VecDeque;
 
 /// What the cue director knows about a roll, copied from its own detail.
 pub(super) struct RollSummary {
+    pub(super) sequence: u64,
     pub(super) attacker: String,
     pub(super) target: String,
     pub(super) hit: bool,
@@ -1378,6 +1381,10 @@ struct Live {
     /// Per HP change `(sequence, target name, before, after)`, oldest first: the values used to
     /// project the newest view's hit points to the last presented beat.
     beat_hp: Vec<(u64, String, u32, u32)>,
+    /// The hit currently in its strike timeline, matched against the renderer's landed event.
+    active_strike: Option<(u64, String, String)>,
+    /// Nominal stages and budgets for the recent battlefield cues, oldest first.
+    battlefield_beat_log: VecDeque<String>,
 }
 
 thread_local! {
@@ -1403,6 +1410,8 @@ thread_local! {
         presented_seq: 0,
         latest_seq: 0,
         beat_hp: Vec::new(),
+        active_strike: None,
+        battlefield_beat_log: VecDeque::new(),
     });
 }
 
@@ -1927,6 +1936,29 @@ fn start_mount(
             stage.set_sound_sink(Rc::new(|event| {
                 live_sfx::play_event(&event, content_rating());
             }));
+            let impact_host = host.clone();
+            stage.set_impact_sink(Rc::new(move |event| {
+                mark(
+                    &impact_host,
+                    "data-battlefield-impact",
+                    &format!("{:?}:{:.2}", event.class, event.intensity),
+                );
+                let sequence = LIVE.with(|live| {
+                    let mut live = live.borrow_mut();
+                    let Some((sequence, attacker, target)) = &live.active_strike else {
+                        return None;
+                    };
+                    if event.attacker.0.as_str() != attacker || event.target.0.as_str() != target {
+                        return None;
+                    }
+                    let sequence = *sequence;
+                    live.active_strike = None;
+                    Some(sequence)
+                });
+                if let Some(sequence) = sequence {
+                    super::live_motion::strike_landed(sequence);
+                }
+            }));
             if let Some(id) = &layout {
                 stage.with_stage(|stage| {
                     stage.set_layout(id);
@@ -2124,6 +2156,15 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
     let mut drained = false;
     LIVE.with(|live| {
         let mut live = live.borrow_mut();
+        match state {
+            "impact" if roll.sequence != 0 && (roll.hit || roll.grazed) => {
+                live.active_strike =
+                    Some((roll.sequence, roll.attacker.clone(), roll.target.clone()));
+            }
+            "impact" => live.active_strike = None,
+            "rolling" | "turn" | "skipped" => live.active_strike = None,
+            _ => {}
+        }
         if matches!(state, "rolling" | "turn" | "skipped") {
             live.held_moves.retain(|(name, ..)| *name != roll.attacker);
         }
@@ -2136,6 +2177,11 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
             }
         }
     });
+
+    if state == "impact" && !roll.hit && !roll.grazed && roll.sequence != 0 {
+        // The miss verdict is already on the roll card; no damage event follows to acknowledge it.
+        super::live_motion::strike_landed(roll.sequence);
+    }
 
     LIVE.with(|live| {
         let guard = live.borrow();
@@ -2243,6 +2289,58 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
             }
         });
     });
+    if state == "rolling" && roll.sequence != 0 {
+        let phase_log = LIVE.with(|live| {
+            let guard = live.borrow();
+            let stage = guard
+                .stage
+                .as_ref()
+                .filter(|_| matches!(guard.phase, Phase::Active))?;
+            stage.with_stage(|stage| {
+                let squares = roll.walk.map_or(0, |(from, to)| {
+                    let Some((from, to)) = cell_of(from).zip(cell_of(to)) else {
+                        return 1;
+                    };
+                    let squares = stage
+                        .grid()
+                        .path(from, to)
+                        .map_or(1, |path| path.len().saturating_sub(1).max(1));
+                    u32::try_from(squares).unwrap_or(u32::MAX)
+                });
+                let heading_ms = if roll.turn_start {
+                    battle::beat_timing::turn_ms()
+                } else {
+                    0
+                };
+                let walk_ms = if squares == 0 {
+                    0
+                } else {
+                    battle::beat_timing::move_ms(squares)
+                };
+                let (approach_ms, strike_ms, settle_ms) = battle::beat_timing::blow_parts_ms(
+                    roll.attack_style == AttackStyle::Ranged,
+                    roll.hit || roll.grazed,
+                    roll.target_down,
+                );
+                format!(
+                    "{}:{}:heading={heading_ms}:walk={walk_ms}:roll={}:approach={approach_ms}:strike={strike_ms}:settle={settle_ms}",
+                    roll.sequence,
+                    roll.attacker,
+                    crate::stage_director::ROLLING_MS
+                )
+            })
+        });
+        if let Some(phase_log) = phase_log {
+            LIVE.with(|live| {
+                let mut live = live.borrow_mut();
+                if live.battlefield_beat_log.len() >= BATTLEFIELD_BEAT_LOG_CAP {
+                    live.battlefield_beat_log.pop_front();
+                }
+                live.battlefield_beat_log.push_back(phase_log);
+            });
+        }
+    }
+
     if drained {
         sync();
     }
@@ -2346,8 +2444,8 @@ fn splat_streaming(live: &Live) -> bool {
     })
 }
 
-/// The display finished presenting beat `sequence`: the feed may now show its results.
-/// A change re-syncs once (at most once per beat), so cards land with the beat.
+/// The strike result for `sequence` landed on screen: the feed may show its health change.
+/// A change re-syncs once (at most once per beat), so cards land with the strike.
 pub(super) fn set_presented(sequence: u64) {
     let changed = LIVE.with(|live| {
         let mut live = live.borrow_mut();
@@ -2363,9 +2461,24 @@ pub(super) fn set_presented(sequence: u64) {
     }
 }
 
-/// Whether blows accepted by the cue stream are still waiting to finish on it.
+/// The renderer's nominal phase budgets for recent battlefield turns, oldest first.
+pub(super) fn beat_log() -> String {
+    LIVE.with(|live| {
+        live.borrow()
+            .battlefield_beat_log
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",")
+    })
+}
+
+/// Whether accepted blows or their held movement are still waiting on the battlefield.
 pub(super) fn has_pending() -> bool {
-    LIVE.with(|live| live.borrow().pending_cues > 0)
+    LIVE.with(|live| {
+        let live = live.borrow();
+        live.pending_cues > 0 || !live.held_moves.is_empty()
+    })
 }
 
 /// The coherent catch-up jump: cut every playing and queued stage beat and land on the
@@ -2447,6 +2560,35 @@ fn cell_of((col, row): GridCell) -> Option<Cell> {
         i32::try_from(col).ok()?,
         i32::try_from(row).ok()?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cell, LIVE, has_pending, now_ms};
+
+    /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
+    #[test]
+    fn held_enemy_move_keeps_the_beat_unpresented_until_its_attack() {
+        let previous = LIVE.with(|live| {
+            let mut live = live.borrow_mut();
+            let pending_cues = std::mem::replace(&mut live.pending_cues, 0);
+            let held_moves = std::mem::replace(
+                &mut live.held_moves,
+                vec![("Weasel 1".to_owned(), Cell::new(1, 1), now_ms())],
+            );
+            (pending_cues, held_moves)
+        });
+
+        let has_pending_move = has_pending();
+
+        LIVE.with(|live| {
+            let mut live = live.borrow_mut();
+            live.pending_cues = previous.0;
+            live.held_moves = previous.1;
+        });
+
+        assert!(has_pending_move);
+    }
 }
 
 /// Applies the latest accepted snapshot again: called when a turn's beats are over so the turn

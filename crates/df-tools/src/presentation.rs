@@ -160,18 +160,32 @@ pub(crate) type GridCell = (u32, u32);
 /// queuing that move separately would delay its dice behind the very walk they introduce.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn fresh_combat_beats(combat: &rpc::CombatView, after: u64) -> Vec<&rpc::CombatOutcome> {
+    let pending_move = pending_combat_move(combat).map(|movement| movement.sequence);
     let mut outcomes: Vec<_> = combat
         .outcomes
         .iter()
         .chain(combat.move_outcomes.iter().filter(|movement| {
-            !combat.outcomes.iter().any(|attack| {
-                attack.sequence > movement.sequence && attack.actor_name == movement.actor_name
-            })
+            pending_move != Some(movement.sequence)
+                && !combat.outcomes.iter().any(|attack| {
+                    attack.sequence > movement.sequence && attack.actor_name == movement.actor_name
+                })
         }))
         .filter(|outcome| outcome.sequence > after)
         .collect();
     outcomes.sort_by_key(|outcome| outcome.sequence);
     outcomes
+}
+
+/// A final movement outcome for the actor still taking its turn may be followed by its attack
+/// in the next view; leave its cue and origin available for that combined turn.
+pub(crate) fn pending_combat_move(combat: &rpc::CombatView) -> Option<&rpc::CombatOutcome> {
+    combat.move_outcomes.iter().find(|movement| {
+        movement.sequence == combat.latest_sequence
+            && movement.actor_name == combat.active_actor
+            && !combat.outcomes.iter().any(|attack| {
+                attack.sequence > movement.sequence && attack.actor_name == movement.actor_name
+            })
+    })
 }
 
 /// A skipped blow still applies its server-provided position and exact health result.
@@ -1159,6 +1173,282 @@ mod tests {
         let marks = turn_marks(&fresh, &HashMap::new(), &HashMap::new());
         assert!(marks.iter().all(|mark| mark.turn_start));
         assert_eq!(fresh_combat_beats(&combat, 4)[0].actor_name, "Weasel 3");
+    }
+
+    /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
+    #[test]
+    fn live_recorded_enemy_moves_match_the_split_server_sequences() {
+        let actors = ["Weasel 1", "Weasel 2", "Weasel 3"];
+        let combat = rpc::CombatView {
+            active_actor: "Brakka".to_owned(),
+            latest_sequence: 6,
+            outcomes: actors
+                .iter()
+                .enumerate()
+                .map(|(index, actor)| rpc::CombatOutcome {
+                    sequence: index as u64 * 2 + 2,
+                    actor_name: (*actor).to_owned(),
+                    target_name: "Brakka".to_owned(),
+                    ..Default::default()
+                })
+                .collect(),
+            move_outcomes: actors
+                .iter()
+                .enumerate()
+                .map(|(index, actor)| rpc::CombatOutcome {
+                    sequence: index as u64 * 2 + 1,
+                    actor_name: (*actor).to_owned(),
+                    kind: rpc::OutcomeKind::Move as i32,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        let fresh = fresh_combat_beats(&combat, 0);
+        assert_eq!(
+            fresh
+                .iter()
+                .map(|outcome| outcome.sequence)
+                .collect::<Vec<_>>(),
+            [2, 4, 6]
+        );
+        assert_eq!(
+            fresh
+                .iter()
+                .map(|outcome| outcome.actor_name.as_str())
+                .collect::<Vec<_>>(),
+            actors
+        );
+    }
+
+    /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
+    #[test]
+    fn live_latest_enemy_move_waits_for_its_attack_or_the_next_turn() {
+        let movement = rpc::CombatOutcome {
+            sequence: 1,
+            actor_name: "Weasel 1".to_owned(),
+            kind: rpc::OutcomeKind::Move as i32,
+            ..Default::default()
+        };
+        let combat = rpc::CombatView {
+            active_actor: "Weasel 1".to_owned(),
+            latest_sequence: 1,
+            move_outcomes: vec![movement.clone()],
+            ..Default::default()
+        };
+
+        assert!(
+            fresh_combat_beats(&combat, 0).is_empty(),
+            "an in-turn move must remain available to merge with the next view's bite"
+        );
+
+        let followup = rpc::CombatView {
+            active_actor: "Brakka".to_owned(),
+            latest_sequence: 2,
+            outcomes: vec![rpc::CombatOutcome {
+                sequence: 2,
+                actor_name: "Weasel 1".to_owned(),
+                target_name: "Brakka".to_owned(),
+                ..Default::default()
+            }],
+            move_outcomes: vec![movement.clone()],
+            ..Default::default()
+        };
+        let fresh = fresh_combat_beats(&followup, 1);
+        assert_eq!(
+            fresh
+                .iter()
+                .map(|outcome| outcome.sequence)
+                .collect::<Vec<_>>(),
+            [2]
+        );
+        let before = HashMap::from([("Weasel 1".to_owned(), (3, 1))]);
+        let standing = HashMap::from([("Weasel 1".to_owned(), (3, 3))]);
+        assert_eq!(
+            turn_marks(&fresh, &before, &standing)[0].walk,
+            Some(((3, 1), (3, 3)))
+        );
+
+        let completed = rpc::CombatView {
+            active_actor: "Brakka".to_owned(),
+            ..combat
+        };
+        assert_eq!(fresh_combat_beats(&completed, 0), [&movement]);
+    }
+
+    /// SRD 5.2.1 p. 177: “When you take the Attack action, you can make one attack roll.”
+    #[test]
+    fn live_three_enemy_phase_uses_the_real_stage_with_a_controlled_clock() {
+        use df_render::battle::{AttackResult, Beat, Cell, Side, Stage, TokenId, load_embedded};
+        use std::time::Duration;
+
+        const TICK: Duration = Duration::from_millis(50);
+        const ROLL_MS: u64 = 1_150;
+        const IMPACT_MINIMUM_MS: u64 = 650;
+
+        let mut stage = Stage::new(load_embedded("salt-quay").unwrap().unwrap());
+        let grid = stage.grid();
+        let mut routes = Vec::new();
+        let mut used_cells = Vec::new();
+        'routes: for row in 0..grid.rows() {
+            for col in 0..grid.cols() {
+                let from = Cell::new(col as i32, row as i32);
+                if !grid.is_walkable(from) || used_cells.contains(&from) {
+                    continue;
+                }
+                for to_row in 0..grid.rows() {
+                    for to_col in 0..grid.cols() {
+                        let to = Cell::new(to_col as i32, to_row as i32);
+                        if used_cells.contains(&to) {
+                            continue;
+                        }
+                        let Some(path) = grid.path(from, to) else {
+                            continue;
+                        };
+                        let squares = path.len().saturating_sub(1);
+                        if !(3..=4).contains(&squares) {
+                            continue;
+                        }
+                        routes.push((from, to));
+                        used_cells.extend([from, to]);
+                        if routes.len() == 3 {
+                            break 'routes;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        assert_eq!(routes.len(), 3, "the stage scene needs three enemy routes");
+
+        let target_cell = (0..grid.rows())
+            .flat_map(|row| (0..grid.cols()).map(move |col| Cell::new(col as i32, row as i32)))
+            .find(|cell| grid.is_walkable(*cell) && !used_cells.contains(cell))
+            .expect("the stage scene has room for the target");
+        let mut target = battle_token("Brakka", Side::Hero);
+        target.cell = target_cell;
+        target.hit_points = Some(df_render::battle::HitPoints {
+            current: 20,
+            maximum: 20,
+        });
+        let mut tokens = vec![target];
+        let names = ["Weasel 1", "Weasel 2", "Weasel 3"];
+        for (name, (from, _)) in names.iter().zip(&routes) {
+            let mut enemy = battle_token(name, Side::Enemy);
+            enemy.cell = *from;
+            tokens.push(enemy);
+        }
+        stage.set_tokens(tokens);
+
+        let hero = TokenId::new("Brakka");
+        let mut now_ms = 0_u64;
+        let mut heading_sequence = Vec::new();
+        let mut shares_ms = Vec::new();
+        let mut result_times = Vec::new();
+        let mut roll_starts = Vec::new();
+        let mut expected_hit_points = 20;
+
+        for (name, (_, to)) in names.iter().zip(&routes) {
+            let actor = TokenId::new(*name);
+            let turn_started = now_ms;
+            roll_starts.push(turn_started);
+            stage.hold_active(true);
+            stage.show_turn_now(Some(actor.clone()));
+            heading_sequence.push(name.to_string());
+            stage
+                .stage(Beat::TurnStart {
+                    actor: actor.clone(),
+                })
+                .unwrap();
+            stage.stage_move(&actor, *to).unwrap();
+            stage
+                .stage(Beat::Approach {
+                    attacker: actor.clone(),
+                    target: hero.clone(),
+                })
+                .unwrap();
+
+            while now_ms - turn_started < ROLL_MS {
+                stage.set_active(Some(hero.clone()));
+                stage.update(TICK);
+                now_ms += TICK.as_millis() as u64;
+                assert_eq!(stage.frame().hud.active.as_ref().unwrap().0, *name);
+            }
+
+            expected_hit_points -= 2;
+            let impact_started = now_ms;
+            stage
+                .stage(Beat::Strike {
+                    attacker: actor.clone(),
+                    target: hero.clone(),
+                    result: AttackResult::Hit {
+                        damage: 2,
+                        critical: false,
+                        downed: false,
+                    },
+                    target_hit_points_after: Some(expected_hit_points),
+                })
+                .unwrap();
+            let mut result_at = None;
+            while stage.is_busy() || now_ms - impact_started < IMPACT_MINIMUM_MS {
+                stage.set_active(Some(hero.clone()));
+                stage.update(TICK);
+                now_ms += TICK.as_millis() as u64;
+                let landed = stage
+                    .take_impacts()
+                    .into_iter()
+                    .any(|impact| impact.attacker == actor && impact.target == hero);
+                let shown = stage
+                    .frame()
+                    .figures
+                    .iter()
+                    .find(|figure| figure.name == "Brakka")
+                    .unwrap()
+                    .hit_points
+                    .unwrap()
+                    .current;
+                if landed {
+                    assert_eq!(shown, expected_hit_points);
+                    result_at.get_or_insert(now_ms);
+                } else if result_at.is_none() {
+                    assert_eq!(shown, expected_hit_points + 2);
+                }
+                assert_eq!(stage.frame().hud.active.as_ref().unwrap().0, *name);
+            }
+            let result_at = result_at.expect("the strike result reaches its health card");
+            result_times.push(result_at);
+            shares_ms.push(now_ms - turn_started);
+        }
+
+        stage.set_tokens(stage.tokens().cloned().collect());
+        assert!(
+            !stage.is_busy(),
+            "the final snapshot must not add another move cue"
+        );
+        stage.hold_active(false);
+        stage.set_active(Some(hero));
+        assert_eq!(stage.frame().hud.active.as_ref().unwrap().0, "Brakka");
+        heading_sequence.push("Brakka".to_owned());
+        assert_eq!(
+            heading_sequence,
+            ["Weasel 1", "Weasel 2", "Weasel 3", "Brakka"]
+        );
+        assert!(
+            shares_ms.iter().all(|share| *share <= 4_000),
+            "{shares_ms:?}"
+        );
+        assert!(now_ms <= 12_000, "whole enemy phase took {now_ms} ms");
+        assert!(
+            roll_starts
+                .iter()
+                .skip(1)
+                .zip(&result_times)
+                .all(|(roll_start, result)| {
+                    roll_start >= result && roll_start - result <= 1_500
+                }),
+            "the next roll starts within 1.5 seconds of the prior readable result"
+        );
     }
 
     #[test]

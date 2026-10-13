@@ -22,23 +22,28 @@ use super::{
 /// The camera settles on a turn's shot over this long, then holds a beat before anything moves.
 /// (`pub(crate)` durations in this block are read by `stage::beat_timing`, the one nominal
 /// beat-duration table the server's pacing bound and this stage share.)
-pub(crate) const FOCUS_PAN: Duration = Duration::from_millis(800);
-pub(crate) const FOCUS_HOLD: Duration = Duration::from_millis(150);
+pub(crate) const FOCUS_PAN: Duration = Duration::from_millis(650);
+pub(crate) const FOCUS_HOLD: Duration = Duration::from_millis(50);
 /// A turn begins with the wide shot leaning toward its figure and out again: in, a beat, out.
-const LEAN_IN: Duration = Duration::from_millis(550);
-const LEAN_HOLD: Duration = Duration::from_millis(150);
-const LEAN_OUT: Duration = Duration::from_millis(800);
-pub(crate) const LEAN_TOTAL: Duration = Duration::from_millis(1500);
+const LEAN_IN: Duration = Duration::from_millis(300);
+const LEAN_HOLD: Duration = Duration::from_millis(200);
+const LEAN_OUT: Duration = Duration::from_millis(250);
+pub(crate) const LEAN_TOTAL: Duration = Duration::from_millis(750);
 /// The slow push-in on the wind-up, which ends before the attack starts: the camera is at rest at
 /// contact.
-pub(crate) const WINDUP_PUSH: Duration = Duration::from_millis(380);
-pub(crate) const STEP: Duration = Duration::from_millis(260);
-pub(crate) const SETTLE_PAN: Duration = Duration::from_millis(1300);
+pub(crate) const WINDUP_PUSH: Duration = Duration::from_millis(150);
+pub(crate) const STEP: Duration = Duration::from_millis(130);
+pub(crate) const SETTLE_PAN: Duration = Duration::from_millis(180);
+/// The short pause after a move before its camera returns to the wide shot.
+pub(crate) const MOVE_SETTLE_HOLD: Duration = Duration::from_millis(150);
+/// The attack's impact hold and final camera settle are timed separately from the strike motion.
+pub(crate) const STRIKE_END_HOLD: Duration = Duration::from_millis(120);
+pub(crate) const STRIKE_CAMERA_DELAY: Duration = Duration::from_millis(80);
 const FINISHING_PUSH: Duration = Duration::from_millis(3200);
 pub(crate) const FINISHING_HOLD: Duration = Duration::from_millis(3600);
-pub const LUNGE: Duration = Duration::from_millis(460);
-pub const LUNGE_CONTACT: Duration = Duration::from_millis(170);
-pub const RECOIL: Duration = Duration::from_millis(420);
+pub const LUNGE: Duration = Duration::from_millis(300);
+pub const LUNGE_CONTACT: Duration = Duration::from_millis(250);
+pub const RECOIL: Duration = Duration::from_millis(250);
 pub const FALL: Duration = Duration::from_millis(900);
 pub const HEAL: Duration = Duration::from_millis(1300);
 /// The bow is drawn back for this long, then released; the figure settles over `DRAW`.
@@ -47,13 +52,13 @@ pub const DRAW: Duration = Duration::from_millis(600);
 /// How long the arrow takes from the bow to the target.
 pub const FLIGHT: Duration = Duration::from_millis(400);
 /// The slowest a long walk is staged, so a far approach does not stall the fight.
-pub(crate) const MAX_APPROACH: Duration = Duration::from_millis(1800);
-pub(crate) const MIN_STEP: Duration = Duration::from_millis(150);
+pub(crate) const MAX_APPROACH: Duration = Duration::from_millis(780);
+pub(crate) const MIN_STEP: Duration = Duration::from_millis(65);
 /// The fall's body lands on the ground this far into the fall animation.
 pub const READY: Duration = Duration::from_millis(700);
 pub const FALL_LANDS: Duration = Duration::from_millis(560);
 /// Extra time the impact shot stays up after a hit that deals damage.
-pub const IMPACT_HOLD: Duration = Duration::from_millis(1800);
+pub const IMPACT_HOLD: Duration = Duration::from_millis(300);
 pub(crate) const FALL_DELAY: Duration = Duration::from_millis(380);
 pub(crate) const FINISHING_DELAY: Duration = Duration::from_millis(560);
 
@@ -668,13 +673,13 @@ fn plan_move(
     );
     let arrived = start + per_step * steps.max(1);
     builder.at(
-        arrived + Duration::from_millis(400),
+        arrived + MOVE_SETTLE_HOLD,
         Step::Camera {
             command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
             pan: SETTLE_PAN,
         },
     );
-    Ok(builder.finish(arrived + Duration::from_millis(400) + SETTLE_PAN))
+    Ok(builder.finish(arrived + MOVE_SETTLE_HOLD + SETTLE_PAN))
 }
 
 /// Time per cell for a walk of `steps` cells: the usual pace, quickened (to a floor) so that a
@@ -937,32 +942,32 @@ fn strike(
                 let end = fall + FALL;
                 builder.at(end, Step::Highlight(None));
                 builder.at(
-                    end + Duration::from_millis(200),
+                    end + STRIKE_CAMERA_DELAY,
                     Step::Camera {
                         command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
                         pan: SETTLE_PAN,
                     },
                 );
-                return end + SETTLE_PAN + Duration::from_millis(200);
+                return end + SETTLE_PAN + STRIKE_CAMERA_DELAY;
             }
         }
     }
 
     // Settle: everyone returns to formation and the camera widens. After a hit the impact shot
     // is held so the number and the hit-point drop are read on a TV across the room.
-    end += Duration::from_millis(220);
+    end += STRIKE_END_HOLD;
     if hits {
         end += IMPACT_HOLD;
     }
     builder.at(end, Step::Highlight(None));
     builder.at(
-        end + Duration::from_millis(200),
+        end + STRIKE_CAMERA_DELAY,
         Step::Camera {
             command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
             pan: SETTLE_PAN,
         },
     );
-    end + SETTLE_PAN + Duration::from_millis(200)
+    end + SETTLE_PAN + STRIKE_CAMERA_DELAY
 }
 
 fn plan_heal(
@@ -1626,9 +1631,10 @@ mod tests {
         let miss = widen(AttackResult::Miss);
         assert!(hit >= miss + IMPACT_HOLD, "hit {hit:?} vs miss {miss:?}");
         assert!(
-            hit >= Duration::from_millis(2400),
-            "the number lives 1.4 s and is read: {hit:?}"
+            hit + SETTLE_PAN <= Duration::from_millis(1_500),
+            "the next roll can begin within 1.5 s of contact: {hit:?}"
         );
+        assert!(super::super::float_text::HOLD_S >= 2.5);
     }
 
     #[test]

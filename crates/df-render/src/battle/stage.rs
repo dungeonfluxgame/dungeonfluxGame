@@ -61,9 +61,10 @@ pub enum StageError {
 /// signal and these numbers are only the fallback for a missing or frozen display.
 pub mod beat_timing {
     use super::director::{
-        DICE_READ, DICE_TUMBLE, DRAW_RELEASE, FALL, FALL_DELAY, FINISHING_DELAY,
-        FINISHING_HOLD, FLIGHT, FOCUS_HOLD, FOCUS_PAN, IMPACT_HOLD, LEAN_TOTAL, LUNGE,
-        MAX_APPROACH, MIN_STEP, SETTLE_PAN, STEP, STOP, WINDUP_PUSH,
+        DICE_READ, DICE_TUMBLE, DRAW_RELEASE, FALL, FALL_DELAY, FINISHING_DELAY, FINISHING_HOLD,
+        FLIGHT, FOCUS_HOLD, FOCUS_PAN, IMPACT_HOLD, LEAN_TOTAL, LUNGE, MAX_APPROACH, MIN_STEP,
+        MOVE_SETTLE_HOLD, SETTLE_PAN, STEP, STOP, STRIKE_CAMERA_DELAY, STRIKE_END_HOLD,
+        WINDUP_PUSH,
     };
     use std::time::Duration;
 
@@ -81,8 +82,9 @@ pub mod beat_timing {
     /// A server-resolved move of `squares` cells: frame, walk, settle (`plan_move`).
     pub fn move_ms(squares: u32) -> u64 {
         let squares = squares.max(1);
-        ms(FOCUS_PAN + FOCUS_HOLD) + walk_pace_ms(squares) * u64::from(squares) + 400
-            + ms(SETTLE_PAN)
+        ms(FOCUS_PAN + FOCUS_HOLD)
+            + walk_pace_ms(squares) * u64::from(squares)
+            + ms(MOVE_SETTLE_HOLD + SETTLE_PAN)
     }
 
     /// A turn opening (the lean toward the acting figure) and, the same length, a
@@ -95,6 +97,12 @@ pub mod beat_timing {
     /// contact, the impact hold on a hit, the fall when the target drops, and the settle
     /// back to the wide shot. A dropping blow ends on its finishing hold instead.
     pub fn blow_ms(ranged: bool, hit: bool, downed: bool) -> u64 {
+        let (approach, strike, settle) = blow_parts_ms(ranged, hit, downed);
+        approach + strike + settle
+    }
+
+    /// The approach, strike, and camera settle budgets used by [`blow_ms`], in that order.
+    pub fn blow_parts_ms(ranged: bool, hit: bool, downed: bool) -> (u64, u64, u64) {
         let approach = ms(FOCUS_PAN + WINDUP_PUSH);
         let (contact, swing_end) = if ranged {
             let contact = DRAW_RELEASE + FLIGHT;
@@ -103,14 +111,17 @@ pub mod beat_timing {
             (ms(super::director::LUNGE_CONTACT), ms(LUNGE))
         };
         if downed {
-            return approach + contact + ms(FALL_DELAY + FINISHING_DELAY + FINISHING_HOLD);
+            return (
+                approach,
+                contact + ms(FALL_DELAY + FINISHING_DELAY + FINISHING_HOLD),
+                0,
+            );
         }
-        approach
-            + swing_end
-            + 220
-            + if hit { ms(IMPACT_HOLD) } else { 0 }
-            + ms(SETTLE_PAN)
-            + 200
+        (
+            approach,
+            swing_end + ms(STRIKE_END_HOLD) + if hit { ms(IMPACT_HOLD) } else { 0 },
+            ms(SETTLE_PAN + STRIKE_CAMERA_DELAY),
+        )
     }
 
     /// A death saving throw: the die tumbles, is read, and the table takes it in.
@@ -2951,10 +2962,21 @@ mod tests {
         // A long earlier beat plays: the hold's clock must not run under it, however
         // long the queue ahead of this blow lasts.
         stage
+            .stage(Beat::TurnStart {
+                actor: TokenId::new("ally"),
+            })
+            .unwrap();
+        stage
             .stage(Beat::Move {
                 actor: TokenId::new("ally"),
                 from: Cell::new(5, 4),
                 to: Cell::new(5, 2),
+            })
+            .unwrap();
+        stage
+            .stage(Beat::Approach {
+                attacker: TokenId::new("ally"),
+                target: enemy.clone(),
             })
             .unwrap();
         run(&mut stage, 2.0);
