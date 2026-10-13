@@ -520,7 +520,7 @@ impl<D: Clone> StageDirector<D> {
         let mut kept: Vec<Cue<D>> = Vec::new();
         let mut dropped_render = false;
         for mut cue in self.queue.drain(..) {
-            if cue.outcome {
+            if cue.outcome || cue.kind == CueKind::Scene {
                 cue.short = true;
                 // Two scene changes converge to one: the newest view is drawn once.
                 if cue.kind == CueKind::Scene
@@ -1223,6 +1223,40 @@ mod tests {
         assert_eq!(director.state(), StageState::Defeat);
         run(&mut director, 4_300, 4_450);
         assert_eq!(director.state(), StageState::Idle);
+    }
+
+    #[test]
+    fn catch_up_does_not_erase_a_pending_scene_change() {
+        let mut director = Director::new();
+        director.on_view(
+            0,
+            ViewDiff {
+                defeat: Some("active blocker"),
+                ..ViewDiff::default()
+            },
+        );
+        director.on_view(
+            1,
+            ViewDiff {
+                heal: Some("stale queued cue"),
+                ..ViewDiff::default()
+            },
+        );
+
+        let commands = director.on_view(
+            4_002,
+            ViewDiff {
+                scene_changed: true,
+                ..ViewDiff::default()
+            },
+        );
+
+        assert!(
+            states(&commands)
+                .iter()
+                .any(|state| state == "LeavingScene"),
+            "the submitted scene change must survive catch-up"
+        );
     }
 
     fn sequenced_blow(sequence: u64, label: &'static str) -> ViewDiff<&'static str> {
