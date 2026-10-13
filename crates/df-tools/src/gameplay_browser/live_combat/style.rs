@@ -143,7 +143,7 @@ const COMMON: &str = r#"
 @S[data-role=player] .tactical-controls .resource-strip{margin:0;order:-1}
 @S[data-role=player] .tactical-controls>.offered-action{display:contents}
 @S[data-role=player] .tactical-controls>.offered-action>*{grid-column:1/-1}
-@S[data-role=player] .tactical-controls .move-map{display:grid;grid-template-columns:repeat(var(--columns),minmax(0,1fr));gap:2px;padding:6px;border:1px solid #d9b77a40;border-radius:8px;background:#05080ad9}
+@S[data-role=player] .tactical-controls .move-map{display:grid;grid-template-columns:repeat(var(--columns),minmax(0,44px));justify-content:center;gap:2px;padding:6px;border:1px solid #d9b77a40;border-radius:8px;background:#05080ad9}
 @S[data-role=player] .tactical-controls .move-map .move-cell{display:grid;place-items:center;aspect-ratio:1;min-width:0;min-height:0;margin:0;padding:0;border:0;border-radius:4px;background:#ffffff0a;color:#f4eddf;font:700 11px/1 system-ui,sans-serif}
 @S[data-role=player] .tactical-controls .move-map button.move-cell{background:#d9b77a38;box-shadow:inset 0 0 0 1px #d9b77a99;cursor:pointer}
 @S[data-role=player] .tactical-controls .move-map button.move-cell[aria-pressed=true]{background:#f0cf8e;box-shadow:inset 0 0 0 2px #fffaf0,0 0 0 2px #f0cf8e}

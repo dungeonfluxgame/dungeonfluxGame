@@ -841,6 +841,10 @@ fn publish_tactical_controls(
 /// Largest grid the phone draws as a map; a larger fight keeps the plain lists.
 const FIGHT_MAP_MAX_COLUMNS: u32 = 16;
 const FIGHT_MAP_MAX_ROWS: u32 = 12;
+/// The smallest battlefield is eight columns by six rows. The view does not carry the grid's
+/// size, so the map starts there: a fight crowded into one corner must not be drawn as a few
+/// enormous squares.
+const FIGHT_MAP_LEAST: (u32, u32) = (8, 6);
 
 /// What one square of the phone's map shows.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1033,7 +1037,9 @@ fn publish_fight_map(
             let (columns, rows) = size.split_once('x')?;
             Some((columns.parse().ok()?, rows.parse().ok()?))
         })
-        .unwrap_or((0, 0));
+        .map_or(FIGHT_MAP_LEAST, |(columns, rows): (u32, u32)| {
+            (columns.max(FIGHT_MAP_LEAST.0), rows.max(FIGHT_MAP_LEAST.1))
+        });
     let squares = (movement.is_some() || !aims.is_empty())
         .then(|| {
             fight_map_squares(
