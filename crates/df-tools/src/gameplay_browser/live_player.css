@@ -6,7 +6,7 @@ main .client.display{background:transparent}
 .client .connection,.scene-copy>.eyebrow:first-child{display:none}
 
 /* Player: phone first. The df-ui surfaces keep their own responsive layout. */
-.client.player{min-height:100svh;padding-bottom:calc(84px + env(safe-area-inset-bottom));background:#05090f}
+.client.player{min-height:100svh;padding-bottom:calc(150px + env(safe-area-inset-bottom));background:#05090f}
 .client.player .live-dock{width:min(1100px,92%);margin:0 auto;padding:0 0 24px;position:relative;z-index:1;font-family:var(--serif)}
 .client.player .df-campaign{font-family:var(--serif)}
 .client.player .df-campaign .connection,.client.player .df-campaign .toolbar{display:none}
