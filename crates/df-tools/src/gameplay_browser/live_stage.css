@@ -270,9 +270,9 @@
    machine releases it only when the battlefield will not appear */
 .tv-stage[data-battle-state=entering] :is(.live-screen,.tv-figures){opacity:0;visibility:hidden}
 /* bubbles opened by a line machine close through it, not by a timer */
-.tv-bubble[data-managed]{animation:df-bubble-in .25s ease-out backwards}
+.tv-bubble[data-managed]{animation:df-bubble-in .18s ease-out var(--appear,0ms) backwards}
 .tv-bubble[data-managed][data-instant]{animation:none}
-.tv-bubble[data-managed][data-line-state=closing]{animation:df-bubble-out .4s ease-in forwards}
+.tv-bubble[data-managed][data-line-state=closing]{animation:df-bubble-out .18s ease-in forwards}
 
 /* the victory card keeps its text clear of the figures: a left column, wrapped whole */
 .tv-stage .df-aftermath .aftermath-narrative,.tv-stage .df-aftermath .aftermath-lower{max-width:58%!important;margin-right:auto;text-align:left}

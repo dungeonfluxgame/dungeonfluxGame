@@ -1286,11 +1286,29 @@ impl Figures {
         state: LineState,
         bubble: &LineBubble<'_>,
     ) -> Result<Element, JsValue> {
+        let replaced_typed_line = if bubble.kind == BubbleKind::Speech {
+            let mut replaced = false;
+            for speaker in &self.figures {
+                if let Some(typed) = speaker
+                    .bubbles
+                    .query_selector("[data-kind=typed][data-managed]")?
+                {
+                    typed.set_attribute("data-line-state", LineState::Closing.name())?;
+                    replaced = true;
+                }
+            }
+            replaced
+        } else {
+            false
+        };
         figure.bubbles.set_text_content(None);
         let element = node(&self.document, &figure.bubbles, "div", "tv-bubble", "")?;
         element.set_attribute("data-kind", bubble.kind.name())?;
         element.set_attribute("data-line-id", &id.to_string())?;
         element.set_attribute("data-managed", "")?;
+        if replaced_typed_line {
+            element.set_attribute("style", "--appear:180ms")?;
+        }
         if state == LineState::Lingering {
             // A line already on screen when the page was (a reload): no entrance.
             element.set_attribute("data-instant", "")?;
