@@ -835,31 +835,33 @@ fn publish_tactical_controls(
             }
         }
     }
-    publish_move_map(client, &controls, combat)
+    publish_fight_map(client, &controls, combat)
 }
 
-/// Largest grid the phone draws as a map; a larger fight keeps the plain list.
-const MOVE_MAP_MAX_COLUMNS: u32 = 16;
-const MOVE_MAP_MAX_ROWS: u32 = 12;
+/// Largest grid the phone draws as a map; a larger fight keeps the plain lists.
+const FIGHT_MAP_MAX_COLUMNS: u32 = 16;
+const FIGHT_MAP_MAX_ROWS: u32 = 12;
 
 /// What one square of the phone's map shows.
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum MoveSquare {
+enum MapSquare {
     Empty,
     /// A cell the Move offer lists: its option id.
     Reachable(String),
-    /// A combatant: the mark drawn, the side (1 heroes, 2 enemies), down, and the player's own.
+    /// A combatant: the mark drawn, the side (1 heroes, 2 enemies), down, the player's own, and
+    /// for an enemy the Attack offer can reach, the option that aims at it.
     Occupied {
         mark: String,
         side: u32,
         down: bool,
         own: bool,
+        aim: Option<String>,
     },
 }
 
 /// The mark for a combatant on the map: the initial, and a trailing number when the name has one
 /// ("Giant Weasel 2" is "G2").
-fn move_map_mark(name: &str) -> String {
+fn fight_map_mark(name: &str) -> String {
     let initial = name.chars().find(|character| character.is_alphanumeric());
     let number = name
         .rsplit(' ')
@@ -872,21 +874,26 @@ fn move_map_mark(name: &str) -> String {
     }
 }
 
-/// The map's squares, row by row, sized to hold every combatant and every offered cell. `None`
-/// when there is nothing to offer or the fight is larger than the phone can draw.
-fn move_map_squares(
-    option_ids: &[String],
+/// The map's squares, row by row, sized to hold every combatant and every offered cell.
+/// `move_ids` are the Move offer's options and `aims` pairs a combatant's id with the Attack
+/// option that targets it. The map is never smaller than `least` (columns, rows), so it does
+/// not shrink and shift as the fight moves. `None` when a move option is not a cell, nobody has
+/// a cell, or the fight is larger than the phone can draw.
+fn fight_map_squares(
+    move_ids: &[String],
     participants: &[rpc::PartyMemberView],
     own_name: Option<&str>,
-) -> Option<(u32, Vec<MoveSquare>)> {
-    let offered = option_ids
+    aims: &[(Vec<u8>, String)],
+    least: (u32, u32),
+) -> Option<(u32, Vec<MapSquare>)> {
+    let offered = move_ids
         .iter()
         .filter_map(|id| {
             let (col, row) = id.split_once('-')?;
             Some(((col.parse::<u32>().ok()?, row.parse::<u32>().ok()?), id))
         })
         .collect::<Vec<_>>();
-    if offered.is_empty() || offered.len() != option_ids.len() {
+    if offered.len() != move_ids.len() {
         return None;
     }
     let occupied = participants
@@ -900,9 +907,9 @@ fn move_map_squares(
         .iter()
         .map(|(cell, _)| *cell)
         .chain(occupied.iter().map(|(cell, _)| *cell));
-    let columns = cells.clone().map(|(col, _)| col).max()? + 1;
-    let rows = cells.map(|(_, row)| row).max()? + 1;
-    if columns > MOVE_MAP_MAX_COLUMNS || rows > MOVE_MAP_MAX_ROWS {
+    let columns = (cells.clone().map(|(col, _)| col).max()? + 1).max(least.0);
+    let rows = (cells.map(|(_, row)| row).max()? + 1).max(least.1);
+    if columns > FIGHT_MAP_MAX_COLUMNS || rows > FIGHT_MAP_MAX_ROWS {
         return None;
     }
     let mut squares = Vec::new();
@@ -915,16 +922,21 @@ fn move_map_squares(
                 .min_by_key(|member| member.unconscious || member.hit_points == 0);
             squares.push(
                 if let Some((_, id)) = offered.iter().find(|(cell, _)| *cell == (col, row)) {
-                    MoveSquare::Reachable((*id).clone())
+                    MapSquare::Reachable((*id).clone())
                 } else if let Some(member) = standing {
-                    MoveSquare::Occupied {
-                        mark: move_map_mark(&member.name),
+                    let down = member.unconscious || member.hit_points == 0;
+                    MapSquare::Occupied {
+                        mark: fight_map_mark(&member.name),
                         side: member.side,
-                        down: member.unconscious || member.hit_points == 0,
+                        down,
                         own: own_name == Some(member.name.as_str()),
+                        aim: aims
+                            .iter()
+                            .find(|(participant, _)| !down && *participant == member.participant_id)
+                            .map(|(_, option)| option.clone()),
                     }
                 } else {
-                    MoveSquare::Empty
+                    MapSquare::Empty
                 },
             );
         }
@@ -932,90 +944,205 @@ fn move_map_squares(
     Some((columns, squares))
 }
 
-/// The owner's chosen way to move (PHN-01): a small map of the fight above the Move button.
-/// Lit squares are the cells the server offers; a tap picks that cell in the offer's own list,
-/// which stays the input that is submitted, so the map adds no rule of its own.
-fn publish_move_map(
+/// The list inside one fight offer, with the ids and texts of its options in order.
+fn offer_list(
+    controls: &Element,
+    kind: rpc::GameplayActionKind,
+) -> Result<Option<(Element, web_sys::HtmlSelectElement, Vec<(String, String)>)>, JsValue> {
+    let Some(wrapper) = controls.query_selector(&format!(
+        ":scope > .offered-action:has(> button[data-action-kind=\"{}\"])",
+        kind as i32
+    ))?
+    else {
+        return Ok(None);
+    };
+    let Some(select) = wrapper
+        .query_selector(":scope > label[data-group-id=\"tactical-choice\"] > select")?
+        .and_then(|select| select.dyn_into::<web_sys::HtmlSelectElement>().ok())
+    else {
+        return Ok(None);
+    };
+    let options = select.query_selector_all(":scope > option")?;
+    let listed = (0..options.length())
+        .filter_map(|index| options.item(index))
+        .map(|option| option.unchecked_into::<Element>())
+        .filter_map(|option| {
+            Some((
+                option.get_attribute("value")?,
+                option.text_content().unwrap_or_default(),
+            ))
+        })
+        .collect();
+    Ok(Some((wrapper, select, listed)))
+}
+
+/// The text of the option a list currently holds.
+fn chosen_text(select: &web_sys::HtmlSelectElement, listed: &[(String, String)]) -> String {
+    let value = select.value();
+    listed
+        .iter()
+        .find(|(id, _)| *id == value)
+        .map(|(_, text)| text.clone())
+        .unwrap_or_default()
+}
+
+/// The owner's chosen way to act in a fight (PHN-01): a small map of the fight above the
+/// controls. Lit squares are the cells the Move offer lists and enemies the Attack offer can
+/// reach are buttons; a tap picks that cell or that enemy in the offer's own list, which stays
+/// the input that is submitted, so the map adds no rule of its own.
+fn publish_fight_map(
     client: &Rc<RefCell<Client>>,
     controls: &Element,
     combat: &rpc::CombatView,
 ) -> Result<(), JsValue> {
     use crate::gameplay_browser::{button, node};
-    let kind = rpc::GameplayActionKind::Move as i32;
-    let Some(wrapper) = controls.query_selector(&format!(
-        ":scope > .offered-action:has(> button[data-action-kind=\"{kind}\"])"
-    ))?
-    else {
-        return Ok(());
-    };
-    for stale in [":scope > .move-map", ":scope > .move-chosen"] {
-        if let Some(stale) = wrapper.query_selector(stale)? {
-            stale.remove();
+    let movement = offer_list(controls, rpc::GameplayActionKind::Move)?;
+    let attack = offer_list(controls, rpc::GameplayActionKind::GreatswordAttack)?;
+    let move_ids = movement
+        .iter()
+        .flat_map(|(_, _, listed)| listed.iter().map(|(id, _)| id.clone()))
+        .collect::<Vec<_>>();
+    // For each enemy, the first attack in the list that targets it: the list is best first.
+    let mut aims = Vec::<(Vec<u8>, String)>::new();
+    if let Some((_, _, listed)) = &attack {
+        for (id, _) in listed {
+            if let Some(target) = combat
+                .legal_targets
+                .iter()
+                .find(|target| target.option_id == *id)
+                && !aims
+                    .iter()
+                    .any(|(participant, _)| *participant == target.participant_id)
+            {
+                aims.push((target.participant_id.clone(), id.clone()));
+            }
         }
     }
-    let Some(select) = wrapper
-        .query_selector(":scope > label[data-group-id=\"tactical-choice\"] > select")?
-        .and_then(|select| select.dyn_into::<web_sys::HtmlSelectElement>().ok())
-    else {
-        return Ok(());
-    };
-    let options = select.query_selector_all(":scope > option")?;
-    let option_ids = (0..options.length())
-        .filter_map(|index| options.item(index))
-        .filter_map(|option| option.unchecked_into::<Element>().get_attribute("value"))
-        .collect::<Vec<_>>();
     let own_name = combat
         .participants
         .iter()
         .find(|member| member.participant_id == combat.active_participant_id)
         .map(|member| member.name.clone());
-    let Some((columns, squares)) =
-        move_map_squares(&option_ids, &combat.participants, own_name.as_deref())
-    else {
+    // The largest map this fight has needed so far, kept on the panel between redraws.
+    let least = controls
+        .get_attribute("data-map-size")
+        .and_then(|size| {
+            let (columns, rows) = size.split_once('x')?;
+            Some((columns.parse().ok()?, rows.parse().ok()?))
+        })
+        .unwrap_or((0, 0));
+    let squares = (movement.is_some() || !aims.is_empty())
+        .then(|| {
+            fight_map_squares(
+                &move_ids,
+                &combat.participants,
+                own_name.as_deref(),
+                &aims,
+                least,
+            )
+        })
+        .flatten();
+    if let Some((wrapper, _, _)) = &movement {
+        // The map replaces the Move list on screen; the list stays for assistive technology.
+        if squares.is_some() {
+            wrapper.set_attribute("data-on-map", "")?;
+        } else {
+            wrapper.remove_attribute("data-on-map")?;
+        }
+    }
+    let Some((columns, squares)) = squares else {
         return Ok(());
     };
+    let rows = u32::try_from(squares.len()).unwrap_or(0) / columns.max(1);
+    controls.set_attribute("data-map-size", &format!("{columns}x{rows}"))?;
     let document = client.borrow().document.clone();
     let map = document.create_element("div")?;
     map.set_class_name("move-map");
     map.set_attribute("role", "group")?;
     map.set_attribute(
         "aria-label",
-        "Map of the fight. Tap a lit square to move there.",
+        "Map of the fight. Tap a lit square to move there, or an enemy to aim at it.",
     )?;
     map.set_attribute("style", &format!("--columns:{columns}"))?;
-    wrapper.insert_before(&map, wrapper.first_child().as_ref())?;
+    controls.insert_before(&map, controls.first_child().as_ref())?;
     let chosen = document.create_element("p")?;
     chosen.set_class_name("move-chosen");
     map.after_with_node_1(&chosen)?;
-    let describe = |select: &web_sys::HtmlSelectElement| {
-        let value = select.value();
-        let label = select
-            .query_selector_all(":scope > option")
-            .ok()
-            .and_then(|options| {
-                (0..options.length())
-                    .filter_map(|index| options.item(index))
-                    .map(|option| option.unchecked_into::<Element>())
-                    .find(|option| option.get_attribute("value").as_deref() == Some(&value))
-            })
-            .and_then(|option| option.text_content())
-            .unwrap_or_default();
-        format!("Tap a lit square, then Move. Chosen: {label}.")
+    let move_list = movement.map(|(_, select, listed)| (select, listed));
+    let attack_list = attack.map(|(_, select, listed)| (select, listed));
+    let describe = {
+        let (move_list, attack_list) = (move_list.clone(), attack_list.clone());
+        move || {
+            let mut lines = Vec::new();
+            if let Some((select, listed)) = &move_list {
+                lines.push(format!(
+                    "Tap a lit square, then Move. Chosen: {}.",
+                    chosen_text(select, listed)
+                ));
+            }
+            if let Some((select, listed)) = &attack_list
+                && !listed.is_empty()
+            {
+                lines.push(format!(
+                    "Tap an enemy, then Attack. Aim: {}.",
+                    chosen_text(select, listed)
+                ));
+            }
+            lines.join(" ")
+        }
     };
-    chosen.set_text_content(Some(&describe(&select)));
-    let selected = select.value();
+    chosen.set_text_content(Some(&describe()));
+    let moving_to = move_list.as_ref().map(|(select, _)| select.value());
+    let aiming_at = attack_list.as_ref().and_then(|(select, _)| {
+        let value = select.value();
+        combat
+            .legal_targets
+            .iter()
+            .find(|target| target.option_id == value)
+            .map(|target| target.participant_id.clone())
+    });
+    let mark_square = |cell: &Element, attribute: &str, id: &str, pressed: bool| {
+        cell.set_attribute("type", "button")?;
+        cell.set_attribute(attribute, id)?;
+        cell.set_attribute("aria-pressed", &pressed.to_string())
+    };
     for square in squares {
         match square {
-            MoveSquare::Empty => {
+            MapSquare::Empty => {
                 node(&document, &map, "span", "move-cell", "")?;
             }
-            MoveSquare::Occupied {
+            MapSquare::Occupied {
                 mark,
                 side,
                 down,
                 own,
+                aim,
             } => {
-                let cell = node(&document, &map, "span", "move-cell", &mark)?;
+                let cell = match (&aim, &attack_list) {
+                    (Some(id), Some((list, _))) => {
+                        let (picked, list, board, line, describe) = (
+                            id.clone(),
+                            list.clone(),
+                            map.clone(),
+                            chosen.clone(),
+                            describe.clone(),
+                        );
+                        let cell = button(client, &map, &mark, move |_| {
+                            list.set_value(&picked);
+                            press_only(&board, "data-aim", &picked);
+                            line.set_text_content(Some(&describe()));
+                        })?;
+                        let aimed = aiming_at.as_ref().is_some_and(|participant| {
+                            aims.iter()
+                                .any(|(target, option)| target == participant && option == id)
+                        });
+                        mark_square(&cell, "data-aim", id, aimed)?;
+                        cell.set_attribute("aria-label", &format!("Aim at {mark}"))?;
+                        cell
+                    }
+                    _ => node(&document, &map, "span", "", &mark)?,
+                };
+                cell.set_class_name("move-cell");
                 cell.set_attribute("data-side", &side.to_string())?;
                 if down {
                     cell.set_attribute("data-down", "")?;
@@ -1024,27 +1151,29 @@ fn publish_move_map(
                     cell.set_attribute("data-own", "")?;
                 }
             }
-            MoveSquare::Reachable(id) => {
-                let (picked, list, board, line) =
-                    (id.clone(), select.clone(), map.clone(), chosen.clone());
+            MapSquare::Reachable(id) => {
+                let Some((list, _)) = &move_list else {
+                    continue;
+                };
+                let (picked, target, board, line, describe) = (
+                    id.clone(),
+                    list.clone(),
+                    map.clone(),
+                    chosen.clone(),
+                    describe.clone(),
+                );
                 let cell = button(client, &map, "", move |_| {
-                    list.set_value(&picked);
-                    if let Ok(cells) = board.query_selector_all("button.move-cell") {
-                        for index in 0..cells.length() {
-                            if let Some(cell) = cells.item(index) {
-                                let cell = cell.unchecked_into::<Element>();
-                                let pressed =
-                                    cell.get_attribute("data-cell").as_deref() == Some(&picked);
-                                let _set = cell.set_attribute("aria-pressed", &pressed.to_string());
-                            }
-                        }
-                    }
-                    line.set_text_content(Some(&describe(&list)));
+                    target.set_value(&picked);
+                    press_only(&board, "data-cell", &picked);
+                    line.set_text_content(Some(&describe()));
                 })?;
                 cell.set_class_name("move-cell");
-                cell.set_attribute("type", "button")?;
-                cell.set_attribute("data-cell", &id)?;
-                cell.set_attribute("aria-pressed", &(id == selected).to_string())?;
+                mark_square(
+                    &cell,
+                    "data-cell",
+                    &id,
+                    moving_to.as_deref() == Some(id.as_str()),
+                )?;
                 if let Some((col, row)) = id.split_once('-')
                     && let (Ok(col), Ok(row)) = (col.parse::<u32>(), row.parse::<u32>())
                 {
@@ -1059,9 +1188,24 @@ fn publish_move_map(
     Ok(())
 }
 
+/// Marks the one button carrying `attribute = picked` as pressed among the map's buttons of
+/// that kind.
+fn press_only(map: &Element, attribute: &str, picked: &str) {
+    let Ok(cells) = map.query_selector_all(&format!("button[{attribute}]")) else {
+        return;
+    };
+    for index in 0..cells.length() {
+        if let Some(cell) = cells.item(index) {
+            let cell = cell.unchecked_into::<Element>();
+            let pressed = cell.get_attribute(attribute).as_deref() == Some(picked);
+            let _set = cell.set_attribute("aria-pressed", &pressed.to_string());
+        }
+    }
+}
+
 #[cfg(test)]
-mod move_map_tests {
-    use super::{MoveSquare, move_map_mark, move_map_squares};
+mod fight_map_tests {
+    use super::{MapSquare, fight_map_mark, fight_map_squares};
     use df_protocol::common as rpc;
 
     fn member(name: &str, col: u32, row: u32, side: u32, hit_points: u32) -> rpc::PartyMemberView {
@@ -1070,15 +1214,16 @@ mod move_map_tests {
             hit_points,
             cell: Some(rpc::GridCell { col, row }),
             side,
+            participant_id: name.as_bytes().to_vec(),
             ..Default::default()
         }
     }
 
     #[test]
     fn marks_are_an_initial_and_the_trailing_number() {
-        assert_eq!(move_map_mark("Brakka"), "B");
-        assert_eq!(move_map_mark("Giant Weasel 2"), "G2");
-        assert_eq!(move_map_mark(""), "?");
+        assert_eq!(fight_map_mark("Brakka"), "B");
+        assert_eq!(fight_map_mark("Giant Weasel 2"), "G2");
+        assert_eq!(fight_map_mark(""), "?");
     }
 
     #[test]
@@ -1087,38 +1232,82 @@ mod move_map_tests {
         let party = vec![
             member("Brakka", 0, 0, 1, 13),
             member("Giant Weasel 2", 2, 0, 2, 0),
+            member("Giant Weasel 3", 0, 1, 2, 9),
         ];
-        let (columns, squares) = move_map_squares(&ids, &party, Some("Brakka")).unwrap();
+        let aims = vec![
+            (b"Giant Weasel 2".to_vec(), "flail-0-4-action".to_owned()),
+            (
+                b"Giant Weasel 3".to_vec(),
+                "greatsword-0-5-action".to_owned(),
+            ),
+        ];
+        let (columns, squares) =
+            fight_map_squares(&ids, &party, Some("Brakka"), &aims, (0, 0)).unwrap();
         assert_eq!(columns, 3);
         assert_eq!(
             squares,
             vec![
-                MoveSquare::Occupied {
+                MapSquare::Occupied {
                     mark: "B".to_owned(),
                     side: 1,
                     down: false,
-                    own: true
+                    own: true,
+                    aim: None
                 },
-                MoveSquare::Reachable("1-0".to_owned()),
-                MoveSquare::Occupied {
+                MapSquare::Reachable("1-0".to_owned()),
+                // A fallen enemy is drawn but cannot be aimed at.
+                MapSquare::Occupied {
                     mark: "G2".to_owned(),
                     side: 2,
                     down: true,
-                    own: false
+                    own: false,
+                    aim: None
                 },
-                MoveSquare::Empty,
-                MoveSquare::Empty,
-                MoveSquare::Reachable("2-1".to_owned()),
+                MapSquare::Occupied {
+                    mark: "G3".to_owned(),
+                    side: 2,
+                    down: false,
+                    own: false,
+                    aim: Some("greatsword-0-5-action".to_owned())
+                },
+                MapSquare::Empty,
+                MapSquare::Reachable("2-1".to_owned()),
             ]
         );
     }
 
     #[test]
-    fn an_option_that_is_not_a_cell_or_a_fight_too_large_keeps_the_list() {
+    fn a_hero_with_no_move_left_still_gets_a_map_to_aim_on() {
+        let party = vec![member("Brakka", 0, 0, 1, 13), member("Rat", 1, 0, 2, 4)];
+        let aims = vec![(b"Rat".to_vec(), "spear-0-2-action".to_owned())];
+        let (columns, squares) =
+            fight_map_squares(&[], &party, Some("Brakka"), &aims, (0, 0)).unwrap();
+        assert_eq!(columns, 2);
+        assert!(
+            matches!(&squares[1], MapSquare::Occupied { aim: Some(id), .. } if id == "spear-0-2-action")
+        );
+    }
+
+    #[test]
+    fn the_map_does_not_shrink_below_the_size_it_has_already_had() {
         let party = vec![member("Brakka", 0, 0, 1, 13)];
-        assert_eq!(move_map_squares(&["stay".to_owned()], &party, None), None);
-        assert_eq!(move_map_squares(&[], &party, None), None);
-        assert_eq!(move_map_squares(&["16-0".to_owned()], &party, None), None);
+        let (columns, squares) =
+            fight_map_squares(&["1-0".to_owned()], &party, None, &[], (8, 6)).unwrap();
+        assert_eq!((columns, squares.len()), (8, 48));
+    }
+
+    #[test]
+    fn an_option_that_is_not_a_cell_or_a_fight_too_large_keeps_the_lists() {
+        let party = vec![member("Brakka", 0, 0, 1, 13)];
+        assert_eq!(
+            fight_map_squares(&["stay".to_owned()], &party, None, &[], (0, 0)),
+            None
+        );
+        assert_eq!(fight_map_squares(&[], &[], None, &[], (0, 0)), None);
+        assert_eq!(
+            fight_map_squares(&["16-0".to_owned()], &party, None, &[], (0, 0)),
+            None
+        );
     }
 }
 
