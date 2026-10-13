@@ -2749,6 +2749,13 @@ fn stage_using(
         return Err(RepositoryError::Unauthorized);
     }
     let kind = wire::action_kind(action.entry.as_str()).ok_or(RepositoryError::InvalidCandidate)?;
+    if tactical::combat_action(kind)
+        && (command.basis != current.basis()
+            || command.observed_revision != current.basis().revision)
+    {
+        refusal_detail::note("combat-stale-basis");
+        return Err(RepositoryError::InvalidCandidate);
+    }
     let selected = super::beat_script_runtime::select(current, kind, submitted_choices)?;
     let original_kind = kind;
     let kind = if selected.effect == super::beat_script::BeatEffect::ThirdApproach {
@@ -3435,6 +3442,51 @@ mod tests {
             .unwrap(),
         );
         checkpoints
+    }
+
+    #[test]
+    fn canonical_end_turn_from_prior_round_is_refused_without_advancing() {
+        let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+        let opening = opening_story();
+        let dialogue = stage_with_supplier(
+            &opening,
+            &input(&opening, first, 6, "ask-courier", vec![]),
+            &mut |_| panic!("dialogue dice"),
+        )
+        .unwrap();
+        let mut initiative = [20, 10, 1].into_iter();
+        let combat = stage_with_supplier(
+            &dialogue,
+            &input(&dialogue, first, 7, "defend-courier", vec![]),
+            &mut |_| Ok(initiative.next().unwrap()),
+        )
+        .unwrap();
+        let stale_end_turn = input(&combat, first, 8, "end-turn", vec![]);
+        let after_first_turn = stage_with_supplier(
+            &combat,
+            &input(&combat, first, 9, "end-turn", vec![]),
+            &mut |_| panic!("first hero turn cannot draw"),
+        )
+        .unwrap();
+        let after_round = stage_with_supplier(
+            &after_first_turn,
+            &input(&after_first_turn, second, 10, "end-turn", vec![]),
+            &mut |_| Ok(1),
+        )
+        .unwrap();
+        let active_hero = after_round.state().encounters[0].active_turn;
+        let draw_count = after_round.state().draws.len();
+
+        assert_eq!(active_hero, Some(entity(ENTITIES[0]).unwrap()));
+        assert_eq!(
+            stage_with_supplier(&after_round, &stale_end_turn, &mut |_| {
+                panic!("stale end-turn must not draw")
+            }),
+            Err(RepositoryError::InvalidCandidate)
+        );
+        assert_eq!(after_round.state().encounters[0].active_turn, active_hero);
+        assert_eq!(after_round.state().draws.len(), draw_count);
     }
 
     #[test]
