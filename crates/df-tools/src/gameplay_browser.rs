@@ -89,6 +89,7 @@ struct Client {
     join_retries: u32,
     /// Times the page has confirmed an unconfirmed choice by itself since it was sent.
     auto_confirms: u8,
+    feedback_generation: u64,
 }
 
 #[derive(Default)]
@@ -243,6 +244,10 @@ mod saved_player {
     }
 }
 const SAVED_GAME_REFUSED: &str = "The server did not accept this saved game.";
+const ACTION_REFUSAL_FEEDBACK: &str = "That did not work. Try again, or pick something else.";
+fn should_replace_feedback(text: &str, action_refusal_active: bool) -> bool {
+    !text.is_empty() || !action_refusal_active
+}
 fn node(
     document: &Document,
     parent: &Element,
@@ -263,8 +268,40 @@ fn status(client: &Client, text: &str) {
 }
 fn feedback(client: &Client, text: &str) {
     if let Ok(Some(node)) = client.root.query_selector(".feedback") {
+        if !should_replace_feedback(text, node.has_attribute("data-action-refusal")) {
+            return;
+        }
+        if !text.is_empty() {
+            let _ = node.remove_attribute("data-action-refusal");
+        }
         node.set_text_content(Some(text));
     }
+}
+fn action_refusal_feedback(client: &Rc<RefCell<Client>>) {
+    let (token, root) = {
+        let mut state = client.borrow_mut();
+        state.feedback_generation = state.feedback_generation.wrapping_add(1);
+        (state.feedback_generation, state.root.clone())
+    };
+    let Ok(Some(node)) = root.query_selector(".feedback") else {
+        return;
+    };
+    let token = token.to_string();
+    let _ = node.set_attribute("data-action-refusal", &token);
+    node.set_text_content(Some(ACTION_REFUSAL_FEEDBACK));
+    let weak = Rc::downgrade(client);
+    wasm_bindgen_futures::spawn_local(async move {
+        gloo_timers::future::TimeoutFuture::new(3500).await;
+        let Some(client) = weak.upgrade() else {
+            return;
+        };
+        if let Ok(Some(node)) = client.borrow().root.query_selector(".feedback")
+            && node.get_attribute("data-action-refusal").as_deref() == Some(&token)
+        {
+            let _ = node.remove_attribute("data-action-refusal");
+            node.set_text_content(Some(""));
+        }
+    });
 }
 fn clear_callbacks(client: &mut Client) {
     for (element, callback) in std::mem::take(&mut client.callbacks) {
@@ -1057,7 +1094,11 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
         if redraw_current(&client).is_err() {
             status(&client.borrow(), "Saved view could not be displayed.");
         }
-        feedback(&client.borrow(), &message);
+        if message == ACTION_REFUSAL_FEEDBACK {
+            action_refusal_feedback(&client);
+        } else {
+            feedback(&client.borrow(), &message);
+        }
     });
 }
 fn complete_action_response(
@@ -1102,13 +1143,9 @@ fn complete_action_response(
                                     if body.action_kind==rpc::GameplayActionKind::SetTableSetting as i32 {"Table setting saved.".to_owned()}
                                     else if receipt.replayed {"Original saved outcome confirmed. No rolls or damage were repeated.".to_owned()} else {"Your choice is saved to the shared adventure.".to_owned()}
                                 }
-                                Some(rpc::decision_receipt::Outcome::Rejected(rejection))=>match rpc::RejectionCode::try_from(rejection.code) {
-                                    Ok(rpc::RejectionCode::InvalidSelection)=>"The server rejected that character or action selection. Review the offered choices.",
-                                    Ok(rpc::RejectionCode::WrongTurn)=>"It is another combatant's turn.",
-                                    Ok(rpc::RejectionCode::StaleOffer)=>"That offer has ended. Choose from the current view.",
-                                    Ok(rpc::RejectionCode::CapabilityUnavailable)=>"That can't be done right now.",
-                                    _=>"The server declined the input. Reconnect to recover.",
-                                }.to_owned(),
+                        Some(rpc::decision_receipt::Outcome::Rejected(_)) => {
+                            ACTION_REFUSAL_FEEDBACK.to_owned()
+                        }
                                 None=>"The server returned no decision outcome.".to_owned(),
                             }
                 }
@@ -1194,7 +1231,7 @@ fn creation(
         .ok_or_else(|| JsValue::from_str("character owner absent"))?;
     let editable = true;
     let view=CharacterPhaseView {generation:state.revision.and_then(|revision|revision.epoch).and_then(|epoch|epoch.value).ok_or_else(||JsValue::from_str("creation epoch absent"))?,owner_key:owner,revision:state.revision.and_then(|revision|revision.sequence).ok_or_else(||JsValue::from_str("creation revision absent"))?,
-        chapter:"Your hero".to_owned(),title:"A story begins with you".to_owned(),description:"Make your hero. Pick one option in each group, then confirm.".to_owned(),
+        chapter:"Your hero".to_owned(),title:"Make your hero".to_owned(),description:"Pick one option in each group, then confirm.".to_owned(),
         connection:"Connected to your shared room".to_owned(),status:CharacterStatus::Editing,
         status_message:"Choose your options and confirm. Names may use letters, dashes, or underscores (up to 24 characters).".to_owned(),
         editable,name:String::new(),flavor:String::new(),appearance:None,portrait:None,
@@ -1918,6 +1955,7 @@ fn new_client(
         served_run,
         join_retries: 0,
         auto_confirms: 0,
+        feedback_generation: 0,
     }));
     live_chrome::mount(&client)?;
     Ok(client)
@@ -2199,7 +2237,21 @@ pub mod fixture {
 
 #[cfg(test)]
 mod tests {
-    use super::{ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, record_join_retry};
+    use super::{
+        ACTION_REFUSAL_FEEDBACK, ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, record_join_retry,
+        should_replace_feedback,
+    };
+
+    #[test]
+    fn rejected_action_feedback_survives_view_updates_until_replaced_or_expired() {
+        assert_eq!(
+            ACTION_REFUSAL_FEEDBACK,
+            "That did not work. Try again, or pick something else."
+        );
+        assert!(!should_replace_feedback("", true));
+        assert!(should_replace_feedback("", false));
+        assert!(should_replace_feedback("A newer message", true));
+    }
 
     #[test]
     fn unavailable_tunnel_retries_stop_at_the_configured_limit() {
