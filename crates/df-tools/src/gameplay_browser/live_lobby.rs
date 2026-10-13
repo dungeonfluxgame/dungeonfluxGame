@@ -56,9 +56,10 @@ fn initial(name: &str) -> String {
 }
 
 fn is_loopback_join_url(join_url: &str) -> bool {
-    let Some((_, address)) = join_url.split_once("://") else {
-        return false;
-    };
+    // The phone is handed the address as shown, without its scheme.
+    let address = join_url
+        .split_once("://")
+        .map_or(join_url, |(_, address)| address);
     let host = address.split('/').next().unwrap_or_default();
     if host.eq_ignore_ascii_case("localhost") {
         return true;
@@ -172,6 +173,8 @@ mod tests {
             "http://127.42.0.9:63419/gameplay/player?room=ABCD",
             "http://[::1]:63419/gameplay/player?room=ABCD",
             "http://localhost:63419/gameplay/player?room=ABCD",
+            "127.0.0.1:63419/gameplay/player?room=ABCD",
+            "localhost:63419/gameplay/player?room=ABCD",
         ] {
             assert!(is_loopback_join_url(join_url));
             let model = LobbyModel {

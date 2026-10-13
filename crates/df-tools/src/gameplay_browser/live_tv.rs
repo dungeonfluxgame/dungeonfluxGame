@@ -781,7 +781,17 @@ impl TvStage {
             "style",
             &format!("--chars:{}", model.room_code.chars().count().max(1)),
         )?;
-        if is_loopback_join_host(&model.join_host) {
+        // A code that leads to this computer's own address is not offered for scanning
+        // (live_join.css hides the QR tile).
+        let local_only = is_loopback_join_host(&model.join_host);
+        if let Some(join) = self.hint.parent_element() {
+            if local_only {
+                join.set_attribute("data-local-only", "")?;
+            } else {
+                join.remove_attribute("data-local-only")?;
+            }
+        }
+        if local_only {
             self.hint.set_text_content(Some(
                 "Phones cannot join yet: the game was started for this computer only",
             ));

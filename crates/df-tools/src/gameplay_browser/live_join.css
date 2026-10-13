@@ -5,3 +5,4 @@
 .tv-join-row{display:flex;align-items:center;justify-content:center;min-width:0}
 .tv-qr{margin:0;flex:none;padding:calc(var(--u)*.5);background:#ffffff;line-height:0}
 .tv-qr-image{display:block}
+.tv-join[data-local-only] .tv-qr{display:none}
