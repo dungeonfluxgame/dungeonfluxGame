@@ -14,7 +14,7 @@ const HARBOR_ESTABLISHING: &str =
     "/assets/concept-art/establishing-harbor-canal-rowboat-bridge.webp";
 const HARBOR_WHARF: &str = "/assets/ui/scenes/mara-harbor-v4.png";
 const HARBOR_INN: &str = "/assets/concept-art/scene-tavern-barkeep-talk-rain.webp";
-const WAITING_TEXT: &str = "Waiting for your companions to act.";
+const WAITING_TEXT: &str = "The story is being told. Your next choice will appear here.";
 const CHOOSE_TEXT: &str = "Choose how your hero responds.";
 
 /// The mounted live screens of one client. At most one display stage, or one player

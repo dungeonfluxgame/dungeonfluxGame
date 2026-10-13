@@ -36,6 +36,10 @@ const PACING_MAX_WAIT_MS: u64 = 20_000;
 /// A live display re-reports about every 1.6 s while the server is behind it, so this
 /// bound is more than two missed reports.
 const ACK_STALE_MS: u64 = 4_000;
+/// How long the phones' story choices stay withheld after the scene changes outside a fight
+/// (FLO-01): long enough for the new scene to be on the TV before anyone can leave it. The TV
+/// does not report when a scene has been told, so this is a fixed, bounded wait.
+const STORY_HOLD_MS: u64 = 4_000;
 /// Displays whose reports are tracked at once; beyond this the stalest report is
 /// dropped. Several televisions on one room stay distinguishable by instance.
 const ACK_DISPLAYS: usize = 8;
@@ -124,6 +128,12 @@ struct Ring {
     /// failure has been logged; cleared by the next successful arm so a later failure
     /// logs again instead of stalling silently.
     pacing_arm_failed: bool,
+    /// Until when the phones' story choices are withheld; see [`STORY_HOLD_MS`].
+    story_hold_until: Option<Instant>,
+    /// The story scenes the phones were last shown (phase, title, place), newest last. A view
+    /// of a scene not listed here starts the hold; two are kept so that two views that differ
+    /// for any reason can never restart it against each other.
+    story_scenes: Vec<(i32, String, String)>,
     /// The newest presentation report of each display instance, `(sequence, at)`. The
     /// slowest display whose report is still fresh governs the release; a display
     /// that stops reporting is dropped after [`ACK_STALE_MS`] and stops governing.
@@ -174,6 +184,8 @@ impl TableLog {
                 pacing: Pacing::CaughtUp { released: 0 },
                 pacing_armed_until: None,
                 pacing_arm_failed: false,
+                story_hold_until: None,
+                story_scenes: Vec::new(),
                 acks: BTreeMap::new(),
             }),
             wake: watch::channel(0).0,
@@ -219,12 +231,29 @@ impl TableLog {
     }
 
     fn next_wake_locked(ring: &Ring) -> Option<Instant> {
-        let Pacing::Presenting { release_at, .. } = ring.pacing else {
-            return None;
+        let beats = match ring.pacing {
+            Pacing::Presenting { release_at, .. } => {
+                let stale = Duration::from_millis(ACK_STALE_MS);
+                let ages_out = ring.acks.values().map(|(_, at)| *at + stale).min();
+                Some(ages_out.map_or(release_at, |at| at.min(release_at)))
+            }
+            Pacing::CaughtUp { .. } => None,
         };
-        let stale = Duration::from_millis(ACK_STALE_MS);
-        let ages_out = ring.acks.values().map(|(_, at)| *at + stale).min();
-        Some(ages_out.map_or(release_at, |at| at.min(release_at)))
+        match (beats, ring.story_hold_until) {
+            (Some(beats), Some(story)) => Some(beats.min(story)),
+            (beats, story) => beats.or(story),
+        }
+    }
+
+    /// Ends the story hold when its time has come. Returns whether it ended (watchers must be
+    /// woken so the phones are sent their choices).
+    fn release_story_locked(ring: &mut Ring, now: Instant) -> bool {
+        if ring.story_hold_until.is_some_and(|until| now >= until) {
+            ring.story_hold_until = None;
+            println!("STORY release cause=timeout");
+            return true;
+        }
+        false
     }
 
     /// Advances the gate as of `now` under the caller's lock: drops reports whose
@@ -295,6 +324,7 @@ impl TableLog {
             ring.next_sequence = floor.min(ring.next_sequence);
             ring.pacing = Pacing::CaughtUp { released: 0 };
             ring.acks.clear();
+            ring.story_hold_until = None;
             ring.version += 1;
             ring.version + ring.presence_version
         };
@@ -646,7 +676,8 @@ impl TableLog {
     fn expire_pacing_at(&self, now: Instant) -> Option<Instant> {
         let (advanced, version, next) = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
-            let advanced = Self::advance_pacing_locked(&mut ring, now);
+            let story_released = Self::release_story_locked(&mut ring, now);
+            let advanced = Self::advance_pacing_locked(&mut ring, now) || story_released;
             if advanced {
                 ring.version += 1;
             }
@@ -738,6 +769,7 @@ impl TableLog {
             None => None,
         };
         let Some(combat) = combat else {
+            self.apply_story_hold(view, Instant::now());
             return;
         };
         let latest = combat.latest_sequence;
@@ -779,6 +811,54 @@ impl TableLog {
         if let Some(at) = arm {
             self.arm_pacing(at);
         }
+    }
+
+    /// Outside a fight: a player's view of a story scene the phones have not been shown before
+    /// starts the hold, and while it lasts such a view carries no choices; the timer that ends
+    /// the hold is armed. The display is never gated, and the lobby and hero creation are
+    /// untouched (their offers are not story choices).
+    fn apply_story_hold(self: &Arc<Self>, view: &mut rpc::ViewMessage, now: Instant) {
+        let Some(rpc::view_message::Audience::Player(player)) = view.audience.as_mut() else {
+            return;
+        };
+        let Some(journey) = player.journey.as_ref() else {
+            return;
+        };
+        if journey.creation.is_some()
+            || !matches!(
+                rpc::JourneyPhase::try_from(journey.phase),
+                Ok(rpc::JourneyPhase::Opening
+                    | rpc::JourneyPhase::Dialogue
+                    | rpc::JourneyPhase::Complete)
+            )
+        {
+            return;
+        }
+        let scene = player.scene.as_ref();
+        let shown = (
+            journey.phase,
+            scene.map_or_else(String::new, |scene| scene.title.clone()),
+            scene.map_or_else(String::new, |scene| scene.place.clone()),
+        );
+        let until = {
+            let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+            let _released = Self::release_story_locked(&mut ring, now);
+            if !ring.story_scenes.contains(&shown) {
+                if ring.story_scenes.len() == 2 {
+                    ring.story_scenes.remove(0);
+                }
+                ring.story_scenes.push(shown);
+                ring.story_hold_until = Some(now + Duration::from_millis(STORY_HOLD_MS));
+                println!("STORY hold ms={STORY_HOLD_MS} reason=telling");
+            }
+            ring.story_hold_until
+        };
+        let Some(until) = until else {
+            return;
+        };
+        player.offers.clear();
+        player.action_available = false;
+        self.arm_pacing(until);
     }
 
     /// Arms the pacing timer whatever thread asks: the runtime handle captured at
@@ -1748,6 +1828,111 @@ mod tests {
         let off = TableLog::disabled();
         speech(&off, "hello");
         assert!(off.lines().is_empty());
+    }
+
+    fn story_view(phase: rpc::JourneyPhase, title: &str, display: bool) -> rpc::ViewMessage {
+        let journey = Some(rpc::JourneyView {
+            phase: phase as i32,
+            ..Default::default()
+        });
+        let scene = Some(rpc::GameplayScene {
+            title: title.to_owned(),
+            ..Default::default()
+        });
+        rpc::ViewMessage {
+            audience: Some(if display {
+                rpc::view_message::Audience::Display(rpc::DisplayGameplayView {
+                    journey,
+                    scene,
+                    ..Default::default()
+                })
+            } else {
+                rpc::view_message::Audience::Player(rpc::PlayerGameplayView {
+                    journey,
+                    scene,
+                    offers: vec![rpc::GameplayActionOffer::default()],
+                    action_available: true,
+                    ..Default::default()
+                })
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn offers_after_hold(log: &Arc<TableLog>, mut view: rpc::ViewMessage, now: Instant) -> usize {
+        log.apply_story_hold(&mut view, now);
+        match view.audience {
+            Some(rpc::view_message::Audience::Player(player)) => player.offers.len(),
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn a_new_story_scene_withholds_its_choices_for_a_moment_and_then_gives_them() {
+        let log = TableLog::new();
+        let start = Instant::now();
+        let scene = || story_view(rpc::JourneyPhase::Opening, "The Windward Pass", false);
+        let last = start + Duration::from_millis(STORY_HOLD_MS - 1);
+
+        assert_eq!(offers_after_hold(&log, scene(), start), 0, "being told");
+        assert_eq!(offers_after_hold(&log, scene(), last), 0, "the other phone");
+
+        // The timer's own path ends the hold and wakes the screens.
+        let watcher = log.subscribe();
+        let end = start + Duration::from_millis(STORY_HOLD_MS);
+        assert_eq!(log.expire_pacing_at(end), None);
+        assert!(watcher.has_changed().unwrap());
+        assert_eq!(offers_after_hold(&log, scene(), end), 1);
+
+        // The next scene is held in its turn; the one before it is not held again.
+        let next = || story_view(rpc::JourneyPhase::Dialogue, "A Soldier's Errand", false);
+        assert_eq!(offers_after_hold(&log, next(), end), 0);
+        let later = end + Duration::from_millis(STORY_HOLD_MS);
+        assert_eq!(offers_after_hold(&log, next(), later), 1);
+        assert_eq!(offers_after_hold(&log, scene(), later), 1);
+    }
+
+    #[test]
+    fn the_story_hold_never_touches_the_lobby_hero_creation_or_the_display() {
+        let log = TableLog::new();
+        let now = Instant::now();
+
+        for phase in [
+            rpc::JourneyPhase::Room,
+            rpc::JourneyPhase::CharacterCreation,
+        ] {
+            let view = story_view(phase, "The Windward Pass", false);
+            assert_eq!(offers_after_hold(&log, view, now), 1, "{phase:?}");
+        }
+        let mut creating = story_view(rpc::JourneyPhase::Opening, "The Windward Pass", false);
+        if let Some(rpc::view_message::Audience::Player(player)) = creating.audience.as_mut() {
+            player.journey.as_mut().unwrap().creation = Some(Default::default());
+        }
+        assert_eq!(offers_after_hold(&log, creating, now), 1, "creating a hero");
+
+        let mut display = story_view(rpc::JourneyPhase::Dialogue, "A Soldier's Errand", true);
+        let before = display.clone();
+        log.apply_story_hold(&mut display, now);
+        assert_eq!(display, before);
+        // The display's view did not start a hold either: a phone's view still does.
+        let phone = story_view(rpc::JourneyPhase::Dialogue, "A Soldier's Errand", false);
+        assert_eq!(offers_after_hold(&log, phone, now), 0);
+    }
+
+    #[test]
+    fn two_views_that_differ_cannot_restart_the_hold_against_each_other() {
+        let log = TableLog::new();
+        let start = Instant::now();
+        let first = || story_view(rpc::JourneyPhase::Dialogue, "A Soldier's Errand", false);
+        let second = || story_view(rpc::JourneyPhase::Dialogue, "A Soldier's Errand.", false);
+        assert_eq!(offers_after_hold(&log, first(), start), 0);
+        assert_eq!(offers_after_hold(&log, second(), start), 0);
+        let end = start + Duration::from_millis(2 * STORY_HOLD_MS);
+        assert_eq!(log.expire_pacing_at(end), None);
+        for _ in 0..3 {
+            assert_eq!(offers_after_hold(&log, first(), end), 1);
+            assert_eq!(offers_after_hold(&log, second(), end), 1);
+        }
     }
 
     #[test]
