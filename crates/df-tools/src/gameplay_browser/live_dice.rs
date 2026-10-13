@@ -70,6 +70,7 @@ struct Library {
     held: Vec<Closure<dyn FnMut()>>,
     listeners: Vec<Closure<dyn FnMut(web_sys::Event)>>,
     painters: Vec<Closure<dyn FnMut(f64)>>,
+    manifest_warned: bool,
 }
 
 thread_local! {
@@ -83,6 +84,7 @@ thread_local! {
         held: Vec::new(),
         listeners: Vec::new(),
         painters: Vec::new(),
+        manifest_warned: false,
     });
 }
 
@@ -102,11 +104,29 @@ pub(super) fn preload() {
     }
 }
 
+fn warn_manifest_unavailable() {
+    let should_warn = LIBRARY.with(|library| {
+        let mut library = library.borrow_mut();
+        if library.manifest_warned {
+            false
+        } else {
+            library.manifest_warned = true;
+            true
+        }
+    });
+    if should_warn {
+        web_sys::console::warn_1(&JsValue::from_str(
+            "Dice manifest unavailable; using still dice images.",
+        ));
+    }
+}
+
 async fn load_library() {
     let manifest = fetch_text(MANIFEST_URL, MAXIMUM_MANIFEST_BYTES).await;
     let manifest: Option<DiceManifest> =
         manifest.and_then(|text| crate::dice_roll::parse_manifest(&text));
     let Some(manifest) = manifest else {
+        warn_manifest_unavailable();
         finish_loading(Vec::new(), [255, 0, 255], DicePath::CardOnly);
         return;
     };
@@ -351,26 +371,24 @@ fn parse_key(text: &str) -> [u8; 3] {
 pub(super) fn show_roll(
     client: &Rc<RefCell<Client>>,
     play: DicePlay,
-    short: bool,
+    _short: bool,
 ) -> Result<u64, JsValue> {
     preload();
-    let (document, host, panel, reduced) = {
+    let (document, host, panel) = {
         let state = client.borrow();
         let Some((host, kind)) = dice_host(&state) else {
             return Ok(0);
         };
-        let reduced = reduced_motion(&state.document, &state.root);
         (
             state.document.clone(),
             host,
             kind == crate::dice_roll::DiceHost::Panel,
-            reduced,
         )
     };
     clear(client)?;
     let Some((first, second, path)) = LIBRARY.with(|library| {
         let mut library = library.borrow_mut();
-        if library.clips.is_empty() || library.path == DicePath::CardOnly {
+        if library.clips.is_empty() {
             return None;
         }
         let first = crate::dice_roll::choose_clip(&play, library.clips.len(), library.last);
@@ -381,6 +399,7 @@ pub(super) fn show_roll(
         Some((first, second, library.path))
     }) else {
         mark_rest_band(client, 0);
+        fallback_stills(&document, &host, panel, &play)?;
         return Ok(0);
     };
     let overlay = document.create_element("div")?;
@@ -402,7 +421,7 @@ pub(super) fn show_roll(
     let rest_ms = LIBRARY.with(|library| library.borrow().clips[first].clip.rest_ms);
     overlay.set_attribute("style", &format!("--dice-rest:{}ms", rest_ms.min(2_500)))?;
     mark_rest_band(client, rest_ms);
-    let still = short || reduced || path == DicePath::CardOnly;
+    let still = path == DicePath::CardOnly;
     die(
         &document,
         &overlay,
@@ -416,6 +435,63 @@ pub(super) fn show_roll(
         die(&document, &overlay, second, other, false, None, still)?;
     }
     Ok(rest_ms)
+}
+
+fn fallback_stills(
+    document: &Document,
+    host: &Element,
+    panel: bool,
+    play: &DicePlay,
+) -> Result<(), JsValue> {
+    let overlay = document.create_element("div")?;
+    overlay.set_class_name("tv-dice");
+    if panel {
+        host.insert_before(&overlay, host.first_element_child().as_deref())?;
+    } else {
+        host.append_child(&overlay)?;
+    }
+    let first = crate::dice_roll::choose_clip(play, crate::dice_roll::FALLBACK_CLIP_COUNT, None);
+    fallback_still(document, &overlay, play.kept, play.natural, true, first)?;
+    if let Some(other) = play.other {
+        let second = crate::dice_roll::pair_clip(first, crate::dice_roll::FALLBACK_CLIP_COUNT);
+        fallback_still(document, &overlay, other, None, false, second)?;
+    }
+    Ok(())
+}
+
+fn fallback_still(
+    document: &Document,
+    overlay: &Element,
+    face: u8,
+    natural: Option<Natural>,
+    kept: bool,
+    clip: usize,
+) -> Result<(), JsValue> {
+    let die = node(document, overlay, "div", "tv-die", "")?;
+    if !kept {
+        die.set_attribute("data-kept", "false")?;
+    }
+    die.set_attribute("style", "outline:none")?;
+    let image = node(document, &die, "img", "tv-die-rest", "")?;
+    image.set_attribute("src", &crate::dice_roll::fallback_rest_url(clip))?;
+    image.set_attribute("alt", "")?;
+    image.set_attribute("style", "display:block")?;
+    let figure = node(document, &die, "div", "tv-die-num", &face.to_string())?;
+    figure.set_attribute("data-settled", "true")?;
+    if let Some(natural) = natural {
+        figure.set_attribute(
+            "data-nat",
+            match natural {
+                Natural::Twenty => "20",
+                Natural::One => "1",
+            },
+        )?;
+    }
+    figure.set_attribute(
+        "style",
+        "left:50%;top:49%;width:30%;height:30%;font-size:calc(var(--u)*4);opacity:1!important;transform:translate(-50%,-50%)",
+    )?;
+    Ok(())
 }
 
 /// Takes the dice down: the roll card resolves from here. Both hosts sit under the page
@@ -463,27 +539,6 @@ pub(super) fn rest_url_for(attack_die: u32, faces: &[u32], roll_mode: i32) -> Op
             &library.clips[index].clip.rest_image,
         ))
     })
-}
-
-/// Reduced motion without a media-query binding (no such web-sys feature on this
-/// target): a probe element the stylesheet widens to 7 px under
-/// `prefers-reduced-motion`, read here. The stylesheet stays the backstop and hides any
-/// playing clip regardless.
-fn reduced_motion(document: &Document, root: &Element) -> bool {
-    let probe = match root.query_selector(".tv-motion-probe").ok().flatten() {
-        Some(probe) => probe,
-        None => {
-            let Ok(probe) = document.create_element("div") else {
-                return false;
-            };
-            probe.set_class_name("tv-motion-probe");
-            if root.append_child(&probe).is_err() {
-                return false;
-            }
-            probe
-        }
-    };
-    probe.client_width() == 7
 }
 
 /// The element the dice are hosted in: the battlefield container while it is mounted (it
@@ -542,7 +597,10 @@ fn die(
 ) -> Result<(), JsValue> {
     let settled_now = still;
     let die = node(document, parent, "div", "tv-die", "")?;
-    die.set_attribute("data-kept", if kept { "true" } else { "false" })?;
+    if !kept {
+        die.set_attribute("data-kept", "false")?;
+    }
+    die.set_attribute("style", "outline:none")?;
     if let Some(natural) = natural {
         die.set_attribute(
             "data-nat",
@@ -641,28 +699,29 @@ fn number(
     }
     // The laid-out die box turns the face fraction into pixels; unreadable without one.
     let pixels = die.client_width().max(1) as f64 * edge * 0.5;
-    figure.set_attribute(
-        "style",
-        &format!(
-            "left:{:.2}%;top:{:.2}%;width:{:.2}%;height:{:.2}%;font-size:{:.0}px;transform:translate(-50%,-50%) rotate({:.1}deg)",
-            center[0] * 100.0,
-            center[1] * 100.0,
-            (max_x - min_x) * 100.0,
-            (max_y - min_y) * 100.0,
-            pixels,
-            rotation,
-        ),
-    )?;
+    let figure_style = format!(
+        "left:{:.2}%;top:{:.2}%;width:{:.2}%;height:{:.2}%;font-size:{:.0}px;opacity:{}!important;transform:translate(-50%,-50%) rotate({:.1}deg)",
+        center[0] * 100.0,
+        center[1] * 100.0,
+        (max_x - min_x) * 100.0,
+        (max_y - min_y) * 100.0,
+        pixels,
+        if settled_now { 1 } else { 0 },
+        rotation,
+    );
+    figure.set_attribute("style", &figure_style)?;
     if settled_now {
         figure.set_attribute("data-settled", "true")?;
         return Ok(());
     }
     let settled = figure.clone();
     let landed = die.clone();
+    let settled_style = figure_style.replace("opacity:0", "opacity:1");
     // At the rest time the number appears; a clip with no data yet hands over to the
     // resting frame instead of standing black behind the number.
     let reveal = Closure::wrap(Box::new(move || {
         let _shown = settled.set_attribute("data-settled", "true");
+        let _styled = settled.set_attribute("style", &settled_style);
         if video.as_ref().is_some_and(|clip| clip.ready_state() < 3) {
             let _marked = landed.set_attribute("data-stalled", "true");
         }
@@ -692,6 +751,7 @@ fn web_clip(
     let url = LIBRARY.with(|library| library.borrow().clips[clip].webm_url.clone());
     let video: web_sys::HtmlVideoElement = document.create_element("video")?.dyn_into()?;
     video.set_class_name("tv-die-clip");
+    video.set_attribute("style", "display:block!important")?;
     video.set_muted(true);
     video.set_attribute("muted", "")?;
     video.set_attribute("playsinline", "")?;
@@ -726,6 +786,7 @@ fn keyed_clip(
     let url = LIBRARY.with(|library| library.borrow().clips[clip].key_url.clone());
     let canvas = document.create_element("canvas")?;
     canvas.set_class_name("tv-die-canvas");
+    canvas.set_attribute("style", "display:block!important")?;
     canvas.set_attribute("width", &CLIP_SIZE.to_string())?;
     canvas.set_attribute("height", &CLIP_SIZE.to_string())?;
     die.append_child(&canvas)?;

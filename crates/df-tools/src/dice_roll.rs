@@ -13,6 +13,7 @@ use df_protocol::common as rpc;
 
 /// The display's dice live under this path, extensionless like every other extra asset.
 pub(crate) const DICE_URL_PREFIX: &str = "/assets/ui/generated/dice/";
+pub(crate) const FALLBACK_CLIP_COUNT: usize = 3;
 
 /// One roll clip from the manifest: file names, the rest time the number and the land
 /// cue follow, and the upward face geometry in 0-to-1 coordinates of the square.
@@ -317,6 +318,13 @@ impl Cursor<'_> {
 }
 
 /// The extensionless display URL for a manifest file name.
+pub(crate) fn fallback_rest_url(index: usize) -> String {
+    clip_url(&format!(
+        "roll-{}-rest.webp",
+        index % FALLBACK_CLIP_COUNT + 1
+    ))
+}
+
 pub(crate) fn clip_url(file: &str) -> String {
     let stem = file.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(file);
     format!("{DICE_URL_PREFIX}{stem}")
@@ -526,6 +534,14 @@ mod tests {
         assert_eq!(dice_host(true, true), DiceHost::Battlefield);
         assert_eq!(dice_host(false, true), DiceHost::Panel);
         assert_eq!(dice_host(false, false), DiceHost::Stage);
+    }
+
+    #[test]
+    fn fallback_stills_use_a_known_rest_asset() {
+        let play = plan(14, 0, &[14]).expect("a d20 test has a plan");
+        let rest = fallback_rest_url(choose_clip(&play, FALLBACK_CLIP_COUNT, None));
+        let selected = choose_clip(&play, FALLBACK_CLIP_COUNT, None);
+        assert_eq!(rest, clip_url(&format!("roll-{}-rest.webp", selected + 1)));
     }
 
     #[test]
