@@ -34,6 +34,7 @@ mod objective_outcome;
 mod objective_outcome_tests;
 #[cfg(test)]
 mod session_flow_tests;
+mod session_machine;
 pub(super) mod tactical;
 #[cfg(test)]
 mod text_pack_tests;
@@ -2757,6 +2758,17 @@ fn stage_using(
         return Err(RepositoryError::InvalidCandidate);
     }
     let selected = super::beat_script_runtime::select(current, kind, submitted_choices)?;
+    // The forward state machine gates every command before any handler runs:
+    // a command that is illegal in the session's current state is refused
+    // here, whatever its handler might have allowed.
+    {
+        let state = session_machine::SessionState::of(current)?;
+        let event = session_machine::Event::of(selected.effect);
+        if session_machine::next(state, event).is_err() {
+            refusal_detail::note("session-machine");
+            return Err(RepositoryError::InvalidCandidate);
+        }
+    }
     let original_kind = kind;
     let kind = if selected.effect == super::beat_script::BeatEffect::ThirdApproach {
         rpc::GameplayActionKind::EscortCourier
