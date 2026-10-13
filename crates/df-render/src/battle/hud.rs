@@ -350,6 +350,13 @@ impl Hud {
             for figure in &chip_order {
                 self.chip_known.insert(figure.id.clone());
                 let chip = element(&self.document, &self.chips, "span", "bf-chip", "")?;
+                let chip_name = if figure.downed {
+                    format!("{} (down)", figure.name)
+                } else {
+                    figure.name.clone()
+                };
+                chip.set_attribute("aria-label", &chip_name)?;
+                chip.set_attribute("title", &chip_name)?;
                 if !known.contains(&figure.id) && !known.is_empty() {
                     chip.set_attribute("data-pop", "")?;
                 }
@@ -368,7 +375,9 @@ impl Hud {
                     chip.set_attribute("data-down", "")?;
                 }
                 chip.set_attribute("style", &portrait_style(figure.portrait.as_deref()))?;
-                if figure.portrait.is_none() {
+                if figure.downed {
+                    element(&self.document, &chip, "span", "bf-chip-initial", "↓")?;
+                } else if figure.portrait.is_none() {
                     element(
                         &self.document,
                         &chip,
