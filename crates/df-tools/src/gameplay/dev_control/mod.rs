@@ -300,8 +300,8 @@ fn revision_json(revision: Option<&rpc::SessionRevision>) -> Value {
 async fn display_view(
     state: &Shared,
 ) -> Result<(rpc::SessionRevision, rpc::ViewMessage), (StatusCode, Json<Value>)> {
-    let seats = state.seats.lock().await;
-    let (session_id, run_id) = scope_of(&seats)?;
+    let basis = state.service.updates.borrow().basis();
+    let (session_id, run_id) = display_scope(basis);
     let request = rpc::WatchViewRequest {
         session_id: Some(rpc::SessionId {
             value: Some(session_id),
@@ -314,7 +314,6 @@ async fn display_view(
         }),
         after_revision: None,
     };
-    drop(seats);
     owner_view(state, state.display_credential, request).await
 }
 
@@ -346,6 +345,13 @@ async fn seat_view(
         after_revision: None,
     };
     owner_view(state, credential, request).await
+}
+
+fn display_scope(basis: df_model::checkpoint::Basis) -> (Vec<u8>, Vec<u8>) {
+    (
+        basis.session.as_bytes().to_vec(),
+        basis.run.as_bytes().to_vec(),
+    )
 }
 
 fn scope_of(seats: &Seats) -> Scope {
@@ -539,4 +545,21 @@ async fn shutdown(State(state): State<Arc<Shared>>, headers: HeaderMap) -> Outco
             json!({"status": "shutting-down", "note": "the server releases its owner lease, so the database resumes immediately"}),
         ),
     ))
+}
+
+#[cfg(test)]
+mod display_scope_tests {
+    use super::*;
+    use df_types::{RecoveryEpoch, RunId, SessionId, SessionRevision};
+
+    #[test]
+    fn display_scope_uses_the_checkpoint_session_and_run() {
+        let basis = df_model::checkpoint::Basis {
+            session: SessionId::from_bytes(&[1; 16]).expect("valid session id"),
+            run: RunId::from_bytes(&[2; 16]).expect("valid run id"),
+            revision: SessionRevision::new(RecoveryEpoch::new(1).expect("valid epoch"), 0),
+        };
+
+        assert_eq!(display_scope(basis), (vec![1; 16], vec![2; 16]));
+    }
 }
