@@ -34,8 +34,8 @@ fn schema() -> TextOutputSchema {
 
 fn limits() -> NativeHttpLimits {
     NativeHttpLimits {
-        connect_timeout: Duration::from_secs(2),
-        read_timeout: Duration::from_secs(2),
+        connect_timeout: Duration::from_secs(5),
+        read_timeout: Duration::from_secs(5),
         total_timeout: Duration::from_secs(3),
         maximum_request_bytes: 16_384,
         maximum_response_bytes: 16_384,
