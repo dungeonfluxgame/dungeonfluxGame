@@ -1,5 +1,6 @@
 // Explicit base types and immutable committed-run receipt binding; statements from SQL09.
 pub(crate) const LOCK_SESSION: &str = r#"SELECT run_id::bytea AS run_id, recovery_epoch::text, in_epoch_sequence::text, owner_fence::bytea AS owner_fence,
+       lease_until > clock_timestamp() AS lease_current,
        GREATEST(0, CEIL(EXTRACT(EPOCH FROM lease_until - clock_timestamp())))::bigint AS lease_remaining_seconds
 FROM df_game.sessions
 WHERE tenant_id = $1::bytea AND session_id = $2::bytea
