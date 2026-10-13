@@ -18,6 +18,204 @@ Integration history through 2026-10-11T15:25:07.071270-04:00, reconstructed from
 
 Integration history from 2026-10-11T15:24:05-04:00 through 2026-10-12T04:33:02-04:00 on the integration branch `claude/playable-20261011`, generated from Git by revision range: six-hour blocks by first-parent commit time, each newly reachable commit listed once. The last block is open and shorter than six hours; the work session is still running.
 
+Integration history from 2026-10-12T18:31:36-04:00 through 2026-10-13T06:51:17-04:00 on `main`, generated from Git by revision range `558654d38a30..e5034d48311b`: six-hour blocks by first-parent commit time, 173 commits, each listed once in integration order.
+
+## 2026-10-13T06:45:20-04:00 to 2026-10-13T06:51:17-04:00
+
+Range: 07ac688e3ee33f0235d00fb90c6624045db5c9d8..e5034d48311bc22079174965b58199904c878ab4
+
+- f911eb056741c427209a56e12ed180b1e8ae1d09 — PHN-01: tap an enemy on the phone's map to aim; the map stays when no move is left
+- c67a8419fc41d3ff308c950f2c602691867b8feb — OBS-62: what a hero says aloud is added to the table log when nobody answers it
+- e5034d48311bc22079174965b58199904c878ab4 — Triage list and roadmap: fight speech and the tap-to-aim map
+
+Next block baseline: `e5034d48311bc22079174965b58199904c878ab4`.
+
+The commit writing this block remains pending for capture in the next block. This block is still open: the work session had not ended when it was written, and it is shorter than six hours.
+
+## 2026-10-13T00:43:37-04:00 to 2026-10-13T06:39:44-04:00
+
+Range: dccea92ccebc34f586ea66f50ed9f9f12d1ef3a2..07ac688e3ee33f0235d00fb90c6624045db5c9d8
+
+- 16819357776702321025bc389e29d44ad79d0420 — CRE-07, OBS-06: form text no longer shows under the confirm bar
+- 98ba2bf2189669a2fb299cd6fb7ec5f4a723b50a — TVX-04, OBS-12: the scene title greets the scene, then leaves
+- 209c7cd6162373b8b6afcc0e63c1dafbedb193f2 — END-03, OBS-54: the health strip is hidden under the end card
+- ad9572a33b267a2bd45ce2388f7ddb287d35fed6 — OBS-44: hit point number stays readable at the edge of the bar's fill
+- 49704baf8c0fba419818aff75a82194839f99e86 — CRE-06, OBS-01, OBS-09: a local-only game offers no QR code or address
+- 283a76d64bb61219043896751dd7f787d4fff86c — OBS-33, SYN-06: the redraw waits behind the finishing blow
+- c342181f213a9efb29a559b7fc25630476f5feef — OBS-36, FGT-03: the table log words a graze, a shot and a hero's move correctly
+- 1026cc4ad8c4a9ae1afe8f9847e01daeb6cfc6ca — OBS-43, FGT-06: attack options are ordered best plain choice first
+- c90814b647439c207a4ef8796101cd41e1ca0e7b — OBS-35, OBS-43, OBS-45: phone fight panel wording
+- b787a80851dac1433ff236d0812637ceed7db191 — OBS-11: the narrator's box clears before the speaker's line appears
+- 399e137991aad9dc0ca7c6a258ed27defd322c2b — Triage list: mark the first hand-play fixes and record the causes found
+- 631ca1ebd4383eee4d5a1566ac95daa5552fd552 — OBS-55: the ending no longer asks for music that was never recorded
+- deb37c2e98a84be7b6d626bf13029705c715368b — OBS-32, SYN-04: a heal during a fight survives the TV's catch-up
+- c05f53c7d07fe240062ce0104839cfacfafbc4b4 — OBS-34, SYN-03: the phone's roll cards wait for the TV
+- c4d94432734f1e939a165620095855e8bfa1d679 — OBS-36, OBS-51: the phone's table log keeps actions from its first view
+- 79388033fede371c558558045ca89d29d2442686 — OBS-38: a creature with no language gets no spoken fight lines
+- 847473bec02e48d58e4e99cd05d182d4a87eb29e — OBS-25, STO-09: a character's reply is told what is happening in the scene
+- 0ac1d6710370749f7b203b3f58630b4e00a877bd — OBS-47: the victory card drops 'Awake' and shows the patron's line
+- dd7954088ce5d3174ed90ce46687a978f4394098 — OBS-19, OBS-21, OBS-05: the phone composer says what it does
+- eca342df2fb1eb5625612c39b89d6d518a268462 — OBS-13: a speech bubble stays paired with the picture on screen
+- d62a3020d269186ae05ba80ac04be9a914e2b81b — DEV: the browser-side test build compiles again
+- 70a9d60834130f6f3940667aee1862fd6257292f — CRE-03, OBS-03, OBS-05, OBS-15: player wording on the creation form and hero sheet
+- 30ecf8b201d5602003b04fb2bb0114ea94e0ebfd — Triage list: mark the second batch of hand-play fixes
+- 37f678d5a365a1f4e313f6c249ddf96937600cbc — SYN-01, SYN-03: opening enemy turns wait while the battlefield is still loading
+- ef7747de75f1248dd078b353b321d887f3218dd4 — OBS-51: an action's log line keeps its place ahead of what followed it
+- 06b4e213277225161d51a968f599f2480d74abc2 — OBS-14: the phone story card shows the newest reply, once
+- ea9430a9ccedacb9a758211ddbb526f5dff30725 — OBS-52, STO-06: an ending does not repeat an earlier scene's sentence
+- 9f26d62ae85b8fe695b7b28ab1349843a0774f47 — OBS-08: the tie rule names 'the enemy', not one adventure's bandit
+- 431f24650f0754a6054ebe736fe6b62f689ebf8f — Triage list: mark the third batch of hand-play fixes
+- 876d2fdef8e3942bce2b2aebe88a24e89a54b798 — HNT-26 (part): a mover paused on an ally's square no longer refuses the fight
+- 0f97c59d7ac601965311421d38a2c52a726f238d — OBS-57: the server log records turns, heals, endings and story steps
+- 7218c949ae93da94da5bb104b5d710df8c3127ec — OBS-10, FLO-08: the opening narration is not replayed when the picture refreshes
+- f0a14bf48d65032d533e3554a6263790e2cd4746 — REV-03: a heal that follows a fresh blow on the same hero is staged after it
+- 1a66b6be4fc35a3105bd2f37b0c33437776f8404 — REV-05: the picture setting is checked before the session is admitted
+- 4852c21d395e3f7eaa4f7cca823142f0efa69344 — REV-07: scanned close-ups are fitted at the push-in the shot will use
+- a6efb1374852a5c8ace36db6d7151af8226112d3 — REV-09: cleaned model text may not start with a list hyphen
+- 14fc1fee5e5157d1cb4e44475390cd938aa47fc6 — REV-02, SES-05: story text that arrived before the deadline is kept
+- ab0fc916e5885358664059371190bc98664035c0 — REV-04: a typed line in the lower strip closes before the reply's bubble opens
+- d44deca02257c4214b6ae89637de84c03b69c016 — REV-06: the dice clip is a still under reduced motion
+- 1cb72de375f801a056702ef0bfc4033be1132af4 — REV-08, OBS-44: the TV shows the rules note; the phone's fight controls are laid out
+- 2d76c3e641730031df639b581c7ca85ffe1fdddc — REV-01: a rejected fight action does not leave the phone waiting
+- 3042d02f408709fdf1604ac4dd64549d4c8a0dce — Triage list: mark the fourth batch of fixes
+- a0ae78d60adf800a189582f13988f239aa5afa63 — OBS-46, PHN-03: the rules note for a fight reads as plain sentences
+- 585d88ea5ac383b4f1711451d364323308d8c8c0 — REV-10: the play-and-record check presses only story choices
+- 87950360d810d80d637de76f912908868ea897c3 — OBS-27: the fight's introduction is told before the first blow
+- b2f7239f952d665ea3187070192b9419573b8b5b — SES-03: a refused action tells the player, briefly; creation page heading
+- 807201f440ffdaf4f90d164641b3ef13d12d4429 — Triage list: mark the fifth batch and the items that need a design decision
+- a98723ca30aea4779a74d2fa961b06c75f92ff0b — Roadmap: mark the hand-played session's items
+- 270548ad6cfc1b5f9b9a6f57c9677bb7ecf31fb0 — Fix: the phone's waiting page draws for a local-only game
+- ce75ec385ac63560fe454dc8f308be4d9a037427 — Fix: the phone's story screen draws again
+- 134d711b4389c65b4a0bba169282e567afe81cdb — OBS-20, PHN-08: the phone's fight controls are updated in place
+- a70bec667b5eee4a0378883159e38384bd63faa1 — OBS-34: at a fight's start the phone shows no roll the TV has not shown
+- 918cdee31ba89a3401c0e8dcc16ea2f22cda5721 — Triage list: results read back from the running pages, two regressions noted, three new rows
+- 1b5a67d302fd42900b4e26140c971a9b12dae2d3 — END-01 tests: the defeat text opens with the fight
+- 7e524f80d9dab444bd5f2012bd7eef5fdd3079c3 — END-01: the defeat screen says what the party fought and who fell
+- 761b5356bab4cb0cb20fe9e620e382e9001320a2 — OBS-58: a crashed game can be restarted on its database
+- da21f17b9dd22e9bcde08ce22f5bbf4bfc626a88 — OBS-15, OBS-59: hero cards and the creation form use player wording
+- aa982f700f5482caebaca5d8bac9480a30652a61 — OBS-60: the server log is in order at a fight's start and records the beginning
+- 2cde9ae0ed938eb27b9bb4f847037acac71a5987 — OBS-02, CRE-04: the phone's join and waiting pages use the adventure's own place picture
+- 4fc941ef970d40a74da156918265ed51126adcaa — OBS-40, FPX-07: the finishing-blow banner is kept for the blow that ends the fight
+- af39b8bb8fd7451826d6ca6526c63220ce8438ed — OBS-39, FPX-09: a dead enemy keeps one mark, and it is not drawn over other figures or the health cards
+- 00c6078571f6b7877cedff1bb0ce6bc29de40f89 — HNT-26: fights with three or more enemies were refused at the start
+- a7673dd5f8f4dca7a47094350e129a68bddba143 — Fix: actions are accepted again (storage query keeps its lease column)
+- 009bb09f4ff2dbf2d609d6f3e845faf7c71db736 — STO-10: a reply that draws on a hero's private clue stays off the TV
+- 268e0180f0ff7bba48ccc6dbeeabb6b512961141 — Triage list: sixth batch, the fight-start bug closed, results read back from running pages
+- 182fad8a3a0d52f8119baaa203d54a088ba2da8f — flow-a3 1: offered action kinds come from the session machine
+- 9f58bedfaa428127c88f40b0f14c0ba0acc71f4e — OBS-45, OBS-56, OBS-02: small wording on the phone
+- 6a013ebd93ce0d358cc7526bc6af8ff37cc37d57 — TVX-05: a heal's caption is brief and says what was regained
+- a27da6471d32257b1986031da71650c0a30fbcea — OBS-41: floating fight text stays inside the screen
+- 5067cda1d3db2f19679dcf7bb5d34b3d22107c54 — OBS-42: one die per d20, shown beside the attack card
+- 5272a1755b12771967b2afe5dde531201b429a95 — Start-up retries the adventure database connection
+- 8a9fe3cb9c58dcd52745bff2193514ca461cc2c7 — OBS-18, FLO-06: offer labels stay actions; the model no longer rewrites them into titles
+- f81314b66f55cb5febe4df2ddcc24bb64a7abb45 — Triage list: seventh batch
+- 8abe71b6205909a7070a559c49629a5a477286ae — Triage list: correct one row, add the start-up connection row
+- 3d6eaa6b4476f36d5746fb2e5a3b06f10e0ce1fb — Triage list: seven faults from the second review of the fixes
+- f3e9f99e6b31f394650a4f809d81bdc28bce27b3 — flow-a3 2 / OBS-48: the short rest is an Aftermath event, once per aftermath, only while a hero regains
+- 05e96ab26ce10861a83b672b455f3e0d86781599 — REV-11: a speech bubble follows its speaker when the same picture gets a new layout
+- 8309c3b1d5684adfd90f7119c64806d261965ad8 — REV-12: kept fight controls are bound again on every redraw and follow the refreshed offer
+- 7726562898a13669fc8ecd06c77e48dcbbc715c8 — Phone fight panel: the button rows apply again
+- 8b538a8256b0d38809e1ec751870bf64e5e46635 — REV-14: a character's line stays in the phone log during a fight, and the story card ignores the previous scene's reply
+- fc5f7d6cc7c58a9b9a9c25390ffecb8b72adc864 — REV-16, REV-17: the rules note is for the phones only, and every disclosed gap reads as a sentence
+- e62c349d8f825791f75a46c3811794725e50cda9 — flow-a3 3: the fight and the conversation are entered only through the session machine, and every staged outcome is checked against it
+- aabe35a9fb9263acfcd4cdabe0ea25bc8202d26a — Triage list: second-review fixes, the short rest, and the state machine's third step
+- 8ef03800d212162bb0579a132736c6a67c4842ca — PHN-01: the phone moves by tapping a map of the fight
+- 523a00b8d27dfefb193e71a31075a5e86820f4b2 — The session machine's transitions and refusals are written to the server log
+- 953f1462e52b41c419c48f5381e14854292f7bf0 — REV-19: the developer command line keeps its seats when the server restarts on the same game
+- a30f6295d8214f9755a03b60e79ac1315d8c2525 — FGT-02: damage dice are kept, sent and logged
+- 397e6e3d878eb71467a2ee2af91c81c44be5efef — OBS-22: a threat cools a character toward the hero before the reply is written
+- 99f570030a5008e591a1997fa764fc311e0632a5 — OBS-43: the attack list has one entry per weapon and target; mastery and Savage Attacker are their own choices
+- af3b71bb8b142c30f0b17d2614365ff5a76b2139 — REV-13: the page a phone sees before joining shows the adventure's own place
+- 1e2bd33edd6b14d372ed0319027dec92c4ae58fa — OBS-53: the end card no longer promises a control that does not exist
+- 07ac688e3ee33f0235d00fb90c6624045db5c9d8 — Triage list and roadmap: eighth batch (state-machine log, damage dice, attack list, move map, seats after restart)
+
+Next block baseline: `07ac688e3ee33f0235d00fb90c6624045db5c9d8`.
+
+## 2026-10-12T18:31:36-04:00 to 2026-10-13T00:25:32-04:00
+
+Range: 558654d38a308ef898da618ce1dbe9731a8bcafc..dccea92ccebc34f586ea66f50ed9f9f12d1ef3a2
+
+- c400f956cb804ee52a047ab08749cf9f08e821a7 — Record the 2026-10-12 afternoon block: the play-session work in progress
+- ed8bda033eef4c3afc51de0ab6dff34a492e8a21 — WIP baseline (compiles, not verified) before the bug-fix campaign
+- f0358ee3c57f02c0ffcd499d9a0a9a6d575ab9f1 — Support: make the lib test build compile again (directed-plate test)
+- 8a59a71fad1c74a555c6ac7e4e0989660c496f94 — Support: implement report_presented in the view-revision peer fixture
+- 301391eac3f86bfcf240930d5beb2866781f06c9 — CRE-04, END-02: neutral join page; phone shows a clear end state
+- 8fa68c82743854ffa942289b7a91fffe51fef79c — PHN-05: show the attack-recovery control only when an attack is unconfirmed
+- 3720b367676f576248f909941830330a03f0cf99 — END-03, TVX-03, TVX-04: scene titles and a clean end card on the TV
+- edece581731289d89974217fdaca9b18fae65cae — CRE-02, CRE-07: memorable-detail field usable; form clears the confirm bar
+- a252a2244a543b302415b6439b7dcda6b96d12f8 — PHN-04, PHN-08: composer labels say what they do; talk buttons stay mounted
+- 4c7e69bb2cf9e38701b47fa6d80ae73eb07a9d31 — TVX-01 (part): the typed line leaves before the reply's bubble enters
+- dc17a41ef4fbcdb7e4bacb829ffdc8351020c95f — AUD-04: a large centred prompt while the TV's sound is off
+- 7ecd7f957372a963f7c9b0dd6a62220fdd6653f2 — PIC-03: picture refreshes let poses move on
+- 97f9d1eedf2210b70feab823252fd498cf4d8fc6 — SES-11: battle scans default to level of detail 1
+- e8a800f5c567d23eab90c562537ecf0ed70b5acb — CRE-01 (part): a group with one option is pre-selected and submitted as a fact
+- 0a9436f55890800233a76225d5c951fedd201f13 — DEV-05: whole-game play-and-record browser check
+- e73f496a8f94860a8bd02519473342f9cbf2e7ba — Mark fixed and part-fixed items; add the code-review findings to the triage list
+- 65ff23cf1aa0bc0f126aafcc675d7a40e33f1638 — Support: refusal detail on REFUSAL and UNAVAILABLE lines
+- d495f61be1febfb6b15242f90cef1dc15e9f0fda — Support: name the refusing step on the fight-start and enemy-turn paths
+- 5cc1d7618e05311f821a480f3fa703b3b213b5c5 — SYN-timer (WIP, not seen in a browser): the fight's pacing no longer waits for ever on a silent display
+- ffed4a489c9b139f09fba9ae839f4b53ca1a7b42 — SES-05 (WIP, not verified against the live model): start-up story text in small groups with retries
+- 5abd72e4d98beccf4a582acfb1c81c4e52351df4 — HNT-01, SES-02: a fight starts whatever order the heroes were confirmed in
+- 4abbe0f23e936eda71143cb47a86e3c51afda9f4 — HNT-06: a healed figure can act again on the TV
+- 67b9586629a05e28100912eb3670557679147d9f — FLO-06: ending titles are quoted in the log, not conjugated
+- dce149caf01f4e4121aa8e6645f68cce4cafcd87 — PIC-08: the opening picture is requested once
+- 0ad7d6712d1d2e4f7b397e477c092288570cd7e8 — PHN-07: phone hero portrait shows the face; fight status line is readable
+- 6b5c6914eb1f112dab78f457670a3334678b33d0 — CRE-05, CRE-06: the TV lobby says what is happening and never prints a loopback address
+- e995a874f7d0851ad12970b1e87f50ab3c9b381a — AUD-01: music comes back when a line is only lingering on screen
+- cafd68cee75d6ab6aeffc2d4e76c332c4eff256a — HNT-03: a stale attack command is refused on the simple combat path
+- a1b3e2510bd42cac0c5ec625cfd4a30c2d564e40 — TVX-02: a hero's typed line is anchored to that hero
+- 1d664bd794651d4ad37d7917fe16e7b23be54ec3 — CRE-01: a single-option creation group reads as a fact
+- 0761a5b1185cd590a98445f0e1bfddb3c29833a6 — SYN-05, PHN-02, PHN-05: the phone shows a spent turn as spent, and death saves
+- 307c2b4c02c4fe2e80a768a219aa80440bd9f5f4 — AUD-04 (follow-up): the sound prompt stays in the lobby and covers nothing
+- 126bec7d26f11ce61207a239826794dc5443f99d — Mark the round-2 fixes in the triage list and the roadmap
+- 30a2551bce429138d4e74d8a9015e0b8da32ae34 — Triage list: add the second pass of code-review findings
+- 8d5425b2dff3ef6df5ec25b2e09985df2fa159b0 — SYN-01, SYN-02: the TV queues every fight beat once, by its server sequence
+- 0d8934fc944b4126e1fd5b63ceb3048d0d9d7c7d — FPX-01: a presented roll plays its tumbling clip
+- 0bf723707af46bf63d4db1748e79545c092f290a — SYN-04: a heal reaches the TV's health card with its beat, not before
+- 129547c8fe8a9f4a47fecf553ec2842954fcad41 — HNT-17: a catch-up no longer erases a pending scene change on the TV
+- a470d5e1e1975e3d0b0f9759a3718206d4cd076c — HNT-07: missing story-text slots are asked for again
+- 33b0ba925a0bb911dfe3d3e50fea57cb242eaf02 — HNT-10: a lost session no longer spins on an expired heartbeat
+- 1222ca161e6c53dfc0452e9868214751a6710120 — HNT-15: cleaned-up model text must keep its words and carry no Markdown
+- 0f5b6959130e9eda56b4001b36da7ff97e3ea8c2 — HNT-11: served scan and lobby-video files must be inside their real folder
+- 5e97f9790352a4a295bf55ddfcdbbb5fa01cdc96 — HNT-21: scene lighting matches whole words; a valid library scene keeps its picture
+- 224b74f7b43ae09452e0080ee2ce93976dd06528 — HNT-18: a defeat scene with dialogue is not labelled a victory
+- 4570a60e3feaccee81d7ec2ad932b979fb6744af — SYN-06: the finale music waits for the last fight beat to be shown
+- 7526b4d8686ec60bd09922d88f6606480b2441da — DEV-01: dev health needs no seat; read commands work on browser-started sessions
+- dc9c81f500bc3eb3343184ab4bd6a3fd4325cc42 — HNT-22: an oversized cached picture is replaced, not served as missing
+- 6dcfb0e17218f993c13d716021092e20a0c88dc0 — HNT-23: a speech-intent loader is cleared when its line closes off the fight screen
+- d4246c48a1212d022bdfdb98bf308ec5210a966f — STO-08: the phone shows a private clue once, not on every later screen
+- d8e4a5f07afc30d387ffb1c1e9424c8cdb500c32 — HNT-13: push-to-talk audio is dropped when the view it was recorded under has gone
+- 7d0f493d9e6d6d41339166f03cf076f0fcc79756 — SES-08: a start-up that fails after admission releases its session
+- c64fe4aed3618bef41d7bcd4b30c1ac9a7db3462 — Tests: compare fight outcomes without their view sequence numbers
+- cd92d25e48fcaf2e27940cfdd0d7a4c249c19c9b — HNT-05: a wolf's or mastiff's bite knocks prone only on a failed Strength save
+- 327e45c8b41b06827284035aecbdaa8043c6c3dd — Mark the round-3 fixes in the triage list and the roadmap
+- 7a3d50541ea0741320a76c4a937c2d06994ab296 — FPX-02: close-up camera poses are checked against the scene's occupancy
+- 7e6c6e19127d9d8001ce4e3237f7481d245bbd5f — HNT-16: duplicate speaker names in a content pack are refused
+- c813ce70dc88d7437421c43a6e676a61d41014c1 — HNT-14: cancelling a speech upload aborts the request itself
+- e47c1a32a32454563bd1869fc03302203ba5e98c — HNT-12: a stale End turn (or any stale combat action) is refused on the simple combat path
+- 0e8e4a1e05758f540eb71d9be563bee93e68e0c0 — HNT-02, HNT-09: restored moves obey the corner rule; thrown weapons land and can be picked up
+- 78771c3d9f104acd5ec5637230671f7af3010c4d — Mark the round-4 fixes in the triage list
+- 1817d9e791df9119c766779b5a2e5cc2aed0261c — SES-01: a refused command no longer kills the room
+- 9f4f1ffaebf5fcacf1a1de9fb1227361461de6c6 — SYN-09 (part): downed combatants in the turn strip are named and marked
+- 80f4bb81b0c21e8d22e113fcae26ab9db4d56168 — HNT-19: scan level-of-detail ranges are checked against the chunk's record count
+- b0f0eb46b4764bd3e7198dcc0cce13997554822b — HNT-24: a dice folder setting that is not valid Unicode is refused at start-up
+- ed7d78bb0234290ed469c9e2027bb8aa61095116 — HNT-20 (part): the browser's WebSocket connection set-up times out after ten seconds
+- 5b9700c7abc146baab73a33d9389b02c71cf822b — PHN-03, PHN-07: phone fight panel shows resources as chips and folds the rules note away
+- 233ac51aed29fbd7fad059e0e0f2d69395f0ff03 — END-03 (part): the end card waits for the last line to close
+- 56b69c72d9bf1a24d3609b543e2f9ab33cc9f597 — SES-07, HNT-20: choices are disabled while a request is in flight; join retries are bounded
+- c9ab22ab6ff47d0128dfaeacac1d508503682f84 — Mark the round-5 fixes and the dead-room fix in the triage list
+- 3b05752a83dd248db55946751146c224655111c2 — AUD-02: a narration longer than the voice limit is spoken in parts
+- a44e30b543cc6eabd053bc7f8596e741ef8f4a97 — CRE-06 (phone): the waiting page does not offer a loopback link to share
+- b3f740ee73ff2d83a85df29fe4bbb06d172d6b33 — PIC-03 (follow-up): drop the test assertion the new refresh wording made obsolete
+- 897c4c6ced7e315ad8f2dedc61edb6975ef57936 — Triage list: add the independent review of tonight's fixes
+- b4d7f43283d6bcad9910b4c36b1a294e61d36ed3 — SYN-03: a beat held for the battlefield entrance is not presented
+- da6dc50a9e5804fc3b14be171c91ed902dbf3b0d — Support: the forward session state machine, as a gate in front of staging
+- ebc63886947ea69c0c865e5a91c1a1f293d26b3b — Triage list: closing state of the 2026-10-12 bug-fix session
+- 6d4ab2f703693d60c1b6211a3f49f87eee21253d — Triage list: record the full test-suite result at the end of the session
+- dccea92ccebc34f586ea66f50ed9f9f12d1ef3a2 — Triage list: findings from the hand-played session (room KESEZA)
+
+Next block baseline: `dccea92ccebc34f586ea66f50ed9f9f12d1ef3a2`.
+
 ## 2026-10-12T12:08:54-04:00 to 2026-10-12T18:31:22-04:00
 
 Range: 2994d1bff06b11de6863b77cd1e5851e91cffbcd..558654d38a308ef898da618ce1dbe9731a8bcafc
