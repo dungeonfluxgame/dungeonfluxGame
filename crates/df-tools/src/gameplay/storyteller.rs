@@ -626,20 +626,18 @@ impl Storyteller {
     ) -> Result<PartialExpression, StorytellerError> {
         let rules = slot_rules(request);
         let file = online.cache_directory.join(format!("{}.json", hex(key)));
-        if let Some(cached) = read_cache(file.clone()).await {
-            let (accepted, rejected) = sort_slots(&rules, request.slots, &cached);
-            if !accepted.is_empty() {
-                span.event("storyteller.cache_hit", &[]);
-                return Ok(PartialExpression {
-                    accepted,
-                    rejected,
-                    tokens: 0,
-                });
+        let cached = read_cache(file.clone()).await;
+        let (mut accepted, mut rejected) = match cached {
+            Some(cached) => {
+                let (accepted, rejected) = sort_slots(&rules, request.slots, &cached);
+                if !accepted.is_empty() {
+                    span.event("storyteller.cache_hit", &[]);
+                }
+                (accepted, rejected)
             }
-        }
+            None => (BTreeMap::new(), BTreeMap::new()),
+        };
         let started = Instant::now();
-        let mut accepted: BTreeMap<String, String> = BTreeMap::new();
-        let mut rejected: BTreeMap<String, ValidationFailure> = BTreeMap::new();
         let mut tokens = 0_u64;
         let mut complaint: Option<String> = None;
         let mut last = StorytellerError::Rejected(ValidationFailure::NotTheRequestedShape);

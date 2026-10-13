@@ -631,10 +631,11 @@ async fn a_slot_refused_twice_is_reported_while_the_accepted_slot_is_still_retur
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn a_batch_with_no_acceptable_slot_is_an_error_and_a_repeat_is_served_from_the_cache() {
+async fn a_partial_cache_retries_missing_slots_and_merges_the_newly_accepted_slot() {
     let endpoint = FakeEndpoint::start(vec![
         Reply::Output(json!({"first": "Rain on the slates.", "second": "The wharf is dark."})),
         Reply::Output(json!({"second": "Back at the wharf."})),
+        Reply::Output(json!({"second": "A quiet dock."})),
     ]);
     let cache = cache_directory("partial-cache");
     let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
@@ -644,9 +645,16 @@ async fn a_batch_with_no_acceptable_slot_is_an_error_and_a_repeat_is_served_from
 
     let again = storyteller.express_partial(&request).await.unwrap();
 
-    assert_eq!(again.accepted.len(), 1);
-    assert_eq!(again.tokens, 0, "served from the cache");
-    assert_eq!(endpoint.connections(), 2);
+    assert_eq!(again.accepted.len(), 2);
+    assert_eq!(again.accepted["first"], "Rain on the slates.");
+    assert_eq!(again.accepted["second"], "A quiet dock.");
+    assert!(again.rejected.is_empty());
+    assert!(again.tokens > 0);
+    assert_eq!(endpoint.connections(), 3);
+    let bodies = endpoint.bodies();
+    let retry_prompt = sent_input(&bodies[2]);
+    assert!(retry_prompt.contains("\"name\":\"second\""));
+    assert!(!retry_prompt.contains("\"name\":\"first\""));
     let none = Slot::new("only", 40).forbidding(vec!["wharf".to_owned()]);
     let endpoint = FakeEndpoint::start(vec![
         Reply::Output(json!({"only": "The wharf."})),
