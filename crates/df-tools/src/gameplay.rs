@@ -481,13 +481,13 @@ async fn both(State(state): State<PageState>) -> Html<String> {
         state.battle_grid,
     )
 }
-async fn player() -> Html<String> {
+async fn player(join_scene_asset: Option<&str>) -> Html<String> {
     let opening_scene_asset = pack::scene(pack::SceneKey::Opening).asset;
     page(
         true,
         None,
         None,
-        Some(&opening_scene_asset),
+        Some(join_scene_asset.unwrap_or(&opening_scene_asset)),
         df_render::battle::BattleFps::DEFAULT.hz(),
         0,
         false,
@@ -1544,6 +1544,7 @@ pub async fn serve(
                 .max_encoding_message_size(8192),
         )
         .serve_with_incoming(incoming);
+    let player_page_actor = sender.clone();
     let state = PageState {
         run_identity: run_identity.into(),
         incoming: incoming_sender,
@@ -1557,9 +1558,15 @@ pub async fn serve(
         splat_lod,
         battle_grid,
     };
+    let player_page_run_identity = state.run_identity.clone();
     let mut router = Router::new()
         .route("/gameplay", get(both))
-        .route("/gameplay/player", get(room::player_page))
+        .route(
+            "/gameplay/player",
+            get(move || {
+                room::player_page(player_page_actor.clone(), player_page_run_identity.clone())
+            }),
+        )
         .route("/gameplay/display", get(display))
         .route("/gameplay/credits", get(credits))
         .route("/gameplay/tunnel", get(socket))

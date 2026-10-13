@@ -73,6 +73,9 @@ fn accepted_now(result: &Result<rpc::SubmitActionResponse, tonic::Status>) -> bo
 }
 
 pub(super) enum Call {
+    PublicSceneAsset {
+        reply: oneshot::Sender<Result<String, tonic::Status>>,
+    },
     AwaySeats {
         room_code: String,
         reply: oneshot::Sender<Result<Vec<super::room::AwayHero>, tonic::Status>>,
@@ -162,7 +165,8 @@ impl ActorInput for Call {
                         .as_ref()
                         .map_or(0, |id| bytes(&id.value)),
                 ),
-            Self::QualificationInputs { .. }
+            Self::PublicSceneAsset { .. }
+            | Self::QualificationInputs { .. }
             | Self::SpeechMember { .. }
             | Self::Presence { .. }
             | Self::Presented { .. } => Some(0),
@@ -2042,6 +2046,14 @@ impl Actor {
     }
 }
 impl Actor {
+    fn public_scene_asset(&self) -> Result<String, tonic::Status> {
+        if self.session_lost() {
+            return Err(session_lost_status());
+        }
+        require_readable(self.fenced)?;
+        wire::public_scene_asset(self.owner.checkpoint()).map_err(unavailable)
+    }
+
     /// Which hero seat the caller holds, for a speech-intent mark.
     fn presence(
         &mut self,
@@ -2102,6 +2114,15 @@ impl Reducer<Call> for Actor {
         // One command's refusal detail must never be printed for another: every call
         // this owner reduces starts from a cleared slot (see `refusal_detail`).
         let _cleared = refusal_detail::take();
+        // The unauthenticated player shell may learn only the public scene picture name.
+        // Reading it is cheap presentation work and must not consume the game call budget.
+        let call = match call {
+            Call::PublicSceneAsset { reply } => {
+                let _delivered = reply.send(self.public_scene_asset());
+                return;
+            }
+            other => other,
+        };
         // A speech-intent mark is served first and alone: no budget, heartbeat, grant
         // reconnect or committed-job dispatch, so it can neither fence nor delay the session.
         let call = match call {
@@ -2134,6 +2155,9 @@ impl Reducer<Call> for Actor {
         }
         if !self.calls_unbounded && self.calls_remaining == 0 {
             match call {
+                Call::PublicSceneAsset { reply } => {
+                    let _ = reply.send(self.public_scene_asset());
+                }
                 Call::QualificationInputs { reply } => {
                     let _ = reply.send(Err(tonic::Status::resource_exhausted(
                         "qualification budget exhausted",
@@ -2203,6 +2227,7 @@ impl Reducer<Call> for Actor {
             _ => self.issuer.reconnect_if_closed(),
         };
         let delivered = match call {
+            Call::PublicSceneAsset { reply } => reply.send(self.public_scene_asset()).is_ok(),
             Call::QualificationInputs { reply } => reply
                 .send(
                     self.qualification_inputs

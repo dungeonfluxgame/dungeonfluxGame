@@ -88,14 +88,39 @@ pub(super) fn matches_room_code(code: &str) -> bool {
 /// The shell remains shared with qualification. Only its validated ASCII room binding and the
 /// run's public identity change.
 pub(super) async fn player_page(
-    axum::extract::State(state): axum::extract::State<super::PageState>,
+    actor: super::InboxHandle<super::actor::Call>,
+    run_identity: std::sync::Arc<str>,
 ) -> axum::response::Html<String> {
-    player_page_for(&state.run_identity).await
+    let scene_asset = public_scene_asset(&actor).await;
+    player_page_with_scene_asset(&run_identity, scene_asset.as_deref()).await
+}
+
+async fn public_scene_asset(actor: &super::InboxHandle<super::actor::Call>) -> Option<String> {
+    let (reply, wait) = tokio::sync::oneshot::channel();
+    actor
+        .try_submit(super::actor::Call::PublicSceneAsset { reply })
+        .ok()?;
+    scene_asset_reply(wait, std::time::Duration::from_millis(250)).await
+}
+
+async fn scene_asset_reply(
+    wait: tokio::sync::oneshot::Receiver<Result<String, tonic::Status>>,
+    timeout: std::time::Duration,
+) -> Option<String> {
+    tokio::time::timeout(timeout, wait).await.ok()?.ok()?.ok()
 }
 
 /// The player shell for the run named `run_identity` (empty when the run publishes none).
+#[cfg(test)]
 pub(super) async fn player_page_for(run_identity: &str) -> axum::response::Html<String> {
-    let axum::response::Html(body) = super::player().await;
+    player_page_with_scene_asset(run_identity, None).await
+}
+
+async fn player_page_with_scene_asset(
+    run_identity: &str,
+    scene_asset: Option<&str>,
+) -> axum::response::Html<String> {
+    let axum::response::Html(body) = super::player(scene_asset).await;
     let run = if run_identity.is_empty() {
         String::new()
     } else {
@@ -105,6 +130,35 @@ pub(super) async fn player_page_for(run_identity: &str) -> axum::response::Html<
         &format!("data-room=\"{}\"", super::journey::ROOM_CODE),
         &format!("data-room=\"{}\"{run}", super::journey::room_code()),
     ))
+}
+
+#[cfg(test)]
+mod player_page_tests {
+    use super::{player_page_with_scene_asset, scene_asset_reply};
+
+    #[tokio::test]
+    async fn player_page_uses_the_lobby_scene_asset_when_the_actor_answers() {
+        let (reply, wait) = tokio::sync::oneshot::channel();
+        reply
+            .send(Ok("assets/adventures/rookhill-gate.webp".to_owned()))
+            .expect("reply receiver remains open");
+        let scene_asset = scene_asset_reply(wait, std::time::Duration::from_secs(1)).await;
+        let axum::response::Html(page) =
+            player_page_with_scene_asset("run", scene_asset.as_deref()).await;
+
+        assert!(page.contains("data-join-scene-asset=\"assets/adventures/rookhill-gate.webp\""));
+    }
+
+    #[tokio::test]
+    async fn player_page_uses_the_opening_asset_when_the_actor_does_not_answer() {
+        let (_reply, wait) = tokio::sync::oneshot::channel();
+        let scene_asset = scene_asset_reply(wait, std::time::Duration::ZERO).await;
+        let opening = super::super::pack::scene(super::super::pack::SceneKey::Opening).asset;
+        let axum::response::Html(page) =
+            player_page_with_scene_asset("run", scene_asset.as_deref()).await;
+
+        assert!(page.contains(&format!("data-join-scene-asset=\"{opening}\"")));
+    }
 }
 
 #[cfg(test)]

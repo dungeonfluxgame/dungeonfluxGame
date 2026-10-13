@@ -718,6 +718,15 @@ pub(super) struct PublicJourneyProjection {
     pub(super) rested: bool,
 }
 
+pub(super) fn public_scene_asset(current: &Checkpoint) -> Result<String, RepositoryError> {
+    let state = current.state();
+    if super::beat_script_runtime::native_inn(state)? {
+        Ok(super::journey::inn_scene().scene_asset)
+    } else {
+        Ok(super::beat_script_runtime::scene(state)?.asset)
+    }
+}
+
 pub(super) fn journey_view(
     current: &Checkpoint,
     role: df_persistence::local_demo_scope::LocalDemoRole,
