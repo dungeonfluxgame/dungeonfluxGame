@@ -39,6 +39,12 @@ const DICE_CARD: Rect = (0.34, 0.80, 0.66, 0.955);
 /// Where the resting shot keeps everything it holds: between the two card columns, below the round
 /// strip and above the dice card.
 pub const REST_AREA: Rect = (0.235, 0.31, 0.765, 0.79);
+/// Where the reachable and targetable ground is kept. It may run under the cards at the sides
+/// and the dice card, which the figures may not: a hero who can reach most of the field no
+/// longer pushes the camera back until that whole region fits the free middle, which left the
+/// figures a few dozen pixels tall. Its top is the free middle's, so the upper part of the
+/// picture stays the place itself.
+pub const FIELD_AREA: Rect = (0.04, 0.30, 0.96, 0.97);
 
 /// How far the resting shot looks down, in degrees: at least this, so it reads as a three-quarter
 /// view of the ground, and never above the upper limit, so figures keep their height.
@@ -140,6 +146,30 @@ pub fn extent(pose: &CameraPose, input: &RestInput<'_>) -> Option<Rect> {
     (bounds.0 <= bounds.2).then_some(bounds)
 }
 
+/// The screen rectangle holding the figures alone (the whole of `input` when it has none).
+fn figures_extent(pose: &CameraPose, input: &RestInput<'_>) -> Option<Rect> {
+    if input.bodies.is_empty() {
+        return extent(pose, input);
+    }
+    extent(
+        pose,
+        &RestInput {
+            bodies: input.bodies,
+            ground: &[],
+            hint: input.hint,
+            previous_yaw: input.previous_yaw,
+            occupancy: input.occupancy,
+            aspect: input.aspect,
+        },
+    )
+}
+
+/// Whether `pose` holds the figures in the free middle and the ground in the field area.
+pub fn holds(pose: &CameraPose, input: &RestInput<'_>) -> bool {
+    figures_extent(pose, input).is_some_and(|found| inside(found, REST_AREA))
+        && extent(pose, input).is_some_and(|found| inside(found, FIELD_AREA))
+}
+
 fn centre(rect: Rect) -> (f32, f32) {
     ((rect.0 + rect.2) * 0.5, (rect.1 + rect.3) * 0.5)
 }
@@ -148,7 +178,8 @@ fn inside(rect: Rect, area: Rect) -> bool {
     rect.0 >= area.0 && rect.1 >= area.1 && rect.2 <= area.2 && rect.3 <= area.3
 }
 
-/// The pose with heading `yaw_deg` that holds everything in `input` inside [`REST_AREA`] from as
+/// The pose with heading `yaw_deg` that holds the figures of `input` inside [`REST_AREA`] and its
+/// ground inside [`FIELD_AREA`] from as
 /// near as the scene's wide shot allows.
 fn fit(input: &RestInput<'_>, yaw_deg: f32, raise_deg: f32) -> CameraPose {
     // A scene may ask for a steeper wide shot than the usual upper limit (a wood whose trunks
@@ -184,13 +215,20 @@ fn fit(input: &RestInput<'_>, yaw_deg: f32, raise_deg: f32) -> CameraPose {
     };
     let minimum = input.hint.distance * MIN_DISTANCE_SHARE;
     let want = centre(REST_AREA);
-    let (area_width, area_height) = (REST_AREA.2 - REST_AREA.0, REST_AREA.3 - REST_AREA.1);
+    let size = |rect: Rect| (rect.2 - rect.0, rect.3 - rect.1);
+    let (area_width, area_height) = size(REST_AREA);
+    let (field_width, field_height) = size(FIELD_AREA);
     for _ in 0..48 {
-        let Some(found) = extent(&pose, input) else {
+        let (Some(found), Some(all)) = (figures_extent(&pose, input), extent(&pose, input)) else {
             pose.distance = (pose.distance * 1.3).min(MAX_DISTANCE_M);
             continue;
         };
-        let need = ((found.2 - found.0) / area_width).max((found.3 - found.1) / area_height);
+        // The figures fill the free middle, or the ground fills the field, whichever is tighter.
+        let (figures, ground) = (size(found), size(all));
+        let need = (figures.0 / area_width)
+            .max(figures.1 / area_height)
+            .max(ground.0 / field_width)
+            .max(ground.1 / field_height);
         let have = centre(found);
         let (miss_x, miss_y) = (want.0 - have.0, want.1 - have.1);
         if miss_x.abs() < 0.003 && miss_y.abs() < 0.003 && (0.985..=1.0).contains(&need) {
@@ -203,7 +241,7 @@ fn fit(input: &RestInput<'_>, yaw_deg: f32, raise_deg: f32) -> CameraPose {
                 target: pose.target + step,
                 ..pose
             };
-            extent(&moved, input).map(centre)
+            figures_extent(&moved, input).map(centre)
         };
         if let (Some(along_right), Some(along_forward)) = (probe(right * 0.5), probe(forward * 0.5))
         {
@@ -224,9 +262,7 @@ fn fit(input: &RestInput<'_>, yaw_deg: f32, raise_deg: f32) -> CameraPose {
             (pose.distance * need.clamp(0.7, 1.4).powf(0.9)).clamp(minimum, MAX_DISTANCE_M);
     }
     // Whatever the iteration reached, back off until it is inside.
-    while pose.distance < MAX_DISTANCE_M
-        && !extent(&pose, input).is_some_and(|found| inside(found, REST_AREA))
-    {
+    while pose.distance < MAX_DISTANCE_M && !holds(&pose, input) {
         pose.distance *= 1.03;
     }
     pose.distance = pose.distance.min(MAX_DISTANCE_M);
@@ -420,7 +456,7 @@ mod tests {
                 }
                 let held = extent(&pose, &input).expect("everything is in front of the camera");
                 assert!(
-                    inside(held, REST_AREA),
+                    inside(held, FIELD_AREA),
                     "{id} {heroes}v{enemies}: the reachable region leaves the frame {held:?}"
                 );
                 assert!(
@@ -489,7 +525,10 @@ mod tests {
                 );
                 // Raising the camera never costs the HUD clearance.
                 let held = extent(&pose, &aware).unwrap();
-                assert!(inside(held, REST_AREA), "{id} {heroes}v{enemies}: {held:?}");
+                assert!(
+                    inside(held, FIELD_AREA),
+                    "{id} {heroes}v{enemies}: {held:?}"
+                );
                 checked += 1;
             }
         }
@@ -509,7 +548,14 @@ mod tests {
             let pose = rest_pose(&input(&fight, &hint));
             let held = extent(&pose, &input(&fight, &hint)).unwrap();
             assert!(held.1 >= 0.30, "{id}: held region reaches {}", held.1);
-            assert!(held.3 <= 0.80, "{id}: held region reaches {}", held.3);
+            assert!(
+                held.3 <= FIELD_AREA.3,
+                "{id}: held region reaches {}",
+                held.3
+            );
+            // The figures themselves stay above the dice card.
+            let figures = figures_extent(&pose, &input(&fight, &hint)).unwrap();
+            assert!(figures.3 <= 0.80, "{id}: figures reach {}", figures.3);
         }
     }
 
