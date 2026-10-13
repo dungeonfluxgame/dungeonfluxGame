@@ -1276,12 +1276,18 @@ fn creation_option_label(group_id: &str, label: &str) -> String {
             return "Longbow and Archery".to_owned();
         }
     }
+    if group_id == "allied-ties" {
+        return live_combat::display_label(&label.replace("the Bandit", "the enemy"));
+    }
     live_combat::display_label(label)
 }
 
 fn creation_option_description(group_id: &str, description: &str) -> String {
     if matches!(group_id, "species" | "class") {
         String::new()
+    } else if group_id == "allied-ties" {
+        // The pack's wording names one adventure's enemy; the rule is the same for any.
+        description.replace("the Bandit", "the enemy")
     } else {
         description.to_owned()
     }
