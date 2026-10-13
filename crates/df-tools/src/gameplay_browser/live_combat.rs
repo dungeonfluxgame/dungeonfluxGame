@@ -359,6 +359,36 @@ fn mount_rules_badge(
     Ok(())
 }
 
+/// Keeps the fight's server-provided rules note available without placing it in the narration.
+fn mount_rules_note(
+    document: &Document,
+    host: &Element,
+    note: &str,
+    fight: bool,
+) -> Result<(), JsValue> {
+    if let Some(previous) = host.query_selector(".rules-disclosure")? {
+        previous.remove();
+    }
+    live_rules::mount(document, host, note)?;
+    if !fight || note.is_empty() {
+        return Ok(());
+    }
+    let Some(line) = host.query_selector(".rules-note")? else {
+        return Ok(());
+    };
+    let narration = line
+        .parent_element()
+        .ok_or_else(|| JsValue::from_str("rules note parent absent"))?;
+    let disclosure = document.create_element("details")?;
+    disclosure.set_class_name("rules-disclosure");
+    let summary = document.create_element("summary")?;
+    summary.set_text_content(Some("Rules for this fight"));
+    disclosure.append_child(&summary)?;
+    narration.insert_before(&disclosure, Some(&line))?;
+    disclosure.append_child(&line)?;
+    Ok(())
+}
+
 /// Presents combat or the aftermath when the accepted view is one. Returns false for every
 /// other view, which the other renderers show.
 pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Result<bool, JsValue> {
@@ -409,8 +439,13 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     }
     mount_chrome(client, &host, view, screen == Screen::Combat)?;
     mount_rules_badge(client, &host, custom_rules)?;
-    // PLAY-F03: the scene's rules note on its own line under the narration (see live_rules).
-    live_rules::mount(&client.borrow().document, &host, &view.scene.rules_note)?;
+    // PLAY-F03: keep the fight's rules note available behind a collapsed disclosure.
+    mount_rules_note(
+        &client.borrow().document,
+        &host,
+        &view.scene.rules_note,
+        screen == Screen::Combat,
+    )?;
     // PLAY-F02 dispatch point: on the shared display the 3D battlefield overlays this flat view
     // when it can run; otherwise today's view above is what the table sees.
     if !player {

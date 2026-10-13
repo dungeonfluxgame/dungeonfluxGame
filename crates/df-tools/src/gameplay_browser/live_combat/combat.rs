@@ -702,32 +702,40 @@ fn publish_tactical_controls(
         None => node(&document, root, "div", "tactical-controls", "")?,
     };
     if let Some(budget) = &combat.own_budget {
-        node(
+        let strip = node(
             &document,
             &controls,
-            "p",
-            "turn-budget",
-            &format!(
-                "Movement {} ft · Action {} · Bonus {} · Reaction {}",
-                budget.movement_ft,
-                if budget.action { "ready" } else { "spent" },
+            "div",
+            "turn-budget resource-strip",
+            "",
+        )?;
+        for value in [
+            format!("Movement {} ft", budget.movement_ft),
+            format!("Action {}", if budget.action { "ready" } else { "spent" }),
+            format!(
+                "Bonus {}",
                 if budget.bonus_action {
                     "ready"
                 } else {
                     "spent"
-                },
+                }
+            ),
+            format!(
+                "Reaction {}",
                 if budget.reaction { "ready" } else { "spent" }
             ),
-        )?;
+        ] {
+            node(&document, &strip, "span", "resource-chip", &value)?;
+        }
     }
     if let Some(ammunition) = &combat.own_ammunition {
-        node(
-            &document,
-            &controls,
-            "p",
-            "ammunition",
-            &format!("Arrows {} · Bolts {}", ammunition.arrows, ammunition.bolts),
-        )?;
+        let strip = node(&document, &controls, "div", "ammunition resource-strip", "")?;
+        for value in [
+            format!("Arrows {}", ammunition.arrows),
+            format!("Bolts {}", ammunition.bolts),
+        ] {
+            node(&document, &strip, "span", "resource-chip", &value)?;
+        }
     }
     if waiting_for_current_view(
         client.borrow().role,

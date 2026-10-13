@@ -136,6 +136,11 @@ const COMMON: &str = r#"
 @S .live-extras .dialogue-controls button:first-child{background:linear-gradient(135deg,#f0d5a4,#c6a05e);color:#211b11;border-color:#f0d195;font-weight:650}
 @S .live-extras .feedback{font:16px/1.5 system-ui,sans-serif;color:#f0d19e;margin:12px 0 0}
 @S .live-extras .feedback:empty{display:none}
+@S[data-role=player] .tactical-controls .resource-strip{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px;padding:8px;border:1px solid #d9b77a66;border-radius:8px;background:#0a1018e8;color:inherit;font:600 13px/1.35 system-ui,sans-serif}
+@S[data-role=player] .tactical-controls .resource-chip{display:inline-flex;padding:5px 8px;border:1px solid #d9b77a66;border-radius:6px;background:#17222de8;color:inherit}
+@S .rules-disclosure{display:block;margin-top:8px;padding:7px 10px;border:1px solid #d9b77a66;border-radius:8px;background:#0a1018d9;color:inherit;font:13px/1.45 system-ui,sans-serif}
+@S .rules-disclosure summary{cursor:pointer;color:inherit;font-weight:650}
+@S .rules-disclosure .rules-note{display:block;margin-top:6px;color:inherit}
 "#;
 
 /// Phone-first single column, valid at any container width (390px phones are the target).
