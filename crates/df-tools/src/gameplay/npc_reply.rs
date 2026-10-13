@@ -328,7 +328,15 @@ impl NpcReplyContext {
         };
         let conversation = social.conversation(member, dossier, scene_key);
         let later_lines = story.later_lines(scene_key);
-        let (mut facts, offered, said_lines) = npc_dossier::facts(&Inputs {
+        let present: Vec<(String, String)> = scene
+            .cast
+            .iter()
+            .filter_map(|actor| {
+                let role = rpc::SceneRole::try_from(actor.role).ok()?;
+                Some((actor.name.clone(), format!("{role:?}")))
+            })
+            .collect();
+        let inputs = Inputs {
             dossier,
             name: &actor.name,
             hero: &hero.name,
@@ -341,7 +349,9 @@ impl NpcReplyContext {
             conversation: &conversation,
             later_lines: &later_lines,
             clue,
-        });
+        };
+        let (mut facts, offered, said_lines) =
+            npc_dossier::facts_with_scene(&inputs, &player.narration, &present);
         let answer_offered = ["answer_from", "you_told_this_hero_in_private"]
             .iter()
             .any(|key| match &facts[*key] {
@@ -1124,6 +1134,51 @@ mod tests {
                 },
             )),
         }
+    }
+
+    #[test]
+    fn dossier_reply_facts_include_current_narration_and_cast() {
+        let adventure = super::super::npc_dossier_tests::adventure(1);
+        let patron = adventure
+            .dossiers
+            .iter()
+            .find(|dossier| dossier.role == super::super::adventure::dossier::NpcRole::Patron)
+            .unwrap();
+        let social = SocialLedger::open(adventure.dossiers.clone(), "scene-facts", None).unwrap();
+        let mut projected = view("", "Perrin");
+        let Some(rpc::view_message::Audience::Player(player)) = projected.audience.as_mut() else {
+            unreachable!();
+        };
+        player.narration = "Calla takes the ledger. Perrin lets out a long breath.".to_owned();
+        player.scene.as_mut().unwrap().cast = vec![rpc::SceneActor {
+            id: patron.npc_id.strip_prefix("patron:").unwrap().to_owned(),
+            name: "Perrin".to_owned(),
+            role: rpc::SceneRole::Patron as i32,
+            ..Default::default()
+        }];
+
+        let context = NpcReplyContext::for_cast(
+            &projected,
+            member(1),
+            "What just happened, Perrin?",
+            &story(),
+            &social,
+            "Opening",
+        )
+        .unwrap();
+
+        assert_eq!(
+            context.facts["now"]["narration"],
+            "Calla takes the ledger. Perrin lets out a long breath."
+        );
+        assert_eq!(
+            context.facts["now"]["characters_present"][0]["name"],
+            "Perrin"
+        );
+        assert_eq!(
+            context.facts["now"]["characters_present"][0]["role"],
+            "Patron"
+        );
     }
 
     #[test]

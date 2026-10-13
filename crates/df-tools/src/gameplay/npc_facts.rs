@@ -80,6 +80,15 @@ pub(super) struct Inputs<'a> {
     pub(super) clue: Clue<'a>,
 }
 
+pub(super) fn current_scene_facts(narration: &str, present: &[(String, String)]) -> Value {
+    json!({
+        "narration": narration,
+        "characters_present": present.iter().map(|(name, role)| {
+            json!({"name": name, "role": role})
+        }).collect::<Vec<_>>(),
+    })
+}
+
 /// What a line is for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Kind {
@@ -883,6 +892,34 @@ will not say what it was, what it was about, or that it holds any detail."
     (facts, offered, said)
 }
 
+/// Keep the storyteller's fact payload within its byte bound without dropping current scene
+/// facts. Oldest remembered/background lines are removed first if the bound is reached.
+pub(super) fn trim_background_facts(facts: &mut Value) {
+    const MAXIMUM_FACTS_BYTES: usize = 16 * 1024;
+    while facts.to_string().len() > MAXIMUM_FACTS_BYTES {
+        let mut trimmed = false;
+        for key in ["already_said", "recent_exchange"] {
+            if let Some(lines) = facts[key].as_array_mut()
+                && !lines.is_empty()
+            {
+                lines.remove(0);
+                trimmed = true;
+                break;
+            }
+        }
+        if !trimmed
+            && let Some(lines) = facts["answer_from"].as_array_mut()
+            && !lines.is_empty()
+        {
+            lines.pop();
+            trimmed = true;
+        }
+        if !trimmed {
+            break;
+        }
+    }
+}
+
 fn stage_of(exchange: u32) -> &'static str {
     match exchange {
         0..=2 => "early",
@@ -894,6 +931,39 @@ fn stage_of(exchange: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn current_scene_facts_include_display_narration_and_present_cast() {
+        let present = vec![("Perrin".to_owned(), "Patron".to_owned())];
+
+        let facts = current_scene_facts(
+            "Calla takes the ledger. Perrin lets out a long breath.",
+            &present,
+        );
+
+        assert_eq!(
+            facts["narration"],
+            "Calla takes the ledger. Perrin lets out a long breath."
+        );
+        assert_eq!(facts["characters_present"][0]["name"], "Perrin");
+        assert_eq!(facts["characters_present"][0]["role"], "Patron");
+    }
+
+    #[test]
+    fn payload_trimming_keeps_scene_facts_and_drops_old_background_facts_first() {
+        let narration = "Calla takes the ledger.";
+        let mut facts = json!({
+            "now": {"narration": narration},
+            "already_said": ["old".repeat(3_000), "new".repeat(3_000)],
+        });
+
+        trim_background_facts(&mut facts);
+
+        assert_eq!(facts["now"]["narration"], narration);
+        assert_eq!(facts["already_said"].as_array().map(Vec::len), Some(1));
+        assert_eq!(facts["already_said"][0], "new".repeat(3_000));
+        assert!(facts.to_string().len() <= 16 * 1024);
+    }
 
     #[test]
     fn a_several_part_question_splits_into_parts_in_order_capped_at_three() {

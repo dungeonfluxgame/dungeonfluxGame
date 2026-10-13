@@ -33,7 +33,22 @@ use super::{
     },
 };
 
-pub(super) use super::npc_facts::{Clue, Inputs, facts};
+pub(super) use super::npc_facts::{Clue, Inputs};
+
+pub(super) fn facts(inputs: &Inputs<'_>) -> (serde_json::Value, Vec<Offered>, Vec<String>) {
+    super::npc_facts::facts(inputs)
+}
+
+pub(super) fn facts_with_scene(
+    inputs: &Inputs<'_>,
+    narration: &str,
+    present: &[(String, String)],
+) -> (serde_json::Value, Vec<Offered>, Vec<String>) {
+    let (mut facts, offered, said) = facts(inputs);
+    facts["now"] = super::npc_facts::current_scene_facts(narration, present);
+    super::npc_facts::trim_background_facts(&mut facts);
+    (facts, offered, said)
+}
 
 /// Longest in-depth spoken reply, in characters: three short sentences.
 pub(super) const REPLY_CHARACTERS: usize = 280;
@@ -65,8 +80,9 @@ facts.player.question_parts, in order. Never open with a greeting, saying, name 
 interjection. Never quote a dossier sentence word for word. Name the hero or use a term of \
 address at most every fourth reply; never reuse a clause from facts.already_said or \
 facts.recent_exchange.\n\
-c. Say only what facts.answer_from, facts.volunteer and facts.you_told_this_hero_in_private \
-give you. Never invent names, places, times, numbers or dangers; an enemy threatens but offers \
+c. Say only what facts.answer_from, facts.volunteer, facts.you_told_this_hero_in_private and \
+facts.now give you; facts.now is this moment and outranks the rest. Never invent names, places, \
+times, numbers or dangers; an enemy threatens but offers \
 nothing. Never contradict the facts or yourself. Say nothing beyond the answer.\n\
 d. When facts.answer_from is empty and facts.conversation.may_say_i_dont_know is true, refuse \
 in character with a fitting reason, naming what was asked; each question earns its own refusal. \
