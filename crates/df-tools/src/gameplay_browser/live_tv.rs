@@ -1130,6 +1130,24 @@ impl TvStage {
             return Ok(());
         };
         if layer.root.get_attribute("data-want").as_deref() == Some(url.as_str()) {
+            // The same picture can arrive with a new layout: its speaker has moved.
+            let layout = plate.layout.clone();
+            *layer.pending_layout.borrow_mut() = layout.clone();
+            if self.root.has_attribute("data-plate-loaded") {
+                if let Some(layout) = &layout {
+                    layer.root.set_attribute(
+                        "style",
+                        &format!(
+                            "--head-x:{}%;--head-y:{}%",
+                            layout.head_x / 10,
+                            layout.head_y / 10
+                        ),
+                    )?;
+                } else {
+                    layer.root.remove_attribute("style")?;
+                }
+                self.figures.set_plate(layout)?;
+            }
             return Ok(());
         }
         let same_scene =
