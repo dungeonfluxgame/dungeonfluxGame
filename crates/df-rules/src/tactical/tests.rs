@@ -673,6 +673,30 @@ fn weapon_properties_hands_heavy_finesse_versatile_and_thrown_inventory() {
     assert_eq!(guard.actor(3).unwrap().spec().armor_class, 14);
 }
 #[test]
+fn attack_summary_retains_recorded_damage_faces_and_modifier() {
+    let state = battle(vec![
+        archer(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "skeleton", Cell(2, 1), 20).unwrap(),
+    ]);
+    let result = step(
+        &state,
+        1,
+        strike(3, Weapon::Shortsword, false),
+        &[(20, 10), (6, 2)],
+    );
+
+    assert_eq!(result.attacks[0].damage_faces, [2]);
+    assert_eq!(result.attacks[0].damage_modifier, 3);
+    assert_eq!(
+        result
+            .draws
+            .iter()
+            .map(|draw| draw.value)
+            .collect::<Vec<_>>(),
+        [10, 2]
+    );
+}
+#[test]
 fn slow_does_not_stack_and_expires_at_source_next_turn() {
     let state = battle(vec![
         archer(1, Cell(1, 1)),

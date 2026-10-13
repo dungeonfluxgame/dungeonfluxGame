@@ -1054,7 +1054,7 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
             outcome.death_failures
         ),
         kind => format!(
-            "COMBAT {} actor={:?} target={:?} weapon={} mode={} distance_ft={} cover={} roll_mode={} faces={:?} modifier={} hit={} critical={} damage={} reasons={:?}",
+            "COMBAT {} actor={:?} target={:?} weapon={} mode={} distance_ft={} cover={} roll_mode={} faces={:?} modifier={} hit={} critical={} damage={}{} reasons={:?}",
             if kind == Ok(rpc::OutcomeKind::OpportunityAttack) {
                 "opportunity_attack"
             } else {
@@ -1076,6 +1076,12 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
             outcome.hit,
             outcome.critical,
             outcome.damage,
+            // The dice behind the damage, when the fight engine recorded them.
+            if outcome.damage_dice.is_empty() {
+                String::new()
+            } else {
+                format!(" damage_faces={:?}", outcome.damage_dice)
+            },
             outcome.reasons
         ),
     }

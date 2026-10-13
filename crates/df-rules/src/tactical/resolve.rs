@@ -101,6 +101,8 @@ pub struct AttackSummary {
     pub selected: u32,
     pub hit: bool,
     pub critical: bool,
+    pub damage_faces: Vec<u32>,
+    pub damage_modifier: i16,
     pub damage: u16,
     pub damage_type: DamageType,
     pub necrotic_damage: u16,
@@ -884,6 +886,7 @@ fn attack(
         0
     };
     let mut necrotic_damage = 0;
+    let mut damage_faces = Vec::new();
     if hit {
         let mut weapon_damage = if usage.weapon == Weapon::UnarmedStrike {
             1_u16
@@ -891,12 +894,16 @@ fn attack(
             0_u16
         };
         for _ in 0..count * multiplier {
-            weapon_damage += draws.take(sides)? as u16;
+            let face = draws.take(sides)?;
+            damage_faces.push(face);
+            weapon_damage += face as u16;
         }
         if usage.savage_attacker {
             let mut second = 0_u16;
             for _ in 0..count * multiplier {
-                second += draws.take(sides)? as u16;
+                let face = draws.take(sides)?;
+                damage_faces.push(face);
+                second += face as u16;
             }
             weapon_damage = weapon_damage.max(second);
         }
@@ -906,7 +913,9 @@ fn attack(
             && matches!(usage.weapon, Weapon::Scimitar | Weapon::Shortbow)
         {
             for _ in 0..multiplier {
-                damage += draws.take(4)? as u16;
+                let face = draws.take(4)?;
+                damage_faces.push(face);
+                damage += face as u16;
             }
         }
         if kind == CreatureKind::Cultist && usage.weapon == Weapon::Sickle {
@@ -1053,6 +1062,8 @@ fn attack(
         selected,
         hit,
         critical,
+        damage_faces,
+        damage_modifier,
         damage,
         damage_type: usage.weapon.damage_type(),
         necrotic_damage,

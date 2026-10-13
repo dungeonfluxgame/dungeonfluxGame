@@ -653,7 +653,7 @@ fn record_outcomes(
             target_armor_class: 0,
             hit: attack.hit,
             critical: attack.critical,
-            damage_dice: Vec::new(),
+            damage_dice: attack.damage_faces.clone(),
             damage: u32::from(attack.damage),
             target_hit_points: u32::from(
                 result
