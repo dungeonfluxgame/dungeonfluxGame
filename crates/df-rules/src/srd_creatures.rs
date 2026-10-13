@@ -9,9 +9,16 @@ pub struct SrdCreature {
     pub id: &'static str,
     pub name: &'static str,
     pub page: u16,
+    pub languages: &'static str,
     pub exact: bool,
     pub weapon_label: &'static str,
     pub rules: BanditRules,
+}
+impl SrdCreature {
+    /// Whether the creature can produce speech, rather than only understand languages.
+    pub fn can_speak(&self) -> bool {
+        self.languages != "None" && !self.languages.contains("can't speak")
+    }
 }
 pub const SRD_521_CREATURES: [SrdCreature; 12] = [
     // SRD 5.2.1, p. 261. Single melee attack taken as written. Light Crossbow is an unused alternative action.
@@ -19,6 +26,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "bandit",
         name: "Bandit",
         page: 261,
+        languages: "Common",
         exact: true,
         weapon_label: "scimitar",
         rules: BanditRules {
@@ -38,6 +46,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "cultist",
         name: "Cultist",
         page: 278,
+        languages: "Common",
         exact: false,
         weapon_label: "ritual sickle",
         rules: BanditRules {
@@ -57,6 +66,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "guard",
         name: "Guard",
         page: 296,
+        languages: "Common",
         exact: true,
         weapon_label: "spear",
         rules: BanditRules {
@@ -76,6 +86,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "goblin-warrior",
         name: "Goblin Warrior",
         page: 290,
+        languages: "Common, Goblin",
         exact: true,
         weapon_label: "scimitar",
         rules: BanditRules {
@@ -95,6 +106,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "kobold-warrior",
         name: "Kobold Warrior",
         page: 302,
+        languages: "Common, Draconic",
         exact: true,
         weapon_label: "dagger",
         rules: BanditRules {
@@ -114,6 +126,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "skeleton",
         name: "Skeleton",
         page: 325,
+        languages: "Understands the languages it knew in life but can't speak",
         exact: true,
         weapon_label: "shortsword",
         rules: BanditRules {
@@ -133,6 +146,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "zombie",
         name: "Zombie",
         page: 343,
+        languages: "Understands the languages it knew in life but can't speak",
         exact: false,
         weapon_label: "slam",
         rules: BanditRules {
@@ -152,6 +166,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "wolf",
         name: "Wolf",
         page: 364,
+        languages: "None",
         exact: false,
         weapon_label: "bite",
         rules: BanditRules {
@@ -171,6 +186,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "giant-rat",
         name: "Giant Rat",
         page: 353,
+        languages: "None",
         exact: true,
         weapon_label: "bite",
         rules: BanditRules {
@@ -190,6 +206,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "giant-weasel",
         name: "Giant Weasel",
         page: 355,
+        languages: "None",
         exact: true,
         weapon_label: "bite",
         rules: BanditRules {
@@ -209,6 +226,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "mastiff",
         name: "Mastiff",
         page: 357,
+        languages: "None",
         exact: false,
         weapon_label: "bite",
         rules: BanditRules {
@@ -228,6 +246,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "scout",
         name: "Scout",
         page: 322,
+        languages: "Common, Goblin",
         exact: false,
         weapon_label: "shortsword",
         rules: BanditRules {
@@ -513,6 +532,20 @@ pub fn missing_features(creature: &str) -> impl Iterator<Item = &'static Creatur
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn creature_languages_distinguish_speech_from_understanding() {
+        let creature = |id| {
+            SRD_521_CREATURES
+                .iter()
+                .find(|creature| creature.id == id)
+                .unwrap()
+        };
+        assert_eq!(creature("giant-weasel").languages, "None");
+        assert!(!creature("giant-weasel").can_speak());
+        assert!(creature("bandit").can_speak());
+        assert!(!creature("skeleton").can_speak());
+    }
+
     #[test]
     fn compiled_creatures_preserve_the_bandit_baseline_and_exact_subset() {
         assert_eq!(

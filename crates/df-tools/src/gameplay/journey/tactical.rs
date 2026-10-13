@@ -462,6 +462,7 @@ fn cover_label(cover: tactical_rules::Cover) -> &'static str {
 fn prior_attacks(
     state: &GameState,
     heroes: &std::collections::HashSet<String>,
+    speakers: &std::collections::HashMap<String, bool>,
     done: &[super::super::fight_lines::AttackFact],
 ) -> Result<Vec<super::super::fight_lines::AttackFact>, RepositoryError> {
     use super::super::fight_lines::AttackFact;
@@ -477,11 +478,15 @@ fn prior_attacks(
             ) {
                 continue;
             }
+            let attacker_can_speak = speakers.get(&outcome.actor_name).copied().unwrap_or(false);
+            let target_can_speak = speakers.get(&outcome.target_name).copied().unwrap_or(false);
             prior.push(AttackFact {
                 attacker: outcome.actor_name.clone(),
                 attacker_hero: heroes.contains(&outcome.actor_name),
+                attacker_can_speak,
                 target: outcome.target_name.clone(),
                 target_hero: heroes.contains(&outcome.target_name),
+                target_can_speak,
                 hit: outcome.hit,
                 critical: outcome.critical,
                 damage: outcome.damage,
@@ -492,6 +497,28 @@ fn prior_attacks(
     }
     prior.extend(done.iter().cloned());
     Ok(prior)
+}
+
+fn creature_can_speak(kind: tactical_rules::CreatureKind) -> bool {
+    let id = match kind {
+        tactical_rules::CreatureKind::Bandit => "bandit",
+        tactical_rules::CreatureKind::Cultist => "cultist",
+        tactical_rules::CreatureKind::Guard => "guard",
+        tactical_rules::CreatureKind::Goblin => "goblin-warrior",
+        tactical_rules::CreatureKind::Kobold => "kobold-warrior",
+        tactical_rules::CreatureKind::Skeleton => "skeleton",
+        tactical_rules::CreatureKind::Zombie => "zombie",
+        tactical_rules::CreatureKind::Wolf => "wolf",
+        tactical_rules::CreatureKind::GiantRat => "giant-rat",
+        tactical_rules::CreatureKind::GiantWeasel => "giant-weasel",
+        tactical_rules::CreatureKind::Mastiff => "mastiff",
+        tactical_rules::CreatureKind::Scout => "scout",
+        tactical_rules::CreatureKind::Hero => return true,
+    };
+    df_rules::SRD_521_CREATURES
+        .iter()
+        .find(|creature| creature.id == id)
+        .is_some_and(|creature| creature.can_speak())
 }
 
 /// The cry pool family of one combatant: heroes cry from the hero pools by their chosen
@@ -549,11 +576,17 @@ fn record_outcomes(
     }
     // Heroes in combatant order, matching party order, so hero cries carry their stage slot.
     let mut heroes: Vec<String> = Vec::new();
+    let mut speakers = std::collections::HashMap::new();
     for combatant in result.battle.combatants() {
+        let combatant_name = name(state, canonical(state, combatant.id())?)?;
+        speakers.insert(
+            combatant_name.clone(),
+            combatant.side() == Side::Heroes || creature_can_speak(combatant.spec().kind),
+        );
         if combatant.side() != Side::Heroes {
             continue;
         }
-        heroes.push(name(state, canonical(state, combatant.id())?)?);
+        heroes.push(combatant_name);
     }
     let hero_set: std::collections::HashSet<String> = heroes.iter().cloned().collect();
     let mut enemies: Vec<String> = Vec::new();
@@ -570,14 +603,18 @@ fn record_outcomes(
         let actor_name = name(state, actor)?;
         let target_name = name(state, target)?;
         let actor_hero = hero_set.contains(&actor_name);
+        let attacker_can_speak = speakers.get(&actor_name).copied().unwrap_or(false);
+        let target_can_speak = speakers.get(&target_name).copied().unwrap_or(false);
         let health = result.battle.actor(attack.target).map_err(bad)?.health();
         let target_hp = u32::from(health.hit_points);
         let target_max_hp = u32::from(health.maximum);
         let fact = AttackFact {
             attacker: actor_name.clone(),
             attacker_hero: actor_hero,
+            attacker_can_speak,
             target: target_name.clone(),
             target_hero: hero_set.contains(&target_name),
+            target_can_speak,
             hit: attack.hit,
             critical: attack.critical,
             damage: u32::from(attack.damage),
@@ -585,7 +622,7 @@ fn record_outcomes(
             target_hp,
         };
         let so_far = FightSoFar {
-            prior: prior_attacks(state, &hero_set, &done)?,
+            prior: prior_attacks(state, &hero_set, &speakers, &done)?,
             enemy_names: enemies.clone(),
         };
         let mut lines = super::super::fight_lines::select(

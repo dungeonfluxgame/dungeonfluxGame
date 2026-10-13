@@ -95,8 +95,10 @@ fn tables() -> Option<&'static Tables> {
 pub(crate) struct AttackFact {
     pub(crate) attacker: String,
     pub(crate) attacker_hero: bool,
+    pub(crate) attacker_can_speak: bool,
     pub(crate) target: String,
     pub(crate) target_hero: bool,
+    pub(crate) target_can_speak: bool,
     pub(crate) hit: bool,
     pub(crate) critical: bool,
     pub(crate) damage: u32,
@@ -245,7 +247,9 @@ pub(crate) fn select(current: &CurrentAttack, so_far: &FightSoFar) -> Vec<rpc::F
             &seed("opening"),
         ));
     }
-    let attacker_cry = if fact.attacker_hero {
+    let attacker_cry = if !fact.attacker_hero && !fact.attacker_can_speak {
+        None
+    } else if fact.attacker_hero {
         if fact.critical {
             cry(
                 tables,
@@ -333,7 +337,7 @@ pub(crate) fn select(current: &CurrentAttack, so_far: &FightSoFar) -> Vec<rpc::F
         None
     };
     lines.extend(attacker_cry);
-    if fact.target_down {
+    if fact.target_down && (fact.target_hero || fact.target_can_speak) {
         lines.extend(cry(
             tables,
             if fact.target_hero {
@@ -462,8 +466,10 @@ mod tests {
         AttackFact {
             attacker: attacker.to_owned(),
             attacker_hero: hero,
+            attacker_can_speak: true,
             target: if hero { "Bandit" } else { "Brynn" }.to_owned(),
             target_hero: !hero,
+            target_can_speak: true,
             hit: true,
             critical: false,
             damage: 5,
@@ -566,6 +572,51 @@ mod tests {
                 .any(|line| line.role == rpc::TableRole::Narrator as i32),
             "the fall is narrated"
         );
+    }
+
+    #[test]
+    fn non_speaking_enemy_has_no_cry_but_speaking_enemy_can() {
+        let mut weasel = fact("Giant Weasel 2", false);
+        weasel.attacker_can_speak = false;
+        let weasel_lines: Vec<_> = (1..=20)
+            .flat_map(|die| {
+                select(
+                    &CurrentAttack {
+                        fact: weasel.clone(),
+                        die,
+                        ..current("Giant Weasel 2", false)
+                    },
+                    &so_far(Vec::new()),
+                )
+            })
+            .collect();
+        assert!(
+            weasel_lines
+                .iter()
+                .all(|line| line.role != rpc::TableRole::Npc as i32),
+            "a giant weasel cannot speak, even when the hit cry gate selects a line"
+        );
+        assert!(
+            weasel_lines
+                .iter()
+                .any(|line| line.role == rpc::TableRole::Narrator as i32),
+            "suppressing a creature's speech preserves narrator outcomes"
+        );
+
+        let bandit = fact("Bandit", false);
+        let bandit_has_cry = (1..=20).any(|die| {
+            select(
+                &CurrentAttack {
+                    fact: bandit.clone(),
+                    die,
+                    ..current("Bandit", false)
+                },
+                &so_far(Vec::new()),
+            )
+            .iter()
+            .any(|line| line.role == rpc::TableRole::Npc as i32)
+        });
+        assert!(bandit_has_cry, "a speaking bandit keeps its hit cry");
     }
 
     #[test]
