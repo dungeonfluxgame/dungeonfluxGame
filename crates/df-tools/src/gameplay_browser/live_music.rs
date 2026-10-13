@@ -25,9 +25,9 @@ use crate::music_score::{
     Facts, LAYER_TRACKS, LINE_BUSY_SCALE, LINE_FILTER_HERTZ, LOOP_SECONDS, Outcome, Phase,
     SOMBRE_FILTER_HERTZ, STINGER_TAKES, Stinger, Suite, TRANSITION_SECONDS, Tempo, VOICE_LUFS,
     arrangement_for, arrangements_for, bubble_hold_ms, colour_for, duck_decibels, effective_phase,
-    facts_of, gain_for_decibels, gap_hold_active, layer_track, line_presenting, mix_for,
-    mix_level_lufs, next_beat, next_take, stinger_between, stinger_track, suite_for, tempo_of,
-    unvoiced_hold_ms,
+    facts_after_presentation, facts_of, gain_for_decibels, gap_hold_active, layer_track,
+    line_presenting, mix_for, mix_level_lufs, next_beat, next_take, stinger_between, stinger_track,
+    suite_for, tempo_of, unvoiced_hold_ms,
 };
 use gloo_timers::callback::Interval;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -161,6 +161,8 @@ struct Director {
     /// The server tempo cues consumed on the current watch connection.
     cues: CueMemory,
     connection: u64,
+    /// Outcome facts held until the display acknowledges the last resolved combat beat.
+    pending_outcome: Option<Outcome>,
     listeners: Vec<Closure<dyn FnMut(Event)>>,
     /// Session seed for the arrangement choice and the alternate-take pick.
     seed: u64,
@@ -394,7 +396,14 @@ impl Director {
         if connection != self.connection {
             self.connection = connection;
             self.cues.reset();
+            self.pending_outcome = None;
         }
+        let outcome = facts.outcome;
+        let facts = match presentation_sequences(&self.document) {
+            Some((presented, latest)) => facts_after_presentation(facts, presented, latest),
+            None => facts_after_presentation(facts, 0, 1),
+        };
+        self.pending_outcome = outcome.filter(|_| facts.outcome.is_none());
         let previous = self.latest.take();
         // A cue already consumed (the same one on a later revision, or a stale one) changes
         // nothing: the tempo that is playing stays, and its release hold keeps running.
@@ -985,6 +994,33 @@ impl Director {
         Ok(())
     }
 
+    /// Promotes an ending only after the stage reports that its newest beat is presented.
+    fn release_presented_outcome(&mut self) {
+        let Some(outcome) = self.pending_outcome else {
+            return;
+        };
+        let Some((presented, latest)) = presentation_sequences(&self.document) else {
+            return;
+        };
+        if presented < latest {
+            return;
+        }
+        self.pending_outcome = None;
+        let stinger = {
+            let Some(current) = self.latest.as_mut() else {
+                return;
+            };
+            let previous = current.facts;
+            current.facts.outcome = Some(outcome);
+            stinger_between(&previous, &current.facts)
+        };
+        if let Some(stinger) = stinger
+            && let Err(error) = self.play_stinger(stinger)
+        {
+            self.fail(&error);
+        }
+    }
+
     /// The read-only debug snapshot: phase, intensity, target gains, buses, arrangement,
     /// colour, suite, takes, bed and ducking. A harness can check the whole mix from here
     /// without listening.
@@ -1218,6 +1254,7 @@ fn create(document: &Document, root: &Element) -> Result<Shared, JsValue> {
         ticker: None,
         cues: CueMemory::default(),
         connection: 0,
+        pending_outcome: None,
         listeners: Vec::new(),
         seed,
         layer_alternate: seed % 2 == 1,
@@ -1298,12 +1335,26 @@ fn tick(shared: &Shared) {
             Vec::new()
         }
     };
+    state.release_presented_outcome();
     state.tick_ms = performance_now() - started;
     state.tick_ms_max = state.tick_ms_max.max(state.tick_ms);
     drop(state);
     for track in wanted {
         spawn_local(load(Rc::clone(shared), track));
     }
+}
+
+fn presentation_sequences(document: &Document) -> Option<(u64, u64)> {
+    let stage = document.query_selector(".tv-stage").ok().flatten()?;
+    let presented = stage
+        .get_attribute("data-presented-seq")?
+        .parse::<u64>()
+        .ok()?;
+    let latest = stage
+        .get_attribute("data-latest-seq")?
+        .parse::<u64>()
+        .ok()?;
+    Some((presented, latest))
 }
 
 /// Fetches and decodes one track. A missing or undecodable track is recorded and simply not

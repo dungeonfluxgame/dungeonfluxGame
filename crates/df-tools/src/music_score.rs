@@ -140,6 +140,18 @@ pub(crate) struct Facts {
     pub(crate) bed: Bed,
 }
 
+/// Hides an ending until the display has acknowledged the newest resolved combat beat.
+pub(crate) fn facts_after_presentation(
+    mut facts: Facts,
+    presented_sequence: u64,
+    latest_sequence: u64,
+) -> Facts {
+    if presented_sequence < latest_sequence {
+        facts.outcome = None;
+    }
+    facts
+}
+
 /// Location family of the ambient bed. Beds carry no melody, so every place shares one score.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Bed {
@@ -1268,6 +1280,27 @@ mod tests {
         assert_eq!(colour_for(Bed::Forest, true), battle);
         assert!(warm.filter_scale < open.filter_scale);
         assert!(open.ambient_scale > battle.ambient_scale);
+    }
+
+    #[test]
+    fn finale_facts_wait_for_the_last_combat_beat_to_be_presented() {
+        let victory = Facts {
+            in_combat: false,
+            antagonist_speaking: false,
+            outcome: Some(Outcome::Victory),
+            bed: Bed::Mountain,
+        };
+
+        let queued = facts_after_presentation(victory, 8, 9);
+        let presented = facts_after_presentation(victory, 9, 9);
+
+        assert_eq!(queued.outcome, None);
+        assert_eq!(suite_for(queued.in_combat, queued.outcome), Suite::Main);
+        assert_eq!(presented.outcome, Some(Outcome::Victory));
+        assert_eq!(
+            suite_for(presented.in_combat, presented.outcome),
+            Suite::Finale
+        );
     }
 
     #[test]
