@@ -567,16 +567,17 @@ pub(crate) fn layer_track(suite: Suite, layer: usize, alternate: bool) -> &'stat
         (Suite::Main, 3, false) => "score-combat",
         (Suite::Main, 0, true) => "score-bed-b",
         (Suite::Main, 1, true) => "score-motif-b",
-        (Suite::Main, 2, true) => "score-tension-b",
-        (Suite::Main, 3, true) => "score-combat-b",
+        (Suite::Main, 2, true) => "score-tension",
+        (Suite::Main, 3, true) => "score-combat",
         (Suite::Battle, 0, _) => "b-score-bed",
         (Suite::Battle, 1, _) => "b-score-motif",
         (Suite::Battle, 2, _) => "b-score-tension",
         (Suite::Battle, 3, _) => "b-score-combat",
-        (Suite::Finale, 0, _) => "c-score-bed",
-        (Suite::Finale, 1, _) => "c-score-motif",
-        (Suite::Finale, 2, _) => "c-score-tension",
-        (Suite::Finale, 3, _) => "c-score-combat",
+        // Until recorded, Finale reuses Main's quieter set; missing alternates use base tracks.
+        (Suite::Finale, 0, _) => "score-bed-b",
+        (Suite::Finale, 1, _) => "score-motif-b",
+        (Suite::Finale, 2, _) => "score-tension",
+        (Suite::Finale, 3, _) => "score-combat",
         _ => "score-bed",
     }
 }
@@ -1483,7 +1484,7 @@ mod tests {
         }
         assert_eq!(layer_track(Suite::Main, 1, true), "score-motif-b");
         assert_eq!(layer_track(Suite::Battle, 1, false), "b-score-motif");
-        assert_eq!(layer_track(Suite::Finale, 1, false), "c-score-motif");
+        assert_eq!(layer_track(Suite::Finale, 1, false), "score-motif-b");
         assert_eq!(layer_track(Suite::Main, 9, false), "score-bed");
         for kind in Stinger::ALL {
             for take in 0..STINGER_TAKES {
@@ -1493,5 +1494,25 @@ mod tests {
         assert_eq!(stinger_track(Stinger::Combat, 0), "sting-combat");
         assert_eq!(stinger_track(Stinger::Combat, 2), "sting-combat-3");
         assert_eq!(stinger_track(Stinger::Combat, 9), "sting-combat");
+    }
+
+    #[test]
+    fn every_suite_layer_and_variant_uses_an_existing_music_file() {
+        let music_directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/music");
+
+        for suite in [Suite::Main, Suite::Battle, Suite::Finale] {
+            for layer in 0..4 {
+                for alternate in [false, true] {
+                    let track = layer_track(suite, layer, alternate);
+                    let path = music_directory.join(format!("{track}.mp3"));
+                    assert!(
+                        path.is_file(),
+                        "{suite:?} layer {layer} alternate={alternate} resolves to missing {}",
+                        path.display()
+                    );
+                }
+            }
+        }
     }
 }
