@@ -8,6 +8,8 @@ use sha2::{Digest, Sha256};
 /// Role of the scene narration, and of a dialogue line that has no named speaker.
 pub(crate) const NARRATOR_ROLE: &str = "narrator";
 const NPC_ROLE_PREFIX: &str = "npc:";
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAXIMUM_VOICE_CLIP_CHARACTERS: usize = 600;
 
 /// One piece of server-authored text a display may have spoken aloud.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,6 +46,68 @@ impl VoiceLine {
     pub(crate) fn speaker(&self) -> Option<&str> {
         self.role.strip_prefix(NPC_ROLE_PREFIX)
     }
+}
+
+/// Splits a line into provider-sized clips, preferring sentence boundaries and then words.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn voice_segments(text: &str) -> Vec<String> {
+    if text.chars().count() <= MAXIMUM_VOICE_CLIP_CHARACTERS {
+        return vec![text.to_owned()];
+    }
+    let mut sentences = Vec::new();
+    let mut start = 0;
+    for (index, character) in text.char_indices() {
+        let end = index + character.len_utf8();
+        if matches!(character, '.' | '!' | '?')
+            && text[end..].chars().next().is_some_and(char::is_whitespace)
+        {
+            let sentence = text[start..end].trim();
+            if !sentence.is_empty() {
+                sentences.push(sentence.to_owned());
+            }
+            start = end;
+        }
+    }
+    let tail = text[start..].trim();
+    if !tail.is_empty() {
+        sentences.push(tail.to_owned());
+    }
+
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    for sentence in sentences {
+        let words = sentence.split_whitespace();
+        for word in words {
+            let mut characters = word.chars();
+            while characters.clone().count() > MAXIMUM_VOICE_CLIP_CHARACTERS {
+                let chunk: String = characters
+                    .by_ref()
+                    .take(MAXIMUM_VOICE_CLIP_CHARACTERS)
+                    .collect();
+                push_voice_segment(&mut segments, &mut current, &chunk);
+            }
+            let word: String = characters.collect();
+            if !word.is_empty() {
+                push_voice_segment(&mut segments, &mut current, &word);
+            }
+        }
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+    segments
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn push_voice_segment(segments: &mut Vec<String>, current: &mut String, word: &str) {
+    let separator = usize::from(!current.is_empty());
+    if current.chars().count() + separator + word.chars().count() > MAXIMUM_VOICE_CLIP_CHARACTERS {
+        segments.push(std::mem::take(current));
+    }
+    if !current.is_empty() {
+        current.push(' ');
+    }
+    current.push_str(word);
 }
 
 /// The scene narration first, then the current speaker line; empty text is not spoken. The
@@ -154,6 +218,33 @@ mod tests {
             line.key(),
             "c803b9299d97b0114e79ffaaf7ce73254cad145d8e6d7b917aea1e23a2815414"
         );
+    }
+
+    #[test]
+    fn long_voice_text_splits_at_sentences_and_respects_provider_limit() {
+        let text = format!("{}. {}.", "a".repeat(350), "b".repeat(300));
+
+        let segments = voice_segments(&text);
+
+        assert_eq!(
+            segments,
+            vec![
+                format!("{}.", "a".repeat(350)),
+                format!("{}.", "b".repeat(300))
+            ]
+        );
+        assert!(
+            segments
+                .iter()
+                .all(|part| { part.chars().count() <= MAXIMUM_VOICE_CLIP_CHARACTERS })
+        );
+    }
+
+    #[test]
+    fn short_voice_text_is_preserved_byte_for_byte() {
+        let text = "  First.\nSecond!  ";
+
+        assert_eq!(voice_segments(text), vec![text]);
     }
 
     #[test]

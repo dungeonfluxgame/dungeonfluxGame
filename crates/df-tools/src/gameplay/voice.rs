@@ -48,11 +48,11 @@ use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use super::startup_configuration::{VoiceConfiguration, VoiceOff, VoiceSettings};
-use crate::voice_line::VoiceLine;
+use crate::voice_line::{MAXIMUM_VOICE_CLIP_CHARACTERS, VoiceLine, voice_segments};
 
 /// Most recent registered lines kept; older ones can no longer be requested.
 const MAXIMUM_LINES: usize = 256;
-const MAXIMUM_LINE_CHARACTERS: usize = 600;
+const MAXIMUM_LINE_CHARACTERS: usize = MAXIMUM_VOICE_CLIP_CHARACTERS;
 const MAXIMUM_ROLE_BYTES: usize = 96;
 const MAXIMUM_AUDIO_BYTES: usize = 4 * 1024 * 1024;
 const SYNTHESIS_DEADLINE: Duration = Duration::from_secs(30);
@@ -163,6 +163,7 @@ type Outcome = Result<Bytes, Failure>;
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum Lookup {
     Audio(Bytes),
+    Part { bytes: Bytes, count: usize },
     Unregistered,
     Unavailable,
 }
@@ -176,9 +177,7 @@ struct Lines {
 impl Lines {
     /// Remembers `line`, or refreshes its recency; the oldest line is dropped at capacity.
     fn register(&mut self, line: VoiceLine) {
-        if line.text.chars().count() > MAXIMUM_LINE_CHARACTERS
-            || line.role.len() > MAXIMUM_ROLE_BYTES
-        {
+        if line.role.len() > MAXIMUM_ROLE_BYTES {
             return;
         }
         let key = line.key();
@@ -457,14 +456,30 @@ impl Voice {
     }
 
     pub(super) async fn audio(&self, key: &str) -> Lookup {
+        self.audio_part(key, 0).await
+    }
+
+    pub(super) async fn audio_part(&self, key: &str, index: usize) -> Lookup {
         let Some(line) = locked(&self.inner.lines).by_key.get(key).cloned() else {
             return Lookup::Unregistered;
         };
         let Mode::On { synthesis, .. } = &self.inner.mode else {
             return Lookup::Unavailable;
         };
-        match synthesis.audio(line).await {
-            Ok(bytes) => Lookup::Audio(bytes),
+        let segments = voice_segments(&line.text);
+        let Some(text) = segments.get(index) else {
+            return Lookup::Unregistered;
+        };
+        let segment = VoiceLine {
+            role: line.role,
+            text: text.clone(),
+        };
+        match synthesis.audio(segment).await {
+            Ok(bytes) if segments.len() == 1 => Lookup::Audio(bytes),
+            Ok(bytes) => Lookup::Part {
+                bytes,
+                count: segments.len(),
+            },
             Err(_) => Lookup::Unavailable,
         }
     }
@@ -708,6 +723,7 @@ fn speech_binding(
 pub(super) fn router(voice: Voice) -> Router {
     Router::new()
         .route("/gameplay/voice/{key}", get(serve_line))
+        .route("/gameplay/voice/{key}/{part}", get(serve_part))
         .with_state(voice)
 }
 
@@ -721,9 +737,40 @@ async fn serve_line(State(voice): State<Voice>, RoutePath(key): RoutePath<String
             bytes,
         )
             .into_response(),
+        Lookup::Part { bytes, count } => audio_parts_response(bytes, count),
         Lookup::Unregistered => StatusCode::NOT_FOUND.into_response(),
         Lookup::Unavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
+}
+
+async fn serve_part(
+    State(voice): State<Voice>,
+    RoutePath((key, part)): RoutePath<(String, usize)>,
+) -> Response {
+    match voice.audio_part(&key, part).await {
+        Lookup::Audio(bytes) => audio_parts_response(bytes, 1),
+        Lookup::Part { bytes, count } => audio_parts_response(bytes, count),
+        Lookup::Unregistered => StatusCode::NOT_FOUND.into_response(),
+        Lookup::Unavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+fn audio_parts_response(bytes: Bytes, count: usize) -> Response {
+    let mut response = (
+        [
+            (header::CONTENT_TYPE, "audio/mpeg"),
+            (header::CACHE_CONTROL, CACHE_CONTROL),
+        ],
+        bytes,
+    )
+        .into_response();
+    let Ok(count) = header::HeaderValue::try_from(count.to_string()) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    response
+        .headers_mut()
+        .insert(header::HeaderName::from_static("x-voice-parts"), count);
+    response
 }
 
 #[cfg(test)]
@@ -976,6 +1023,26 @@ mod tests {
         assert_eq!(std::fs::read(cache.join(name)).unwrap(), AUDIO);
         let first_target = fake.targets.lock().unwrap()[0].clone();
         assert!(first_target.contains("/v1/text-to-speech/narratorvoice/stream"));
+    }
+
+    #[tokio::test]
+    async fn long_line_parts_are_individually_addressable_and_cached() {
+        let cache = scratch("long-line-parts");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let voice = voice_with(&fake, &cache, 1000);
+        let line = narrator(&format!("{}. {}.", "a".repeat(350), "b".repeat(300)));
+        let key = register(&voice, &line);
+
+        let first = serve_line(State(voice.clone()), RoutePath(key.clone())).await;
+        let second = serve_part(State(voice.clone()), RoutePath((key.clone(), 1))).await;
+        let replay = serve_part(State(voice), RoutePath((key, 1))).await;
+
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()["x-voice-parts"], "2");
+        assert_eq!(second.status(), StatusCode::OK);
+        assert_eq!(second.headers()["x-voice-parts"], "2");
+        assert_eq!(replay.status(), StatusCode::OK);
+        assert_eq!(fake.calls(), 2);
     }
 
     #[tokio::test]
@@ -1370,22 +1437,19 @@ mod tests {
     }
 
     #[test]
-    fn registry_keeps_the_most_recent_lines_and_skips_long_ones() {
+    fn registry_keeps_the_most_recent_lines_including_long_ones() {
         let mut lines = Lines::default();
         for index in 0..MAXIMUM_LINES + 10 {
             lines.register(narrator(&format!("line {index}")));
         }
-        lines.register(narrator(&"x".repeat(MAXIMUM_LINE_CHARACTERS + 1)));
+        let long_line = narrator(&"x".repeat(MAXIMUM_LINE_CHARACTERS + 1));
+        lines.register(long_line.clone());
 
         assert_eq!(lines.by_key.len(), MAXIMUM_LINES);
         assert_eq!(lines.order.len(), MAXIMUM_LINES);
         assert!(!lines.by_key.contains_key(&narrator("line 0").key()));
         assert!(lines.by_key.contains_key(&narrator("line 265").key()));
-        assert!(
-            !lines
-                .by_key
-                .contains_key(&narrator(&"x".repeat(MAXIMUM_LINE_CHARACTERS + 1)).key())
-        );
+        assert!(lines.by_key.contains_key(&long_line.key()));
     }
 
     #[test]

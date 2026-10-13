@@ -16,7 +16,7 @@ use super::*;
 use crate::sound_switch::{Press, Sound, SoundSwitch};
 use crate::stage_conductor::{ClipSignal, LineId};
 use crate::voice_line::VoiceLine;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{Blob, BlobPropertyBag, Event, EventTarget, HtmlAudioElement, Node, Response, Url};
 
@@ -51,13 +51,14 @@ const MUTE_PATHS: &str = "<path d=\"M16 9l6 6M22 9l-6 6\"/>";
 enum Clip {
     Fetching,
     /// Decoded and waiting for its turn, as an object URL.
-    Ready(String),
+    Ready(VecDeque<String>),
 }
 
 /// The clip on the audio element.
 struct Current {
     id: LineId,
     url: String,
+    remaining: VecDeque<String>,
     /// `Started` was reported (the `playing` event repeats after buffering).
     started: bool,
     /// The watchdog generation watching it; only the newest generation may release it.
@@ -129,6 +130,13 @@ impl Director {
     /// Frees an object URL; a refusal only leaves a little memory until the page closes.
     fn release(url: &str) {
         let _revoked = Url::revoke_object_url(url);
+    }
+}
+
+fn release_current(current: Current) {
+    Director::release(&current.url);
+    for url in current.remaining {
+        Director::release(&url);
     }
 }
 
@@ -353,8 +361,9 @@ fn apply_mute(shared: &Shared, muted: bool) {
     live_sfx::sync();
     live_motion::sound_changed(!muted);
     if let Some(current) = stopped {
-        Director::release(&current.url);
-        live_motion::clip_signal(current.id, ClipSignal::Error);
+        let id = current.id;
+        release_current(current);
+        live_motion::clip_signal(id, ClipSignal::Error);
     }
 }
 
@@ -381,13 +390,13 @@ pub(super) fn request(id: LineId, line: &VoiceLine) {
     }
     let key = line.key();
     spawn_local(async move {
-        let fetched = fetch_clip(&key).await;
+        let fetched = fetch_clips(&key).await;
         let signal = {
             let mut state = shared.borrow_mut();
             let wanted = matches!(state.clips.get(&id), Some(Clip::Fetching));
             match (wanted, fetched) {
-                (true, Ok(url)) => {
-                    state.clips.insert(id, Clip::Ready(url));
+                (true, Ok(urls)) => {
+                    state.clips.insert(id, Clip::Ready(urls));
                     Some(ClipSignal::Loaded)
                 }
                 (true, Err(_)) => {
@@ -395,8 +404,10 @@ pub(super) fn request(id: LineId, line: &VoiceLine) {
                     Some(ClipSignal::Error)
                 }
                 // Cancelled while it was on its way.
-                (false, Ok(url)) => {
-                    Director::release(&url);
+                (false, Ok(urls)) => {
+                    for url in urls {
+                        Director::release(&url);
+                    }
                     None
                 }
                 (false, Err(_)) => None,
@@ -418,12 +429,15 @@ pub(super) fn play(id: LineId) {
     let started = {
         let mut state = shared.borrow_mut();
         match state.clips.remove(&id) {
-            Some(Clip::Ready(url)) => {
+            Some(Clip::Ready(mut urls)) => {
+                let Some(url) = urls.pop_front() else {
+                    return signal_later(id, ClipSignal::Error);
+                };
                 // A clip the conductor already moved past still sits on the element (its cancel
                 // never arrived, or its end signal was lost): its bytes are freed and it reports
                 // nothing more, so the new clip starts from a clean element.
                 if let Some(orphan) = state.current.take() {
-                    Director::release(&orphan.url);
+                    release_current(orphan);
                 }
                 state.watch_seq += 1;
                 let watch = state.watch_seq;
@@ -431,6 +445,7 @@ pub(super) fn play(id: LineId) {
                 state.current = Some(Current {
                     id,
                     url,
+                    remaining: urls,
                     started: false,
                     watch,
                 });
@@ -502,8 +517,9 @@ fn watch_fired(shared: &Shared, id: LineId, watch: u64) {
         }
     };
     if let Some(current) = overran {
-        Director::release(&current.url);
-        live_motion::clip_signal(current.id, ClipSignal::Error);
+        let id = current.id;
+        release_current(current);
+        live_motion::clip_signal(id, ClipSignal::Error);
     }
 }
 
@@ -514,8 +530,10 @@ pub(super) fn cancel(id: LineId) {
         return;
     };
     let mut state = shared.borrow_mut();
-    if let Some(Clip::Ready(url)) = state.clips.remove(&id) {
-        Director::release(&url);
+    if let Some(Clip::Ready(urls)) = state.clips.remove(&id) {
+        for url in urls {
+            Director::release(&url);
+        }
     }
     if state
         .current
@@ -524,7 +542,7 @@ pub(super) fn cancel(id: LineId) {
     {
         let _paused = state.audio.pause();
         if let Some(current) = state.current.take() {
-            Director::release(&current.url);
+            release_current(current);
         }
     }
 }
@@ -557,7 +575,7 @@ fn refused(shared: &Shared, id: LineId, refusal: &JsValue) {
         (state.current.take(), relocked)
     };
     if let Some(current) = released {
-        Director::release(&current.url);
+        release_current(current);
     }
     if relocked {
         live_motion::sound_changed(false);
@@ -606,18 +624,51 @@ fn on_playing(shared: &Shared, _event: &Event) {
 
 /// `ended` or `error`, but only for the real clip, never for the unlock clip.
 fn finish(shared: &Shared, signal: ClipSignal) {
-    let over = {
+    let (over, next) = {
         let mut state = shared.borrow_mut();
         let url = state.audio.current_src();
         if state.plays(&url) {
-            state.current.take()
+            let Some(mut current) = state.current.take() else {
+                return;
+            };
+            if matches!(signal, ClipSignal::Finished)
+                && let Some(next_url) = current.remaining.pop_front()
+            {
+                Director::release(&current.url);
+                state.watch_seq += 1;
+                current.watch = state.watch_seq;
+                current.url = next_url;
+                state.audio.set_src(&current.url);
+                let watch = current.watch;
+                let id = current.id;
+                let promise = state.audio.play();
+                state.current = Some(current);
+                (None, Some((id, watch, promise)))
+            } else {
+                (Some(current), None)
+            }
         } else {
-            None
+            (None, None)
         }
     };
     if let Some(current) = over {
-        Director::release(&current.url);
-        live_motion::clip_signal(current.id, signal);
+        let id = current.id;
+        release_current(current);
+        live_motion::clip_signal(id, signal);
+    }
+    if let Some((id, watch, promise)) = next {
+        match promise {
+            Ok(promise) => {
+                arm_watch(shared, id, watch, WATCH_UNSTARTED_MS);
+                let shared = Rc::clone(shared);
+                spawn_local(async move {
+                    if let Err(refusal) = JsFuture::from(promise).await {
+                        refused(&shared, id, &refusal);
+                    }
+                });
+            }
+            Err(refusal) => refused(shared, id, &refusal),
+        }
     }
 }
 
@@ -631,9 +682,31 @@ fn on_error(shared: &Shared, _event: &Event) {
 
 /// Fetches one clip and returns an object URL for it. Anything but a non-empty, bounded
 /// 200 response is an error and the line stays silent.
-async fn fetch_clip(key: &str) -> Result<String, JsValue> {
+async fn fetch_clips(key: &str) -> Result<VecDeque<String>, JsValue> {
+    let (first, count) = fetch_clip(key, 0).await?;
+    let mut clips = VecDeque::from([first]);
+    for index in 1..count {
+        match fetch_clip(key, index).await {
+            Ok((clip, _)) => clips.push_back(clip),
+            Err(error) => {
+                for clip in clips {
+                    Director::release(&clip);
+                }
+                return Err(error);
+            }
+        }
+    }
+    Ok(clips)
+}
+
+async fn fetch_clip(key: &str, index: usize) -> Result<(String, usize), JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
-    let response: Response = JsFuture::from(window.fetch_with_str(&format!("{VOICE_PATH}/{key}")))
+    let path = if index == 0 {
+        format!("{VOICE_PATH}/{key}")
+    } else {
+        format!("{VOICE_PATH}/{key}/{index}")
+    };
+    let response: Response = JsFuture::from(window.fetch_with_str(&path))
         .await?
         .dyn_into()?;
     if response.status() != 200 {
@@ -644,8 +717,14 @@ async fn fetch_clip(key: &str) -> Result<String, JsValue> {
     if bytes.length() == 0 || bytes.length() > MAXIMUM_CLIP_BYTES {
         return Err(JsValue::from_str("voice clip size refused"));
     }
+    let count = response
+        .headers()
+        .get("x-voice-parts")?
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(1);
     let options = BlobPropertyBag::new();
     options.set_type("audio/mpeg");
     let blob = Blob::new_with_u8_array_sequence_and_options(&js_sys::Array::of1(&bytes), &options)?;
-    Url::create_object_url_with_blob(&blob)
+    Ok((Url::create_object_url_with_blob(&blob)?, count))
 }
