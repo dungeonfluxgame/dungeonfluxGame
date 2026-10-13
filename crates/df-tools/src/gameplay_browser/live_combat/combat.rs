@@ -305,9 +305,7 @@ fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollTe
     combat
         .outcomes
         .iter()
-        .filter(|outcome| {
-            released_sequence.is_none_or(|sequence| sequence == 0 || outcome.sequence <= sequence)
-        })
+        .filter(|outcome| released_sequence.is_none_or(|sequence| outcome.sequence <= sequence))
         .rev()
         .enumerate()
         .map(|(index, outcome)| {
@@ -1163,6 +1161,8 @@ mod tests {
             ..Default::default()
         };
 
+        // At a fight's start the TV has shown nothing yet: the phone shows nothing either.
+        assert!(super::rolls(&combat, Some(0)).is_empty());
         let released = super::rolls(&combat, Some(1));
         assert_eq!(released.len(), 1);
         assert_eq!(released[0].label, "Actor 1 attacks ");
