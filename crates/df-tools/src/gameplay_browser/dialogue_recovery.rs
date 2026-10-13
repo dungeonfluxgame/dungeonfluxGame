@@ -187,12 +187,12 @@ pub(super) fn mount(
                 let context = document
                     .create_element("select")?
                     .dyn_into::<HtmlSelectElement>()?;
-                context.set_attribute("aria-label", "Input context")?;
+                context.set_attribute("aria-label", "How are you saying it?")?;
                 for (kind, label) in [
-                    (rpc::DialogueContext::Unspecified, "Uncertain intention"),
-                    (rpc::DialogueContext::Question, "Question"),
-                    (rpc::DialogueContext::Social, "Conversation"),
-                    (rpc::DialogueContext::PlanOnly, "Plan only"),
+                    (rpc::DialogueContext::Unspecified, "Just saying it"),
+                    (rpc::DialogueContext::Question, "As a question"),
+                    (rpc::DialogueContext::Social, "In conversation"),
+                    (rpc::DialogueContext::PlanOnly, "As a plan"),
                     (rpc::DialogueContext::Meta, "About the game"),
                     (rpc::DialogueContext::Joke, "Joke"),
                 ] {
@@ -273,7 +273,7 @@ pub(super) fn mount(
         selector.as_ref(),
         "option",
         "",
-        "No action selected",
+        "Choose an offered action (optional)",
     )?;
     none.set_attribute("value", "")?;
     let mut current = Vec::new();
@@ -299,7 +299,13 @@ pub(super) fn mount(
     if current.iter().any(|offer| offer.offer_id == previous) {
         selector.set_value(&previous);
     }
-    panel.append_child(&selector)?;
+    selector.set_attribute("aria-label", "Choose an offered action (optional)")?;
+    if current.is_empty() {
+        selector.set_attribute("hidden", "")?;
+    } else {
+        selector.remove_attribute("hidden")?;
+        panel.append_child(&selector)?;
+    }
     {
         let mut state = client.borrow_mut();
         let revision = state.revision;
@@ -318,7 +324,7 @@ pub(super) fn mount(
         recovery.offers = current;
     }
     let controls = node(&document, &panel, "div", "dialogue-controls", "")?;
-    let raw = button(client, &controls, "Ask for clarification", submit)?;
+    let raw = button(client, &controls, "Say it", submit)?;
     let cancel = button(client, &controls, "Decline this choice", decline)?;
     let confirm = button(client, &controls, "Confirm offered choice", confirm)?;
     // Retry is a lost-response recovery path: it exists only while a confirmation's outcome

@@ -10,6 +10,7 @@
 .talk-status:empty{display:none}
 .talk-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .talk-actions:empty{display:none}
+.talk-actions[hidden]{display:none}
 .talk-actions button{flex:1 1 120px;min-height:48px;padding:10px 12px;background:#132530;border:1px solid #7c8a825e;border-radius:7px;color:#d7ddd1;font:16px system-ui,sans-serif;cursor:pointer}
 .talk-actions button[data-talk=send]{background:linear-gradient(135deg,#355447,#20392e);border-color:#8cb498;color:#f5eedf}
 @keyframes talk-pulse{0%{box-shadow:0 0 0 0 #ff8a70cc}100%{box-shadow:0 0 0 14px #ff8a7000}}

@@ -94,6 +94,9 @@ struct Row {
     label: Element,
     status: Element,
     actions: Element,
+    send: Element,
+    clear: Element,
+    cancel: Element,
 }
 
 #[derive(Default)]
@@ -259,12 +262,23 @@ fn build(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let status = node(&document, &root, "p", "talk-status", "")?;
     status.set_attribute("role", "status")?;
     let actions = node(&document, &root, "div", "talk-actions", "")?;
+    let send_button = button(client, &actions, "Send", send)?;
+    send_button.set_attribute("data-talk", "send")?;
+    let clear_button = button(client, &actions, "Clear", clear)?;
+    clear_button.set_attribute("data-talk", "clear")?;
+    let cancel_button = button(client, &actions, "Cancel", |client| {
+        interrupt(&client, Interruption::Cancelled)
+    })?;
+    cancel_button.set_attribute("data-talk", "cancel")?;
     client.borrow_mut().dialogue.talk.row = Some(Row {
         root,
         hold: hold.clone(),
         label,
         status,
         actions,
+        send: send_button,
+        clear: clear_button,
+        cancel: cancel_button,
     });
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
     let window_target: &EventTarget = window.as_ref();
@@ -893,6 +907,9 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 row.label.clone(),
                 row.status.clone(),
                 row.actions.clone(),
+                row.send.clone(),
+                row.clear.clone(),
+                row.cancel.clone(),
             ),
             talk.capture.phase(),
             talk.capture.notice(),
@@ -900,7 +917,7 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             talk.capture.elapsed_seconds(now()),
         )
     };
-    let (root, hold, label, status_line, actions) = row;
+    let (root, hold, label, status_line, actions, send_button, clear_button, cancel_button) = row;
     let name = match phase {
         Phase::Idle => "idle",
         Phase::Requesting(_) => "requesting",
@@ -938,19 +955,23 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         (Phase::Idle, None, Availability::BudgetSpent) => Notice::BudgetSpent.message(),
         _ => "",
     }));
-    actions.set_text_content(None);
-    match phase {
-        Phase::Review => {
-            button(client, &actions, "Send", send)?.set_attribute("data-talk", "send")?;
-            button(client, &actions, "Clear", clear)?.set_attribute("data-talk", "clear")?;
+    let review = phase == Phase::Review;
+    let listening = phase == Phase::Listening;
+    for (button, visible) in [
+        (&send_button, review),
+        (&clear_button, review),
+        (&cancel_button, listening),
+    ] {
+        if visible {
+            button.remove_attribute("hidden")?;
+        } else {
+            button.set_attribute("hidden", "")?;
         }
-        Phase::Listening => {
-            button(client, &actions, "Cancel", |client| {
-                interrupt(&client, Interruption::Cancelled)
-            })?
-            .set_attribute("data-talk", "cancel")?;
-        }
-        _ => {}
+    }
+    if review || listening {
+        actions.remove_attribute("hidden")?;
+    } else {
+        actions.set_attribute("hidden", "")?;
     }
     Ok(())
 }
