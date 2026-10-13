@@ -175,8 +175,11 @@ struct Motion {
     /// The sequence last reported to the server as presented, and when (performance ms).
     reported_seq: u64,
     reported_at_ms: u64,
-    battlefield_progress: Option<(Option<u32>, Option<(u32, u32, bool)>, bool)>,
+    battlefield_progress: Option<BattlefieldProgress>,
 }
+
+/// What the battlefield last reported about its loading, kept to notice a change.
+type BattlefieldProgress = (Option<u32>, Option<(u32, u32, bool)>, bool);
 
 thread_local! {static MOTION:RefCell<Option<Motion>>=const{RefCell::new(None)};}
 
@@ -871,7 +874,7 @@ fn display_instance() -> u64 {
     DISPLAY_INSTANCE.with(|cell| {
         if cell.get() == 0 {
             let seed = (js_sys::Math::random() * 9_007_199_254_740_991.0) as u64;
-            cell.set(seed.max(1) ^ (u64::from(now_ms()) << 17) | 1);
+            cell.set(seed.max(1) ^ (now_ms() << 17) | 1);
         }
         cell.get()
     })

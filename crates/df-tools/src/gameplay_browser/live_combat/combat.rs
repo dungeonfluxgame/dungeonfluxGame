@@ -829,7 +829,7 @@ fn publish_tactical_controls(
             let element = element.unchecked_into::<Element>();
             if element
                 .get_attribute("data-action-identity")
-                .map_or(true, |identity| !active_action_ids.contains(&identity))
+                .is_none_or(|identity| !active_action_ids.contains(&identity))
             {
                 element.remove();
             }
@@ -944,11 +944,14 @@ fn fight_map_squares(
     Some((columns, squares))
 }
 
-/// The list inside one fight offer, with the ids and texts of its options in order.
+/// One fight offer's wrapper, its list, and the ids and texts of the list's options in order.
+type OfferList = (Element, web_sys::HtmlSelectElement, Vec<(String, String)>);
+
+/// The list inside one fight offer.
 fn offer_list(
     controls: &Element,
     kind: rpc::GameplayActionKind,
-) -> Result<Option<(Element, web_sys::HtmlSelectElement, Vec<(String, String)>)>, JsValue> {
+) -> Result<Option<OfferList>, JsValue> {
     let Some(wrapper) = controls.query_selector(&format!(
         ":scope > .offered-action:has(> button[data-action-kind=\"{}\"])",
         kind as i32
