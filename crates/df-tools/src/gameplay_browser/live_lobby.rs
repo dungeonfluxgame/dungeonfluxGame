@@ -7,6 +7,7 @@ use df_ui::{
     JoinPhaseView, JoinRoom, JoinStage, JoinStamp, JoinUpdate, LobbyOffer, LobbyParticipant,
 };
 use std::cell::Cell;
+use std::net::{IpAddr, SocketAddr};
 
 const LIMITS: CampaignLimits = CampaignLimits {
     max_members: 8,
@@ -54,6 +55,30 @@ fn initial(name: &str) -> String {
         .map_or_else(|| "?".to_owned(), |first| first.to_uppercase().collect())
 }
 
+fn is_loopback_join_url(join_url: &str) -> bool {
+    let Some((_, address)) = join_url.split_once("://") else {
+        return false;
+    };
+    let host = address.split('/').next().unwrap_or_default();
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    if host
+        .parse::<SocketAddr>()
+        .is_ok_and(|address| address.ip().is_loopback())
+    {
+        return true;
+    }
+    if host
+        .parse::<IpAddr>()
+        .is_ok_and(|address| address.is_loopback())
+    {
+        return true;
+    }
+    host.split_once(':')
+        .is_some_and(|(hostname, _)| hostname.eq_ignore_ascii_case("localhost"))
+}
+
 fn with_view<R>(
     model: &LobbyModel,
     sequence: u64,
@@ -77,6 +102,7 @@ fn with_view<R>(
             presence: "In the room",
         })
         .collect();
+    let loopback = is_loopback_join_url(&model.join_url);
     let view = JoinPhaseView {
         stamp: JoinStamp {
             generation: STAMP_GENERATION,
@@ -106,7 +132,7 @@ fn with_view<R>(
         room: (model.stage == JoinStage::Lobby).then(|| JoinRoom {
             label: "Room code",
             code: &model.code,
-            detail: &model.join_url,
+            detail: if loopback { "" } else { &model.join_url },
         }),
         roster_heading: "Your party",
         empty_roster: "No heroes have joined yet.",
@@ -117,7 +143,11 @@ fn with_view<R>(
             enabled: offer.enabled,
             pending: offer.pending,
         }),
-        pairing_fallback: "Share the room code, or open the join link on a second phone.",
+        pairing_fallback: if loopback {
+            "Phones cannot join yet: the game was started for this computer only."
+        } else {
+            "Share the room code, or open the join link on a second phone."
+        },
     };
     present(&view)
 }
@@ -128,6 +158,77 @@ fn render_error(client: &Rc<RefCell<Client>>, error: &dyn std::fmt::Display) -> 
         .root
         .set_attribute("data-render-error", "lobby");
     JsValue::from_str(&format!("The lobby could not be displayed: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LobbyModel, is_loopback_join_url, with_view};
+    use df_ui::JoinStage;
+
+    #[test]
+    fn loopback_join_urls_are_not_presented_as_shareable_links() {
+        for join_url in [
+            "http://127.0.0.1:63419/gameplay/player?room=ABCD",
+            "http://127.42.0.9:63419/gameplay/player?room=ABCD",
+            "http://[::1]:63419/gameplay/player?room=ABCD",
+            "http://localhost:63419/gameplay/player?room=ABCD",
+        ] {
+            assert!(is_loopback_join_url(join_url));
+            let model = LobbyModel {
+                stage: JoinStage::Lobby,
+                title: String::new(),
+                narration: String::new(),
+                code: "ABCD".to_owned(),
+                join_url: join_url.to_owned(),
+                join_label: "Join this room",
+                panel_heading: "Your party gathers",
+                panel_description: "Waiting for heroes",
+                members: Vec::new(),
+                offer: None,
+            };
+            let (detail, fallback) = with_view(&model, 1, |view| {
+                (
+                    view.room.as_ref().map(|room| room.detail.to_owned()),
+                    view.pairing_fallback.to_owned(),
+                )
+            });
+            assert_eq!(detail.as_deref(), Some(""));
+            assert_eq!(
+                fallback,
+                "Phones cannot join yet: the game was started for this computer only."
+            );
+        }
+    }
+
+    #[test]
+    fn network_join_urls_remain_shareable() {
+        let model = LobbyModel {
+            stage: JoinStage::Lobby,
+            title: String::new(),
+            narration: String::new(),
+            code: "ABCD".to_owned(),
+            join_url: "http://192.168.1.20:63419/gameplay/player?room=ABCD".to_owned(),
+            join_label: "Join this room",
+            panel_heading: "Your party gathers",
+            panel_description: "Waiting for heroes",
+            members: Vec::new(),
+            offer: None,
+        };
+        let (detail, fallback) = with_view(&model, 1, |view| {
+            (
+                view.room.as_ref().map(|room| room.detail.to_owned()),
+                view.pairing_fallback.to_owned(),
+            )
+        });
+        assert_eq!(
+            detail.as_deref(),
+            Some("http://192.168.1.20:63419/gameplay/player?room=ABCD")
+        );
+        assert_eq!(
+            fallback,
+            "Share the room code, or open the join link on a second phone."
+        );
+    }
 }
 
 /// The player's name is chosen during character creation, so the join form offers no name
