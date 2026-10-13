@@ -48,7 +48,7 @@ const FOE_CARD: usize = HEROES;
 /// Hit-point fraction, in percent, under which a figure breathes heavier and shows a vignette.
 const LOW_HEALTH_PERCENT: u32 = 35;
 /// An action call-out stays this long, plus a little for long text.
-const ACTION_HOLD_MS: u64 = 5500;
+const ACTION_HOLD_MS: u64 = 1500;
 const HOLD_PER_EXTRA_CHARACTER_MS: u64 = 40;
 const MAXIMUM_ACTION_HOLD_MS: u64 = 8500;
 /// A hero's typed line stays this long before it fades; a non-player line stays until replaced.
@@ -729,15 +729,12 @@ impl Figures {
             FloatKind::Heal,
             Duration::ZERO,
         )?;
-        let text = match mode {
-            StageMode::Combat => "catches a second wind",
-            StageMode::Aftermath | StageMode::Scene => "rests and recovers",
-        };
+        let text = healing_action_text(mode, amount);
         self.bubble_on(
             figure,
             BubbleKind::Action,
             &actor.name,
-            text,
+            &text,
             Duration::ZERO,
             false,
         )?;
@@ -1440,6 +1437,14 @@ fn flag(element: &Element, name: &str, on: bool) -> Result<(), JsValue> {
     }
 }
 
+fn healing_action_text(mode: StageMode, amount: u32) -> String {
+    let action = match mode {
+        StageMode::Combat => "catches a second wind",
+        StageMode::Aftermath | StageMode::Scene => "rests and recovers",
+    };
+    format!("{action} · +{amount} HP")
+}
+
 #[cfg(test)]
 mod tests {
     use super::typed_line_anchor;
@@ -1472,5 +1477,13 @@ mod tests {
         let heroes = [Some("Aria".to_owned()), None];
 
         assert_eq!(typed_line_anchor("Bram", &heroes), None);
+    }
+
+    #[test]
+    fn healing_action_caption_names_the_recovered_hit_points() {
+        assert_eq!(
+            super::healing_action_text(super::StageMode::Combat, 6),
+            "catches a second wind · +6 HP",
+        );
     }
 }
