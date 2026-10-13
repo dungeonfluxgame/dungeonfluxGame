@@ -202,6 +202,7 @@ pub(crate) struct Conductor<D> {
     in_entrance: bool,
     battle: BattleState,
     battle_since_ms: u64,
+    battle_progress_ms: u64,
     /// A 3D battlefield is expected, so the fight's entrance waits for it (and the flat view
     /// stays hidden meanwhile instead of flashing before it).
     battlefield_expected: bool,
@@ -239,6 +240,7 @@ impl<D: Clone> Conductor<D> {
             in_entrance: false,
             battle: BattleState::Absent,
             battle_since_ms: 0,
+            battle_progress_ms: 0,
             battlefield_expected: false,
             battlefield: Battlefield::Pending,
             held: Vec::new(),
@@ -296,6 +298,18 @@ impl<D: Clone> Conductor<D> {
         let mut out = Vec::new();
         self.step(now_ms, &mut out);
         out
+    }
+
+    /// The battlefield's visible entrance advanced; restart its stalled-load deadline.
+    pub(crate) fn on_battlefield_progress(&mut self, now_ms: u64) {
+        if self.battle == BattleState::Entering {
+            self.battle_progress_ms = now_ms;
+        }
+    }
+
+    /// Whether a pending battlefield exceeded its progress deadline and took the flat fallback.
+    pub(crate) fn battlefield_failed(&self) -> bool {
+        self.battlefield == Battlefield::Fallback
     }
 
     pub(crate) fn scene_state(&self) -> SceneState {
@@ -660,6 +674,9 @@ impl<D: Clone> Conductor<D> {
         if let Some(next) = battle_next(self.battle, event) {
             self.battle = next;
             self.battle_since_ms = now_ms;
+            if next == BattleState::Entering {
+                self.battle_progress_ms = now_ms;
+            }
             out.push(Command::Battle(next));
         }
     }
@@ -676,12 +693,18 @@ impl<D: Clone> Conductor<D> {
         {
             return;
         }
-        let waited = now_ms.saturating_sub(self.battle_since_ms);
+        let waited = now_ms.saturating_sub(self.battle_progress_ms);
         let done = !self.battlefield_expected
             || self.battlefield != Battlefield::Pending
             || waited > BATTLE_ENTER_CAP_MS;
         if !done {
             return;
+        }
+        if self.battlefield_expected
+            && self.battlefield == Battlefield::Pending
+            && waited > BATTLE_ENTER_CAP_MS
+        {
+            self.battlefield = Battlefield::Fallback;
         }
         self.move_battle(now_ms, BattleEvent::EntranceDone, out);
         for diff in std::mem::take(&mut self.held) {
@@ -2337,6 +2360,57 @@ mod tests {
     }
 
     #[test]
+    fn a_progressing_battlefield_keeps_opening_blows_held_until_it_is_ready() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0]);
+        harness.conductor.set_battlefield_expected(true);
+        harness.view(fight_start());
+        for turn in ["first enemy", "second enemy", "third enemy"] {
+            harness.view(ViewPlan {
+                diff: ViewDiff {
+                    roll: Some(turn),
+                    impact: Some(turn),
+                    ..ViewDiff::default()
+                },
+                script: Vec::new(),
+                cast: vec![0],
+            });
+        }
+
+        for second in 1_u64..=40 {
+            let now = second * 1_000;
+            harness.conductor.on_battlefield_progress(now);
+            let commands = harness.conductor.on_battlefield(now, Battlefield::Pending);
+            harness.record(commands);
+            harness.run_to(now);
+            assert_eq!(harness.conductor.battle_state(), BattleState::Entering);
+            assert!(!harness.conductor.director_idle());
+            assert_eq!(harness.conductor.presented_sequence(), 0);
+            assert!(harness.entered(StageState::Rolling).is_none());
+        }
+
+        harness.now += 1_000;
+        let ready_at = harness.now;
+        let commands = harness
+            .conductor
+            .on_battlefield(harness.now, Battlefield::Ready);
+        harness.record(commands);
+        harness.run_to(ready_at + 20_000);
+        let rolls: Vec<&str> = harness
+            .log
+            .iter()
+            .filter_map(|(_, command)| match command {
+                Command::Enter {
+                    state: StageState::Rolling,
+                    detail,
+                    ..
+                } => *detail,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rolls, ["first enemy", "second enemy", "third enemy"]);
+    }
+
+    #[test]
     fn without_a_battlefield_the_entrance_ends_with_the_scene_and_a_fallback_releases_it() {
         let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0]);
         harness.view(fight_start());
@@ -2371,6 +2445,7 @@ mod tests {
             .expect("released at the cap");
         assert!(rolling >= BATTLE_ENTER_CAP_MS);
         assert_ne!(harness.conductor.battle_state(), BattleState::Entering);
+        assert!(harness.conductor.battlefield_failed());
     }
 
     #[test]

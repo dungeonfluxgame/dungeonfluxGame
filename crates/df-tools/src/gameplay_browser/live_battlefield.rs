@@ -2239,6 +2239,36 @@ pub(super) fn entrance() -> crate::stage_conductor::Battlefield {
     })
 }
 
+/// Progress shown on the loading card, its source values, and whether initiative roll-call is
+/// running. The adapter reports changes to the conductor so a live load does not time out.
+pub(super) fn entrance_progress() -> (Option<u32>, Option<(u32, u32, bool)>, bool) {
+    LIVE.with(|live| {
+        let live = live.borrow();
+        let progress = live.stage.as_ref().map(|stage| stage.scan_progress());
+        let percent = progress.map(|(loaded, wanted, complete)| {
+            if complete {
+                100
+            } else if wanted == 0 {
+                0
+            } else {
+                ((loaded as f32 / wanted as f32).min(0.99) * 100.0).round() as u32
+            }
+        });
+        (percent, progress, live.initiative_pending)
+    })
+}
+
+/// Drops a battlefield whose entrance stopped progressing, removing its loading card before
+/// the conductor releases the held opening blows on the flat fallback.
+pub(super) fn fail_entrance() {
+    let stage = LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        live.phase = Phase::Unavailable;
+        live.stage.take()
+    });
+    drop(stage);
+}
+
 /// A scan's splat is still streaming in: part of the entrance, so nothing of the fight (not even
 /// the initiative roll) starts until it is complete or has failed and the fallback shows.
 fn splat_streaming(live: &Live) -> bool {
