@@ -374,15 +374,17 @@ pub(super) fn show_roll(
     _short: bool,
 ) -> Result<u64, JsValue> {
     preload();
-    let (document, host, panel) = {
+    let (document, host, panel, reduced) = {
         let state = client.borrow();
         let Some((host, kind)) = dice_host(&state) else {
             return Ok(0);
         };
+        let reduced = reduced_motion(&state.document, &state.root);
         (
             state.document.clone(),
             host,
             kind == crate::dice_roll::DiceHost::Panel,
+            reduced,
         )
     };
     clear(client)?;
@@ -421,7 +423,7 @@ pub(super) fn show_roll(
     let rest_ms = LIBRARY.with(|library| library.borrow().clips[first].clip.rest_ms);
     overlay.set_attribute("style", &format!("--dice-rest:{}ms", rest_ms.min(2_500)))?;
     mark_rest_band(client, rest_ms);
-    let still = path == DicePath::CardOnly;
+    let still = should_show_still(reduced, path);
     die(
         &document,
         &overlay,
@@ -435,6 +437,33 @@ pub(super) fn show_roll(
         die(&document, &overlay, second, other, false, None, still)?;
     }
     Ok(rest_ms)
+}
+
+/// A roll shown while the display catches up still tumbles (FPX-01: nearly every roll arrives
+/// that way); only reduced motion or a missing clip leaves the still frame.
+fn should_show_still(reduced: bool, path: DicePath) -> bool {
+    reduced || path == DicePath::CardOnly
+}
+
+/// Reduced motion without a media-query binding (no such web-sys feature on this
+/// target): a probe element the stylesheet widens to 7 px under
+/// `prefers-reduced-motion`, read here. The stylesheet stays the backstop and hides any
+/// playing clip regardless.
+fn reduced_motion(document: &Document, root: &Element) -> bool {
+    let probe = match root.query_selector(".tv-motion-probe").ok().flatten() {
+        Some(probe) => probe,
+        None => {
+            let Ok(probe) = document.create_element("div") else {
+                return false;
+            };
+            probe.set_class_name("tv-motion-probe");
+            if root.append_child(&probe).is_err() {
+                return false;
+            }
+            probe
+        }
+    };
+    probe.client_width() == 7
 }
 
 fn fallback_stills(
@@ -938,4 +967,17 @@ fn canvas_context(canvas: &Element) -> Result<JsValue, JsValue> {
 fn call(context: &JsValue, name: &str, args: &[JsValue]) -> Result<JsValue, JsValue> {
     let method: Function = Reflect::get(context, &JsValue::from_str(name))?.dyn_into()?;
     method.apply(context, &args.iter().collect::<Array>())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DicePath, should_show_still};
+
+    #[test]
+    fn reduced_motion_uses_a_still_frame_for_playable_clips() {
+        assert!(should_show_still(true, DicePath::WebM));
+        assert!(should_show_still(true, DicePath::Key));
+        assert!(!should_show_still(false, DicePath::WebM));
+        assert!(should_show_still(false, DicePath::CardOnly));
+    }
 }
