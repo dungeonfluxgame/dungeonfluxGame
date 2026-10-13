@@ -69,6 +69,7 @@ const SLIPS: [(&str, &str); 4] = [
     ("pls", "please"),
 ];
 const NEGATIONS: [&str; 7] = ["not", "no", "never", "nothing", "nobody", "none", "cannot"];
+const MARKUP_DELIMITERS: &str = "<>{}`\\*_~#|[]()";
 /// Profanity masked at a restrained table; a mature table never reads this list.
 const PROFANITY: [&str; 6] = ["fuck", "shit", "bitch", "asshole", "cunt", "dick"];
 
@@ -93,6 +94,10 @@ fn core(word: &str) -> String {
         .filter(|character| character.is_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+fn is_markup_delimiter(character: char) -> bool {
+    MARKUP_DELIMITERS.contains(character)
 }
 
 fn is_filler(word: &str) -> bool {
@@ -127,11 +132,13 @@ fn known_name<'a>(word: &str, names: &'a [String]) -> Option<&'a str> {
 pub(super) fn normalise(raw: &str, names: &[String]) -> String {
     let flattened: String = raw
         .chars()
-        .map(|character| {
+        .filter_map(|character| {
             if character.is_control() {
-                ' '
+                Some(' ')
+            } else if is_markup_delimiter(character) {
+                None
             } else {
-                character
+                Some(character)
             }
         })
         .collect();
@@ -318,7 +325,7 @@ pub(super) fn validate(raw: &str, candidate: &str, names: &[String]) -> Option<S
     if candidate.is_empty()
         || candidate
             .chars()
-            .any(|character| character.is_control() || "<>{}`\\".contains(character))
+            .any(|character| character.is_control() || is_markup_delimiter(character))
     {
         return None;
     }
@@ -326,11 +333,25 @@ pub(super) fn validate(raw: &str, candidate: &str, names: &[String]) -> Option<S
     if candidate.chars().count() > raw_chars + MAXIMUM_GROWTH.max(raw_chars / 8) {
         return None;
     }
-    let raw_words: Vec<String> = raw
-        .split_whitespace()
-        .map(core)
-        .filter(|w| !w.is_empty())
-        .collect();
+    let mut raw_words = Vec::new();
+    let mut required_raw_positions = Vec::new();
+    let mut previous_kept: Option<String> = None;
+    for token in raw.split_whitespace() {
+        let word = core(token);
+        if word.is_empty() {
+            continue;
+        }
+        let position = raw_words.len();
+        raw_words.push(word.clone());
+        if token.ends_with(['-', '\u{2014}']) || is_filler(&word) {
+            continue;
+        }
+        if previous_kept.as_deref() == Some(word.as_str()) && !word.chars().all(char::is_numeric) {
+            continue;
+        }
+        required_raw_positions.push(position);
+        previous_kept = Some(word);
+    }
     let clean_words: Vec<String> = candidate
         .split_whitespace()
         .map(core)
@@ -341,6 +362,7 @@ pub(super) fn validate(raw: &str, candidate: &str, names: &[String]) -> Option<S
     }
     // Every cleaned word traces to a raw word at or after the one before it.
     let mut cursor = 0;
+    let mut matched_raw_positions = Vec::new();
     for word in &clean_words {
         let found = raw_words
             .iter()
@@ -354,7 +376,15 @@ pub(super) fn validate(raw: &str, candidate: &str, names: &[String]) -> Option<S
                         .any(|(wrong, right)| *wrong == raw_word.as_str() && core(right) == *word)
             })
             .map(|(position, _)| position);
-        cursor = found? + 1;
+        let position = found?;
+        matched_raw_positions.push(position);
+        cursor = position + 1;
+    }
+    if required_raw_positions
+        .iter()
+        .any(|position| !matched_raw_positions.contains(position))
+    {
+        return None;
     }
     // The meaning of a denial is never flipped.
     let kept_raw: Vec<String> = raw_words
@@ -558,6 +588,17 @@ mod tests {
         assert_eq!(validate("open the door", "<b>Open the door</b>", &[]), None);
         assert_eq!(validate("open the door", "", &[]), None);
         assert_eq!(validate("open the door", "Open the\ndoor", &[]), None);
+    }
+
+    #[test]
+    fn rejects_a_candidate_that_drops_the_request() {
+        assert_eq!(validate("I want the key", "I.", &[]), None);
+    }
+
+    #[test]
+    fn refuses_markdown_markup_in_a_display_candidate() {
+        assert_eq!(validate("Open the door", "**Open the door**", &[]), None);
+        assert_eq!(normalise("**Open the door**", &[]), "Open the door.");
     }
 
     #[test]
