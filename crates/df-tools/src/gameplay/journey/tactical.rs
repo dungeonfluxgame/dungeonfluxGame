@@ -2608,6 +2608,123 @@ pub(super) mod tests {
             })
             .expect("an operation id selects each layout")
     }
+    /// HNT-26: three scouts opening on the salt quay produced a decision whose
+    /// recorded receipt was longer than the checkpoint's per-text limit, so
+    /// `finish` refused the fight at `finish-checkpoint`.
+    #[test]
+    fn three_scouts_opening_on_the_salt_quay_start_their_fight() {
+        with_live(|| {
+            let dialogue = dialogue_checkpoint(true, false).unwrap();
+            let bytes = scene_bytes("salt-quay").unwrap();
+            let data: tactical_rules::BattleSceneData = serde_json::from_slice(bytes).unwrap();
+            let layout_index = data
+                .layouts
+                .iter()
+                .position(|layout| layout.id == "open-quay")
+                .expect("salt-quay has the open-quay layout");
+            let operation = operation_for_layout(layout_index, data.layouts.len());
+            TEST_SCENE_OVERRIDE.with(|own| own.set(Some("salt-quay")));
+            TEST_FIGHT_OVERRIDE.with(|own| {
+                *own.borrow_mut() = Some(TestFight {
+                    enemies: 3,
+                    foe: Some("scout".to_owned()),
+                });
+            });
+            let _ = crate::gameplay::refusal_detail::take();
+            let started = start_fight_from(&dialogue, operation, &[1, 2, 20]).map_err(|error| {
+                format!(
+                    "step={:?} error={error:?}",
+                    crate::gameplay::refusal_detail::take()
+                )
+            });
+            TEST_SCENE_OVERRIDE.with(|own| own.set(None));
+            TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
+            let started = started.expect("three scouts start their fight");
+            let semantic = started
+                .state()
+                .decisions
+                .last()
+                .and_then(|decision| decision.semantic_output.as_deref())
+                .expect("the fight-start decision records its receipt");
+            assert!(
+                semantic.len() > 4096,
+                "this case must exercise the old 4096 limit, got {}",
+                semantic.len()
+            );
+            assert!(
+                semantic.len() <= model::limits().maximum_text_bytes,
+                "recorded receipt {} exceeds the checkpoint text limit",
+                semantic.len()
+            );
+        });
+    }
+    /// The budgets behind `model::limits().maximum_text_bytes`: one outcome
+    /// filled to every producer cap at once (48-byte names, 4 fight lines, a
+    /// 24-cell dash path, the longest source revision) encodes within 2,048
+    /// bytes, and a decision full of them (6 combatants x 12 outcomes)
+    /// hex-encodes within the checkpoint text limit.
+    #[test]
+    fn a_worst_case_receipt_fits_the_checkpoint_text_limit() {
+        let line = rpc::FightLine {
+            role: rpc::TableRole::Hero as i32,
+            hero_index: 1,
+            speaker: "s".repeat(48),
+            text: "t".repeat(160),
+        };
+        let outcome = rpc::CombatOutcome {
+            actor_name: "a".repeat(48),
+            target_name: "b".repeat(48),
+            attack_die: u32::MAX,
+            attack_modifier: i32::MIN,
+            attack_total: i32::MAX,
+            target_armor_class: u32::MAX,
+            hit: true,
+            critical: true,
+            damage_dice: vec![u32::MAX; 4],
+            damage: u32::MAX,
+            target_hit_points: u32::MAX,
+            knocked_out: true,
+            grazed: true,
+            source_revision: "r".repeat(128),
+            actor_id: vec![7; 16],
+            target_id: vec![9; 16],
+            weapon: "w".repeat(32),
+            attack_style: 2,
+            damage_type: "d".repeat(16),
+            distance_ft: u32::MAX,
+            kind: rpc::OutcomeKind::Attack as i32,
+            path: (0..24)
+                .map(|cell| rpc::GridCell {
+                    col: cell,
+                    row: cell,
+                })
+                .collect(),
+            cost_ft: u32::MAX,
+            remaining_ft: u32::MAX,
+            roll_mode: -1,
+            faces: vec![u32::MAX; 4],
+            reasons: vec!["disadvantage: ".repeat(2); 6],
+            cover: "c".repeat(16),
+            death_save_result: rpc::DeathSaveResult::CriticalFailure as i32,
+            death_successes: 3,
+            death_failures: 3,
+            recovery_hours: 4,
+            lines: vec![line; 4],
+            sequence: u64::MAX,
+        };
+        let encoded = outcome.encode_to_vec().len();
+        assert!(encoded <= 2048, "one worst-case outcome is {encoded} bytes");
+        let receipt = rpc::AcceptedAction {
+            combat: vec![outcome; 6 * 12],
+            phase: rpc::JourneyPhase::Combat as i32,
+            ..Default::default()
+        };
+        let hex_len = receipt.encode_to_vec().len() * 2;
+        assert!(
+            hex_len <= model::limits().maximum_text_bytes,
+            "a worst-case receipt hex-encodes to {hex_len} bytes"
+        );
+    }
     /// Exhaustively checks every stored adventure creature, scene layout and enemy count.
     #[test]
     #[ignore]

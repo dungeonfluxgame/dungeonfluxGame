@@ -1217,7 +1217,7 @@ pub(super) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 pub(super) fn unhex(text: &str) -> Result<Vec<u8>, RepositoryError> {
-    if text.len() > 4096 || !text.len().is_multiple_of(2) {
+    if text.len() > model::limits().maximum_text_bytes || !text.len().is_multiple_of(2) {
         return Err(RepositoryError::InvalidReceipt);
     }
     text.as_bytes()
@@ -1376,11 +1376,13 @@ fn finish(
     } = content;
     let objective = objective_command
         .map(|command| objective_outcome::pending(current, &state, command))
-        .transpose()?
+        .transpose()
+        .inspect_err(|_| refusal_detail::note("finish-objective-pending"))?
         .flatten();
     if (entry == "escort-courier") != escort_target.is_some()
         || (reaction.is_some() && entry != "defend-courier")
     {
+        refusal_detail::note("finish-content-contract");
         return Err(RepositoryError::InvalidCandidate);
     }
     let mut facts = Vec::new();
@@ -1481,8 +1483,14 @@ fn finish(
             .find(|before| before.id == moved.id)
             && before.location != moved.location
         {
-            let destination = moved.location.ok_or(RepositoryError::InvalidCandidate)?;
-            let position = moved.position.ok_or(RepositoryError::InvalidCandidate)?;
+            let destination = moved.location.ok_or_else(|| {
+                refusal_detail::note("finish-move-destination");
+                RepositoryError::InvalidCandidate
+            })?;
+            let position = moved.position.ok_or_else(|| {
+                refusal_detail::note("finish-move-position");
+                RepositoryError::InvalidCandidate
+            })?;
             let id = make_id(facts.len() as u32)?;
             state.facts.push(GameFact {
                 id,
@@ -1509,9 +1517,13 @@ fn finish(
             .any(|before| before.id == scheduled.id)
         {
             if scheduled.definition != model::content("knockout-short-rest-due")? {
+                refusal_detail::note("finish-schedule-definition");
                 return Err(RepositoryError::InvalidCandidate);
             }
-            let cause=state.facts.iter().find(|fact|fact.operation==operation && matches!(&fact.value,FactValue::ResourceChanged {entity,resource,before:0,after:1,..} if *entity==scheduled.entity && resource.as_str()=="unconscious")).map(|fact|fact.id).ok_or(RepositoryError::InvalidCandidate)?;
+            let cause=state.facts.iter().find(|fact|fact.operation==operation && matches!(&fact.value,FactValue::ResourceChanged {entity,resource,before:0,after:1,..} if *entity==scheduled.entity && resource.as_str()=="unconscious")).map(|fact|fact.id).ok_or_else(|| {
+                refusal_detail::note("finish-schedule-cause");
+                RepositoryError::InvalidCandidate
+            })?;
             let started = LogicalTime {
                 ticks: scheduled
                     .due
@@ -1520,13 +1532,17 @@ fn finish(
                         u64::from(scheduled.due.ticks_per_second)
                             * u64::from(pack::rest().short_rest_seconds),
                     )
-                    .ok_or(RepositoryError::InvalidCandidate)?,
+                    .ok_or_else(|| {
+                        refusal_detail::note("finish-schedule-start");
+                        RepositoryError::InvalidCandidate
+                    })?,
                 ticks_per_second: scheduled.due.ticks_per_second,
             };
             if started.ticks_per_second != evidenced_time.ticks_per_second
                 || started.ticks < evidenced_time.ticks
                 || started.ticks > state.logical_time.ticks
             {
+                refusal_detail::note("finish-schedule-time");
                 return Err(RepositoryError::InvalidCandidate);
             }
             if started != evidenced_time {
@@ -1666,7 +1682,10 @@ fn finish(
         operation,
         ordinal: facts.len() as u32,
         cause: if entry == "harbor-inn" {
-            Some(inn_source(current)?.ok_or(RepositoryError::InvalidCandidate)?)
+            Some(inn_source(current)?.ok_or_else(|| {
+                refusal_detail::note("finish-inn-source");
+                RepositoryError::InvalidCandidate
+            })?)
         } else {
             facts
                 .last()
@@ -1706,18 +1725,24 @@ fn finish(
         semantic_output: semantic,
     });
     state.draws.extend(draws);
-    let candidate = model::checkpoint(basis, state)?;
+    let candidate = model::checkpoint(basis, state)
+        .inspect_err(|_| refusal_detail::note("finish-checkpoint"))?;
     let candidate = if objective.is_some() {
         objective_outcome::stage(
             current,
             candidate,
-            objective_command.ok_or(RepositoryError::InvalidCandidate)?,
-        )?
+            objective_command.ok_or_else(|| {
+                refusal_detail::note("finish-objective-command");
+                RepositoryError::InvalidCandidate
+            })?,
+        )
+        .inspect_err(|_| refusal_detail::note("finish-objective-stage"))?
     } else {
         candidate
     };
-    let candidate = stage_authored_threads(candidate, fact_id)?;
-    phase(&candidate)?;
+    let candidate = stage_authored_threads(candidate, fact_id)
+        .inspect_err(|_| refusal_detail::note("finish-authored-threads"))?;
+    phase(&candidate).inspect_err(|_| refusal_detail::note("finish-phase"))?;
     Ok(candidate)
 }
 
@@ -3016,6 +3041,15 @@ fn stage_using(
         phase: phase_from_state(current, &state, &selected.id)? as i32,
     };
     let semantic = Some(hex(&result.encode_to_vec()));
+    // The recorded receipt is the largest text a checkpoint holds; refuse here,
+    // by name, rather than as an opaque checkpoint failure in `finish`.
+    if semantic
+        .as_ref()
+        .is_some_and(|text| text.len() > model::limits().maximum_text_bytes)
+    {
+        refusal_detail::note("receipt-too-large");
+        return Err(RepositoryError::Capacity);
+    }
     let entry = if pure_target.is_some() {
         super::beat_script_runtime::STEP
     } else if selected.effect == super::beat_script::BeatEffect::ThirdApproach {

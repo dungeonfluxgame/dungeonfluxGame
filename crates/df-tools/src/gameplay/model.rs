@@ -323,6 +323,20 @@ pub(super) fn actor() -> Result<EntityId, RepositoryError> {
 pub(super) fn member() -> Result<MemberId, RepositoryError> {
     MemberId::from_bytes(&PLAYER).map_err(invalid)
 }
+/// The largest single text a checkpoint may hold is one decision's recorded
+/// receipt (`AcceptedDecision::semantic_output`: the hex of an
+/// `AcceptedAction`). Sized from the fight's own caps, not from observed
+/// traffic: at most 6 combatants (2 heroes, 4 enemies) act in one decision
+/// (`enemy_turns` stops at the first able hero, and a battle finishes when a
+/// side is wholly incapacitated), each turn records at most 12 outcomes
+/// (move segments, its attack, opportunity attacks it provokes, a death
+/// save), and one outcome encodes in at most 2,048 bytes (names of at most
+/// 48 bytes, at most 4 fight lines, a move path, ids, and the source
+/// revision). Hex doubles the bytes. The per-outcome and per-decision
+/// budgets are proven by
+/// `journey::tactical::tests::a_worst_case_receipt_fits_the_checkpoint_text_limit`
+/// and the every-creature sweep.
+const MAXIMUM_RECEIPT_TEXT_BYTES: usize = 6 * 12 * 2048 * 2;
 pub(super) fn limits() -> CheckpointLimits {
     CheckpointLimits {
         maximum_records: if super::journey::tactical::enabled() {
@@ -330,7 +344,7 @@ pub(super) fn limits() -> CheckpointLimits {
         } else {
             512
         },
-        maximum_text_bytes: 4096,
+        maximum_text_bytes: MAXIMUM_RECEIPT_TEXT_BYTES,
         maximum_total_text_bytes: if super::journey::tactical::enabled() {
             1024 * 1024
         } else {
