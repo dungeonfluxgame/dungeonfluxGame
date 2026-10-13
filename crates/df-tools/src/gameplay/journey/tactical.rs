@@ -948,7 +948,28 @@ pub(super) fn start(
     let map = noted("fight-scene-map", scene_map(bytes, &layout.id))?;
     let mut specs = Vec::new();
     let mut actors = Vec::new();
-    for (index, character) in state.characters.iter().enumerate() {
+    for (index, entity) in noted(
+        "fight-hero-membership",
+        participants(current)
+            .into_iter()
+            .map(|participant| {
+                participant
+                    .character
+                    .ok_or(RepositoryError::InvalidCandidate)
+            })
+            .collect::<Result<Vec<_>, _>>(),
+    )?
+    .into_iter()
+    .enumerate()
+    {
+        let character = noted(
+            "fight-hero-character",
+            state
+                .characters
+                .iter()
+                .find(|character| character.entity == entity)
+                .ok_or(RepositoryError::InvalidCandidate),
+        )?;
         let cell = *noted(
             "fight-hero-spawn",
             map.hero_spawns()
@@ -988,7 +1009,7 @@ pub(super) fn start(
             )?
         };
         specs.push(spec);
-        actors.push((id, character.entity));
+        actors.push((id, entity));
     }
     for (index, (who, source_id, ammunition)) in
         noted("fight-enemy-roster", enemies())?.into_iter().enumerate()
@@ -2388,17 +2409,30 @@ pub(super) mod tests {
         operation: [u8; 16],
         faces: &[u32],
     ) -> Result<Checkpoint, RepositoryError> {
+        staged_fight_with_character_storage_order(mixed, operation, faces, false)
+    }
+    fn staged_fight_with_character_storage_order(
+        mixed: bool,
+        operation: [u8; 16],
+        faces: &[u32],
+        reverse_character_storage: bool,
+    ) -> Result<Checkpoint, RepositoryError> {
         let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
         let opening = if mixed {
             mixed_opening()
         } else {
             opening_story()
         };
-        let dialogue = stage_with_supplier(
+        let mut dialogue = stage_with_supplier(
             &opening,
             &input(&opening, member, 6, "escort-courier", vec![]),
             &mut |_| panic!("dialogue draws"),
         )?;
+        if reverse_character_storage {
+            let mut state = dialogue.state().clone();
+            state.characters.reverse();
+            dialogue = model::checkpoint(dialogue.basis(), state)?;
+        }
         let mut supplied = faces.iter().copied();
         let mut defend = input(&dialogue, member, 7, "defend-courier", vec![]);
         let GameInput::Game(command) = &mut defend else {
@@ -2461,6 +2495,43 @@ pub(super) mod tests {
                         crate::gameplay::refusal_detail::take()
                     ),
                 }
+            }
+            TEST_SCENE_OVERRIDE.with(|own| own.set(None));
+            TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
+        });
+    }
+    #[test]
+    fn fight_start_uses_join_order_for_heroes_independent_of_character_storage_order() {
+        with_live(|| {
+            TEST_SCENE_OVERRIDE.with(|own| own.set(Some("scan-valley-bridges")));
+            TEST_FIGHT_OVERRIDE.with(|own| {
+                *own.borrow_mut() = Some(TestFight {
+                    enemies: 3,
+                    foe: Some("bandit".to_owned()),
+                });
+            });
+            let operation = operation_for_layout(0, 2);
+            for reverse_character_storage in [false, true] {
+                let current = staged_fight_with_character_storage_order(
+                    true,
+                    operation,
+                    &[1, 2, 20],
+                    reverse_character_storage,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "reverse_character_storage={reverse_character_storage}: step={:?} error={error:?}",
+                        crate::gameplay::refusal_detail::take()
+                    )
+                });
+                let membership_order = participants(&current)
+                    .into_iter()
+                    .map(|participant| participant.character.unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    current.state().encounters[0].participants[..2],
+                    membership_order
+                );
             }
             TEST_SCENE_OVERRIDE.with(|own| own.set(None));
             TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
