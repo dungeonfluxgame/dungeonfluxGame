@@ -221,10 +221,13 @@ impl CombatFeed {
                 .members
                 .iter()
                 .filter(|member| {
-                    self.last_hit_points
-                        .get(&member.id)
-                        .is_some_and(|before| member.hit_points > *before)
-                        && !fresh.iter().any(|outcome| outcome.target == member.id)
+                    fresh
+                        .iter()
+                        .rev()
+                        .find(|outcome| outcome.target == member.id)
+                        .map(|outcome| outcome.target_hit_points_after)
+                        .or_else(|| self.last_hit_points.get(&member.id).copied())
+                        .is_some_and(|before| member.hit_points > before)
                 })
                 .collect();
             let mut targets: Vec<TokenId> = fresh
@@ -257,7 +260,14 @@ impl CombatFeed {
                 let before = self.last_hit_points.get(&member.id).copied();
                 let healed = healed_members.iter().any(|healed| healed.id == member.id);
                 if healed {
-                    let amount = member.hit_points - before.unwrap_or(0);
+                    let heal_from = fresh
+                        .iter()
+                        .rev()
+                        .find(|outcome| outcome.target == member.id)
+                        .map(|outcome| outcome.target_hit_points_after)
+                        .or(before)
+                        .unwrap_or(0);
+                    let amount = member.hit_points - heal_from;
                     let beat = Beat::Heal {
                         source: TokenId::new(member.id.clone()),
                         target: TokenId::new(member.id.clone()),
@@ -456,6 +466,42 @@ mod tests {
         }
         assert_eq!(shown_hp(&stage), Some(10));
     }
+
+    #[test]
+    fn a_heal_after_a_fresh_attack_is_staged_after_the_attack() {
+        fn shown_hp(stage: &Stage) -> Option<u32> {
+            stage
+                .frame()
+                .figures
+                .iter()
+                .find(|figure| figure.id.0 == "a")
+                .and_then(|figure| figure.hit_points)
+                .map(|hp| hp.current)
+        }
+
+        let mut stage = stage();
+        let mut feed = CombatFeed::default();
+        feed.apply(&mut stage, &snapshot(vec![], [8, 12, 12]))
+            .unwrap();
+        let mut attack = strike(true, 4, 4, false);
+        attack.actor = "e".to_owned();
+        attack.target = "a".to_owned();
+
+        let report = feed
+            .apply(&mut stage, &snapshot(vec![attack], [10, 12, 12]))
+            .unwrap();
+
+        assert_eq!(report.staged, 2);
+        assert_eq!(shown_hp(&stage), Some(8));
+        let mut saw_attack_hp = false;
+        for _ in 0..400 {
+            stage.update(Duration::from_millis(50));
+            saw_attack_hp |= shown_hp(&stage) == Some(4);
+        }
+        assert!(saw_attack_hp);
+        assert_eq!(shown_hp(&stage), Some(10));
+    }
+
     #[test]
     fn a_hit_point_rise_without_an_outcome_is_staged_as_a_heal() {
         let mut stage = stage();
