@@ -847,23 +847,55 @@ pub(super) fn action_lines(
             || weapon.to_owned(),
             |outcome| outcome.weapon.replace('-', " "),
         );
-    let phrase = match kind {
-        Kind::CreateCharacter | Kind::Unspecified => return Vec::new(),
-        Kind::GreatswordAttack => match own {
-            Some(outcome) if outcome.hit => format!(
-                "strikes with the {used} \u{2014} {}hit, {} damage",
+    if matches!(kind, Kind::CreateCharacter | Kind::Unspecified) {
+        return Vec::new();
+    }
+    // Only an attack action is worded from the attack it resolved: a turn that ends, or a move,
+    // keeps its own line even when the same submit carries a reaction's blow.
+    let attacking = matches!(kind, Kind::GreatswordAttack | Kind::OpportunityAttack);
+    let phrase = if let Some(outcome) = own.filter(|_| attacking) {
+        let attack = if outcome.attack_style == 2 {
+            format!("shoots the {used}")
+        } else if outcome.grazed || !outcome.hit {
+            format!("swings the {used}")
+        } else {
+            format!("strikes with the {used}")
+        };
+        let result = if outcome.grazed {
+            format!("graze, {} damage", damage_words(outcome))
+        } else if outcome.hit {
+            format!(
+                "{}hit, {} damage",
                 if outcome.critical { "critical " } else { "" },
                 damage_words(outcome)
-            ),
-            Some(_) => format!("swings the {used} \u{2014} miss"),
-            None => format!("strikes with the {used}"),
-        },
-        Kind::SecondWind => "catches a second wind".to_owned(),
-        Kind::EndTurn => "ends the turn".to_owned(),
-        Kind::ShortRest => "takes a short rest".to_owned(),
-        Kind::ChooseHarborScene => format!("leads on to {destination}"),
-        Kind::ResolveErrand => format!("chose \"{label}\""),
-        _ => third_person(label),
+            )
+        } else {
+            "miss".to_owned()
+        };
+        format!("{attack} \u{2014} {result}")
+    } else {
+        match kind {
+            Kind::GreatswordAttack => format!("strikes with the {used}"),
+            Kind::SecondWind => "catches a second wind".to_owned(),
+            Kind::EndTurn => "ends the turn".to_owned(),
+            Kind::ShortRest => "takes a short rest".to_owned(),
+            Kind::Move => {
+                let (squares, feet) = combat
+                    .iter()
+                    .filter(|outcome| {
+                        outcome.actor_name == hero
+                            && rpc::OutcomeKind::try_from(outcome.kind)
+                                == Ok(rpc::OutcomeKind::Move)
+                    })
+                    .fold((0, 0), |(squares, feet), outcome| {
+                        (squares + outcome.path.len(), feet + outcome.cost_ft)
+                    });
+                format!("moves {squares} squares ({feet} ft)")
+            }
+            Kind::ChooseHarborScene => format!("leads on to {destination}"),
+            Kind::ResolveErrand => format!("chose \"{label}\""),
+            _ => third_person(label),
+        }
     };
     let mut lines = vec![ActionLine {
         speaker: hero.to_owned(),
@@ -889,7 +921,6 @@ pub(super) fn action_lines(
                 continue;
             }
             Ok(rpc::OutcomeKind::Move) => {
-                // The hero's own move already reads as the offer's phrase.
                 if outcome.actor_name != hero {
                     lines.push(ActionLine {
                         speaker: outcome.actor_name.clone(),
@@ -1421,6 +1452,79 @@ mod tests {
             lines[1].text,
             "strikes Brakka \u{2014} hit, 4 piercing damage"
         );
+    }
+
+    #[test]
+    fn a_grazing_greatsword_attack_names_its_damage_instead_of_a_miss() {
+        let graze = rpc::CombatOutcome {
+            grazed: true,
+            damage: 3,
+            damage_type: "slashing".to_owned(),
+            weapon: "greatsword".to_owned(),
+            ..outcome("Brakka", "Snag", false, 3)
+        };
+
+        let lines = action_lines(
+            rpc::GameplayActionKind::GreatswordAttack,
+            "Brakka",
+            &[graze],
+            "greatsword",
+            "",
+            "",
+        );
+
+        assert_eq!(
+            lines[0].text,
+            "swings the greatsword \u{2014} graze, 3 slashing damage"
+        );
+    }
+
+    #[test]
+    fn a_resolved_ranged_attack_uses_shot_wording_for_any_attack_kind() {
+        let shot = rpc::CombatOutcome {
+            attack_style: 2,
+            weapon: "longbow".to_owned(),
+            damage_type: "piercing".to_owned(),
+            ..outcome("Sigrun", "Snag", true, 10)
+        };
+
+        let lines = action_lines(
+            rpc::GameplayActionKind::OpportunityAttack,
+            "Sigrun",
+            &[shot],
+            "shortsword",
+            "",
+            "Strikes with the longbow",
+        );
+
+        assert_eq!(
+            lines[0].text,
+            "shoots the longbow \u{2014} hit, 10 piercing damage"
+        );
+    }
+
+    #[test]
+    fn a_hero_move_sums_its_resolved_segments_into_one_distance_line() {
+        let segments = (0..4)
+            .map(|_| rpc::CombatOutcome {
+                kind: rpc::OutcomeKind::Move as i32,
+                path: vec![rpc::GridCell::default()],
+                cost_ft: 5,
+                ..outcome("Brakka", "", false, 0)
+            })
+            .collect::<Vec<_>>();
+
+        let lines = action_lines(
+            rpc::GameplayActionKind::Move,
+            "Brakka",
+            &segments,
+            "greatsword",
+            "",
+            "Move",
+        );
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "moves 4 squares (20 ft)");
     }
 
     #[test]
