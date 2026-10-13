@@ -394,7 +394,7 @@ fn exploration_model(
                 id: offer.offer_id.clone(),
                 label: offer.label.clone(),
                 icon: choice_icon(offer.action_kind),
-                disabled_reason: unconfirmed.then_some("Confirm your last choice first."),
+                disabled_reason: choice_disabled_reason(client.busy, unconfirmed),
             })
             .collect()
     };
@@ -474,6 +474,16 @@ fn exploration_model(
         choices,
         pending: client.busy.then_some("Waiting for the game server…"),
     })
+}
+
+fn choice_disabled_reason(busy: bool, unconfirmed: bool) -> Option<&'static str> {
+    if busy {
+        Some("Waiting for the game server…")
+    } else if unconfirmed {
+        Some("Confirm your last choice first.")
+    } else {
+        None
+    }
 }
 
 /// A choice or lobby action chosen on a screen: the server's own current offer is sent
@@ -661,7 +671,7 @@ fn render_display(
 
 #[cfg(test)]
 mod tests {
-    use super::is_new_private_clue;
+    use super::{choice_disabled_reason, is_new_private_clue};
 
     #[test]
     fn retained_private_clue_is_not_a_new_reveal() {
@@ -670,11 +680,24 @@ mod tests {
         assert!(!is_new_private_clue(Some("saved clue"), "saved clue"));
         assert!(!is_new_private_clue(Some(""), ""));
     }
+
+    #[test]
+    fn pending_request_disables_each_offered_choice() {
+        assert_eq!(
+            choice_disabled_reason(true, false),
+            Some("Waiting for the game server…")
+        );
+        assert_eq!(
+            choice_disabled_reason(false, true),
+            Some("Confirm your last choice first.")
+        );
+        assert_eq!(choice_disabled_reason(false, false), None);
+    }
 }
 
 /// The join screen before a player has a seat: the same lobby surface in its invitation stage.
 pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let (document, view, code, uncertain) = {
+    let (document, view, code, has_request, retries) = {
         let mut state = client.borrow_mut();
         clear_callbacks(&mut state);
         (
@@ -685,6 +708,7 @@ pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 .ok_or_else(|| JsValue::from_str("view missing"))?,
             state.room_code.clone(),
             state.join_request.is_some(),
+            state.join_retries,
         )
     };
     let retired = {
@@ -706,7 +730,9 @@ pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         narration: "Connect to the shared room and create your own hero.".to_owned(),
         code,
         join_url: String::new(),
-        join_label: if uncertain {
+        join_label: if retries >= crate::reconnect::JOIN_RETRIES {
+            "Try again"
+        } else if has_request {
             "Confirm the same join"
         } else {
             "Join this room"

@@ -480,6 +480,8 @@ fn use_room_code(client: &Rc<RefCell<Client>>, typed: &str) -> bool {
         state.room_code = code;
         state.join_request = None;
     }
+    state.join_retries = 0;
+    state.reconnect.attempt = 0;
     true
 }
 
@@ -646,20 +648,13 @@ fn join_room(client: Rc<RefCell<Client>>) {
                 ),
             },
             Err(error) => {
-                let _ = render_join(&client);
-                // The join is idempotent (same operation and proof), so repeating it is safe:
-                // a room that could not be reached is retried until it answers, and an
-                // unknown outcome a few times before the choice goes back to the player.
+                // The join is idempotent (same operation and proof), so bounded retries are
+                // safe for both an unavailable tunnel and an unknown RPC outcome.
                 let retry = {
                     let mut state = client.borrow_mut();
-                    let unreachable = error == ROOM_CONNECTION_UNAVAILABLE;
-                    let retry = error != SERVER_LOST
-                        && (unreachable || state.join_retries < crate::reconnect::JOIN_RETRIES);
-                    if retry && !unreachable {
-                        state.join_retries += 1;
-                    }
-                    retry
+                    record_join_retry(&error, &mut state.join_retries)
                 };
+                let _ = render_join(&client);
                 if retry {
                     feedback(
                         &client.borrow(),
@@ -667,7 +662,14 @@ fn join_room(client: Rc<RefCell<Client>>) {
                     );
                     schedule_join_retry(&client);
                 } else {
-                    feedback(&client.borrow(), &error);
+                    feedback(
+                        &client.borrow(),
+                        if error == ROOM_CONNECTION_UNAVAILABLE {
+                            "Could not connect to the room. Select Try again to retry."
+                        } else {
+                            &error
+                        },
+                    );
                     if error == SERVER_LOST {
                         show_notice(&client.borrow(), Some(SERVER_LOST));
                     }
@@ -675,6 +677,14 @@ fn join_room(client: Rc<RefCell<Client>>) {
             }
         }
     });
+}
+
+fn record_join_retry(error: &str, retries: &mut u32) -> bool {
+    if error == SERVER_LOST || *retries >= crate::reconnect::JOIN_RETRIES {
+        return false;
+    }
+    *retries += 1;
+    true
 }
 
 /// Repeats the pending join after a backoff while the page shows "Reconnecting…".
@@ -2103,5 +2113,31 @@ pub mod fixture {
         });
         OLD.with(|slot| slot.borrow_mut().take());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, record_join_retry};
+
+    #[test]
+    fn unavailable_tunnel_retries_stop_at_the_configured_limit() {
+        let mut retries = 0;
+        for _ in 0..crate::reconnect::JOIN_RETRIES {
+            assert!(record_join_retry(ROOM_CONNECTION_UNAVAILABLE, &mut retries));
+        }
+        assert_eq!(retries, crate::reconnect::JOIN_RETRIES);
+        assert!(!record_join_retry(
+            ROOM_CONNECTION_UNAVAILABLE,
+            &mut retries
+        ));
+        assert_eq!(retries, crate::reconnect::JOIN_RETRIES);
+    }
+
+    #[test]
+    fn lost_server_state_is_never_retried() {
+        let mut retries = 0;
+        assert!(!record_join_retry(SERVER_LOST, &mut retries));
+        assert_eq!(retries, 0);
     }
 }
