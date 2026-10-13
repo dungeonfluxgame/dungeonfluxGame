@@ -284,6 +284,15 @@ impl rpc::session_service_server::SessionService for Service {
 
 #[tonic::async_trait]
 impl rpc::room_service_server::RoomService for Service {
+    async fn reclaim(
+        &self,
+        _request: Request<rpc::ReclaimRoomRequest>,
+    ) -> Result<Response<rpc::ReclaimRoomResponse>, Status> {
+        Err(Status::unimplemented(
+            "reclaim is outside the revision-order fixture",
+        ))
+    }
+
     async fn join(
         &self,
         request: Request<rpc::JoinRoomRequest>,

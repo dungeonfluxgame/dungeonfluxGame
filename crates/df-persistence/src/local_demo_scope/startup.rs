@@ -221,6 +221,9 @@ async fn restore(
         .try_get("owner_fence")
         .map_err(|_| error("owner_lock", RepositoryError::InvalidCandidate))?;
     validate_claim(remaining, &old_fence, fence)?;
+    tx.batch_execute(include_str!("../../migrations/0002_local_room_reclaim.sql"))
+        .await
+        .map_err(|_| error("seat_schema", RepositoryError::Unavailable))?;
     let basis = crate::decision_rows::current_row_basis(&row, session)
         .map_err(|e| error("stored_basis", e))?;
     let maximum = i64::try_from(codec.maximum_document_bytes)

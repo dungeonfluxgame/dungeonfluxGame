@@ -163,6 +163,7 @@ mod browser {
             } else {
                 &[]
             },
+            away_heroes: &[],
             lobby_offer: if lobby {
                 Some(LobbyOffer {
                     key: "preview-ready-offer",

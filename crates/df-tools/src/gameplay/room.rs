@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 use tonic::{Request, Response, Status};
 
 use super::{Service, actor, journey, model, wire};
+mod reclaim;
+pub(in crate::gameplay) use reclaim::{AwayHero, ReclaimRefusal, ReclaimRequest, SeatClock};
 fn refused(code: rpc::RejectionCode) -> rpc::JoinRoomResponse {
     rpc::JoinRoomResponse {
         outcome: Some(rpc::join_room_response::Outcome::Refused(
@@ -267,6 +269,15 @@ impl actor::Actor {
             }
             Err(error) => return Err(actor::unavailable(error)),
         };
+        let now = self
+            .session
+            .seat_clock
+            .millis(std::time::Instant::now())
+            .map_err(actor::unavailable)?;
+        self.issuer
+            .register_room_seat(member, model::random().map_err(actor::unavailable)?, now)
+            .map_err(actor::unavailable)?;
+        self.seat_activity(&grant)?;
         // Membership grant acknowledgement is the final visibility gate. A receipt
         // or reload alone must not reopen watches after an ambiguous Join.
         if recovering {
@@ -312,6 +323,95 @@ impl actor::Actor {
 }
 #[tonic::async_trait]
 impl rpc::room_service_server::RoomService for Service {
+    async fn reclaim(
+        &self,
+        request: Request<rpc::ReclaimRoomRequest>,
+    ) -> Result<Response<rpc::ReclaimRoomResponse>, Status> {
+        let body = request.into_inner();
+        if body.room_code.len() > 32 || !matches!(body.seat_token.len(), 0 | 32) {
+            return Err(Status::invalid_argument(
+                "bounded reclaim identity required",
+            ));
+        }
+        let refused = |reason: rpc::SeatReclaimRefusal| {
+            Response::new(rpc::ReclaimRoomResponse {
+                outcome: Some(rpc::reclaim_room_response::Outcome::Refused(reason as i32)),
+                away_heroes: Vec::new(),
+            })
+        };
+        if body.seat_token.is_empty() {
+            if body.operation_id.is_some() {
+                return Err(Status::invalid_argument("seat read has no operation"));
+            }
+            if !matches_room_code(&body.room_code) {
+                return Ok(refused(rpc::SeatReclaimRefusal::SeatRoomCodeWrong));
+            }
+            let (reply, wait) = tokio::sync::oneshot::channel();
+            self.actor
+                .try_submit(actor::Call::AwaySeats {
+                    room_code: body.room_code,
+                    reply,
+                })
+                .map_err(|_| Status::resource_exhausted("room actor queue full"))?;
+            let away = tokio::time::timeout(super::timing::active().reply, wait)
+                .await
+                .map_err(|_| Status::deadline_exceeded("away seat read deadline"))?
+                .map_err(|_| Status::unavailable("room owner stopped"))??;
+            return Ok(Response::new(rpc::ReclaimRoomResponse {
+                outcome: None,
+                away_heroes: away
+                    .into_iter()
+                    .map(|hero| rpc::AwayHero {
+                        name: hero.name,
+                        seat_token: hero.token.to_vec(),
+                    })
+                    .collect(),
+            }));
+        }
+        let operation = df_api::operation_id(body.operation_id.as_ref())
+            .map_err(|_| Status::invalid_argument("reclaim operation required"))?;
+        let token = body
+            .seat_token
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("reclaim token required"))?;
+        let (reply, wait) = tokio::sync::oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::Reclaim {
+                request: ReclaimRequest {
+                    room_code: body.room_code,
+                    operation,
+                    token,
+                },
+                reply,
+            })
+            .map_err(|_| Status::resource_exhausted("room actor queue full"))?;
+        let answer = tokio::time::timeout(super::timing::active().reply, wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("retain your original reclaim proof"))?
+            .map_err(|_| Status::unavailable("room owner stopped"))??;
+        Ok(match answer {
+            Ok(joined) => Response::new(rpc::ReclaimRoomResponse {
+                outcome: Some(rpc::reclaim_room_response::Outcome::Joined(Box::new(
+                    joined,
+                ))),
+                away_heroes: Vec::new(),
+            }),
+            Err(reason) => refused(match reason {
+                ReclaimRefusal::WrongRoomCode => rpc::SeatReclaimRefusal::SeatRoomCodeWrong,
+                ReclaimRefusal::Seat(
+                    df_persistence::local_demo_scope::SeatReclaimRefusal::NotAway,
+                ) => rpc::SeatReclaimRefusal::SeatNotAway,
+                ReclaimRefusal::Seat(
+                    df_persistence::local_demo_scope::SeatReclaimRefusal::UnknownToken,
+                ) => rpc::SeatReclaimRefusal::SeatTokenUnknown,
+                ReclaimRefusal::Seat(
+                    df_persistence::local_demo_scope::SeatReclaimRefusal::OperationConflict,
+                ) => rpc::SeatReclaimRefusal::SeatOperationConflict,
+            }),
+        })
+    }
+
     async fn join(
         &self,
         request: Request<rpc::JoinRoomRequest>,

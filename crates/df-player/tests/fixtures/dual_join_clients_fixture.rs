@@ -196,6 +196,7 @@ mod browser {
             } else {
                 &[]
             },
+            away_heroes: &[],
             lobby_offer: offer,
             pairing_fallback: "Public invitation and QR component remain caller-owned. This fixture generates no credential, invitation URL or QR code.",
         }

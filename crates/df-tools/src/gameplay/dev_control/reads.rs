@@ -489,6 +489,9 @@ fn describe_json() -> Value {
             {"command": "join", "method": "POST", "path": "/dev/join",
              "args": {"seat": "1 or 2"},
              "output": "{status: joined|refused, seat, receipt?}"},
+            {"command": "reclaim", "method": "POST", "path": "/dev/reclaim",
+             "args": {"seat": "1 or 2"},
+             "output": "{status: joined|refused, seat?, receipt?, reason?}; replaces an away hero's phone after 30 seconds"},
             {"command": "create", "method": "POST", "path": "/dev/create",
              "args": {"seat": "1 or 2", "name": "hero name, 1-48 chars"},
              "output": "{status: accepted|refused|unavailable, ...}; the canonical Dwarf Fighter/Soldier is created"},
@@ -545,4 +548,21 @@ fn describe_json() -> Value {
              "output": "{status: shutting-down}; the server releases its owner lease so the database resumes immediately"},
         ],
     })
+}
+
+#[cfg(test)]
+mod reclaim_tests {
+    #[test]
+    fn describe_advertises_reclaim_for_an_existing_seat() {
+        let description = super::describe_json();
+        let reclaim = description["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|command| command["command"] == "reclaim")
+            .unwrap();
+        assert_eq!(reclaim["method"], "POST");
+        assert_eq!(reclaim["path"], "/dev/reclaim");
+        assert_eq!(reclaim["args"]["seat"], "1 or 2");
+    }
 }

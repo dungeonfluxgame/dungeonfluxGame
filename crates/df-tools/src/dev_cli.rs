@@ -188,6 +188,7 @@ fn print_help() {
          \n\
          health                       server liveness and current revision\n\
          join <seat>                  join the room as seat 1 or 2\n\
+         reclaim <seat>               take an away hero back on this control seat\n\
          create <seat> <name>         create the canonical hero for a seat\n\
          act <hero> <action> [...]    play one action: --cell c5r6 --target <foe> --weapon <name> --option <id>\n\
          say <hero> <text>            speak one line; [--context question|social|plan|meta|joke]\n\
@@ -260,6 +261,10 @@ async fn dispatch(
         "join" => {
             let seat = positional.get(1).cloned().unwrap_or_default();
             post(client, "/dev/join", &json!({"seat": seat})).await
+        }
+        "reclaim" => {
+            let seat = positional.get(1).cloned().unwrap_or_default();
+            post(client, "/dev/reclaim", &json!({"seat": seat})).await
         }
         "create" => {
             let (seat, name) = (

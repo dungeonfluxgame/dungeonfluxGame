@@ -370,6 +370,7 @@ fn lobby_model(input: &SceneInput<'_>, client: &Client) -> Result<LobbyModel, Js
             "Waiting for your companions to finish their heroes."
         },
         members,
+        away_heroes: Vec::new(),
         offer: begin.map(|offer| LobbyOfferModel {
             key: offer.offer_id.clone(),
             label: offer.label.clone(),
@@ -695,6 +696,42 @@ mod tests {
     };
 
     #[test]
+    fn away_reclaim_buttons_are_bound_again_after_join_redraw() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("section").unwrap();
+        root.set_attribute("data-room", "ROOM").unwrap();
+        let view = document.create_element("div").unwrap();
+        view.set_class_name("view");
+        root.append_child(&view).unwrap();
+        let client = super::super::new_client(&document, root, "player").unwrap();
+        client.borrow_mut().away_heroes = vec![super::super::rpc::AwayHero {
+            name: "Brakka".to_owned(),
+            seat_token: vec![2; 32],
+        }];
+        for _ in 0..2 {
+            super::render_join(&client).unwrap();
+            let button = view.query_selector("[data-reclaim-key]").unwrap().unwrap();
+            assert_eq!(
+                button.text_content().as_deref(),
+                Some("Take this hero back")
+            );
+            assert!(view.text_content().unwrap().contains("Brakka (away)"));
+            assert_eq!(
+                client
+                    .borrow()
+                    .callbacks
+                    .iter()
+                    .filter(|(element, _)| element.get_attribute("data-reclaim-key").is_some())
+                    .count(),
+                1
+            );
+        }
+        client.borrow_mut().away_heroes.clear();
+        super::render_join(&client).unwrap();
+        assert!(view.query_selector(".join-away").unwrap().is_none());
+    }
+
+    #[test]
     fn lobby_art_uses_the_server_scene_asset_when_it_is_a_local_asset_path() {
         let live_backdrop = format!("/gameplay/imagery/{}", "a".repeat(64));
         assert_eq!(
@@ -798,9 +835,19 @@ pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         panel_heading: "Join your companions",
         panel_description: "Enter the room code from the TV.",
         members: Vec::new(),
+        away_heroes: client.borrow().away_heroes.clone(),
         offer: None,
     };
     LobbyScreen::present(client, &view, &model)?;
+    for hero in &model.away_heroes {
+        let token = hero.seat_token.clone();
+        let key = hex(&token);
+        if let Some(button) = view.query_selector(&format!("[data-reclaim-key='{key}']"))? {
+            bind_click(client, &button, move |client| {
+                seat_recovery::take_back(client, token.clone())
+            })?;
+        }
+    }
     let dock = ensure_dock(&document, &view)?;
     dock.set_text_content(None);
     recovery_details(client, &dock)

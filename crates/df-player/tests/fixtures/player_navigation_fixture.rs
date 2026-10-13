@@ -64,6 +64,7 @@ fn view(stamp: JoinStamp, scenario: Scenario) -> JoinPhaseView<'static> {
         roster_heading: "Party",
         empty_roster: "No supplied participants",
         participants: &[],
+        away_heroes: &[],
         lobby_offer: lobby.then_some(LobbyOffer {
             key: "fixture-ready-offer",
             label: "Send readiness intention",

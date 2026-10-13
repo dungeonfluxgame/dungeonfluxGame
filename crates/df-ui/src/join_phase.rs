@@ -46,6 +46,13 @@ pub struct JoinRoom<'a> {
     pub detail: &'a str,
 }
 
+/// Room-authorized recovery offer. The shell returns the opaque key unchanged.
+pub struct AwayHero<'a> {
+    pub key: &'a str,
+    pub name: &'a str,
+    pub reclaim_label: &'a str,
+}
+
 /// Audience-safe, localized composition, not a second Join RPC schema. The
 /// caller supplies connectivity separately from admission/readiness. Public join
 /// URL and QR rendering stay with the existing Display-I04 component, which may
@@ -65,6 +72,7 @@ pub struct JoinPhaseView<'a> {
     pub roster_heading: &'a str,
     pub empty_roster: &'a str,
     pub participants: &'a [LobbyParticipant<'a>],
+    pub away_heroes: &'a [AwayHero<'a>],
     pub lobby_offer: Option<LobbyOffer<'a>>,
     pub pairing_fallback: &'a str,
 }
@@ -159,6 +167,21 @@ impl JoinPhaseView<'_> {
         }
         if self.participants.len() > limits.max_members {
             return Err(JoinValidationError::ResourceLimit);
+        }
+        if self.away_heroes.len() > limits.max_members {
+            return Err(JoinValidationError::ResourceLimit);
+        }
+        if !self.away_heroes.is_empty() && self.stage != JoinStage::Invitation {
+            return Err(JoinValidationError::InvalidStage);
+        }
+        let mut away_keys = BTreeSet::new();
+        for hero in self.away_heroes {
+            for value in [hero.key, hero.name, hero.reclaim_label] {
+                text(value)?;
+            }
+            if !away_keys.insert(hero.key) {
+                return Err(JoinValidationError::DuplicateParticipant);
+            }
         }
         let mut keys = BTreeSet::new();
         for participant in self.participants {
@@ -735,6 +758,20 @@ mod browser {
                 pending,
             })?;
             hidden(&self.form, view.stage == JoinStage::Lobby)?;
+            if let Some(previous) = self.form.query_selector(".join-away")? {
+                previous.remove();
+            }
+            if !view.away_heroes.is_empty() {
+                let list = child(&self.document, &self.form, "ul", "join-away")?;
+                for hero in view.away_heroes {
+                    let row = child(&self.document, &list, "li", "join-away-hero")?;
+                    child(&self.document, &row, "span", "")?.set_text_content(Some(hero.name));
+                    let button = child(&self.document, &row, "button", "")?;
+                    button.set_attribute("type", "button")?;
+                    button.set_attribute("data-reclaim-key", hero.key)?;
+                    button.set_text_content(Some(hero.reclaim_label));
+                }
+            }
             hidden(&self.lobby, view.stage != JoinStage::Lobby)?;
             hidden(&self.room, view.room.is_none())?;
             if let Some(room) = &view.room {
@@ -910,9 +947,40 @@ mod tests {
             roster_heading: "Party",
             empty_roster: "Awaiting adventurers",
             participants,
+            away_heroes: &[],
             lobby_offer: None,
             pairing_fallback: "Public join information unavailable",
         }
+    }
+
+    #[test]
+    fn optional_away_heroes_validate_only_supplied_rows() {
+        let mut current = view(&[]);
+        assert_eq!(current.validate(limits()), Ok(()));
+        let offered = [AwayHero {
+            key: "opaque-seat-token",
+            name: "Brakka (away)",
+            reclaim_label: "Take this hero back",
+        }];
+        current.away_heroes = &offered;
+        assert_eq!(current.validate(limits()), Ok(()));
+        current.stage = JoinStage::Lobby;
+        assert_eq!(
+            current.validate(limits()),
+            Err(JoinValidationError::InvalidStage)
+        );
+        current.stage = JoinStage::Invitation;
+        let empty_name = [AwayHero {
+            name: "",
+            ..offered[0]
+        }];
+        current.away_heroes = &empty_name;
+        assert_eq!(
+            current.validate(limits()),
+            Err(JoinValidationError::EmptyText)
+        );
+        current.away_heroes = &[];
+        assert_eq!(current.validate(limits()), Ok(()));
     }
 
     #[test]

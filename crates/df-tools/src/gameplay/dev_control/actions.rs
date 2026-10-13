@@ -60,6 +60,96 @@ pub(super) async fn join_seat(
     }
 }
 
+/// `POST /dev/reclaim {"seat":"1"}` uses the room-code-only phone admission path.
+/// It reads no player view first: doing so would keep the abandoned credential active.
+pub(super) async fn reclaim_seat(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let seat = body
+        .get("seat")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad_request("reclaim needs {\"seat\": \"1\"}"))?;
+    let index = super::seat_index(seat).map_err(bad_request)?;
+    let member = state.seats.lock().await.seats[index]
+        .member
+        .clone()
+        .ok_or_else(|| bad_request("that seat has not joined"))?;
+    let pending = state.seats.lock().await.seats[index].reclaim;
+    let pending = match pending {
+        Some(pending) => pending,
+        None => {
+            let (reply, wait) = oneshot::channel();
+            state
+                .service
+                .actor
+                .try_submit(super::super::actor::Call::AwaySeats {
+                    room_code: super::super::journey::room_code(),
+                    reply,
+                })
+                .map_err(|_| failed("room actor queue full"))?;
+            let away = tokio::time::timeout(super::super::timing::active().reply, wait)
+                .await
+                .map_err(|_| failed("away seat read deadline"))?
+                .map_err(|_| failed("room owner stopped"))?
+                .map_err(|status| failed(status.message()))?;
+            let token = away
+                .into_iter()
+                .find(|hero| hero.member.as_slice() == member.as_slice())
+                .map(|hero| hero.token)
+                .unwrap_or([0; 32]);
+            let pending = super::PendingReclaim {
+                operation: random_array::<16>().await?,
+                token,
+            };
+            let mut seats = state.seats.lock().await;
+            seats.seats[index].reclaim = Some(pending);
+            super::persist_seats(&state, &seats)
+                .map_err(|_| failed("reclaim proof could not be retained"))?;
+            pending
+        }
+    };
+    let operation = df_types::OperationId::from_bytes(&pending.operation)
+        .map_err(|_| failed("reclaim operation invalid"))?;
+    let token = pending.token;
+    let (reply, wait) = oneshot::channel();
+    state
+        .service
+        .actor
+        .try_submit(super::super::actor::Call::Reclaim {
+            request: super::super::room::ReclaimRequest {
+                room_code: super::super::journey::room_code(),
+                operation,
+                token,
+            },
+            reply,
+        })
+        .map_err(|_| failed("room actor queue full"))?;
+    let answer = tokio::time::timeout(super::super::timing::active().reply, wait)
+        .await
+        .map_err(|_| failed("room reclaim deadline"))?
+        .map_err(|_| failed("room owner stopped"))?
+        .map_err(|status| failed(status.message()))?;
+    if answer.is_err() {
+        let mut seats = state.seats.lock().await;
+        seats.seats[index].reclaim = None;
+        super::persist_seats(&state, &seats)
+            .map_err(|_| failed("reclaim proof could not be cleared"))?;
+    }
+    match answer {
+        Ok(joined) => store_join(&state, index, joined).await,
+        Err(reason) => Ok((
+            axum::http::StatusCode::OK,
+            Json(json!({
+                "status": "refused", "reason": format!("{reason:?}"),
+                "message": "That hero is being played on another phone."
+            })),
+        )),
+    }
+}
+
 async fn store_join(state: &Shared, index: usize, joined: rpc::JoinedRoom) -> Outcome {
     let credential = super::super::journey::unhex(&joined.local_binding)
         .map_err(|_| failed("join binding invalid"))?;
@@ -82,6 +172,7 @@ async fn store_join(state: &Shared, index: usize, joined: rpc::JoinedRoom) -> Ou
     let mut seats = state.seats.lock().await;
     seats.session_id = Some(session_id);
     seats.run_id = Some(run_id);
+    seats.seats[index].reclaim = None;
     seats.seats[index].credential = Some(credential);
     seats.seats[index].member = Some(member);
     super::persist_seats(state, &seats)

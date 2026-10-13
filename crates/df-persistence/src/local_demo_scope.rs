@@ -3,6 +3,10 @@
 //! No production bootstrap, arbitrary scope constructor, or hosted identity is provided.
 mod adventure;
 mod recovery;
+mod seats;
+pub use seats::{
+    LocalReclaimedSeat, LocalRoomSeat, LocalSeatReclaim, SEAT_AWAY_MILLIS, SeatReclaimRefusal,
+};
 mod table_settings;
 pub use adventure::{AdventureStartup, DemoAdventure, stored_adventure};
 pub use table_settings::StoredTableSettings;
@@ -112,7 +116,7 @@ impl MembershipAuthority for LocalDemoAuthority {
     ) -> Result<Option<MembershipRecord<Self>>, RepositoryError> {
         self.runtime.block_on(async {
             let row = tokio::time::timeout(Duration::from_secs(2), self.client()?.query_opt(
-                "SELECT principal_id, tenant_id, campaign_id, effective_role, access_revision, active, extract(epoch from expires_at)::bigint AS expires_unix FROM df_local_demo.grants WHERE tenant_id = $1::bytea AND principal_id = $2::bytea AND campaign_id = $3::bytea AND effective_role = $4::bytea LIMIT 1",
+                "SELECT principal_id, tenant_id, campaign_id, effective_role, access_revision, active, extract(epoch from expires_at)::bigint AS expires_unix FROM df_local_demo.grants WHERE tenant_id = $1::bytea AND principal_id = $2::bytea AND campaign_id = $3::bytea AND effective_role = $4::bytea AND active LIMIT 1",
                 &[&request.tenant.as_slice(), &request.principal.as_slice(), &request.campaign.as_slice(), &request.role.as_slice()]))
                 .await.map_err(|_| RepositoryError::Unavailable)?
                 .map_err(|_| RepositoryError::Unavailable)?;
@@ -380,10 +384,11 @@ impl LocalDemoScopeIssuer {
                 let actual:Vec<u8>=row.try_get("complete_envelope").map_err(|_|RepositoryError::InvalidCandidate)?;
                 if actual!=encoded {return Err(RepositoryError::RevisionConflict);}
                 let prior=transaction.query_opt(
-                    "SELECT j.canonical_fingerprint,j.principal_id,g.credential FROM df_local_demo.room_grants j JOIN df_local_demo.grants g ON g.credential=j.credential WHERE j.operation_id=$1::bytea AND g.session_id=$2::bytea AND g.active AND g.expires_at>clock_timestamp()",
+                    "SELECT j.canonical_fingerprint,j.principal_id,g.credential,g.active AND g.expires_at>clock_timestamp() AS permission_current FROM df_local_demo.room_grants j JOIN df_local_demo.grants g ON g.credential=j.credential WHERE j.operation_id=$1::bytea AND g.session_id=$2::bytea",
                     &[&scope.operation.as_bytes().as_slice(),&scope.session.as_bytes().as_slice()]
                 ).await.map_err(|_|RepositoryError::Unavailable)?;
                 let credential=if let Some(prior)=prior {
+                    if !prior.try_get::<_,bool>("permission_current").map_err(|_|RepositoryError::InvalidReceipt)? {return Err(RepositoryError::Unauthorized);}
                     let fingerprint:Vec<u8>=prior.try_get("canonical_fingerprint").map_err(|_|RepositoryError::InvalidReceipt)?;
                     let principal:Vec<u8>=prior.try_get("principal_id").map_err(|_|RepositoryError::InvalidReceipt)?;
                     if fingerprint!=scope.fingerprint || principal!=member {return Err(RepositoryError::OperationConflict);}
@@ -700,6 +705,13 @@ async fn initialize_with_adventure(
         CREATE TABLE df_local_demo.room_grants (operation_id bytea PRIMARY KEY CHECK(octet_length(operation_id)=16), canonical_fingerprint bytea NOT NULL CHECK(octet_length(canonical_fingerprint)=32), principal_id bytea NOT NULL UNIQUE CHECK(octet_length(principal_id)=16), credential bytea NOT NULL UNIQUE REFERENCES df_local_demo.grants);
         CREATE TABLE df_local_demo.scope_proofs (binding bytea PRIMARY KEY CHECK(octet_length(binding)=32), credential bytea REFERENCES df_local_demo.grants, tenant_id bytea NOT NULL, principal_id bytea NOT NULL, campaign_id bytea NOT NULL, effective_role bytea NOT NULL, access_revision bytea NOT NULL, session_id bytea NOT NULL, operation_id bytea NOT NULL, command_namespace bytea NOT NULL, recovery_epoch text NOT NULL, fingerprint_version integer NOT NULL, canonical_fingerprint bytea NOT NULL, owner_fence bytea NOT NULL, execution_mode smallint NOT NULL, lookup_only boolean NOT NULL);").await.map_err(|_| DemoInitializationError { stage:"local_schema",class:RepositoryError::Unavailable })?;
     transaction.batch_execute("CREATE TABLE df_local_demo.rejected_operations (tenant_id bytea NOT NULL, session_id bytea NOT NULL, principal_id bytea NOT NULL, command_namespace bytea NOT NULL, recovery_epoch numeric(20,0) NOT NULL, operation_id bytea NOT NULL, fingerprint_version integer NOT NULL CHECK(fingerprint_version=1), canonical_fingerprint bytea NOT NULL CHECK(octet_length(canonical_fingerprint)=32), checkpoint_epoch numeric(20,0) NOT NULL, checkpoint_sequence numeric(20,0) NOT NULL, typed_receipt_version integer NOT NULL CHECK(typed_receipt_version=1), typed_receipt bytea CHECK(octet_length(typed_receipt)<=4096), PRIMARY KEY(tenant_id,session_id,principal_id,command_namespace,recovery_epoch,operation_id), FOREIGN KEY(tenant_id,session_id,checkpoint_epoch,checkpoint_sequence) REFERENCES df_game.checkpoints(tenant_id,session_id,recovery_epoch,in_epoch_sequence));").await.map_err(|_|DemoInitializationError { stage:"rejected_schema",class:RepositoryError::Unavailable })?;
+    transaction
+        .batch_execute(include_str!("../migrations/0002_local_room_reclaim.sql"))
+        .await
+        .map_err(|_| DemoInitializationError {
+            stage: "seat_schema",
+            class: RepositoryError::Unavailable,
+        })?;
     if let Some(adventure) = adventure {
         adventure::insert(&transaction, adventure).await?;
     }

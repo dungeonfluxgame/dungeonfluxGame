@@ -73,6 +73,16 @@ fn accepted_now(result: &Result<rpc::SubmitActionResponse, tonic::Status>) -> bo
 }
 
 pub(super) enum Call {
+    AwaySeats {
+        room_code: String,
+        reply: oneshot::Sender<Result<Vec<super::room::AwayHero>, tonic::Status>>,
+    },
+    Reclaim {
+        request: super::room::ReclaimRequest,
+        reply: oneshot::Sender<
+            Result<Result<rpc::JoinedRoom, super::room::ReclaimRefusal>, tonic::Status>,
+        >,
+    },
     QualificationInputs {
         reply: oneshot::Sender<Result<QualificationSnapshot, tonic::Status>>,
     },
@@ -140,6 +150,8 @@ impl ActorInput for Call {
             value.as_ref().map_or(0, Vec::capacity)
         }
         match self {
+            Self::AwaySeats { room_code, .. } => Some(room_code.capacity()),
+            Self::Reclaim { request, .. } => Some(request.room_code.capacity()),
             Self::Join { request, .. } => request
                 .room_code
                 .capacity()
@@ -413,11 +425,13 @@ pub(super) struct SessionState {
     pub(super) fence: Option<super::session_recovery::Health>,
     /// Keeps the owner lease and access grants alive while nobody is acting.
     pub(super) heartbeat: super::session_recovery::Heartbeat,
+    pub(super) seat_clock: super::room::SeatClock,
 }
 
 impl Default for SessionState {
     fn default() -> Self {
         Self {
+            seat_clock: super::room::SeatClock::default(),
             attempt: None,
             commit_millis: 0,
             fence: None,
@@ -676,10 +690,15 @@ impl Actor {
         };
         let heartbeat =
             heartbeat_wake(self.session_lost(), &self.session.heartbeat, Instant::now());
-        [completion, recovery, heartbeat]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            completion,
+            recovery,
+            heartbeat,
+            (!self.session_lost()).then_some(self.session.seat_clock.next_poll),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Renews the session lease and grants when the heartbeat is due. Called at every wake and
@@ -732,6 +751,7 @@ impl Actor {
     pub(super) fn wake_completion(&mut self) {
         self.heartbeat_if_due();
         self.heal_session();
+        self.poll_away_seats(Instant::now());
         if self
             .completion_retry
             .as_ref()
@@ -1314,6 +1334,8 @@ impl Actor {
                 "display bindings cannot submit player actions",
             ));
         }
+
+        self.seat_activity(&credential)?;
         let principal = self.issuer.principal(&credential).map_err(unavailable)?;
         if principal == df_persistence::local_demo_scope::PLAYER {
             return Err(tonic::Status::permission_denied(
@@ -2015,6 +2037,7 @@ impl Actor {
         if let Some(tempo) = self.tempo.as_mut() {
             tempo::observe(tempo.decorate(&mut view, current, Instant::now()));
         }
+        self.seat_activity(&credential)?;
         Ok((role, view))
     }
 }
@@ -2047,6 +2070,7 @@ impl Actor {
             .position(|party_member| party_member.name == hero)
             .and_then(|position| u32::try_from(position).ok())
             .ok_or_else(|| tonic::Status::failed_precondition("hero seat unknown"))?;
+        self.seat_activity(credential)?;
         self.table_log.set_composing(index, kind);
         Ok(())
     }
@@ -2113,6 +2137,16 @@ impl Reducer<Call> for Actor {
                 Call::QualificationInputs { reply } => {
                     let _ = reply.send(Err(tonic::Status::resource_exhausted(
                         "qualification budget exhausted",
+                    )));
+                }
+                Call::AwaySeats { reply, .. } => {
+                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
+                        "finite room budget exhausted",
+                    )));
+                }
+                Call::Reclaim { reply, .. } => {
+                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
+                        "finite room budget exhausted",
                     )));
                 }
                 Call::Join { reply, .. } => {
@@ -2187,6 +2221,16 @@ impl Reducer<Call> for Actor {
                         .ok_or_else(|| tonic::Status::permission_denied("qualification disabled")),
                 )
                 .is_ok(),
+            Call::AwaySeats { room_code, reply } => reply
+                .send(after_grant_reconnect(reconnected, || {
+                    self.away_seats(&room_code)
+                }))
+                .is_ok(),
+            Call::Reclaim { request, reply } => reply
+                .send(after_grant_reconnect(reconnected, || {
+                    self.reclaim_seat(request)
+                }))
+                .is_ok(),
             Call::Join { request, reply } => reply
                 .send(after_grant_reconnect(reconnected, || self.join(request)))
                 .is_ok(),
@@ -2203,6 +2247,8 @@ impl Reducer<Call> for Actor {
                     | super::dialogue::DialogueRequest::Cancel(_) => None,
                 };
                 let result = after_grant_reconnect(reconnected, || {
+                    self.dialogue_member(&credential)?;
+                    self.seat_activity(&credential)?;
                     self.handle_dialogue(credential, request)
                 });
                 if let (Some(request), Ok(super::dialogue::DialogueReply::Raw(_, _))) =
@@ -2234,7 +2280,9 @@ impl Reducer<Call> for Actor {
                 .is_ok(),
             Call::SpeechMember { credential, reply } => reply
                 .send(after_grant_reconnect(reconnected, || {
-                    self.dialogue_member(&credential)
+                    let member = self.dialogue_member(&credential)?;
+                    self.seat_activity(&credential)?;
+                    Ok(member)
                 }))
                 .is_ok(),
             Call::Dev {

@@ -268,6 +268,7 @@ impl rpc::session_service_server::SessionService for Service {
                         changed = updates.changed() => changed.is_err(),
                         changed = table_lines.changed() => changed.is_err(),
                         () = scene_art_changed(&mut art) => false,
+                        () = tokio::time::sleep(Duration::from_secs(5)) => false,
                     };
                     if ended {
                         return None;

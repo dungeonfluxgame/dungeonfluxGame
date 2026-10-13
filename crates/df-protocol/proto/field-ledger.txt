@@ -688,3 +688,22 @@ field dungeonflux.public.v1.PresentedRequest 1 sequence type=4 label=1 presence=
 field dungeonflux.public.v1.PresentedRequest 2 display_instance type=4 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PresentedResponse 1 released_sequence type=4 label=1 presence=false target=- oneof=-
 method dungeonflux.public.v1.SessionService ReportPresented .dungeonflux.public.v1.PresentedRequest .dungeonflux.public.v1.PresentedResponse client-stream=false server-stream=false
+# SES-04: additive room-code-only away-seat discovery and credential replacement.
+message dungeonflux.public.v1.ReclaimRoomRequest
+field dungeonflux.public.v1.ReclaimRoomRequest 1 room_code type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ReclaimRoomRequest 2 operation_id type=11 label=1 presence=true target=.dungeonflux.public.v1.OperationId oneof=-
+field dungeonflux.public.v1.ReclaimRoomRequest 3 seat_token type=12 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.AwayHero
+field dungeonflux.public.v1.AwayHero 1 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.AwayHero 2 seat_token type=12 label=1 presence=false target=- oneof=-
+enum dungeonflux.public.v1.SeatReclaimRefusal
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 0 SEAT_RECLAIM_REFUSAL_UNSPECIFIED
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 1 SEAT_NOT_AWAY
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 2 SEAT_TOKEN_UNKNOWN
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 3 SEAT_ROOM_CODE_WRONG
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 4 SEAT_OPERATION_CONFLICT
+message dungeonflux.public.v1.ReclaimRoomResponse
+field dungeonflux.public.v1.ReclaimRoomResponse 1 joined type=11 label=1 presence=true target=.dungeonflux.public.v1.JoinedRoom oneof=outcome
+field dungeonflux.public.v1.ReclaimRoomResponse 2 refused type=14 label=1 presence=true target=.dungeonflux.public.v1.SeatReclaimRefusal oneof=outcome
+field dungeonflux.public.v1.ReclaimRoomResponse 3 away_heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.AwayHero oneof=-
+method dungeonflux.public.v1.RoomService Reclaim .dungeonflux.public.v1.ReclaimRoomRequest .dungeonflux.public.v1.ReclaimRoomResponse client-stream=false server-stream=false

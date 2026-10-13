@@ -53,6 +53,7 @@ fn join<'a>(
         roster_heading: "Members",
         empty_roster: "No permitted members",
         participants: &[],
+        away_heroes: &[],
         lobby_offer: None,
         pairing_fallback: "Pairing unavailable",
     }

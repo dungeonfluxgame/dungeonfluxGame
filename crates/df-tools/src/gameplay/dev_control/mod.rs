@@ -82,6 +82,8 @@ struct Seats {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Seat {
+    #[serde(default)]
+    reclaim: Option<PendingReclaim>,
     credential: Option<[u8; 32]>,
     member: Option<Vec<u8>>,
     hero: Option<String>,
@@ -170,6 +172,7 @@ pub(super) fn setup(
     let router = Router::new()
         .route("/dev/health", get(health))
         .route("/dev/join", post(actions::join_seat))
+        .route("/dev/reclaim", post(actions::reclaim_seat))
         .route("/dev/create", post(actions::create_hero))
         .route("/dev/act", post(actions::act))
         .route("/dev/say", post(actions::say))
@@ -197,9 +200,16 @@ pub(super) fn setup(
     })
 }
 
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct PendingReclaim {
+    operation: [u8; 16],
+    token: [u8; 32],
+}
+
 impl Seat {
     fn empty() -> Self {
         Self {
+            reclaim: None,
             credential: None,
             member: None,
             hero: None,
@@ -590,6 +600,10 @@ mod display_scope_tests {
             run_id: Some(vec![2; 16]),
             seats: [
                 Seat {
+                    reclaim: Some(PendingReclaim {
+                        operation: [5; 16],
+                        token: [6; 32],
+                    }),
                     credential: Some([3; 32]),
                     member: Some(vec![4; 16]),
                     hero: Some("Sigrun".to_owned()),
@@ -607,5 +621,10 @@ mod display_scope_tests {
         assert_eq!(restored.seats[0].member, Some(vec![4; 16]));
         assert_eq!(restored.seats[0].hero.as_deref(), Some("Sigrun"));
         assert!(restored.seats[1].credential.is_none());
+        let pending = restored.seats[0]
+            .reclaim
+            .expect("uncertain reclaim proof restored");
+        assert_eq!(pending.operation, [5; 16]);
+        assert_eq!(pending.token, [6; 32]);
     }
 }

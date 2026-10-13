@@ -20,6 +20,7 @@ mod live_theme;
 mod live_tv;
 mod live_voice;
 mod public_scene_assets;
+mod seat_recovery;
 mod talk_control;
 mod view_delivery;
 
@@ -58,6 +59,9 @@ struct Client {
     revision: Option<rpc::SessionRevision>,
     views: Option<GameplayViews>,
     join_request: Option<rpc::JoinRoomRequest>,
+    reclaim_request: Option<rpc::ReclaimRoomRequest>,
+    away_heroes: Vec<rpc::AwayHero>,
+    seat_poll_abort: Option<AbortHandle>,
     last_request: Option<rpc::SubmitActionRequest>,
     first_attack: Option<rpc::SubmitActionRequest>,
     last_confirmed: bool,
@@ -101,6 +105,7 @@ struct Reconnect {
 }
 impl Drop for Client {
     fn drop(&mut self) {
+        seat_recovery::stop(self);
         if let Some(abort) = self.watch_abort.take() {
             abort.abort();
         }
@@ -433,7 +438,8 @@ fn clear_view_scope(client: &mut Client) -> Result<(), JsValue> {
     Ok(())
 }
 fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    live_screens::render_join(client)
+    live_screens::render_join(client)?;
+    seat_recovery::ensure_poll(client)
 }
 const LEAVE_LABEL: &str = "Leave this game on this device";
 /// Shown while a saved player is reconnecting, and as the way out if that cannot finish.
@@ -479,6 +485,8 @@ fn forget_saved_game(client: &Rc<RefCell<Client>>, reason: &str) {
     let cleared = {
         let mut state = client.borrow_mut();
         let cleared = saved_player::clear(&state.room_code);
+        state.away_heroes.clear();
+        state.reclaim_request = None;
         retire_transport(&mut state);
         let reset = clear_view_scope(&mut state);
         state.credential.clear();
@@ -488,6 +496,7 @@ fn forget_saved_game(client: &Rc<RefCell<Client>>, reason: &str) {
         state.join_request = None;
         cleared.and(reset)
     };
+    let cleared = cleared.and(seat_recovery::clear(client));
     let rendered = render_join(client);
     let state = client.borrow();
     status(&state, "Your adventure awaits.");
@@ -523,6 +532,17 @@ fn use_room_code(client: &Rc<RefCell<Client>>, typed: &str) -> bool {
         );
         return false;
     };
+    let different_reclaim_room = {
+        let state = client.borrow();
+        state.room_code != code && state.reclaim_request.is_some()
+    };
+    if different_reclaim_room && seat_recovery::clear(client).is_err() {
+        feedback(
+            &client.borrow(),
+            "This browser could not clear the earlier request. Try again.",
+        );
+        return false;
+    }
     let mut state = client.borrow_mut();
     if state.room_code != code {
         state.room_code = code;
@@ -546,7 +566,10 @@ fn join_room(client: Rc<RefCell<Client>>) {
         if state.join_request.is_none() {
             state.join_request = Some(rpc::JoinRoomRequest {
                 room_code: state.room_code.clone(),
-                operation_id: Some(operation()?),
+                operation_id: match state.reclaim_request.as_ref() {
+                    Some(reclaim) => reclaim.operation_id.clone(),
+                    None => Some(operation()?),
+                },
                 join_secret: random::<32>()?,
             });
         }
@@ -554,9 +577,9 @@ fn join_room(client: Rc<RefCell<Client>>) {
         retire_transport(&mut state);
         state.busy = true;
         status(&state, "Joining your companions…");
-        Ok((body, state.generation))
+        Ok((body, state.generation, state.reclaim_request.clone()))
     })();
-    let (body, generation) = match prepared {
+    let (body, generation, reclaim) = match prepared {
         Ok(value) => value,
         Err(error) => {
             feedback(&client.borrow(), &error);
@@ -564,7 +587,24 @@ fn join_room(client: Rc<RefCell<Client>>) {
         }
     };
     wasm_bindgen_futures::spawn_local(async move {
+        let reclaiming = reclaim.is_some();
         let run = async {
+            if let Some(reclaim) = reclaim {
+                return seat_recovery::call(reclaim)
+                    .await
+                    .map(|reply| rpc::JoinRoomResponse {
+                        outcome: reply.outcome.map(|outcome| match outcome {
+                            rpc::reclaim_room_response::Outcome::Joined(joined) => {
+                                rpc::join_room_response::Outcome::Joined(joined)
+                            }
+                            rpc::reclaim_room_response::Outcome::Refused(_) => {
+                                rpc::join_room_response::Outcome::Refused(rpc::JoinRefusal {
+                                    code: rpc::RejectionCode::InvalidSelection as i32,
+                                })
+                            }
+                        }),
+                    });
+            }
             let url = crate::browser::tunnel_url("/gameplay/tunnel")?;
             let (connection, channel) = BrowserConnection::connect(&url)
                 .await
@@ -649,6 +689,7 @@ fn join_room(client: Rc<RefCell<Client>>) {
                     }
                     let saved = {
                         let mut state = client.borrow_mut();
+                        seat_recovery::stop(&mut state);
                         state.credential = joined.local_binding;
                         state.session = joined.session_id;
                         state.run = joined.run_id;
@@ -665,8 +706,9 @@ fn join_room(client: Rc<RefCell<Client>>) {
                             _ => Err(JsValue::from_str("joined scope absent")),
                         }
                     };
+                    let recovery_saved = seat_recovery::clear(&client);
                     connect(client.clone());
-                    if saved.is_err() {
+                    if saved.is_err() || recovery_saved.is_err() {
                         feedback(
                             &client.borrow(),
                             "This browser cannot remember your game, so a reload would start over.",
@@ -674,6 +716,19 @@ fn join_room(client: Rc<RefCell<Client>>) {
                     }
                 }
                 Some(rpc::join_room_response::Outcome::Refused(refusal)) => {
+                    if reclaiming {
+                        client.borrow_mut().join_request = None;
+                        if seat_recovery::clear(&client).is_err() {
+                            feedback(
+                                &client.borrow(),
+                                "This browser could not clear the request. Try again.",
+                            );
+                            return;
+                        }
+                        let _rendered = render_join(&client);
+                        feedback(&client.borrow(), seat_recovery::REFUSED);
+                        return;
+                    }
                     feedback(
                         &client.borrow(),
                         match rpc::RejectionCode::try_from(refusal.code) {
@@ -872,11 +927,13 @@ fn connect(client: Rc<RefCell<Client>>) {
                 })?
                 .into_inner();
             status(&owned.borrow(), "Connected · server owns the saved game");
-            while let Some(view) = stream
-                .message()
-                .await
-                .map_err(|_| "Connection interrupted; reconnect to recover")?
-            {
+            while let Some(view) = stream.message().await.map_err(|status| {
+                if status.code() == tonic::Code::PermissionDenied {
+                    SAVED_GAME_REFUSED
+                } else {
+                    "Connection interrupted; reconnect to recover"
+                }
+            })? {
                 if owned.borrow().generation != generation {
                     return Ok(());
                 }
@@ -889,10 +946,7 @@ fn connect(client: Rc<RefCell<Client>>) {
         if owned.borrow().generation == generation {
             let refused = matches!(&result, Ok(Err(error)) if error == SAVED_GAME_REFUSED);
             if owned.borrow().role == "player" && refused {
-                forget_saved_game(
-                    &owned,
-                    "Your saved game was not recognised by this server, so it was cleared. Join again to start over.",
-                );
+                forget_saved_game(&owned, "That hero is being played on another phone.");
                 return;
             }
             if let Some(connection) = owned.borrow_mut().connection.take() {
@@ -2083,6 +2137,9 @@ fn new_client(
         revision: None,
         views: None,
         join_request: None,
+        reclaim_request: None,
+        away_heroes: Vec::new(),
+        seat_poll_abort: None,
         last_request: None,
         first_attack: None,
         last_confirmed: false,

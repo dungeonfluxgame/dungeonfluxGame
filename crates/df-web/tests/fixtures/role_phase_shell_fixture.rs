@@ -113,6 +113,7 @@ mod browser {
             roster_heading: "Your company",
             empty_roster: "The company is gathering",
             participants: &[],
+            away_heroes: &[],
             lobby_offer: None,
             pairing_fallback: "Use the supplied invitation",
         }

@@ -4,6 +4,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ".dungeonflux.public.v1.DecisionReceipt.outcome.accepted",
         ".dungeonflux.public.v1.SubmitActionResponse.outcome.committed_decision",
         ".dungeonflux.public.v1.JoinRoomResponse.outcome.joined",
+        ".dungeonflux.public.v1.ReclaimRoomResponse.outcome.joined",
     ] {
         config.boxed(field);
     }

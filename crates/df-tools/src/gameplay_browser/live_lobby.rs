@@ -42,6 +42,7 @@ pub(super) struct LobbyModel {
     pub(super) panel_heading: &'static str,
     pub(super) panel_description: &'static str,
     pub(super) members: Vec<LobbyMember>,
+    pub(super) away_heroes: Vec<rpc::AwayHero>,
     pub(super) offer: Option<LobbyOfferModel>,
 }
 
@@ -105,6 +106,30 @@ fn with_view<R>(
             presence: "In the room",
         })
         .collect();
+    let away_names: Vec<_> = model
+        .away_heroes
+        .iter()
+        .map(|hero| format!("{} (away)", hero.name))
+        .collect();
+    let away_keys: Vec<_> = model
+        .away_heroes
+        .iter()
+        .map(|hero| {
+            hero.seat_token
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        })
+        .collect();
+    let away_heroes: Vec<_> = away_names
+        .iter()
+        .zip(&away_keys)
+        .map(|(name, key)| df_ui::AwayHero {
+            key,
+            name,
+            reclaim_label: "Take this hero back",
+        })
+        .collect();
     let loopback = is_loopback_join_url(&model.join_url);
     let view = JoinPhaseView {
         stamp: JoinStamp {
@@ -140,6 +165,7 @@ fn with_view<R>(
         roster_heading: "Your party",
         empty_roster: "No heroes have joined yet.",
         participants: &participants,
+        away_heroes: &away_heroes,
         lobby_offer: model.offer.as_ref().map(|offer| LobbyOffer {
             key: &offer.key,
             label: &offer.label,
@@ -190,6 +216,7 @@ mod tests {
                 panel_heading: "Your party gathers",
                 panel_description: "Waiting for heroes",
                 members: Vec::new(),
+                away_heroes: Vec::new(),
                 offer: None,
             };
             let (detail, fallback) = with_view(&model, 1, |view| {
@@ -219,6 +246,7 @@ mod tests {
             panel_heading: "Your party gathers",
             panel_description: "Waiting for heroes",
             members: Vec::new(),
+            away_heroes: Vec::new(),
             offer: None,
         };
         let (detail, fallback) = with_view(&model, 1, |view| {
@@ -248,6 +276,10 @@ fn fix_fields(surface: &JoinPhaseSurface) -> Result<(), JsValue> {
 }
 
 impl LobbyScreen {
+    pub(super) fn invitation_value(&self) -> String {
+        self.surface.invitation().input().value()
+    }
+
     fn set_scene_asset(&self, scene_asset: Option<&str>) -> Result<(), JsValue> {
         self.scene_asset.borrow_mut().take();
         let Some(source) = scene_asset else {

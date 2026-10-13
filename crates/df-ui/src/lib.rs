@@ -39,8 +39,8 @@ mod join_phase;
 #[cfg(target_arch = "wasm32")]
 mod join_phase_theme;
 pub use join_phase::{
-    JoinFeedback, JoinPhaseIntent, JoinPhaseView, JoinRoom, JoinStage, JoinStamp, JoinUpdate,
-    JoinValidationError, LobbyOffer, LobbyParticipant, validate_join_drafts,
+    AwayHero, JoinFeedback, JoinPhaseIntent, JoinPhaseView, JoinRoom, JoinStage, JoinStamp,
+    JoinUpdate, JoinValidationError, LobbyOffer, LobbyParticipant, validate_join_drafts,
 };
 #[cfg(target_arch = "wasm32")]
 pub use join_phase::{JoinPhaseError, JoinPhaseSurface};

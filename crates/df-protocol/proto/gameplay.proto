@@ -44,11 +44,18 @@ message SceneActor { string id = 1; string name = 2; SceneRole role = 3; string 
 message HarborSceneOption { HarborDestination destination = 1; string label = 2; }
 message GameplayActionOffer { string offer_id = 1; GameplayActionKind action_kind = 2; string label = 3; repeated HarborSceneOption destinations = 4; repeated JourneyGroup input_groups = 5; }
 
-service RoomService { rpc Join(JoinRoomRequest) returns (JoinRoomResponse); }
+service RoomService { rpc Join(JoinRoomRequest) returns (JoinRoomResponse); rpc Reclaim(ReclaimRoomRequest) returns (ReclaimRoomResponse); }
 message JoinRoomRequest { string room_code = 1; OperationId operation_id = 2; bytes join_secret = 3; }
 message JoinedRoom { DecisionReceipt receipt = 1; string local_binding = 2; ClientBindingId client_binding_id = 3; SessionId session_id = 4; RunId run_id = 5; }
 message JoinRoomResponse { oneof outcome { JoinedRoom joined = 1; JoinRefusal refused = 2; } }
 message JoinRefusal { RejectionCode code = 1; }
+// SES-04: empty seat_token is a public away-seat read with the room code, with no operation.
+// A nonempty token requires an operation id; exact retries retain both fields unchanged.
+// Tokens are server-minted opaque capabilities, never member ids or prior credentials.
+message ReclaimRoomRequest { string room_code = 1; OperationId operation_id = 2; bytes seat_token = 3; }
+message AwayHero { string name = 1; bytes seat_token = 2; }
+enum SeatReclaimRefusal { SEAT_RECLAIM_REFUSAL_UNSPECIFIED = 0; SEAT_NOT_AWAY = 1; SEAT_TOKEN_UNKNOWN = 2; SEAT_ROOM_CODE_WRONG = 3; SEAT_OPERATION_CONFLICT = 4; }
+message ReclaimRoomResponse { oneof outcome { JoinedRoom joined = 1; SeatReclaimRefusal refused = 2; } repeated AwayHero away_heroes = 3; }
 enum JourneyPhase { JOURNEY_PHASE_UNSPECIFIED = 0; ROOM = 1; CHARACTER_CREATION = 2; OPENING = 3; DIALOGUE = 4; COMBAT = 5; COMPLETE = 6; }
 message JourneyChoice { string group_id = 1; string option_id = 2; }
 message CharacterSelection { string name = 1; repeated JourneyChoice choices = 2; }
