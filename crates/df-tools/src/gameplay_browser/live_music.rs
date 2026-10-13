@@ -501,9 +501,8 @@ impl Director {
     /// narrator's box, every character's and hero's bubble, fight cries and commentary, and
     /// the loading-screen mirror all run this same machine: no role is exempt), while a hero
     /// holds push-to-talk (the speech-intent loader), or while a fresh action or roll-readout
-    /// bubble stands. Attribute presence only; line text is never read. Every active tick
-    /// retriggers the hold, so back-to-back lines never pump; a newly seen line additionally
-    /// floors the hold at the display's own minimum dwell.
+    /// bubble stands. Attribute presence only; line text is never read. Opening and speaking
+    /// retrigger the hold; lingering lines do not. A newly seen line floors it at minimum dwell.
     fn watch_line(&mut self) {
         let now = js_sys::Date::now();
         let stage = self.document.query_selector(".tv-stage").ok().flatten();

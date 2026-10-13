@@ -324,9 +324,10 @@ pub(crate) fn duck_decibels(suite: Suite) -> f32 {
 /// The player reads this off the stage root's `data-line-state`: the narrator's box, every
 /// character's and hero's bubble, fight cries and commentary, and the loading-screen mirror
 /// all run this same machine, so no role is exempt. Intent loaders (`composing`,
-/// `submitted`) and closed lines never duck: typing is not a line, and a finished one is over.
+/// `submitted`), lingering captions, and closed lines do not duck: typing is not a line, and a
+/// finished one is over.
 pub(crate) fn line_presenting(line_state: &str) -> bool {
-    matches!(line_state, "opening" | "speaking" | "lingering")
+    matches!(line_state, "opening" | "speaking")
 }
 
 /// Whether a line seen this recently still holds the duck: gaps shorter than
@@ -1336,6 +1337,22 @@ mod tests {
     }
 
     #[test]
+    fn a_caption_holds_through_reading_time_and_the_short_gap_only() {
+        let text = "The gate opens.";
+        let reading_ms = f64::from(unvoiced_hold_ms(text));
+        let gap_ms = LINE_GAP_HOLD_SECONDS * 1_000.0;
+
+        assert_eq!(
+            unvoiced_hold_ms(text),
+            crate::stage_machines::reading_time_ms(text)
+        );
+        assert!(reading_ms > 0.0);
+        assert!(gap_hold_active(0.0));
+        assert!(gap_hold_active(gap_ms - 0.1));
+        assert!(!gap_hold_active(gap_ms));
+    }
+
+    #[test]
     fn action_callout_hold_is_the_bubbles_own_dwell() {
         // Arrange: the inline styles the display writes on unmanaged call-out bubbles.
         // Act/assert: the music reuses that dwell, and asks for nothing when there is none.
@@ -1375,13 +1392,13 @@ mod tests {
         for state in states {
             assert_eq!(
                 line_presenting(state.name()),
-                state.is_active(),
+                matches!(state, LineState::Opening | LineState::Speaking),
                 "{state:?} disagrees with the line machine"
             );
         }
         assert!(line_presenting("opening"));
         assert!(line_presenting("speaking"));
-        assert!(line_presenting("lingering"));
+        assert!(!line_presenting("lingering"));
         assert!(!line_presenting("idle"));
         assert!(!line_presenting("composing"));
         assert!(!line_presenting("submitted"));
