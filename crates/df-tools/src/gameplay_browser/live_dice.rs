@@ -570,11 +570,8 @@ pub(super) fn rest_url_for(attack_die: u32, faces: &[u32], roll_mode: i32) -> Op
     })
 }
 
-/// The element the dice are hosted in: the battlefield container while it is mounted (it
-/// paints over the whole stage, so dice on the stage root would hide behind it), else the
-/// flat roll panel in flow (so the dice never cover its text and never hide behind it),
-/// else the stage root. The choice is [`crate::dice_roll::dice_host`] so the rule is pinned
-/// by a native test; this only reads which host the page has.
+/// The element the dice are hosted in: beside the battlefield's attack card while it is
+/// mounted, else the flat roll panel in flow, else the stage root.
 fn dice_host(state: &Client) -> Option<(Element, crate::dice_roll::DiceHost)> {
     use crate::dice_roll::{DiceHost, dice_host as host_for};
     let field_mounted = state.root.query_selector(".battlefield").ok()?.is_some();
@@ -585,7 +582,7 @@ fn dice_host(state: &Client) -> Option<(Element, crate::dice_roll::DiceHost)> {
         .flatten();
     let kind = host_for(field_mounted, panel.is_some());
     let host = match kind {
-        DiceHost::Battlefield => state.root.query_selector(".battlefield").ok()??,
+        DiceHost::Battlefield => state.root.query_selector(".battlefield .bf-roll").ok()??,
         DiceHost::Panel => panel?,
         DiceHost::Stage => state.live.tv.as_ref().map(|stage| stage.root().clone())?,
     };

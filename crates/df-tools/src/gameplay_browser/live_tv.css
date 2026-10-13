@@ -85,12 +85,10 @@ Stacking order, lowest first: the flat stage paints its scene and figures at z 3
 below, the dice ride at z 3 (appended last, so above the figures), and every flat HUD
 card paints above them (roll panel z 4, narrator box and big cards z 7/8, bubbles z 9),
 so a die never covers a roll card, turn label, health card or bubble. The 3D battlefield
-is a fixed overlay at z 40 over the whole stage: while it is mounted the dice are hosted
-inside its container instead (see live_dice.rs), above its canvas and below its HUD
-(z 1 under .bf-hud z 2, set in live_battlefield.css) and its speech (z 6), so a die never
-covers its roll card, turn label, health plates or target tag either. The toast (z 60)
-and the loading splash (z 41) stay above everything. The overlay is DOM, so it is in
-front of the scene at every fight camera. */
+is a fixed overlay at z 40 over the whole stage: while it is mounted the dice join the
+attack card's row at the bottom centre of its HUD (see live_dice.rs and
+live_battlefield.css). The toast (z 60) and the loading splash (z 41) stay above
+everything. The overlay is DOM, so it is in front of the scene at every fight camera. */
 .tv-dice{position:absolute;left:50%;top:30%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:calc(var(--u)*3);z-index:3;pointer-events:none;animation:tv-dice-leave 320ms ease forwards;animation-delay:calc(var(--dice-rest,900ms) + 800ms)}
 @keyframes tv-dice-leave{to{opacity:0}}
 /* No background here: the drawn die (dark square) is gone; the clip paints the die. */
