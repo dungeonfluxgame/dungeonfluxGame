@@ -921,40 +921,33 @@ pub async fn serve(
             return Err(error.into());
         }
     }
-    let initialization = tokio::time::timeout(
-        Duration::from_secs(5),
-        df_persistence::local_demo_scope::admit_startup_with_adventure(
-            &mut grant_client,
-            &cold,
-            df_persistence::local_demo_scope::DemoStartupIdentity {
-                fence,
-                player_credential,
-                display_credential,
-            },
-            codec,
-            &recovery,
-            generated_adventure
-                .as_ref()
-                .map(|prepared| &prepared.documents),
-            |checkpoint| {
-                df_session::submission::SessionEngine::<
-                    df_persistence::NativeScope<LocalDemoAuthority>,
-                >::validate_recovery(&mut model::HarborEngine, checkpoint)
-            },
-        ),
+    let initialization = df_persistence::local_demo_scope::admit_startup_with_adventure(
+        &mut grant_client,
+        &cold,
+        df_persistence::local_demo_scope::DemoStartupIdentity {
+            fence,
+            player_credential,
+            display_credential,
+        },
+        codec,
+        &recovery,
+        generated_adventure
+            .as_ref()
+            .map(|prepared| &prepared.documents),
+        |checkpoint| {
+            df_session::submission::SessionEngine::<
+                df_persistence::NativeScope<LocalDemoAuthority>,
+            >::validate_recovery(&mut model::HarborEngine, checkpoint)
+        },
     )
     .await;
     let admitted = match initialization {
-        Ok(Ok(admitted)) => admitted,
-        failure => {
-            let refusal_report = if restart_phase == Some(restart_qualification::Phase::Contender)
-                && let Ok(Err(error)) = &failure
-            {
-                restart_qualification::refusal(error)
-            } else if rest_phase == Some(rest_qualification::Phase::Contender)
-                && let Ok(Err(error)) = &failure
-            {
-                rest_qualification::refusal(error)
+        Ok(admitted) => admitted,
+        Err(error) => {
+            let refusal_report = if restart_phase == Some(restart_qualification::Phase::Contender) {
+                restart_qualification::refusal(&error)
+            } else if rest_phase == Some(rest_qualification::Phase::Contender) {
+                rest_qualification::refusal(&error)
             } else {
                 Ok(())
             };
@@ -963,10 +956,7 @@ pub async fn serve(
             refusal_report?;
             return Err(io::Error::other(format!(
                 "owned gameplay admission refused: {}",
-                match failure {
-                    Ok(Err(error)) => format!("{} {:?}", error.stage, error.class),
-                    _ => "startup_timeout".to_owned(),
-                }
+                format!("{} {:?}", error.stage, error.class)
             ))
             .into());
         }

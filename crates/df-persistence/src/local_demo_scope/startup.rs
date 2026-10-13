@@ -92,25 +92,56 @@ pub async fn admit_startup_with_adventure(
             }
         }
     }
-    let tx = client
-        .transaction()
-        .await
-        .map_err(|_| error("startup_transaction", RepositoryError::Unavailable))?;
-    let admitted = restore(&tx, cold, fence, codec, recovery, &mut validate).await;
-    match admitted {
-        Ok(state) => {
-            tx.commit()
-                .await
-                .map_err(|_| error("claim_commit", RepositoryError::UnresolvedCommit))?;
-            Ok(state)
-        }
-        Err(original) => {
-            tx.rollback()
-                .await
-                .map_err(|_| error("startup_rollback", RepositoryError::Unavailable))?;
-            Err(original)
+    // A dead owner's lease runs out once; an owner that is still alive renews it. Two waits
+    // tell them apart, so a second server started against a live game still exits.
+    let mut waits = 0_u8;
+    loop {
+        let tx = client
+            .transaction()
+            .await
+            .map_err(|_| error("startup_transaction", RepositoryError::Unavailable))?;
+        let admitted = restore(&tx, cold, fence, codec, recovery, &mut validate).await;
+        match admitted {
+            Ok(state) => {
+                tx.commit()
+                    .await
+                    .map_err(|_| error("claim_commit", RepositoryError::UnresolvedCommit))?;
+                return Ok(state);
+            }
+            Err(original) => {
+                tx.rollback()
+                    .await
+                    .map_err(|_| error("startup_rollback", RepositoryError::Unavailable))?;
+                if original.stage != "live_owner" || waits >= 2 {
+                    return Err(original);
+                }
+                waits += 1;
+                let seconds = previous_owner_lease_seconds(client, cold.basis().session).await?;
+                if seconds > 0 {
+                    println!("SESSION waiting for the previous owner's lease, {seconds} s");
+                    let seconds = u64::try_from(seconds)
+                        .map_err(|_| error("owner_wait", RepositoryError::Capacity))?;
+                    tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                }
+            }
         }
     }
+}
+
+async fn previous_owner_lease_seconds(
+    client: &Client,
+    session: SessionId,
+) -> Result<i64, DemoInitializationError> {
+    let row = client
+        .query_opt(
+            "SELECT GREATEST(0, CEIL(EXTRACT(EPOCH FROM lease_until - clock_timestamp())))::bigint AS remaining FROM df_game.sessions WHERE tenant_id=$1::bytea AND session_id=$2::bytea",
+            &[&TENANT.as_slice(), &session.as_bytes().as_slice()],
+        )
+        .await
+        .map_err(|_| error("owner_wait", RepositoryError::Unavailable))?
+        .ok_or_else(|| error("owner_wait", RepositoryError::InvalidCandidate))?;
+    row.try_get("remaining")
+        .map_err(|_| error("owner_wait", RepositoryError::InvalidCandidate))
 }
 
 /// Read only bounded startup provenance after complete schema/catalog admission. The result
@@ -183,13 +214,13 @@ async fn restore(
         .await
         .map_err(|_| error("owner_lock", RepositoryError::Unavailable))?
         .ok_or_else(|| error("missing_session", RepositoryError::InvalidCandidate))?;
-    let live: bool = row
-        .try_get("lease_current")
+    let remaining: i64 = row
+        .try_get("lease_remaining_seconds")
         .map_err(|_| error("owner_lock", RepositoryError::InvalidCandidate))?;
     let old_fence: Vec<u8> = row
         .try_get("owner_fence")
         .map_err(|_| error("owner_lock", RepositoryError::InvalidCandidate))?;
-    validate_claim(live, &old_fence, fence)?;
+    validate_claim(remaining, &old_fence, fence)?;
     let basis = crate::decision_rows::current_row_basis(&row, session)
         .map_err(|e| error("stored_basis", e))?;
     let maximum = i64::try_from(codec.maximum_document_bytes)
@@ -250,11 +281,11 @@ fn classify_catalog(game: bool, local: bool) -> Result<bool, DemoInitializationE
     }
 }
 fn validate_claim(
-    live: bool,
+    lease_remaining_seconds: i64,
     old_fence: &[u8],
     fence: [u8; 16],
 ) -> Result<(), DemoInitializationError> {
-    if live {
+    if lease_remaining_seconds > 0 {
         return Err(error("live_owner", RepositoryError::RevisionConflict));
     }
     if old_fence.len() != 16 || old_fence == [0; 16] || old_fence == fence || fence == [0; 16] {
@@ -327,14 +358,34 @@ mod tests {
     #[test]
     fn live_owner_never_admits_even_a_distinct_fence() {
         assert_eq!(
-            validate_claim(true, &[1; 16], [2; 16]).unwrap_err().stage,
+            validate_claim(1, &[1; 16], [2; 16]).unwrap_err().stage,
             "live_owner"
         );
         assert_eq!(
-            validate_claim(true, &[1; 16], [1; 16]).unwrap_err().class,
+            validate_claim(1, &[1; 16], [1; 16]).unwrap_err().class,
             RepositoryError::RevisionConflict
         );
-        assert!(validate_claim(false, &[1; 16], [2; 16]).is_ok());
+        assert!(validate_claim(0, &[1; 16], [2; 16]).is_ok());
+    }
+    #[test]
+    fn admission_wait_uses_database_remaining_seconds_at_lease_boundary() {
+        let database_now = 1_000_i64;
+        let lease_expiry = 1_120_i64;
+        assert_eq!(
+            validate_claim(lease_expiry - database_now, &[1; 16], [2; 16])
+                .unwrap_err()
+                .stage,
+            "live_owner"
+        );
+        assert!(validate_claim(lease_expiry - lease_expiry, &[1; 16], [2; 16]).is_ok());
+        assert!(
+            validate_claim(
+                lease_expiry.saturating_sub(lease_expiry + 1),
+                &[1; 16],
+                [2; 16]
+            )
+            .is_ok()
+        );
     }
     #[test]
     fn expired_claim_requires_complete_distinct_nonzero_identity() {
@@ -346,7 +397,7 @@ mod tests {
             (vec![0; 16], [2; 16]),
         ] {
             assert_eq!(
-                validate_claim(false, &old, new).unwrap_err().class,
+                validate_claim(0, &old, new).unwrap_err().class,
                 RepositoryError::InvalidCandidate
             );
         }
