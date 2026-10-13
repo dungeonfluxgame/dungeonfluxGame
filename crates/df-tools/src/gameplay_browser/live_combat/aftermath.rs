@@ -46,9 +46,25 @@ fn condition(member: &rpc::PartyMemberView) -> &'static str {
         "Creating a hero"
     } else if member.unconscious {
         "Unconscious"
+    } else if member
+        .conditions
+        .iter()
+        .any(|condition| condition == "bloodied")
+    {
+        "Bloodied"
+    } else if member
+        .conditions
+        .iter()
+        .any(|condition| condition == "hurt")
+    {
+        "Hurt"
     } else {
-        "Awake"
+        ""
     }
+}
+
+fn dialogue_line(journey: &rpc::JourneyView) -> Option<String> {
+    (!journey.dialogue.is_empty()).then(|| format!("{}: “{}”", journey.speaker, journey.dialogue))
 }
 
 /// "Victory" when the server projects the courier's closing line, which only the won encounter
@@ -85,6 +101,7 @@ pub(super) fn present_display(
         (state.document.clone(), revision)
     };
     let presentation = presentation_revision(client, revision)?;
+    let result_line = dialogue_line(view.journey);
     let keys: Vec<String> = view
         .journey
         .party
@@ -127,6 +144,7 @@ pub(super) fn present_display(
         chapter: outcome_word(view),
         title: &view.scene.title,
         narrative: view.narration,
+        dialogue: result_line.as_deref(),
         party_heading: "The party",
         party: &party,
         next_heading: "What happens next",
@@ -220,14 +238,7 @@ pub(super) fn present_rest(
     let single_destination = proceed.is_some_and(|offer| offer.destinations.len() == 1);
     // The view carries no location name, so the eyebrow is only the outcome.
     let location = outcome_word(view);
-    let result_line = if view.journey.dialogue.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "{}: “{}”",
-            view.journey.speaker, view.journey.dialogue
-        ))
-    };
+    let result_line = dialogue_line(view.journey);
     let campfire = CampfireView {
         owner_generation: revision.epoch().get(),
         revision: revision.sequence(),
@@ -330,5 +341,62 @@ fn submit(client: &Rc<RefCell<Client>>, selection: &CampfireSelection) {
     match prepare(client, &offer, None, false, false, destination) {
         Ok(body) => send(client.clone(), body, false),
         Err(reason) => feedback(&client.borrow(), &reason),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{condition, dialogue_line};
+    use df_protocol::common as rpc;
+
+    #[test]
+    fn victory_display_projection_omits_healthy_state_and_includes_patron_dialogue() {
+        let healthy = rpc::PartyMemberView {
+            character_ready: true,
+            hit_points: 8,
+            maximum_hit_points: 8,
+            ..Default::default()
+        };
+        let bloodied = rpc::PartyMemberView {
+            character_ready: true,
+            conditions: vec!["bloodied".to_owned()],
+            ..Default::default()
+        };
+        let hurt = rpc::PartyMemberView {
+            character_ready: true,
+            conditions: vec!["hurt".to_owned()],
+            ..Default::default()
+        };
+        let stable = rpc::PartyMemberView {
+            hit_points: 0,
+            conditions: vec!["stable".to_owned()],
+            ..Default::default()
+        };
+        let dying = rpc::PartyMemberView {
+            hit_points: 0,
+            unconscious: true,
+            ..Default::default()
+        };
+        let dead = rpc::PartyMemberView {
+            conditions: vec!["dead".to_owned()],
+            ..Default::default()
+        };
+        let journey = rpc::JourneyView {
+            speaker: "Perrin".to_owned(),
+            dialogue: "Thank you for bringing the ledger home.".to_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(condition(&healthy), "");
+        assert_eq!(condition(&bloodied), "Bloodied");
+        assert_eq!(condition(&hurt), "Hurt");
+        assert_eq!(condition(&stable), "Stable at 0 HP");
+        assert_eq!(condition(&dying), "Dying");
+        assert_eq!(condition(&dead), "Dead");
+        assert_eq!(
+            dialogue_line(&journey).as_deref(),
+            Some("Perrin: “Thank you for bringing the ledger home.”")
+        );
+        assert_eq!(dialogue_line(&rpc::JourneyView::default()), None);
     }
 }
