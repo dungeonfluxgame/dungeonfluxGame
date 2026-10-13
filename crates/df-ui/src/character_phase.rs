@@ -373,6 +373,28 @@ impl CharacterDraftState {
         self.dirty_groups.insert(group.to_owned());
         Ok(())
     }
+    fn select_only_visible_option(&mut self, group: &str, visible_options: &[String]) {
+        if self
+            .choices
+            .get(group)
+            .is_some_and(|selected| !visible_options.contains(selected))
+        {
+            self.choices.remove(group);
+            self.dirty_groups.remove(group);
+        }
+        if let [option] = visible_options
+            && self.view.groups.iter().any(|offered| {
+                offered.id == group
+                    && offered
+                        .options
+                        .iter()
+                        .any(|candidate| candidate.id == *option && candidate.enabled)
+            })
+        {
+            self.choices.insert(group.to_owned(), option.clone());
+            self.dirty_groups.insert(group.to_owned());
+        }
+    }
     fn submission(
         &self,
         action_id: &str,
@@ -847,6 +869,60 @@ mod browser {
                 button.set_attribute("aria-pressed", "false")?;
             }
             card.set_attribute("data-selected", "false")?;
+        }
+        let groups = root.query_selector_all("[data-group-id]")?;
+        for index in 0..groups.length() {
+            let Some(group) = groups
+                .item(index)
+                .and_then(|node| node.dyn_into::<Element>().ok())
+            else {
+                continue;
+            };
+            let Some(group_id) = group.get_attribute("data-group-id") else {
+                continue;
+            };
+            let options =
+                group.query_selector_all(":scope > .character-options > .character-option")?;
+            let mut visible_options = Vec::new();
+            for option_index in 0..options.length() {
+                let Some(card) = options
+                    .item(option_index)
+                    .and_then(|node| node.dyn_into::<Element>().ok())
+                else {
+                    continue;
+                };
+                if !card.has_attribute("hidden")
+                    && let Some(button) = card.query_selector("button")?
+                    && let Some(option_id) = button.get_attribute("data-option-id")
+                {
+                    visible_options.push(option_id);
+                }
+            }
+            state
+                .borrow_mut()
+                .select_only_visible_option(&group_id, &visible_options);
+            let selected = state.borrow().choices.get(&group_id).cloned();
+            for option_index in 0..options.length() {
+                let Some(card) = options
+                    .item(option_index)
+                    .and_then(|node| node.dyn_into::<Element>().ok())
+                else {
+                    continue;
+                };
+                if let Some(button) = card.query_selector("button")?
+                    && let Some(option_id) = button.get_attribute("data-option-id")
+                {
+                    let is_selected = selected.as_deref() == Some(&option_id);
+                    button.set_attribute(
+                        "aria-pressed",
+                        if is_selected { "true" } else { "false" },
+                    )?;
+                    card.set_attribute(
+                        "data-selected",
+                        if is_selected { "true" } else { "false" },
+                    )?;
+                }
+            }
         }
         Ok(())
     }
@@ -1777,6 +1853,38 @@ mod tests {
                 group_id: "group".into(),
                 option_id: "first".into(),
             }]
+        );
+    }
+    #[test]
+    fn a_conditionally_visible_single_option_is_submitted_and_restored_after_switching_back() {
+        let mut data = view();
+        data.groups[0].selected = None;
+        let mut state = CharacterDraftState::create(&data);
+        state.select_only_visible_option("group", &["first".into()]);
+        assert_eq!(
+            state.choices.get("group").map(String::as_str),
+            Some("first")
+        );
+        assert_eq!(
+            state
+                .submission("submit-offer", "Mara".into(), "".into(), None, limits())
+                .expect("sole visible option is included")
+                .choices,
+            vec![CharacterChoice {
+                group_id: "group".into(),
+                option_id: "first".into(),
+            }]
+        );
+
+        state.select_only_visible_option("group", &["second".into()]);
+        assert_eq!(
+            state.choices.get("group").map(String::as_str),
+            Some("second")
+        );
+        state.select_only_visible_option("group", &["first".into()]);
+        assert_eq!(
+            state.choices.get("group").map(String::as_str),
+            Some("first")
         );
     }
     #[test]

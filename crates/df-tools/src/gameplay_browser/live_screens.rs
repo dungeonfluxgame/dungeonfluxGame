@@ -567,6 +567,10 @@ fn ensure_say_more(document: &Document, dock: &Element) -> Result<Element, JsVal
     Ok(details)
 }
 
+fn should_show_dialogue_composer(adventure_ended: bool) -> bool {
+    !adventure_ended
+}
+
 /// Recovery controls: the toast when something needs attention, the menu items for the rest.
 fn recovery(client: &Rc<RefCell<Client>>, dock: &Element) -> Result<(), JsValue> {
     recovery_prompt(client, dock)?;
@@ -638,8 +642,12 @@ pub(super) fn render(
     if lobby {
         dock.set_text_content(None);
     } else {
-        let say = ensure_say_more(&document, &dock)?;
-        dialogue_recovery::mount(client, &say, input.offers)?;
+        if should_show_dialogue_composer(input.journey.adventure_ended) {
+            let say = ensure_say_more(&document, &dock)?;
+            dialogue_recovery::mount(client, &say, input.offers)?;
+        } else if let Some(say) = dock.query_selector("details.say-more")? {
+            say.remove();
+        }
         if let Some(previous) = dock.query_selector(".scene-actions")? {
             previous.remove();
         }
@@ -692,7 +700,8 @@ fn render_display(
 #[cfg(test)]
 mod tests {
     use super::{
-        choice_disabled_reason, is_new_private_clue, lobby_art_source, validated_join_scene_asset,
+        choice_disabled_reason, is_new_private_clue, lobby_art_source,
+        should_show_dialogue_composer, validated_join_scene_asset,
     };
 
     #[test]
@@ -785,6 +794,12 @@ mod tests {
             Some("Confirm your last choice first.")
         );
         assert_eq!(choice_disabled_reason(false, false), None);
+    }
+
+    #[test]
+    fn ended_adventure_hides_the_dialogue_composer() {
+        assert!(should_show_dialogue_composer(false));
+        assert!(!should_show_dialogue_composer(true));
     }
 }
 
