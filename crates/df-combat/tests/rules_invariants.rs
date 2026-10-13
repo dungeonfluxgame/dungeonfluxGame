@@ -1299,3 +1299,149 @@ fn a_kobold_that_cannot_reach_melee_this_turn_walks_into_range_and_throws_its_da
     assert_eq!(thrown, Some((true, 20, Weapon::Dagger)));
     assert_eq!(battle.actor(10).unwrap().weapon_count(Weapon::Dagger), 2);
 }
+
+/// SRD 5.2.1 p. 14: a visible creature leaving reach provokes an attack made as a Reaction.
+#[test]
+fn enemy_policy_takes_a_natural_weapon_opportunity_attack() {
+    let json: &[u8] = br#"{"schema":2,"grid":{"cols":4,"rows":3,"blocked":[]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[1,1]],"enemies":[[2,1]]}}]}"#;
+    let map = BattleMap::from_json(json, "flat").unwrap();
+    let specs = vec![
+        hero(1, Cell(1, 1), false),
+        CombatantSpec::creature(10, "giant-weasel", Cell(2, 1), 0).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(11);
+    let mut initiative = [
+        record(&mut rng, 20, 0, &source),
+        record(&mut rng, 20, 1, &source),
+    ];
+    initiative[0].value = 20;
+    initiative[1].value = 1;
+    let battle = begin(map, specs, binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    assert_eq!(battle.active_actor(), Some(1));
+
+    let moving = resolve_dice(&battle, 1, &Action::Move(vec![Cell(0, 1)]), &mut rng)
+        .unwrap()
+        .battle;
+    assert_eq!(moving.reaction_offers(), &[10]);
+    let Action::Opportunity {
+        attack: Some(attack),
+    } = propose(&moving, 10).unwrap().unwrap()
+    else {
+        panic!("the enemy must take its available opportunity attack");
+    };
+    assert_eq!(attack.weapon, Weapon::Bite);
+    assert!(!attack.ranged);
+    assert_eq!(
+        df_combat::tactical::propose_legacy(&moving, 10).unwrap(),
+        Some(Action::Opportunity { attack: None })
+    );
+}
+
+/// SRD 5.2.1 pp. 9, 14: a spent Reaction cannot be used for a second mover before the enemy's turn.
+#[test]
+fn enemy_policy_spends_only_one_opportunity_reaction_before_its_turn() {
+    let json: &[u8] = br#"{"schema":2,"grid":{"cols":5,"rows":3,"blocked":[]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[2,1],[3,2]],"enemies":[[3,1]]}}]}"#;
+    let map = BattleMap::from_json(json, "flat").unwrap();
+    let specs = vec![
+        hero(1, Cell(2, 1), false),
+        hero(2, Cell(3, 2), false),
+        CombatantSpec::creature(10, "wolf", Cell(3, 1), 0).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(13);
+    let mut initiative = [
+        record(&mut rng, 20, 0, &source),
+        record(&mut rng, 20, 1, &source),
+        record(&mut rng, 20, 2, &source),
+    ];
+    initiative[0].value = 20;
+    initiative[1].value = 19;
+    initiative[2].value = 1;
+    let battle = begin(map, specs, binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    assert_eq!(battle.active_actor(), Some(1));
+
+    let pending = resolve_dice(&battle, 1, &Action::Move(vec![Cell(1, 1)]), &mut rng)
+        .unwrap()
+        .battle;
+    let reaction = propose(&pending, 10).unwrap().unwrap();
+    let after_reaction = resolve_dice(&pending, 10, &reaction, &mut rng)
+        .unwrap()
+        .battle;
+    assert!(after_reaction.actor(10).unwrap().budget().reaction_used);
+    let next_hero = resolve_dice(&after_reaction, 1, &Action::EndTurn, &mut rng)
+        .unwrap()
+        .battle;
+    assert_eq!(next_hero.active_actor(), Some(2));
+
+    let second_move = resolve_dice(&next_hero, 2, &Action::Move(vec![Cell(4, 2)]), &mut rng)
+        .unwrap()
+        .battle;
+    assert!(second_move.reaction_offers().is_empty());
+    assert_eq!(second_move.actor(2).unwrap().cell(), Cell(4, 2));
+}
+
+/// SRD 5.2.1 pp. 14, 183: an Incapacitated creature cannot take a Reaction.
+#[test]
+fn incapacitated_enemy_does_not_offer_an_opportunity_attack() {
+    let json: &[u8] = br#"{"schema":2,"grid":{"cols":6,"rows":3,"blocked":[]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[1,1]],"enemies":[[2,1],[5,1]]}}]}"#;
+    let map = BattleMap::from_json(json, "flat").unwrap();
+    let specs = vec![
+        hero(1, Cell(1, 1), false),
+        CombatantSpec::creature(10, "wolf", Cell(2, 1), 0).unwrap(),
+        CombatantSpec::creature(11, "wolf", Cell(5, 1), 0).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(17);
+    let mut initiative = Vec::new();
+    let battle = loop {
+        match begin(map.clone(), specs.clone(), binding(&source), &initiative) {
+            Err(RuleError::MissingDraw { sides }) => {
+                let ordinal = initiative.len() as u32;
+                let mut draw = record(&mut rng, sides, ordinal, &source);
+                draw.value = [20, 10, 1].get(ordinal as usize).copied().unwrap_or(1);
+                initiative.push(draw);
+            }
+            Ok(result) => break result.battle,
+            Err(error) => panic!("the battle must begin with its supplied dice: {error:?}"),
+        }
+    };
+    let knockout_attack = AttackUse {
+        weapon: Weapon::Greatsword,
+        ranged: false,
+        hands: 2,
+        finesse_dexterity: false,
+        knockout: true,
+        savage_attacker: false,
+        use_mastery: false,
+    };
+    let action = Action::Attack {
+        target: 10,
+        weapon: knockout_attack,
+        spend: AttackSpend::Action,
+    };
+    let mut attack_draws = Vec::new();
+    let attacked = loop {
+        match resolve(&battle, 1, &action, binding(&source), &attack_draws) {
+            Err(RuleError::MissingDraw { sides }) => {
+                let ordinal = attack_draws.len() as u32;
+                let mut draw = record(&mut rng, sides, ordinal, &source);
+                draw.value = if sides == 20 { 20 } else { 6 };
+                attack_draws.push(draw);
+            }
+            Ok(result) => break result.battle,
+            Err(error) => panic!("the attack must resolve with its supplied dice: {error:?}"),
+        }
+    };
+    assert!(attacked.actor(10).unwrap().health().unconscious);
+
+    let moved = resolve_dice(&attacked, 1, &Action::Move(vec![Cell(0, 1)]), &mut rng)
+        .unwrap()
+        .battle;
+    assert!(moved.reaction_offers().is_empty());
+    assert_eq!(moved.actor(1).unwrap().cell(), Cell(0, 1));
+}

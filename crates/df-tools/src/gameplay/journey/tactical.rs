@@ -8,6 +8,10 @@ use tactical_rules::{
 };
 
 const ENEMY_ENTITIES: [[u8; 16]; 4] = [[0x65; 16], [0x71; 16], [0x72; 16], [0x73; 16]];
+// This persisted revision also pins the enemy reaction policy for deterministic fight replay.
+const TACTICAL_SOURCE_REVISION_LEGACY_POLICY: &str = tactical_rules::SOURCE_REVISION;
+const TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY: &str =
+    "SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v1";
 const SCENES: &[(&str, &[u8])] = &[
     (
         "salt-quay",
@@ -298,15 +302,21 @@ pub(super) fn snapshot(state: &GameState) -> Result<&TacticalSnapshot, Repositor
         .ok_or(RepositoryError::InvalidCandidate)
 }
 pub(super) fn read(state: &GameState) -> Result<Battle, RepositoryError> {
-    let saved = snapshot(state)?;
+    let saved = noted("fight-snapshot", snapshot(state))?;
     if saved.schema != 1
-        || saved.source_revision.as_str() != tactical_rules::SOURCE_REVISION
+        || !matches!(
+            saved.source_revision.as_str(),
+            TACTICAL_SOURCE_REVISION_LEGACY_POLICY | TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY
+        )
         || saved.scene_digest.0 != <[u8; 32]>::from(Sha256::digest(&saved.scene))
         || !SCENES
             .iter()
             .any(|(_, bytes)| *bytes == saved.scene.as_slice())
     {
-        return Err(RepositoryError::InvalidCandidate);
+        return noted(
+            "fight-snapshot-version",
+            Err(RepositoryError::InvalidCandidate),
+        );
     }
     let map = scene_map(&saved.scene, saved.layout.as_str())?;
     let battle = Battle::from_snapshot(map, &saved.state).map_err(bad)?;
@@ -316,7 +326,10 @@ pub(super) fn read(state: &GameState) -> Result<Battle, RepositoryError> {
             .iter()
             .any(|actor| !saved.actors.iter().any(|(id, _)| *id == actor.id()))
     {
-        return Err(RepositoryError::InvalidCandidate);
+        return noted(
+            "fight-snapshot-actors",
+            Err(RepositoryError::InvalidCandidate),
+        );
     }
     Ok(battle)
 }
@@ -853,7 +866,13 @@ fn policy(
     let basis = current.basis();
     let pins = current.pins();
     let observer = KnowledgeObserver::Entity(canonical(state, actor)?);
-    let definition = model::content("tactical-srd521-cover-policy")?;
+    let [encounter] = state.encounters.as_slice() else {
+        return noted(
+            "enemy-policy-version",
+            Err(RepositoryError::InvalidCandidate),
+        );
+    };
+    let definition = encounter.combat_policy.clone();
     let observation = RankingObservation {
         basis: &basis,
         pins,
@@ -877,11 +896,22 @@ fn policy(
         criteria: &[],
     };
     let source = rule()?;
+    let saved = noted("enemy-policy-version", snapshot(state))?;
+    let choose = match saved.source_revision.as_str() {
+        TACTICAL_SOURCE_REVISION_LEGACY_POLICY => df_combat::tactical::choose_legacy,
+        TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY => df_combat::tactical::choose,
+        _ => {
+            return noted(
+                "enemy-policy-version",
+                Err(RepositoryError::InvalidCandidate),
+            );
+        }
+    };
     noted(
         "enemy-policy-none",
         noted(
             "enemy-policy",
-            df_combat::tactical::choose(
+            choose(
                 battle,
                 actor,
                 TacticContext {
@@ -1218,7 +1248,7 @@ pub(super) fn start(
         combat_policy: model::content("tactical-srd521-cover-policy")?,
         tactical: Some(TacticalSnapshot {
             schema: 1,
-            source_revision: model::label(tactical_rules::SOURCE_REVISION)?,
+            source_revision: model::label(TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY)?,
             scene_digest: ContentDigest(Sha256::digest(bytes).into()),
             scene: bytes.to_vec(),
             layout: model::label(&layout.id)?,
@@ -4776,13 +4806,17 @@ pub(super) mod tests {
             );
         });
     }
+    /// SRD 5.2.1 p. 14: Disengage avoids opportunity attacks; a legal enemy Reaction attacks.
     #[test]
-    fn submitted_disengage_prevents_source_opportunity_window_while_enemy_policy_declines_optional_attack()
-     {
+    fn submitted_disengage_prevents_source_opportunity_window_and_enemy_policy_attacks() {
         use rpc::GameplayActionKind as K;
         with_live(|| {
             let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
             let current = fight(true);
+            assert_eq!(
+                snapshot(current.state()).unwrap().source_revision.as_str(),
+                TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY
+            );
             let cell_option = |current: &Checkpoint, cell| {
                 options(current.state(),1,K::Move).unwrap().into_iter().find(|(_,action,_)|matches!(action,Action::Move(path) if path.last()==Some(&cell))).unwrap().0
             };
@@ -4812,13 +4846,46 @@ pub(super) mod tests {
             .unwrap()
             .battle;
             assert!(!pending.reaction_offers().is_empty());
+            let mut legacy_state = current.state().clone();
+            legacy_state.encounters[0]
+                .tactical
+                .as_mut()
+                .unwrap()
+                .source_revision = model::label(TACTICAL_SOURCE_REVISION_LEGACY_POLICY).unwrap();
+            let legacy_action = policy(
+                &current,
+                &legacy_state,
+                &pending,
+                pending.reaction_offers()[0],
+                operation,
+                0,
+            )
+            .unwrap();
+            assert_eq!(
+                legacy_action,
+                Action::Opportunity { attack: None },
+                "the stored legacy source revision keeps the historical policy"
+            );
             let exited = submit(
                 &current,
                 first,
                 &request(&current, 9, K::Move, Some(&exit)),
-                &mut |_| panic!("enemy policy declines optional attack"),
+                &mut |_| Ok(1),
             );
             assert!(read(exited.state()).unwrap().reaction_offers().is_empty());
+            let recorded = accepted(exited.state().decisions.last().unwrap())
+                .unwrap()
+                .combat;
+            assert!(
+                recorded
+                    .iter()
+                    .any(|outcome| outcome.kind == rpc::OutcomeKind::OpportunityAttack as i32)
+            );
+            assert!(
+                recorded
+                    .iter()
+                    .any(|outcome| outcome.kind == rpc::OutcomeKind::Move as i32)
+            );
             let disengaged = submit(
                 &current,
                 first,
@@ -5513,5 +5580,21 @@ mod shared_scene_tests {
     fn the_server_stages_a_fight_on_the_story_location_unless_a_scene_is_forced() {
         // Not forced in this process: the story place stands.
         assert_eq!(staged_location("salt-quay".to_owned()), "salt-quay");
+    }
+
+    /// SRD 5.2.1 p. 14: an Opportunity Attack is a melee attack made as a Reaction.
+    #[test]
+    fn tactical_opportunity_attack_audit_line_names_its_reaction() {
+        let line = super::super::super::table_log::audit_line(&rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::OpportunityAttack as i32,
+            actor_name: "Giant Weasel 1".to_owned(),
+            target_name: "Brakka".to_owned(),
+            weapon: "bite".to_owned(),
+            attack_style: 1,
+            ..Default::default()
+        });
+
+        assert!(line.starts_with("COMBAT attack "));
+        assert!(line.contains("mode=melee reaction=opportunity "));
     }
 }

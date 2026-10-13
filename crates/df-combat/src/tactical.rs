@@ -82,13 +82,37 @@ impl LegalOfferOwner for Authority<'_> {
 /// Propose one legal deterministic next step, then admit/rank it with existing combat APIs.
 /// Empty contributions preserve the explicit table policy order and introduce no fictitious
 /// evidence or utility bonus. Real caller pins/knowledge/policy must agree or ranking rejects.
-/// Opportunity windows are explicit: this policy declines its own optional reaction.
+/// Current policy takes each legal opportunity attack with a natural or held melee weapon.
 pub fn choose(
     battle: &Battle,
     actor: u32,
     context: TacticContext<'_>,
 ) -> Result<Option<Action>, TacticError> {
-    let proposed = propose(battle, actor).map_err(TacticError::Rules)?;
+    choose_with_policy(battle, actor, context, false)
+}
+
+/// Preserve the historical policy for fights whose stored tactical source revision predates
+/// opportunity-attack reactions.
+pub fn choose_legacy(
+    battle: &Battle,
+    actor: u32,
+    context: TacticContext<'_>,
+) -> Result<Option<Action>, TacticError> {
+    choose_with_policy(battle, actor, context, true)
+}
+
+fn choose_with_policy(
+    battle: &Battle,
+    actor: u32,
+    context: TacticContext<'_>,
+    legacy: bool,
+) -> Result<Option<Action>, TacticError> {
+    let proposed = if legacy {
+        propose_legacy(battle, actor)
+    } else {
+        propose(battle, actor)
+    }
+    .map_err(TacticError::Rules)?;
     let offers: Vec<Offer> = proposed
         .into_iter()
         .map(|action| Offer { action })
@@ -146,7 +170,10 @@ pub fn choose(
 pub fn propose(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
     let actor = battle.actor(id)?;
     if battle.reaction_offers().first().copied() == Some(id) {
-        return Ok(Some(Action::Opportunity { attack: None }));
+        let weapon = opportunity_weapon(&actor.spec().weapons, actor.held_weapons());
+        return Ok(Some(Action::Opportunity {
+            attack: Some(weapon_use(weapon, false)),
+        }));
     }
     if !battle.reaction_offers().is_empty() {
         return Err(RuleError::PendingReaction);
@@ -352,6 +379,24 @@ pub fn propose(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
         Ok(Some(Action::EndTurn))
     }
 }
+fn opportunity_weapon(weapons: &[Weapon], held: &[Weapon]) -> Weapon {
+    weapons
+        .iter()
+        .copied()
+        .find(|weapon| {
+            !weapon.ranged_weapon()
+                && (matches!(weapon, Weapon::Bite | Weapon::Slam) || held.contains(weapon))
+        })
+        .unwrap_or(Weapon::UnarmedStrike)
+}
+/// The previous policy deliberately declined optional opportunity reactions.
+pub fn propose_legacy(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
+    battle.actor(id)?;
+    if battle.reaction_offers().first().copied() == Some(id) {
+        return Ok(Some(Action::Opportunity { attack: None }));
+    }
+    propose(battle, id)
+}
 /// The thrown weapon a stat-block creature carries: a melee weapon with a 20/60 style range
 /// and at least one left. Heroes choose their own throws, so only enemies use this policy.
 fn thrown_weapon(battle: &Battle, id: u32) -> Result<Option<Weapon>, RuleError> {
@@ -419,11 +464,36 @@ fn weapon_use(weapon: Weapon, ranged: bool) -> AttackUse {
     AttackUse {
         weapon,
         ranged,
-        hands: if weapon.two_handed() { 2 } else { 1 },
+        hands: if weapon == Weapon::UnarmedStrike {
+            0
+        } else if weapon.two_handed() {
+            2
+        } else {
+            1
+        },
         finesse_dexterity: weapon.finesse(),
         knockout: false,
         savage_attacker: false,
         // Stat-block actions do not grant Fighter weapon masteries.
         use_mastery: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opportunity_weapon;
+    use df_rules::tactical::Weapon;
+
+    /// SRD 5.2.1 pp. 14, 176: a Reaction uses a weapon in hand or an Unarmed Strike.
+    #[test]
+    fn enemy_with_only_a_held_ranged_weapon_uses_an_unarmed_strike_for_its_reaction() {
+        assert_eq!(
+            opportunity_weapon(&[Weapon::Longbow], &[Weapon::Longbow]),
+            Weapon::UnarmedStrike
+        );
+        assert_eq!(
+            opportunity_weapon(&[Weapon::Javelin], &[]),
+            Weapon::UnarmedStrike
+        );
     }
 }

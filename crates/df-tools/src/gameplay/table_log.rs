@@ -1144,12 +1144,7 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
             outcome.death_failures
         ),
         kind => format!(
-            "COMBAT {} actor={:?} target={:?} weapon={} mode={} distance_ft={} cover={} roll_mode={} faces={:?} modifier={} hit={} critical={} damage={}{} reasons={:?}",
-            if kind == Ok(rpc::OutcomeKind::OpportunityAttack) {
-                "opportunity_attack"
-            } else {
-                "attack"
-            },
+            "COMBAT attack actor={:?} target={:?} weapon={} mode={}{} distance_ft={} cover={} roll_mode={} faces={:?} modifier={} hit={} critical={} damage={}{} reasons={:?}",
             outcome.actor_name,
             outcome.target_name,
             outcome.weapon,
@@ -1157,6 +1152,11 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
                 "ranged"
             } else {
                 "melee"
+            },
+            if kind == Ok(rpc::OutcomeKind::OpportunityAttack) {
+                " reaction=opportunity"
+            } else {
+                ""
             },
             outcome.distance_ft,
             outcome.cover,

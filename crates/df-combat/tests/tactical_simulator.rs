@@ -416,8 +416,9 @@ fn simulate(layout: &str, enemies: &[&str], seed: u64) -> (u32, String) {
 fn tactical_simulator_four_complete_source_fights_with_recorded_dice() {
     for (layout, enemies, seed) in [
         ("open-court", vec!["goblin-warrior"], 31),
-        ("broken-yard", vec!["goblin-warrior"; 3], 13),
-        ("wolf-trail", vec!["wolf"; 2], 26),
+        ("broken-yard", vec!["goblin-warrior"; 3], 26),
+        // SRD 5.2.1 p. 364: a Wolf Bite has no save roll after its attack/damage dice.
+        ("wolf-trail", vec!["wolf"; 2], 23),
         ("open-court", vec!["skeleton"], 0),
     ] {
         let (rounds, log) = simulate(layout, &enemies, seed);
@@ -510,10 +511,18 @@ fn tactical_policy_prefers_reachable_target_and_handles_optional_reactions() {
         .battle;
     assert_eq!(pending.reaction_offers(), &[2]);
     let decline = propose(&pending, 2).unwrap().unwrap();
-    assert_eq!(decline, Action::Opportunity { attack: None });
+    assert!(matches!(
+        decline,
+        Action::Opportunity {
+            attack: Some(AttackUse {
+                weapon: Weapon::Greatsword,
+                ..
+            })
+        }
+    ));
     let moved = dice.step(&pending, 2, &decline).battle;
     assert_eq!(moved.actor(10).unwrap().cell(), Cell(7, 4));
-    assert!(!moved.actor(2).unwrap().budget().reaction_used);
+    assert!(moved.actor(2).unwrap().budget().reaction_used);
 }
 
 #[test]
@@ -964,14 +973,10 @@ fn tactical_ammunition_collection_requires_a_living_capable_actor_after_combat()
             weapon: bite,
             spend: AttackSpend::Action,
         },
-        &[(20, 20), (6, 6), (6, 6), (20, 20)],
+        // SRD 5.2.1 p. 364: Bite is an attack roll plus damage dice, with Prone on a hit.
+        &[(20, 20), (6, 6), (6, 6)],
     );
-    assert!(
-        bite_result.attacks[0]
-            .strength_save
-            .expect("wolf bite records the target's save")
-            .succeeded
-    );
+    assert!(bite_result.battle.actor(3).unwrap().health().prone);
     state = bite_result.battle;
     state = fixed_step(&state, 10, &Action::EndTurn, &[]).battle;
     let sword = AttackUse {
@@ -1053,15 +1058,11 @@ fn tactical_natural_attacks_need_no_hands_and_are_never_dropped_items() {
         savage_attacker: false,
         use_mastery: false,
     };
-    let mut rolls = vec![
-        dice.record(20, &src, 2),
-        dice.record(6, &src, 3),
-        dice.record(20, &src, 4),
-    ];
+    // SRD 5.2.1 p. 364: no d20 is drawn for the Bite's Prone rider.
+    let mut rolls = vec![dice.record(20, &src, 2), dice.record(6, &src, 3)];
     rolls[0].value = 15;
     rolls[1].value = 1;
-    rolls[2].value = 1;
-    let state = resolve(
+    let bite_result = resolve(
         &state,
         10,
         &Action::Attack {
@@ -1072,10 +1073,18 @@ fn tactical_natural_attacks_need_no_hands_and_are_never_dropped_items() {
         dice.binding(&src),
         &rolls,
     )
-    .unwrap()
-    .battle;
+    .unwrap();
+    assert_eq!(
+        bite_result
+            .draws
+            .iter()
+            .map(|draw| draw.sides)
+            .collect::<Vec<_>>(),
+        vec![20, 6]
+    );
+    let state = bite_result.battle;
     assert!(state.actor(1).unwrap().health().prone);
-    dice.ordinal = 5;
+    dice.ordinal = 4;
     let state = dice.step(&state, 10, &Action::EndTurn).battle;
     let sword = AttackUse {
         weapon: Weapon::Greatsword,
@@ -1087,10 +1096,10 @@ fn tactical_natural_attacks_need_no_hands_and_are_never_dropped_items() {
         use_mastery: true,
     };
     let mut rolls = vec![
+        dice.record(20, &src, 4),
         dice.record(20, &src, 5),
-        dice.record(20, &src, 6),
+        dice.record(6, &src, 6),
         dice.record(6, &src, 7),
-        dice.record(6, &src, 8),
     ];
     rolls[0].value = 15;
     rolls[1].value = 16;
