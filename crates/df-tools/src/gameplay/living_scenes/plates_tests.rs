@@ -189,7 +189,7 @@ fn fresh_ids(jobs: &[Job]) -> Vec<String> {
     jobs.iter()
         .filter_map(|job| match job {
             Job::Fresh { id, .. } => Some(id.clone()),
-            Job::Edit { .. } | Job::Locate { .. } => None,
+            Job::Directed(_) | Job::Edit { .. } | Job::Locate { .. } => None,
         })
         .collect()
 }

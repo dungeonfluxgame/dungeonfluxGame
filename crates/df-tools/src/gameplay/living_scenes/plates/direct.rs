@@ -39,11 +39,11 @@ impl Book {
 pub(super) struct Work {
     generation: u64,
     scene_key: String,
-    scene: PlateScene,
-    spec: ShotSpec,
-    heroes: Vec<u8>,
-    faces: Vec<(u8, ImageKey)>,
-    text: String,
+    pub(super) scene: PlateScene,
+    pub(super) spec: ShotSpec,
+    pub(super) heroes: Vec<u8>,
+    pub(super) faces: Vec<(u8, ImageKey)>,
+    pub(super) text: String,
     keep: bool,
     reply: RenderReply,
 }
