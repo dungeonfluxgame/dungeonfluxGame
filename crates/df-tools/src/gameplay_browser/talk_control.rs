@@ -60,6 +60,18 @@ enum Held {
     Key,
 }
 
+struct UploadCancellation {
+    task: AbortHandle,
+    fetch: AbortController,
+}
+
+impl UploadCancellation {
+    fn abort(self) {
+        self.fetch.abort();
+        self.task.abort();
+    }
+}
+
 struct Listener {
     target: EventTarget,
     name: &'static str,
@@ -112,7 +124,7 @@ pub(super) struct Talk {
     held: Option<Held>,
     recording: Option<Recording>,
     ticker: Option<Interval>,
-    upload: Option<AbortHandle>,
+    upload: Option<UploadCancellation>,
 }
 
 impl Talk {
@@ -137,8 +149,8 @@ impl Talk {
             Command::AbortUpload => {
                 // The recorder may not have delivered its stop event yet; it must not upload.
                 self.discard();
-                if let Some(abort) = self.upload.take() {
-                    abort.abort();
+                if let Some(upload) = self.upload.take() {
+                    upload.abort();
                 }
             }
             // Only a tap opens or finishes a recording; an interruption never asks for either.
@@ -163,8 +175,8 @@ impl Talk {
     /// Releases the microphone and every listener. Used when the page's client is dropped.
     fn dispose(&mut self) {
         self.ticker = None;
-        if let Some(abort) = self.upload.take() {
-            abort.abort();
+        if let Some(upload) = self.upload.take() {
+            upload.abort();
         }
         if let Some(recording) = self.recording.take() {
             recording.keep.set(false);
@@ -813,16 +825,27 @@ fn recorded(client: &Rc<RefCell<Client>>) {
         }
         Blob::new_with_blob_sequence(&parts)
     };
-    let (abort, registration) = AbortHandle::new_pair();
     let Ok(blob) = blob else {
         client.borrow_mut().dialogue.talk.capture.unreadable();
         show(client);
         return;
     };
-    client.borrow_mut().dialogue.talk.upload = Some(abort);
+    let controller = match AbortController::new() {
+        Ok(controller) => controller,
+        Err(_) => {
+            client.borrow_mut().dialogue.talk.capture.upload_failed();
+            show(client);
+            return;
+        }
+    };
+    let (task, registration) = AbortHandle::new_pair();
+    client.borrow_mut().dialogue.talk.upload = Some(UploadCancellation {
+        task,
+        fetch: controller.clone(),
+    });
     let weak = Rc::downgrade(client);
     spawn_local(async move {
-        let _finished = Abortable::new(hear(weak, blob), registration).await;
+        let _finished = Abortable::new(hear(weak, blob, controller), registration).await;
     });
 }
 
@@ -850,7 +873,7 @@ async fn decode(blob: &Blob) -> Result<Vec<f32>, JsValue> {
     Ok(samples)
 }
 
-async fn hear(weak: WeakClient, blob: Blob) {
+async fn hear(weak: WeakClient, blob: Blob, controller: AbortController) {
     let decoded = decode(&blob).await;
     drop(blob);
     let Some(client) = weak.upgrade() else {
@@ -880,7 +903,7 @@ async fn hear(weak: WeakClient, blob: Blob) {
         return;
     }
     let credential = client.borrow().credential.clone();
-    let answer = upload(&credential, &clip).await;
+    let answer = upload(&credential, &clip, &controller).await;
     drop(clip);
     let Some(client) = weak.upgrade() else {
         return;
@@ -923,9 +946,12 @@ fn focus_editor(client: &Rc<RefCell<Client>>) {
 }
 
 /// Sends the clip and returns the server's outcome label and the transcript text.
-async fn upload(credential: &str, clip: &[u8]) -> Result<(SpeechOutcome, String), JsValue> {
+async fn upload(
+    credential: &str,
+    clip: &[u8],
+    controller: &AbortController,
+) -> Result<(SpeechOutcome, String), JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
-    let controller = AbortController::new()?;
     let aborting = controller.clone();
     let _deadline = Timeout::new(UPLOAD_DEADLINE_MILLISECONDS, move || aborting.abort());
     let headers = Headers::new()?;
