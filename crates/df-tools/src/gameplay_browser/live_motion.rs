@@ -1850,14 +1850,10 @@ pub(super) fn on_player_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue
         }
     }
     let rolled = with_motion(|motion| {
-        let first = motion.previous.is_none();
         let transitions = presentation::transitions(motion.previous.as_ref(), &snapshot);
         motion.previous = Some(snapshot.clone());
         for line in &lines {
-            if remember(&mut motion.seen, line.sequence)
-                && !hidden
-                && (!first || line.kind == TableKind::Speech)
-            {
+            if remember(&mut motion.seen, line.sequence) && !hidden {
                 if motion.log.len() >= LOG_LINES {
                     motion.log.pop_front();
                 }
@@ -1969,7 +1965,7 @@ mod tests {
     #[test]
     fn fresh_outcomes_uses_sequence_and_keeps_every_new_beat_in_order() {
         let outcomes: Vec<_> = (1..=7)
-            .map(|sequence| crate::rpc::CombatOutcome {
+            .map(|sequence| df_protocol::common::CombatOutcome {
                 sequence,
                 ..Default::default()
             })
