@@ -1484,6 +1484,38 @@ fn shipped_pack_lists_its_secret_terms_and_speakers_and_bad_ones_are_refused() {
 }
 
 #[test]
+fn duplicate_speaker_names_are_refused_regardless_of_profile_order() {
+    for prepend in [true, false] {
+        let pack = edit(&shipped_pack(), |document| {
+            let speakers = document["speakers"]
+                .as_array_mut()
+                .expect("speakers must be an array");
+            let mut duplicate = speakers[0].clone();
+            duplicate["role"] = json!("An unsafe conflicting role");
+            duplicate["voice"] = json!("A conflicting voice");
+            duplicate["age"] = serde_json::Value::Null;
+            if prepend {
+                speakers.insert(0, duplicate);
+            } else {
+                speakers.push(duplicate);
+            }
+        });
+
+        let duplicate_path = if prepend {
+            "speakers[1].name"
+        } else {
+            "speakers[2].name"
+        };
+        assert_cross_ref(
+            refusal(&pack, &shipped_tuning()),
+            SourceFile::Pack,
+            duplicate_path,
+            CrossRefReason::DuplicateId,
+        );
+    }
+}
+
+#[test]
 fn tempo_is_optional_revisioned_presentation_tuning_without_rules_departures() {
     let pack = shipped_pack();
     let tuning = shipped_tuning();

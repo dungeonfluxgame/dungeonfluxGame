@@ -1629,6 +1629,11 @@ fn validate_speaking_notes(pack: &PackFile) -> Result<(), PackError> {
             96,
         )?;
     }
+    require_unique(
+        FILE,
+        |index| format!("speakers[{index}].name"),
+        pack.speakers.iter().map(|speaker| speaker.name.as_str()),
+    )?;
     Ok(())
 }
 
