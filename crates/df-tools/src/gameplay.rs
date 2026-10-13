@@ -866,6 +866,8 @@ pub async fn serve(
         .transpose()?;
     let cold =
         journey::initial().map_err(|_| io::Error::other("gameplay baseline validation failed"))?;
+    let plates_enabled =
+        startup_configuration::plates_enabled(std::env::var("DF_GAMEPLAY_PLATES"))?;
     let codec = NativeCodecLimits {
         maximum_document_bytes: 1024 * 1024,
         maximum_allocated_bytes: 2 * 1024 * 1024,
@@ -1329,7 +1331,7 @@ pub async fn serve(
         social.clone(),
         rating,
         living_scenes::Timing::from_interval(living_interval),
-        startup_configuration::plates_enabled(std::env::var("DF_GAMEPLAY_PLATES"))?,
+        plates_enabled,
     );
     // PLAY-V10: the home screen's looping video, made from the still just in time.
     let home_video_line = home_video::install(
