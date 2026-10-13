@@ -22,6 +22,31 @@ Integration history from 2026-10-12T18:31:36-04:00 through 2026-10-13T06:51:17-0
 
 Integration history from 2026-10-13T06:51:46-04:00 through 2026-10-13T10:55:22-04:00 on `main`, generated from Git by revision range `e5034d48311b..cefa2864f788`: six-hour blocks by first-parent commit time, 26 commits, each listed once in integration order.
 
+Integration history from 2026-10-13T10:55:42-04:00 through 2026-10-13T14:04:49-04:00 on `main`, generated from Git by revision range `cefa2864f788..493477ca31cc`: six-hour blocks by first-parent commit time, 14 commits, each listed once in integration order.
+
+## 2026-10-13T10:55:42-04:00 to 2026-10-13T14:04:49-04:00
+
+Range: cefa2864f7887557351490c88279a4112ca52c1e..493477ca31cc41a14d0ac0a32c59787ee9817cfd
+
+- 929063ff693318d9ff354da81d1feb493e226ee1 — Roadmap and changelog: the fifth playthrough and its fixes
+- 5a18675ca860d99bfdd2c8ee25a9b438075b8104 — Provider tests: the closed-port case is given time to be refused on Windows
+- 432709201c4b409c3310b82d667b594587902490 — REV-21: seat activity is written at most once every five seconds per seat
+- a97b36485b553c8bfe80c9b8186d2a3f4e4b4ce5 — RUN-13: the phone's page before joining shows the lobby's picture
+- 9e53905c2bd71f5e6db09e562c765326647d59b3 — OBS-07: the two greatsword packages say what makes them different
+- b4c7cbdf9a881c3f99bb1bb29e9815302d69876f — RUN-08, STO-03: the storyteller is told how many creatures take the field and what they carry
+- 8b0967d41fe765615e4a63ead235fe92c0645301 — Rules auditor: a thrown javelin lying on the ground does not empty the hero's hand
+- b1488ab86f2d4ccab65e78893abf7d746ec1df85 — Format the package ability text and its test
+- fc1fc3f9d200169561f95df919f0cbc72ed50de6 — TV fight picture: tilt-shift on the figures, nothing drawn close to the lens, and a scan can end before its ragged rim
+- d29a3a4f0a304b3497ff5f4980d715c4cb7e0ea2 — SCN-01: scanned battlefields get their walkable ground from the scan, so nobody stands in or walks through a fence
+- 3b0e411488915ad25637d320590713081d73013f — TV fight: a thin side-coloured ring on the ground under every standing figure
+- 23c8fa4844812694cfe5637a34fd39297286cc57 — RUN-03, SYN-07: between two enemies' beats the TV heading names the next enemy, not the last hero
+- 050729eba7bf46dd87bff5e76c3a71c2bdeee22e — Combat simulator tests: supply the Strength save a wolf's bite now draws
+- 493477ca31cc41a14d0ac0a32c59787ee9817cfd — FPX-03: the wide shot comes closer; reachable ground may run under the side cards, figures may not
+
+Next block baseline: `493477ca31cc41a14d0ac0a32c59787ee9817cfd`.
+
+The commit writing this block remains pending for capture in the next block. This block is still open: the work session had not ended when it was written, and it is shorter than six hours.
+
 ## 2026-10-13T06:51:46-04:00 to 2026-10-13T10:55:22-04:00
 
 Range: e5034d48311bc22079174965b58199904c878ab4..cefa2864f7887557351490c88279a4112ca52c1e
