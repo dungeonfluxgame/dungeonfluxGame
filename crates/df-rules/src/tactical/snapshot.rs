@@ -101,29 +101,27 @@ impl Battle {
             if (!actor.spec.shield && actor.shield_equipped)
                 || actor.held.iter().copied().collect::<BTreeSet<_>>().len() != actor.held.len()
                 || actor
-                    .dropped
+                    .held
                     .iter()
-                    .map(|(weapon, _)| *weapon)
-                    .collect::<BTreeSet<_>>()
-                    .len()
-                    != actor.dropped.len()
-                || actor.held.iter().any(|weapon| {
-                    actor.dropped.iter().any(|(dropped, _)| dropped == weapon)
-                        || actor.weapon_count(*weapon) == 0
-                })
+                    .any(|weapon| actor.weapon_count(*weapon) == 0)
                 || actor.weapon_counts.keys().copied().collect::<BTreeSet<_>>()
                     != actor.spec.weapons.iter().copied().collect::<BTreeSet<_>>()
                 || actor.weapon_counts.iter().any(|(weapon, count)| {
-                    *count
-                        > if *weapon == super::Weapon::Javelin {
-                            8
+                    usize::from(*count)
+                        + actor
+                            .dropped
+                            .iter()
+                            .filter(|(dropped, _)| dropped == weapon)
+                            .count()
+                        > usize::from(if *weapon == super::Weapon::Javelin {
+                            8_u16
                         } else if actor.spec.kind == super::CreatureKind::Kobold
                             && *weapon == super::Weapon::Dagger
                         {
                             3
                         } else {
                             1
-                        }
+                        })
                 })
             {
                 return Err(RuleError::SnapshotData);
@@ -202,10 +200,17 @@ impl Battle {
         if let Some(pending) = &battle.pending {
             let mover = battle.actor(pending.actor)?;
             let destination = pending.path[pending.next];
+            let mut from = mover.cell();
+            let remaining_path_is_clear = pending.path[pending.next..].iter().all(|to| {
+                let clear = battle.map.step_clear(from, *to);
+                from = *to;
+                clear
+            });
             if mover.health.incapacitated()
                 || mover.budget.disengaged
                 || mover.cell().distance(destination) != 5
                 || battle.map.is_blocked(destination)
+                || !remaining_path_is_clear
                 || pending
                     .path
                     .windows(2)

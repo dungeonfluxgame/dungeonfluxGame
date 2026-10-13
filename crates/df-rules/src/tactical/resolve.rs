@@ -440,16 +440,24 @@ pub fn resolve(
                             combatant.budget.action_used = true;
                         }
                         combatant.budget.object_interaction_used = true;
-                        if combatant.held.len() == 2
-                            || (weapon.two_handed() && combatant.shield_equipped)
+                        if !combatant.held.contains(weapon)
+                            && (combatant.held.len() == 2
+                                || (weapon.two_handed() && combatant.shield_equipped))
                         {
                             return Err(RuleError::InvalidHands);
                         }
                         combatant.dropped.remove(index);
+                        let quantity = combatant
+                            .weapon_counts
+                            .get_mut(weapon)
+                            .ok_or(RuleError::WeaponMissing)?;
+                        *quantity = quantity.checked_add(1).ok_or(RuleError::Capacity)?;
                         if weapon.two_handed() {
                             combatant.held.clear();
                         }
-                        combatant.held.push(*weapon);
+                        if !combatant.held.contains(weapon) {
+                            combatant.held.push(*weapon);
+                        }
                     }
                     Action::Opportunity { .. }
                     | Action::DeathSave
@@ -573,13 +581,7 @@ fn admit_attack(battle: &Battle, id: u32, target: u32, usage: AttackUse) -> Resu
     if actor.id() == target.id() || actor.side() == target.side() || target.health.dead {
         return Err(RuleError::InvalidTarget);
     }
-    if usage.weapon != Weapon::UnarmedStrike
-        && (actor
-            .dropped
-            .iter()
-            .any(|(weapon, _)| *weapon == usage.weapon)
-            || actor.weapon_count(usage.weapon) == 0)
-    {
+    if usage.weapon != Weapon::UnarmedStrike && actor.weapon_count(usage.weapon) == 0 {
         return Err(RuleError::WeaponMissing);
     }
     if (usage.hands == 0
@@ -842,6 +844,11 @@ fn attack(
     } else {
         None
     };
+    let thrown_landing = if usage.ranged && !usage.weapon.ammunition() {
+        Some(battle.actor(target)?.cell())
+    } else {
+        None
+    };
     let graze = !hit && mastery == Some(Mastery::Graze);
     let multiplier = if critical { 2 } else { 1 };
     let (mut count, mut sides) = usage
@@ -951,6 +958,10 @@ fn attack(
                 .get_mut(&usage.weapon)
                 .ok_or(RuleError::WeaponMissing)?;
             *quantity -= 1;
+            actor.dropped.push((
+                usage.weapon,
+                thrown_landing.ok_or(RuleError::WeaponMissing)?,
+            ));
             if *quantity == 0 {
                 actor.held.retain(|held| *held != usage.weapon);
             }
@@ -1074,7 +1085,7 @@ fn apply_damage(
         actor.health.knocked_out = true;
         actor.health.unconscious = true;
         actor.health.prone = true;
-        drop_held(actor);
+        drop_held(actor)?;
         return Ok(());
     }
     if hp > 0 && actor.spec.kind == CreatureKind::Zombie && !critical {
@@ -1087,7 +1098,7 @@ fn apply_damage(
     actor.health.hit_points = 0;
     actor.health.unconscious = true;
     actor.health.prone = true;
-    drop_held(actor);
+    drop_held(actor)?;
     if actor.spec.kind != CreatureKind::Hero
         || (hp > 0 && damage - hp >= actor.health.maximum)
         || (hp == 0 && damage >= actor.health.maximum)
@@ -1304,10 +1315,14 @@ fn react(
     Ok(())
 }
 
-fn drop_held(actor: &mut super::Combatant) {
+fn drop_held(actor: &mut super::Combatant) -> Result<(), RuleError> {
     for weapon in actor.held.drain(..) {
-        if !actor.dropped.iter().any(|(item, _)| *item == weapon) {
-            actor.dropped.push((weapon, actor.spec.cell));
-        }
+        let quantity = actor
+            .weapon_counts
+            .get_mut(&weapon)
+            .ok_or(RuleError::WeaponMissing)?;
+        *quantity = quantity.checked_sub(1).ok_or(RuleError::WeaponMissing)?;
+        actor.dropped.push((weapon, actor.spec.cell));
     }
+    Ok(())
 }

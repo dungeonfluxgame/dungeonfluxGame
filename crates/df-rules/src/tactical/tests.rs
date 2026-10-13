@@ -72,6 +72,13 @@ fn map(name: &str) -> BattleMap {
     };
     BattleMap::from_json(bytes, name).unwrap()
 }
+fn corner_map() -> BattleMap {
+    BattleMap::from_json(
+        br#"{"schema":2,"grid":{"cols":4,"rows":4,"blocked":[[1,2],[2,1]]},"layouts":[{"id":"corner-test","obstacles":[],"difficult":[],"spawns":{"heroes":[[1,1],[3,3]],"enemies":[[0,2]]}}]}"#,
+        "corner-test",
+    )
+    .unwrap()
+}
 fn melee(id: u32, cell: Cell) -> CombatantSpec {
     CombatantSpec {
         id,
@@ -1248,6 +1255,90 @@ fn tactical_snapshot_preserves_optional_opportunity_pending_path_and_continuatio
         step(&pending, 3, decline.clone(), &[]),
         step(&recovered, 3, decline, &[])
     );
+}
+
+#[test]
+fn tactical_snapshot_rejects_pending_diagonal_path_through_blocked_corners() {
+    let src = source();
+    let pending = begin(
+        corner_map(),
+        vec![
+            melee(1, Cell(1, 1)),
+            melee(2, Cell(3, 3)),
+            CombatantSpec::creature(3, "bandit", Cell(0, 2), 0).unwrap(),
+        ],
+        binding(&src),
+        &records(&src, &[(20, 20), (20, 1), (20, 1)]),
+    )
+    .unwrap()
+    .battle;
+    let pending = step(&pending, 1, Action::Move(vec![Cell(1, 0)]), &[]).battle;
+    assert_eq!(pending.reaction_offers(), &[3]);
+
+    let mut snapshot: serde_json::Value =
+        serde_json::from_slice(&pending.snapshot().unwrap()).unwrap();
+    snapshot["pending"]["path"][0] = serde_json::json!([2, 2]);
+    assert_eq!(
+        Battle::from_snapshot(corner_map(), &serde_json::to_vec(&snapshot).unwrap()),
+        Err(RuleError::SnapshotData)
+    );
+}
+
+#[test]
+fn thrown_javelin_lands_at_target_cell_on_hit_and_can_be_picked_up() {
+    let before = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "goblin-warrior", Cell(3, 1), 0).unwrap(),
+    ]);
+    let mut thrown = step(
+        &before,
+        1,
+        strike(3, Weapon::Javelin, true),
+        &[(20, 10), (6, 6)],
+    )
+    .battle;
+    assert_eq!(thrown.actor(1).unwrap().weapon_count(Weapon::Javelin), 7);
+    assert_eq!(
+        thrown.actor(1).unwrap().dropped_weapons(),
+        &[(Weapon::Javelin, Cell(3, 1))]
+    );
+    thrown.actor_mut(3).unwrap().spec.cell = Cell(3, 2);
+
+    let moved = step(&thrown, 1, Action::Move(vec![Cell(2, 1), Cell(3, 1)]), &[]).battle;
+    let picked_up = step(&moved, 1, Action::PickUpWeapon(Weapon::Javelin), &[]).battle;
+    assert_eq!(picked_up.actor(1).unwrap().weapon_count(Weapon::Javelin), 8);
+    assert!(picked_up.actor(1).unwrap().dropped_weapons().is_empty());
+    assert_eq!(
+        Battle::from_snapshot(picked_up.map().clone(), &picked_up.snapshot().unwrap()).unwrap(),
+        picked_up
+    );
+}
+
+#[test]
+fn thrown_javelin_lands_at_target_cell_on_miss_and_snapshot_keeps_repeated_drops() {
+    let before = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "goblin-warrior", Cell(3, 1), 0).unwrap(),
+    ]);
+    let thrown = step(&before, 1, strike(3, Weapon::Javelin, true), &[(20, 1)]).battle;
+    assert_eq!(thrown.actor(1).unwrap().weapon_count(Weapon::Javelin), 7);
+    assert_eq!(
+        thrown.actor(1).unwrap().dropped_weapons(),
+        &[(Weapon::Javelin, Cell(3, 1))]
+    );
+
+    let mut snapshot: serde_json::Value =
+        serde_json::from_slice(&thrown.snapshot().unwrap()).unwrap();
+    snapshot["actors"][0]["weapon_counts"]["Javelin"] = 6.into();
+    snapshot["actors"][0]["dropped"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!(["Javelin", [3, 1]]));
+    let restored = Battle::from_snapshot(
+        thrown.map().clone(),
+        &serde_json::to_vec(&snapshot).unwrap(),
+    );
+    assert!(restored.is_ok());
 }
 
 #[test]
