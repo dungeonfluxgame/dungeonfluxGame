@@ -798,15 +798,47 @@ impl NpcVoice {
     /// [`Self::converse`] for an NPC with a backstory, reporting how the exchange went.
     pub(super) async fn converse_in_character(
         &self,
-        context: NpcReplyContext,
+        mut context: NpcReplyContext,
         log: &TableLog,
     ) -> Option<Exchange> {
+        let keyword_approach = classify_keywords(&context.typed_words);
+        let threat_shift = if keyword_approach == Approach::Intimidation {
+            let turn = context.turn.as_mut()?;
+            let shift = turn
+                .ledger
+                .threaten(context.member, &turn.dossier, &turn.scene);
+            turn.standing = turn.ledger.standing(context.member, &turn.dossier);
+            shift
+        } else {
+            None
+        };
+        if let Some(shift @ Shift::Level { from, to }) = threat_shift {
+            let turn = context.turn.as_ref()?;
+            context.facts["attitude_toward_hero"] = json!(turn.standing.attitude.label());
+            eprintln!(
+                "SOCIAL attitude npc=\"{}\" from={} to={} cause=threat",
+                turn.dossier.npc_id,
+                from.label(),
+                to.label(),
+            );
+            log.push(
+                &context.speaker,
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Action,
+                &shift_line(shift, &context.hero_name),
+            );
+        }
         let modeled = self.model_dialogue(&context).await;
         let turn = context.turn.as_ref()?;
         let (text, approach, fallback) = match modeled {
             Ok((reply, approach)) => (
                 reply,
-                approach.unwrap_or_else(|| classify_keywords(&context.typed_words)),
+                if keyword_approach == Approach::Intimidation {
+                    keyword_approach
+                } else {
+                    approach.unwrap_or(keyword_approach)
+                },
                 None,
             ),
             Err(reason) => {
@@ -822,7 +854,7 @@ impl NpcVoice {
                     reason.label(),
                     turn.dossier.npc_id,
                 );
-                let approach = classify_keywords(&context.typed_words);
+                let approach = keyword_approach;
                 let (answer, answer_key) = npc_dossier::fallback(
                     &turn.dossier,
                     turn.standing,
@@ -1038,6 +1070,7 @@ fn strip_outer_quotes(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::adventure::dossier::Attitude;
     use super::*;
 
     const CLUE: &str = "The courier quietly tells you: the sealed packet is addressed to Vell at the Harbor Inn. Keep its destination between you.";
@@ -1175,6 +1208,64 @@ mod tests {
             context.facts["now"]["characters_present"][0]["role"],
             "Patron"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_threat_lowers_standing_before_the_model_generates_its_reply() {
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
+            "reply": "Put that away. I will not be threatened.",
+            "approach": "question"
+        }))]);
+        let (voice, cache) = voice(&endpoint, "voice-threat-attitude");
+        let mut adventure = super::super::npc_dossier_tests::adventure(1);
+        let patron = adventure
+            .dossiers
+            .iter_mut()
+            .find(|dossier| dossier.role == NpcRole::Patron)
+            .unwrap();
+        patron.starting_attitude = Attitude::Friendly;
+        let patron = patron.clone();
+        let social = SocialLedger::open(adventure.dossiers, "threat", None).unwrap();
+        let mut projected = view("", "Perrin");
+        let Some(rpc::view_message::Audience::Player(player)) = projected.audience.as_mut() else {
+            unreachable!();
+        };
+        player.scene.as_mut().unwrap().cast = vec![rpc::SceneActor {
+            id: patron.npc_id.strip_prefix("patron:").unwrap().to_owned(),
+            name: patron.name.clone(),
+            role: rpc::SceneRole::Patron as i32,
+            speaking: true,
+            ..Default::default()
+        }];
+        let context = NpcReplyContext::for_cast(
+            &projected,
+            member(1),
+            "Hand over the key or else.",
+            &story(),
+            &social,
+            "Opening",
+        )
+        .unwrap();
+        let log = TableLog::new();
+
+        voice.converse(context, &log).await;
+
+        assert_eq!(
+            social.standing(member(1), &patron).attitude,
+            Attitude::Indifferent
+        );
+        assert!(
+            endpoint.bodies()[0]["input"]
+                .as_str()
+                .unwrap()
+                .contains("\"attitude_toward_hero\":\"indifferent\"")
+        );
+        assert!(
+            log.lines()
+                .iter()
+                .any(|line| line.text == "cools toward Brannoch")
+        );
+        std::fs::remove_dir_all(cache).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]

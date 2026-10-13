@@ -15,8 +15,8 @@
 //!
 //! * An exchange moves trust by at most one point. Two points in one direction move the attitude
 //!   one level and reset the counter, so one exchange moves attitude by at most one level.
-//! * Per hero and NPC, the attitude never ends a scene more than one level from where the scene
-//!   found it.
+//! * Ordinary approaches move attitude at most one level from the scene's starting point; each
+//!   classified threat lowers it one level.
 //! * An opposing NPC (antagonist, villain, lieutenant) never becomes Friendly from talk alone.
 //!
 //! The state is saved with the run in `social.json` (atomic replace) so a reload or reconnect
@@ -382,6 +382,10 @@ struct Relationship {
     /// Whether her last reply ended with a question, so the next should end another way.
     #[serde(default)]
     last_asked: bool,
+    /// Set when a threat has already moved the attitude for the exchange now being answered, so
+    /// recording that exchange does not move it again. Never stored.
+    #[serde(skip)]
+    threat_applied: bool,
 }
 
 impl Relationship {
@@ -396,6 +400,7 @@ impl Relationship {
             exchanges: 0,
             admitted_ignorance: false,
             last_asked: false,
+            threat_applied: false,
         }
     }
 
@@ -427,6 +432,28 @@ impl Relationship {
         if target == before || !allowed {
             // At a limit: stay one point short of the next step.
             self.trust = direction * (TRUST_STEP - 1);
+            return None;
+        }
+        self.attitude = target;
+        self.trust = 0;
+        Some(Shift::Level {
+            from: before,
+            to: target,
+        })
+    }
+
+    fn threaten(&mut self, scene: &str) -> Option<Shift> {
+        if self.scene != scene {
+            self.scene = scene.to_owned();
+            self.scene_start = self.attitude;
+            self.exchanges = 0;
+            self.admitted_ignorance = false;
+            self.last_asked = false;
+        }
+        self.threat_applied = true;
+        let before = self.attitude;
+        let target = from_rank(rank(before) - 1);
+        if target == before {
             return None;
         }
         self.attitude = target;
@@ -792,11 +819,15 @@ impl SocialLedger {
         let relationship = relationships
             .entry((member, dossier.npc_id.clone()))
             .or_insert_with(|| Relationship::new(dossier));
-        let shift = relationship.apply(
-            scene,
-            effect_of(dossier, approach),
-            dossier.role.opposes_party(),
-        );
+        let shift = if std::mem::take(&mut relationship.threat_applied) {
+            None
+        } else {
+            relationship.apply(
+                scene,
+                effect_of(dossier, approach),
+                dossier.role.opposes_party(),
+            )
+        };
         relationship.exchanges = relationship.exchanges.saturating_add(1);
         relationship.admitted_ignorance |= admits_not_knowing(npc_line);
         relationship.last_asked = npc_line.trim_end().ends_with('?');
@@ -821,6 +852,20 @@ impl SocialLedger {
         });
         self.exchanges.send_replace(sequence);
         Recorded { shift }
+    }
+
+    /// Applies a deterministic threat before generating the NPC's answer. The caller saves after
+    /// recording the completed exchange.
+    pub(super) fn threaten(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+    ) -> Option<Shift> {
+        self.lock()
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier))
+            .threaten(scene)
     }
 
     /// The latest exchange of the run, if any.

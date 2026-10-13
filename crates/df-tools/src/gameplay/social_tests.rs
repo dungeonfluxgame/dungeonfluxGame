@@ -238,6 +238,58 @@ fn the_dossiers_temperament_decides_whether_an_approach_warms_cools_or_changes_n
 }
 
 #[test]
+fn a_threat_lowers_attitude_immediately_even_when_the_dossier_is_steady() {
+    let mut dossier = patron(Attitude::Friendly);
+    dossier.temperament.threats.effect = Effect::Steady;
+    let directory = directory("threat");
+    let ledger =
+        SocialLedger::open(vec![dossier.clone()], "threat", Some(directory.clone())).unwrap();
+    let hero = member(12);
+
+    assert_eq!(
+        ledger.threaten(hero, &dossier, "opening"),
+        Some(Shift::Level {
+            from: Attitude::Friendly,
+            to: Attitude::Indifferent
+        })
+    );
+    assert_eq!(
+        ledger.standing(hero, &dossier).attitude,
+        Attitude::Indifferent
+    );
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        Approach::Intimidation,
+        "Hand over the key or else.",
+        "I will not.",
+    );
+    assert_eq!(
+        ledger.standing(hero, &dossier).attitude,
+        Attitude::Indifferent,
+        "recording the reply does not apply the threat twice"
+    );
+    ledger.save().unwrap();
+    let ledger =
+        SocialLedger::open(vec![dossier.clone()], "threat", Some(directory.clone())).unwrap();
+    assert_eq!(
+        ledger.standing(hero, &dossier).attitude,
+        Attitude::Indifferent,
+        "the lowered attitude survives reload"
+    );
+    assert_eq!(
+        ledger.threaten(hero, &dossier, "opening"),
+        Some(Shift::Level {
+            from: Attitude::Indifferent,
+            to: Attitude::Hostile
+        })
+    );
+    assert_eq!(ledger.standing(hero, &dossier).attitude, Attitude::Hostile);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn every_change_has_a_short_public_line() {
     assert_eq!(
         shift_line(

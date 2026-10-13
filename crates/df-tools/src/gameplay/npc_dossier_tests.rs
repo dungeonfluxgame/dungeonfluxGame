@@ -1048,10 +1048,11 @@ async fn a_crude_reply_is_kept_when_mature_and_replaced_by_the_prepared_answer_w
         let (adventure, ledger) = confiding_patron(Attitude::Indifferent);
         let dossier = adventure.dossiers[0].clone();
         let ask = context(&adventure, &ledger, SceneKey::Opening, words);
+        // The threat itself cools the patron one step before she answers (OBS-22).
         let expected = fallback_of(
             &dossier,
             Standing {
-                attitude: Attitude::Indifferent,
+                attitude: Attitude::Hostile,
                 trust: 0,
             },
             words,
