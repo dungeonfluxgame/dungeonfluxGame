@@ -173,6 +173,20 @@ impl LodIndex {
         })
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(super) fn file_ranges_fit_count(&self, file: u32, chunk_count: usize) -> bool {
+        self.leaves
+            .iter()
+            .flat_map(|leaf| leaf.ranges.iter().flatten())
+            .filter(|range| range.file == file)
+            .all(|range| {
+                range
+                    .offset
+                    .checked_add(range.count)
+                    .is_some_and(|end| end as usize <= chunk_count)
+            })
+    }
+
     pub fn level_count(&self) -> usize {
         self.counts.len()
     }
@@ -632,6 +646,25 @@ mod tests {
         assert_eq!(at, plan.total);
         assert!(!plan.truncated);
         assert!(selection.plan(1).truncated);
+    }
+
+    #[test]
+    fn a_chunk_rejects_lod_ranges_past_its_record_count() {
+        let json = r#"{"lodLevels":1,"counts":[1],"filenames":["0_0/meta.json"],
+            "tree":{"bound":{"min":[0,0,0],"max":[1,1,1]},
+            "lods":{"0":{"file":0,"offset":0,"count":4294967295}}}}"#;
+        let index = LodIndex::parse(json).unwrap();
+        assert!(!index.file_ranges_fit_count(0, 1));
+
+        let overflow_json = r#"{"lodLevels":1,"counts":[1],"filenames":["0_0/meta.json"],
+            "tree":{"bound":{"min":[0,0,0],"max":[1,1,1]},
+            "lods":{"0":{"file":0,"offset":4294967295,"count":2}}}}"#;
+        let overflow = LodIndex::parse(overflow_json).unwrap();
+        assert!(!overflow.file_ranges_fit_count(0, 1));
+
+        let valid = LodIndex::parse(&synthetic()).unwrap();
+        assert!(valid.file_ranges_fit_count(1, 1000));
+        assert!(!valid.file_ranges_fit_count(1, 999));
     }
 
     #[test]

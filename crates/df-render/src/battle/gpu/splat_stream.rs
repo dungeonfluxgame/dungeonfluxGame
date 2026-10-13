@@ -167,6 +167,7 @@ async fn load_chunk(
     core: &GpuCore,
     shared: &SharedSplats,
     chunk_layout: &JsValue,
+    index: &LodIndex,
     index_url: &str,
     folder: &str,
     file: u32,
@@ -174,6 +175,9 @@ async fn load_chunk(
     let base = folder_url(index_url, folder);
     let meta_text = fetch_text(&format!("{base}/meta.json"), MAX_CHUNK_META_BYTES).await?;
     let meta = SogMeta::parse(&meta_text).map_err(|_| StreamError::Chunk)?;
+    if !index.file_ranges_fit_count(file, meta.count) {
+        return Err(StreamError::Chunk);
+    }
     let (scales, colours) = meta.codebooks().ok_or(StreamError::Chunk)?;
     let plane = |name: &str| format!("{base}/{name}");
     let urls = [
@@ -328,7 +332,7 @@ async fn run(
                 .get(file as usize)
                 .map(|chunk| chunk.folder.clone())
                 .ok_or(StreamError::Index)?;
-            if load_chunk(core, shared, chunk_layout, &config.index_url, &folder, file)
+            if load_chunk(core, shared, chunk_layout, &index, &config.index_url, &folder, file)
                 .await
                 .is_err()
             {
