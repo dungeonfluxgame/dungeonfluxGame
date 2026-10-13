@@ -1034,7 +1034,7 @@ pub(super) fn action_lines(
                 format!("moves {squares} squares ({feet} ft)")
             }
             Kind::ChooseHarborScene => format!("leads on to {destination}"),
-            Kind::ResolveErrand => format!("chose \"{label}\""),
+            Kind::ResolveErrand => third_person_or_choice(label),
             _ => third_person(label),
         }
     };
@@ -1307,6 +1307,21 @@ fn death_save_text(outcome: &rpc::CombatOutcome) -> String {
         "makes a Death Saving Throw: {} \u{2014} {result} ({} successes, {} failures)",
         outcome.attack_die, outcome.death_successes, outcome.death_failures
     )
+}
+
+/// The third-person phrase for a choice label, or its quoted form when the label has no action
+/// verb at the start.
+fn third_person_or_choice(label: &str) -> String {
+    let first_word = label.split_whitespace().next().unwrap_or_default();
+    let lower_first_word = first_word.to_lowercase();
+    if first_word.is_empty()
+        || matches!(lower_first_word.as_str(), "a" | "an" | "the")
+        || first_word.contains('\'')
+    {
+        format!("chose \"{label}\"")
+    } else {
+        third_person(label)
+    }
 }
 
 /// The third-person phrase for an offer label: its imperative verb takes an `s`
@@ -2189,7 +2204,7 @@ mod tests {
     }
 
     #[test]
-    fn ending_labels_are_quoted_and_imperative_labels_are_conjugated() {
+    fn errand_choices_use_actions_and_unconvertible_titles_stay_quoted() {
         let phrase = |label: &str| {
             action_lines(
                 rpc::GameplayActionKind::ResolveErrand,
@@ -2202,6 +2217,11 @@ mod tests {
             .text
             .clone()
         };
+        assert_eq!(
+            phrase("Settle things with Wystan"),
+            "settles things with Wystan"
+        );
+        assert_eq!(phrase("Close the chapter"), "closes the chapter");
         assert_eq!(
             phrase("The Road Takes Its Toll"),
             "chose \"The Road Takes Its Toll\""
@@ -2278,6 +2298,17 @@ mod tests {
         for label in &labels {
             let verb = label.split(' ').next().unwrap().to_lowercase();
             let third = third_person(label);
+            let action = action_lines(
+                rpc::GameplayActionKind::ResolveErrand,
+                "Brakka",
+                &[],
+                "greatsword",
+                "",
+                label,
+            )[0]
+            .text
+            .clone();
+            assert_eq!(action, third, "choice label {label:?}");
             let form = third.split(' ').next().unwrap();
             let expected = if verb.ends_with("y")
                 && !verb[..verb.len() - 1].ends_with(['a', 'e', 'i', 'o', 'u'])
