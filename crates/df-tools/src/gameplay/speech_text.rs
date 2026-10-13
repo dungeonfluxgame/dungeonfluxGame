@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 /// A sentence is not counted as a repeat below this many words.
 pub(super) const REPEAT_MIN_WORDS: usize = 4;
+pub(super) const REPEATED_CLAUSE_WORDS: usize = 4;
 
 /// Words with typographic apostrophes unified, lower-cased.
 pub(super) fn normalised(text: &str) -> String {
@@ -78,8 +79,7 @@ pub(super) fn shared_words(a: &str, b: &str) -> usize {
 }
 
 /// The meaning-carrying words of `text` in order (see [`content_words`]), for finding a
-/// clause one reply lifts from an earlier one. Transcript checks only.
-#[cfg(test)]
+/// clause one reply lifts from an earlier one.
 pub(super) fn content_sequence(text: &str) -> Vec<String> {
     words(text)
         .into_iter()
@@ -136,21 +136,19 @@ pub(super) fn is_denial(sentence: &str) -> bool {
 }
 
 /// Flat dodges that refuse without saying anything: what the speaker knows, a guess, or
-/// who would know is owed instead. A subset of [`is_denial`], named for the transcript
-/// checks and the reply rules.
-#[cfg(test)]
-const FLAT_DODGES: [&str; 6] = [
+/// who would know is owed instead. A subset of [`is_denial`].
+const FLAT_DODGES: [&str; 8] = [
     "a question for another time",
     "nothing more to add",
+    "nothing more i can tell you",
+    "i cannot say which you should choose",
     "my mind's elsewhere",
     "my mind is elsewhere",
     "my thoughts are elsewhere",
     "my thoughts keep",
 ];
 
-/// Whether the sentence is one of the flat dodges in [`FLAT_DODGES`]. Transcript
-/// checks only.
-#[cfg(test)]
+/// Whether the sentence is one of the flat dodges in [`FLAT_DODGES`].
 pub(super) fn is_flat_dodge(sentence: &str) -> bool {
     let sentence = normalised(sentence);
     FLAT_DODGES.iter().any(|phrase| sentence.contains(phrase))
@@ -171,8 +169,10 @@ pub(super) enum SpokenRule {
     /// No sentence may say the speaker does not know or cannot tell: they already said so
     /// once in this conversation, and now steer to what they know instead.
     NoDenial,
-    /// No sentence of four or more words may repeat one of these earlier sentences.
+    /// No sentence or four-word content clause may repeat one of these earlier replies.
     NoRepeat(Vec<String>),
+    /// No sentence may refuse without saying what is known or who would know.
+    NoFlatRefusal,
     /// No semicolons: a person talking does not speak in balanced written clauses.
     NoSemicolons,
     /// No colons: no colon-led lists or explanations, which read as prose, not speech.
@@ -208,11 +208,30 @@ impl SpokenRule {
                     .filter(|part| words(part).len() >= REPEAT_MIN_WORDS)
                     .map(|part| sentence_key(&part))
                     .collect();
+                let known_clauses: BTreeSet<String> = earlier
+                    .iter()
+                    .flat_map(|line| sentences(line))
+                    .flat_map(|part| {
+                        content_sequence(&part)
+                            .windows(REPEATED_CLAUSE_WORDS)
+                            .map(|window| window.join(" "))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
                 parts
                     .iter()
-                    .any(|part| known.contains(&sentence_key(part)))
+                    .any(|part| {
+                        known.contains(&sentence_key(part))
+                            || content_sequence(part)
+                                .windows(REPEATED_CLAUSE_WORDS)
+                                .any(|window| known_clauses.contains(&window.join(" ")))
+                    })
                     .then_some("a sentence repeated something already said; say something new")
             }
+            Self::NoFlatRefusal => parts
+                .iter()
+                .any(|part| is_flat_dodge(part))
+                .then_some("do not refuse flatly; say what you know or who would know"),
             Self::NoSemicolons => text
                 .contains(';')
                 .then_some("a semicolon is writing, not talking; use short sentences"),

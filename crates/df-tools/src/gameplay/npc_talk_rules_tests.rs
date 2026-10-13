@@ -41,6 +41,41 @@ fn with_answer() -> Value {
     json!({"answer_from": ["The iron coffer goes to Tomas."]})
 }
 
+fn live_reply_is_rejected(reply: &str, said: &[String], answer_offered: bool) -> bool {
+    super::super::npc_dossier::spoken_rules(answer_offered, said, false)
+        .iter()
+        .any(|rule| rule.violation(reply).is_some())
+}
+
+#[test]
+fn live_reply_validation_rejects_a_flat_refusal() {
+    assert!(live_reply_is_rejected(
+        "I have nothing more I can tell you.",
+        &[],
+        false,
+    ));
+}
+
+#[test]
+fn live_reply_validation_rejects_a_repeated_phrase() {
+    let said = vec!["There is a quicker way to finish the journey.".to_owned()];
+
+    assert!(live_reply_is_rejected(
+        "There is a quicker way to finish the journey, through a gap most travelers miss.",
+        &said,
+        false,
+    ));
+}
+
+#[test]
+fn live_reply_validation_rejects_refusing_to_recommend_a_choice() {
+    assert!(live_reply_is_rejected(
+        "I cannot say which you should choose.",
+        &[],
+        false,
+    ));
+}
+
 #[test]
 fn sentences_split_at_terminal_marks_and_keep_the_rest() {
     assert_eq!(
@@ -290,12 +325,26 @@ fn the_recorded_conversations_after_the_fix_hold_every_hard_rule() {
     let mut soft = 0;
     let mut fallbacks = 0;
     let mut hard: Vec<String> = Vec::new();
+    let mut live_rejections: Vec<(String, &'static str)> = Vec::new();
     for (name, conversation) in &after {
         for finding in check(conversation) {
             if matches!(finding.check, "autobiography" | "local_lore_or_saying") {
                 soft += 1;
             } else {
-                hard.push(format!("{name}: {finding:?}"));
+                let exchange = &conversation.exchanges[finding.exchange - 1];
+                let said: Vec<String> = conversation.exchanges[..finding.exchange - 1]
+                    .iter()
+                    .map(|exchange| exchange.reply.clone())
+                    .collect();
+                if live_reply_is_rejected(
+                    &exchange.reply,
+                    &said,
+                    super::answer_offered(&exchange.facts),
+                ) {
+                    live_rejections.push((name.clone(), finding.check));
+                } else {
+                    hard.push(format!("{name}: {finding:?}"));
+                }
             }
         }
         fallbacks += conversation
@@ -305,6 +354,21 @@ fn the_recorded_conversations_after_the_fix_hold_every_hard_rule() {
             .count();
     }
     assert!(hard.is_empty(), "{hard:?}");
+    live_rejections.sort();
+    assert_eq!(
+        live_rejections,
+        [
+            ("after-patron-earnest-mature".to_owned(), "flat_refusal"),
+            ("after-patron-earnest-restrained".to_owned(), "flat_refusal"),
+            ("after-witness-holder-mature".to_owned(), "repeated_clause"),
+            ("after-witness-outsider-mature".to_owned(), "flat_refusal"),
+            (
+                "after-witness-outsider-mature".to_owned(),
+                "repeated_clause"
+            ),
+        ],
+        "known recorded violations must remain rejected by live validation"
+    );
     assert!(soft <= 2, "{soft} soft findings");
     assert!(
         fallbacks <= 1,

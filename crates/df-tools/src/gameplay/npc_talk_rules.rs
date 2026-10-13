@@ -9,8 +9,8 @@
 use serde_json::Value;
 
 use super::speech_text::{
-    REPEAT_MIN_WORDS, content_sequence, content_words, coverage, is_denial, is_flat_dodge,
-    normalised, sentence_key, sentences, words,
+    REPEAT_MIN_WORDS, REPEATED_CLAUSE_WORDS, content_sequence, content_words, coverage, is_denial,
+    is_flat_dodge, normalised, sentence_key, sentences, words,
 };
 
 /// The most sentences a spoken reply may have.
@@ -235,19 +235,16 @@ fn menu_recital(reply: &str, facts: &Value) -> Option<String> {
 
 /// Terms of address that wear out: at most about one reply in four may use one.
 const TERMS_OF_ADDRESS: [&str; 4] = ["friend", "chief", "mate", "stranger"];
-/// Content words in a row that make a reused clause.
-const CLAUSE_WORDS: usize = 4;
-
 /// The content-word clauses of `text`, minus the standing courtship answer, which is
 /// repeated word for word every time by design.
 fn fresh_clauses(text: &str, courted: &std::collections::BTreeSet<String>) -> Vec<String> {
     let mut clauses = Vec::new();
     for part in sentences(text) {
         let sequence = content_sequence(&part);
-        if sequence.len() < CLAUSE_WORDS {
+        if sequence.len() < REPEATED_CLAUSE_WORDS {
             continue;
         }
-        for window in sequence.windows(CLAUSE_WORDS) {
+        for window in sequence.windows(REPEATED_CLAUSE_WORDS) {
             let clause = window.join(" ");
             if !courted.contains(&clause) {
                 clauses.push(clause);
@@ -264,7 +261,7 @@ pub(super) fn check(transcript: &Transcript) -> Vec<Finding> {
     let mut admissions = 0;
     let mut heard: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let courted: std::collections::BTreeSet<String> = content_sequence(&transcript.courtship)
-        .windows(CLAUSE_WORDS)
+        .windows(REPEATED_CLAUSE_WORDS)
         .map(|window| window.join(" "))
         .collect();
     let mut addressed: [usize; TERMS_OF_ADDRESS.len()] = [0; TERMS_OF_ADDRESS.len()];

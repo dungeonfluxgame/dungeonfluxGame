@@ -497,8 +497,8 @@ pub(super) fn style_phrases(dossier: &Dossier) -> Vec<String> {
 
 /// The rules every spoken reply must pass after generation: short, never opening on a denial
 /// when the facts held an answer, never denying twice in one conversation, never repeating a
-/// sentence the NPC already said, and always sounding talked rather than written (no
-/// semicolons, no colons, one breath per sentence).
+/// sentence or useful clause the NPC already said, no flat refusals, and always sounding talked
+/// rather than written (no semicolons, no colons, one breath per sentence).
 pub(super) fn spoken_rules(
     answer_offered: bool,
     said: &[String],
@@ -507,6 +507,7 @@ pub(super) fn spoken_rules(
     let mut rules = vec![
         SpokenRule::SentencesAtMost(REPLY_SENTENCES),
         SpokenRule::NoRepeat(said.to_vec()),
+        SpokenRule::NoFlatRefusal,
         SpokenRule::NoSemicolons,
         SpokenRule::NoColons,
         SpokenRule::SentenceWordsAtMost(MAX_SENTENCE_WORDS),

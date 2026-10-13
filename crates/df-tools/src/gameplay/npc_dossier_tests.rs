@@ -1205,7 +1205,7 @@ fn a_line_already_said_is_not_offered_again() {
         &adventure,
         &dossier,
         friendly(),
-        "What is going on here?",
+        "What must happen to the ledger?",
         &Conversation {
             exchange: 1,
             ..Conversation::default()
@@ -1222,7 +1222,7 @@ fn a_line_already_said_is_not_offered_again() {
         &adventure,
         &dossier,
         friendly(),
-        "What is going on here?",
+        "What must happen to the ledger?",
         &voiced,
     );
     for line in answer_lines(&next) {
