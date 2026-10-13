@@ -774,7 +774,7 @@ pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             "Join this room"
         },
         panel_heading: "Join your companions",
-        panel_description: "Connect to the shared room, then create your own hero.",
+        panel_description: "Enter the room code from the TV.",
         members: Vec::new(),
         offer: None,
     };

@@ -146,6 +146,19 @@ fn close_menu(client: &Rc<RefCell<Client>>) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::super::has_unconfirmed_saved_choice;
+
+    #[test]
+    fn menu_reoffers_only_an_unconfirmed_saved_choice() {
+        assert!(has_unconfirmed_saved_choice(true, false, false));
+        assert!(!has_unconfirmed_saved_choice(false, false, false));
+        assert!(!has_unconfirmed_saved_choice(true, true, false));
+        assert!(!has_unconfirmed_saved_choice(true, false, true));
+    }
+}
+
 /// The toast shared by every screen. It holds the one `.feedback` line and the recovery
 /// prompt, and shows only while either has content.
 fn toast(client: &Rc<RefCell<Client>>) -> Result<Element, JsValue> {
@@ -222,7 +235,7 @@ fn choice_hints_hidden(state: &Client) -> bool {
 
 /// Rebuilds the player's menu items for the current state; the display has no menu.
 pub(super) fn fill_menu(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let (document, needs, dialogue_retry, last_request, confirm_strike, body, hero, hidden) = {
+    let (document, needs, confirm_strike, body, hero, hidden) = {
         let state = client.borrow();
         let Some(mounted) = state.chrome.mounted.as_ref() else {
             return Ok(());
@@ -230,8 +243,6 @@ pub(super) fn fill_menu(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         (
             state.document.clone(),
             recovery_needs(&state),
-            state.dialogue.has_confirmation(),
-            state.last_request.is_some(),
             state.first_attack.is_some() && {
                 let needs = recovery_needs(&state);
                 needs.lost_connection || needs.unknown_choice
@@ -246,8 +257,8 @@ pub(super) fn fill_menu(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         close_menu(&client);
         connect(client);
     })?;
-    if last_request && !(needs.unknown_choice && !dialogue_retry) {
-        button(client, &body, "Confirm saved choice", |client| {
+    if needs.unknown_choice {
+        button(client, &body, "Send my last choice again", |client| {
             close_menu(&client);
             replay(client, false);
         })?;

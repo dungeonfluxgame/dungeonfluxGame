@@ -1904,11 +1904,18 @@ struct RecoveryNeeds {
 fn recovery_needs(state: &Client) -> RecoveryNeeds {
     RecoveryNeeds {
         lost_connection: state.connection.is_none(),
-        unknown_choice: state.last_request.is_some() && !state.last_confirmed && !state.busy,
+        unknown_choice: has_unconfirmed_saved_choice(
+            state.last_request.is_some(),
+            state.last_confirmed,
+            state.busy,
+        ),
     }
 }
+fn has_unconfirmed_saved_choice(last_request: bool, last_confirmed: bool, busy: bool) -> bool {
+    last_request && !last_confirmed && !busy
+}
 fn confirm_saved_choice(client: &Rc<RefCell<Client>>, parent: &Element) -> Result<(), JsValue> {
-    button(client, parent, "Confirm saved choice", |client| {
+    button(client, parent, "Send my last choice again", |client| {
         replay(client, false)
     })?;
     Ok(())

@@ -233,12 +233,6 @@ fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Opt
             .to_owned()
         };
         let mut resources = Vec::new();
-        if let Some(cell) = &member.cell {
-            resources.push((
-                "Cell",
-                format!("Column {}, row {}", cell.col + 1, cell.row + 1),
-            ));
-        }
         if let Some(conditions) = conditions_resource(member) {
             resources.push(("Conditions", conditions));
         }
