@@ -335,11 +335,23 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
             let package_ids: Vec<String> =
                 packages.iter().map(|package| package.id.clone()).collect();
             {
-                groups.push(rpc::JourneyGroup {group_id:"build-package".to_owned(),label:"Combat training and starting package".to_owned(),options:packages.into_iter().map(|package| rpc::JourneyOption {option_id:package.id,label:package.label,description:"Equipment, ability training, fighting style and masteries are coupled in this supported package. Other lawful SRD combinations remain unsupported.".to_owned(),..Default::default()}).collect()});
+                groups.push(rpc::JourneyGroup {
+                    group_id: "build-package".to_owned(),
+                    label: "Starting package".to_owned(),
+                    options: packages
+                        .into_iter()
+                        .map(|package| rpc::JourneyOption {
+                            option_id: package.id,
+                            label: package.label,
+                            description: String::new(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                });
             }
             groups.push(rpc::JourneyGroup {
                 group_id: "portrait".to_owned(),
-                label: "Hero appearance (presentation only)".to_owned(),
+                label: "How your hero looks".to_owned(),
                 options: [
                     ("portrait-hero-1", "Greatsword hero"),
                     ("portrait-hero-2", "Second hero"),
@@ -349,7 +361,7 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
                 .map(|(id, label)| rpc::JourneyOption {
                     option_id: id.to_owned(),
                     label: label.to_owned(),
-                    description: "Art only; this changes no character rules.".to_owned(),
+                    description: String::new(),
                     // An appearance is offered only with the packages it may be chosen with.
                     requires_group: "build-package".to_owned(),
                     requires_options: package_ids

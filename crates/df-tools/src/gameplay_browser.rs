@@ -31,8 +31,8 @@ use df_client::{
 use df_protocol::common as rpc;
 use df_rpc_bridge::{BrowserChannel, BrowserConnection, RPC_MESSAGE_BYTES};
 use df_ui::{
-    CharacterAction, CharacterActionKind, CharacterFact, CharacterGroup, CharacterLimits,
-    CharacterOption, CharacterPhaseSurface, CharacterPhaseView, CharacterStatus,
+    CharacterAction, CharacterActionKind, CharacterGroup, CharacterLimits, CharacterOption,
+    CharacterPhaseSurface, CharacterPhaseView, CharacterStatus,
 };
 use futures::future::{AbortHandle, Abortable};
 use public_scene_assets::browser::PublicSceneDelivery;
@@ -1186,16 +1186,16 @@ fn creation(
         .ok_or_else(|| JsValue::from_str("character owner absent"))?;
     let editable = true;
     let view=CharacterPhaseView {generation:state.revision.and_then(|revision|revision.epoch).and_then(|epoch|epoch.value).ok_or_else(||JsValue::from_str("creation epoch absent"))?,owner_key:owner,revision:state.revision.and_then(|revision|revision.sequence).ok_or_else(||JsValue::from_str("creation revision absent"))?,
-        chapter:"Your hero".to_owned(),title:"A story begins with you".to_owned(),description:offer.description.clone(),
+        chapter:"Your hero".to_owned(),title:"A story begins with you".to_owned(),description:"Make your hero. Pick one option in each group, then confirm.".to_owned(),
         connection:"Connected to your shared room".to_owned(),status:CharacterStatus::Editing,
-        status_message:"Review your hero, choose any options offered, then confirm. Character names use letters, dashes or underscores (up to 24 characters).".to_owned(),
+        status_message:"Choose your options and confirm. Names may use letters, dashes, or underscores (up to 24 characters).".to_owned(),
         editable,name:String::new(),flavor:String::new(),appearance:None,portrait:None,
-        groups:offer.groups.iter().map(|group|CharacterGroup {id:group.group_id.clone(),label:group.label.clone(),
-            description:(if group.options.len() == 1 { "Every hero in this adventure has this." } else { "Choose one offered option." }).to_owned(),selected:(group.options.len() == 1).then(|| group.options[0].option_id.clone()),options:group.options.iter().map(|option|CharacterOption {
-                id:option.option_id.clone(),label:live_combat::display_label(&option.label),description:option.description.clone(),
+        groups:offer.groups.iter().map(|group|CharacterGroup {id:group.group_id.clone(),label:creation_group_label(&group.group_id, &group.label),
+            description:(if group.options.len() == 1 { "Every hero in this adventure has this." } else { "Pick one." }).to_owned(),selected:(group.options.len() == 1).then(|| group.options[0].option_id.clone()),options:group.options.iter().map(|option|CharacterOption {
+                id:option.option_id.clone(),label:creation_option_label(&group.group_id, &option.label),description:creation_option_description(&group.group_id, &option.description),
                 enabled:true,availability:"Available in this room".to_owned(),portrait:None,
             }).collect()}).collect(),
-        facts:vec![CharacterFact {label:"Supported rules".to_owned(),value:offer.source_revision.clone()}],
+        facts:vec![],
         actions:vec![CharacterAction {id:action.offer_id.clone(),kind:CharacterActionKind::SubmitDraft,
             label:"Confirm your hero".to_owned(),enabled:editable}],
     };
@@ -1259,6 +1259,71 @@ fn creation(
     client.borrow_mut().creation = Some(created);
     Ok(())
 }
+
+fn creation_group_label(group_id: &str, label: &str) -> String {
+    if group_id == "allied-ties" {
+        return "When turns are tied".to_owned();
+    }
+    live_combat::display_label(label)
+}
+
+fn creation_option_label(group_id: &str, label: &str) -> String {
+    if group_id == "build-package" {
+        if label.contains("Fighter A") {
+            return "Greatsword and Defense".to_owned();
+        }
+        if label.contains("Fighter B") {
+            return "Longbow and Archery".to_owned();
+        }
+    }
+    live_combat::display_label(label)
+}
+
+fn creation_option_description(group_id: &str, description: &str) -> String {
+    if matches!(group_id, "species" | "class") {
+        String::new()
+    } else {
+        description.to_owned()
+    }
+}
+
+fn player_sheet_fact_value(label: &str, value: &str) -> Option<String> {
+    match label {
+        "Supported rules" => None,
+        "Starting equipment" => {
+            let Some((equipment, coins)) = value.rsplit_once(" · ") else {
+                return Some(value.to_owned());
+            };
+            let Some(amount) = coins.strip_suffix(" GP") else {
+                return Some(value.to_owned());
+            };
+            if matches!(equipment, "Fighter A + Soldier A" | "Fighter B + Soldier B") {
+                Some(format!("{amount} gp"))
+            } else {
+                Some(format!("{equipment} · {amount} gp"))
+            }
+        }
+        "First language" | "Second language" | "Base language" | "First class skill"
+        | "Second class skill" | "Alignment" => Some(live_combat::display_label(value)),
+        _ if value == "Held" => Some("(in hand)".to_owned()),
+        _ if value.starts_with("Dropped") => Some("(dropped)".to_owned()),
+        _ => Some(value.to_owned()),
+    }
+}
+
+fn player_sheet_view(sheet: &rpc::CharacterSheet) -> rpc::CharacterSheet {
+    let mut view = sheet.clone();
+    view.facts.retain_mut(|fact| {
+        if let Some(value) = player_sheet_fact_value(&fact.label, &fact.value) {
+            fact.value = value;
+            true
+        } else {
+            false
+        }
+    });
+    view
+}
+
 /// Lists an option only with the choices the server says it goes with (an appearance only with
 /// the packages that grant the weapon it shows); the server refuses the others in any case.
 fn apply_option_requirements(
@@ -1714,7 +1779,8 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         node(&document, &body, "p", "clue", &clue)?;
     }
     if let Some(sheet) = journey.own_character.as_ref() {
-        live_combat::sheet::summary(client, &body, sheet)?;
+        let sheet = player_sheet_view(sheet);
+        live_combat::sheet::summary(client, &body, &sheet)?;
     }
 
     dialogue_recovery::mount(client, &body, &offers)?;

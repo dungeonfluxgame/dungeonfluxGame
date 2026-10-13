@@ -87,7 +87,7 @@ pub enum CharacterStatus {
 impl CharacterStatus {
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Editing => "Draft · editing",
+            Self::Editing => "Your choices",
             Self::Pending => "Server validation pending",
             Self::Rejected => "Server validation rejected",
             Self::Ready => "Server reports ready",
@@ -913,13 +913,7 @@ mod browser {
                 "character-panel identity-panel",
                 None,
             )?;
-            child(
-                document,
-                &identity,
-                "h2",
-                "",
-                Some("Give your story a name"),
-            )?;
+            child(document, &identity, "h2", "", Some("Name your hero"))?;
             let name = Rc::new(ControlledTextInput::create(
                 document,
                 &format!("{identifier}-name"),
@@ -948,7 +942,7 @@ mod browser {
                 &aside,
                 "p",
                 "character-overline",
-                Some("Your character · reported view"),
+                Some("How your hero looks"),
             )?;
             let portrait = PortraitSlot::create(document, &aside, "character-portrait")?;
             child(
