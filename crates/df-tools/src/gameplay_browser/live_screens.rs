@@ -24,6 +24,7 @@ pub(super) struct LiveScreens {
     pub(super) lobby: Option<LobbyScreen>,
     pub(super) exploration: Option<ExplorationScreen>,
     pub(super) tv: Option<TvStage>,
+    last_private_clue: Option<String>,
 }
 
 impl LiveScreens {
@@ -55,6 +56,10 @@ pub(super) struct SceneInput<'a> {
     pub(super) journey: &'a rpc::JourneyView,
     pub(super) offers: &'a [rpc::GameplayActionOffer],
     pub(super) clue: &'a str,
+}
+
+fn is_new_private_clue(previous: Option<&str>, clue: &str) -> bool {
+    previous == Some("") && !clue.is_empty()
 }
 
 /// The lobby, opening, dialogue and non-combat completion are rendered here. Combat and the
@@ -365,7 +370,11 @@ fn lobby_model(input: &SceneInput<'_>, client: &Client) -> Result<LobbyModel, Js
     })
 }
 
-fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<ExplorationModel, JsValue> {
+fn exploration_model(
+    input: &SceneInput<'_>,
+    client: &Client,
+    show_clue: bool,
+) -> Result<ExplorationModel, JsValue> {
     let binding = client
         .views
         .as_ref()
@@ -390,7 +399,7 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
             .collect()
     };
     let has_offers = !input.offers.is_empty();
-    let whisper = if input.clue.is_empty() {
+    let whisper = if !show_clue {
         if has_offers {
             CHOOSE_TEXT
         } else {
@@ -428,7 +437,7 @@ fn exploration_model(input: &SceneInput<'_>, client: &Client) -> Result<Explorat
         plate_focus: plate.layout.map(|layout| layout.head_x),
         scene_asset: plate.url.or_else(|| asset_url(&input.scene.scene_asset)),
         portrait_asset: asset_url(&input.scene.speaker_portrait),
-        has_whisper: !input.clue.is_empty(),
+        has_whisper: show_clue,
         rules_note: input.scene.rules_note.clone(),
         binding,
         scene: art_scene,
@@ -559,6 +568,17 @@ pub(super) fn render(
         return render_display(client, view, input);
     }
     let lobby = input.phase == rpc::JourneyPhase::Room;
+    let show_clue = {
+        let mut state = client.borrow_mut();
+        if state.role == "player" {
+            let show_clue =
+                is_new_private_clue(state.live.last_private_clue.as_deref(), input.clue);
+            state.live.last_private_clue = Some(input.clue.to_owned());
+            show_clue
+        } else {
+            false
+        }
+    };
     // The other screen retires first so exactly one surface is ever mounted.
     let (retired_lobby, retired_exploration) = {
         let mut state = client.borrow_mut();
@@ -581,7 +601,7 @@ pub(super) fn render(
         let model = lobby_model(input, &client.borrow())?;
         LobbyScreen::present(client, view, &model)?;
     } else {
-        let model = exploration_model(input, &client.borrow())?;
+        let model = exploration_model(input, &client.borrow(), show_clue)?;
         ExplorationScreen::present(client, view, &model)?;
     }
     let dock = ensure_dock(&document, view)?;
@@ -637,6 +657,19 @@ fn render_display(
         stage.dock().clone()
     };
     recovery(client, &dock)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_new_private_clue;
+
+    #[test]
+    fn retained_private_clue_is_not_a_new_reveal() {
+        assert!(!is_new_private_clue(None, "saved clue"));
+        assert!(is_new_private_clue(Some(""), "new clue"));
+        assert!(!is_new_private_clue(Some("saved clue"), "saved clue"));
+        assert!(!is_new_private_clue(Some(""), ""));
+    }
 }
 
 /// The join screen before a player has a seat: the same lobby surface in its invitation stage.
