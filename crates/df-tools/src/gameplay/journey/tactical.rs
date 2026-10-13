@@ -311,6 +311,18 @@ fn binding<'a>(
         next_ordinal: ordinal,
     })
 }
+/// Records `step` as the refusing step when `result` is an error, then passes it through.
+/// The first note of a command wins, so the innermost named step is what the session
+/// owner's `REFUSAL` line prints.
+fn noted<T>(
+    step: &'static str,
+    result: Result<T, RepositoryError>,
+) -> Result<T, RepositoryError> {
+    if result.is_err() {
+        crate::gameplay::refusal_detail::note(step);
+    }
+    result
+}
 fn resolve_with_draws(
     operation: OperationId,
     draws: &mut Vec<ActualDraw>,
@@ -329,7 +341,10 @@ fn resolve_with_draws(
             Err(RuleError::MissingDraw { sides }) => {
                 draw(operation, sides, draws, supplier)?;
             }
-            Err(_) => return Err(RepositoryError::InvalidCandidate),
+            Err(_) => {
+                crate::gameplay::refusal_detail::note("tactical-resolve");
+                return Err(RepositoryError::InvalidCandidate);
+            }
         }
     }
 }
@@ -787,22 +802,28 @@ fn policy(
         criteria: &[],
     };
     let source = rule()?;
-    df_combat::tactical::choose(
-        battle,
-        actor,
-        TacticContext {
-            candidates: CandidateContext {
-                basis: &basis,
-                pins,
-            },
-            observation: &observation,
-            knowledge: &knowledge,
-            policy: &utility,
-            draws: binding(operation, &source, ordinal)?,
-        },
+    noted(
+        "enemy-policy-none",
+        noted(
+            "enemy-policy",
+            df_combat::tactical::choose(
+                battle,
+                actor,
+                TacticContext {
+                    candidates: CandidateContext {
+                        basis: &basis,
+                        pins,
+                    },
+                    observation: &observation,
+                    knowledge: &knowledge,
+                    policy: &utility,
+                    draws: binding(operation, &source, ordinal)?,
+                },
+            )
+            .map_err(bad),
+        )?
+        .ok_or(RepositoryError::InvalidCandidate),
     )
-    .map_err(bad)?
-    .ok_or(RepositoryError::InvalidCandidate)
 }
 fn enemy_turns(
     current: &Checkpoint,
@@ -885,17 +906,29 @@ pub(super) fn start(
         None if pack::active().is_some_and(|loaded| loaded.pack.id == "harbor-journey") => {
             "harbor-journey".to_owned()
         }
-        None => return Err(RepositoryError::InvalidCandidate),
+        None => {
+            return noted(
+                "fight-scene-location",
+                Err(RepositoryError::InvalidCandidate),
+            );
+        }
     };
     let location = staged_location(location);
-    let bytes = SCENES
-        .iter()
-        .find(|(id, _)| *id == location)
-        .map(|(_, bytes)| *bytes)
-        .ok_or(RepositoryError::InvalidCandidate)?;
-    let scene: tactical_rules::BattleSceneData = serde_json::from_slice(bytes).map_err(bad)?;
+    let bytes = noted(
+        "fight-scene-bytes",
+        SCENES
+            .iter()
+            .find(|(id, _)| *id == location)
+            .map(|(_, bytes)| *bytes)
+            .ok_or(RepositoryError::InvalidCandidate),
+    )?;
+    let scene: tactical_rules::BattleSceneData =
+        noted("fight-scene-parse", serde_json::from_slice(bytes).map_err(bad))?;
     if scene.layouts.is_empty() {
-        return Err(RepositoryError::InvalidCandidate);
+        return noted(
+            "fight-scene-layouts",
+            Err(RepositoryError::InvalidCandidate),
+        );
     }
     let index = command
         .operation
@@ -905,26 +938,33 @@ pub(super) fn start(
             hash.wrapping_mul(31).wrapping_add(usize::from(*byte))
         })
         % scene.layouts.len();
-    let layout = scene
-        .layouts
-        .get(index)
-        .ok_or(RepositoryError::InvalidCandidate)?;
-    let map = scene_map(bytes, &layout.id)?;
+    let layout = noted(
+        "fight-scene-layout",
+        scene
+            .layouts
+            .get(index)
+            .ok_or(RepositoryError::InvalidCandidate),
+    )?;
+    let map = noted("fight-scene-map", scene_map(bytes, &layout.id))?;
     let mut specs = Vec::new();
     let mut actors = Vec::new();
     for (index, character) in state.characters.iter().enumerate() {
-        let cell = *map
-            .hero_spawns()
-            .get(index)
-            .ok_or(RepositoryError::InvalidCandidate)?;
+        let cell = *noted(
+            "fight-hero-spawn",
+            map.hero_spawns()
+                .get(index)
+                .ok_or(RepositoryError::InvalidCandidate),
+        )?;
         let choices = character
             .choices
             .iter()
             .filter(|choice| choice.offer.as_str() != "name")
             .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
             .collect::<Vec<_>>();
-        let legal =
-            pack::validate_character(&name(state, character.entity)?, &choices).map_err(bad)?;
+        let legal = noted(
+            "fight-hero-build",
+            pack::validate_character(&name(state, character.entity)?, &choices).map_err(bad),
+        )?;
         let id = u32::try_from(index + 1).map_err(bad)?;
         let spec = if legal
             .choices
@@ -936,24 +976,39 @@ pub(super) fn start(
                 .iter()
                 .map(|(key, value)| (key.as_str(), value.as_str()))
                 .collect::<Vec<_>>();
-            tactical_rules::validate_archer(&legal.name, &borrowed)
-                .map_err(bad)?
-                .combatant(id, cell)
+            noted(
+                "fight-hero-spec",
+                tactical_rules::validate_archer(&legal.name, &borrowed).map_err(bad),
+            )?
+            .combatant(id, cell)
         } else {
-            CombatantSpec::melee_hero(&legal, id, cell).map_err(bad)?
+            noted(
+                "fight-hero-spec",
+                CombatantSpec::melee_hero(&legal, id, cell).map_err(bad),
+            )?
         };
         specs.push(spec);
         actors.push((id, character.entity));
     }
-    for (index, (who, source_id, ammunition)) in enemies()?.into_iter().enumerate() {
+    for (index, (who, source_id, ammunition)) in
+        noted("fight-enemy-roster", enemies())?.into_iter().enumerate()
+    {
         let id = u32::try_from(index + 3).map_err(bad)?;
-        let cell = *map
-            .enemy_spawns()
-            .get(index)
-            .ok_or(RepositoryError::InvalidCandidate)?;
-        let spec = CombatantSpec::creature(id, &source_id, cell, ammunition).map_err(bad)?;
+        let cell = *noted(
+            "fight-enemy-spawn",
+            map.enemy_spawns()
+                .get(index)
+                .ok_or(RepositoryError::InvalidCandidate),
+        )?;
+        let spec = noted(
+            "fight-enemy-spec",
+            CombatantSpec::creature(id, &source_id, cell, ammunition).map_err(bad),
+        )?;
         if state.entities.iter().any(|entity| entity.id == who) {
-            return Err(RepositoryError::InvalidCandidate);
+            return noted(
+                "fight-enemy-duplicate",
+                Err(RepositoryError::InvalidCandidate),
+            );
         }
         state.entities.push(WorldEntity {
             id: who,
@@ -988,16 +1043,22 @@ pub(super) fn start(
         actors.push((id, who));
     }
     // Participant/challenge admission is performed before the first initiative draw.
-    encounter_admission::admission(
-        current,
-        command,
-        state,
-        &actors.iter().map(|(_, who)| *who).collect::<Vec<_>>(),
-    )
-    .map_err(bad)?;
-    let mut result = resolve_with_draws(command.operation, draws, supplier, |binding, records| {
-        tactical_rules::begin(map.clone(), specs.clone(), binding, records)
-    })?;
+    noted(
+        "fight-admission",
+        encounter_admission::admission(
+            current,
+            command,
+            state,
+            &actors.iter().map(|(_, who)| *who).collect::<Vec<_>>(),
+        )
+        .map_err(bad),
+    )?;
+    let mut result = noted(
+        "fight-begin",
+        resolve_with_draws(command.operation, draws, supplier, |binding, records| {
+            tactical_rules::begin(map.clone(), specs.clone(), binding, records)
+        }),
+    )?;
     for (id, who) in &actors {
         if !state
             .characters
@@ -1011,15 +1072,19 @@ pub(super) fn start(
             .iter()
             .find(|item| item.owner == *who && item.origin.entry.as_str() == "arrow")
             .map_or(0, |item| item.quantity);
-        result.battle = result
-            .battle
-            .with_hero_resources(
-                *id,
-                u16::try_from(value(state, *who, "hit-points")?).map_err(bad)?,
-                u16::try_from(arrows).map_err(bad)?,
-                u8::try_from(value(state, *who, "second-wind")?).map_err(bad)?,
-            )
-            .map_err(bad)?;
+        result.battle = noted(
+            "fight-hero-resources",
+            result
+                .battle
+                .clone()
+                .with_hero_resources(
+                    *id,
+                    u16::try_from(value(state, *who, "hit-points")?).map_err(bad)?,
+                    u16::try_from(arrows).map_err(bad)?,
+                    u8::try_from(value(state, *who, "second-wind")?).map_err(bad)?,
+                )
+                .map_err(bad),
+        )?;
         let quantities = result
             .battle
             .actor(*id)
@@ -1038,10 +1103,14 @@ pub(super) fn start(
                 ))
             })
             .collect::<Result<Vec<_>, RepositoryError>>()?;
-        result.battle = result
-            .battle
-            .with_hero_weapons(*id, &quantities)
-            .map_err(bad)?;
+        result.battle = noted(
+            "fight-hero-weapons",
+            result
+                .battle
+                .clone()
+                .with_hero_weapons(*id, &quantities)
+                .map_err(bad),
+        )?;
     }
     state.encounters.push(EncounterState {
         id: RecordId::from_bytes(&ENCOUNTER).map_err(bad)?,
@@ -1061,16 +1130,19 @@ pub(super) fn start(
             state: result.battle.snapshot().map_err(bad)?,
         }),
     });
-    store(state, &result.battle)?;
-    beat(state, "combat")?;
-    enemy_turns(
-        current,
-        state,
-        result.battle,
-        command.operation,
-        draws,
-        outcomes,
-        supplier,
+    noted("fight-store", store(state, &result.battle))?;
+    noted("fight-beat", beat(state, "combat"))?;
+    noted(
+        "fight-enemy-turns",
+        enemy_turns(
+            current,
+            state,
+            result.battle,
+            command.operation,
+            draws,
+            outcomes,
+            supplier,
+        ),
     )
 }
 fn weapon(actor: &tactical_rules::Combatant, weapon: Weapon) -> AttackUse {
@@ -2308,6 +2380,91 @@ pub(super) mod tests {
             &mut |_| panic!("opening draws"),
         )
         .unwrap()
+    }
+    /// Stages a fight with a chosen defend operation (which picks the layout) and dice
+    /// faces (initiative first, in spec order, then the fight-start enemy turns).
+    fn staged_fight(
+        mixed: bool,
+        operation: [u8; 16],
+        faces: &[u32],
+    ) -> Result<Checkpoint, RepositoryError> {
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let opening = if mixed {
+            mixed_opening()
+        } else {
+            opening_story()
+        };
+        let dialogue = stage_with_supplier(
+            &opening,
+            &input(&opening, member, 6, "escort-courier", vec![]),
+            &mut |_| panic!("dialogue draws"),
+        )?;
+        let mut supplied = faces.iter().copied();
+        let mut defend = input(&dialogue, member, 7, "defend-courier", vec![]);
+        let GameInput::Game(command) = &mut defend else {
+            panic!("game input");
+        };
+        command.operation = OperationId::from_bytes(&operation).expect("operation");
+        stage_with_supplier(&dialogue, &defend, &mut |sides| {
+            Ok(supplied.next().unwrap_or(10).clamp(1, sides))
+        })
+    }
+    /// An operation id whose layout hash selects `wanted` among `layouts` layouts,
+    /// mirroring the fold in `start`. A repeated single byte always hashes even, so the
+    /// first byte varies against a fixed tail.
+    fn operation_for_layout(wanted: usize, layouts: usize) -> [u8; 16] {
+        (0_u8..=255)
+            .map(|first| {
+                let mut operation = [7_u8; 16];
+                operation[0] = first;
+                operation
+            })
+            .find(|operation| {
+                operation
+                    .iter()
+                    .fold(0_usize, |hash, value| {
+                        hash.wrapping_mul(31).wrapping_add(usize::from(*value))
+                    })
+                    % layouts
+                    == wanted
+            })
+            .expect("an operation id selects each layout")
+    }
+    #[test]
+    fn ses02_valley_bandits_start_a_fight_on_both_layouts_with_enemies_first() {
+        with_live(|| {
+            TEST_SCENE_OVERRIDE.with(|own| own.set(Some("scan-valley-bridges")));
+            TEST_FIGHT_OVERRIDE.with(|own| {
+                *own.borrow_mut() = Some(TestFight {
+                    enemies: 3,
+                    foe: Some("bandit".to_owned()),
+                });
+            });
+            for layout_index in 0..2 {
+                let operation = operation_for_layout(layout_index, 2);
+                let _ = crate::gameplay::refusal_detail::take();
+                match staged_fight(true, operation, &[1, 2, 20]) {
+                    Ok(current) => {
+                        let battle = read(current.state()).unwrap();
+                        assert_eq!(
+                            battle
+                                .combatants()
+                                .iter()
+                                .filter(|actor| actor.side() == Side::Enemies)
+                                .count(),
+                            3,
+                            "layout {layout_index}"
+                        );
+                    }
+                    Err(error) => panic!(
+                        "layout {layout_index} refused: step={:?} error={error:?}",
+                        crate::gameplay::refusal_detail::take()
+                    ),
+                }
+            }
+            TEST_SCENE_OVERRIDE.with(|own| own.set(None));
+            TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
+        });
     }
     fn fight(mixed: bool) -> Checkpoint {
         let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
