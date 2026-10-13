@@ -130,7 +130,7 @@ In the order I would take them. One at a time, as agreed.
 | FGT-02 | 2 | Only the d20 is rolled and shown. Damage appears as a finished number and the server's combat record holds no damage dice ("he rolls hit but doesnt roll damage"). | P3, OWNER | |
 | FGT-03 | 3 | An enemy can die to a miss: the greatsword's graze deals damage on a failed roll, the TV says "ENEMY VANQUISHED", and nothing explains why. The table log calls it a "miss". | P3, SR, EARLIER | |
 | FGT-04 | 3 | Nothing shows that a hero's reaction is spent, so an enemy walking away without an opportunity attack looks like a mistake by the game ("no opportunity attack when they walked away"). The rule itself was applied correctly. | P3, OWNER | |
-| FGT-05 | 3 | Attack lists offer weapons the heroes' builds do not state: Spear and Shortbow for the greatsword fighter, Scimitar and Shortsword for the archer. | P1 | |
+| FGT-05 | 3 | Attack lists offer weapons the heroes' builds do not state: Spear and Shortbow for the greatsword fighter, Scimitar and Shortsword for the archer. | P1 | Not a rules fault: the Soldier background really starts with a spear and a shortbow. What is left is presentation (main weapon first) |
 | FGT-06 | 3 | The greatsword fighter is offered "Javelin (throw)" at 5 ft, which is rolled with disadvantage, with nothing marking it as the worse choice. | P2 | |
 | FGT-07 | 3 | Balance swings widely for a party of two: dead in three rounds in one game, victory in three actions in the next, seven enemy misses in a row in a third. Enemy count, hit points and turn order need tuning. | P1, P2, SR | |
 | FGT-08 | 4 | Two rulings are applied without being disclosed: initiative ties between a hero and a monster go to the heroes, and a dead creature's square does not block movement. | EARLIER | |
@@ -141,7 +141,7 @@ The owner's words: "the battle scene was out of sync", "make sure the state mach
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
-| SYN-01 | 2 | The TV skips enemy turns. In playthrough 1 six beats were resolved before the first hero turn; the TV showed the first, waited about 25 s and jumped to the sixth, so the bites that hurt the heroes were never seen. In playthrough 2 a whole enemy turn was marked skipped ("the 3rd creature didnt even get a chance to play"). In playthrough 3 two of 26 beats were skipped. | P1, P2, P3, OWNER | Fixed `8d5425b` (browser check pending) |
+| SYN-01 | 2 | The TV skips enemy turns. In playthrough 1 six beats were resolved before the first hero turn; the TV showed the first, waited about 25 s and jumped to the sixth, so the bites that hurt the heroes were never seen. In playthrough 2 a whole enemy turn was marked skipped ("the 3rd creature didnt even get a chance to play"). In playthrough 3 two of 26 beats were skipped. | P1, P2, P3, OWNER | Fixed `8d5425b`: enemy turns seen in order in a three-enemy recording; beat-by-beat proof pending |
 | SYN-02 | 2 | A defeated enemy acts again on screen: "it said enemy vanquished then he stood back up", "the dead guy moved". Consistent with the TV applying a death and then playing an older queued beat for the same figure. | OWNER (twice) | Fixed `8d5425b` (browser check pending) |
 | SYN-03 | 2 | The phone offers a hero his turn while the TV is still several beats behind (beat 6 of 6 on the phone, 2 of 6 on the TV); the TV's own counter went 6, 0, 2 during the entrance. | P1 | |
 | SYN-04 | 2 | The TV's health cards are wrong: hurt before any bite was shown, then full for 26 s while both phones said hurt, then hurt again. A heal on the phone (4 to 10) did not reach the TV for two rounds. | P1, P3 | Fixed `0bf7237`: heals wait for their beat; cards running ahead of damage beats still to confirm in a browser |
@@ -158,8 +158,8 @@ The owner's words: "the battle scene was out of sync", "make sure the state mach
 
 | ID | Sev | Issue | Seen in | Decision |
 |---|---|---|---|---|
-| FPX-01 | 2 | No dice roll is ever seen. Rendered tumbling clips exist (`assets/ui/generated/dice/`), but the game shows a still image with the number for 0.4 to 1.8 s, with a gold square outline round it. Death saves were rolled five times in one fight and never shown at all. Before this the owner's complaint was the opposite: "the old dice roll stay on screen way too long". | P1, P2, P3, SR, OWNER | Fixed `0d8934f` (browser check pending) |
-| FPX-02 | 2 | The camera can sit behind scenery: for a finishing blow it stayed behind the stockade fence, which filled the screen. Owner: "the camera needs an xray feature … the player characters need to be cut out so they can be seen". | P1, OWNER | |
+| FPX-01 | 2 | No dice roll is ever seen. Rendered tumbling clips exist (`assets/ui/generated/dice/`), but the game shows a still image with the number for 0.4 to 1.8 s, with a gold square outline round it. Death saves were rolled five times in one fight and never shown at all. Before this the owner's complaint was the opposite: "the old dice roll stay on screen way too long". | P1, P2, P3, SR, OWNER | Part `0d8934f`: the tumbling clip now plays (seen in a recording); the die is only about 40 px across and death saves are still not shown as rolls |
+| FPX-02 | 2 | The camera can sit behind scenery: for a finishing blow it stayed behind the stockade fence, which filled the screen. Owner: "the camera needs an xray feature … the player characters need to be cut out so they can be seen". | P1, OWNER | Fixed `7a3d505` (browser check pending) |
 | FPX-03 | 2 | In the default view a hero is 30 to 40 px tall on an 800 px wide screen and most of the frame is empty ground. The actor-centred camera the owner asked for is designed but not built. | P1, P2, SC, EARLIER | |
 | FPX-04 | 3 | Bad frames: one near-black blurred frame mid-fight, heavy smear with colour fringing during strikes, and a whole-battlefield motion blur during a camera move that reduces the figures to streaks. | SR, SC | |
 | FPX-05 | 3 | The Dungeon Master says nothing between beats or while the game waits on a player; waits of 20 s and more are silent. Owner: "if the match idles the DM should make some more commentary, he tries to keep intensity up". Battle cries and fight narration were decided earlier and never built. | P3, OWNER, EARLIER | |
@@ -265,14 +265,14 @@ Thirty read-only reviewers each read one module on the evening of 2026-10-12 and
 | ID | Sev | Issue | Source | Decision |
 |---|---|---|---|---|
 | HNT-01 | 1 | A fight is refused at the start when the heroes were confirmed in a different order from the order they joined: the fight builds its hero list in confirmation order and the admission check expects join order. Very likely the real cause of SES-02 and of the refused fight behind SES-01, since the recording script confirms both heroes at once. | H12 F1 | Fixed `5abd72e`. Verified on a running server: refused before, starts now |
-| HNT-02 | 3 | Restoring a pending move accepts a diagonal path through blocked corners and can leave the fight permanently stuck. Needs a hand-altered saved game to trigger, so lowered from severity 1. | H14 F1 | |
-| HNT-03 | 2 | A delayed attack command from an earlier turn can be accepted on the same hero's later turn. | H08 F1 | Part `cafd68c`: attacks fixed; the same fault for End turn is being fixed |
+| HNT-02 | 3 | Restoring a pending move accepts a diagonal path through blocked corners and can leave the fight permanently stuck. Needs a hand-altered saved game to trigger, so lowered from severity 1. | H14 F1 | Fixed `0e8e4a1` |
+| HNT-03 | 2 | A delayed attack command from an earlier turn can be accepted on the same hero's later turn. | H08 F1 | Fixed `cafd68c`, `e47c1a3` |
 | HNT-04 | 2 | An "observe" investigation offer advances the story without resolving or recording what was observed (medium confidence). | H05 F1 | |
 | HNT-05 | 2 | A wolf's or mastiff's bite knocks its target prone on every hit, without the Strength save the rules require. | H13 F1 | Fixed `cd92d25` |
 | HNT-06 | 2 | A healed figure stays down on the TV during playback and its next action can be dropped. | H22 F1 | Fixed `4abbe0f` |
 | HNT-07 | 2 | Start-up story text that came back incomplete is cached as complete, so refused slots are never asked for again. | H27 F1 | Fixed `a470d5e` |
 | HNT-08 | 2 | After stepping back with the development tool, a late report from the TV can release a beat in the restored fight (medium confidence). | H15 F1 | |
-| HNT-09 | 3 | Thrown weapons are used up but never recorded where they land, so they cannot be picked up. | H13 F2 | |
+| HNT-09 | 3 | Thrown weapons are used up but never recorded where they land, so they cannot be picked up. | H13 F2 | Fixed `0e8e4a1` |
 | HNT-10 | 3 | When the server loses its ownership lease for good, an expired wake-up stays armed and the session thread spins. | H02 F1 | Fixed `33b0ba9` |
 
 Causes the reviewers found for issues already listed above:
@@ -302,11 +302,11 @@ Forty more read-only reviewers covered the modules the first thirty did not. Sam
 | ID | Sev | Issue | Source | Decision |
 |---|---|---|---|---|
 | HNT-11 | 2 | The server will serve a file outside its configured folder through a symlink, for scan files and for the lobby-video cache. | W06 F1, F2 | Fixed `0f5b695` |
-| HNT-12 | 2 | A stale End turn from an earlier round can use up the same hero's later turn (the same missing revision check as HNT-03). | W39 F1 | |
+| HNT-12 | 2 | A stale End turn from an earlier round can use up the same hero's later turn (the same missing revision check as HNT-03). | W39 F1 | Fixed `e47c1a3` |
 | HNT-13 | 2 | Push-to-talk audio recorded under one view can be sent under the next view's offer. | W20 F1 | Fixed `d8e4a5f` (browser check pending) |
-| HNT-14 | 2 | Cancelling during a speech upload does not stop the browser's request or the server's transcription. | W30 F1 | |
+| HNT-14 | 2 | Cancelling during a speech upload does not stop the browser's request or the server's transcription. | W30 F1 | Part `c813ce7`: the browser request is aborted; the server still charges and transcribes the clip |
 | HNT-15 | 2 | Cleanup of model text can remove every meaningful word and still pass validation; Markdown formatting survives cleanup and reaches the spoken line. | W15 F1, F2 | Fixed `1222ca1` |
-| HNT-16 | 2 | Duplicate speaker profiles in the content pack make a character's safety facts depend on array order. | W01 F1 | |
+| HNT-16 | 2 | Duplicate speaker profiles in the content pack make a character's safety facts depend on array order. | W01 F1 | Fixed `7e6c6e1` |
 | HNT-17 | 2 | A catch-up on the TV can erase a submitted scene transition and leave the TV on the previous scene (medium confidence). | W27 F1 | Fixed `129547c` |
 | HNT-18 | 2 | A defeat scene that has authored dialogue is labelled as a victory (medium confidence). | W29 F1 | Fixed `224b74f` |
 | HNT-19 | 2 | Scan level-of-detail range counts are trusted past the chunk size and can submit an invalid GPU dispatch (medium confidence). | W33 F1 | |
