@@ -276,9 +276,13 @@ impl<D: Clone> Conductor<D> {
     }
 
     /// The cue sequencer has nothing playing and nothing queued (a Roll waiting for the
-    /// battlefield does not count as idle).
+    /// battlefield does not count as idle), and no beat is held back for the battlefield's
+    /// entrance or exit: a held beat has not been presented, however empty the sequencer is.
     pub(crate) fn director_idle(&self) -> bool {
         self.director.is_idle()
+            && self.battle != BattleState::Entering
+            && self.held.is_empty()
+            && self.held_exit.is_none()
     }
 
     /// Whether a 3D battlefield will show the next fight (WebGPU is present).
@@ -2306,6 +2310,30 @@ mod tests {
                 BattleState::TurnEnd,
             ]
         );
+    }
+
+    #[test]
+    fn a_held_opening_beat_counts_as_busy_until_the_entrance_finishes() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0]);
+        harness.conductor.set_battlefield_expected(true);
+        harness.view(fight_start());
+        harness.run_to(300);
+        harness.view(first_attack());
+        harness.run_to(6_000);
+        assert_eq!(harness.conductor.battle_state(), BattleState::Entering);
+        assert_eq!(harness.conductor.presented_sequence(), 0);
+        assert!(
+            !harness.conductor.director_idle(),
+            "a beat held for the entrance must not read as idle: the display would \
+             otherwise report it presented before the field is raised"
+        );
+        harness.now += 50;
+        let commands = harness
+            .conductor
+            .on_battlefield(harness.now, Battlefield::Ready);
+        harness.record(commands);
+        harness.run_to(harness.now + 10_000);
+        assert!(harness.conductor.director_idle());
     }
 
     #[test]
