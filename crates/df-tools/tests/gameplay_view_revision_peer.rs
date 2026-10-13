@@ -269,6 +269,17 @@ impl rpc::session_service_server::SessionService for Service {
         );
         Ok(Response::new(Box::pin(stream)))
     }
+
+    /// The fixture has no pacing gate: a presentation report is answered with the
+    /// sequence it carried, as a fully released table would.
+    async fn report_presented(
+        &self,
+        request: Request<rpc::PresentedRequest>,
+    ) -> Result<Response<rpc::PresentedResponse>, Status> {
+        Ok(Response::new(rpc::PresentedResponse {
+            released_sequence: request.into_inner().sequence,
+        }))
+    }
 }
 
 #[tonic::async_trait]
