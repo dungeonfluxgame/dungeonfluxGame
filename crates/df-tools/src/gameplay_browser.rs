@@ -1555,6 +1555,10 @@ fn activate_action_offer(
     let mut savage = false;
     let mut graze = false;
     let mut action_choices = Vec::new();
+    let tactical_offer = offered
+        .input_groups
+        .iter()
+        .any(|group| group.group_id == "tactical-choice");
     for (key, input) in inputs {
         let value = input.value();
         if key == "tactical-choice" {
@@ -1569,6 +1573,14 @@ fn activate_action_offer(
                 group_id: key.clone(),
                 option_id: value,
             });
+            continue;
+        }
+        if tactical_offer {
+            let Some(choice) = tactical_action_choice(offered, key, &value) else {
+                feedback(&client.borrow(), "Choose an offered attack approach.");
+                return;
+            };
+            action_choices.push(choice);
             continue;
         }
         if !matches!(value.as_str(), "yes" | "no") {
@@ -1611,6 +1623,32 @@ fn activate_action_offer(
         }
         Err(error) => feedback(&client.borrow(), &error),
     }
+}
+
+fn tactical_action_choice(
+    offer: &rpc::GameplayActionOffer,
+    group_id: &str,
+    option_id: &str,
+) -> Option<rpc::JourneyChoice> {
+    if !matches!(option_id, "yes" | "no")
+        || !offer
+            .input_groups
+            .iter()
+            .any(|group| group.group_id == "tactical-choice")
+        || !offer.input_groups.iter().any(|group| {
+            group.group_id == group_id
+                && group
+                    .options
+                    .iter()
+                    .any(|option| option.option_id == option_id)
+        })
+    {
+        return None;
+    }
+    Some(rpc::JourneyChoice {
+        group_id: group_id.to_owned(),
+        option_id: option_id.to_owned(),
+    })
 }
 fn receive_view(
     client: &Rc<RefCell<Client>>,
@@ -2350,8 +2388,39 @@ pub mod fixture {
 mod tests {
     use super::{
         ACTION_REFUSAL_FEEDBACK, ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, action_identity,
-        record_join_retry, should_replace_feedback,
+        record_join_retry, should_replace_feedback, tactical_action_choice,
     };
+
+    #[test]
+    fn tactical_attack_inputs_are_forwarded_only_when_the_offer_contains_them() {
+        let group = |group_id: &str, options: &[&str]| df_protocol::common::JourneyGroup {
+            group_id: group_id.to_owned(),
+            options: options
+                .iter()
+                .map(|option_id| df_protocol::common::JourneyOption {
+                    option_id: (*option_id).to_owned(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let offer = df_protocol::common::GameplayActionOffer {
+            input_groups: vec![
+                group("tactical-choice", &[]),
+                group("weapon-mastery", &["no", "yes"]),
+                group("savage-attacker", &["no", "yes"]),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            tactical_action_choice(&offer, "weapon-mastery", "yes")
+                .map(|choice| (choice.group_id, choice.option_id)),
+            Some(("weapon-mastery".to_owned(), "yes".to_owned()))
+        );
+        assert!(tactical_action_choice(&offer, "graze", "yes").is_none());
+        assert!(tactical_action_choice(&offer, "weapon-mastery", "maybe").is_none());
+    }
 
     #[test]
     fn rejected_action_feedback_survives_view_updates_until_replaced_or_expired() {

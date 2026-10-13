@@ -143,7 +143,9 @@ pub(super) fn journey_input(
     if request.offer_id.len() > 96 {
         return Err(tonic::Status::invalid_argument("offer exceeds bound"));
     }
-    if request.action_choices.len() > 2
+    // A fight action carries at most its choice from the list and the two attack variants
+    // (weapon mastery, Savage Attacker).
+    if request.action_choices.len() > 3
         || (!super::journey::tactical::present(current.state())
             && !request.action_choices.is_empty())
     {

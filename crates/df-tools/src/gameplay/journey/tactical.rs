@@ -1452,16 +1452,17 @@ pub(in crate::gameplay) fn groups(
         return Ok(Vec::new());
     }
     let actor = actor_id(current.state(), player_entity(member, current)?)?;
-    let options = options(current.state(), actor, kind)?
-        .into_iter()
-        .map(|(option_id, _, label)| rpc::JourneyOption {
-            option_id,
-            label,
-            description: String::new(),
-            ..Default::default()
-        })
-        .collect();
-    Ok(vec![rpc::JourneyGroup {
+    let candidates = options(current.state(), actor, kind)?;
+    // A variant is offered only while some attack on offer has it (Savage Attacker is spent
+    // after its one use in a turn).
+    let offers_variant = |wanted: fn(&AttackUse) -> bool| {
+        candidates
+            .iter()
+            .any(|(_, action, _)| matches!(action, Action::Attack { weapon, .. } if wanted(weapon)))
+    };
+    let offers_mastery = offers_variant(|weapon| weapon.use_mastery);
+    let offers_savage = offers_variant(|weapon| weapon.savage_attacker);
+    let mut groups = vec![rpc::JourneyGroup {
         group_id: "tactical-choice".to_owned(),
         label: if kind == rpc::GameplayActionKind::Move {
             "Reachable cell"
@@ -1469,8 +1470,144 @@ pub(in crate::gameplay) fn groups(
             "Weapon and target"
         }
         .to_owned(),
-        options,
-    }])
+        options: Vec::new(),
+    }];
+    for (option_id, action, label) in candidates {
+        let option_id = match &action {
+            Action::Attack {
+                target,
+                weapon,
+                spend,
+            } => tactical_attack_id(*target, *weapon, *spend),
+            _ => option_id,
+        };
+        let options = &mut groups[0].options;
+        if !options.iter().any(|option| option.option_id == option_id) {
+            options.push(rpc::JourneyOption {
+                option_id,
+                label: match &action {
+                    Action::Attack { target, weapon, .. } => format!(
+                        "{}{} → {}",
+                        weapon_display_name(weapon.weapon.id()),
+                        if weapon.ranged && !weapon.weapon.ranged_weapon() {
+                            " (throw)"
+                        } else {
+                            ""
+                        },
+                        name(current.state(), canonical(current.state(), *target)?)?
+                    ),
+                    _ => label,
+                },
+                description: String::new(),
+                ..Default::default()
+            });
+        }
+    }
+    if offers_mastery {
+        groups.push(yes_no_group(
+            "weapon-mastery",
+            "Use the weapon's mastery when it has one",
+        ));
+    }
+    if offers_savage {
+        groups.push(yes_no_group(
+            "savage-attacker",
+            "Savage Attacker (once a turn)",
+        ));
+    }
+    Ok(groups)
+}
+
+fn yes_no_group(group_id: &str, label: &str) -> rpc::JourneyGroup {
+    rpc::JourneyGroup {
+        group_id: group_id.to_owned(),
+        label: label.to_owned(),
+        // Both variants only help the attacker, so "Yes" is the choice shown first.
+        options: [("yes", "Yes"), ("no", "No")]
+            .into_iter()
+            .map(|(option_id, label)| rpc::JourneyOption {
+                option_id: option_id.to_owned(),
+                label: label.to_owned(),
+                ..Default::default()
+            })
+            .collect(),
+    }
+}
+
+fn tactical_attack_id(target: u32, weapon: AttackUse, spend: AttackSpend) -> String {
+    let spend = match spend {
+        AttackSpend::Action => "action",
+        AttackSpend::LightBonus => "bonus",
+        AttackSpend::Nick => "nick",
+        AttackSpend::Multiattack => "multiattack",
+    };
+    format!(
+        "{}-{}-{target}-{spend}",
+        weapon.weapon.id(),
+        u8::from(weapon.ranged)
+    )
+}
+
+fn selected_candidate<'a>(
+    candidates: &'a [(String, Action, String)],
+    choices: &[(&str, &str)],
+    allow_mastery: bool,
+    allow_savage: bool,
+) -> Option<&'a (String, Action, String)> {
+    if choices.is_empty() {
+        return candidates.iter().find(|(id, _, _)| id.is_empty());
+    }
+    let mut tactical_choice = None;
+    let mut mastery = false;
+    let mut savage = false;
+    let mut mastery_seen = false;
+    let mut savage_seen = false;
+    for (group, option) in choices {
+        match (*group, *option) {
+            ("tactical-choice", id) if tactical_choice.is_none() => tactical_choice = Some(id),
+            ("weapon-mastery", "yes") if !mastery_seen => {
+                mastery = true;
+                mastery_seen = true;
+            }
+            ("weapon-mastery", "no") if !mastery_seen => mastery_seen = true,
+            ("savage-attacker", "yes") if !savage_seen => {
+                savage = true;
+                savage_seen = true;
+            }
+            ("savage-attacker", "no") if !savage_seen => savage_seen = true,
+            _ => return None,
+        }
+    }
+    if (mastery_seen && !allow_mastery) || (savage_seen && !allow_savage) {
+        return None;
+    }
+    let id = tactical_choice?;
+    if let Some(exact) = candidates
+        .iter()
+        .find(|(candidate_id, _, _)| candidate_id == id)
+    {
+        // A variant's own id, as sent before the variants became separate inputs.
+        return (choices.len() == 1).then_some(exact);
+    }
+    // "Yes" means "when this attack has it": a weapon without a mastery, or Savage Attacker
+    // already spent this turn, falls back to the fullest variant the attack still has.
+    candidates
+        .iter()
+        .filter(|(_, action, _)| {
+            matches!(
+                action,
+                Action::Attack { target, weapon, spend }
+                    if tactical_attack_id(*target, *weapon, *spend) == id
+                        && (mastery || !weapon.use_mastery)
+                        && (savage || !weapon.savage_attacker)
+            )
+        })
+        .max_by_key(|(_, action, _)| match action {
+            Action::Attack { weapon, .. } => {
+                u8::from(weapon.use_mastery) + u8::from(weapon.savage_attacker)
+            }
+            _ => 0,
+        })
 }
 pub(super) fn offered(
     current: &Checkpoint,
@@ -1533,13 +1670,22 @@ pub(super) fn stage(
         return aftermath(state, command.operation, draws, outcomes, supplier);
     }
     let candidates = options(state, actor, kind)?;
-    let selected = match choices.as_slice() {
-        [] => candidates.iter().find(|(id, _, _)| id.is_empty()),
-        [(group, id)] if group.as_str() == "tactical-choice" => candidates
-            .iter()
-            .find(|(offered, _, _)| offered == id.as_str()),
-        _ => None,
-    }
+    let choices = choices
+        .iter()
+        .map(|(group, id)| (group.as_str(), id.as_str()))
+        .collect::<Vec<_>>();
+    let combatant = battle.actor(actor).map_err(bad)?;
+    let allow_mastery = combatant
+        .spec()
+        .weapons
+        .iter()
+        .any(|weapon| combatant.spec().masteries.contains(weapon));
+    let selected = selected_candidate(
+        &candidates,
+        &choices,
+        allow_mastery,
+        combatant.spec().savage_attacker,
+    )
     .ok_or(RepositoryError::InvalidCandidate)?;
     if !targets.is_empty() {
         let expected = match &selected.1 {
@@ -2250,7 +2396,12 @@ pub(in crate::gameplay) fn project_combat(
         for (option_id, action, _) in
             options(state, actor, rpc::GameplayActionKind::GreatswordAttack)?
         {
-            let Action::Attack { target, weapon, .. } = action else {
+            let Action::Attack {
+                target,
+                weapon,
+                spend,
+            } = action
+            else {
                 continue;
             };
             let source = battle.actor(actor).map_err(bad)?;
@@ -2314,6 +2465,18 @@ pub(in crate::gameplay) fn project_combat(
                     .collect(),
                 option_id,
             });
+            // The offered list names an attack once per weapon and target; its entry carries
+            // the same cover, range and reasons as every variant of that attack.
+            let listed = tactical_attack_id(target, weapon, spend);
+            if !view
+                .legal_targets
+                .iter()
+                .any(|legal| legal.option_id == listed)
+                && let Some(mut entry) = view.legal_targets.last().cloned()
+            {
+                entry.option_id = listed;
+                view.legal_targets.push(entry);
+            }
         }
     }
     if let Some(who) = own {
@@ -2362,13 +2525,24 @@ pub(in crate::gameplay) fn valid_selection(
     }
     let actor = actor_id(current.state(), player_entity(member, current)?)?;
     let candidates = options(current.state(), actor, kind)?;
-    Ok(match choices {
-        [] => candidates.iter().any(|(id, _, _)| id.is_empty()),
-        [choice] if choice.group_id == "tactical-choice" => {
-            candidates.iter().any(|(id, _, _)| *id == choice.option_id)
-        }
-        _ => false,
-    })
+    let battle = read(current.state())?;
+    let combatant = battle.actor(actor).map_err(bad)?;
+    let allow_mastery = combatant
+        .spec()
+        .weapons
+        .iter()
+        .any(|weapon| combatant.spec().masteries.contains(weapon));
+    let choices = choices
+        .iter()
+        .map(|choice| (choice.group_id.as_str(), choice.option_id.as_str()))
+        .collect::<Vec<_>>();
+    Ok(selected_candidate(
+        &candidates,
+        &choices,
+        allow_mastery,
+        combatant.spec().savage_attacker,
+    )
+    .is_some())
 }
 
 fn reason_label(reason: tactical_rules::AttackReason) -> &'static str {
@@ -3917,7 +4091,7 @@ pub(super) mod tests {
             let attacks = options(current.state(), 2, K::GreatswordAttack).unwrap();
             let (first_id, first_action, _) = attacks.first().unwrap();
             let group = groups(&current, second, K::GreatswordAttack).unwrap();
-            assert_eq!(group[0].options[0].option_id, *first_id);
+            assert!(group[0].options.len() < attacks.len());
             let Action::Attack {
                 target,
                 weapon,
@@ -3926,6 +4100,10 @@ pub(super) mod tests {
             else {
                 panic!("first option must be an attack");
             };
+            assert_eq!(
+                group[0].options[0].option_id,
+                tactical_attack_id(*target, *weapon, *spend)
+            );
             assert!(!weapon.ranged);
             assert!(!weapon.use_mastery);
             assert!(!weapon.savage_attacker);
@@ -3944,18 +4122,50 @@ pub(super) mod tests {
                 first_target.participant_id,
                 canonical(current.state(), *target).unwrap().as_bytes()
             );
-            assert_eq!(
-                group[0].options.len(),
-                view.legal_targets
+            assert!(group[0].options.iter().all(|option| attacks.iter().any(
+                |(id, action, _)| matches!(action, Action::Attack { target, weapon, spend }
+                    if tactical_attack_id(*target, *weapon, *spend) == option.option_id
+                        && view.legal_targets.iter().any(|legal| legal.option_id == *id))
+            )));
+            assert!(group.iter().any(|group| group.group_id == "weapon-mastery"));
+            assert!(
+                group
                     .iter()
-                    .filter(|legal| !legal.option_id.is_empty())
-                    .count()
+                    .any(|group| group.group_id == "savage-attacker")
             );
-            assert!(group[0].options.iter().all(|option| {
-                view.legal_targets
-                    .iter()
-                    .any(|legal| legal.option_id == option.option_id)
-            }));
+            let savage_option = attacks
+                .iter()
+                .find(|(_, action, _)| {
+                    matches!(action, Action::Attack { weapon, .. } if weapon.savage_attacker && !weapon.use_mastery)
+                })
+                .unwrap();
+            let Action::Attack {
+                target,
+                weapon,
+                spend,
+            } = &savage_option.1
+            else {
+                panic!("savage option must be an attack");
+            };
+            let savage_id = tactical_attack_id(*target, *weapon, *spend);
+            let selected = selected_candidate(
+                &attacks,
+                &[
+                    ("tactical-choice", &savage_id),
+                    ("weapon-mastery", "no"),
+                    ("savage-attacker", "yes"),
+                ],
+                true,
+                true,
+            )
+            .unwrap();
+            assert_eq!(selected.0, savage_option.0);
+            assert_eq!(
+                selected_candidate(&attacks, &[("tactical-choice", first_id)], true, true)
+                    .unwrap()
+                    .0,
+                *first_id
+            );
         });
     }
 

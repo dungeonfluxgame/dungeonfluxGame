@@ -1327,7 +1327,21 @@ impl Actor {
         {
             return self.set_table_setting(member, &request);
         }
-        let input = wire::journey_input(&request, member, self.owner.checkpoint())?;
+        // A request refused for its shape never reaches the game, so it is logged here: without
+        // this line a phone's "Outcome unknown" has no trace on the server.
+        let input = wire::journey_input(&request, member, self.owner.checkpoint()).inspect_err(
+            |status| {
+                record_audit_line(
+                    "gameplay.request_invalid",
+                    format!(
+                        "REQUEST invalid action_kind={} choices={} reason={:?}",
+                        request.action_kind,
+                        request.action_choices.len(),
+                        status.message()
+                    ),
+                );
+            },
+        )?;
         let GameInput::Game(command) = &input else {
             return Err(tonic::Status::internal("canonical command unavailable"));
         };
