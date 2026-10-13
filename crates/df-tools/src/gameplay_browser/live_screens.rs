@@ -202,6 +202,10 @@ fn lobby_art_source(scene_asset: &str, live_backdrop: &str) -> Option<String> {
     crate::presentation::imagery_url(live_backdrop).or_else(|| asset_url(scene_asset))
 }
 
+fn validated_join_scene_asset(scene_asset: Option<&str>) -> Option<String> {
+    scene_asset.and_then(asset_url)
+}
+
 fn speaker_portrait_stem(name: &str) -> Option<&'static str> {
     match name {
         "Courier" => Some("portrait-courier"),
@@ -686,7 +690,9 @@ fn render_display(
 
 #[cfg(test)]
 mod tests {
-    use super::{choice_disabled_reason, is_new_private_clue, lobby_art_source};
+    use super::{
+        choice_disabled_reason, is_new_private_clue, lobby_art_source, validated_join_scene_asset,
+    };
 
     #[test]
     fn lobby_art_uses_the_server_scene_asset_when_it_is_a_local_asset_path() {
@@ -706,6 +712,21 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn join_art_uses_only_a_well_formed_local_scene_asset() {
+        assert_eq!(
+            validated_join_scene_asset(Some("assets/ui/generated/scene-place-guardhouse")),
+            Some("/assets/ui/generated/scene-place-guardhouse".to_owned())
+        );
+        assert_eq!(validated_join_scene_asset(None), None);
+        assert_eq!(validated_join_scene_asset(Some("")), None);
+        assert_eq!(
+            validated_join_scene_asset(Some("https://example.com/scene.webp")),
+            None
+        );
+        assert_eq!(validated_join_scene_asset(Some("assets/scene?bad")), None);
     }
 
     #[test]
@@ -732,7 +753,7 @@ mod tests {
 
 /// The join screen before a player has a seat: the same lobby surface in its invitation stage.
 pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let (document, view, code, has_request, retries) = {
+    let (document, view, code, join_scene_asset, has_request, retries) = {
         let mut state = client.borrow_mut();
         clear_callbacks(&mut state);
         (
@@ -742,6 +763,7 @@ pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 .query_selector(".view")?
                 .ok_or_else(|| JsValue::from_str("view missing"))?,
             state.room_code.clone(),
+            state.root.get_attribute("data-join-scene-asset"),
             state.join_request.is_some(),
             state.join_retries,
         )
@@ -763,7 +785,7 @@ pub(super) fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         stage: JoinStage::Invitation,
         title: "Join the table".to_owned(),
         narration: "Connect to the shared room and create your own hero.".to_owned(),
-        scene_asset: None,
+        scene_asset: validated_join_scene_asset(join_scene_asset.as_deref()),
         code,
         join_url: String::new(),
         join_label: if retries >= crate::reconnect::JOIN_RETRIES {

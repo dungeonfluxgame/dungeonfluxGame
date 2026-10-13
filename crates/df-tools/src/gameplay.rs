@@ -473,16 +473,19 @@ async fn both(State(state): State<PageState>) -> Html<String> {
         false,
         Some(state.display),
         state.battle_scene.as_deref(),
+        None,
         state.battle_fps,
         state.splat_lod,
         state.battle_grid,
     )
 }
 async fn player() -> Html<String> {
+    let opening_scene_asset = pack::scene(pack::SceneKey::Opening).asset;
     page(
         true,
         None,
         None,
+        Some(&opening_scene_asset),
         df_render::battle::BattleFps::DEFAULT.hz(),
         0,
         false,
@@ -493,6 +496,7 @@ async fn display(State(state): State<PageState>) -> Html<String> {
         false,
         Some(state.display),
         state.battle_scene.as_deref(),
+        None,
         state.battle_fps,
         state.splat_lod,
         state.battle_grid,
@@ -502,6 +506,7 @@ fn page(
     player: bool,
     display: Option<[u8; 32]>,
     battle_scene: Option<&str>,
+    join_scene_asset: Option<&str>,
     battle_fps: u32,
     splat_lod: u32,
     battle_grid: bool,
@@ -510,9 +515,10 @@ fn page(
     // same setting (see `timing`).
     let wait = timing::active().browser_request().as_millis();
     let roots = if player {
+        let join_scene_asset = join_scene_asset.map(escape_attribute).unwrap_or_default();
         format!(
-            "<section class=\"client player\" id=\"player\" data-room=\"{}\" data-request-timeout-ms=\"{wait}\"><div class=\"view\"></div></section>",
-            journey::ROOM_CODE
+            "<section class=\"client player\" id=\"player\" data-room=\"{}\" data-join-scene-asset=\"{join_scene_asset}\" data-request-timeout-ms=\"{wait}\"><div class=\"view\"></div></section>",
+            journey::ROOM_CODE,
         )
     } else {
         display.map(|credential|format!("<section class=\"client display\" id=\"display\" data-local-binding=\"{}\" data-request-timeout-ms=\"{wait}\" data-battle-fps=\"{battle_fps}\" data-battle-splat-lod=\"{splat_lod}\"{}{}><div class=\"view\"></div></section>",hex(&credential),battle_scene.map(|scene|format!(" data-battle-scene=\"{scene}\"")).unwrap_or_default(),if battle_grid{" data-battle-grid=\"on\""}else{""})).unwrap_or_default()
@@ -525,6 +531,14 @@ fn page(
             "clients display-only"
         },
     ))
+}
+fn escape_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\'', "&#39;")
 }
 /// A minimal shell: the Rust client mounts and styles everything (see `live_theme`).
 const HTML: &str = r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><base href="/"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>DungeonFlux</title><style>*{box-sizing:border-box}html,body{margin:0;background:#05090f;color:#efe6ce;font-family:Georgia,serif}</style></head><body><main class="__LAYOUT__">__ROOTS__</main><script type="module">import init from '/pkg/df_tools.js'; await init();</script></body></html>"#;
@@ -1988,19 +2002,37 @@ mod battle_scene_page_tests {
     #[test]
     fn the_display_page_names_the_forced_battle_scene_and_the_player_page_never_does() {
         let credential = Some([7u8; 32]);
-        let forced = page(false, credential, Some("scan-village"), 24, 2, true).0;
+        let forced = page(false, credential, Some("scan-village"), None, 24, 2, true).0;
         assert!(forced.contains("data-battle-grid=\"on\""));
         assert!(forced.contains("data-battle-scene=\"scan-village\""));
         assert!(forced.contains("data-battle-fps=\"24\""));
         assert!(forced.contains("data-battle-splat-lod=\"2\""));
-        let default = page(false, credential, None, 30, 1, false).0;
+        let default = page(false, credential, None, None, 30, 1, false).0;
         assert!(!default.contains("data-battle-grid"));
         assert!(!default.contains("data-battle-scene"));
         assert!(default.contains("data-battle-fps=\"30\""));
-        let player = page(true, None, Some("scan-village"), 24, 1, true).0;
+        let player = page(true, None, Some("scan-village"), None, 24, 1, true).0;
         assert!(!player.contains("data-battle-grid"));
         assert!(!player.contains("data-battle-scene"));
         assert!(!player.contains("data-battle-fps"));
         assert!(!player.contains("data-battle-splat-lod"));
+    }
+
+    #[test]
+    fn the_player_page_includes_and_escapes_the_opening_scene_asset() {
+        let player = page(
+            true,
+            None,
+            None,
+            Some("assets/ui/generated/opening?x=\"&<>'"),
+            30,
+            1,
+            false,
+        )
+        .0;
+
+        assert!(player.contains(
+            "data-join-scene-asset=\"assets/ui/generated/opening?x=&quot;&amp;&lt;&gt;&#39;\""
+        ));
     }
 }
