@@ -322,6 +322,89 @@ fn input_for(current: &Checkpoint, operation: u8, entry: &str) -> GameInput {
     input(current, first(), operation, entry, vec![])
 }
 
+/// The offer/machine agreement, over the checkpoints a played game actually
+/// reaches: every offered kind (handler, authored, tactical and view
+/// projection alike) is an event the machine accepts in that checkpoint's
+/// state, and every event the machine accepts is offered somewhere on the
+/// path or carries a written internal reason in the table.
+#[test]
+fn every_offer_on_the_played_path_is_an_event_the_machine_accepts() {
+    use session_machine::{Event, SessionState};
+    live(|| {
+        let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+        let mut lobby = initial().unwrap();
+        for op in [1, 2] {
+            lobby = stage_join(
+                &lobby,
+                &input(&lobby, bootstrap_member().unwrap(), op, "join-room", vec![]),
+            )
+            .unwrap();
+        }
+        let prepared = super::tests::prepared_story();
+        let opening = super::tests::opening_story();
+        let dialogue = stage_with_supplier(
+            &opening,
+            &input(&opening, first(), 6, "escort-courier", vec![]),
+            &mut |_| panic!("dialogue dice"),
+        )
+        .unwrap();
+        let combat = tactical::tests::current_combat("escort-courier");
+        let victory = tactical::tests::current_victory("escort-courier");
+        let defeat = tactical::tests::current_defeat("escort-courier");
+        let inn = stage_with_supplier(&victory, &inn_command(&victory, first(), 21), &mut |_| {
+            panic!("inn dice")
+        })
+        .unwrap();
+        let epilogue = ending_step(&inn, 22).unwrap();
+        let end = ending_step(&epilogue, 23).unwrap();
+        let path = [
+            lobby, prepared, opening, dialogue, combat, victory, defeat, inn, epilogue, end,
+        ];
+        let mut covered: Vec<(SessionState, Event)> = Vec::new();
+        let mut states_seen: Vec<SessionState> = Vec::new();
+        for current in &path {
+            let state = SessionState::of(current).unwrap();
+            if !states_seen.contains(&state) {
+                states_seen.push(state);
+            }
+            for member in [first(), second] {
+                let mut offered_kinds: Vec<K> = Vec::new();
+                if let Ok(offers) = handler_offered(current, member) {
+                    offered_kinds.extend(offers.into_iter().map(|(kind, _)| kind));
+                }
+                if let Ok(offers) = authored_offered(current, member) {
+                    offered_kinds.extend(offers.into_iter().map(|(kind, _)| kind));
+                }
+                if let Ok(offers) = offered(current, member) {
+                    offered_kinds.extend(offers.into_iter().map(|(kind, _)| kind));
+                }
+                if let Ok(offers) = runtime::view_offers(current, member) {
+                    offered_kinds.extend(offers.into_iter().map(|(kind, _, _)| kind));
+                }
+                for kind in offered_kinds {
+                    assert!(
+                        session_machine::kind_accepted(state, kind),
+                        "{kind:?} offered in {state:?} but the machine refuses it there"
+                    );
+                    for event in session_machine::events_for_kind(kind) {
+                        covered.push((state, *event));
+                    }
+                }
+            }
+        }
+        assert_eq!(states_seen.len(), 6, "the path visits every state");
+        for state in states_seen {
+            for event in session_machine::accepted_events(state) {
+                assert!(
+                    covered.contains(&(state, event))
+                        || session_machine::internal_reason(state, event).is_some(),
+                    "{event:?} accepted in {state:?} is never offered and has no internal reason"
+                );
+            }
+        }
+    });
+}
+
 #[test]
 fn outcome_classes_follow_who_stands_and_who_is_dead() {
     // Victory with every hero standing, or with one down; defeat with a survivor, or none.

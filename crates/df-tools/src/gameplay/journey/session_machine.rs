@@ -114,6 +114,93 @@ pub(super) struct MachineRefusal {
     pub(super) event: Event,
 }
 
+/// Every event, so the accepted set of a state is derived from `next` and
+/// never restated.
+pub(super) const EVENTS: [Event; 9] = [
+    Event::CreateHero,
+    Event::Begin,
+    Event::StoryChoice,
+    Event::ScriptStep,
+    Event::StartFight,
+    Event::CombatAction,
+    Event::EndTurn,
+    Event::Rest,
+    Event::Resolve,
+];
+
+/// The events `next` accepts from `state`.
+pub(super) fn accepted_events(state: SessionState) -> impl Iterator<Item = Event> {
+    EVENTS
+        .into_iter()
+        .filter(move |event| next(state, *event).is_ok())
+}
+
+/// The events an offered action kind can mean, mirroring `Event::of` over
+/// every effect whose `BeatEffect::action` is `kind`, plus the tactical
+/// kinds selection maps onto the fight beat's attack offer. Empty for kinds
+/// that are never journey offers (table settings, unspecified).
+pub(super) fn events_for_kind(kind: rpc::GameplayActionKind) -> &'static [Event] {
+    use rpc::GameplayActionKind as K;
+    match kind {
+        K::CreateCharacter => &[Event::CreateHero],
+        // A pure authored Continue step is also submitted as BeginStory.
+        K::BeginStory => &[Event::Begin, Event::ScriptStep],
+        K::AskCourier | K::EscortCourier | K::ExamineHarborSeal | K::ChooseHarborScene => {
+            &[Event::StoryChoice]
+        }
+        K::DefendCourier => &[Event::StartFight],
+        K::GreatswordAttack
+        | K::SecondWind
+        | K::Move
+        | K::Dash
+        | K::Dodge
+        | K::Disengage
+        | K::OpportunityAttack
+        | K::DeclineReaction
+        | K::Stand
+        | K::PickUpWeapon => &[Event::CombatAction],
+        K::EndTurn => &[Event::EndTurn],
+        K::ShortRest => &[Event::Rest],
+        K::ResolveErrand => &[Event::Resolve],
+        _ => &[],
+    }
+}
+
+/// Whether an offer of `kind` may be built in `state`: some event the kind
+/// can mean is accepted there. This is the one place offer kinds are
+/// decided; handlers keep building labels and inputs for the kinds it
+/// allows.
+pub(super) fn kind_accepted(state: SessionState, kind: rpc::GameplayActionKind) -> bool {
+    events_for_kind(kind)
+        .iter()
+        .any(|event| next(state, *event).is_ok())
+}
+
+/// Why an accepted event may have no offer on a given screen, for the pairs
+/// whose offers are not the handler's to build. `None` means the event is
+/// expected to reach the player as an ordinary offer somewhere in its
+/// state.
+pub(super) fn internal_reason(state: SessionState, event: Event) -> Option<&'static str> {
+    use Event as E;
+    use SessionState as S;
+    match (state, event) {
+        // Pure authored steps are offered by the loaded script's own beats
+        // (its validated forward edges), never by a handler.
+        (_, E::ScriptStep) => Some("offered by the loaded script's beats, not a handler"),
+        // A script whose fight follows the opening directly offers the
+        // fight from Story; the canonical journey reaches it by talking.
+        (S::Story, E::StartFight) => {
+            Some("offered by scripts whose fight follows the opening directly")
+        }
+        // Conversation choices are the script's conversation-beat offers
+        // and typed dialogue lines, not handler offers.
+        (S::Conversation, E::StoryChoice) => {
+            Some("offered by the script's conversation beats and typed dialogue")
+        }
+        _ => None,
+    }
+}
+
 /// The one table: for the current state and an event, the next state or a
 /// typed refusal.
 pub(super) fn next(state: SessionState, event: Event) -> Result<Transition, MachineRefusal> {
@@ -157,17 +244,7 @@ mod tests {
         SessionState::Aftermath,
         SessionState::Ended,
     ];
-    const EVENTS: [Event; 9] = [
-        Event::CreateHero,
-        Event::Begin,
-        Event::StoryChoice,
-        Event::ScriptStep,
-        Event::StartFight,
-        Event::CombatAction,
-        Event::EndTurn,
-        Event::Rest,
-        Event::Resolve,
-    ];
+    // `EVENTS` comes from the module: the table and the tests share it.
 
     #[test]
     fn the_table_names_every_state_and_event() {
@@ -209,6 +286,45 @@ mod tests {
                     || matches!(event, Event::CombatAction | Event::EndTurn),
                 "only combat events are legal in a fight: {event:?}"
             );
+        }
+    }
+
+    #[test]
+    fn every_effects_kind_carries_its_event() {
+        // The kind->events map offer building uses must agree with the
+        // effect->event map command admission uses, for every effect.
+        let effects = [
+            BeatEffect::CreateCharacter,
+            BeatEffect::BeginStory,
+            BeatEffect::AskCourier,
+            BeatEffect::EscortCourier,
+            BeatEffect::DefendCourier,
+            BeatEffect::GreatswordAttack,
+            BeatEffect::SecondWind,
+            BeatEffect::EndTurn,
+            BeatEffect::ShortRest,
+            BeatEffect::ChooseHarborScene,
+            BeatEffect::ThirdApproach,
+            BeatEffect::Observe,
+            BeatEffect::Resolve,
+            BeatEffect::Continue,
+        ];
+        for effect in effects {
+            assert!(
+                events_for_kind(effect.action()).contains(&Event::of(effect)),
+                "{effect:?}"
+            );
+        }
+        // And the accepted set is exactly the table's Ok cells.
+        for state in STATES {
+            let accepted: Vec<_> = accepted_events(state).collect();
+            for event in EVENTS {
+                assert_eq!(
+                    accepted.contains(&event),
+                    next(state, event).is_ok(),
+                    "{state:?} {event:?}"
+                );
+            }
         }
     }
 

@@ -682,11 +682,16 @@ pub(super) fn offered(
     current: &Checkpoint,
     member: MemberId,
 ) -> Result<Vec<(rpc::GameplayActionKind, String)>, RepositoryError> {
+    // The machine's state decides which kinds of offer may be built; each
+    // branch below only builds labels and inputs for kinds it accepts.
+    let state = session_machine::SessionState::of(current)?;
     if tactical::present(current.state()) {
-        if phase(current)? == rpc::JourneyPhase::Combat {
+        if state == session_machine::SessionState::Fight {
             return tactical::offered(current, member);
         }
-        if tactical::dying(current.state())? {
+        if state == session_machine::SessionState::Aftermath
+            && tactical::dying(current.state())?
+        {
             return Ok(vec![(
                 rpc::GameplayActionKind::EndTurn,
                 if tactical::needs_saves(current.state())? {
@@ -712,7 +717,11 @@ fn handler_offered(
     current: &Checkpoint,
     member: MemberId,
 ) -> Result<Vec<(rpc::GameplayActionKind, String)>, RepositoryError> {
-    let phase = phase(current)?;
+    // Offer kinds are a function of the machine's state: each arm below
+    // builds only kinds `session_machine::kind_accepted` allows there, and
+    // keeps its own conditions for when among them.
+    use session_machine::SessionState as State;
+    let state = session_machine::SessionState::of(current)?;
     let who = player_entity(member, current)?;
     let ready = current
         .state()
@@ -720,16 +729,26 @@ fn handler_offered(
         .iter()
         .any(|character| character.entity == who);
     if !ready {
-        return Ok(vec![(
-            rpc::GameplayActionKind::CreateCharacter,
-            pack::offer_label(rpc::GameplayActionKind::CreateCharacter),
-        )]);
+        return Ok(
+            if session_machine::kind_accepted(state, rpc::GameplayActionKind::CreateCharacter) {
+                vec![(
+                    rpc::GameplayActionKind::CreateCharacter,
+                    pack::offer_label(rpc::GameplayActionKind::CreateCharacter),
+                )]
+            } else {
+                vec![]
+            },
+        );
     }
     if let Some(offers) = super::beat_script::with_script(|script| {
-        if !script.uses_encounter() && phase != rpc::JourneyPhase::Room {
+        if !script.uses_encounter() && state != State::Lobby {
             Some(script.current(current.state()).and_then(|beat| {
                 beat.offers
                     .iter()
+                    .filter(|offer| {
+                        session_machine::next(state, session_machine::Event::of(offer.effect))
+                            .is_ok()
+                    })
                     .map(|offer| {
                         script
                             .label(offer)
@@ -743,8 +762,8 @@ fn handler_offered(
     }) {
         return offers;
     }
-    let result = match phase {
-        rpc::JourneyPhase::Room
+    let result = match state {
+        State::Lobby
             if current.state().characters.len() == 2
                 && narrative_transition::story_permitted(current, member)? =>
         {
@@ -753,8 +772,8 @@ fn handler_offered(
                 pack::offer_label(rpc::GameplayActionKind::BeginStory),
             )]
         }
-        rpc::JourneyPhase::Room => vec![],
-        rpc::JourneyPhase::Opening => vec![
+        State::Lobby => vec![],
+        State::Story => vec![
             (
                 rpc::GameplayActionKind::AskCourier,
                 pack::offer_label(rpc::GameplayActionKind::AskCourier),
@@ -764,14 +783,14 @@ fn handler_offered(
                 pack::offer_label(rpc::GameplayActionKind::EscortCourier),
             ),
         ],
-        rpc::JourneyPhase::Dialogue if narrative_phase::courier_encounter_permitted(current)? => {
+        State::Conversation if narrative_phase::courier_encounter_permitted(current)? => {
             vec![(
                 rpc::GameplayActionKind::DefendCourier,
                 pack::offer_label(rpc::GameplayActionKind::DefendCourier),
             )]
         }
-        rpc::JourneyPhase::Dialogue => vec![],
-        rpc::JourneyPhase::Combat => {
+        State::Conversation => vec![],
+        State::Fight => {
             let encounter = current
                 .state()
                 .encounters
@@ -804,7 +823,7 @@ fn handler_offered(
                 offered
             }
         }
-        rpc::JourneyPhase::Complete => {
+        State::Aftermath => {
             if tactical::present(current.state())
                 && !tactical::read(current.state())?
                     .combatants()
@@ -830,7 +849,8 @@ fn handler_offered(
             }
             result
         }
-        _ => return Err(RepositoryError::InvalidCandidate),
+        // The end card accepts nothing, so it offers nothing.
+        State::Ended => vec![],
     };
     Ok(result)
 }

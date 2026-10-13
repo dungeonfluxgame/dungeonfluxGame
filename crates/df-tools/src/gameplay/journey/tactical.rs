@@ -1477,6 +1477,9 @@ pub(super) fn offered(
     member: MemberId,
 ) -> Result<Vec<(rpc::GameplayActionKind, String)>, RepositoryError> {
     use rpc::GameplayActionKind as K;
+    // The fight is a sub-machine inside the machine's Fight state: only
+    // kinds the machine accepts there may be built.
+    let state = super::session_machine::SessionState::of(current)?;
     let actor = actor_id(current.state(), player_entity(member, current)?)?;
     let mut offers = Vec::new();
     for (kind, label) in [
@@ -1492,7 +1495,9 @@ pub(super) fn offered(
         (K::OpportunityAttack, "Opportunity attack"),
         (K::DeclineReaction, "Decline opportunity attack"),
     ] {
-        if !options(current.state(), actor, kind)?.is_empty() {
+        if super::session_machine::kind_accepted(state, kind)
+            && !options(current.state(), actor, kind)?.is_empty()
+        {
             offers.push((kind, label.to_owned()));
         }
     }
