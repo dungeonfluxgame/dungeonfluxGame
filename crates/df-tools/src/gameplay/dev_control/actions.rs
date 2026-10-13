@@ -84,6 +84,8 @@ async fn store_join(state: &Shared, index: usize, joined: rpc::JoinedRoom) -> Ou
     seats.run_id = Some(run_id);
     seats.seats[index].credential = Some(credential);
     seats.seats[index].member = Some(member);
+    super::persist_seats(state, &seats)
+        .map_err(|_| failed("dev control seat state unavailable"))?;
     Ok((
         axum::http::StatusCode::OK,
         Json(json!({"status": "joined", "seat": index + 1, "receipt": receipt})),
@@ -184,7 +186,10 @@ pub(super) async fn create_hero(
     };
     let (code, Json(answer)) = owner_submit_action(&state, credential, request).await?;
     if answer.get("status").and_then(Value::as_str) == Some("accepted") {
-        state.seats.lock().await.seats[index].hero = Some(name.to_owned());
+        let mut seats = state.seats.lock().await;
+        seats.seats[index].hero = Some(name.to_owned());
+        super::persist_seats(&state, &seats)
+            .map_err(|_| failed("dev control seat state unavailable"))?;
     }
     Ok((code, Json(answer)))
 }

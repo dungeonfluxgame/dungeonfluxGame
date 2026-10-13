@@ -58,6 +58,7 @@ struct Shared {
     service: super::Service,
     display_credential: [u8; 32],
     token: Arc<str>,
+    seat_file: std::path::PathBuf,
     shutdown: watch::Sender<bool>,
     seats: Arc<Mutex<Seats>>,
     overrides: Arc<Mutex<Vec<Value>>>,
@@ -72,12 +73,14 @@ struct Shared {
 }
 
 /// The two joinable seats and the session scope learned from the first join.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Seats {
     session_id: Option<Vec<u8>>,
     run_id: Option<Vec<u8>>,
     seats: [Seat; 2],
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Seat {
     credential: Option<[u8; 32]>,
     member: Option<Vec<u8>>,
@@ -149,16 +152,14 @@ pub(super) fn setup(
         .join(&database_name);
     let token = config::fresh_token()?;
     let token_file = config::write_token_file(&run_dir, &token)?;
+    let seat_file = run_dir.join("dev-control-seats");
     let shared = Shared {
         service,
         display_credential,
         token: Arc::from(token),
+        seats: Arc::new(Mutex::new(load_seats(&seat_file)?)),
+        seat_file,
         shutdown: shutdown_send,
-        seats: Arc::new(Mutex::new(Seats {
-            session_id: None,
-            run_id: None,
-            seats: [Seat::empty(), Seat::empty()],
-        })),
         overrides: Arc::new(Mutex::new(Vec::new())),
         recovery,
         history: bundle.history,
@@ -204,6 +205,25 @@ impl Seat {
             hero: None,
         }
     }
+}
+
+fn load_seats(path: &std::path::Path) -> Result<Seats, io::Error> {
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|_| io::Error::other("dev control seat state invalid")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Seats {
+            session_id: None,
+            run_id: None,
+            seats: [Seat::empty(), Seat::empty()],
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+fn persist_seats(state: &Shared, seats: &Seats) -> Result<(), io::Error> {
+    let bytes = serde_json::to_vec(seats)
+        .map_err(|_| io::Error::other("dev control seat state invalid"))?;
+    std::fs::write(&state.seat_file, bytes)
 }
 
 /// Parses `1`, `2`, `seat1` or `seat2` into a seat index.
@@ -561,5 +581,31 @@ mod display_scope_tests {
         };
 
         assert_eq!(display_scope(basis), (vec![1; 16], vec![2; 16]));
+    }
+
+    #[test]
+    fn dev_control_seat_state_round_trips_credentials_and_hero_names() {
+        let seats = Seats {
+            session_id: Some(vec![1; 16]),
+            run_id: Some(vec![2; 16]),
+            seats: [
+                Seat {
+                    credential: Some([3; 32]),
+                    member: Some(vec![4; 16]),
+                    hero: Some("Sigrun".to_owned()),
+                },
+                Seat::empty(),
+            ],
+        };
+
+        let bytes = serde_json::to_vec(&seats).expect("seat state serializes");
+        let restored: Seats = serde_json::from_slice(&bytes).expect("seat state restores");
+
+        assert_eq!(restored.session_id, Some(vec![1; 16]));
+        assert_eq!(restored.run_id, Some(vec![2; 16]));
+        assert_eq!(restored.seats[0].credential, Some([3; 32]));
+        assert_eq!(restored.seats[0].member, Some(vec![4; 16]));
+        assert_eq!(restored.seats[0].hero.as_deref(), Some("Sigrun"));
+        assert!(restored.seats[1].credential.is_none());
     }
 }
