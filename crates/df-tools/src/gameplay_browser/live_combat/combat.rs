@@ -197,6 +197,12 @@ fn waiting_for_current_view(
         })
 }
 
+fn ordered_tactical_offers(offers: &[rpc::GameplayActionOffer]) -> Vec<&rpc::GameplayActionOffer> {
+    let mut ordered = offers.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|offer| offer.action_kind != rpc::GameplayActionKind::EndTurn as i32);
+    ordered
+}
+
 fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Option<String>) {
     let own = view.journey.own_character.as_ref();
     let own_matches = own.map_or(0, |own| {
@@ -303,14 +309,16 @@ fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollTe
         .rev()
         .enumerate()
         .map(|(index, outcome)| {
-            let damage = if outcome.damage == 0 {
-                "No damage".to_owned()
-            } else if outcome.damage_dice.is_empty() {
-                format!("{} damage", outcome.damage)
-            } else {
-                let dice: Vec<String> = outcome.damage_dice.iter().map(u32::to_string).collect();
-                format!("{} damage ({})", outcome.damage, dice.join(" + "))
-            };
+            let damage_rolls = outcome
+                .damage_rolls
+                .iter()
+                .map(|roll| (roll.dice.as_slice(), roll.kept))
+                .collect::<Vec<_>>();
+            let damage = crate::combat_text::damage_summary(
+                outcome.damage,
+                &damage_rolls,
+                outcome.damage_modifier,
+            );
             let knockout = if outcome.knocked_out {
                 " · Nonlethal knockout: unconscious at 1 HP"
             } else {
@@ -322,33 +330,16 @@ fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollTe
                 label: if outcome.weapon.is_empty() {
                     format!("{} attacks {}", outcome.actor_name, outcome.target_name)
                 } else {
-                    format!(
-                        "{} {} {} \u{b7} {}",
-                        outcome.actor_name,
-                        if outcome.attack_style == 2 {
-                            "shoots"
-                        } else {
-                            "strikes"
-                        },
-                        outcome.target_name,
-                        df_render::battle::float_text::attack_name(&outcome.weapon)
+                    crate::combat_text::combat_attack_label(
+                        &outcome.actor_name,
+                        &outcome.target_name,
+                        &outcome.weapon,
+                        &df_render::battle::float_text::attack_name(&outcome.weapon),
+                        outcome.attack_style,
                     )
                 },
                 value: outcome.attack_die.to_string(),
-                explanation: if outcome.target_armor_class == 0 {
-                    format!(
-                        "d20 {} {:+} = {}",
-                        outcome.attack_die, outcome.attack_modifier, outcome.attack_total
-                    )
-                } else {
-                    format!(
-                        "d20 {} {:+} = {} vs AC {}",
-                        outcome.attack_die,
-                        outcome.attack_modifier,
-                        outcome.attack_total,
-                        outcome.target_armor_class
-                    )
-                },
+                explanation: attack_roll_explanation(outcome),
                 source: format!(
                     "{damage} · {} has {} HP left{knockout}",
                     outcome.target_name, outcome.target_hit_points
@@ -373,6 +364,58 @@ fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollTe
             }
         })
         .collect()
+}
+
+fn attack_roll_explanation(outcome: &rpc::CombatOutcome) -> String {
+    // SRD 5.2.1 p. 8: Advantage/Disadvantage rolls two d20s and uses the higher/lower face.
+    let roll = match outcome.roll_mode {
+        -1 | 1 => {
+            let (mode, prefix) = if outcome.roll_mode < 0 {
+                ("Disadvantage", "disadvantage: ")
+            } else {
+                ("Advantage", "advantage: ")
+            };
+            let faces = outcome
+                .faces
+                .iter()
+                .map(|face| {
+                    if *face == outcome.attack_die {
+                        format!("{face} (used)")
+                    } else {
+                        face.to_string()
+                    }
+                })
+                .collect::<Vec<_>>();
+            let faces = if faces.is_empty() {
+                outcome.attack_die.to_string()
+            } else {
+                faces.join(", ")
+            };
+            let reasons = outcome
+                .reasons
+                .iter()
+                .filter_map(|reason| reason.strip_prefix(prefix))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if reasons.is_empty() {
+                format!("d20 {faces} · {mode}")
+            } else {
+                format!("d20 {faces} · {mode}: {reasons}")
+            }
+        }
+        _ => format!("d20 {}", outcome.attack_die),
+    };
+    let mut explanation = format!(
+        "{roll} · {} {:+} = {}",
+        outcome.attack_die, outcome.attack_modifier, outcome.attack_total
+    );
+    if outcome.target_armor_class > 0 {
+        explanation.push_str(&format!(" vs AC {}", outcome.target_armor_class));
+        if !outcome.cover.is_empty() && outcome.cover != "none" {
+            explanation.push_str(&format!(" ({} cover)", outcome.cover));
+        }
+    }
+    explanation
 }
 
 /// How one roll reads on the display, for the final-blow overlay that shows a roll the
@@ -792,12 +835,12 @@ fn publish_tactical_controls(
         }
     }
     if let Some(ammunition) = &combat.own_ammunition {
-        let strip = node(&document, &controls, "div", "ammunition resource-strip", "")?;
-        for value in [
-            format!("Arrows {}", ammunition.arrows),
-            format!("Bolts {}", ammunition.bolts),
-        ] {
-            node(&document, &strip, "span", "resource-chip", &value)?;
+        let labels = crate::combat_text::ammunition_labels(ammunition.arrows, ammunition.bolts);
+        if !labels.is_empty() {
+            let strip = node(&document, &controls, "div", "ammunition resource-strip", "")?;
+            for value in labels {
+                node(&document, &strip, "span", "resource-chip", &value)?;
+            }
         }
     }
     if waiting_for_current_view(
@@ -822,7 +865,7 @@ fn publish_tactical_controls(
         return Ok(());
     }
     let mut active_action_ids = Vec::new();
-    for offer in view.offers {
+    for offer in ordered_tactical_offers(view.offers) {
         let mut offer = offer.clone();
         for group in &mut offer.input_groups {
             for option in &mut group.options {
@@ -1507,8 +1550,9 @@ fn handle_intent(client: &Rc<RefCell<Client>>, intent: CombatIntent) {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_empty, conditions_resource, death_save_for, death_save_summary,
-        tactical_option_label, waiting_for_current_view,
+        action_empty, attack_roll_explanation, conditions_resource, death_save_for,
+        death_save_summary, ordered_tactical_offers, rolls, tactical_option_label,
+        waiting_for_current_view,
     };
     use df_protocol::common as rpc;
 
@@ -1540,6 +1584,145 @@ mod tests {
             Some(&request),
             &current_view
         ));
+    }
+
+    #[test]
+    fn phone_roll_card_explains_disadvantage_faces_reason_and_compared_ac() {
+        let outcome = rpc::CombatOutcome {
+            attack_die: 11,
+            attack_modifier: 5,
+            attack_total: 16,
+            target_armor_class: 14,
+            roll_mode: -1,
+            faces: vec![11, 15],
+            reasons: vec!["disadvantage: hostile within 5 ft".to_owned()],
+            cover: "half (+2)".to_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            attack_roll_explanation(&outcome),
+            "d20 11 (used), 15 · Disadvantage: hostile within 5 ft · 11 +5 = 16 vs AC 14 (half (+2) cover)"
+        );
+    }
+
+    #[test]
+    fn phone_roll_card_explains_advantage_faces_reason_and_compared_ac() {
+        let outcome = rpc::CombatOutcome {
+            attack_die: 19,
+            attack_modifier: 5,
+            attack_total: 24,
+            target_armor_class: 14,
+            roll_mode: 1,
+            faces: vec![4, 19],
+            reasons: vec!["advantage: allies flank the target".to_owned()],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            attack_roll_explanation(&outcome),
+            "d20 4, 19 (used) · Advantage: allies flank the target · 19 +5 = 24 vs AC 14"
+        );
+    }
+
+    #[test]
+    fn phone_roll_card_does_not_sum_unclassified_damage_faces() {
+        let combat = rpc::CombatView {
+            outcomes: vec![rpc::CombatOutcome {
+                actor_name: "Brakka".to_owned(),
+                target_name: "Giant Weasel".to_owned(),
+                damage_dice: vec![6, 4, 6, 5],
+                damage: 14,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let roll = rolls(&combat, None).remove(0);
+
+        assert_eq!(roll.source, "14 damage · Giant Weasel has 0 HP left");
+    }
+
+    #[test]
+    fn phone_roll_card_shows_both_savage_attacker_rolls_kept_roll_and_modifier() {
+        let combat = rpc::CombatView {
+            outcomes: vec![rpc::CombatOutcome {
+                actor_name: "Brakka".to_owned(),
+                target_name: "Giant Weasel".to_owned(),
+                damage_rolls: vec![
+                    rpc::DamageRoll {
+                        dice: vec![6, 4],
+                        kept: false,
+                    },
+                    rpc::DamageRoll {
+                        dice: vec![6, 5],
+                        kept: true,
+                    },
+                ],
+                damage_modifier: 3,
+                damage: 14,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let roll = rolls(&combat, None).remove(0);
+
+        assert_eq!(
+            roll.source,
+            "14 damage (6 + 4; kept 6 + 5; modifier +3) · Giant Weasel has 0 HP left"
+        );
+    }
+
+    #[test]
+    fn phone_roll_card_calls_a_thrown_javelin_a_throw() {
+        let combat = rpc::CombatView {
+            outcomes: vec![rpc::CombatOutcome {
+                actor_name: "Brakka".to_owned(),
+                target_name: "Sigrun".to_owned(),
+                weapon: "javelin".to_owned(),
+                attack_style: 2,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            rolls(&combat, None).remove(0).label,
+            "Brakka throws the javelin at Sigrun"
+        );
+    }
+
+    #[test]
+    fn phone_tactical_actions_put_end_turn_first() {
+        let offers = [
+            rpc::GameplayActionOffer {
+                action_kind: rpc::GameplayActionKind::Move as i32,
+                ..Default::default()
+            },
+            rpc::GameplayActionOffer {
+                action_kind: rpc::GameplayActionKind::EndTurn as i32,
+                ..Default::default()
+            },
+            rpc::GameplayActionOffer {
+                action_kind: rpc::GameplayActionKind::Dodge as i32,
+                ..Default::default()
+            },
+        ];
+
+        let ordered = ordered_tactical_offers(&offers);
+
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|offer| offer.action_kind)
+                .collect::<Vec<_>>(),
+            [
+                rpc::GameplayActionKind::EndTurn as i32,
+                rpc::GameplayActionKind::Move as i32,
+                rpc::GameplayActionKind::Dodge as i32,
+            ]
+        );
     }
 
     #[test]

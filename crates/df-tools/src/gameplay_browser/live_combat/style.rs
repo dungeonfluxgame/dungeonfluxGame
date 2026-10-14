@@ -202,6 +202,14 @@ const PLAYER: &str = r#"
 @S[data-role=player] .live-extras{padding:0 16px calc(36px + env(safe-area-inset-bottom))}
 @S[data-role=player] .live-rules-badge{margin:8px 16px 0}
 @S[data-role=player] .df-combat button{min-height:48px}
+@S[data-role=player] .tactical-controls{order:2;align-self:stretch;margin:0 16px 16px;background:linear-gradient(145deg,#101922f5,#080d13f7);box-shadow:0 12px 28px #0008}
+@S[data-role=player] .combat-lower{order:3}
+@S[data-role=player] .combat-initiative{order:4}
+@S[data-role=player] .combat-connection{order:5}
+@S[data-role=player] .tactical-controls .attack-option{width:100%;min-width:0;padding:6px 8px;border:1px solid #d9b77a33;border-radius:6px;background:#080d13e8}
+@S[data-role=player] .tactical-controls .attack-option select{display:block;width:100%;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+@S[data-role=player] .tactical-controls button[data-action-kind="10"]{grid-column:1/-1;border-color:#f0d195;background:linear-gradient(135deg,#f0d5a4,#c6a05e);color:#211b11;font-weight:700}
+@S[data-role=player] .combat-hp-text{z-index:1;font-size:12px;text-shadow:0 1px 3px #000,0 0 3px #000}
 "#;
 
 /// A fixed 16:9, ten-foot interface in the display's `.tv-stage`. `--u` is 1% of the width
