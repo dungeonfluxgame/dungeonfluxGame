@@ -60,6 +60,7 @@ const PROMPT: &str = "Locked-off camera with an almost imperceptible push-in. Am
 const DURATION_SECONDS: u32 = 5;
 /// Changing how a clip is requested or cached changes this, so old loops are not reused for it.
 const RECIPE: &str = "df-home-video/1";
+const SCENE_RECIPE: &str = "df-scene-video/1";
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const STILL_QUALITY: u8 = 95;
@@ -77,9 +78,13 @@ const REQUEST_DEADLINE: Duration = Duration::from_secs(170);
 const PRICE_DEADLINE: Duration = Duration::from_secs(20);
 const ROUTE: &str = "/gameplay/home-video";
 
-/// The raw `DF_GAMEPLAY_HOME_VIDEO*` and `FAL_KEY` inputs.
+#[path = "scene_video_prompt.rs"]
+mod scene_video_prompt;
+
+/// The raw `DF_GAMEPLAY_HOME_VIDEO*`, `DF_GAMEPLAY_SCENE_VIDEO` and `FAL_KEY` inputs.
 pub(crate) struct HomeVideoInputs {
     pub(crate) mode: Result<String, std::env::VarError>,
+    pub(crate) scene_mode: Result<String, std::env::VarError>,
     pub(crate) model: Result<String, std::env::VarError>,
     pub(crate) budget: Result<String, std::env::VarError>,
     pub(crate) cache: Result<String, std::env::VarError>,
@@ -90,6 +95,7 @@ impl HomeVideoInputs {
     pub(crate) fn from_environment() -> Self {
         Self {
             mode: std::env::var("DF_GAMEPLAY_HOME_VIDEO"),
+            scene_mode: std::env::var("DF_GAMEPLAY_SCENE_VIDEO"),
             model: std::env::var("DF_GAMEPLAY_HOME_VIDEO_MODEL"),
             budget: std::env::var("DF_GAMEPLAY_VIDEO_BUDGET"),
             cache: std::env::var("DF_GAMEPLAY_HOME_VIDEO_CACHE"),
@@ -129,17 +135,23 @@ impl HomeVideoOff {
 
 #[derive(Debug)]
 pub(crate) struct HomeVideoConfiguration {
-    pub(crate) credential: FalCredential,
     pub(crate) model: &'static str,
     /// Clips the run may request, charged before each submit.
     pub(crate) budget: u32,
-    pub(crate) cache_dir: PathBuf,
 }
 
 #[derive(Debug)]
-pub(crate) enum HomeVideoSettings {
-    Off(HomeVideoOff),
-    On(HomeVideoConfiguration),
+struct SceneVideoConfiguration {
+    enabled: bool,
+    off_reason: &'static str,
+}
+
+#[derive(Debug)]
+pub(crate) struct HomeVideoSettings {
+    home: Result<HomeVideoConfiguration, HomeVideoOff>,
+    scene: SceneVideoConfiguration,
+    credential: Option<FalCredential>,
+    cache_dir: PathBuf,
 }
 
 /// A setting that is present and invalid is refused by name, never echoed.
@@ -147,75 +159,130 @@ fn refused(name: &str) -> io::Error {
     io::Error::other(format!("{name} invalid"))
 }
 
-/// Validates the home video settings. Off is a state, not an error: a missing key or a setting
-/// of `off` turns the feature off with a reason the startup line states.
+/// Validates both video settings. Scene clips default on when a media credential is configured;
+/// explicitly enabling clips without a key keeps the request visible but cannot submit it.
 pub(crate) fn home_video_settings(
     inputs: HomeVideoInputs,
     current: &Path,
     qualification: bool,
 ) -> Result<HomeVideoSettings, io::Error> {
     if qualification {
-        return Ok(HomeVideoSettings::Off(HomeVideoOff::Qualification));
+        return Ok(HomeVideoSettings {
+            home: Err(HomeVideoOff::Qualification),
+            scene: SceneVideoConfiguration {
+                enabled: false,
+                off_reason: "qualification run",
+            },
+            credential: None,
+            cache_dir: current.join(DEFAULT_CACHE),
+        });
     }
     let mode = match inputs.mode {
         Ok(value) => value,
         Err(std::env::VarError::NotPresent) => String::new(),
         Err(_) => return Err(refused("DF_GAMEPLAY_HOME_VIDEO")),
     };
-    let credential = match inputs.credential {
-        Ok(value) if !value.is_empty() => value,
-        Err(std::env::VarError::NotPresent) | Ok(_) => String::new(),
-        Err(_) => return Err(refused("FAL_KEY")),
-    };
     match mode.as_str() {
-        "off" => return Ok(HomeVideoSettings::Off(HomeVideoOff::Disabled)),
+        "off" => {}
         "" | "on" => {}
         _ => return Err(refused("DF_GAMEPLAY_HOME_VIDEO")),
     }
-    if credential.is_empty() {
-        return Ok(HomeVideoSettings::Off(HomeVideoOff::NoCredential));
+    let scene_mode = match inputs.scene_mode {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => String::new(),
+        Err(_) => return Err(refused("DF_GAMEPLAY_SCENE_VIDEO")),
+    };
+    match scene_mode.as_str() {
+        "" | "on" | "off" => {}
+        _ => return Err(refused("DF_GAMEPLAY_SCENE_VIDEO")),
     }
-    if credential.len() > 8192 || !credential.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+    let credential = match inputs.credential {
+        Ok(value) if !value.is_empty() => Some(value),
+        Err(std::env::VarError::NotPresent) | Ok(_) => None,
+        Err(_) if mode != "off" || scene_mode == "on" => return Err(refused("FAL_KEY")),
+        Err(_) => None,
+    };
+    let scene_enabled = match scene_mode.as_str() {
+        "on" => true,
+        "off" => false,
+        _ => credential.is_some(),
+    };
+    let scene_off_reason = if scene_mode == "off" {
+        "DF_GAMEPLAY_SCENE_VIDEO=off"
+    } else {
+        "no FAL_KEY"
+    };
+    let home_enabled = mode != "off" && credential.is_some();
+    if (home_enabled || scene_enabled)
+        && credential.as_ref().is_some_and(|value| {
+            value.len() > 8192 || !value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+        })
+    {
         return Err(refused("FAL_KEY"));
     }
-    let model = match inputs.model {
-        Ok(value) if value.is_empty() => MODEL,
-        Ok(value) if value == MODEL => MODEL,
-        Ok(_) => return Err(refused("DF_GAMEPLAY_HOME_VIDEO_MODEL")),
-        Err(std::env::VarError::NotPresent) => MODEL,
-        Err(_) => return Err(refused("DF_GAMEPLAY_HOME_VIDEO_MODEL")),
+    let home = if mode == "off" {
+        Err(HomeVideoOff::Disabled)
+    } else if credential.is_none() {
+        Err(HomeVideoOff::NoCredential)
+    } else {
+        let model = match inputs.model {
+            Ok(value) if value.is_empty() => MODEL,
+            Ok(value) if value == MODEL => MODEL,
+            Ok(_) => return Err(refused("DF_GAMEPLAY_HOME_VIDEO_MODEL")),
+            Err(std::env::VarError::NotPresent) => MODEL,
+            Err(_) => return Err(refused("DF_GAMEPLAY_HOME_VIDEO_MODEL")),
+        };
+        let budget = match inputs.budget {
+            Ok(value) if !value.is_empty() => value
+                .parse::<u32>()
+                .ok()
+                .filter(|budget| *budget <= MAXIMUM_BUDGET)
+                .ok_or_else(|| refused("DF_GAMEPLAY_VIDEO_BUDGET"))?,
+            Ok(_) | Err(std::env::VarError::NotPresent) => DEFAULT_BUDGET,
+            Err(_) => return Err(refused("DF_GAMEPLAY_VIDEO_BUDGET")),
+        };
+        Ok(HomeVideoConfiguration { model, budget })
     };
-    let budget = match inputs.budget {
-        Ok(value) if !value.is_empty() => value
-            .parse::<u32>()
-            .ok()
-            .filter(|budget| *budget <= MAXIMUM_BUDGET)
-            .ok_or_else(|| refused("DF_GAMEPLAY_VIDEO_BUDGET"))?,
-        Ok(_) | Err(std::env::VarError::NotPresent) => DEFAULT_BUDGET,
-        Err(_) => return Err(refused("DF_GAMEPLAY_VIDEO_BUDGET")),
+    let cache_dir = if home_enabled || scene_enabled {
+        match inputs.cache {
+            Ok(value) if !value.is_empty() => PathBuf::from(value),
+            Ok(_) | Err(std::env::VarError::NotPresent) => current.join(DEFAULT_CACHE),
+            Err(_) => return Err(refused("DF_GAMEPLAY_HOME_VIDEO_CACHE")),
+        }
+    } else {
+        current.join(DEFAULT_CACHE)
     };
-    let cache_dir = match inputs.cache {
-        Ok(value) if !value.is_empty() => PathBuf::from(value),
-        Ok(_) | Err(std::env::VarError::NotPresent) => current.join(DEFAULT_CACHE),
-        Err(_) => return Err(refused("DF_GAMEPLAY_HOME_VIDEO_CACHE")),
-    };
-    Ok(HomeVideoSettings::On(HomeVideoConfiguration {
-        credential: FalCredential(credential),
-        model,
-        budget,
+    Ok(HomeVideoSettings {
+        home,
+        scene: SceneVideoConfiguration {
+            enabled: scene_enabled,
+            off_reason: scene_off_reason,
+        },
+        credential: credential.map(FalCredential),
         cache_dir,
-    }))
+    })
 }
 
 /// The one startup line for the feature, printed with the other services.
 pub(crate) fn startup_line(settings: &HomeVideoSettings) -> String {
-    match settings {
-        HomeVideoSettings::On(configuration) => format!(
+    let home = match &settings.home {
+        Ok(configuration) => format!(
             "HOME VIDEO on model={} budget={} duration={}s",
             configuration.model, configuration.budget, DURATION_SECONDS
         ),
-        HomeVideoSettings::Off(reason) => format!("HOME VIDEO off ({})", reason.reason()),
-    }
+        Err(reason) => format!("HOME VIDEO off ({})", reason.reason()),
+    };
+    let scene = if settings.scene.enabled {
+        let unavailable = settings
+            .credential
+            .is_none()
+            .then_some(" (no FAL_KEY; request logging only)")
+            .unwrap_or_default();
+        format!("SCENE VIDEO on model={MODEL} duration={DURATION_SECONDS}s{unavailable}")
+    } else {
+        format!("SCENE VIDEO off ({})", settings.scene.off_reason)
+    };
+    format!("{home}; {scene}")
 }
 
 /// What the view says about a lobby's loop.
@@ -242,6 +309,34 @@ impl LoopView {
     }
 
     /// The served path, empty unless the loop is ready.
+    pub(crate) fn path(&self) -> String {
+        match self {
+            Self::Ready { path } => path.clone(),
+            _ => String::new(),
+        }
+    }
+}
+
+/// The scene plate's optional ambient loop. The still remains the presentation fallback in every
+/// state except `Ready`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SceneClipView {
+    None,
+    Pending,
+    Ready { path: String },
+    Failed,
+}
+
+impl SceneClipView {
+    pub(crate) fn proto_state(&self) -> rpc::HomeVideoState {
+        match self {
+            Self::None => rpc::HomeVideoState::None,
+            Self::Pending => rpc::HomeVideoState::Pending,
+            Self::Ready { .. } => rpc::HomeVideoState::Ready,
+            Self::Failed => rpc::HomeVideoState::Failed,
+        }
+    }
+
     pub(crate) fn path(&self) -> String {
         match self {
             Self::Ready { path } => path.clone(),
@@ -303,11 +398,14 @@ pub(crate) enum Endpoints {
 pub(crate) struct Engine {
     root: PathBuf,
     cache_dir: PathBuf,
-    credential: String,
+    credential: Option<String>,
     endpoints: Endpoints,
     deadline: Duration,
     budget: AtomicU32,
+    home_enabled: bool,
+    scene_enabled: bool,
     stages: Mutex<BTreeMap<String, Stage>>,
+    scene_stages: Mutex<BTreeMap<String, Stage>>,
     price: tokio::sync::Mutex<Option<f64>>,
     living: Option<LivingScenes>,
 }
@@ -348,35 +446,66 @@ pub(crate) fn install(
     asset_root: &Path,
     living: LivingScenes,
 ) -> Result<String, io::Error> {
-    let configuration = match settings {
-        HomeVideoSettings::Off(reason) => return Ok(startup_line(&HomeVideoSettings::Off(reason))),
-        HomeVideoSettings::On(configuration) => configuration,
-    };
-    let pins = resolve_pins();
-    if pins.is_empty() {
-        return Ok(startup_line(&HomeVideoSettings::Off(HomeVideoOff::NoHost)));
+    let line = startup_line(&settings);
+    let home_enabled = settings.home.is_ok();
+    let scene_enabled = settings.scene.enabled;
+    if !home_enabled && !scene_enabled {
+        return Ok(line);
     }
-    let line = startup_line(&HomeVideoSettings::On(HomeVideoConfiguration {
-        credential: FalCredential(String::new()),
-        model: configuration.model,
-        budget: configuration.budget,
-        cache_dir: configuration.cache_dir.clone(),
-    }));
+    let credential = settings.credential.map(|credential| credential.0);
+    let pins = if credential.is_some() {
+        resolve_pins()
+    } else {
+        Vec::new()
+    };
+    let home_configuration = settings.home.ok();
+    let home_enabled = home_enabled && !pins.is_empty();
+    let scene_enabled = settings.scene.enabled && (credential.is_none() || !pins.is_empty());
+    let effective_line = if credential.is_some() && pins.is_empty() {
+        let home_line = if home_configuration.is_some() {
+            format!("HOME VIDEO off ({})", HomeVideoOff::NoHost.reason())
+        } else {
+            line.split_once("; ")
+                .map(|(home, _)| home.to_owned())
+                .unwrap_or_else(|| "HOME VIDEO off".to_owned())
+        };
+        let scene_line = if settings.scene.enabled {
+            format!("SCENE VIDEO off ({})", HomeVideoOff::NoHost.reason())
+        } else {
+            line.split_once("; ")
+                .map(|(_, scene)| scene.to_owned())
+                .unwrap_or_else(|| "SCENE VIDEO off".to_owned())
+        };
+        format!("{home_line}; {scene_line}")
+    } else {
+        line
+    };
+    if !home_enabled && !scene_enabled {
+        return Ok(effective_line);
+    }
     let engine = Engine {
         root: asset_root.to_path_buf(),
-        cache_dir: configuration.cache_dir,
-        credential: configuration.credential.0,
+        cache_dir: settings.cache_dir,
+        credential,
         endpoints: Endpoints::Live { pins },
         deadline: DEFAULT_DEADLINE,
-        budget: AtomicU32::new(configuration.budget),
+        budget: AtomicU32::new(
+            home_configuration
+                .as_ref()
+                .map(|configuration| configuration.budget)
+                .unwrap_or_default(),
+        ),
+        home_enabled,
+        scene_enabled,
         stages: Mutex::new(BTreeMap::new()),
+        scene_stages: Mutex::new(BTreeMap::new()),
         price: tokio::sync::Mutex::new(None),
         living: Some(living),
     };
     *ENGINE
         .lock()
         .map_err(|_| io::Error::other("home video lock poisoned"))? = Some(Arc::new(engine));
-    Ok(line)
+    Ok(effective_line)
 }
 
 /// Resolves each pinned fal media host once, at startup. Only public addresses are kept.
@@ -401,6 +530,39 @@ pub(crate) fn observe(painting: &str) -> LoopView {
         Some(engine) => engine.observe(painting),
         None => LoopView::None,
     }
+}
+
+/// Starts one scene clip after the owning plate is current on the display. The caller suppresses
+/// combat and rolls; repeats for the same plate key return without another provider request.
+pub(crate) fn request_scene_clip(
+    plate_key: &str,
+    still: Vec<u8>,
+    description: &str,
+    reason: &str,
+    blocked_by_combat_or_roll: bool,
+) {
+    if blocked_by_combat_or_roll {
+        return;
+    }
+    let Some(engine) = ENGINE.lock().ok().and_then(|engine| engine.clone()) else {
+        return;
+    };
+    engine.request_scene_clip(plate_key, still, description, reason);
+}
+
+/// A plate's staging without player dialogue, for the motion prompt.
+pub(in crate::gameplay) fn scene_description(spec: &super::shot::ShotSpec) -> String {
+    scene_video_prompt::staging(spec)
+}
+
+/// The clip state for a plate image key, for the current display view projection.
+pub(crate) fn scene_clip_view(plate_key: &str) -> SceneClipView {
+    ENGINE
+        .lock()
+        .ok()
+        .and_then(|engine| engine.clone())
+        .map(|engine| engine.scene_clip_view(plate_key))
+        .unwrap_or(SceneClipView::None)
 }
 
 /// Sets the home loop on a view: the state and the served path, for the display's lobby only. It
@@ -432,6 +594,9 @@ pub(crate) fn router() -> Router {
 
 impl Engine {
     fn observe(self: &Arc<Self>, painting: &str) -> LoopView {
+        if !self.home_enabled {
+            return LoopView::None;
+        }
         let Ok(mut stages) = self.stages.lock() else {
             return LoopView::None;
         };
@@ -455,6 +620,176 @@ impl Engine {
             },
             Stage::Failed(_) => LoopView::Failed,
         }
+    }
+
+    fn request_scene_clip(
+        self: &Arc<Self>,
+        plate_key: &str,
+        still: Vec<u8>,
+        description: &str,
+        reason: &str,
+    ) {
+        if !self.scene_enabled || !valid_plate_key(plate_key) {
+            return;
+        }
+        let Ok(mut stages) = self.scene_stages.lock() else {
+            return;
+        };
+        if stages.contains_key(plate_key) {
+            return;
+        }
+        if let Some(path) = cached_clip(&self.cache_dir, plate_key) {
+            let Ok(bytes) = std::fs::metadata(path).map(|metadata| metadata.len()) else {
+                stages.insert(
+                    plate_key.to_owned(),
+                    Stage::Failed(Failure::Clip("cached clip unavailable")),
+                );
+                drop(stages);
+                record_scene_video(
+                    "failed",
+                    plate_key,
+                    MODEL,
+                    DURATION_SECONDS,
+                    "cached clip unavailable",
+                    None,
+                    None,
+                );
+                if let Some(living) = &self.living {
+                    living.signal_art();
+                }
+                return;
+            };
+            stages.insert(plate_key.to_owned(), Stage::Ready(plate_key.to_owned()));
+            drop(stages);
+            record_scene_video(
+                "ready",
+                plate_key,
+                MODEL,
+                DURATION_SECONDS,
+                "cached",
+                Some(0),
+                Some(bytes),
+            );
+            if let Some(living) = &self.living {
+                living.signal_art();
+            }
+            return;
+        }
+        stages.insert(plate_key.to_owned(), Stage::Pending);
+        drop(stages);
+        record_scene_video(
+            "request",
+            plate_key,
+            MODEL,
+            DURATION_SECONDS,
+            reason,
+            None,
+            None,
+        );
+
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            let failure = Failure::Clip("runtime unavailable");
+            self.finish_scene_clip(plate_key.to_owned(), Err(failure));
+            return;
+        };
+        let engine = Arc::clone(self);
+        let plate_key = plate_key.to_owned();
+        let description = description.to_owned();
+        handle.spawn(async move {
+            engine.fly_scene_clip(plate_key, still, description).await;
+        });
+    }
+
+    fn scene_clip_view(&self, plate_key: &str) -> SceneClipView {
+        if !valid_plate_key(plate_key) {
+            return SceneClipView::None;
+        }
+        let Ok(stages) = self.scene_stages.lock() else {
+            return SceneClipView::None;
+        };
+        match stages.get(plate_key) {
+            Some(Stage::Pending) => SceneClipView::Pending,
+            Some(Stage::Ready(key)) => SceneClipView::Ready {
+                path: format!("{ROUTE}/{key}"),
+            },
+            Some(Stage::Failed(_)) => SceneClipView::Failed,
+            None => SceneClipView::None,
+        }
+    }
+
+    async fn fly_scene_clip(
+        self: Arc<Self>,
+        plate_key: String,
+        still: Vec<u8>,
+        description: String,
+    ) {
+        let outcome = self
+            .produce_scene_clip(&plate_key, &still, &description)
+            .await;
+        match &outcome {
+            Ok((_, milliseconds, bytes)) => record_scene_video(
+                "ready",
+                &plate_key,
+                MODEL,
+                DURATION_SECONDS,
+                "ambient-scene-loop",
+                Some(*milliseconds),
+                Some(*bytes),
+            ),
+            Err(failure) => record_scene_video(
+                "failed",
+                &plate_key,
+                MODEL,
+                DURATION_SECONDS,
+                &failure.label(),
+                None,
+                None,
+            ),
+        }
+        self.finish_scene_clip(plate_key, outcome.map(|(key, _, _)| key));
+    }
+
+    fn finish_scene_clip(&self, plate_key: String, outcome: Result<String, Failure>) {
+        let stage = match outcome {
+            Ok(key) => Stage::Ready(key),
+            Err(failure) => Stage::Failed(failure),
+        };
+        if let Ok(mut stages) = self.scene_stages.lock() {
+            stages.insert(plate_key, stage);
+        }
+        if let Some(living) = &self.living {
+            living.signal_art();
+        }
+    }
+
+    async fn produce_scene_clip(
+        &self,
+        plate_key: &str,
+        still: &[u8],
+        description: &str,
+    ) -> Result<(String, u128, u64), Failure> {
+        let prompt = scene_video_prompt::ambient(description).map_err(|reason| match reason {
+            scene_video_prompt::Refusal::EmptyDescription => {
+                Failure::Clip("scene description missing")
+            }
+            scene_video_prompt::Refusal::InvalidDescription => {
+                Failure::Clip("scene description invalid")
+            }
+            scene_video_prompt::Refusal::PromptTooLong => Failure::Clip("prompt too long"),
+        })?;
+        let still = prepare_scene_still(still.to_vec()).await?;
+        if let Some(path) = cached_clip(&self.cache_dir, plate_key) {
+            let bytes = std::fs::metadata(path)
+                .map_err(|_| Failure::Clip("cached clip unavailable"))?
+                .len();
+            return Ok((plate_key.to_owned(), 0, bytes));
+        }
+        let provider = self.provider()?;
+        let started = Instant::now();
+        let bytes = self
+            .make_scene_clip(&provider, &still, plate_key, &prompt)
+            .await?;
+        Ok((plate_key.to_owned(), started.elapsed().as_millis(), bytes))
     }
 
     /// The one task of a painting: prepare the still, serve a cached loop or make one, then
@@ -497,7 +832,16 @@ impl Engine {
     }
 
     fn provider(&self) -> Result<NativeFalMediaProvider, Failure> {
+        let credential = self
+            .credential
+            .as_deref()
+            .ok_or_else(|| Failure::Provider("no FAL_KEY".to_owned()))?;
         let config = match &self.endpoints {
+            Endpoints::Live { pins } if pins.is_empty() => {
+                return Err(Failure::Provider(
+                    "fal media hosts do not resolve".to_owned(),
+                ));
+            }
             Endpoints::Live { pins } => FalMediaConfig::live(FalMediaFamily::Video, pins.clone()),
             Endpoints::Fixture { api, media } => {
                 FalMediaConfig::loopback_fixture(FalMediaFamily::Video, *api, *media)
@@ -507,7 +851,7 @@ impl Engine {
         let config = config
             .with_video_model(MODEL)
             .map_err(|_| Failure::Provider("model refused".to_owned()))?;
-        registered_fal_media_provider(config, &self.credential, limits())
+        registered_fal_media_provider(config, credential, limits())
             .map_err(|error| Failure::Provider(format!("{:?}", error.reason)))
     }
 
@@ -548,6 +892,23 @@ impl Engine {
                 .await
                 .map_err(|_| Failure::Timeout)??;
         write_clip(&self.cache_dir, key, &bytes).await
+    }
+
+    async fn make_scene_clip(
+        &self,
+        provider: &NativeFalMediaProvider,
+        still: &[u8],
+        key: &str,
+        prompt: &str,
+    ) -> Result<u64, Failure> {
+        let (request, reference) = scene_video_request(still, key, prompt)?;
+        let bytes =
+            tokio::time::timeout(self.deadline, self.run_job(provider, &request, &reference))
+                .await
+                .map_err(|_| Failure::Timeout)??;
+        let byte_length = bytes.len() as u64;
+        write_clip(&self.cache_dir, key, &bytes).await?;
+        Ok(byte_length)
     }
 
     async fn run_job(
@@ -631,6 +992,13 @@ fn provider_failure(error: FalMediaError) -> Failure {
     }
 }
 
+fn valid_plate_key(key: &str) -> bool {
+    key.len() == 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
 fn limits() -> NativeHttpLimits {
     NativeHttpLimits {
         connect_timeout: Duration::from_secs(10),
@@ -659,6 +1027,17 @@ fn request_refused<E>(_: E) -> Failure {
 /// The request for one still: the still as both frames, five seconds, the adapter's own profile
 /// for the endpoint.
 fn video_basis(still: &[u8], key: &str) -> Result<RequestBinding<FalVideoBasis>, Failure> {
+    video_basis_with(still, key, PROMPT, "home-still", "home-video", RECIPE)
+}
+
+fn video_basis_with(
+    still: &[u8],
+    key: &str,
+    prompt: &str,
+    asset_key: &str,
+    rights_revision: &str,
+    recipe: &str,
+) -> Result<RequestBinding<FalVideoBasis>, Failure> {
     let digest: [u8; 32] = Sha256::digest(still).into();
     let mut ids = [0u8; 16];
     for (target, source) in ids.iter_mut().zip(key.as_bytes().chunks(2)) {
@@ -685,10 +1064,10 @@ fn video_basis(still: &[u8], key: &str) -> Result<RequestBinding<FalVideoBasis>,
     };
     let semantic = VideoSemantics {
         locale: None,
-        prompt: PROMPT.to_owned(),
+        prompt: prompt.to_owned(),
         reference_frames: vec![FalReferenceFrame {
             asset: AssetReference {
-                key: RevisionLabel::new(Some("home-still")).map_err(request_refused)?,
+                key: RevisionLabel::new(Some(asset_key)).map_err(request_refused)?,
                 digest: ContentDigest(digest),
                 byte_length: still.len() as u64,
                 kind: AssetKind::Image,
@@ -707,8 +1086,8 @@ fn video_basis(still: &[u8], key: &str) -> Result<RequestBinding<FalVideoBasis>,
         semantic_basis: RequestBasis {
             modality: RequestModality::Video,
             source: ContentDigest(digest),
-            rights_revision: RevisionLabel::new(Some("home-video")).map_err(request_refused)?,
-            output_format_revision: RevisionLabel::new(Some(RECIPE)).map_err(request_refused)?,
+            rights_revision: RevisionLabel::new(Some(rights_revision)).map_err(request_refused)?,
+            output_format_revision: RevisionLabel::new(Some(recipe)).map_err(request_refused)?,
             semantic,
         },
         mode: ExecutionMode::Live,
@@ -723,8 +1102,39 @@ fn video_request(
     key: &str,
 ) -> Result<(FalVideoRequest, RequestBinding<FalVideoBasis>), Failure> {
     let reference = video_basis(still, key)?;
+    make_video_request(video_basis(still, key)?, reference)
+}
+
+fn scene_video_request(
+    still: &[u8],
+    key: &str,
+    prompt: &str,
+) -> Result<(FalVideoRequest, RequestBinding<FalVideoBasis>), Failure> {
+    let reference = video_basis_with(
+        still,
+        key,
+        prompt,
+        "scene-plate",
+        "scene-video",
+        SCENE_RECIPE,
+    )?;
+    let request_basis = video_basis_with(
+        still,
+        key,
+        prompt,
+        "scene-plate",
+        "scene-video",
+        SCENE_RECIPE,
+    )?;
+    make_video_request(request_basis, reference)
+}
+
+fn make_video_request(
+    request_basis: RequestBinding<FalVideoBasis>,
+    reference: RequestBinding<FalVideoBasis>,
+) -> Result<(FalVideoRequest, RequestBinding<FalVideoBasis>), Failure> {
     let request = FalVideoRequest::new(
-        video_basis(still, key)?,
+        request_basis,
         b"",
         RequestUsage::new(
             0,
@@ -748,7 +1158,7 @@ fn video_request(
     Ok((request, reference))
 }
 
-fn base64_encode(bytes: &[u8]) -> String {
+pub(crate) fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -794,6 +1204,23 @@ async fn prepare_still(root: &Path, painting: &str) -> Result<Vec<u8>, Failure> 
     })
     .await
     .map_err(|_| Failure::Still("still task interrupted"))?
+}
+
+async fn prepare_scene_still(still: Vec<u8>) -> Result<Vec<u8>, Failure> {
+    tokio::task::spawn_blocking(move || {
+        let image = image::load_from_memory(&still)
+            .map_err(|_| Failure::Still("scene plate does not decode"))?;
+        let rgb = image
+            .resize_exact(WIDTH, HEIGHT, image::imageops::FilterType::Triangle)
+            .to_rgb8();
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, STILL_QUALITY)
+            .encode(rgb.as_raw(), WIDTH, HEIGHT, image::ExtendedColorType::Rgb8)
+            .map_err(|_| Failure::Still("scene plate does not encode"))?;
+        Ok(bytes)
+    })
+    .await
+    .map_err(|_| Failure::Still("scene plate task interrupted"))?
 }
 
 #[cfg(test)]
@@ -1052,6 +1479,38 @@ fn record_event(kind: &str, subject: &str, price: Option<f64>) {
     span.finish_unmeasured("recorded");
 }
 
+fn record_scene_video(
+    kind: &str,
+    plate: &str,
+    model: &str,
+    duration_seconds: u32,
+    reason: &str,
+    milliseconds: Option<u128>,
+    bytes: Option<u64>,
+) {
+    let message = match kind {
+        "request" => format!(
+            "VIDEO request plate={plate} model={model} seconds={duration_seconds} reason={reason}"
+        ),
+        "ready" => format!(
+            "VIDEO ready plate={plate} ms={} bytes={}",
+            milliseconds.unwrap_or_default(),
+            bytes.unwrap_or_default()
+        ),
+        _ => format!("VIDEO failed plate={plate} reason={reason}"),
+    };
+    let mut span = df_observe::begin(&context(), "gameplay.scene_video");
+    span.event(
+        "gameplay.scene_video.event",
+        &[
+            ("gameplay.scene_video.message", message),
+            ("gameplay.scene_video.plate", plate.to_owned()),
+            ("gameplay.scene_video.kind", kind.to_owned()),
+        ],
+    );
+    span.finish_unmeasured(kind);
+}
+
 /// Test helper: a flight's outcome for a still, without the display.
 #[cfg(test)]
 pub(crate) fn test_engine(
@@ -1064,11 +1523,14 @@ pub(crate) fn test_engine(
     Arc::new(Engine {
         root,
         cache_dir,
-        credential: "fixture-private-key".to_owned(),
+        credential: Some("fixture-private-key".to_owned()),
         endpoints,
         deadline,
         budget: AtomicU32::new(budget),
+        home_enabled: true,
+        scene_enabled: false,
         stages: Mutex::new(BTreeMap::new()),
+        scene_stages: Mutex::new(BTreeMap::new()),
         price: tokio::sync::Mutex::new(None),
         living: None,
     })
@@ -1099,11 +1561,37 @@ pub(crate) fn live_test_engine(
     Arc::new(Engine {
         root,
         cache_dir,
-        credential,
+        credential: Some(credential),
         endpoints: Endpoints::Live { pins },
         deadline,
         budget: AtomicU32::new(budget),
+        home_enabled: true,
+        scene_enabled: false,
         stages: Mutex::new(BTreeMap::new()),
+        scene_stages: Mutex::new(BTreeMap::new()),
+        price: tokio::sync::Mutex::new(None),
+        living: None,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn scene_test_engine(
+    cache_dir: PathBuf,
+    endpoints: Endpoints,
+    deadline: Duration,
+    credential: Option<String>,
+) -> Arc<Engine> {
+    Arc::new(Engine {
+        root: PathBuf::new(),
+        cache_dir,
+        credential,
+        endpoints,
+        deadline,
+        budget: AtomicU32::new(0),
+        home_enabled: false,
+        scene_enabled: true,
+        stages: Mutex::new(BTreeMap::new()),
+        scene_stages: Mutex::new(BTreeMap::new()),
         price: tokio::sync::Mutex::new(None),
         living: None,
     })
@@ -1128,4 +1616,37 @@ impl Engine {
     pub(crate) fn budget_left(&self) -> u32 {
         self.budget.load(Ordering::SeqCst)
     }
+
+    pub(crate) fn request_scene_for_test(
+        self: &Arc<Self>,
+        plate_key: &str,
+        still: Vec<u8>,
+        description: &str,
+        reason: &str,
+        blocked_by_combat_or_roll: bool,
+    ) {
+        if blocked_by_combat_or_roll {
+            return;
+        }
+        self.request_scene_clip(plate_key, still, description, reason);
+    }
+
+    pub(crate) fn scene_stage_of(&self, plate_key: &str) -> Option<String> {
+        self.scene_stages.lock().ok().and_then(|stages| {
+            stages.get(plate_key).map(|stage| match stage {
+                Stage::Pending => "pending".to_owned(),
+                Stage::Ready(key) => format!("ready:{key}"),
+                Stage::Failed(failure) => format!("failed:{}", failure.label()),
+            })
+        })
+    }
+
+    pub(crate) fn scene_view_for_test(&self, plate_key: &str) -> SceneClipView {
+        self.scene_clip_view(plate_key)
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn prepare_scene_still_for_test(still: Vec<u8>) -> Result<Vec<u8>, Failure> {
+    prepare_scene_still(still).await
 }
