@@ -2,7 +2,10 @@
 use super::DemoInitializationError;
 use df_session::submission::RepositoryError;
 use tokio_postgres::{Client, Transaction};
-const MAXIMUM_DOCUMENT_BYTES: usize = 256 * 1024;
+/// The largest stored pack, tuning or record document. Scene models, dossiers and item detail
+/// grew the generated pack past 256 KiB (267,859 bytes on 2026-10-14).
+pub const ADVENTURE_DOCUMENT_BYTES: usize = 1024 * 1024;
+const MAXIMUM_DOCUMENT_BYTES: usize = ADVENTURE_DOCUMENT_BYTES;
 /// Native-only private content: deliberately no Debug or public view projection.
 #[derive(Clone, Eq, PartialEq)]
 pub struct DemoAdventure {
@@ -82,7 +85,7 @@ pub(super) async fn insert(
     adventure: &DemoAdventure,
 ) -> Result<(), DemoInitializationError> {
     adventure.validate_bounds()?;
-    transaction.batch_execute("CREATE TABLE df_local_demo.adventure (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), pack bytea NOT NULL CHECK(octet_length(pack) BETWEEN 1 AND 262144), tuning bytea NOT NULL CHECK(octet_length(tuning) BETWEEN 1 AND 262144), record bytea NOT NULL CHECK(octet_length(record) BETWEEN 1 AND 262144)); REVOKE ALL ON df_local_demo.adventure FROM PUBLIC;
+    transaction.batch_execute("CREATE TABLE df_local_demo.adventure (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), pack bytea NOT NULL CHECK(octet_length(pack) BETWEEN 1 AND 1048576), tuning bytea NOT NULL CHECK(octet_length(tuning) BETWEEN 1 AND 1048576), record bytea NOT NULL CHECK(octet_length(record) BETWEEN 1 AND 1048576)); REVOKE ALL ON df_local_demo.adventure FROM PUBLIC;
         CREATE FUNCTION df_local_demo.refuse_adventure_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'generated adventure bytes are immutable'; END; $$;
         CREATE TRIGGER immutable_adventure BEFORE UPDATE OR DELETE ON df_local_demo.adventure FOR EACH ROW EXECUTE FUNCTION df_local_demo.refuse_adventure_mutation();").await.map_err(|_|refused("adventure_schema",RepositoryError::Unavailable))?;
     transaction.execute("INSERT INTO df_local_demo.adventure (singleton,pack,tuning,record) VALUES(true,$1,$2,$3)",&[&adventure.pack,&adventure.tuning,&adventure.record]).await.map_err(|_|refused("adventure_seed",RepositoryError::Unavailable))?;

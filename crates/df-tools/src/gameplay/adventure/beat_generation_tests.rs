@@ -327,7 +327,7 @@ fn generated_story_scenes_have_two_valid_findings_for_every_location_and_antagon
         let documents = adventure.documents(true).unwrap();
         for document in [&documents.pack, &documents.tuning, &documents.record] {
             assert!(!document.is_empty());
-            assert!(document.len() <= 256 * 1024);
+            assert!(document.len() <= df_persistence::local_demo_scope::ADVENTURE_DOCUMENT_BYTES);
         }
         pack::load_from_bytes(&documents.pack, &documents.tuning).unwrap();
     };

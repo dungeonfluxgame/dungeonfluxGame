@@ -10,7 +10,7 @@ pub use seats::{
     LocalReclaimedSeat, LocalRoomSeat, LocalSeatReclaim, SEAT_AWAY_MILLIS, SeatReclaimRefusal,
 };
 mod table_settings;
-pub use adventure::{AdventureStartup, DemoAdventure, stored_adventure};
+pub use adventure::{ADVENTURE_DOCUMENT_BYTES, AdventureStartup, DemoAdventure, stored_adventure};
 pub use table_settings::StoredTableSettings;
 mod startup;
 pub use startup::{

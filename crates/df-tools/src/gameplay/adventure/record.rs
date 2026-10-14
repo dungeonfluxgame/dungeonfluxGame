@@ -1,7 +1,7 @@
 //! Exact immutable bytes are authority on resume; changed tables are never consulted.
 use super::super::pack::{self, CastRole, LoadedPack, SpeakerProfile};
 use super::{GenerateError, GeneratedAdventure, Roll, RollStatus, RulesMode, dossier::Dossier};
-use df_persistence::local_demo_scope::DemoAdventure;
+use df_persistence::local_demo_scope::{ADVENTURE_DOCUMENT_BYTES, DemoAdventure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -271,7 +271,7 @@ pub(crate) fn reload(
 ) -> Result<(LoadedPack, AdventureRecord), RecordError> {
     if [&documents.pack, &documents.tuning, &documents.record]
         .iter()
-        .any(|bytes| bytes.is_empty() || bytes.len() > 256 * 1024)
+        .any(|bytes| bytes.is_empty() || bytes.len() > ADVENTURE_DOCUMENT_BYTES)
     {
         // Say which document and by how much: "document size" alone cost a debugging session.
         eprintln!(
@@ -279,7 +279,7 @@ pub(crate) fn reload(
             documents.pack.len(),
             documents.tuning.len(),
             documents.record.len(),
-            256 * 1024
+            ADVENTURE_DOCUMENT_BYTES
         );
         return Err(RecordError::Invalid("document size"));
     }
@@ -352,15 +352,11 @@ pub(crate) fn reload(
             return Err(RecordError::Invalid("legacy record with scene settings"));
         }
         SettingState::Defined(settings)
-            if loaded
-                .pack
-                .scenes
-                .iter()
-                .any(|s| {
-                    !s.setting
-                        .as_ref()
-                        .is_some_and(|setting| same_place(setting, settings.scene(s.key)))
-                }) =>
+            if loaded.pack.scenes.iter().any(|s| {
+                !s.setting
+                    .as_ref()
+                    .is_some_and(|setting| same_place(setting, settings.scene(s.key)))
+            }) =>
         {
             return Err(RecordError::Invalid("record scene settings binding"));
         }
@@ -623,7 +619,7 @@ mod emotional_profile_tests {
                 .collect(),
         };
         let bytes = serde_json::to_vec(&record).unwrap();
-        assert!(bytes.len() <= 256 * 1024);
+        assert!(bytes.len() <= df_persistence::local_demo_scope::ADVENTURE_DOCUMENT_BYTES);
     }
 }
 /// Creates the run cache once before bootstrap. Existing staging is never overwritten.
@@ -663,7 +659,10 @@ pub(crate) fn verify_cache(directory: &Path, data: &DemoAdventure) -> Result<(),
     for (name, expected) in documents(data) {
         let mut actual = Vec::new();
         fs::File::open(directory.join(name))
-            .and_then(|file| file.take(256 * 1024 + 1).read_to_end(&mut actual))
+            .and_then(|file| {
+                file.take(ADVENTURE_DOCUMENT_BYTES as u64 + 1)
+                    .read_to_end(&mut actual)
+            })
             .map_err(|e| RecordError::Io {
                 file: name,
                 kind: e.kind(),

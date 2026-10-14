@@ -12,7 +12,7 @@ use super::{
     record,
     startup::{PreparedAdventure, StartupError},
 };
-use df_persistence::local_demo_scope::{AdventureStartup, DemoAdventure};
+use df_persistence::local_demo_scope::{ADVENTURE_DOCUMENT_BYTES, AdventureStartup, DemoAdventure};
 use std::{
     fmt,
     path::{Path, PathBuf},
@@ -176,8 +176,9 @@ pub(crate) fn select_campaign(
                             let file = std::fs::File::open(directory.join(name));
                             file.and_then(|file| {
                                 let mut bytes = Vec::new();
-                                file.take(256 * 1024 + 1).read_to_end(&mut bytes)?;
-                                if bytes.len() > 256 * 1024 {
+                                file.take(ADVENTURE_DOCUMENT_BYTES as u64 + 1)
+                                    .read_to_end(&mut bytes)?;
+                                if bytes.len() > ADVENTURE_DOCUMENT_BYTES {
                                     return Err(std::io::Error::new(
                                         std::io::ErrorKind::InvalidData,
                                         "chapter file bound",
@@ -318,7 +319,10 @@ pub(crate) fn create_campaign_cache(
         };
         let mut bytes = Vec::new();
         std::fs::File::open(&path)
-            .and_then(|file| file.take(256 * 1024 + 1).read_to_end(&mut bytes))
+            .and_then(|file| {
+                file.take(ADVENTURE_DOCUMENT_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+            })
             .map_err(|_| CampaignStartupError::Run("orphan cache read"))?;
         if bytes.len() > expected.len() || !expected.starts_with(&bytes) {
             return Err(CampaignStartupError::Run(
