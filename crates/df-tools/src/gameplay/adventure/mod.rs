@@ -27,6 +27,9 @@ mod mature_overlay;
 pub(crate) mod record;
 mod render;
 mod rng;
+pub(crate) mod scene_model;
+#[cfg(test)]
+mod scene_model_tests;
 mod schema;
 pub(crate) mod setting;
 pub(crate) mod startup;
@@ -140,6 +143,7 @@ pub(crate) enum GenerateError {
     },
     Pack(super::pack::PackError),
     Dossier(dossier::DossierError),
+    SceneModel(scene_model::SceneModelError),
     Serialization,
 }
 impl fmt::Display for GenerateError {
@@ -161,11 +165,17 @@ impl fmt::Display for GenerateError {
             } => write!(f, "adventure {slot}: {actual} characters exceeds {maximum}"),
             Self::Pack(error) => error.fmt(f),
             Self::Dossier(error) => error.fmt(f),
+            Self::SceneModel(error) => error.fmt(f),
             Self::Serialization => f.write_str("adventure serialization failed"),
         }
     }
 }
 impl std::error::Error for GenerateError {}
+impl From<scene_model::SceneModelError> for GenerateError {
+    fn from(error: scene_model::SceneModelError) -> Self {
+        Self::SceneModel(error)
+    }
+}
 /// Manifest-pinned generated route paths; never accepts arbitrary stems or filesystem paths.
 pub(crate) fn generated_asset(path: &str) -> bool {
     generated_stems()

@@ -476,8 +476,15 @@ pub(crate) fn generate_with_prose(
         atmos.insert(text.clone());
         context.insert(format!("loc.atmos_{letter}"), text);
     }
-    let settings =
-        super::setting::roll_settings(tables, loc, &patron.id, dest, &mut roller, &mut context)?;
+    let settings = super::setting::roll_settings(
+        tables,
+        loc,
+        &patron.id,
+        dest,
+        seed,
+        &mut roller,
+        &mut context,
+    )?;
     context.insert("pos".into(), pronouns(&patron.gender)?[2].into());
     let entrance = render::render(&hook.entrance, &context)?;
     context.insert("entrance".into(), entrance);
@@ -569,6 +576,12 @@ pub(crate) fn generate_with_prose(
         let mut scene_context = context.clone();
         scene_context.insert("place".into(), place.name.clone());
         scene_context.insert("place_short".into(), place.short.clone());
+        if let (Some(key), Some(model)) = (scene_key, place.model.as_ref()) {
+            scene_context.insert(
+                "scene.model".into(),
+                super::scene_model::prompt_context(model, key)?,
+            );
+        }
         if scene_key == Some(SceneKey::Combat) {
             scene_context.insert("encounter.count".into(), encounter.count.to_string());
             scene_context.insert("encounter.creatures".into(), encounter.creatures.clone());
@@ -858,7 +871,10 @@ pub(crate) fn generate_with_prose(
         scene.dialogue = expression(Some(scene.key), beat, "line", speaker, &line, 160)?;
         let setting = settings.scene(scene.key);
         scene.asset = tables.asset(&setting.art_key)?;
-        scene.setting = Some(setting.clone());
+        let mut pack_setting = setting.clone();
+        // Chapter settings persist the shared model once; repeating it on every pack scene exceeds the document bound.
+        pack_setting.model = None;
+        scene.setting = Some(pack_setting);
         scene.speaker_portrait = portrait;
         // Who is on stage: the patron through the story, the antagonist from the beat that
         // brings it in, the contact at the destination, nobody but the heroes in the lobby.

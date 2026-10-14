@@ -1,0 +1,356 @@
+use super::{
+    scene_model::{
+        SceneChange, SceneChangeKind, SceneModel, ScenePlace, SceneTargetKind, StartingAttitude,
+    },
+    setting::{SceneSetting, SettingKind},
+};
+use std::collections::{BTreeMap, BTreeSet};
+
+const SEED: u64 = 0xa7d1_f297_b79d_0c83;
+
+fn inn() -> SceneSetting {
+    SceneSetting {
+        place_id: "taproom".into(),
+        name: "The Lantern Taproom".into(),
+        short: "a warm taproom".into(),
+        kind: SettingKind::Inn,
+        exterior: false,
+        art_key: "taproom".into(),
+        model: None,
+    }
+}
+
+fn facts() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("stake.short".into(), "recover a fever-herb".into()),
+        ("patron.full".into(), "Ilsa".into()),
+        ("patron.role".into(), "innkeeper".into()),
+        (
+            "patron.desc".into(),
+            "a gray-haired woman at the bar".into(),
+        ),
+        ("ant.full".into(), "giant rats".into()),
+        ("ant.group".into(), "giant rats".into()),
+        ("ant.short".into(), "restless giant rats".into()),
+        ("ant.voice".into(), "a chittering presence".into()),
+    ])
+}
+
+fn taproom() -> SceneModel {
+    SceneModel::fallback(&inn(), ScenePlace::Meeting, SEED, &facts())
+        .expect("the taproom tables provide all named scene facts")
+}
+
+#[test]
+fn fallback_in_scene_has_people_things_exits_and_srd_521_prices_p101() {
+    let model = taproom();
+
+    assert_eq!(model.people.len(), 5);
+    assert_eq!(
+        model
+            .people
+            .iter()
+            .filter(|person| person.is_background)
+            .count(),
+        3
+    );
+    assert_eq!(model.things.len(), 6);
+    assert_eq!(model.ways_out.len(), 3);
+    assert_eq!(model.offers.len(), 5);
+    assert!(
+        model
+            .offers
+            .iter()
+            .any(|offer| { offer.name == "ale (mug)" && offer.cost_cp == 4 })
+    );
+    assert!(
+        model
+            .offers
+            .iter()
+            .any(|offer| { offer.name == "bread (loaf)" && offer.cost_cp == 2 })
+    );
+    assert!(
+        model
+            .offers
+            .iter()
+            .any(|offer| { offer.name == "one night's poor lodging" && offer.cost_cp == 10 })
+    );
+}
+
+#[test]
+fn legacy_scene_setting_without_a_model_still_loads() {
+    let mut legacy = serde_json::to_value(inn()).expect("scene setting serializes");
+    legacy
+        .as_object_mut()
+        .expect("scene setting is an object")
+        .remove("model");
+
+    let setting: SceneSetting =
+        serde_json::from_value(legacy).expect("legacy settings omit the optional model");
+    assert!(setting.model.is_none());
+}
+
+#[test]
+fn thirteen_pointing_lines_resolve_people_things_exits_offers_and_owners() {
+    let model = taproom();
+    let lines = [
+        ("Who are those men in the back?", SceneTargetKind::Person),
+        ("I want a pint of beer.", SceneTargetKind::Offer),
+        ("Whose mug is that?", SceneTargetKind::Thing),
+        ("Talk to the carters.", SceneTargetKind::Person),
+        (
+            "Does the lady with the tray work here?",
+            SceneTargetKind::Person,
+        ),
+        ("Does she work here with you?", SceneTargetKind::Person),
+        ("Look at the mug on the bar.", SceneTargetKind::Thing),
+        ("Take the dice at the back table.", SceneTargetKind::Thing),
+        ("What's on the left by the hearth?", SceneTargetKind::Thing),
+        ("Read the clock on the wall.", SceneTargetKind::Thing),
+        ("Sit beside the fire.", SceneTargetKind::Thing),
+        ("Open the window.", SceneTargetKind::WayOut),
+        ("Take the herbs above the bar.", SceneTargetKind::Thing),
+    ];
+
+    for (line, expected_kind) in lines {
+        let target = model
+            .resolve_target(line)
+            .unwrap_or_else(|| panic!("no target for {line:?}"));
+        assert_eq!(target.kind, expected_kind, "{line:?}");
+    }
+
+    let carters = model
+        .resolve_target("Who are those men in the back?")
+        .expect("the pictured carters resolve as people");
+    assert_eq!(carters.ids.len(), 2);
+    let mug = model
+        .resolve_target("Whose mug is that?")
+        .expect("the pictured nearest mug resolves as a thing");
+    let tankard = model
+        .things
+        .iter()
+        .find(|thing| thing.id == mug.ids[0])
+        .expect("resolved thing is in the model");
+    assert_eq!(tankard.name, "dented pewter tankard");
+    assert_eq!(tankard.owner_id.as_deref(), Some("patron"));
+}
+
+#[test]
+fn structured_scene_model_accepts_grounded_data_and_rejects_untrusted_claims() {
+    let original = taproom();
+    let schema = SceneModel::schema().expect("scene model schema is valid JSON");
+    assert_eq!(schema["additionalProperties"], false);
+    assert!(schema["required"].as_array().is_some_and(|fields| {
+        fields.iter().any(|field| field == "people")
+            && fields.iter().any(|field| field == "things")
+            && fields.iter().any(|field| field == "ways_out")
+    }));
+    assert!(!SceneModel::prompt().trim().is_empty());
+    let mut cast = BTreeMap::from([
+        ("patron".into(), "Ilsa".into()),
+        ("antagonist".into(), "giant rats".into()),
+    ]);
+    let place_ids = BTreeSet::from(["orrery-library".to_owned()]);
+    let finding_ids = BTreeSet::from(["errand-truth".to_owned(), "enemy-position".to_owned()]);
+    let canonical_facts = canonical_facts(&original);
+    let valid = serde_json::to_value(&original).expect("model serializes to structured JSON");
+
+    assert!(
+        SceneModel::validate_candidate(
+            valid.clone(),
+            &cast,
+            &place_ids,
+            &canonical_facts,
+            &finding_ids,
+        )
+        .is_ok()
+    );
+
+    let mut unknown_person = valid.clone();
+    unknown_person["people"][0]["id"] = "unlisted-stranger".into();
+    assert!(
+        SceneModel::validate_candidate(
+            unknown_person,
+            &cast,
+            &place_ids,
+            &canonical_facts,
+            &finding_ids,
+        )
+        .is_err()
+    );
+
+    let mut unknown_clue = valid.clone();
+    unknown_clue["things"][0]["clue_fact_id"] = "missing-fact".into();
+    assert!(
+        SceneModel::validate_candidate(
+            unknown_clue,
+            &cast,
+            &place_ids,
+            &canonical_facts,
+            &finding_ids,
+        )
+        .is_err()
+    );
+
+    let mut unknown_place = valid.clone();
+    unknown_place["ways_out"][0]["beyond_place_id"] = "unlisted-place".into();
+    assert!(
+        SceneModel::validate_candidate(
+            unknown_place,
+            &cast,
+            &place_ids,
+            &canonical_facts,
+            &finding_ids,
+        )
+        .is_err()
+    );
+
+    let mut contradiction = valid.clone();
+    contradiction["people"][0]["knowledge"][0]["statement"] = "an unrelated place".into();
+    assert!(
+        SceneModel::validate_candidate(
+            contradiction,
+            &cast,
+            &place_ids,
+            &canonical_facts,
+            &finding_ids,
+        )
+        .is_err()
+    );
+
+    let mut missing_field = valid;
+    missing_field
+        .as_object_mut()
+        .expect("top-level object")
+        .remove("weather");
+    assert!(
+        SceneModel::validate_candidate(
+            missing_field,
+            &cast,
+            &place_ids,
+            &canonical_facts,
+            &finding_ids,
+        )
+        .is_err()
+    );
+
+    cast.insert("patron".into(), "someone else".into());
+    assert!(
+        SceneModel::validate_candidate(
+            serde_json::to_value(&original).expect("model serializes"),
+            &cast,
+            &place_ids,
+            &canonical_facts,
+            &finding_ids,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn scene_now_applies_item_and_person_changes_to_the_prompt_projection() {
+    let model = taproom();
+    let mug_id = model
+        .things
+        .iter()
+        .find(|thing| thing.name == "dented pewter tankard")
+        .expect("taproom model has its bar tankard")
+        .id
+        .clone();
+    let door_id = model.ways_out[0].id.clone();
+    let serving_woman_id = model
+        .people
+        .iter()
+        .find(|person| person.role == "serving woman")
+        .expect("taproom model has its server")
+        .id
+        .clone();
+    let changes = [
+        SceneChange {
+            entity_id: mug_id.clone(),
+            description: "Brakka took the dented tankard from the bar".into(),
+            kind: SceneChangeKind::Taken {
+                holder_id: "hero-brakka".into(),
+            },
+        },
+        SceneChange {
+            entity_id: mug_id.clone(),
+            description: "Brakka gave the tankard to Sigrun".into(),
+            kind: SceneChangeKind::Given {
+                holder_id: "hero-sigrun".into(),
+            },
+        },
+        SceneChange {
+            entity_id: door_id.clone(),
+            description: "the front door now stands open".into(),
+            kind: SceneChangeKind::Opened,
+        },
+        SceneChange {
+            entity_id: mug_id.clone(),
+            description: "Sigrun broke the tankard's handle".into(),
+            kind: SceneChangeKind::Broken,
+        },
+        SceneChange {
+            entity_id: serving_woman_id.clone(),
+            description: "Mara moved to the doorway".into(),
+            kind: SceneChangeKind::PersonMoved {
+                position: "at the doorway".into(),
+            },
+        },
+        SceneChange {
+            entity_id: serving_woman_id.clone(),
+            description: "Mara now distrusts Brakka".into(),
+            kind: SceneChangeKind::AttitudeChanged {
+                hero_id: "hero-brakka".into(),
+                attitude: StartingAttitude::Hostile,
+            },
+        },
+    ];
+
+    let prompt = model
+        .as_it_is_now(super::super::pack::SceneKey::Opening, &changes)
+        .expect("bounded scene changes form a prompt projection");
+    let snapshot: serde_json::Value = serde_json::from_str(&prompt).expect("snapshot is JSON");
+    let tankard = snapshot["model"]["things"]
+        .as_array()
+        .expect("snapshot has things")
+        .iter()
+        .find(|thing| thing["id"] == mug_id)
+        .expect("the taken item remains represented by its state");
+    assert_eq!(tankard["holder_id"], "hero-sigrun");
+    assert!(!tankard["in_scene"].as_bool().unwrap_or(true));
+    assert!(tankard["broken"].as_bool().unwrap_or(false));
+    let door = snapshot["model"]["ways_out"]
+        .as_array()
+        .expect("snapshot has ways out")
+        .iter()
+        .find(|way| way["id"] == door_id)
+        .expect("opened door remains in scene");
+    assert!(door["open"].as_bool().unwrap_or(false));
+    let serving_woman = snapshot["model"]["people"]
+        .as_array()
+        .expect("snapshot has people")
+        .iter()
+        .find(|person| person["id"] == serving_woman_id)
+        .expect("moved person remains in scene");
+    assert_eq!(serving_woman["position"], "at the doorway");
+    assert_eq!(serving_woman["attitudes"]["hero-brakka"], "hostile");
+    assert_eq!(
+        snapshot["changes"].as_array().map(Vec::len),
+        Some(changes.len())
+    );
+}
+
+fn canonical_facts(model: &SceneModel) -> BTreeMap<String, String> {
+    model
+        .people
+        .iter()
+        .flat_map(|person| &person.knowledge)
+        .filter(|knowledge| !knowledge.fact_id.starts_with("scene-person:"))
+        .map(|knowledge| (knowledge.fact_id.clone(), knowledge.statement.clone()))
+        .chain([
+            ("secret.id".into(), "the fever-herb errand".into()),
+            ("ant.id".into(), "giant rats".into()),
+        ])
+        .collect()
+}

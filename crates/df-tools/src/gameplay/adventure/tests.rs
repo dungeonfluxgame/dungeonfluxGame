@@ -526,7 +526,11 @@ fn two_hundred_seeds_bind_every_scene_to_its_story_setting() {
         assert!(keys.len() >= 3, "seed {seed}");
         for scene in &generated.pack.scenes {
             let setting = scene.setting.as_ref().unwrap();
-            assert_eq!(setting, generated.settings.scene(scene.key));
+            let stored_setting = generated.settings.scene(scene.key);
+            let mut pack_setting = stored_setting.clone();
+            pack_setting.model = None;
+            assert_eq!(setting, &pack_setting);
+            assert!(stored_setting.model.is_some());
             assert!(tables.depicts[&setting.art_key].contains(&setting.kind));
             assert_eq!(scene.asset, tables.art[&setting.art_key]);
             if scene.key == SceneKey::Opening {

@@ -1,0 +1,104 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["time_of_day", "weather", "people", "things", "ways_out", "offers"],
+  "properties": {
+    "time_of_day": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "weather": { "type": "string", "minLength": 1, "maxLength": 72 },
+    "people": {
+      "type": "array", "minItems": 2, "maxItems": 6,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "name", "role", "description", "relation_to_speaker", "position", "aliases", "is_background", "present_in", "attitude", "attitudes", "knowledge", "wants"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "role": { "type": "string", "minLength": 1, "maxLength": 48 },
+          "description": { "type": "string", "minLength": 1, "maxLength": 180 },
+          "relation_to_speaker": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "position": { "type": "string", "minLength": 1, "maxLength": 48 },
+          "aliases": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 64 } },
+          "is_background": { "type": "boolean" },
+          "present_in": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 48 } },
+          "attitude": { "type": "string", "enum": ["friendly", "indifferent", "hostile"] },
+          "attitudes": { "type": "object", "additionalProperties": { "type": "string", "enum": ["friendly", "indifferent", "hostile"] } },
+          "knowledge": {
+            "type": "array", "minItems": 3, "maxItems": 3,
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["fact_id", "statement"],
+              "properties": {
+                "fact_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+                "statement": { "type": "string", "minLength": 1, "maxLength": 160 }
+              }
+            }
+          },
+          "wants": { "type": "string", "minLength": 1, "maxLength": 100 }
+        }
+      }
+    },
+    "things": {
+      "type": "array", "minItems": 4, "maxItems": 6,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "name", "short", "detail", "picture_description", "closer_look", "skill", "dc", "finding_id", "clue_fact_id", "portable", "value_cp", "use_effect", "position", "owner_id", "in_use", "in_scene", "holder_id", "open", "lit", "broken", "searched_by", "aliases"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "short": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "detail": { "type": "string", "minLength": 1, "maxLength": 480 },
+          "picture_description": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "closer_look": { "type": "string", "minLength": 1, "maxLength": 180 },
+          "skill": { "type": "string", "enum": ["perception", "investigation", "insight", "survival", "medicine", "arcana", "history", "nature", "religion"] },
+          "dc": { "type": "integer", "minimum": 5, "maximum": 30 },
+          "finding_id": { "type": ["string", "null"] },
+          "clue_fact_id": { "type": ["string", "null"] },
+          "portable": { "type": "boolean" },
+          "value_cp": { "type": ["integer", "null"], "minimum": 0 },
+          "use_effect": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "position": { "type": "string", "minLength": 1, "maxLength": 48 },
+          "owner_id": { "type": ["string", "null"] },
+          "in_use": { "type": "boolean" },
+          "in_scene": { "type": "boolean" },
+          "holder_id": { "type": ["string", "null"] },
+          "open": { "type": "boolean" },
+          "lit": { "type": "boolean" },
+          "broken": { "type": "boolean" },
+          "searched_by": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 96 } },
+          "aliases": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 64 } }
+        }
+      }
+    },
+    "ways_out": {
+      "type": "array", "minItems": 1, "maxItems": 3,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "name", "aliases", "position", "beyond_place_id", "beyond", "open"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "aliases": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "type": "string", "minLength": 1, "maxLength": 64 } },
+          "position": { "type": "string", "minLength": 1, "maxLength": 48 },
+          "beyond_place_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "beyond": { "type": "string", "minLength": 1, "maxLength": 180 },
+          "open": { "type": "boolean" }
+        }
+      }
+    },
+    "offers": {
+      "type": "array", "maxItems": 8,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "seller_id", "name", "aliases", "description", "cost_cp"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "seller_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "aliases": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "type": "string", "minLength": 1, "maxLength": 64 } },
+          "description": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "cost_cp": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

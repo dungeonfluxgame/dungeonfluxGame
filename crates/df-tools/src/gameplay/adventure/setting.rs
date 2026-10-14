@@ -88,6 +88,8 @@ pub(crate) struct SceneSetting {
     pub(crate) kind: SettingKind,
     pub(crate) exterior: bool,
     pub(crate) art_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model: Option<super::scene_model::SceneModel>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -306,6 +308,7 @@ pub(super) fn roll_settings(
     location: &Location,
     patron: &str,
     destination: &Destination,
+    seed: u64,
     roller: &mut Roller<'_>,
     context: &mut BTreeMap<String, String>,
 ) -> Result<ChapterSettings, GenerateError> {
@@ -330,7 +333,7 @@ pub(super) fn roll_settings(
     )?;
     context.insert("setting.meeting.detail".into(), meeting_detail);
     context.insert("setting.confrontation.detail".into(), bridge);
-    let settings = ChapterSettings {
+    let mut settings = ChapterSettings {
         meeting: SceneSetting {
             place_id: meeting.art.clone(),
             name: render::render(&meeting.name, context)?,
@@ -338,6 +341,7 @@ pub(super) fn roll_settings(
             kind: meeting.kind,
             exterior: meeting.exterior,
             art_key: meeting.art.clone(),
+            model: None,
         },
         confrontation: SceneSetting {
             place_id: location.id.clone(),
@@ -346,6 +350,7 @@ pub(super) fn roll_settings(
             kind: confrontation.kind,
             exterior: confrontation.exterior,
             art_key: confrontation.art.clone(),
+            model: None,
         },
         destination: SceneSetting {
             place_id: destination.id.clone(),
@@ -357,8 +362,27 @@ pub(super) fn roll_settings(
                 .art
                 .clone()
                 .ok_or_else(|| GenerateError::Incompatible("destination art".into()))?,
+            model: None,
         },
     };
+    settings.meeting.model = Some(super::scene_model::SceneModel::fallback(
+        &settings.meeting,
+        super::scene_model::ScenePlace::Meeting,
+        seed,
+        context,
+    )?);
+    settings.confrontation.model = Some(super::scene_model::SceneModel::fallback(
+        &settings.confrontation,
+        super::scene_model::ScenePlace::Confrontation,
+        seed,
+        context,
+    )?);
+    settings.destination.model = Some(super::scene_model::SceneModel::fallback(
+        &settings.destination,
+        super::scene_model::ScenePlace::Destination,
+        seed,
+        context,
+    )?);
     settings.facts(context)?;
     Ok(settings)
 }
@@ -375,6 +399,10 @@ pub(crate) fn validates(scene: &SceneSetting, asset: &str) -> bool {
         && !scene.name.is_empty()
         && !scene.short.is_empty()
         && scene.exterior == scene.kind.exterior()
+        && scene
+            .model
+            .as_ref()
+            .is_none_or(|model| model.validate_structure().is_ok())
         && art.as_ref().is_ok_and(|entries| {
             entries.iter().any(|a| {
                 a.art_key == scene.art_key
