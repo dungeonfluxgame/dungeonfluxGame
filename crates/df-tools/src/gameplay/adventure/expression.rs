@@ -14,7 +14,7 @@ use super::super::{
     startup_configuration::ContentRating,
     storyteller::{
         RESTRAINED_GORE, RESTRAINED_PROFANITY, Slot, Storyteller, StorytellerError, age_group,
-        mature_themes, sexual_content_allowed,
+        contains_whole_word, mature_themes, sexual_content_allowed,
     },
 };
 use super::{
@@ -275,11 +275,48 @@ fn error_label(error: &StorytellerError) -> &'static str {
 }
 
 /// One line per slot group, so a session that fell back says which group and why.
-fn log_group(label: &str, outcome: &str, detail: &str, elapsed: Duration) {
+fn log_group(
+    label: &str,
+    elapsed: Duration,
+    slot_count: usize,
+    refused: &BTreeMap<String, String>,
+) {
+    let refused_slots = if refused.is_empty() {
+        "none".to_owned()
+    } else {
+        refused.keys().cloned().collect::<Vec<_>>().join(",")
+    };
+    let reasons = if refused.is_empty() {
+        "none".to_owned()
+    } else {
+        refused
+            .iter()
+            .map(|(slot, reason)| format!("{slot}:{reason}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
     println!(
-        "ADVENTURE PROSE group={label} outcome={outcome} {detail} elapsed_ms={}",
-        elapsed.as_millis()
+        "STORY group={label} ms={} slots={slot_count} refused={refused_slots} reasons={reasons}",
+        elapsed.as_millis(),
     );
+}
+
+fn log_group_outcomes(
+    groups: &[(String, Group, BTreeSet<String>)],
+    elapsed: &[Duration],
+    refused: &BTreeMap<String, String>,
+) {
+    for ((label, _, names), elapsed) in groups.iter().zip(elapsed) {
+        let group_refused = names
+            .iter()
+            .filter_map(|name| {
+                refused
+                    .get(name)
+                    .map(|reason| (name.clone(), reason.clone()))
+            })
+            .collect();
+        log_group(label, *elapsed, names.len(), &group_refused);
+    }
 }
 
 /// The planned slots split into request groups: generation order (opening
@@ -901,18 +938,17 @@ impl ProseSource for AcceptedText {
     fn express(&self, sheet: &FactSheet) -> Result<String, GenerateError> {
         let index = self.position.get();
         self.position.set(index + 1);
-        let lowered = |text: &str| text.to_lowercase();
         if let Some(Some(text)) = self.texts.get(index)
             && text.chars().count() <= sheet.bounds
             && !text.contains(['{', '}'])
             && sheet
                 .must_mention
                 .iter()
-                .all(|term| lowered(text).contains(&lowered(term)))
+                .all(|term| text.to_lowercase().contains(&term.to_lowercase()))
             && sheet
                 .forbidden
                 .iter()
-                .all(|term| !lowered(text).contains(&lowered(term)))
+                .all(|term| !contains_whole_word(&text.to_lowercase(), &term.to_lowercase()))
         {
             self.used.borrow_mut().insert(index);
             return Ok(text.clone());
@@ -974,10 +1010,10 @@ async fn ask_group(
     storyteller: &Storyteller,
     baseline: &GeneratedAdventure,
     planned: &[Planned<'_>],
-    label: &str,
     group: Group,
     names: &BTreeSet<String>,
-) -> Result<Answer, StorytellerError> {
+    group_deadline: Duration,
+) -> (Result<Answer, StorytellerError>, Duration) {
     let started = Instant::now();
     let mut attempt = 0_u32;
     loop {
@@ -989,28 +1025,12 @@ async fn ask_group(
             Some(names),
             Some(group),
             None,
-            GROUP_DEADLINE,
+            group_deadline,
         )
         .await
         {
             Ok(answer) => {
-                let outcome = if answer.accepted.is_empty() {
-                    "refused"
-                } else {
-                    "arrived"
-                };
-                log_group(
-                    label,
-                    outcome,
-                    &format!(
-                        "accepted={} refused={} tokens={} attempt={attempt}",
-                        answer.accepted.len(),
-                        answer.refused.len(),
-                        answer.tokens
-                    ),
-                    started.elapsed(),
-                );
-                return Ok(answer);
+                return (Ok(answer), started.elapsed());
             }
             Err(error) => {
                 let retryable = matches!(
@@ -1018,21 +1038,9 @@ async fn ask_group(
                     StorytellerError::DeadlineExceeded | StorytellerError::Provider(_)
                 );
                 if retryable && attempt < 2 {
-                    log_group(
-                        label,
-                        "retried",
-                        &format!("reason={} attempt={attempt}", error_label(&error)),
-                        started.elapsed(),
-                    );
                     continue;
                 }
-                log_group(
-                    label,
-                    "fell_back",
-                    &format!("reason={} attempt={attempt}", error_label(&error)),
-                    started.elapsed(),
-                );
-                return Err(error);
+                return (Err(error), started.elapsed());
             }
         }
     }
@@ -1062,32 +1070,62 @@ struct Written {
     tokens: u64,
 }
 
-async fn collect_before_deadline<T, F>(
-    requests: impl IntoIterator<Item = (usize, F)>,
-    results: &mut [Option<T>],
+async fn collect_replenishing<T, F, MakeRequest>(
+    count: usize,
+    concurrency: usize,
     deadline: Instant,
-) -> bool
+    mut make_request: MakeRequest,
+) -> (Vec<Option<T>>, Vec<Option<Instant>>, bool)
 where
     F: std::future::Future<Output = T>,
+    MakeRequest: FnMut(usize) -> F,
 {
     use futures::StreamExt;
 
+    async fn indexed<T, F>(index: usize, future: F) -> (usize, T)
+    where
+        F: std::future::Future<Output = T>,
+    {
+        (index, future.await)
+    }
+
+    let mut results: Vec<Option<T>> = (0..count).map(|_| None).collect();
+    let mut started_at: Vec<Option<Instant>> = (0..count).map(|_| None).collect();
     if Instant::now() >= deadline {
-        return true;
+        return (results, started_at, count > 0);
     }
     let mut pending = futures::stream::FuturesUnordered::new();
-    for (index, future) in requests {
-        pending.push(async move { (index, future.await) });
+    let mut next = 0;
+    let mut deadline_hit = false;
+    while next < count && next < concurrency {
+        let index = next;
+        let future = make_request(index);
+        started_at[index] = Some(Instant::now());
+        pending.push(indexed(index, future));
+        next += 1;
     }
-    let deadline = tokio::time::Instant::from_std(deadline);
+    let deadline_at = deadline;
+    let deadline = tokio::time::Instant::from_std(deadline_at);
     while !pending.is_empty() {
         match tokio::time::timeout_at(deadline, pending.next()).await {
-            Ok(Some((index, result))) => results[index] = Some(result),
-            Ok(None) => return false,
-            Err(_) => return true,
+            Ok(Some((index, result))) => {
+                results[index] = Some(result);
+                if next < count && Instant::now() < deadline_at {
+                    let index = next;
+                    let future = make_request(index);
+                    started_at[index] = Some(Instant::now());
+                    pending.push(indexed(index, future));
+                    next += 1;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {
+                deadline_hit = true;
+                break;
+            }
         }
     }
-    false
+    (results, started_at, deadline_hit || next < count)
 }
 
 async fn write(
@@ -1096,45 +1134,62 @@ async fn write(
     planned: &[Planned<'_>],
     started: Instant,
 ) -> Result<Written, Declined> {
-    // Small groups in waves, opening scenes first: each group that arrives is
-    // kept even when another group is slow, refused or falls back.
+    write_with_limits(
+        storyteller,
+        baseline,
+        planned,
+        started,
+        DEADLINE,
+        GROUP_DEADLINE,
+        GROUP_CONCURRENCY,
+    )
+    .await
+}
+
+async fn write_with_limits(
+    storyteller: &Storyteller,
+    baseline: &GeneratedAdventure,
+    planned: &[Planned<'_>],
+    started: Instant,
+    overall_budget: Duration,
+    group_deadline: Duration,
+    concurrency: usize,
+) -> Result<Written, Declined> {
+    // Small groups start in generation order; a finished group frees a request slot immediately.
     let groups = slot_groups(planned);
-    let mut results: Vec<Option<Result<Answer, StorytellerError>>> =
-        (0..groups.len()).map(|_| None).collect();
-    let deadline = started + DEADLINE;
-    let mut deadline_hit = false;
-    for (wave_index, wave) in groups.chunks(GROUP_CONCURRENCY).enumerate() {
-        if Instant::now() >= deadline {
-            deadline_hit = true;
-            break;
-        }
-        let first_index = wave_index * GROUP_CONCURRENCY;
-        let pending = wave
-            .iter()
-            .enumerate()
-            .map(|(offset, (label, group, names))| {
-                let index = first_index + offset;
-                (index, async move {
-                    ask_group(storyteller, baseline, planned, label, *group, names).await
-                })
-            });
-        if collect_before_deadline(pending, &mut results, deadline).await {
-            deadline_hit = true;
-            break;
-        }
-    }
+    let deadline = started + overall_budget;
+    let (results, started_at, deadline_hit) =
+        collect_replenishing(groups.len(), concurrency, deadline, |index| {
+            let (_, group, names) = &groups[index];
+            ask_group(
+                storyteller,
+                baseline,
+                planned,
+                *group,
+                names,
+                group_deadline,
+            )
+        })
+        .await;
     let mut raw: BTreeMap<String, String> = BTreeMap::new();
     let mut refused: BTreeMap<String, String> = BTreeMap::new();
     let mut tokens = 0_u64;
     let mut failure = None;
-    for ((label, _, names), result) in groups.iter().zip(results) {
+    let now = Instant::now();
+    let mut elapsed: Vec<Duration> = started_at
+        .into_iter()
+        .map(|started| started.map_or(Duration::ZERO, |started| now.duration_since(started)))
+        .collect();
+    for (((_, _, names), result), elapsed) in groups.iter().zip(results).zip(&mut elapsed) {
         match result {
-            Some(Ok(answer)) => {
+            Some((Ok(answer), group_elapsed)) => {
+                *elapsed = group_elapsed;
                 raw.extend(answer.accepted);
                 refused.extend(answer.refused);
                 tokens = tokens.saturating_add(answer.tokens);
             }
-            Some(Err(error)) => {
+            Some((Err(error), group_elapsed)) => {
+                *elapsed = group_elapsed;
                 for name in names {
                     refused.insert(name.clone(), error_label(&error).to_owned());
                 }
@@ -1144,11 +1199,11 @@ async fn write(
                 for name in names {
                     refused.insert(name.clone(), "deadline".to_owned());
                 }
-                log_group(label, "deadline", "overall_deadline", started.elapsed());
             }
         }
     }
     if raw.is_empty() {
+        log_group_outcomes(&groups, &elapsed, &refused);
         if deadline_hit {
             return Err(Declined::Deadline);
         }
@@ -1198,6 +1253,7 @@ async fn write(
         texts.remove(slot);
         refused.insert(slot.clone(), format!("lint_{problem}"));
     }
+    log_group_outcomes(&groups, &elapsed, &refused);
     Ok(Written {
         texts,
         refused,

@@ -1,4 +1,5 @@
 use super::super::super::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
+use super::super::super::storyteller::{CallProfile, Expression};
 use super::super::{generate, record};
 use super::*;
 use std::{path::Path, sync::Arc};
@@ -22,6 +23,33 @@ fn baseline(tables: &Tables) -> GeneratedAdventure {
         &ForcedEntries::new(),
     )
     .unwrap()
+}
+
+#[test]
+fn accepted_text_does_not_refuse_forbidden_terms_inside_other_words() {
+    let text = "The package hangs beside a troll.";
+    let accepted = AcceptedText {
+        texts: vec![Some(text.to_owned())],
+        position: Cell::new(0),
+        used: RefCell::new(BTreeSet::new()),
+    };
+    let sheet = FactSheet {
+        scene: None,
+        beat: "test".to_owned(),
+        slot: "narration".to_owned(),
+        speaker: String::new(),
+        voice: String::new(),
+        delivery: String::new(),
+        facts: BTreeMap::new(),
+        must_mention: Vec::new(),
+        forbidden: vec!["ac".to_owned(), "roll".to_owned()],
+        bounds: text.chars().count(),
+        baseline: "A patterned line.".to_owned(),
+        tone: String::new(),
+    };
+
+    assert_eq!(accepted.express(&sheet).unwrap(), text);
+    assert!(accepted.used.borrow().contains(&0));
 }
 
 /// The slot names and facts a request's prompt carries.
@@ -128,24 +156,92 @@ async fn express_with(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn completed_group_results_survive_wave_deadline() {
-    let mut results = vec![None, None];
-    let pending = vec![
-        (
-            0,
-            futures::future::Either::Left(futures::future::ready("arrived")),
-        ),
-        (
-            1,
-            futures::future::Either::Right(futures::future::pending()),
-        ),
+async fn queued_group_starts_when_a_request_slot_frees() {
+    let (release_slow, slow_response) = tokio::sync::oneshot::channel();
+    let mut release_slow = Some(release_slow);
+    let mut slow_response = Some(slow_response);
+    let slow_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let slow_was_pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let (results, _, deadline_hit) =
+        super::collect_replenishing(3, 2, Instant::now() + Duration::from_secs(2), |index| {
+            let slow_response = (index == 1).then(|| slow_response.take().unwrap());
+            if index == 2 {
+                slow_was_pending.store(
+                    !slow_finished.load(std::sync::atomic::Ordering::SeqCst),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+                let _ = release_slow.take().unwrap().send(());
+            }
+            let slow_finished = slow_finished.clone();
+            async move {
+                if let Some(slow_response) = slow_response {
+                    let _ = slow_response.await;
+                    slow_finished.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                index
+            }
+        })
+        .await;
+
+    assert!(!deadline_hit);
+    assert_eq!(results, vec![Some(0), Some(1), Some(2)]);
+    assert!(slow_was_pending.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn completed_provider_groups_survive_the_overall_deadline_while_a_group_is_slow() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({"opening_title": "Harbor Request"})),
+        Reply::Hang,
+    ]);
+    let cache = cache_directory("expression-slow-group");
+    let storyteller = teller(endpoint.address, 200_000, Duration::from_secs(5), &cache);
+    let facts = json!({"scene": "A harbor", "forbidden": []});
+    let first_slot = [Slot::new("opening_title", 80)];
+    let second_slot = [Slot::new("opening_narration", 80)];
+    let requests = [
+        Expression {
+            purpose: "adventure",
+            facts: &facts,
+            slots: &first_slot,
+            style: "short story prose",
+            profile: CallProfile::default(),
+        },
+        Expression {
+            purpose: "adventure",
+            facts: &facts,
+            slots: &second_slot,
+            style: "short story prose",
+            profile: CallProfile::default(),
+        },
     ];
+    let storyteller = &storyteller;
 
-    let deadline = Instant::now() + Duration::from_millis(10);
-    let timed_out = super::collect_before_deadline(pending, &mut results, deadline).await;
+    let (results, _, deadline_hit) = super::collect_replenishing(
+        requests.len(),
+        1,
+        Instant::now() + Duration::from_secs(2),
+        |index| {
+            let request = &requests[index];
+            async move { storyteller.single_attempt(request).await }
+        },
+    )
+    .await;
 
-    assert!(timed_out);
-    assert_eq!(results, vec![Some("arrived"), None]);
+    assert!(deadline_hit);
+    assert_eq!(
+        results[0]
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()["opening_title"],
+        "Harbor Request"
+    );
+    assert!(results[1].is_none());
+    let _ = std::fs::remove_dir_all(cache);
 }
 
 #[tokio::test(flavor = "current_thread")]
