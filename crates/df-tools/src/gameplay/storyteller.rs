@@ -715,7 +715,13 @@ impl Storyteller {
                         .find(|(slot, _)| slot.as_str() == "reply")
                         .or_else(|| rejected.iter().next());
                     if let Some((slot, failure)) = chosen {
-                        complaint = Some(failure.complaint());
+                        complaint = Some(
+                            rejected
+                                .values()
+                                .map(ValidationFailure::complaint)
+                                .collect::<Vec<_>>()
+                                .join("; "),
+                        );
                         last = StorytellerError::Rejected {
                             failure: failure.clone(),
                             words: (slot == "reply")

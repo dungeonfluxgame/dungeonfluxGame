@@ -687,6 +687,37 @@ async fn a_slot_refused_twice_is_reported_while_the_accepted_slot_is_still_retur
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_batched_retry_includes_each_refused_slots_validation_reason() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({
+            "a_secret": "A goblin waits.",
+            "b_long": "This sentence cannot fit."
+        })),
+        Reply::Output(json!({
+            "a_secret": "A traveler waits.",
+            "b_long": "Fog lifts."
+        })),
+    ]);
+    let cache = cache_directory("partial-multiple-reasons");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let facts = json!({"forbidden": ["goblin"]});
+    let slots = [Slot::new("a_secret", 80), Slot::new("b_long", 10)];
+
+    let answer = storyteller
+        .express_partial(&batch_request(&facts, &slots))
+        .await
+        .unwrap();
+
+    assert_eq!(answer.accepted["a_secret"], "A traveler waits.");
+    assert_eq!(answer.accepted["b_long"], "Fog lifts.");
+    let retry_prompt = sent_input(&endpoint.bodies()[1]);
+    assert!(retry_prompt.contains("slot \"a_secret\" used or hinted at a term"));
+    assert!(retry_prompt.contains("slot \"b_long\" had"));
+    assert!(retry_prompt.contains("at most 10"));
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_partial_cache_retries_missing_slots_and_merges_the_newly_accepted_slot() {
     let endpoint = FakeEndpoint::start(vec![
         Reply::Output(json!({"first": "Rain on the slates.", "second": "The wharf is dark."})),
