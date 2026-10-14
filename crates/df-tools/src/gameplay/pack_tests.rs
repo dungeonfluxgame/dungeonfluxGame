@@ -987,6 +987,28 @@ fn rested_narration_belongs_to_victory_and_defeat_only() {
 }
 
 #[test]
+fn rested_story_text_keeps_short_rest_rules_out_of_narration() {
+    let loaded = load_from_bytes(shipped_pack().as_bytes(), shipped_tuning().as_bytes()).unwrap();
+
+    super::pack::with_test_pack(loaded, || {
+        for key in [
+            super::pack::SceneKey::Victory,
+            super::pack::SceneKey::Defeat,
+        ] {
+            let scene = super::pack::scene(key);
+            let (narration, rules) = super::pack::rested_story_and_rules(&scene).unwrap();
+            assert!(narration.contains("hour catching its breath"), "{key:?}");
+            assert!(!narration.contains("Hit Point Dice"), "{key:?}");
+            assert!(!narration.contains("Second Wind"), "{key:?}");
+            assert!(!narration.contains("stable 0-HP"), "{key:?}");
+            assert!(rules.contains("Hit Point Dice"), "{key:?}");
+            assert!(rules.contains("Second Wind"), "{key:?}");
+            assert!(rules.contains("1d4 hours"), "{key:?}");
+        }
+    });
+}
+
+#[test]
 fn creation_groups_must_be_the_supported_set() {
     let unknown = set(&shipped_pack(), "/creation/groups/0/id", json!("mystery"));
     let missing = remove(&shipped_pack(), "/creation/groups/0");

@@ -900,6 +900,36 @@ pub(super) struct Scene {
     pub(super) findings: Vec<Finding>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RestedStoryError;
+
+/// Split authored Short Rest rules prose from the story before projecting a rested scene.
+pub(super) fn rested_story_and_rules(scene: &Scene) -> Result<(String, String), RestedStoryError> {
+    const HOUR_RULES: &str = "An uninterrupted hour has passed without Hit Point Dice or healing.";
+    const BENEFIT_RULES: &str = "Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived.";
+    let narration = scene.narration_rested.as_deref().ok_or(RestedStoryError)?;
+    if narration.matches(HOUR_RULES).count() != 1 || narration.matches(BENEFIT_RULES).count() != 1 {
+        return Err(RestedStoryError);
+    }
+    let start = narration.find(HOUR_RULES).ok_or(RestedStoryError)?;
+    let after_hour = start + HOUR_RULES.len();
+    let benefits = narration[after_hour..]
+        .find(BENEFIT_RULES)
+        .map(|offset| after_hour + offset)
+        .ok_or(RestedStoryError)?;
+    let end = benefits + BENEFIT_RULES.len();
+    let story = format!(
+        "{}The party spends an hour catching its breath.{}",
+        &narration[..start],
+        &narration[end..]
+    );
+    // SRD 5.2.1 pp. 16, 22: “hour-long Short Rests”; “can spend Hit Dice during a Short Rest.”
+    // SRD 5.2.1 p. 18: “A Stable creature that isn't healed regains 1 Hit Point after 1d4 hours.”
+    // SRD 5.2.1 p. 48: “You regain one expended use when you finish a Short Rest.”
+    let rules = "No Hit Point Dice are spent and no healing is received during the Short Rest. Eligible heroes regain one use of Second Wind. A stable creature that isn't healed regains 1 Hit Point after 1d4 hours; a dead creature remains dead.";
+    Ok((story, rules.to_owned()))
+}
+
 // ---------------------------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------------------------

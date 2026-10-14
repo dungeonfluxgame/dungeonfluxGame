@@ -324,8 +324,7 @@ pub(crate) fn generate_chapter(
         .iter()
         .find(|c| c.vehicle == "private")
         .ok_or_else(|| CampaignError::Invalid("private lead".into()))?;
-    generated.pack.courier_clue = format!(
-        "{} whispers: {} waits at {}. {} Keep it between us.",
+    generated.pack.courier_clue = whispered_clue(
         generated
             .facts
             .get("patron.first")
@@ -338,7 +337,7 @@ pub(crate) fn generate_chapter(
             .facts
             .get("dest.name")
             .ok_or_else(|| CampaignError::Missing("dest.name".into()))?,
-        private.text
+        &private.text,
     );
     check(&generated.pack.courier_clue, 280, "private clue")?;
     let mut room_narration = if let Some(previous) = plan.recap.chapters.first() {
@@ -523,7 +522,17 @@ pub(crate) fn generate_chapter(
                 }
             }
             SceneKey::Inn => {
-                scene.dialogue = contact.text.clone();
+                if plan.chapter_type == "finale" {
+                    let (speaker, dialogue) = epilogue_speech(
+                        &plan.contact.first,
+                        &frame.artifact.name,
+                        &frame.region_short,
+                    );
+                    scene.speaker = speaker;
+                    scene.dialogue = dialogue;
+                } else {
+                    scene.dialogue = contact.text.clone();
+                }
             }
             _ => {}
         }
@@ -677,6 +686,17 @@ pub(crate) fn generate_chapter(
     pack::load_from_bytes(&pack, &tuning)
         .map_err(|e| CampaignError::Generate(super::GenerateError::Pack(e)))?;
     Ok(generated)
+}
+
+fn whispered_clue(patron: &str, contact: &str, destination: &str, detail: &str) -> String {
+    format!("{patron} whispers: “{contact} waits at {destination}. {detail}” Keep it between us.")
+}
+
+fn epilogue_speech(speaker: &str, artifact: &str, region: &str) -> (String, String) {
+    (
+        speaker.to_owned(),
+        format!("I'll tell the people of {region} what you risked for {artifact}."),
+    )
 }
 
 pub(super) fn epilogue(
@@ -854,5 +874,35 @@ pub(super) fn remove_repeated_ending_sentences(
                 scene.dialogue.clone(),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{epilogue_speech, whispered_clue};
+
+    #[test]
+    fn private_clue_quotes_the_whispered_speech() {
+        assert_eq!(
+            whispered_clue(
+                "Jorun",
+                "Tomas Greaves",
+                "Tin Street Tea House",
+                "Ask him plainly for help. There is old kindness between them."
+            ),
+            "Jorun whispers: “Tomas Greaves waits at Tin Street Tea House. Ask him plainly for help. There is old kindness between them.” Keep it between us."
+        );
+    }
+
+    #[test]
+    fn epilogue_speech_uses_its_speaker_and_campaign_details() {
+        let calla = epilogue_speech("Calla", "the Ledger", "Shepherds' Bothy");
+        let mara = epilogue_speech("Mara", "the Moon Glass", "Greyhaven");
+
+        assert_eq!(calla.0, "Calla");
+        assert_eq!(mara.0, "Mara");
+        assert!(calla.1.contains("the Ledger"));
+        assert!(calla.1.contains("Shepherds' Bothy"));
+        assert_ne!(calla, mara);
     }
 }
