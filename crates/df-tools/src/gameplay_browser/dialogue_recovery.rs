@@ -23,11 +23,12 @@ pub(super) struct DialogueRecovery {
     intent_listeners: Vec<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
-/// The player's last spoken line and the scene speaker's in-character answer to it. It is
+/// The player's last line, its disposition, and any separate reply or action result. It is
 /// shown only while the revision it answered is still current.
 struct Exchange {
     revision: Option<rpc::SessionRevision>,
     you: String,
+    disposition: Option<String>,
     speaker: String,
     portrait: String,
     reply: String,
@@ -42,6 +43,16 @@ const MAXIMUM_REPLY_BYTES: usize = 1024;
 /// The typed-dialogue request also waits for the speaker's reply, so it gets longer than the
 /// ordinary five seconds.
 const RAW_DIALOGUE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+fn scope_change_notice(draft: &str) -> Option<&'static str> {
+    (!draft.trim().is_empty()).then_some("Your draft is still here. Review it before sending.")
+}
+
+fn split_action_response(response: &str) -> (&str, &str) {
+    response.find(". ").map_or((response, ""), |period| {
+        (&response[..=period], &response[period + 2..])
+    })
+}
 
 fn portrait_url(speaker: &str) -> &'static str {
     match speaker {
@@ -145,7 +156,12 @@ impl DialogueRecovery {
         self.talk.interrupt_now(Interruption::SceneChanged);
         self.retire_transport();
         self.confirmation = None;
-        self.message = "The input scope changed. Your text remains editable.".to_owned();
+        let draft = self
+            .editor
+            .as_ref()
+            .map(HtmlTextAreaElement::value)
+            .unwrap_or_default();
+        self.message = scope_change_notice(&draft).unwrap_or_default().to_owned();
     }
 
     pub(super) fn has_confirmation(&self) -> bool {
@@ -245,18 +261,29 @@ pub(super) fn mount(
             let you: String = exchange.you.chars().take(300).collect();
             let thread = node(&document, &panel, "div", "npc-exchange", "")?;
             node(&document, &thread, "p", "npc-you", &format!("You: {you}"))?;
-            let bubble = node(&document, &thread, "div", "npc-bubble", "")?;
-            let portrait = node(&document, &bubble, "img", "npc-bubble-portrait", "")?;
-            portrait.set_attribute("src", &exchange.portrait)?;
-            portrait.set_attribute("alt", "")?;
-            let body = node(&document, &bubble, "div", "npc-bubble-body", "")?;
-            let name = if exchange.speaker.is_empty() {
-                "Narrator"
-            } else {
-                &exchange.speaker
-            };
-            node(&document, &body, "p", "npc-bubble-name", name)?;
-            node(&document, &body, "p", "npc-bubble-reply", &exchange.reply)?;
+            if let Some(disposition) = &exchange.disposition {
+                node(
+                    &document,
+                    &thread,
+                    "p",
+                    "npc-disposition npc-you",
+                    disposition,
+                )?;
+            }
+            if !exchange.reply.is_empty() {
+                let bubble = node(&document, &thread, "div", "npc-bubble", "")?;
+                let portrait = node(&document, &bubble, "img", "npc-bubble-portrait", "")?;
+                portrait.set_attribute("src", &exchange.portrait)?;
+                portrait.set_attribute("alt", "")?;
+                let body = node(&document, &bubble, "div", "npc-bubble-body", "")?;
+                let name = if exchange.speaker.is_empty() {
+                    "Narrator"
+                } else {
+                    &exchange.speaker
+                };
+                node(&document, &body, "p", "npc-bubble-name", name)?;
+                node(&document, &body, "p", "npc-bubble-reply", &exchange.reply)?;
+            }
         }
     }
     thinking_row(client, &document, &panel)?;
@@ -355,14 +382,16 @@ pub(super) fn mount(
             element.set_attribute("disabled", "")?;
         }
     }
-    let message = node(
-        &document,
-        &panel,
-        "p",
-        "dialogue-feedback",
-        &recovery.message,
-    )?;
-    message.set_attribute("role", "status")?;
+    if !recovery.message.is_empty() {
+        let message = node(
+            &document,
+            &panel,
+            "p",
+            "dialogue-feedback",
+            &recovery.message,
+        )?;
+        message.set_attribute("role", "status")?;
+    }
     if focused {
         editor.focus()?;
         if let Some((start, end)) = selection {
@@ -776,17 +805,19 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                             && reply.npc_reply.len() <= MAXIMUM_REPLY_BYTES =>
                     {
                         state.dialogue.ticket = None;
+                        let (disposition, result) = split_action_response(&reply.npc_reply);
                         state.dialogue.exchange = Some(Exchange {
                             revision: reply.revision.clone(),
                             you: input.text.clone(),
+                            disposition: Some(disposition.to_owned()),
                             speaker: "Narrator".to_owned(),
                             portrait: portrait_url("Narrator").to_owned(),
-                            reply: reply.npc_reply.clone(),
+                            reply: result.to_owned(),
                         });
                         if let Some(editor) = &state.dialogue.editor {
                             editor.set_value("");
                         }
-                        reply.npc_reply.clone()
+                        String::new()
                     }
                     Call::Raw(input)
                         if reply.input_id == input.input_id
@@ -817,6 +848,7 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                                     state.dialogue.exchange = Some(Exchange {
                                         revision: input.observed_revision,
                                         you: input.text.clone(),
+                                        disposition: None,
                                         speaker,
                                         portrait,
                                         reply: reply.npc_reply.clone(),
@@ -929,7 +961,36 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
 
 #[cfg(test)]
 mod tests {
-    use super::{composer_available, speaker_portrait_url};
+    use super::{
+        composer_available, scope_change_notice, speaker_portrait_url, split_action_response,
+    };
+
+    #[test]
+    fn scope_change_notice_is_absent_for_an_empty_draft() {
+        assert_eq!(scope_change_notice(""), None);
+        assert_eq!(scope_change_notice(" \t\n"), None);
+    }
+
+    #[test]
+    fn scope_change_notice_keeps_a_nonempty_draft_reviewable() {
+        assert_eq!(
+            scope_change_notice("I look behind the counter."),
+            Some("Your draft is still here. Review it before sending.")
+        );
+    }
+
+    #[test]
+    fn action_response_separates_attempt_from_roll_and_result() {
+        let response = "You search behind the counter. Brakka searches the counter: Wisdom (Perception) 16 + 3 = 19. You find the ledger.";
+
+        let (attempt, result) = split_action_response(response);
+
+        assert_eq!(attempt, "You search behind the counter.");
+        assert_eq!(
+            result,
+            "Brakka searches the counter: Wisdom (Perception) 16 + 3 = 19. You find the ledger."
+        );
+    }
 
     #[test]
     fn composer_is_hidden_during_creation_and_after_the_journey_ends() {
